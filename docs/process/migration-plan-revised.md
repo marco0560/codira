@@ -2,7 +2,7 @@
 
 ## Version
 
-Document version: `0.1.8`
+Document version: `0.1.12`
 
 Status: active migration ledger.
 
@@ -35,6 +35,16 @@ This document supersedes the root-level draft `migration-plan.md` for the
 - `0.1.8`: Complete Phase 7 local validation, including extended package and
   example checks, distribution builds, twine validation, installed-wheel
   rehearsal, and CLI/plugin discovery smoke tests.
+- `0.1.9`: Complete Phase 8 by publishing fresh `marco0560/codira` history
+  from a prepared copy and pushing tag `v1.0.0`.
+- `0.1.10`: Complete Phase 9 by transferring the selected open issues from
+  `marco0560/repoindex` to `marco0560/codira`, verifying issue metadata, and
+  confirming GitHub redirects for sampled old issue URLs.
+- `0.1.11`: Complete Phase 10 by adding the old-repository archive notice,
+  preserving public visibility, and archiving `marco0560/repoindex` on GitHub.
+- `0.1.12`: Sync the Phase 8 through Phase 10 ledger into the active
+  `codira` checkout and correct remaining ledger references where historical
+  `repoindex` package names were accidentally rewritten to `codira`.
 
 ## Purpose
 
@@ -244,8 +254,8 @@ Phase 1 audit record:
 - [x] Protected ignored runtime/generated state remains by repository policy:
   - [x] `.codira/`
   - [x] `src/codira/_version.py`
-- [x] These protected paths are intentionally still `codira` before the
-  rebrand implementation. They must become `.codira/` and
+- [x] These protected paths were intentionally still `repoindex` before the
+  rebrand implementation. They became `.codira/` and
   `src/codira/_version.py` when `scripts/clean_repo.py` is updated in
   Phase 4.
 - [x] PyPI JSON endpoint status for target names on 2026-04-11:
@@ -257,14 +267,14 @@ Phase 1 audit record:
   - [x] `codira-backend-sqlite`: 404
   - [x] `codira-bundle-official`: 404
 - [x] PyPI JSON endpoint status for old names on 2026-04-11:
-  - [x] `codira`: 200, occupied by package `codira` version `0.15.2`
+  - [x] `repoindex`: 200, occupied by package `repoindex` version `0.15.2`
     with summary `A collection-aware metadata index for git repositories`.
-  - [x] `codira-analyzer-python`: 404
-  - [x] `codira-analyzer-json`: 404
-  - [x] `codira-analyzer-c`: 404
-  - [x] `codira-analyzer-bash`: 404
-  - [x] `codira-backend-sqlite`: 404
-  - [x] `codira-bundle-official`: 404
+  - [x] `repoindex-analyzer-python`: 404
+  - [x] `repoindex-analyzer-json`: 404
+  - [x] `repoindex-analyzer-c`: 404
+  - [x] `repoindex-analyzer-bash`: 404
+  - [x] `repoindex-backend-sqlite`: 404
+  - [x] `repoindex-bundle-official`: 404
 
 ## Phase 2 - Triage GitHub Issues
 
@@ -273,23 +283,23 @@ Preserve only useful active work in the new `codira` issue tracker.
 
 Tasks:
 
-- [x] Keep the old `codira` repository public while issue triage is in
+- [x] Keep the old `repoindex` repository public while issue triage is in
   progress.
-- [x] Classify each current `codira` issue as:
+- [x] Classify each current `repoindex` issue as:
   - [x] still relevant to `codira`
   - [x] historical only
   - [x] obsolete
-- [ ] Pre-create matching labels and milestones in `codira` where preserving
+- [x] Pre-create matching labels and milestones in `codira` where preserving
   them matters.
-- [ ] Transfer only still-relevant open issues in Phase 9 after the new
+- [x] Transfer only still-relevant open issues in Phase 9 after the new
   `codira` repository exists.
 - [x] Leave closed, obsolete, and historical issues in the archived
-  `codira` repository.
+  `repoindex` repository.
 
 Exit criteria:
 
-- [ ] The new `codira` issue tracker contains only intentional active work.
-- [x] The old `codira` issue tracker remains available for history.
+- [x] The new `codira` issue tracker contains only intentional active work.
+- [x] The old `repoindex` issue tracker remains available for history.
 
 Phase 2 classification record:
 
@@ -313,6 +323,8 @@ Phase 2 classification record:
   - [x] `#12` - replaceable Python analyzer and backend
   - [x] `#13` - monorepo analyzer fallback removal
 - [x] Obsolete issues: none identified.
+- [x] No labels or milestones were present on the selected open issues, so no
+  pre-created `codira` labels or milestones were needed.
 
 ## Phase 3 - Create The New Public GitHub Repository
 
@@ -322,9 +334,9 @@ Create a clean target remote without disturbing the old repository location.
 Tasks:
 
 - [x] Create a new public GitHub repository named `codira`.
-- [x] Do not rename the old `codira` repository in place.
-- [x] Do not transfer the old `codira` repository.
-- [x] Do not create a new repository at the old `codira` location after any
+- [x] Do not rename the old `repoindex` repository in place.
+- [x] Do not transfer the old `repoindex` repository.
+- [x] Do not create a new repository at the old `repoindex` location after any
   rename or transfer operation.
 - [ ] Configure the new repository with the expected default branch, branch
   protection, Actions settings, and trusted publishing settings if used.
@@ -484,22 +496,22 @@ Exit criteria:
 ## Phase 8 - Create Fresh Public History
 
 Goal:
-Publish a clean `codira` history without old `codira` commit history.
+Publish a clean `codira` history without old `repoindex` commit history.
 
 Tasks:
 
-- [ ] Remove old `.git` metadata only in the prepared `codira` copy, not in the
-  source `codira` repository.
-- [ ] Run `git init` in the prepared `codira` copy.
-- [ ] Create one initial commit containing the fully renamed, validated tree.
-- [ ] Add the new `codira` GitHub remote.
-- [ ] Push `main`.
-- [ ] Create and push tag `v1.0.0`.
+- [x] Remove old `.git` metadata only in the prepared `codira` copy, not in the
+  source `repoindex` repository.
+- [x] Run `git init` in the prepared `codira` copy.
+- [x] Create one initial commit containing the fully renamed, validated tree.
+- [x] Add the new `codira` GitHub remote.
+- [x] Push `main`.
+- [x] Create and push tag `v1.0.0`.
 
 Exit criteria:
 
-- [ ] The public `codira` repository starts from the renamed tree.
-- [ ] The first public tag is `v1.0.0`.
+- [x] The public `codira` repository starts from the renamed tree.
+- [x] The first public tag is `v1.0.0`.
 
 ## Phase 9 - Transfer Selected Issues
 
@@ -508,16 +520,38 @@ Move only intentionally active issue work to `codira`.
 
 Tasks:
 
-- [ ] Transfer selected open issues from `codira` to `codira`.
-- [ ] Verify transferred issues have comments and assignees.
-- [ ] Verify labels and milestones are preserved where intended.
-- [ ] Verify old issue URLs redirect to the transferred issues where GitHub
+- [x] Transfer selected open issues from `repoindex` to `codira`.
+- [x] Verify transferred issues have comments and assignees.
+- [x] Verify labels and milestones are preserved where intended.
+- [x] Verify old issue URLs redirect to the transferred issues where GitHub
   supports that redirect.
 
 Exit criteria:
 
-- [ ] Active issue work lives in `codira`.
-- [ ] Historical issue work remains in `codira`.
+- [x] Active issue work lives in `codira`.
+- [x] Historical issue work remains in `repoindex`.
+
+Phase 9 issue transfer record:
+
+- [x] `marco0560/repoindex#3` transferred to `marco0560/codira#1`.
+- [x] `marco0560/repoindex#4` transferred to `marco0560/codira#2`.
+- [x] `marco0560/repoindex#5` transferred to `marco0560/codira#3`.
+- [x] `marco0560/repoindex#6` transferred to `marco0560/codira#4`.
+- [x] `marco0560/repoindex#8` transferred to `marco0560/codira#5`.
+- [x] `marco0560/repoindex#14` transferred to `marco0560/codira#6`.
+- [x] `marco0560/repoindex#15` transferred to `marco0560/codira#7`.
+- [x] `gh issue list --repo marco0560/repoindex --state open` returned no
+  open issues after transfer.
+- [x] `gh issue list --repo marco0560/codira --state open` returned the seven
+  expected transferred issues.
+- [x] No transferred issue had labels, milestones, or assignees to preserve.
+- [x] Existing comments were preserved on transferred issues `#3`, `#4`, and
+  `#5`.
+- [x] GitHub redirect samples:
+  - [x] `https://github.com/marco0560/repoindex/issues/3` redirects to
+    `https://github.com/marco0560/codira/issues/1`.
+  - [x] `https://github.com/marco0560/repoindex/issues/15` redirects to
+    `https://github.com/marco0560/codira/issues/7`.
 
 ## Phase 10 - Archive The Old Repository
 
@@ -526,19 +560,26 @@ Freeze the old identity as historical reference.
 
 Tasks:
 
-- [ ] Update the old `codira` README with:
-  - [ ] archived status
-  - [ ] link to the new `codira` repository
-  - [ ] note that active development moved to `codira`
-  - [ ] note that the rename avoided conflict and confusion around the old
-    `codira` package identity
-- [ ] Archive the old `codira` repository on GitHub.
-- [ ] Keep the old repository public.
+- [x] Update the old `repoindex` README with:
+  - [x] archived status
+  - [x] link to the new `codira` repository
+  - [x] note that active development moved to `codira`
+  - [x] note that the rename avoided conflict and confusion around the old
+    `repoindex` package identity
+- [x] Archive the old `repoindex` repository on GitHub.
+- [x] Keep the old repository public.
 
 Exit criteria:
 
-- [ ] Old history and issues remain visible.
-- [ ] Users landing on the old repository can find `codira`.
+- [x] Old history and issues remain visible.
+- [x] Users landing on the old repository can find `codira`.
+
+Phase 10 archive record:
+
+- [x] README archive notice added before the old repository was archived.
+- [x] Old repository visibility before archive: public.
+- [x] Old repository default branch before archive: `main`.
+- [x] Old repository archived status after archive: true.
 
 ## Phase 11 - TestPyPI Rehearsal
 
@@ -564,7 +605,7 @@ Fresh-environment checks:
 - [ ] `codira plugins --json`
 - [ ] `codira index --full --json`
 - [ ] `codira ctx "package metadata rename" --json`
-- [ ] Confirm no installed distribution depends on `codira`.
+- [ ] Confirm no installed distribution depends on `repoindex`.
 
 Exit criteria:
 
@@ -593,7 +634,7 @@ Tasks:
 - [ ] Verify `pip install codira-bundle-official` in a fresh environment.
 - [ ] Verify `codira --help`.
 - [ ] Verify `codira plugins --json`.
-- [ ] Verify no dependency metadata points to `codira`.
+- [ ] Verify no dependency metadata points to `repoindex`.
 
 Exit criteria:
 
