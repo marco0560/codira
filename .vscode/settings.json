@@ -1,0 +1,28 @@
+{
+    "editor.formatOnSave": true,
+    "files.eol": "\n",
+    "files.insertFinalNewline": true,
+    "files.trimTrailingWhitespace": true,
+
+    "editor.detectIndentation": false,
+    "editor.renderWhitespace": "boundary",
+
+    "git.useEditorAsCommitInput": true,
+
+    "python.analysis.typeCheckingMode": "basic",
+
+    // ----------------------------
+    // Ruff — native language server ONLY
+    // ----------------------------
+    "ruff.enable": true,
+    "ruff.configuration": "pyproject.toml",
+    "ruff.organizeImports": true,
+
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.codeActionsOnSave": {
+            "source.fixAll": "explicit",
+            "source.organizeImports": "explicit"
+        }
+    },
+}

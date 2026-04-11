@@ -1,0 +1,57 @@
+#!/bin/sh
+set -eu
+
+HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$HOOK_DIR/.." && pwd)
+LOCAL_PRE_COMMIT="$REPO_ROOT/.venv/bin/pre-commit"
+WINDOWS_PRE_COMMIT="$REPO_ROOT/.venv/Scripts/pre-commit.exe"
+LOCAL_PYTHON="$REPO_ROOT/.venv/bin/python"
+WINDOWS_PYTHON="$REPO_ROOT/.venv/Scripts/python.exe"
+
+if [ -x "$LOCAL_PRE_COMMIT" ]; then
+    PRE_COMMIT="$LOCAL_PRE_COMMIT"
+elif [ -x "$WINDOWS_PRE_COMMIT" ]; then
+    PRE_COMMIT="$WINDOWS_PRE_COMMIT"
+elif command -v pre-commit >/dev/null 2>&1; then
+    PRE_COMMIT=$(command -v pre-commit)
+else
+    PRE_COMMIT=""
+fi
+
+if [ -x "$LOCAL_PYTHON" ]; then
+    PYTHON_BIN="$LOCAL_PYTHON"
+elif [ -x "$WINDOWS_PYTHON" ]; then
+    PYTHON_BIN="$WINDOWS_PYTHON"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN=$(command -v python3)
+else
+    echo "python not available, cannot run pre-push validation"
+    exit 1
+fi
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+if [ "$BRANCH" = "main" ] && [ -z "${ALLOW_MAIN_PUSH:-}" ]; then
+    echo "ERROR: direct push to main is blocked"
+    echo "Use: git rel"
+    echo "Emergency workaround: git push --no-verify"
+    exit 1
+fi
+
+if [ -n "$PRE_COMMIT" ]; then
+    echo "▶ Running pre-commit hooks"
+    "$PRE_COMMIT" run --all-files
+fi
+
+echo "▶ Running mypy"
+"$PYTHON_BIN" -m mypy .
+
+echo "▶ Running test suite"
+"$PYTHON_BIN" -m pytest -q
+
+echo "▶ Running release audit"
+if [ -z "${SKIP_RELEASE_AUDIT:-}" ]; then
+    exec "$REPO_ROOT/scripts/release_audit.sh"
+fi
+
+echo "ℹ Skipping release_audit (already executed)"

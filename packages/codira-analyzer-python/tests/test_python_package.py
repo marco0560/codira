@@ -1,0 +1,26 @@
+"""Package-local tests for the first-party Python analyzer distribution."""
+
+from __future__ import annotations
+
+import tomllib
+from pathlib import Path
+
+from codira_analyzer_python import PythonAnalyzer, build_analyzer
+
+
+def test_python_package_declares_expected_entry_point() -> None:
+    """Keep package metadata aligned to the analyzer entry-point contract."""
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    assert project["project"]["entry-points"]["codira.analyzers"] == {
+        "python": "codira_analyzer_python:build_analyzer"
+    }
+
+
+def test_python_package_builds_expected_analyzer() -> None:
+    """Keep the package-local factory aligned to the published analyzer name."""
+    analyzer = build_analyzer()
+
+    assert isinstance(analyzer, PythonAnalyzer)
+    assert analyzer.name == "python"

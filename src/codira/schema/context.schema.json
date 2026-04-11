@@ -1,0 +1,414 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "codira context output",
+  "type": "object",
+  "required": ["schema_version", "status", "top_matches"],
+  "properties": {
+    "schema_version": { "type": "string", "enum": ["1.1"] },
+    "status": { "type": "string", "enum": ["ok", "no_matches"] },
+    "top_matches": { "type": "array", "items": { "$ref": "#/definitions/symbol" } },
+    "doc_issues": { "type": "array", "items": { "$ref": "#/definitions/doc_issue" } },
+    "context": {
+      "type": "array",
+      "items": { "type": "array", "items": { "type": "string" } }
+    },
+    "module_expansion": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/symbol" }
+    },
+    "references": { "type": "array", "items": { "$ref": "#/definitions/reference" } },
+    "explain": {
+      "type": "object",
+      "properties": {
+        "environment": {
+          "type": "object",
+          "required": ["codira_version", "schema_version"],
+          "properties": {
+            "codira_version": { "type": "string" },
+            "schema_version": { "type": "string" },
+            "embedding_backend": {
+              "type": "object",
+              "required": ["name", "version", "dim"],
+              "properties": {
+                "name": { "type": "string" },
+                "version": { "type": "string" },
+                "dim": { "type": "integer" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "intent": {
+          "type": "object",
+          "properties": {
+            "is_identifier_query": { "type": "boolean" },
+            "is_test_related": { "type": "boolean" },
+            "is_script_related": { "type": "boolean" },
+            "is_multi_term": { "type": "boolean" },
+            "primary_intent": { "type": "string" },
+            "raw": { "type": "string" }
+          },
+          "required": [
+            "is_identifier_query",
+            "is_test_related",
+            "is_script_related",
+            "is_multi_term",
+            "primary_intent",
+            "raw"
+          ],
+          "additionalProperties": false
+        },
+        "planner": {
+          "type": "object",
+          "required": [
+            "primary_intent",
+            "channels",
+            "include_doc_issues",
+            "include_include_graph",
+            "include_references"
+          ],
+          "properties": {
+            "primary_intent": { "type": "string" },
+            "channels": { "type": "array", "items": { "type": "string" } },
+            "include_doc_issues": { "type": "boolean" },
+            "include_include_graph": { "type": "boolean" },
+            "include_references": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "enabled_channels": { "type": "array", "items": { "type": "string" } },
+        "channel_priority": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" }
+        },
+        "ordered_channels": { "type": "array", "items": { "type": "string" } },
+        "retrieval_producers": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/retrieval_producer" }
+        },
+        "signal_collection": { "$ref": "#/definitions/signal_collection" },
+        "signals": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/retrieval_signal_preview" }
+        },
+        "signal_merge": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/signal_merge_entry" }
+        },
+        "channel_results": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/channel_result" }
+          }
+        },
+        "merge": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/merge_entry" }
+        },
+        "diversity": { "$ref": "#/definitions/diversity_block" },
+        "expansion": { "$ref": "#/definitions/expansion_block" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "definitions": {
+    "symbol": {
+      "type": "object",
+      "required": ["type", "module", "name", "file", "lineno"],
+      "properties": {
+        "type": { "type": "string" },
+        "module": { "type": "string" },
+        "name": { "type": "string" },
+        "file": { "type": "string" },
+        "lineno": { "type": "integer" },
+        "confidence": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "doc_issue": {
+      "type": "object",
+      "required": ["type", "message"],
+      "properties": {
+        "type": { "type": "string" },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "reference": {
+      "type": "object",
+      "required": ["file", "lineno"],
+      "properties": {
+        "file": { "type": "string" },
+        "lineno": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "channel_result": {
+      "type": "object",
+      "required": ["type", "module", "name", "lineno", "score"],
+      "properties": {
+        "type": { "type": "string" },
+        "module": { "type": "string" },
+        "name": { "type": "string" },
+        "lineno": { "type": "integer" },
+        "score": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "retrieval_producer": {
+      "type": "object",
+      "required": [
+        "producer_name",
+        "producer_version",
+        "capability_version",
+        "source_kind",
+        "source_name",
+        "declared_capabilities",
+        "known_capabilities",
+        "unknown_capabilities"
+      ],
+      "properties": {
+        "producer_name": { "type": "string" },
+        "producer_version": { "type": "string" },
+        "capability_version": { "type": "string" },
+        "source_kind": {
+          "type": "string",
+          "enum": ["channel", "enrichment"]
+        },
+        "source_name": { "type": "string" },
+        "declared_capabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "known_capabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "unknown_capabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "signal_collection": {
+      "type": "object",
+      "required": [
+        "total_signals",
+        "families",
+        "capabilities",
+        "used_producers",
+        "ignored_producers"
+      ],
+      "properties": {
+        "total_signals": { "type": "integer" },
+        "families": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" }
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" }
+        },
+        "used_producers": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ignored_producers": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "signal_source": {
+      "type": "object",
+      "required": ["type", "module", "name", "lineno"],
+      "properties": {
+        "type": { "type": "string" },
+        "module": { "type": "string" },
+        "name": { "type": "string" },
+        "lineno": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "retrieval_signal_preview": {
+      "type": "object",
+      "required": [
+        "kind",
+        "family",
+        "producer_name",
+        "capability_name",
+        "type",
+        "module",
+        "name",
+        "lineno"
+      ],
+      "properties": {
+        "kind": { "type": "string" },
+        "family": { "type": "string" },
+        "producer_name": { "type": "string" },
+        "capability_name": { "type": "string" },
+        "type": { "type": "string" },
+        "module": { "type": "string" },
+        "name": { "type": "string" },
+        "lineno": { "type": "integer" },
+        "channel_name": { "type": "string" },
+        "rank": { "type": "integer" },
+        "strength": { "type": "number" },
+        "distance": { "type": "integer" },
+        "source": { "$ref": "#/definitions/signal_source" }
+      },
+      "additionalProperties": false
+    },
+    "signal_merge_entry": {
+      "type": "object",
+      "required": [
+        "type",
+        "module",
+        "name",
+        "lineno",
+        "signal_count",
+        "families",
+        "capabilities",
+        "producers"
+      ],
+      "properties": {
+        "type": { "type": "string" },
+        "module": { "type": "string" },
+        "name": { "type": "string" },
+        "lineno": { "type": "integer" },
+        "signal_count": { "type": "integer" },
+        "families": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" }
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" }
+        },
+        "producers": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "merge_entry": {
+      "type": "object",
+      "required": [
+        "type",
+        "module",
+        "name",
+        "lineno",
+        "channels",
+        "families",
+        "rrf_score",
+        "evidence_bonus",
+        "role_bonus",
+        "merge_score",
+        "winner",
+        "role",
+        "role_bias"
+      ],
+      "properties": {
+        "type": { "type": "string" },
+        "module": { "type": "string" },
+        "name": { "type": "string" },
+        "lineno": { "type": "integer" },
+        "channels": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        },
+        "families": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        },
+        "rrf_score": { "type": "number" },
+        "evidence_bonus": { "type": "number" },
+        "role_bonus": { "type": "number" },
+        "merge_score": { "type": "number" },
+        "winner": { "type": "string" },
+        "role": { "type": "string" },
+        "role_bias": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "diversity_entry": {
+      "type": "object",
+      "required": ["type", "module", "name", "file", "lineno", "role", "language"],
+      "properties": {
+        "type": { "type": "string" },
+        "module": { "type": "string" },
+        "name": { "type": "string" },
+        "file": { "type": "string" },
+        "lineno": { "type": "integer" },
+        "role": { "type": "string" },
+        "language": { "type": "string" },
+        "selection_stage": {
+          "type": "string",
+          "enum": ["primary", "deferred"]
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["file_cap", "role_cap", "language_cap"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "diversity_block": {
+      "type": "object",
+      "required": ["selected", "deferred"],
+      "properties": {
+        "selected": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/diversity_entry" }
+        },
+        "deferred": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/diversity_entry" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "expansion_entry": {
+      "type": "object",
+      "required": [
+        "seed_module",
+        "via_module",
+        "target_name",
+        "kind",
+        "direction",
+        "expanded_module",
+        "expanded_name"
+      ],
+      "properties": {
+        "seed_module": { "type": "string" },
+        "via_module": { "type": "string" },
+        "target_name": { "type": "string" },
+        "kind": { "type": "string" },
+        "direction": {
+          "type": "string",
+          "enum": ["outgoing", "incoming"]
+        },
+        "expanded_module": { "type": "string" },
+        "expanded_name": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "expansion_block": {
+      "type": "object",
+      "required": ["include_graph"],
+      "properties": {
+        "include_graph": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/expansion_entry" }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

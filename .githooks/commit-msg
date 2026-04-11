@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+MSG_FILE="$1"
+SUBJECT=$(sed -n '1p' "$MSG_FILE")
+
+PATTERN='^(feat|fix|docs|perf|refactor|test|chore|style)(\([a-z0-9/_-]+\))?: .{1,72}$'
+
+if printf '%s' "$SUBJECT" | grep -Eq "$PATTERN"; then
+    exit 0
+fi
+
+echo "ERROR: commit subject must match type(scope): summary" >&2
+echo "Allowed types: feat, fix, docs, perf, refactor, test, chore, style" >&2
+echo "Allowed scope characters: lowercase letters, digits, '/', '_' and '-'" >&2
+exit 1

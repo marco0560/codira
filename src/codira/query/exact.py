@@ -1,0 +1,743 @@
+"""Exact lookup helpers backed by the active codira index backend.
+
+Responsibilities
+----------------
+- Provide APIs to find symbols, call edges, callable references, includes, docstring issues, and embedding inventory.
+- Support prefix filtering, limit enforcement, and deterministic ordering for exact queries.
+- Normalize query parameters and translate them into backend calls used by CLI and context rendering.
+
+Design principles
+-----------------
+Helpers delegate to the active backend while keeping filtering and ordering deterministic.
+
+Architectural role
+------------------
+This module belongs to the **exact query layer** used by CLI and context building when retrieving precise symbols and relations.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from codira.registry import active_index_backend
+
+if TYPE_CHECKING:
+    import sqlite3
+    from pathlib import Path
+
+    from codira.types import DocstringIssueRow, IncludeEdgeRow, SymbolRow
+
+CallEdgeRow = tuple[str, str, str | None, str | None, int]
+CallableRefRow = tuple[str, str, str | None, str | None, int]
+EmbeddingInventoryRow = tuple[str, str, int, int]
+
+
+@dataclass(frozen=True)
+class CallTreeNode:
+    """
+    One bounded call-tree node rendered by the `calls` CLI traversal mode.
+
+    Parameters
+    ----------
+    module : str | None
+        Owning module for a resolved symbol, or ``None`` for unresolved leaves.
+    name : str
+        Logical symbol name or the unresolved placeholder.
+    resolved : bool
+        Whether the node resolves to a concrete indexed symbol.
+    children : tuple[CallTreeNode, ...], optional
+        Deterministically ordered child nodes for the next traversal layer.
+    cycle : bool, optional
+        Whether traversal stopped because this node would repeat the current
+        branch path.
+    """
+
+    module: str | None
+    name: str
+    resolved: bool
+    children: tuple[CallTreeNode, ...] = ()
+    cycle: bool = False
+
+
+@dataclass(frozen=True)
+class CallTreeResult:
+    """
+    Bounded traversal result for one `calls` CLI query.
+
+    Parameters
+    ----------
+    root_module : str | None
+        Owning module for the root query symbol when it can be resolved
+        deterministically.
+    root_name : str
+        Root logical symbol name requested by the user.
+    children : tuple[codira.query.exact.CallTreeNode, ...]
+        Deterministically ordered first-level traversal nodes.
+    incoming : bool
+        Whether traversal followed incoming edges instead of outgoing edges.
+    truncated_by_depth : bool
+        Whether at least one branch was cut by the supplied depth limit.
+    truncated_by_nodes : bool
+        Whether traversal stopped early because of the node cap.
+    node_count : int
+        Number of rendered nodes including the root.
+    edge_count : int
+        Number of rendered edges in the bounded traversal result.
+    """
+
+    root_module: str | None
+    root_name: str
+    children: tuple[CallTreeNode, ...]
+    incoming: bool
+    truncated_by_depth: bool
+    truncated_by_nodes: bool
+    node_count: int
+    edge_count: int
+
+
+def find_symbol(
+    root: Path,
+    name: str,
+    *,
+    prefix: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[SymbolRow]:
+    """
+    Find exact symbol-name matches in the index.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    name : str
+        Exact symbol name to search for.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict symbol files.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the function
+        opens and closes its own connection.
+
+    Returns
+    -------
+    list[SymbolRow]
+        Matching symbol rows ordered deterministically.
+    """
+    backend = active_index_backend()
+    return backend.find_symbol(root, name, prefix=prefix, conn=conn)
+
+
+def docstring_issues(
+    root: Path,
+    *,
+    prefix: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[DocstringIssueRow]:
+    """
+    Return indexed docstring validation issues.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict issue ownership.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the function
+        opens and closes its own connection.
+
+    Returns
+    -------
+    list[codira.types.DocstringIssueRow]
+        Issue rows with issue text, stable identity, and defining location
+        metadata.
+    """
+    backend = active_index_backend()
+    return backend.docstring_issues(root, prefix=prefix, conn=conn)
+
+
+def find_call_edges(
+    root: Path,
+    name: str,
+    *,
+    module: str | None = None,
+    incoming: bool = False,
+    prefix: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[CallEdgeRow]:
+    """
+    Find exact call edges for a caller or callee logical name.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    name : str
+        Exact logical caller or callee name to search for.
+    module : str | None, optional
+        Optional module qualifier used to restrict the result set.
+    incoming : bool, optional
+        When ``True``, return incoming edges for the callee; otherwise return
+        outgoing edges for the caller.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict caller files.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the function
+        opens and closes its own connection.
+
+    Returns
+    -------
+    list[CallEdgeRow]
+        Matching call-edge rows ordered deterministically.
+    """
+    backend = active_index_backend()
+    return backend.find_call_edges(
+        root,
+        name,
+        module=module,
+        incoming=incoming,
+        prefix=prefix,
+        conn=conn,
+    )
+
+
+def build_call_tree(
+    root: Path,
+    name: str,
+    *,
+    module: str | None = None,
+    incoming: bool = False,
+    prefix: str | None = None,
+    max_depth: int = 2,
+    max_nodes: int = 20,
+    conn: sqlite3.Connection | None = None,
+) -> CallTreeResult | None:
+    """
+    Build a bounded traversal tree for one exact `calls` query.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    name : str
+        Exact logical caller or callee name to traverse around.
+    module : str | None, optional
+        Optional exact module filter for the selected side of the edge.
+    incoming : bool, optional
+        When ``True``, traverse callers of the named callee; otherwise traverse
+        callees of the named caller.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict caller files.
+    max_depth : int, optional
+        Maximum traversal depth below the root. Depth ``0`` renders only the
+        root node.
+    max_nodes : int, optional
+        Maximum number of rendered nodes including the root.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the function
+        opens and closes its own connection through nested exact helpers.
+
+    Returns
+    -------
+    codira.query.exact.CallTreeResult | None
+        Bounded traversal result, or ``None`` when the root query matches no
+        call edges.
+    """
+    initial_rows = find_call_edges(
+        root,
+        name,
+        module=module,
+        incoming=incoming,
+        prefix=prefix,
+        conn=conn,
+    )
+    if not initial_rows:
+        return None
+
+    root_candidates: set[tuple[str | None, str]] = {
+        (
+            (callee_module, callee_name)
+            if incoming and callee_module is not None and callee_name is not None
+            else (caller_module, caller_name)
+        )
+        for caller_module, caller_name, callee_module, callee_name, _resolved in initial_rows
+    }
+    if len(root_candidates) == 1:
+        root_module, root_name = next(iter(root_candidates))
+    else:
+        root_module, root_name = module, name
+
+    rendered_nodes = 1
+    rendered_edges = 0
+    truncated_by_depth = False
+    truncated_by_nodes = False
+
+    def ordered_neighbors(
+        rows: list[CallEdgeRow],
+    ) -> list[tuple[str | None, str, bool]]:
+        deduped: dict[tuple[str | None, str, bool], tuple[str | None, str, bool]] = {}
+        for caller_module, caller_name, callee_module, callee_name, resolved in rows:
+            key: tuple[str | None, str, bool]
+            if incoming:
+                key = (caller_module, caller_name, True)
+            elif resolved and callee_module is not None and callee_name is not None:
+                key = (callee_module, callee_name, True)
+            else:
+                key = (None, "<unresolved>", False)
+            deduped.setdefault(key, key)
+        return sorted(
+            deduped.values(),
+            key=lambda item: (
+                0 if item[2] else 1,
+                item[0] or "",
+                item[1],
+            ),
+        )
+
+    def build_children(
+        current_module: str | None,
+        current_name: str,
+        *,
+        depth: int,
+        path: tuple[tuple[str | None, str], ...],
+    ) -> tuple[CallTreeNode, ...]:
+        nonlocal rendered_edges, rendered_nodes, truncated_by_depth, truncated_by_nodes
+
+        rows = find_call_edges(
+            root,
+            current_name,
+            module=current_module,
+            incoming=incoming,
+            prefix=prefix,
+            conn=conn,
+        )
+        if not rows:
+            return ()
+        if depth >= max_depth:
+            truncated_by_depth = True
+            return ()
+
+        children: list[CallTreeNode] = []
+        for child_module, child_name, child_resolved in ordered_neighbors(rows):
+            if rendered_nodes >= max_nodes:
+                truncated_by_nodes = True
+                break
+
+            rendered_edges += 1
+            rendered_nodes += 1
+
+            if not child_resolved:
+                children.append(
+                    CallTreeNode(
+                        module=None,
+                        name=child_name,
+                        resolved=False,
+                    )
+                )
+                continue
+
+            child_identity = (child_module, child_name)
+            if child_identity in path:
+                children.append(
+                    CallTreeNode(
+                        module=child_module,
+                        name=child_name,
+                        resolved=True,
+                        cycle=True,
+                    )
+                )
+                continue
+
+            grandchildren = build_children(
+                child_module,
+                child_name,
+                depth=depth + 1,
+                path=path + (child_identity,),
+            )
+            children.append(
+                CallTreeNode(
+                    module=child_module,
+                    name=child_name,
+                    resolved=True,
+                    children=grandchildren,
+                )
+            )
+
+        return tuple(children)
+
+    return CallTreeResult(
+        root_module=root_module,
+        root_name=root_name,
+        children=build_children(
+            root_module,
+            root_name,
+            depth=0,
+            path=((root_module, root_name),),
+        ),
+        incoming=incoming,
+        truncated_by_depth=truncated_by_depth,
+        truncated_by_nodes=truncated_by_nodes,
+        node_count=rendered_nodes,
+        edge_count=rendered_edges,
+    )
+
+
+def find_callable_refs(
+    root: Path,
+    name: str,
+    *,
+    module: str | None = None,
+    incoming: bool = False,
+    prefix: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[CallableRefRow]:
+    """
+    Find exact callable-object references for an owner or referenced target.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    name : str
+        Exact logical owner or referenced target name to search for.
+    module : str | None, optional
+        Optional module qualifier used to restrict the result set.
+    incoming : bool, optional
+        When ``True``, return incoming references for the target; otherwise
+        return outgoing references for the owner.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict owner files.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the function
+        opens and closes its own connection.
+
+    Returns
+    -------
+    list[CallableRefRow]
+        Matching callable-reference rows ordered deterministically.
+    """
+    backend = active_index_backend()
+    return backend.find_callable_refs(
+        root,
+        name,
+        module=module,
+        incoming=incoming,
+        prefix=prefix,
+        conn=conn,
+    )
+
+
+def build_ref_tree(
+    root: Path,
+    name: str,
+    *,
+    module: str | None = None,
+    incoming: bool = False,
+    prefix: str | None = None,
+    max_depth: int = 2,
+    max_nodes: int = 20,
+    conn: sqlite3.Connection | None = None,
+) -> CallTreeResult | None:
+    """
+    Build a bounded traversal tree for one exact `refs` query.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    name : str
+        Exact logical owner or referenced target name to traverse around.
+    module : str | None, optional
+        Optional exact module filter for the selected side of the reference.
+    incoming : bool, optional
+        When ``True``, traverse owners that reference the named target;
+        otherwise traverse referenced targets for the named owner.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict owner files.
+    max_depth : int, optional
+        Maximum traversal depth below the root. Depth ``0`` renders only the
+        root node.
+    max_nodes : int, optional
+        Maximum number of rendered nodes including the root.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the function
+        opens and closes its own connection through nested exact helpers.
+
+    Returns
+    -------
+    codira.query.exact.CallTreeResult | None
+        Bounded traversal result, or ``None`` when the root query matches no
+        callable references.
+    """
+    initial_rows = find_callable_refs(
+        root,
+        name,
+        module=module,
+        incoming=incoming,
+        prefix=prefix,
+        conn=conn,
+    )
+    if not initial_rows:
+        return None
+
+    root_candidates: set[tuple[str | None, str]] = {
+        (
+            (target_module, target_name)
+            if incoming and target_module is not None and target_name is not None
+            else (owner_module, owner_name)
+        )
+        for owner_module, owner_name, target_module, target_name, _resolved in initial_rows
+    }
+    if len(root_candidates) == 1:
+        root_module, root_name = next(iter(root_candidates))
+    else:
+        root_module, root_name = module, name
+
+    rendered_nodes = 1
+    rendered_edges = 0
+    truncated_by_depth = False
+    truncated_by_nodes = False
+
+    def ordered_neighbors(
+        rows: list[CallableRefRow],
+    ) -> list[tuple[str | None, str, bool]]:
+        deduped: dict[tuple[str | None, str, bool], tuple[str | None, str, bool]] = {}
+        for owner_module, owner_name, target_module, target_name, resolved in rows:
+            key: tuple[str | None, str, bool]
+            if incoming:
+                key = (owner_module, owner_name, True)
+            elif resolved and target_module is not None and target_name is not None:
+                key = (target_module, target_name, True)
+            else:
+                key = (None, "<unresolved>", False)
+            deduped.setdefault(key, key)
+        return sorted(
+            deduped.values(),
+            key=lambda item: (
+                0 if item[2] else 1,
+                item[0] or "",
+                item[1],
+            ),
+        )
+
+    def build_children(
+        current_module: str | None,
+        current_name: str,
+        *,
+        depth: int,
+        path: tuple[tuple[str | None, str], ...],
+    ) -> tuple[CallTreeNode, ...]:
+        nonlocal rendered_edges, rendered_nodes, truncated_by_depth, truncated_by_nodes
+
+        rows = find_callable_refs(
+            root,
+            current_name,
+            module=current_module,
+            incoming=incoming,
+            prefix=prefix,
+            conn=conn,
+        )
+        if not rows:
+            return ()
+        if depth >= max_depth:
+            truncated_by_depth = True
+            return ()
+
+        children: list[CallTreeNode] = []
+        for child_module, child_name, child_resolved in ordered_neighbors(rows):
+            if rendered_nodes >= max_nodes:
+                truncated_by_nodes = True
+                break
+
+            rendered_edges += 1
+            rendered_nodes += 1
+
+            if not child_resolved:
+                children.append(
+                    CallTreeNode(module=None, name=child_name, resolved=False)
+                )
+                continue
+
+            child_identity = (child_module, child_name)
+            if child_identity in path:
+                children.append(
+                    CallTreeNode(
+                        module=child_module,
+                        name=child_name,
+                        resolved=True,
+                        cycle=True,
+                    )
+                )
+                continue
+
+            grandchildren = build_children(
+                child_module,
+                child_name,
+                depth=depth + 1,
+                path=path + (child_identity,),
+            )
+            children.append(
+                CallTreeNode(
+                    module=child_module,
+                    name=child_name,
+                    resolved=True,
+                    children=grandchildren,
+                )
+            )
+
+        return tuple(children)
+
+    return CallTreeResult(
+        root_module=root_module,
+        root_name=root_name,
+        children=build_children(
+            root_module,
+            root_name,
+            depth=0,
+            path=((root_module, root_name),),
+        ),
+        incoming=incoming,
+        truncated_by_depth=truncated_by_depth,
+        truncated_by_nodes=truncated_by_nodes,
+        node_count=rendered_nodes,
+        edge_count=rendered_edges,
+    )
+
+
+def find_include_edges(
+    root: Path,
+    name: str,
+    *,
+    module: str | None = None,
+    incoming: bool = False,
+    prefix: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[IncludeEdgeRow]:
+    """
+    Find exact include-like edges for an owner module or included target.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    name : str
+        Exact owner module name or include target path to search for.
+    module : str | None, optional
+        Optional owner-module qualifier used to restrict incoming results.
+    incoming : bool, optional
+        When ``True``, return incoming include edges for the included target;
+        otherwise return outgoing include edges for the owner module.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict owner files.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the function
+        opens and closes its own connection.
+
+    Returns
+    -------
+    list[codira.types.IncludeEdgeRow]
+        Matching include-edge rows ordered deterministically as
+        ``(owner_module, target_name, kind, lineno)`` tuples.
+    """
+    backend = active_index_backend()
+    return backend.find_include_edges(
+        root,
+        name,
+        module=module,
+        incoming=incoming,
+        prefix=prefix,
+        conn=conn,
+    )
+
+
+def find_logical_symbols(
+    root: Path,
+    module_name: str,
+    logical_name: str,
+    *,
+    prefix: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[SymbolRow]:
+    """
+    Resolve a logical callable name back to indexed symbol rows.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    module_name : str
+        Dotted module that owns the logical symbol.
+    logical_name : str
+        Logical symbol identity such as ``helper`` or ``Class.method``.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict symbol files.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the function
+        opens and closes its own connection.
+
+    Returns
+    -------
+    list[codira.types.SymbolRow]
+        Matching indexed symbol rows ordered deterministically.
+    """
+    backend = active_index_backend()
+    return backend.find_logical_symbols(
+        root,
+        module_name,
+        logical_name,
+        prefix=prefix,
+        conn=conn,
+    )
+
+
+def logical_symbol_name(
+    root: Path,
+    symbol: SymbolRow,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> str:
+    """
+    Return the logical graph identity for one indexed symbol row.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    symbol : codira.types.SymbolRow
+        Indexed symbol row whose logical identity should be resolved.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the function
+        opens and closes its own connection.
+
+    Returns
+    -------
+    str
+        Logical symbol identity used by call edges and callable references.
+    """
+    backend = active_index_backend()
+    return backend.logical_symbol_name(root, symbol, conn=conn)
+
+
+def embedding_inventory(
+    root: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[EmbeddingInventoryRow]:
+    """
+    Return stored embedding inventory grouped by backend metadata.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the function
+        opens and closes its own connection.
+
+    Returns
+    -------
+    list[EmbeddingInventoryRow]
+        Rows as ``(backend, version, dim, count)`` ordered deterministically.
+    """
+    backend = active_index_backend()
+    return backend.embedding_inventory(root, conn=conn)

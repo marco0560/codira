@@ -1,0 +1,306 @@
+[project]
+name = "codira"
+version = "1.0.0"
+description = "Local repository indexing and retrieval tool"
+readme = "README.md"
+authors = [{name = "Marco Coppola"}]
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = [
+    "jsonschema>=4.0",
+]
+
+[project.optional-dependencies]
+semantic = [
+  "sentence-transformers>=3.0"
+]
+
+bundle-official = [
+  "sentence-transformers>=3.0",
+  "codira-analyzer-python==1.0.0",
+  "codira-analyzer-json==1.0.0",
+  "codira-analyzer-c==1.0.0",
+  "codira-analyzer-bash==1.0.0",
+  "codira-backend-sqlite==1.0.0"
+]
+
+dev = [
+  "black",
+  "mypy",
+  "ruff",
+  "pre-commit",
+  "pytest",
+  "pytest-cov",
+  "packaging"
+]
+
+docs = [
+  "mkdocs>=1.6",
+  "mkdocs-material>=9.7",
+  "mkdocstrings[python]>=0.24"
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+codira = ["py.typed"]
+
+[project.scripts]
+codira = "codira.cli:main"
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+#[tool.ruff.lint]
+#select = [
+#    "E",   # pycodestyle
+#    "F",   # pyflakes
+#    "I",   # isort
+#]
+#ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+exclude = """(?x)(
+    ^build/
+  | ^dist/
+  | ^src/codira\\.egg-info/
+  | ^packages/[^/]+/build/
+  | ^packages/[^/]+/dist/
+  | ^packages/[^/]+/src/[^/]+\\.egg-info/
+)"""
+
+[[tool.mypy.overrides]]
+module = ["tree_sitter", "tree_sitter_c", "tree_sitter_bash", "sentence_transformers"]
+ignore_missing_imports = true
+
+[tool.ruff.lint]
+# Baseline: real bugs + imports
+# Phase 1 — Exception semantics
+# Phase 2 — Import/type boundary
+# Phase 3 — pathlib migration
+# Phase 4 — Bug-risk & correctness
+# Phase 5 — Return & logging correctness
+# ------------------------------------------------------------
+# Phase 6 — Robustness hardening (low-noise / high-value)
+#
+# Adds:
+#   PLR  → risky constructs (not complexity limits)
+#   RSE  → raise misuse (exception correctness)
+#   SIM  → logic simplification traps (can reveal hidden bugs)
+#   ICN  → import alias / shadowing correctness
+#   TCH  → typing boundary correctness helpers
+#
+# Goal:
+#   Catch remaining real defects without enabling high-noise families
+#   (docstrings, typing completeness, complexity, perf, style).
+# ------------------------------------------------------------
+# Phase 7 — Engineering strictness (maturity phase, still low-noise)
+#
+# Adds:
+#   S602, S607, S610, S701 → core subprocess / execution hygiene
+#   C901, PLR0912          → light complexity detection
+#   ERA                    → commented-out / dead code detection
+#
+# Goal:
+#   Improve maintainability and execution safety without opening
+#   style, typing, or documentation flood.
+# ------------------------------------------------------------
+
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # import order / correctness
+    "UP",   # pyupgrade
+
+    # ------------------------------------------------------------
+    # Phase 1 — Exception semantics
+    # ------------------------------------------------------------
+    "BLE",
+    "TRY",
+    "EM",
+    "S110",
+    "S112",
+
+    # ------------------------------------------------------------
+    # Phase 2 — Import/type boundary
+    # ------------------------------------------------------------
+    "TC",
+
+    # ------------------------------------------------------------
+    # Phase 3 — pathlib migration
+    # ------------------------------------------------------------
+    "PTH",
+
+    # ------------------------------------------------------------
+    # Phase 4 — Bug-risk & correctness
+    # ------------------------------------------------------------
+    "B",      # flake8-bugbear (high-value correctness rules)
+
+    # ------------------------------------------------------------
+    # Phase 5 — Return & logging correctness
+    # ------------------------------------------------------------
+    "RET",    # return correctness
+    "LOG",    # logging misuse
+
+    # ------------------------------------------------------------
+    # Phase 6 — Robustness hardening
+    # ------------------------------------------------------------
+    "PLR",    # pylint refactor (risky constructs only; complexity still ignored)
+    "RSE",    # raise misuse / exception correctness
+    "SIM",    # simplification rules revealing hidden logic issues
+    "ICN",    # import alias / shadowing correctness
+    "TCH",    # typing boundary correctness helpers
+    "PIE",    # potential import cycles (can reveal hidden import issues)
+
+    # ------------------------------------------------------------
+    # Phase 7 — Engineering strictness (NEW)
+    # ------------------------------------------------------------
+    "S602",   # subprocess with shell=True
+    "S607",   # partial path execution
+    "S610",   # subprocess execution hygiene
+    "S701",   # template autoescape (harmless if unused)
+    "C901",   # function complexity
+    "PLR0912",# too many branches
+    "ERA",    # commented-out code / dead code
+    "TD",     # type comment detection (encourage migration to inline typing)
+]
+
+ignore = [
+    # ------------------------------------------------------------
+    # Documentation / style
+    # ------------------------------------------------------------
+    "D",
+
+    # ------------------------------------------------------------
+    # Typing strictness (future phase)
+    # ------------------------------------------------------------
+    "ANN",
+    "FBT",
+
+    # ------------------------------------------------------------
+    # Security — partially enforced
+    # (S101 and S108 disabled in tests via per-file-ignores)
+    # ------------------------------------------------------------
+    "S603",
+    "S324",
+
+    # ------------------------------------------------------------
+    # Complexity — postponed (except C901 + PLR0912 enabled in Phase 7)
+    # ------------------------------------------------------------
+    "PLR0911",
+    "PLR0915",
+
+    # ------------------------------------------------------------
+    # Magic values / design
+    # ------------------------------------------------------------
+    "PLR2004",
+
+    # ------------------------------------------------------------
+    # Formatting (handled elsewhere)
+    # ------------------------------------------------------------
+    "COM812",
+    "E501",
+
+    # ------------------------------------------------------------
+    # Hygiene / TODO
+    # ------------------------------------------------------------
+    "FIX002",
+
+    # ------------------------------------------------------------
+    # Performance / micro-refactors — still optional
+    # ------------------------------------------------------------
+    "FURB",
+    "PERF",
+
+    # ------------------------------------------------------------
+    # Bugbear rules intentionally ignored
+    # ------------------------------------------------------------
+    "B008",   # function calls in default args (used intentionally sometimes)
+    "B905",   # zip() strict — too noisy for now
+]
+
+fixable = [
+    "I",      # import sorting
+    "UP",     # pyupgrade
+    "B007",   # unused loop variable → _var
+    "B009",   # getattr(const) → attribute
+]
+
+unfixable = [
+    "E501",   # never auto-wrap long lines (TeX/regex risk)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",  # asserts allowed in tests
+    "S108",  # temp files allowed
+    "S607",  # CLI tests intentionally invoke entrypoints via PATH (portable & venv-safe)
+    "ARG",   # test functions often have unused arguments for fixtures or parameterization
+    "PLR",   # test functions often have more branches than normal code (e.g. subtests, parameterization)
+]
+"tests/test_charset_decoding.py" = [
+    "B017", # So only truly generic-failure tests allow broad Exception
+]
+"tests/helpers.py" = [
+    "PLR0913", # test helper requires multiple independent knobs
+]
+"src/codira/cli.py" = [
+    "PLR0913", # command handlers mirror stable CLI option sets
+    "PLR0912", # index usability checks intentionally fan out by staleness case
+    "C901", # index usability checks are orchestration-heavy, not algorithmically complex
+]
+"src/codira/contracts.py" = [
+    "PLR0913", # protocol method arity follows backend/query contracts
+]
+"src/codira/query/graph_enrichment.py" = [
+    "PLR0913", # graph enrichment orchestration requires explicit graph/context inputs
+    "PLR0912", # bounded graph expansion branches by edge direction and relation type
+    "C901", # graph enrichment is orchestration-heavy rather than algorithmically complex
+]
+"src/codira/docstring.py" = [
+    "PLR0913", # validation API exposes independent semantic flags
+]
+"src/codira/indexer.py" = [
+    "PLR0913", # persistence helpers and backend methods preserve stable indexing contracts
+]
+"packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py" = [
+    "PLR0913", # backend method arity mirrors the stable backend query and persistence contracts
+]
+"src/codira/parser_ast.py" = [
+    "PLR0912", # parser normalization branches mirror Python AST node families
+]
+"src/codira/prompts/default.py" = [
+    "PLR0913", # prompt renderer combines distinct context inputs
+    "PLR0912", # prompt sections branch on symbol families and optional context blocks
+]
+"src/codira/query/context.py" = [
+    "PLR0913", # retrieval and rendering helpers preserve stable query interfaces
+    "PLR0912", # retrieval orchestration branches across symbol families and output modes
+    "C901", # context assembly remains intentionally centralized for deterministic ordering
+]
+"src/codira/query/exact.py" = [
+    "PLR0913", # exact-query wrappers mirror backend query parameters
+]
+"src/codira/registry.py" = [
+    "BLE001", # third-party plugin loading must degrade gracefully on arbitrary plugin failures
+]
+"src/codira/semantic/search.py" = [
+    "PLR0913", # semantic search wrapper mirrors backend similarity parameters
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15

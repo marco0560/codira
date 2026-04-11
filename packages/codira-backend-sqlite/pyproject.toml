@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codira-backend-sqlite"
+version = "1.0.0"
+description = "First-party SQLite backend plugin for codira"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "codira>=1.0.0,<2.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "black",
+    "mypy",
+    "pytest",
+    "ruff",
+]
+
+[project.entry-points."codira.backends"]
+sqlite = "codira_backend_sqlite:build_backend"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+codira_backend_sqlite = ["py.typed"]
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true

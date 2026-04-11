@@ -1,0 +1,47 @@
+# Packaging artifacts
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Repoindex internal DB
+.codira/
+issues.json
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual Studio Code configuration
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+src/codira/_version.py
+repo.tar.xz
+site/
+
+# Coverage
+.coverage
+htmlcov/
+
+# --- Node (semantic-release) ---
+node_modules/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Codex ---
+.codex

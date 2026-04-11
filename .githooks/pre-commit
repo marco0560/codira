@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$HOOK_DIR/.." && pwd)
+LOCAL_PRE_COMMIT="$REPO_ROOT/.venv/bin/pre-commit"
+WINDOWS_PRE_COMMIT="$REPO_ROOT/.venv/Scripts/pre-commit.exe"
+
+if [ -x "$LOCAL_PRE_COMMIT" ]; then
+    PRE_COMMIT="$LOCAL_PRE_COMMIT"
+elif [ -x "$WINDOWS_PRE_COMMIT" ]; then
+    PRE_COMMIT="$WINDOWS_PRE_COMMIT"
+elif command -v pre-commit >/dev/null 2>&1; then
+    PRE_COMMIT=$(command -v pre-commit)
+else
+    echo "pre-commit not available, skipping pre-commit hook"
+    exit 0
+fi
+
+echo "▶ Running pre-commit hooks"
+exec "$PRE_COMMIT" run --hook-stage commit

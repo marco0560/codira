@@ -1,0 +1,23 @@
+name: Commit Message Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  validate-commit-messages:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/check_commit_messages.py --base "$BASE_SHA" --head "$HEAD_SHA"

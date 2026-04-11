@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codira-demo-analyzer"
+version = "0.1.0"
+description = "Example third-party analyzer plugin for codira"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["codira"]
+
+[project.entry-points."codira.analyzers"]
+demo = "codira_demo_analyzer:build_analyzer"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codira-bundle-official"
+version = "1.0.0"
+description = "Curated first-party plugin bundle for codira"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "codira[semantic]==1.0.0",
+    "codira-analyzer-python==1.0.0",
+    "codira-analyzer-json==1.0.0",
+    "codira-analyzer-c==1.0.0",
+    "codira-analyzer-bash==1.0.0",
+    "codira-backend-sqlite==1.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "black",
+    "mypy",
+    "pytest",
+    "ruff",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true

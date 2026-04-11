@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codira-analyzer-bash"
+version = "1.0.0"
+description = "First-party Bash analyzer plugin for codira"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "codira>=1.0.0,<2.0.0",
+    "tree-sitter>=0.25.2",
+    "tree-sitter-bash>=0.25.1",
+]
+
+[project.optional-dependencies]
+test = [
+    "black",
+    "mypy",
+    "pytest",
+    "ruff",
+]
+
+[project.entry-points."codira.analyzers"]
+bash = "codira_analyzer_bash:build_analyzer"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
