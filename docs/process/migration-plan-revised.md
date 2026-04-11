@@ -2,7 +2,7 @@
 
 ## Version
 
-Document version: `0.1.12`
+Document version: `0.1.13`
 
 Status: active migration ledger.
 
@@ -45,6 +45,9 @@ This document supersedes the root-level draft `migration-plan.md` for the
 - `0.1.12`: Sync the Phase 8 through Phase 10 ledger into the active
   `codira` checkout and correct remaining ledger references where historical
   `repoindex` package names were accidentally rewritten to `codira`.
+- `0.1.13`: Complete Phase 11 by uploading all seven `1.0.0` distributions to
+  TestPyPI and validating a fresh `codira-bundle-official` install from the
+  package index.
 
 ## Purpose
 
@@ -588,28 +591,56 @@ Prove the package set resolves from a package index before touching real PyPI.
 
 Publish to TestPyPI in dependency order:
 
-1. [ ] `codira-analyzer-python`
-2. [ ] `codira-analyzer-json`
-3. [ ] `codira-analyzer-c`
-4. [ ] `codira-analyzer-bash`
-5. [ ] `codira-backend-sqlite`
-6. [ ] `codira`
-7. [ ] `codira-bundle-official`
+1. [x] `codira-analyzer-python`
+2. [x] `codira-analyzer-json`
+3. [x] `codira-analyzer-c`
+4. [x] `codira-analyzer-bash`
+5. [x] `codira-backend-sqlite`
+6. [x] `codira`
+7. [x] `codira-bundle-official`
 
 Fresh-environment checks:
 
-- [ ] `pip install codira-bundle-official` from TestPyPI with PyPI as the
+- [x] `pip install codira-bundle-official` from TestPyPI with PyPI as the
   extra index for third-party dependencies.
-- [ ] `codira --help`
-- [ ] `codira -V`
-- [ ] `codira plugins --json`
-- [ ] `codira index --full --json`
-- [ ] `codira ctx "package metadata rename" --json`
-- [ ] Confirm no installed distribution depends on `repoindex`.
+- [x] `codira --help`
+- [x] `codira -V`
+- [x] `codira plugins --json`
+- [x] `codira index --full --json`
+- [x] `codira ctx "package metadata rename" --json`
+- [x] Confirm no installed distribution depends on `repoindex`.
 
 Exit criteria:
 
-- [ ] TestPyPI install and runtime smoke tests pass from a fresh environment.
+- [x] TestPyPI install and runtime smoke tests pass from a fresh environment.
+
+Phase 11 TestPyPI record:
+
+- [x] Built wheel and sdist artifacts for all seven distributions.
+- [x] `twine check` passed for all generated artifacts.
+- [x] TestPyPI project pages:
+  - [x] `https://test.pypi.org/project/codira-analyzer-python/1.0.0/`
+  - [x] `https://test.pypi.org/project/codira-analyzer-json/1.0.0/`
+  - [x] `https://test.pypi.org/project/codira-analyzer-c/1.0.0/`
+  - [x] `https://test.pypi.org/project/codira-analyzer-bash/1.0.0/`
+  - [x] `https://test.pypi.org/project/codira-backend-sqlite/1.0.0/`
+  - [x] `https://test.pypi.org/project/codira/1.0.0/`
+  - [x] `https://test.pypi.org/project/codira-bundle-official/1.0.0/`
+- [x] Fresh environment:
+  `/tmp/codira-testpypi-venv`.
+- [x] Install command:
+  `python -m pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ codira-bundle-official`.
+- [x] Installed package set included `codira==1.0.0` and all six first-party
+  `codira-*==1.0.0` distributions.
+- [x] `pip check` reported no broken requirements.
+- [x] Metadata search found no installed `repoindex` distribution and no
+  `Requires-Dist: repoindex` dependency metadata.
+- [x] Runtime smoke tests passed from the fresh environment:
+  - [x] `codira --help`
+  - [x] `codira -V`
+  - [x] `codira plugins --json`
+  - [x] `codira index --full --json`
+  - [x] `codira ctx "package metadata rename" --json`
 
 ## Phase 12 - Real PyPI Release
 
