@@ -2,7 +2,7 @@
 
 ## Version
 
-Document version: `0.1.14`
+Document version: `0.1.15`
 
 Status: active migration ledger.
 
@@ -51,6 +51,9 @@ This document supersedes the root-level draft `migration-plan.md` for the
 - `0.1.14`: Record the Phase 12 real-PyPI blocker: the first upload attempt
   was rejected with `403 Forbidden`, and PyPI still reported the attempted
   project name as absent afterward.
+- `0.1.15`: Complete Phase 12 by retrying real PyPI uploads with TestPyPI
+  `TWINE_*` environment variables unset, then validating a fresh
+  `codira-bundle-official` install from PyPI.
 
 ## Purpose
 
@@ -652,29 +655,29 @@ Publish the validated `codira` package set to PyPI.
 
 Publish to PyPI in dependency order:
 
-1. [ ] `codira-analyzer-python`
-2. [ ] `codira-analyzer-json`
-3. [ ] `codira-analyzer-c`
-4. [ ] `codira-analyzer-bash`
-5. [ ] `codira-backend-sqlite`
-6. [ ] `codira`
-7. [ ] `codira-bundle-official`
+1. [x] `codira-analyzer-python`
+2. [x] `codira-analyzer-json`
+3. [x] `codira-analyzer-c`
+4. [x] `codira-analyzer-bash`
+5. [x] `codira-backend-sqlite`
+6. [x] `codira`
+7. [x] `codira-bundle-official`
 
 Tasks:
 
-- [ ] Do not publish the bundle before its dependencies exist on PyPI.
-- [ ] Do not reuse any failed version number in a package namespace.
-- [ ] Verify each PyPI project page after upload.
-- [ ] Verify `pip install codira-bundle-official` in a fresh environment.
-- [ ] Verify `codira --help`.
-- [ ] Verify `codira plugins --json`.
-- [ ] Verify no dependency metadata points to `repoindex`.
+- [x] Do not publish the bundle before its dependencies exist on PyPI.
+- [x] Do not reuse any failed version number in a package namespace.
+- [x] Verify each PyPI project page after upload.
+- [x] Verify `pip install codira-bundle-official` in a fresh environment.
+- [x] Verify `codira --help`.
+- [x] Verify `codira plugins --json`.
+- [x] Verify no dependency metadata points to `repoindex`.
 
 Exit criteria:
 
-- [ ] The real PyPI release is installable through `codira-bundle-official`.
-- [ ] The installed command is `codira`.
-- [ ] The installed public API is `codira*`.
+- [x] The real PyPI release is installable through `codira-bundle-official`.
+- [x] The installed command is `codira`.
+- [x] The installed public API is `codira*`.
 
 Phase 12 blocker record:
 
@@ -685,7 +688,35 @@ Phase 12 blocker record:
 - [x] PyPI rejected the upload with `403 Forbidden`.
 - [x] `https://pypi.org/pypi/codira-analyzer-python/json` still returned 404
   after the failed upload, so no partial project creation was observed.
-- [ ] Resolve PyPI upload authorization before retrying Phase 12.
+- [x] Resolved PyPI upload authorization by unsetting `TWINE_USERNAME` and
+  `TWINE_PASSWORD` so `twine` used the real PyPI credentials from
+  `~/.pypirc`.
+
+Phase 12 PyPI release record:
+
+- [x] Real PyPI project pages:
+  - [x] `https://pypi.org/project/codira-analyzer-python/1.0.0/`
+  - [x] `https://pypi.org/project/codira-analyzer-json/1.0.0/`
+  - [x] `https://pypi.org/project/codira-analyzer-c/1.0.0/`
+  - [x] `https://pypi.org/project/codira-analyzer-bash/1.0.0/`
+  - [x] `https://pypi.org/project/codira-backend-sqlite/1.0.0/`
+  - [x] `https://pypi.org/project/codira/1.0.0/`
+  - [x] `https://pypi.org/project/codira-bundle-official/1.0.0/`
+- [x] Fresh environment:
+  `/tmp/codira-pypi-venv`.
+- [x] Install command:
+  `python -m pip install codira-bundle-official`.
+- [x] Installed package set included `codira==1.0.0` and all six first-party
+  `codira-*==1.0.0` distributions.
+- [x] `pip check` reported no broken requirements.
+- [x] Metadata search found no installed `repoindex` distribution and no
+  `Requires-Dist: repoindex` dependency metadata.
+- [x] Runtime smoke tests passed from the fresh environment:
+  - [x] `codira --help`
+  - [x] `codira -V`
+  - [x] `codira plugins --json`
+  - [x] `codira index --full --json`
+  - [x] `codira ctx "package metadata rename" --json`
 
 ## Phase 13 - Post-Release Cleanup
 
