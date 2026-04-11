@@ -2,7 +2,7 @@
 
 ## Version
 
-Document version: `0.1.13`
+Document version: `0.1.14`
 
 Status: active migration ledger.
 
@@ -48,6 +48,9 @@ This document supersedes the root-level draft `migration-plan.md` for the
 - `0.1.13`: Complete Phase 11 by uploading all seven `1.0.0` distributions to
   TestPyPI and validating a fresh `codira-bundle-official` install from the
   package index.
+- `0.1.14`: Record the Phase 12 real-PyPI blocker: the first upload attempt
+  was rejected with `403 Forbidden`, and PyPI still reported the attempted
+  project name as absent afterward.
 
 ## Purpose
 
@@ -672,6 +675,17 @@ Exit criteria:
 - [ ] The real PyPI release is installable through `codira-bundle-official`.
 - [ ] The installed command is `codira`.
 - [ ] The installed public API is `codira*`.
+
+Phase 12 blocker record:
+
+- [x] Real PyPI project availability was checked before upload; all seven
+  target names returned 404.
+- [x] The first upload attempted was
+  `codira-analyzer-python==1.0.0`.
+- [x] PyPI rejected the upload with `403 Forbidden`.
+- [x] `https://pypi.org/pypi/codira-analyzer-python/json` still returned 404
+  after the failed upload, so no partial project creation was observed.
+- [ ] Resolve PyPI upload authorization before retrying Phase 12.
 
 ## Phase 13 - Post-Release Cleanup
 
