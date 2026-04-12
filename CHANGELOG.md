@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/marco0560/codira/compare/v1.0.2...v1.1.0) (2026-04-12)
+
+
+### Features
+
+* **ci:** update sentence-transformers dependency to 5.4 ([0999d50](https://github.com/marco0560/codira/commit/0999d50d4e7346492cbeeaf3411380bb63e8cdaa))
+
 ## [1.0.2](https://github.com/marco0560/codira/compare/v1.0.1...v1.0.2) (2026-04-12)
 
 
