@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/marco0560/codira/compare/v1.0.0...v1.0.1) (2026-04-12)
+
+
+### Bug Fixes
+
+* **version:** avoid generated module import in source checkouts ([137c239](https://github.com/marco0560/codira/commit/137c23943beca998ad2fcfe8f6365348234be403))
+
 # Changelog
 
 ## 1.0.0 - 2026-04-11
