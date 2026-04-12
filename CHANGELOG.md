@@ -1,3 +1,10 @@
+## [1.1.2](https://github.com/marco0560/codira/compare/v1.1.1...v1.1.2) (2026-04-12)
+
+
+### Bug Fixes
+
+* **ci:** update pyproject.toml for versioning and packaging ([d570b87](https://github.com/marco0560/codira/commit/d570b876ccb8ae9bcac6449eeaa0aad65d4fc926))
+
 ## [1.1.1](https://github.com/marco0560/codira/compare/v1.1.0...v1.1.1) (2026-04-12)
 
 
