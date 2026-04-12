@@ -1,6 +1,6 @@
 [project]
 name = "codira"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Local repository indexing and retrieval tool"
 readme = "README.md"
 authors = [{name = "Marco Coppola"}]
@@ -41,8 +41,23 @@ docs = [
 ]
 
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=61", "setuptools_scm[toml]>=8"]
 build-backend = "setuptools.build_meta"
+
+[tool.poetry]
+name = "codira"
+version = "0.0.0"  # placeholder for Poetry only; actual versioning via setuptools_scm
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+write_to = "src/codira/_version.py"
+version_scheme = "no-guess-dev"
+local_scheme = "no-local-version"
 
 [tool.setuptools.package-data]
 codira = ["py.typed"]
