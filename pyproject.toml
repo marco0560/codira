@@ -12,11 +12,11 @@ dependencies = [
 
 [project.optional-dependencies]
 semantic = [
-  "sentence-transformers>=3.0"
+  "sentence-transformers>=5.4,<6.0"
 ]
 
 bundle-official = [
-  "sentence-transformers>=3.0",
+  "sentence-transformers>=5.4,<6.0",
   "codira-analyzer-python==1.0.0",
   "codira-analyzer-json==1.0.0",
   "codira-analyzer-c==1.0.0",

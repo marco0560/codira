@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 
     class _EmbeddingModel(Protocol):
         def get_sentence_embedding_dimension(self) -> int: ...
+        def get_embedding_dimension(self) -> int: ...
 
         def encode(
             self,
@@ -305,7 +306,7 @@ def _configure_torch_runtime() -> None:
         if num_interop_threads is not None:
             torch.set_num_interop_threads(num_interop_threads)
     except RuntimeError as exc:
-        msg = "Failed to apply configured Torch runtime settings. " f"Details: {exc}"
+        msg = f"Failed to apply configured Torch runtime settings. Details: {exc}"
         raise EmbeddingBackendError(msg) from exc
 
 
@@ -386,7 +387,7 @@ def provision_embedding_model(*, quiet: bool = False) -> None:
 
     if not quiet:
         print(
-            "[codira] Provisioning local embedding model " f"{EMBEDDING_BACKEND}...",
+            f"[codira] Provisioning local embedding model {EMBEDDING_BACKEND}...",
             file=sys.stderr,
         )
 
@@ -440,7 +441,10 @@ def _load_model() -> _EmbeddingModel:
     except RuntimeError as exc:
         raise _wrap_load_error(exc) from exc
 
-    dimension = model.get_sentence_embedding_dimension()
+    if hasattr(model, "get_embedding_dimension"):
+        dimension = model.get_embedding_dimension()
+    else:
+        dimension = model.get_sentence_embedding_dimension()
     if dimension != EMBEDDING_DIM:
         msg = (
             "Loaded embedding model dimension "

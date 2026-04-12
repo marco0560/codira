@@ -1004,7 +1004,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "mkdocstrings[python]>=0.24",
     ]
     assert optional_dependencies["bundle-official"] == [
-        "sentence-transformers>=3.0",
+        "sentence-transformers>=5.4,<6.0",
         "codira-analyzer-python==1.0.0",
         "codira-analyzer-json==1.0.0",
         "codira-analyzer-c==1.0.0",
@@ -1643,7 +1643,7 @@ def test_c_analyzer_keeps_last_duplicate_named_declaration(tmp_path: Path) -> No
     source = tmp_path / "native" / "types.h"
     source.parent.mkdir()
     source.write_text(
-        "struct Foo;\n" "struct Foo { int value; };\n",
+        "struct Foo;\nstruct Foo { int value; };\n",
         encoding="utf-8",
     )
 
@@ -1713,7 +1713,7 @@ def test_index_repo_handles_duplicate_c_declaration_redefinitions(
     source = tmp_path / "native" / "types.h"
     source.parent.mkdir()
     source.write_text(
-        "struct Foo;\n" "struct Foo { int value; };\n",
+        "struct Foo;\nstruct Foo { int value; };\n",
         encoding="utf-8",
     )
 
@@ -1863,11 +1863,7 @@ def test_c_analyzer_handles_latin1_encoded_source(tmp_path: Path) -> None:
     source.parent.mkdir()
     source.write_bytes(
         (
-            "/* Cr\xe8me legacy comment. */\n"
-            "int helper(void)\n"
-            "{\n"
-            "    return 1;\n"
-            "}\n"
+            "/* Cr\xe8me legacy comment. */\nint helper(void)\n{\n    return 1;\n}\n"
         ).encode("latin-1")
     )
 
@@ -1897,11 +1893,7 @@ def test_index_repo_handles_latin1_encoded_c_source(tmp_path: Path) -> None:
     source.parent.mkdir()
     source.write_bytes(
         (
-            "/* Cr\xe8me legacy comment. */\n"
-            "int helper(void)\n"
-            "{\n"
-            "    return 1;\n"
-            "}\n"
+            "/* Cr\xe8me legacy comment. */\nint helper(void)\n{\n    return 1;\n}\n"
         ).encode("latin-1")
     )
 

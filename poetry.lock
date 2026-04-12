@@ -3213,4 +3213,4 @@ semantic = ["sentence-transformers"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13"
-content-hash = "fbb9e18a8b2d9b86a5602121754a9a0c4504cbf14176629e62ce454aac7c24a1"
+content-hash = "4957fb39ebfa8817c456f120a16dddb8798cd2275cc4aa3dfd6f13c257bedb2c"
