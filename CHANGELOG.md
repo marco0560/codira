@@ -1,3 +1,11 @@
+## [1.1.3](https://github.com/marco0560/codira/compare/v1.1.2...v1.1.3) (2026-04-12)
+
+
+### Bug Fixes
+
+* **ci:** tighten versioning configuration ([c38c777](https://github.com/marco0560/codira/commit/c38c777a23fa5524ed7b3b7341225d13f2194b13))
+* **dev:** typo in script ([9dc1990](https://github.com/marco0560/codira/commit/9dc19905bc4833f31afba83cd8778c092192ae7f))
+
 ## [1.1.2](https://github.com/marco0560/codira/compare/v1.1.1...v1.1.2) (2026-04-12)
 
 
