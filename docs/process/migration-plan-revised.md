@@ -2,7 +2,7 @@
 
 ## Version
 
-Document version: `0.1.15`
+Document version: `0.1.16`
 
 Status: active migration ledger.
 
@@ -54,6 +54,10 @@ This document supersedes the root-level draft `migration-plan.md` for the
 - `0.1.15`: Complete Phase 12 by retrying real PyPI uploads with TestPyPI
   `TWINE_*` environment variables unset, then validating a fresh
   `codira-bundle-official` install from PyPI.
+- `0.1.16`: Complete Phase 13 by updating install and release documentation,
+  replacing inherited release notes with the `1.0.0` rebrand release record,
+  enabling published documentation, and running the final stale-reference
+  audit.
 
 ## Purpose
 
@@ -725,19 +729,48 @@ Remove local migration leftovers and update downstream references.
 
 Tasks:
 
-- [ ] Verify GitHub README badges and install instructions.
-- [ ] Verify published documentation links.
-- [ ] Verify release notes mention the rebrand and version reset.
-- [ ] Update local developer aliases and shell snippets.
-- [ ] Update any external documentation controlled by the maintainer.
-- [ ] Remove temporary release notebooks or archive them under `docs/process`
+- [x] Verify GitHub README badges and install instructions.
+- [x] Verify published documentation links.
+- [x] Verify release notes mention the rebrand and version reset.
+- [x] Update local developer aliases and shell snippets.
+- [x] Update any external documentation controlled by the maintainer.
+- [x] Remove temporary release notebooks or archive them under `docs/process`
   if they are still useful.
-- [ ] Run one final stale-reference audit.
+- [x] Run one final stale-reference audit.
 
 Exit criteria:
 
-- [ ] The migration is complete.
-- [ ] Remaining `codira` references are historical and intentional.
+- [x] The migration is complete.
+- [x] Remaining `repoindex` references are historical and intentional.
+
+Phase 13 cleanup record:
+
+- [x] README install instructions now include the published
+  `pip install codira-bundle-official` path and the core-only
+  `pip install codira` path.
+- [x] `docs/getting_started.md` now starts with the published package install
+  path before source-tree contributor setup.
+- [x] `docs/release/checklist.md` and
+  `docs/process/python-package-publishing-walkthrough.md` now describe the
+  coordinated `codira` package release flow instead of the old `v2.0.0`
+  split-first plan as active guidance.
+- [x] `CHANGELOG.md` now records `1.0.0` as the first public `codira` release,
+  including the rebrand from `repoindex` and the intentional version reset.
+- [x] GitHub Pages was enabled for `marco0560/codira` with Actions deployments.
+- [x] Fresh Docs workflow run `24292298099` completed successfully.
+- [x] `https://marco0560.github.io/codira/` returned HTTP 200 after the docs
+  deployment.
+- [x] README badge targets were checked:
+  - [x] `https://github.com/marco0560/codira/actions/workflows/ci.yml`
+    returned HTTP 200.
+  - [x] `https://pypi.org/project/codira-bundle-official/1.0.0/` returned
+    HTTP 200.
+- [x] No temporary release notebooks were present in the checkout.
+- [x] Final active stale-reference audit found only intentional historical
+  `repoindex` references in `CHANGELOG.md` and release-process context, plus
+  historical migration/ADR/process documents.
+- [x] Local documentation validation:
+  `python -m mkdocs build --strict`.
 
 ## Validation Contract
 

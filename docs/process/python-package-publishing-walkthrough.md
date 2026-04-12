@@ -16,10 +16,9 @@ to publish packages in.
 
 ## Packaging Model
 
-The `v2.0.0` publish is a coordinated multirepo release train. The current
-monorepo remains the staging source for the split, but the final PyPI upload
-must be built from the split repositories, not from a transitional monorepo
-checkout.
+The `1.0.0` `codira` publish is a coordinated package release. The source tree
+contains the core package and first-party package directories, and each
+distribution is built and uploaded explicitly in dependency order.
 
 The final repository set contains these installable distributions:
 
@@ -82,15 +81,16 @@ compatible secondary surface.
 
 ## Version Policy
 
-The initial `v2.0.0` publish is coordinated:
+The initial public `codira` publish is coordinated:
 
-* every first-party distribution publishes `2.0.0`
-* `codira-bundle-official` pins the matching `2.0.0` package set
-* release notes are coordinated across repositories
-* artifacts are built from the split repositories
+* every first-party distribution publishes `1.0.0`
+* `codira-bundle-official` pins the matching `1.0.0` package set
+* release notes document the rebrand from the historical `repoindex` working
+  name
+* artifacts are validated through TestPyPI before real PyPI upload
 
-After the initial `2.0.0` train, split repositories may evolve independently.
-Repository-local tags become the source of truth for future package versions.
+Future package versions may evolve independently once repository ownership and
+release automation are split further.
 
 ## Build Concepts
 
@@ -132,22 +132,7 @@ Before publishing:
 3. build every distribution
 4. run `twine check` on every generated artifact
 
-## Split-First Release Gate
-
-Before building release artifacts:
-
-1. export the accepted repository set from the monorepo split manifest
-2. create or update the real split repositories from those exports
-3. remove monorepo-only package paths from the final core repository
-4. ensure every split repository builds and tests in isolation
-5. ensure the core repository keeps installed-package integration coverage
-6. tag each repository for the coordinated `v2.0.0` release
-
-Do not publish `v2.0.0` directly from the monorepo staging checkout.
-
 ## Build Steps
-
-From each split repository root:
 
 Build `codira`:
 
@@ -265,6 +250,6 @@ Verify that the expected official analyzers and the SQLite backend are discovera
   with different contents.
 * Treat editable local installs under `packages/` as monorepo staging workflow,
   not as end-user documentation.
-* Publish in the recommended package order across repositories.
+* Publish in the recommended package order.
 * Use one final TestPyPI smoke test for the bundle after every repository has
-  uploaded its `2.0.0` artifacts.
+  uploaded its coordinated release artifacts.

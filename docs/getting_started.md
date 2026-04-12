@@ -1,5 +1,31 @@
 # Getting Started
 
+## Install the published package
+
+For normal use, install the official bundle into the virtual environment of the
+repository you want to analyze:
+
+```bash
+source .venv/bin/activate
+pip install codira-bundle-official
+```
+
+That installs `codira`, the first-party Python, JSON, C, and Bash analyzers,
+and the first-party SQLite backend.
+
+Verify the install:
+
+```bash
+codira -V
+codira plugins
+```
+
+For a core-only install:
+
+```bash
+pip install codira
+```
+
 ## Bootstrap this repository
 
 Create the local development environment and install the repo-local Git
@@ -41,12 +67,9 @@ the live source tree from this repository.
 
 The current source-tree install keeps the embedding stack in the core package
 while the extracted first-party analyzers and backend are installed from
-`packages/`.
-The accepted published umbrella name remains `codira[bundle-official]`, but
-that is a published-package contract rather than a source-tree shortcut. While
-working from the current checkout, the extracted first-party packages are still
-installed explicitly from `packages/`, and the canonical local package set is
-the one installed by `scripts/install_first_party_packages.py`.
+`packages/`. The published end-user bundle is `codira-bundle-official`; while
+working from the current checkout, the canonical local package set is the one
+installed by `scripts/install_first_party_packages.py`.
 
 Use `codira plugins` after installation if you want to verify whether a
 capability came from the core package, an official extracted package, or a

@@ -42,6 +42,26 @@ Start with:
 - `docs/process/decisions.md`
 - `docs/adr/index.md`
 
+## Install
+
+For the official runtime with the first-party analyzers and SQLite backend:
+
+```bash
+pip install codira-bundle-official
+```
+
+The installed command is:
+
+```bash
+codira --help
+```
+
+For a core-only install:
+
+```bash
+pip install codira
+```
+
 ## Install for Local Development
 
 Install `codira` into the virtual environment of the repository you want to
@@ -76,10 +96,9 @@ python ../codira/scripts/install_first_party_packages.py \
   --core-extra semantic
 ```
 
-The accepted published umbrella name remains `codira[bundle-official]`, but
-that is a published-package contract, not a source-tree shortcut. Inside the
-current checkout, install the extracted first-party analyzers and backend from
-`packages/`, with the canonical local install set owned by
+The published end-user bundle is `codira-bundle-official`. Inside the current
+checkout, install the extracted first-party analyzers and backend from
+`packages/`; the canonical local install set is owned by
 `scripts/install_first_party_packages.py`.
 
 Use `codira plugins` to inspect discovery. The report marks each plugin as
