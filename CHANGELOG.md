@@ -1,3 +1,11 @@
+## [1.1.1](https://github.com/marco0560/codira/compare/v1.1.0...v1.1.1) (2026-04-12)
+
+
+### Bug Fixes
+
+* **coverage:** ignore py.typed files in coverage audit ([1edba6c](https://github.com/marco0560/codira/commit/1edba6c5a79e96846f74f8f79911c821be970fac))
+* **indexer:** ignore .py.typed files in coverage audit ([7128c75](https://github.com/marco0560/codira/commit/7128c75929d9752b6c5df36bb4192dc61e44da24))
+
 # [1.1.0](https://github.com/marco0560/codira/compare/v1.0.2...v1.1.0) (2026-04-12)
 
 
