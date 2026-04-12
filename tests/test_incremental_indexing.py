@@ -1310,12 +1310,15 @@ def test_audit_repo_coverage_ignores_suppressed_suffixes(tmp_path: Path) -> None
     """
     markdown_file = tmp_path / "src" / "notes.md"
     text_file = tmp_path / "tests" / "fixture.txt"
+    typed_file = tmp_path / "src" / "pkg" / "py.typed"
     suffixless_file = tmp_path / "scripts" / "runner"
     markdown_file.parent.mkdir(parents=True, exist_ok=True)
     text_file.parent.mkdir(parents=True, exist_ok=True)
+    typed_file.parent.mkdir(parents=True, exist_ok=True)
     suffixless_file.parent.mkdir(parents=True, exist_ok=True)
     markdown_file.write_text("# Notes\n", encoding="utf-8")
     text_file.write_text("fixture\n", encoding="utf-8")
+    typed_file.write_text("", encoding="utf-8")
     suffixless_file.write_text("echo demo\n", encoding="utf-8")
 
     assert audit_repo_coverage(tmp_path) == []
