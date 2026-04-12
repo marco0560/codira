@@ -65,7 +65,7 @@ if TYPE_CHECKING:
 CallRecord = dict[str, str | int]
 ReferenceRecord = dict[str, str | int]
 ParsedFile = tuple[Path, FileMetadataSnapshot, AnalysisResult]
-_IGNORED_COVERAGE_SUFFIXES = frozenset({"<no-suffix>", ".md", ".txt", ".tyed"})
+_IGNORED_COVERAGE_SUFFIXES = frozenset({"<no-suffix>", ".md", ".txt", ".typed"})
 _BINARY_SNIFF_BYTES = 8192
 __all__ = [
     "PendingEmbeddingRow",
