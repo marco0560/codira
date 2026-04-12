@@ -8,7 +8,7 @@ git fetch
 git pull --ff-only
 
 echo "[2] Running release_rel.sh..."
-bash scripts/release_ausit.sh
+bash scripts/release_audit.sh
 SKIP_RELEASE_AUDIT=1 ALLOW_MAIN_PUSH=1 git push
 
 echo "[3] Waiting for CI/tag propagation..."
