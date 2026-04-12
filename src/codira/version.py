@@ -17,6 +17,7 @@ This module belongs to the **package infrastructure layer** and decouples
 runtime version access from generated source artifacts.
 """
 
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as metadata_version
 
@@ -60,8 +61,15 @@ def package_version() -> str:
     if installed_version is not None:
         return installed_version
 
+    package_name = __package__ or "codira"
     try:
-        from ._version import version as generated_version
-    except ImportError:
+        generated_module = import_module("._version", package=package_name)
+    except ModuleNotFoundError as exc:
+        if exc.name != f"{package_name}._version":
+            raise
         return "0.0.0"
-    return generated_version
+
+    generated_version: object = getattr(generated_module, "version", None)
+    if isinstance(generated_version, str):
+        return generated_version
+    return "0.0.0"
