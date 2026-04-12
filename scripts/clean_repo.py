@@ -35,6 +35,7 @@ PROTECTED_PATHS = {
     Path("node_modules"),
     Path("src/codira/_version.py"),
     Path(".codira"),
+    Path(".poetry"),
 }
 GIT_EXE = shutil.which("git") or "git"
 
