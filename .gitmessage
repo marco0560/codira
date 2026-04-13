@@ -1,8 +1,74 @@
-# type(scope): summary
+<type>(<scope>): <summary>
+
+Why:
+-
+
+What:
+-
+
+Notes:
+-
+
+Refs:
+# Types:
+#   feat     = new feature (minor version bump)
+#   fix      = bug fix (patch version bump)
+#   docs     = documentation only changes
+#   perf     = performance improvement
+#   refactor = code change that neither fixes a bug nor adds a feature
+#   test     = adding or updating tests
+#   chore    = maintenance, tooling, formatting, packaging
+#   style    = formatting only
+# ----------------------------
+# Scopes (codira):
+#   analyzer   = analyzer plugin contracts or implementations
+#   backend    = index backend contracts or implementations
+#   bootstrap  = environment bootstrap commands and checks
+#   bundle     = curated first-party bundle package
+#   ci         = CI / GitHub Actions
+#   cli        = command-line interface
+#   config     = repository and tool configuration
+#   context    = context rendering and retrieval assembly
+#   contracts  = public protocol and data contracts
+#   coverage   = canonical source coverage audit
+#   dev        = development scripts and local workflow helpers
+#   docs       = README, MkDocs, ADRs, and process documentation
+#   embeddings = embedding generation, storage, and search support
+#   git        = Git aliases, hooks, templates, and release flow wiring
+#   hooks      = local Git hook behavior
+#   indexer    = repository indexing and incremental index planning
+#   package    = packaging, pyproject metadata, wheels, and install helpers
+#   plugins    = plugin discovery and compatibility shims
+#   process    = migration notes, issue plans, and governance records
+#   query      = exact, structural, graph, and retrieval query behavior
+#   registry   = analyzer/backend registry discovery
+#   release    = semantic-release, tags, changelog, and release audit
+#   scanner    = filesystem/git project file scanning
+#   schema     = JSON schemas and schema validation
+#   semantic   = semantic retrieval signals and scoring
+#   storage    = SQLite schema and persistence helpers
+#   tests      = test-only changes
+#   version    = version reporting and setuptools_scm integration
+# ----------------------------
+# Rules:
+# - Subject line max 72 characters
+# - Use imperative mood ("add", "fix", "document")
+# - No trailing period
+# - Body is optional but encouraged for non-trivial changes
 #
-# Allowed types:
-# feat, fix, docs, perf, refactor, test, chore, style
+# Breaking changes:
+#   Add "!" after the type or include "BREAKING CHANGE:" in the body.
 #
+#   feat!(contracts): change analyzer protocol
+#
+# Body (optional):
+#   Explain WHY, not WHAT.
+#
+# Footer (optional):
+#   BREAKING CHANGE: <description>
+# ----------------------------
 # Examples:
-# docs(repo): add docs skeleton
-# fix(query): preserve deterministic symbol ordering
+#   fix(ci): fetch tags for editable package versions
+#   docs(process): record release workflow rules
+#   feat(query): add graph context producer
+#   chore(git): enforce local commit scopes

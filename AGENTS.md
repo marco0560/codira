@@ -75,7 +75,8 @@ Use at least the following shared skills for the corresponding task classes:
 - `numpy-docstring-enforcer` whenever modifying modules, classes, public
   functions, or non-trivial private functions
 - `codira-workflow` before broad code exploration or patching
-- `commit-block-generator` when proposing the final commit block
+- `commit-block-generator` for every commit, including direct local commits and
+  proposed commit blocks
 
 If a required shared skill is unavailable, state that explicitly and apply the
 same rules manually.
@@ -106,10 +107,15 @@ same rules manually.
    - If any would fail → fix BEFORE concluding
 
 8. Manually validate behavior if needed
-9. If a commit block is requested or appropriate, propose a **single** commit
-   block using the applicable shared skill.
+9. At the end of every complex modification cycle, create a commit before
+   concluding.
 
-   The commit block must remain atomic and CI-compliant.
+   Always use `commit-block-generator` before creating the commit.
+
+10. If a commit block is requested or appropriate, propose a **single** commit
+    block using the applicable shared skill.
+
+    The commit block must remain atomic and CI-compliant.
 
 ### codira Workflow
 

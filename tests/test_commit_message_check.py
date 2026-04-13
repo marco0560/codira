@@ -51,6 +51,30 @@ def _load_module() -> ModuleType:
     return module
 
 
+def _load_commit_msg_hook() -> ModuleType:
+    """
+    Load the local commit-msg hook validator as a module.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    types.ModuleType
+        Imported module object for ``.githooks/commit-msg.py``.
+    """
+    script_path = Path(__file__).resolve().parents[1] / ".githooks" / "commit-msg.py"
+    spec = importlib.util.spec_from_file_location("commit_msg_hook", script_path)
+    assert spec is not None
+    assert spec.loader is not None
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_validate_header_rejects_comma_in_scope() -> None:
     """
     Ensure comma-separated scopes are rejected.
@@ -98,3 +122,42 @@ def test_validate_header_accepts_release_safe_scope() -> None:
     )
 
     assert module.validate_header(commit) is None
+
+
+def test_commit_msg_hook_accepts_codira_scope() -> None:
+    """
+    Accept a Conventional Commit header with a codira-specific scope.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the local Git hook accepts documented codira scopes.
+    """
+    module = _load_commit_msg_hook()
+
+    assert module.validate_header("fix(indexer): ignore typed coverage marker") is None
+
+
+def test_commit_msg_hook_rejects_unknown_scope() -> None:
+    """
+    Reject a Conventional Commit header with a foreign scope.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the local Git hook rejects scopes outside the codira
+        scope list.
+    """
+    module = _load_commit_msg_hook()
+
+    assert module.validate_header("fix(catalog): update font inventory") == (
+        "scope 'catalog' not admitted"
+    )
