@@ -1,3 +1,10 @@
+## [1.1.5](https://github.com/marco0560/codira/compare/v1.1.4...v1.1.5) (2026-04-13)
+
+
+### Bug Fixes
+
+* **ci:** fetch tags for editable package versions ([1664f42](https://github.com/marco0560/codira/commit/1664f4276b7a484d05be06bb1edb1dc029a020e4))
+
 ## [1.1.4](https://github.com/marco0560/codira/compare/v1.1.3...v1.1.4) (2026-04-13)
 
 
