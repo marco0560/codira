@@ -1,3 +1,11 @@
+## [1.1.6](https://github.com/marco0560/codira/compare/v1.1.5...v1.1.6) (2026-04-13)
+
+
+### Bug Fixes
+
+* **ci:** made poetry play nice with scm-tools ([ba22c8f](https://github.com/marco0560/codira/commit/ba22c8fae2d4f89eeeab1380f3646cb8418305b9))
+* **tests:** update dependency versions in test ([8e6d29e](https://github.com/marco0560/codira/commit/8e6d29e41e7f85ce0063b5cef28133700ffe52d3))
+
 ## [1.1.5](https://github.com/marco0560/codira/compare/v1.1.4...v1.1.5) (2026-04-13)
 
 
