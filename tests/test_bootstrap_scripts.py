@@ -1204,3 +1204,26 @@ def test_build_bootstrap_commands_reuses_shared_first_party_install_command() ->
         "--core-extra",
         "semantic",
     )
+
+
+def test_ci_workflow_fetches_tags_for_setuptools_scm() -> None:
+    """
+    Keep CI editable installs versioned from reachable release tags.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts CI checkout fetches full history so setuptools_scm
+        does not fall back to a pre-1.0 local version.
+    """
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "uses: actions/checkout@v5\n        with:\n          fetch-depth: 0" in workflow
+    )
