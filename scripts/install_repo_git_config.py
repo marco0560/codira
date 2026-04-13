@@ -3,17 +3,23 @@
 
 Responsibilities
 ----------------
-- Define stable Git config entries such as hooks paths, commit template, and helpful aliases.
+- Define stable Git config entries such as hooks paths, commit template, and
+  helpful aliases.
 - Apply all entries via `git config --local` to the repository.
-- Mirror repo tooling commands through aliases for bootstrap, context, clean-repo, and release helpers.
+- Mirror the repo-local alias set used by this checkout without installing
+  personal identity, remote URLs, or credentials.
 
 Design principles
 -----------------
-Configuration is explicit, deterministic, and avoids personal or environment-specific overrides.
+Configuration is explicit, deterministic, and avoids personal or
+environment-specific overrides.
+Aliases that contact GitHub use the caller's own configured `gh`/Git
+authentication and do not embed credentials.
 
 Architectural role
 ------------------
-This script belongs to the **tooling layer** ensuring consistent Git behavior for contributors.
+This script belongs to the **tooling layer** ensuring consistent Git behavior
+for contributors.
 """
 
 from __future__ import annotations
@@ -44,20 +50,30 @@ def git_alias_entries() -> list[tuple[str, str]]:
         ("pull.ff", "only"),
         ("pull.rebase", "false"),
         ("rebase.autostash", "true"),
+        ("alias.st", "status"),
+        ("alias.co", "checkout"),
+        ("alias.br", "branch"),
+        ("alias.ci", "commit"),
+        ("alias.lg", "log --oneline --graph --decorate"),
+        (
+            "alias.check",
+            (
+                "!bash -lc 'source .venv/bin/activate && black --check . && "
+                "ruff check . && mypy . && pytest -q'"
+            ),
+        ),
+        ("alias.fix", "!ruff check . --fix"),
         (
             "alias.clean-repo",
             "!bash scripts/run_with_repo_python.sh scripts/clean_repo.py",
         ),
         (
-            "alias.ctx",
-            ("!f(){ bash scripts/run_with_repo_python.sh -m codira " 'ctx "$@"; }; f'),
+            "alias.clean-repo-dry",
+            "!python scripts/clean_repo.py --dry-run",
         ),
         (
-            "alias.check",
-            (
-                "!bash -lc 'source .venv/bin/activate && black --check . && "
-                "ruff check . && mypy . && pytest'"
-            ),
+            "alias.re-clean",
+            "!git clean-repo && git gen-issues && git txz",
         ),
         (
             "alias.bootstrap",
@@ -84,7 +100,7 @@ def git_alias_entries() -> list[tuple[str, str]]:
         (
             "alias.gen-issues",
             (
-                "!f() { rm -f issues.json; timeout 10s gh api graphql "
+                "!f(){ rm -f issues.json; timeout 10s gh api graphql "
                 '-f query=\'query {repository(owner: "marco0560", '
                 'name: "codira") {issues(first: 100, states: OPEN, '
                 "orderBy: {field: CREATED_AT, direction: ASC}) {nodes "
@@ -93,14 +109,26 @@ def git_alias_entries() -> list[tuple[str, str]]:
                 "{totalCount}}}}}' > issues.json; }; f"
             ),
         ),
+        (
+            "alias.txz",
+            (
+                '!f(){ name="${1:-repo}"; tmp="$(mktemp -d)"; '
+                "trap 'rm -rf \"$tmp\"' EXIT; rsync -a --delete "
+                '--exclude=".git" --exclude="*.tar.xz" --exclude=".codira" '
+                '--exclude=".venv" --exclude="node_modules" '
+                '--exclude="__pycache__" ./ "$tmp/repo/" && '
+                'XZ_OPT="-9e -T0" tar -C "$tmp" -cJf "$PWD/$name.tar.xz" '
+                "repo; }; f"
+            ),
+        ),
         ("alias.release-audit", "!bash scripts/release_audit.sh"),
         ("alias.release-check", "!bash scripts/release_system_selfcheck.sh"),
         ("alias.rel", "!bash scripts/release_rel.sh"),
         (
             "alias.safe-push",
             (
-                "!bash scripts/release_audit.sh && git fetch && "
-                "git pull --ff-only && git push"
+                "!bash -lc 'bash scripts/release_audit.sh && git fetch && "
+                "git pull --ff-only && git push'"
             ),
         ),
     ]

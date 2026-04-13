@@ -93,6 +93,13 @@ class _PackageInventoryModule(Protocol):
         """Return package paths in deterministic order."""
 
 
+class _GitConfigInstallModule(Protocol):
+    """Protocol for the standalone repo Git configuration installer."""
+
+    def git_alias_entries(self) -> list[tuple[str, str]]:
+        """Return repo-local Git config entries to install."""
+
+
 class _BuildHelperModule(Protocol):
     """Protocol for the standalone first-party build helper module."""
 
@@ -268,6 +275,33 @@ def _load_install_helper() -> _InstallHelperModule:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return cast("_InstallHelperModule", module)
+
+
+def _load_git_config_install_helper() -> _GitConfigInstallModule:
+    """
+    Load the repo Git configuration installer from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the Git configuration installer.
+    """
+    helper_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "install_repo_git_config.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "install_repo_git_config", helper_path
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_GitConfigInstallModule", module)
 
 
 def _load_build_helper() -> _BuildHelperModule:
@@ -448,6 +482,55 @@ def test_editable_package_paths_follow_authoritative_first_party_order() -> None
         "packages/codira-backend-sqlite",
         "packages/codira-bundle-official",
     )
+
+
+def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
+    """
+    Keep installed repo aliases aligned while excluding local-only credentials.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the installer covers the sanctioned alias set and does
+        not install personal identity, remotes, or credential helpers.
+    """
+    helper = _load_git_config_install_helper()
+    entries = dict(helper.git_alias_entries())
+
+    expected_aliases = {
+        "alias.st",
+        "alias.co",
+        "alias.br",
+        "alias.ci",
+        "alias.lg",
+        "alias.check",
+        "alias.fix",
+        "alias.clean-repo",
+        "alias.clean-repo-dry",
+        "alias.re-clean",
+        "alias.bootstrap",
+        "alias.new-decision",
+        "alias.install-repo-config",
+        "alias.docs-build",
+        "alias.gen-issues",
+        "alias.txz",
+        "alias.release-audit",
+        "alias.release-check",
+        "alias.rel",
+        "alias.safe-push",
+    }
+
+    assert {key for key in entries if key.startswith("alias.")} == expected_aliases
+    assert entries["alias.check"].endswith("pytest -q'")
+    assert "alias.ctx" not in entries
+    assert "user.name" not in entries
+    assert "user.email" not in entries
+    assert not any(key.startswith("remote.") for key in entries)
+    assert not any("credential" in key for key in entries)
 
 
 def test_install_helper_can_target_exported_split_repositories() -> None:

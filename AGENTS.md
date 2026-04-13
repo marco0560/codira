@@ -170,7 +170,7 @@ codira index
 Use:
 
 ```bash
-git ctx <query>
+codira ctx <query>
 ```
 
 to inspect symbols and relationships.

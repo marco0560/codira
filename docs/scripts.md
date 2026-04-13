@@ -16,6 +16,10 @@ authoritative package list shared by bootstrap and CI.
 Install the repo-local Git configuration expected by this repository,
 including hooks, commit template, and sanctioned aliases.
 
+The installer mirrors repository-local aliases only. It does not configure
+`user.name`, `user.email`, remote URLs, tokens, or credential helpers. Aliases
+that contact GitHub use the operator's own Git or `gh` authentication.
+
 ## `scripts/run_with_repo_python.sh`
 
 Resolve the repository Python interpreter deterministically and execute Python
