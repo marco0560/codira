@@ -1284,19 +1284,19 @@ files = [
 
 [[package]]
 name = "mkdocstrings"
-version = "1.0.3"
+version = "0.30.1"
 description = "Automatic documentation from sources, for MkDocs."
 optional = true
-python-versions = ">=3.10"
+python-versions = ">=3.9"
 groups = ["main"]
 markers = "extra == \"docs\""
 files = [
-    {file = "mkdocstrings-1.0.3-py3-none-any.whl", hash = "sha256:0d66d18430c2201dc7fe85134277382baaa15e6b30979f3f3bdbabd6dbdb6046"},
-    {file = "mkdocstrings-1.0.3.tar.gz", hash = "sha256:ab670f55040722b49bb45865b2e93b824450fb4aef638b00d7acb493a9020434"},
+    {file = "mkdocstrings-0.30.1-py3-none-any.whl", hash = "sha256:41bd71f284ca4d44a668816193e4025c950b002252081e387433656ae9a70a82"},
+    {file = "mkdocstrings-0.30.1.tar.gz", hash = "sha256:84a007aae9b707fb0aebfc9da23db4b26fc9ab562eb56e335e9ec480cb19744f"},
 ]
 
 [package.dependencies]
-Jinja2 = ">=3.1"
+Jinja2 = ">=2.11.1"
 Markdown = ">=3.6"
 MarkupSafe = ">=1.1"
 mkdocs = ">=1.6"
@@ -3213,4 +3213,4 @@ semantic = ["sentence-transformers"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13"
-content-hash = "4957fb39ebfa8817c456f120a16dddb8798cd2275cc4aa3dfd6f13c257bedb2c"
+content-hash = "ea1a957362312b4a10103128f35025d9816f552e826d2f52ff92754348872298"
