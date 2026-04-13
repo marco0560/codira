@@ -1,3 +1,10 @@
+## [1.1.4](https://github.com/marco0560/codira/compare/v1.1.3...v1.1.4) (2026-04-13)
+
+
+### Bug Fixes
+
+* **ci:** keep core checkout installed during package setup ([5b6281f](https://github.com/marco0560/codira/commit/5b6281f2d147ae51c951eee40fdaf5745472ed99))
+
 ## [1.1.3](https://github.com/marco0560/codira/compare/v1.1.2...v1.1.3) (2026-04-12)
 
 
