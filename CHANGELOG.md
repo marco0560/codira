@@ -1,3 +1,10 @@
+## [1.1.7](https://github.com/marco0560/codira/compare/v1.1.6...v1.1.7) (2026-04-13)
+
+
+### Bug Fixes
+
+* **docs:** restore generated site navigation ([aab26df](https://github.com/marco0560/codira/commit/aab26df349c43ee433fa5a6bf213b77e5122ec74))
+
 ## [1.1.6](https://github.com/marco0560/codira/compare/v1.1.5...v1.1.6) (2026-04-13)
 
 
