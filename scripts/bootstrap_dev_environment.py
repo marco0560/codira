@@ -131,7 +131,17 @@ def build_bootstrap_commands(
         ),
         CommandSpec(
             "Install extracted first-party analyzer and backend packages",
-            (str(python_bin), "scripts/install_first_party_packages.py"),
+            (
+                str(python_bin),
+                "scripts/install_first_party_packages.py",
+                "--include-core",
+                "--core-extra",
+                "dev",
+                "--core-extra",
+                "docs",
+                "--core-extra",
+                "semantic",
+            ),
             repo_root,
         ),
         CommandSpec(

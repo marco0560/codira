@@ -1196,4 +1196,11 @@ def test_build_bootstrap_commands_reuses_shared_first_party_install_command() ->
     assert install_command.argv == (
         str(repo_root / ".venv" / "bin" / "python"),
         "scripts/install_first_party_packages.py",
+        "--include-core",
+        "--core-extra",
+        "dev",
+        "--core-extra",
+        "docs",
+        "--core-extra",
+        "semantic",
     )
