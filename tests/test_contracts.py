@@ -999,9 +999,9 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
     optional_dependencies = project["optional-dependencies"]
 
     assert optional_dependencies["docs"] == [
-        "mkdocs>=1.6,<2",
-        "mkdocs-material>=9.7,<10",
-        "mkdocstrings[python]>=0.24,<1",
+        "mkdocs>=1.6,<2.0",
+        "mkdocs-material>=9.7,<10.0",
+        "mkdocstrings[python]>=1.0,<2.0",
     ]
     assert optional_dependencies["bundle-official"] == [
         "sentence-transformers>=5.4,<6.0",

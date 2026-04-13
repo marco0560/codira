@@ -7,7 +7,7 @@ echo "[1] Sync with remote..."
 git fetch
 git pull --ff-only
 
-echo "[2] Running release_rel.sh..."
+echo "[2] Running release_audit.sh..."
 bash scripts/release_audit.sh
 SKIP_RELEASE_AUDIT=1 ALLOW_MAIN_PUSH=1 git push
 
@@ -19,10 +19,11 @@ git fetch
 git pull --ff-only
 
 echo "[5] Cleaning build artifacts..."
-rm -rf dist build *.egg-info
+rm -rf dist build
+find . -maxdepth 1 -type d -name '*.egg-info' -exec rm -rf {} +
 
 echo "[6] Building package..."
-poetry build > /dev/null
+poetry run python -m build > /dev/null
 
 echo "[7] Installing latest wheel..."
 WHEEL="$(ls -t dist/*.whl | head -n1)"
@@ -35,6 +36,6 @@ fi
 poetry run pip install --force-reinstall "$WHEEL"
 
 echo "[8] Verifying version..."
-codira -V
+poetry run codira -V
 
 echo "== Release pipeline completed =="
