@@ -13,6 +13,9 @@ pip install codira-bundle-official
 That installs `codira`, the first-party Python, JSON, C, and Bash analyzers,
 and the first-party SQLite backend.
 
+The package is published on PyPI. If you only need to use `codira`, prefer this
+published install path over an editable checkout from a development branch.
+
 Verify the install:
 
 ```bash
@@ -50,6 +53,10 @@ python scripts/install_first_party_packages.py \
   --core-extra docs \
   --core-extra semantic
 ```
+
+Developer automation is Poetry-based for dependency resolution and lockfile
+maintenance, while the actual checks run the installed tools directly from
+`.venv` and the editable first-party package set.
 
 ## Install into another repository
 

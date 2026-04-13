@@ -20,6 +20,22 @@ Rules:
 - keep `main` stable and releasable
 - rebase or merge from `main` regularly as needed
 
+When work is not tied to a numbered issue, use a Conventional Commit-style
+branch name:
+
+```text
+<type>/<short-description>
+```
+
+The `<type>` segment should match the repository's commit and CI categories,
+such as `fix`, `feat`, `docs`, `chore`, `refactor`, `test`, `ci`, `build`,
+`perf`, or `release`. The description should be short, lowercase, and
+hyphenated, for example:
+
+```text
+chore/quality-hardening-phase-2
+```
+
 ## Exploratory branches
 
 Exploratory work that is not yet normal issue implementation should use:

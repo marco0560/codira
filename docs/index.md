@@ -2,6 +2,8 @@
 
 <img src="badges/cartoon_cold-2.png" alt="codira badge" width="160" align="right">
 
+**codira: your code ferret**
+
 `codira` is a repository-local indexing and context retrieval tool for
 agent-assisted development. It gives coding agents a compact, deterministic
 map of the repository so they can spend fewer tokens rediscovering files,
@@ -19,6 +21,16 @@ It builds a SQLite index inside the target repository and currently provides:
 Used next to a coding agent, `codira` is most useful before broad exploration:
 index once, ask a focused question, then hand the agent a small context pack
 instead of asking it to scan the whole tree.
+
+For normal use, install the published PyPI package instead of a development
+checkout:
+
+```bash
+pip install codira-bundle-official
+```
+
+Use the source checkout only when you are developing `codira` itself or need a
+specific development branch.
 
 ## Documentation scope
 

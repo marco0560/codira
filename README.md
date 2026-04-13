@@ -2,6 +2,8 @@
 
 # codira
 
+**codira: your code ferret**
+
 [![CI](https://github.com/marco0560/codira/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/marco0560/codira/actions/workflows/ci.yml)
 [![Docs](https://github.com/marco0560/codira/actions/workflows/docs.yml/badge.svg?branch=main)](https://marco0560.github.io/codira/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -80,6 +82,10 @@ For the official runtime with the first-party analyzers and SQLite backend:
 pip install codira-bundle-official
 ```
 
+`codira` and the official bundle are published on PyPI. If you only need to
+use the tool and do not need a development branch, prefer the published package
+instead of an editable checkout.
+
 The installed command is:
 
 ```bash
@@ -107,6 +113,10 @@ pip install -e ../codira
 The editable install keeps the `codira` CLI available in the target
 repository's virtual environment while still using the live source tree from
 this repository.
+
+Developer automation is Poetry-based for dependency resolution and lockfile
+maintenance, while local validation and CI execute the installed tools directly
+from `.venv` and the editable first-party package set.
 
 Install optional analyzer packages only when needed. For repository-local
 development inside this repo, the bootstrap flow installs the official

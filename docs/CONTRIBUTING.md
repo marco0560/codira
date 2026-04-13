@@ -22,6 +22,11 @@ Use the repository-local `.venv` for all Python-facing tools.
 CI and the pre-push hook also run broader repository checks such as
 `mypy .`, which includes the first-party packages under `packages/`.
 
+The repository uses Poetry for dependency resolution and lockfile maintenance.
+The validation commands themselves run from `.venv` against the editable core
+and first-party package set, so local checks match the installed-package layout
+used by CI.
+
 ## Bootstrap
 
 A fresh clone can be initialized with:
