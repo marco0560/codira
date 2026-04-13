@@ -32,7 +32,9 @@ dev = [
   "pytest",
   "pytest-cov",
   "packaging",
-  "build"
+  "build",
+  "setuptools>=61",
+  "setuptools_scm[toml]>=8"
 ]
 
 docs = [
