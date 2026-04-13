@@ -84,7 +84,7 @@ same rules manually.
 ### Standard Loop
 
 1. Analyze request
-2. Propose plan, ask all necessaary clarification questions
+2. Propose plan, ask all necessary clarification questions
 3. Wait for approval or changes
 4. Execute plan
 5. Do NOT run `git check` in a terminal for agent validation.
@@ -92,17 +92,17 @@ same rules manually.
 
    ```bash
    source .venv/bin/activate
-   black --check src scripts tests
-   ruff check src scripts tests
-   mypy src scripts tests
+   black --check .
+   ruff check .
+   mypy .
    pytest -q
    ```
 
 7. Verify:
 
-   - `black --check src scripts tests` passes
-   - `ruff check src scripts tests` passes
-   - `mypy src scripts tests` passes
+   - `black --check .` passes
+   - `ruff check .` passes
+   - `mypy .` passes
    - `pytest -q` passes
    - If any would fail → fix BEFORE concluding
 
