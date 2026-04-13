@@ -18,7 +18,7 @@ This asymmetry is deliberate:
 
 The current codebase now exposes:
 
-- built-in backend and analyzer registrations
+- first-party backend and analyzer package registrations
 - third-party plugin discovery through Python entry points
 - deterministic duplicate rejection and load diagnostics
 - a `codira plugins` inspection surface for discovery verification
@@ -46,8 +46,8 @@ Current defaults and selection rules are:
 - `CODIRA_INDEX_BACKEND` selects the active backend
 - when unset or blank, the backend defaults to `sqlite`
 - unsupported backend names raise `ValueError` before indexing or query work
-- analyzers are registered from built-ins plus entry points and instantiated in
-  deterministic order
+- analyzers are registered from first-party packages plus entry points and
+  instantiated in deterministic order
 - file routing still uses first-match analyzer selection
 
 This keeps configuration narrow while making backend selection and analyzer
@@ -55,22 +55,25 @@ activation explicit.
 
 The current packaging boundary is also now explicit:
 
-- core `codira` dependencies cover the default Python analyzer and shared
-  query/index infrastructure
-- analyzer-specific dependencies can live in separate plugin distributions
-- the current C and Bash analyzers are now extracted into first-party packages
-  rather than remaining optional built-ins in the core install
+- core `codira` dependencies cover shared CLI, registry, query, indexing, and
+  contract infrastructure
+- analyzer-specific dependencies live in separate plugin distributions
+- the current Python, JSON, C, and Bash analyzers are extracted into
+  first-party packages rather than remaining built-ins in the core install
+- the default SQLite backend is provided by `codira-backend-sqlite`
 - third-party plugins live in separate distributions and are discovered from
   `codira.analyzers` and `codira.backends` entry-point groups
 
 ## Phase-9 Analyzer Proof
 
-Phase 9 validates the analyzer side of the plugin model with a second
-implementation:
+Phase 9 validated the analyzer side of the plugin model with a second
+implementation. The current package set extends that proof:
 
-- `PythonAnalyzer` remains the first-match handler for `*.py`
+- `PythonAnalyzer` handles `*.py`
+- `JSONAnalyzer` handles supported JSON document families
 - `CAnalyzer` handles `*.c` and `*.h`
-- both analyzers can participate in the same indexing run
+- `BashAnalyzer` handles Bash scripts
+- all active analyzers can participate in the same indexing run
 
 This is the first concrete proof that the `LanguageAnalyzer` contract supports
 mixed-language repositories without changing backend semantics.

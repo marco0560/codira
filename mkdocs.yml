@@ -8,6 +8,8 @@ edit_uri: edit/main/docs/
 
 theme:
   name: material
+  favicon: badges/small.png
+  logo: badges/cartoon_cold-2.png
   features:
     - navigation.tabs
     - navigation.sections
@@ -25,46 +27,4 @@ markdown_extensions:
 
 plugins:
   - search
-
-nav:
-  - Home: index.md
-  - Getting started: getting_started.md
-  - Architecture:
-      - Index: architecture/index.md
-      - System overview: architecture/system-overview.md
-      - Indexing pipeline: architecture/indexing-pipeline.md
-      - Query pipeline: architecture/query-pipeline.md
-      - Plugin model: architecture/plugin-model.md
-      - Core contracts: architecture/core-contracts.md
-      - Storage backends: architecture/storage-backends.md
-      - Language analyzers: architecture/language-analyzers.md
-  - Plugin development:
-      - Index: plugins/index.md
-      - Quick start: plugins/getting-started.md
-      - Analyzer plugins: plugins/analyzers.md
-      - Backend plugins: plugins/backends.md
-      - Packaging and install: plugins/packaging.md
-      - Tutorial: plugins/tutorial.md
-  - Contributing: CONTRIBUTING.md
-  - Scripts: scripts.md
-  - Release checklist: release/checklist.md
-  - Release process: release/process.md
-  - Process:
-      - Branching: process/branching.md
-      - Decisions: process/decisions.md
-      - Publishing walkthrough: process/python-package-publishing-walkthrough.md
-      - Issue 001 execution: process/issue-001-real-embeddings-execution.md
-      - Issue 009 execution: process/issue-009-capability-signal-layer-execution.md
-      - Issue 009 inventory: process/issue-009-capability-signal-layer-inventory.md
-      - Embedding performance execution: process/embedding-performance-execution.md
-  - ADRs:
-      - Index: adr/index.md
-      - ADR-001: adr/ADR-001-rrf-multichannel.md
-      - ADR-002: adr/ADR-002-prefix-filtering.md
-      - ADR-003: adr/ADR-003-query-json-output.md
-      - ADR-004: adr/ADR-004-pluggable-backends-migration-plan.md
-      - ADR-005: adr/ADR-005-real-persisted-embeddings-durable-symbol-identity.md
-      - ADR-006: adr/ADR-006-capability-driven-signal-layer.md
-      - ADR-007: adr/ADR-007-first-party-package-boundary.md
-      - ADR-008: adr/ADR-008-batched-embedding-generation-and-tunable-inference-runtime.md
-      - ADR-009: adr/ADR-009-end-user-distribution-and-publishing-model.md
+  - awesome-pages

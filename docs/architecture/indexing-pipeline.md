@@ -40,10 +40,12 @@ Phases 5 through 9 make `index_repo()` act as an explicit orchestrator:
 5. delegate persistence to the selected backend
 6. rebuild derived backend indexes
 
-The current analyzer registry is still intentionally minimal:
+The current analyzer registry is package-driven:
 
-- `PythonAnalyzer` for `*.py`
-- `CAnalyzer` for `*.c` and `*.h`
+- `PythonAnalyzer` for `*.py` from `codira-analyzer-python`
+- `JSONAnalyzer` for supported JSON families from `codira-analyzer-json`
+- `CAnalyzer` for `*.c` and `*.h` from `codira-analyzer-c`
+- `BashAnalyzer` for Bash scripts from `codira-analyzer-bash`
 
 The important Phase 18 boundary is now in place: file discovery follows
 analyzer metadata rather than a hard-coded scanner tuple, so future

@@ -1,7 +1,7 @@
 # Language Analyzers
 
-The current repository now has one built-in analyzer plus first-party plugin
-analyzers:
+The current repository now gets its default analyzers from first-party plugin
+packages:
 
 - Python through the extracted `codira-analyzer-python` first-party package
 - JSON through the extracted `codira-analyzer-json` first-party package for
@@ -9,6 +9,7 @@ analyzers:
   `package.json`, and `.releaserc.json`
 - C for the first non-Python proof required by `ADR-004`, installed through
   the extracted `codira-analyzer-c` first-party package
+- Bash through the extracted `codira-analyzer-bash` first-party package
 
 ## Current Analyzer Responsibilities
 
@@ -20,12 +21,17 @@ The Python analysis path currently performs:
 - callable-reference extraction
 - docstring validation integration
 
-Today these responsibilities are concentrated in:
+Today these responsibilities are concentrated in the analyzer packages and
+compatibility modules:
 
 - `src/codira/parser_ast.py`
 - `src/codira/analyzers/python.py`
 - `src/codira/analyzers/json.py`
 - `src/codira/analyzers/c.py`
+- `packages/codira-analyzer-python/`
+- `packages/codira-analyzer-json/`
+- `packages/codira-analyzer-c/`
+- `packages/codira-analyzer-bash/`
 - `src/codira/indexer.py` for analyzer routing only
 
 ## Current Scope Boundary
@@ -124,7 +130,7 @@ support to arbitrary machine-generated artifacts.
 
 ## Phase-9 Second Analyzer Proof
 
-Phase 9 adds `src/codira/analyzers/c.py` and registers it after Python.
+Phase 9 added the C analyzer proof and registered it after Python.
 
 - Python keeps the full AST-driven extraction path
 - C currently extracts module identity, include dependencies, and top-level
@@ -153,7 +159,10 @@ language-specific C parsing strategy has been upgraded.
 The packaging surface now distinguishes core `codira` dependencies from
 analyzer-specific dependencies.
 
-- core install keeps Python analysis available
+- core install keeps the contracts, CLI, registry, and compatibility shims
+  available
+- the Python analyzer loads when `codira-analyzer-python` is installed
+- the JSON analyzer loads when `codira-analyzer-json` is installed
 - the C analyzer loads when `codira-analyzer-c` is installed
 - the Bash analyzer loads when `codira-analyzer-bash` is installed
 - the supported package form for C-family indexing is `codira-analyzer-c`

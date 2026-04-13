@@ -9,7 +9,7 @@ by two query families:
 
 ## Exact Query Flow
 
-Exact commands such as `symbol`, `calls`, `refs`, and `audit`:
+Exact commands such as `sym`, `calls`, `refs`, and `audit`:
 
 1. normalize optional repo-root-relative prefix filters
 2. delegate exact lookup work to the active index backend

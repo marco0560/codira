@@ -1,3 +1,5 @@
+<img src="docs/badges/cartoon_cold-2.png" alt="codira badge" width="160">
+
 # codira
 
 [![CI](https://github.com/marco0560/codira/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/marco0560/codira/actions/workflows/ci.yml)
@@ -5,25 +7,50 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 `codira` is a repository-local indexing and context retrieval tool for
-agent-assisted development.
+agent-assisted development. It gives coding agents a concise, deterministic
+map of the codebase so they can answer focused questions, find the right files,
+and start edits with less broad scanning.
 
-It builds a SQLite index inside the target repository, supports exact symbol
-lookup, docstring auditing, deterministic local semantic embeddings, and
+The practical effect is simple: when `codira` is used alongside a coding
+agent, the same task can often be handled with fewer tokens because the agent
+receives a small, relevant context pack instead of rediscovering the repository
+from scratch.
+
+`codira` builds a SQLite index inside the target repository and supports exact
+symbol lookup, docstring auditing, deterministic local semantic embeddings,
+static call and callable-reference inspection, plugin discovery, and
 deterministic context generation for natural-language queries.
 
-The current branch now indexes mixed-language repositories through registered
+The current release indexes mixed-language repositories through registered
 language analyzers:
 
 - Python via the first-party `codira-analyzer-python` plugin
 - JSON via the first-party `codira-analyzer-json` plugin for JSON Schema,
   `package.json`, and `.releaserc.json`
-- SQLite persistence via the first-party `codira-backend-sqlite` backend
-  plugin
 - C-family `*.c` and `*.h` files via the first-party
   `codira-analyzer-c` plugin backed by `tree-sitter-c`
+- Bash scripts via the first-party `codira-analyzer-bash` plugin backed by
+  `tree-sitter-bash`
+- SQLite persistence via the first-party `codira-backend-sqlite` backend
+  plugin
 
 Storage and query persistence remain SQLite-backed through the active backend
 registry.
+
+## Why It Helps Agent Workflows
+
+Coding agents are strongest when they start with the right local facts. `codira`
+turns the repository into a compact map of symbols, docstring issues, semantic
+matches, call edges, callable references, and plugin coverage. Instead of asking
+an agent to spend a large part of the context window scanning files, you can run
+one focused command and hand it the relevant slice.
+
+That usually means:
+
+- fewer tokens spent on broad repository exploration
+- fewer repeated file reads for the same task
+- more deterministic handoffs between human intent and agent action
+- a clearer audit trail for why a file or symbol was considered relevant
 
 ## Repository Documentation
 
@@ -41,6 +68,9 @@ Start with:
 - `docs/process/branching.md`
 - `docs/process/decisions.md`
 - `docs/adr/index.md`
+
+The project documentation site uses the same badge on the landing page and
+uses the small badge as the MkDocs favicon.
 
 ## Install
 
@@ -83,7 +113,11 @@ development inside this repo, the bootstrap flow installs the official
 first-party packages automatically through:
 
 ```bash
-python scripts/install_first_party_packages.py
+python scripts/install_first_party_packages.py \
+  --include-core \
+  --core-extra dev \
+  --core-extra docs \
+  --core-extra semantic
 ```
 
 For an editable install into another repository with the current source tree:
@@ -114,7 +148,7 @@ The current architecture after completed `ADR-004` migration work is:
   `codira-backend-sqlite`
 - multiple language analyzers in one indexing run
 - deterministic mixed-language indexing for tracked Python, supported JSON,
-  and C-family files
+  Bash, and C-family files
 - query-time retrieval planning with deterministic intent families for
   behavior, test, configuration, API-surface, and architecture/navigation
   queries

@@ -8,7 +8,7 @@ The current implementation remains:
 
 - registry-driven
 - SQLite-backed
-- mixed-language across Python and C-family analyzers
+- mixed-language across Python, JSON, Bash, and C-family analyzers
 - CLI-driven through a single repository-local index
 
 These documents describe the post-Phase-9 architecture produced by the

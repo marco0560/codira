@@ -44,7 +44,11 @@ downloads inside this repository.
 The repository-local first-party package set is owned by:
 
 ```bash
-python scripts/install_first_party_packages.py
+python scripts/install_first_party_packages.py \
+  --include-core \
+  --core-extra dev \
+  --core-extra docs \
+  --core-extra semantic
 ```
 
 ## Install into another repository

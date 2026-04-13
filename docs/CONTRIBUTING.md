@@ -19,6 +19,9 @@ pytest -q
 
 Use the repository-local `.venv` for all Python-facing tools.
 
+CI and the pre-push hook also run broader repository checks such as
+`mypy .`, which includes the first-party packages under `packages/`.
+
 ## Bootstrap
 
 A fresh clone can be initialized with:

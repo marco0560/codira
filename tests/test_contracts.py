@@ -991,7 +991,8 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
     -------
     None
         The test asserts the root package keeps the curated bundle aligned to
-        the first-party distribution set and preserves the canonical docs extra.
+        the first-party distribution set and preserves the canonical docs extra,
+        including documentation navigation plugins.
     """
     with Path("pyproject.toml").open("rb") as pyproject_file:
         project = tomllib.load(pyproject_file)["project"]
@@ -1001,6 +1002,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
     assert optional_dependencies["docs"] == [
         "mkdocs>=1.6,<2.0",
         "mkdocs-material>=9.7,<10.0",
+        "mkdocs-awesome-pages-plugin>=2.10,<3.0",
         "mkdocstrings[python]>=1.0,<2.0",
     ]
     assert optional_dependencies["bundle-official"] == [
