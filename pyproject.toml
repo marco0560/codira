@@ -35,9 +35,9 @@ dev = [
 ]
 
 docs = [
-  "mkdocs>=1.6",
-  "mkdocs-material>=9.7",
-  "mkdocstrings[python]>=0.24"
+  "mkdocs>=1.6,<2",
+  "mkdocs-material>=9.7,<10",
+  "mkdocstrings[python]>=0.24,<1"
 ]
 
 [build-system]
@@ -46,7 +46,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.poetry]
 name = "codira"
-version = "0.0.0"  # placeholder for Poetry only; actual versioning via setuptools_scm
+version = "1.1.0"  # placeholder for Poetry only; actual versioning via setuptools_scm
+package-mode = false
 
 [tool.setuptools]
 package-dir = {"" = "src"}
