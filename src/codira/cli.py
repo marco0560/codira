@@ -70,6 +70,7 @@ from codira.version import installed_distribution_version, package_version
 
 if TYPE_CHECKING:
     import codira.indexer as indexer_types
+    from codira.types import DocstringIssueRow
 
 GIT_EXE = shutil.which("git") or "git"
 __version__ = package_version()
@@ -320,7 +321,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Inspect tracked files under canonical source directories and "
             "report which files are not covered by the active analyzer set."
         ),
-        epilog=("Examples:\n" "  codira cov\n" "  codira cov --json"),
+        epilog=("Examples:\n  codira cov\n  codira cov --json"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     coverage_parser.add_argument(
@@ -591,7 +592,7 @@ def build_parser() -> argparse.ArgumentParser:
             "List analyzer and backend plugins discovered from built-ins and "
             "installed Python entry points."
         ),
-        epilog=("Examples:\n" "  codira plugins\n" "  codira plugins --json"),
+        epilog=("Examples:\n  codira plugins\n  codira plugins --json"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     plugins_parser.add_argument(
@@ -1280,6 +1281,36 @@ def _run_audit_docstrings(
         print("No docstring issues found")
         return 0
 
+    grouped_missing: dict[tuple[str, str, int], list[str]] = {}
+    passthrough: list[DocstringIssueRow] = []
+
+    for row in rows:
+        (
+            issue_type,
+            message,
+            _stable_id,
+            _symbol_type,
+            _module_name,
+            symbol_name,
+            file_path,
+            lineno,
+            _end_lineno,
+        ) = row
+
+        if issue_type == "missing_parameter" and "Parameter not documented:" in message:
+            param = message.split("Parameter not documented:", 1)[1].strip()
+            key = (symbol_name, file_path, lineno)
+            grouped_missing.setdefault(key, []).append(param)
+        else:
+            passthrough.append(row)
+
+    for (symbol_name, file_path, lineno), params in grouped_missing.items():
+        params_str = ", ".join(sorted(params))
+        print(
+            f"missing_parameter: Function {symbol_name}: Parameters not documented: {params_str} "
+            f"[{file_path}:{lineno}]"
+        )
+
     for (
         issue_type,
         message,
@@ -1290,8 +1321,9 @@ def _run_audit_docstrings(
         file_path,
         lineno,
         _end_lineno,
-    ) in rows:
+    ) in passthrough:
         print(f"{issue_type}: {message} [{file_path}:{lineno}]")
+
     return 0
 
 
@@ -1406,12 +1438,7 @@ def _run_embeddings(
         )
         return 0
 
-    print(
-        "backend:"
-        f" {backend.name}"
-        f" version={backend.version}"
-        f" dim={backend.dim}"
-    )
+    print(f"backend: {backend.name} version={backend.version} dim={backend.dim}")
     for stored_backend, stored_version, stored_dim, count in inventory:
         print(
             "stored:"
@@ -2232,8 +2259,7 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
 
         if current_commit and indexed_commit != current_commit:
             return IndexRebuildRequest(
-                message="[codira] Index outdated (git commit changed) "
-                "— rebuilding...",
+                message="[codira] Index outdated (git commit changed) — rebuilding...",
                 reset_db=True,
                 stderr=True,
             )
@@ -2251,8 +2277,7 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
 
         if runtime_inventory[:2] != current_runtime:
             return IndexRebuildRequest(
-                message="[codira] Index stale (backend plugin changed) "
-                "— rebuilding...",
+                message="[codira] Index stale (backend plugin changed) — rebuilding...",
                 reset_db=True,
                 stderr=True,
             )
