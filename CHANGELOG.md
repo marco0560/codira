@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/marco0560/codira/compare/v1.1.7...v1.2.0) (2026-04-14)
+
+
+### Features
+
+* **cli:** add audit aggregation functionality only in non-JSON mode ([0028d67](https://github.com/marco0560/codira/commit/0028d6718f5d3d78955c084c9043833bf04a24c3))
+
 ## [1.1.7](https://github.com/marco0560/codira/compare/v1.1.6...v1.1.7) (2026-04-13)
 
 
