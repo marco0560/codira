@@ -1,3 +1,5 @@
+"""Tests for CLI docstring-audit aggregation output."""
+
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +11,21 @@ from codira.cli import _run_audit_docstrings
 def test_missing_parameter_aggregation(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Arrange: simulate two missing parameters for same function/location
+    """
+    Group missing-parameter rows for the same function and location.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to replace the docstring issue provider.
+    capsys : pytest.CaptureFixture[str]
+        Pytest fixture used to capture CLI output.
+
+    Returns
+    -------
+    None
+        The test asserts the plain audit output aggregates parameter names.
+    """
     rows = [
         (
             "missing_parameter",

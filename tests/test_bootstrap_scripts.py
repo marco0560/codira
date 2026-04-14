@@ -37,7 +37,21 @@ class _InstallHelperModule(Protocol):
         repo_root: Path,
         package_root: Path | None,
     ) -> Path:
-        """Return the directory containing first-party package repositories."""
+        """
+        Return the directory containing first-party package repositories.
+
+        Parameters
+        ----------
+        repo_root : pathlib.Path
+            Repository root used when no package root override is supplied.
+        package_root : pathlib.Path | None
+            Optional explicit package root.
+
+        Returns
+        -------
+        pathlib.Path
+            Directory containing first-party package repositories.
+        """
 
     def editable_core_requirement(
         self,
@@ -45,7 +59,21 @@ class _InstallHelperModule(Protocol):
         *,
         extras: tuple[str, ...] = (),
     ) -> str:
-        """Return the editable requirement string for the core package."""
+        """
+        Return the editable requirement string for the core package.
+
+        Parameters
+        ----------
+        repo_root : pathlib.Path
+            Repository root for the editable core package.
+        extras : tuple[str, ...], optional
+            Optional extras to include in the requirement string.
+
+        Returns
+        -------
+        str
+            Editable requirement string for the core package.
+        """
 
     def editable_package_paths(
         self,
@@ -53,7 +81,21 @@ class _InstallHelperModule(Protocol):
         *,
         package_root: Path | None = None,
     ) -> tuple[Path, ...]:
-        """Return package paths in deterministic order."""
+        """
+        Return package paths in deterministic order.
+
+        Parameters
+        ----------
+        repo_root : pathlib.Path
+            Repository root used to resolve package paths.
+        package_root : pathlib.Path | None, optional
+            Optional package directory override.
+
+        Returns
+        -------
+        tuple[pathlib.Path, ...]
+            Editable package paths in deterministic order.
+        """
 
     def bundle_package_path(
         self,
@@ -61,7 +103,21 @@ class _InstallHelperModule(Protocol):
         *,
         package_root: Path | None = None,
     ) -> Path:
-        """Return the bundle package path."""
+        """
+        Return the bundle package path.
+
+        Parameters
+        ----------
+        repo_root : pathlib.Path
+            Repository root used to resolve the package path.
+        package_root : pathlib.Path | None, optional
+            Optional package directory override.
+
+        Returns
+        -------
+        pathlib.Path
+            Bundle package path.
+        """
 
     def non_bundle_package_paths(
         self,
@@ -69,7 +125,21 @@ class _InstallHelperModule(Protocol):
         *,
         package_root: Path | None = None,
     ) -> tuple[Path, ...]:
-        """Return first-party package paths excluding the bundle package."""
+        """
+        Return first-party package paths excluding the bundle package.
+
+        Parameters
+        ----------
+        repo_root : pathlib.Path
+            Repository root used to resolve package paths.
+        package_root : pathlib.Path | None, optional
+            Optional package directory override.
+
+        Returns
+        -------
+        tuple[pathlib.Path, ...]
+            First-party package paths excluding the bundle package.
+        """
 
     def build_install_commands(
         self,
@@ -81,7 +151,29 @@ class _InstallHelperModule(Protocol):
         include_bundle: bool = False,
         package_root: Path | None = None,
     ) -> tuple[tuple[str, ...], ...]:
-        """Build the editable-install command plan for first-party packages."""
+        """
+        Build the editable-install command plan for first-party packages.
+
+        Parameters
+        ----------
+        python : str
+            Python executable used in generated commands.
+        repo_root : pathlib.Path
+            Repository root used to resolve editable requirements.
+        include_core : bool, optional
+            Whether to include the core project in the install plan.
+        core_extras : tuple[str, ...], optional
+            Extras to apply to the core editable requirement.
+        include_bundle : bool, optional
+            Whether to include the official bundle package.
+        package_root : pathlib.Path | None, optional
+            Optional package directory override.
+
+        Returns
+        -------
+        tuple[tuple[str, ...], ...]
+            Editable-install command plan.
+        """
 
 
 class _PackageInventoryModule(Protocol):
@@ -90,14 +182,37 @@ class _PackageInventoryModule(Protocol):
     FIRST_PARTY_PACKAGE_DIRS: tuple[str, ...]
 
     def package_paths(self, repo_root: Path) -> tuple[Path, ...]:
-        """Return package paths in deterministic order."""
+        """
+        Return package paths in deterministic order.
+
+        Parameters
+        ----------
+        repo_root : pathlib.Path
+            Repository root used to resolve package paths.
+
+        Returns
+        -------
+        tuple[pathlib.Path, ...]
+            Package paths in deterministic order.
+        """
 
 
 class _GitConfigInstallModule(Protocol):
     """Protocol for the standalone repo Git configuration installer."""
 
     def git_alias_entries(self) -> list[tuple[str, str]]:
-        """Return repo-local Git config entries to install."""
+        """
+        Return repo-local Git config entries to install.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        list[tuple[str, str]]
+            Git config key-value entries to install.
+        """
 
 
 class _BuildHelperModule(Protocol):
@@ -110,7 +225,23 @@ class _BuildHelperModule(Protocol):
         package_path: Path,
         wheel_dir: Path,
     ) -> tuple[str, ...]:
-        """Build the wheel-validation argv for one package."""
+        """
+        Build the wheel-validation argv for one package.
+
+        Parameters
+        ----------
+        python : str
+            Python executable used in the command.
+        package_path : pathlib.Path
+            Package root being built.
+        wheel_dir : pathlib.Path
+            Directory receiving wheel artifacts.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Wheel-validation command arguments.
+        """
 
     def build_all_argv(
         self,
@@ -119,10 +250,38 @@ class _BuildHelperModule(Protocol):
         repo_root: Path,
         wheel_dir: Path,
     ) -> tuple[tuple[str, ...], ...]:
-        """Build the complete wheel-validation command plan."""
+        """
+        Build the complete wheel-validation command plan.
+
+        Parameters
+        ----------
+        python : str
+            Python executable used in generated commands.
+        repo_root : pathlib.Path
+            Repository root used to discover packages.
+        wheel_dir : pathlib.Path
+            Directory receiving wheel artifacts.
+
+        Returns
+        -------
+        tuple[tuple[str, ...], ...]
+            Complete wheel-validation command plan.
+        """
 
     def cleanup_build_artifacts(self, package_path: Path) -> None:
-        """Remove known package-local wheel-build artifacts."""
+        """
+        Remove known package-local wheel-build artifacts.
+
+        Parameters
+        ----------
+        package_path : pathlib.Path
+            Package root whose build artifacts should be removed.
+
+        Returns
+        -------
+        None
+            Matching package-local artifacts are removed in place.
+        """
 
 
 class _ReleaseInstallRehearsalModule(Protocol):
@@ -135,7 +294,23 @@ class _ReleaseInstallRehearsalModule(Protocol):
         repo_root: Path,
         wheel_dir: Path,
     ) -> tuple[str, ...]:
-        """Build the first-party wheel-rehearsal command."""
+        """
+        Build the first-party wheel-rehearsal command.
+
+        Parameters
+        ----------
+        python : str
+            Python executable used in the command.
+        repo_root : pathlib.Path
+            Repository root containing first-party packages.
+        wheel_dir : pathlib.Path
+            Directory receiving wheel artifacts.
+
+        Returns
+        -------
+        tuple[str, ...]
+            First-party wheel-rehearsal command arguments.
+        """
 
     def build_root_wheel_argv(
         self,
@@ -144,10 +319,38 @@ class _ReleaseInstallRehearsalModule(Protocol):
         repo_root: Path,
         wheel_dir: Path,
     ) -> tuple[str, ...]:
-        """Build the core wheel-rehearsal command."""
+        """
+        Build the core wheel-rehearsal command.
+
+        Parameters
+        ----------
+        python : str
+            Python executable used in the command.
+        repo_root : pathlib.Path
+            Repository root for the core package.
+        wheel_dir : pathlib.Path
+            Directory receiving wheel artifacts.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Core wheel-rehearsal command arguments.
+        """
 
     def discover_wheel_paths(self, wheel_dir: Path) -> tuple[Path, ...]:
-        """Return built wheel paths in deterministic order."""
+        """
+        Return built wheel paths in deterministic order.
+
+        Parameters
+        ----------
+        wheel_dir : pathlib.Path
+            Directory containing built wheel artifacts.
+
+        Returns
+        -------
+        tuple[pathlib.Path, ...]
+            Built wheel paths in deterministic order.
+        """
 
     def build_install_wheels_argv(
         self,
@@ -156,17 +359,57 @@ class _ReleaseInstallRehearsalModule(Protocol):
         install_dir: Path,
         wheel_paths: tuple[Path, ...],
     ) -> tuple[str, ...]:
-        """Build the installed-wheel rehearsal install command."""
+        """
+        Build the installed-wheel rehearsal install command.
+
+        Parameters
+        ----------
+        python : str
+            Python executable used in the command.
+        install_dir : pathlib.Path
+            Target directory for installed wheel contents.
+        wheel_paths : tuple[pathlib.Path, ...]
+            Wheel artifacts to install.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Installed-wheel rehearsal install command arguments.
+        """
 
     def build_probe_argv(self, *, python: str) -> tuple[str, ...]:
-        """Build the installed-wheel discovery probe command."""
+        """
+        Build the installed-wheel discovery probe command.
+
+        Parameters
+        ----------
+        python : str
+            Python executable used in the command.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Installed-wheel discovery probe command arguments.
+        """
 
 
 class _ReleaseArtifactBuildModule(Protocol):
     """Protocol for the release-artifact build helper."""
 
     def release_package_paths(self, repo_root: Path) -> tuple[Path, ...]:
-        """Return release package roots in deterministic order."""
+        """
+        Return release package roots in deterministic order.
+
+        Parameters
+        ----------
+        repo_root : pathlib.Path
+            Repository root used to discover release packages.
+
+        Returns
+        -------
+        tuple[pathlib.Path, ...]
+            Release package roots in deterministic order.
+        """
 
     def build_artifact_argv(
         self,
@@ -174,7 +417,21 @@ class _ReleaseArtifactBuildModule(Protocol):
         python: str,
         package_path: Path,
     ) -> tuple[str, ...]:
-        """Build the release artifact command for one package root."""
+        """
+        Build the release artifact command for one package root.
+
+        Parameters
+        ----------
+        python : str
+            Python executable used in the command.
+        package_path : pathlib.Path
+            Package root for the release artifact.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Release artifact command arguments.
+        """
 
     def artifact_check_argv(
         self,
@@ -182,7 +439,21 @@ class _ReleaseArtifactBuildModule(Protocol):
         python: str,
         package_path: Path,
     ) -> tuple[str, ...]:
-        """Build the twine-check command for one package root."""
+        """
+        Build the twine-check command for one package root.
+
+        Parameters
+        ----------
+        python : str
+            Python executable used in the command.
+        package_path : pathlib.Path
+            Package root whose artifact should be checked.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Twine-check command arguments.
+        """
 
     def build_release_plan(
         self,
@@ -190,14 +461,39 @@ class _ReleaseArtifactBuildModule(Protocol):
         python: str,
         repo_root: Path,
     ) -> tuple[tuple[str, ...], ...]:
-        """Build the ordered release-artifact plan."""
+        """
+        Build the ordered release-artifact plan.
+
+        Parameters
+        ----------
+        python : str
+            Python executable used in generated commands.
+        repo_root : pathlib.Path
+            Repository root used to discover release packages.
+
+        Returns
+        -------
+        tuple[tuple[str, ...], ...]
+            Ordered release-artifact command plan.
+        """
 
 
 class _SplitRepoVerificationModule(Protocol):
     """Protocol for the exported split-repo verification helper."""
 
     def split_repo_names(self) -> tuple[str, ...]:
-        """Return split repository names in deterministic validation order."""
+        """
+        Return split repository names in deterministic validation order.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple[str, ...]
+            Split repository names in deterministic validation order.
+        """
 
     def build_repo_validation_commands(
         self,
@@ -206,7 +502,23 @@ class _SplitRepoVerificationModule(Protocol):
         exported_repo_root: Path,
         core_repo_root: Path,
     ) -> tuple[tuple[str, ...], ...]:
-        """Build the validation command plan for one exported split repository."""
+        """
+        Build the validation command plan for one exported split repository.
+
+        Parameters
+        ----------
+        python : str
+            Python executable used in generated commands.
+        exported_repo_root : pathlib.Path
+            Exported split repository root to validate.
+        core_repo_root : pathlib.Path
+            Core repository root used for shared context.
+
+        Returns
+        -------
+        tuple[tuple[str, ...], ...]
+            Validation command plan for one exported split repository.
+        """
 
 
 class _BootstrapHelperModule(Protocol):
@@ -219,7 +531,23 @@ class _BootstrapHelperModule(Protocol):
         python: str,
         skip_validation: bool,
     ) -> list[CommandSpec]:
-        """Build the ordered bootstrap command plan."""
+        """
+        Build the ordered bootstrap command plan.
+
+        Parameters
+        ----------
+        repo_root : pathlib.Path
+            Repository root to bootstrap.
+        python : str
+            Python executable used in generated commands.
+        skip_validation : bool
+            Whether validation commands should be omitted.
+
+        Returns
+        -------
+        list[scripts.bootstrap_dev_environment.CommandSpec]
+            Ordered bootstrap command plan.
+        """
 
 
 def _load_first_party_package_inventory() -> _PackageInventoryModule:

@@ -295,6 +295,8 @@ class IndexBackend(Protocol):
         ----------
         root : pathlib.Path
             Repository root whose backend state should be queried.
+        conn : object | None, optional
+            Existing backend connection to reuse.
 
         Returns
         -------
@@ -340,6 +342,8 @@ class IndexBackend(Protocol):
             Repository root whose backend state should be updated.
         paths : collections.abc.Sequence[str]
             Absolute file paths to remove from backend state.
+        conn : object | None, optional
+            Existing backend connection to reuse.
 
         Returns
         -------
@@ -368,6 +372,12 @@ class IndexBackend(Protocol):
             Stable file metadata captured during scanning.
         analysis : codira.models.AnalysisResult
             Normalized analyzer output for the file.
+        embedding_backend : codira.contracts.EmbeddingBackendSpec | None, optional
+            Optional semantic embedding backend used during persistence.
+        previous_embeddings : collections.abc.Mapping[str, object] | None, optional
+            Previously persisted semantic artifacts eligible for reuse.
+        conn : object | None, optional
+            Existing backend connection to reuse.
 
         Returns
         -------
@@ -391,6 +401,8 @@ class IndexBackend(Protocol):
             Repository root whose backend state should be queried.
         paths : collections.abc.Sequence[str]
             Absolute file paths considered reusable.
+        conn : object | None, optional
+            Existing backend connection to reuse.
 
         Returns
         -------
@@ -411,6 +423,8 @@ class IndexBackend(Protocol):
         ----------
         root : pathlib.Path
             Repository root whose backend state should be finalized.
+        conn : object | None, optional
+            Existing backend connection to reuse.
 
         Returns
         -------

@@ -56,6 +56,12 @@ def package_version() -> str:
     str
         The installed package metadata version when available, otherwise the
         build-generated version, otherwise ``"0.0.0"``.
+
+    Raises
+    ------
+    ModuleNotFoundError
+        Propagated when importing generated version metadata fails for a module
+        other than codira's optional ``_version`` module.
     """
     installed_version = installed_distribution_version("codira")
     if installed_version is not None:

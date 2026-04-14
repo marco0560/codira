@@ -15,7 +15,18 @@ class _FutureRepoSplitManifestModule(Protocol):
     """Protocol for the standalone future split manifest helper."""
 
     def future_repo_split_manifests(self) -> tuple[FutureRepoSplitManifest, ...]:
-        """Return the deterministic future repository split manifests."""
+        """
+        Return the deterministic future repository split manifests.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple[scripts.future_repo_split_manifest.FutureRepoSplitManifest, ...]
+            Future repository split manifests in deterministic order.
+        """
 
 
 def _load_future_repo_split_manifest_helper() -> _FutureRepoSplitManifestModule:

@@ -15,7 +15,18 @@ class _FutureRepoCIModule(Protocol):
     """Protocol for the standalone future-repo CI helper module."""
 
     def future_repo_ci_specs(self) -> tuple[FutureRepoCISpec, ...]:
-        """Return the deterministic future repository CI specifications."""
+        """
+        Return the deterministic future repository CI specifications.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple[scripts.future_repo_ci.FutureRepoCISpec, ...]
+            Future repository CI specifications in deterministic order.
+        """
 
 
 def _load_future_repo_ci_helper() -> _FutureRepoCIModule:
@@ -43,7 +54,18 @@ def _load_future_repo_ci_helper() -> _FutureRepoCIModule:
 
 
 def test_future_repo_ci_specs_cover_the_accepted_repository_set() -> None:
-    """Keep the future CI plan aligned to the accepted split repository set."""
+    """
+    Keep the future CI plan aligned to the accepted split repository set.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the CI specs cover every accepted future repository.
+    """
     specs = _load_future_repo_ci_helper().future_repo_ci_specs()
 
     assert [spec.repository for spec in specs] == [
@@ -58,7 +80,18 @@ def test_future_repo_ci_specs_cover_the_accepted_repository_set() -> None:
 
 
 def test_core_future_repo_ci_keeps_integration_validation_explicit() -> None:
-    """Keep the core future-repo CI contract focused on orchestration and integration."""
+    """
+    Keep the core future-repo CI contract focused on integration validation.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the core CI spec keeps full repository validation.
+    """
     core_spec = _load_future_repo_ci_helper().future_repo_ci_specs()[0]
 
     assert core_spec.install == (
@@ -75,7 +108,18 @@ def test_core_future_repo_ci_keeps_integration_validation_explicit() -> None:
 
 
 def test_package_future_repo_ci_keeps_package_local_validation_uniform() -> None:
-    """Keep first-party package repos on one simple package-local CI contract."""
+    """
+    Keep first-party package repos on one package-local CI contract.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts package CI specs share the same validation commands.
+    """
     package_specs = _load_future_repo_ci_helper().future_repo_ci_specs()[1:6]
 
     assert all(
@@ -95,7 +139,18 @@ def test_package_future_repo_ci_keeps_package_local_validation_uniform() -> None
 
 
 def test_bundle_future_repo_ci_stays_test_only() -> None:
-    """Keep the bundle repo CI focused on metadata and package-local tests."""
+    """
+    Keep the bundle repo CI focused on metadata and package-local tests.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the bundle CI spec stays test-only.
+    """
     bundle_spec = _load_future_repo_ci_helper().future_repo_ci_specs()[-1]
 
     assert bundle_spec.install == (("python", "-m", "pip", "install", "-e", ".[test]"),)

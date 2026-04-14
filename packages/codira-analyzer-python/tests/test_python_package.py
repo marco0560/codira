@@ -9,7 +9,18 @@ from codira_analyzer_python import PythonAnalyzer, build_analyzer
 
 
 def test_python_package_declares_expected_entry_point() -> None:
-    """Keep package metadata aligned to the analyzer entry-point contract."""
+    """
+    Keep package metadata aligned to the analyzer entry-point contract.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the package advertises the expected analyzer factory.
+    """
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
@@ -19,7 +30,18 @@ def test_python_package_declares_expected_entry_point() -> None:
 
 
 def test_python_package_builds_expected_analyzer() -> None:
-    """Keep the package-local factory aligned to the published analyzer name."""
+    """
+    Keep the package-local factory aligned to the published analyzer name.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the factory returns the expected analyzer type and name.
+    """
     analyzer = build_analyzer()
 
     assert isinstance(analyzer, PythonAnalyzer)

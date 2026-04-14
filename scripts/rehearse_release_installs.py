@@ -287,6 +287,15 @@ def main(argv: list[str] | None = None) -> int:
     -------
     int
         Process exit code.
+
+    Raises
+    ------
+    FileNotFoundError
+        Raised when no wheel artifacts are produced.
+    subprocess.CalledProcessError
+        Raised when build, install, or probe subprocesses fail.
+    json.JSONDecodeError
+        Raised when the installed package probe emits invalid JSON.
     """
     args = parse_args(argv)
     args.wheel_dir.mkdir(parents=True, exist_ok=True)

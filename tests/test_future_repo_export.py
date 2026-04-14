@@ -22,7 +22,21 @@ class _FutureRepoExportModule(Protocol):
         repo_root: Path,
         repository: str,
     ) -> tuple[_FutureRepoExportEntry, ...]:
-        """Return the deterministic export plan for one future repository."""
+        """
+        Return the deterministic export plan for one future repository.
+
+        Parameters
+        ----------
+        repo_root : pathlib.Path
+            Repository root containing the source monorepo.
+        repository : str
+            Future repository name to export.
+
+        Returns
+        -------
+        tuple[_FutureRepoExportEntry, ...]
+            Export plan entries for the requested repository.
+        """
 
     def materialize_future_repo(
         self,
@@ -30,7 +44,23 @@ class _FutureRepoExportModule(Protocol):
         repository: str,
         destination_root: Path,
     ) -> Path:
-        """Materialize one future repository into a destination directory."""
+        """
+        Materialize one future repository into a destination directory.
+
+        Parameters
+        ----------
+        repo_root : pathlib.Path
+            Repository root containing the source monorepo.
+        repository : str
+            Future repository name to materialize.
+        destination_root : pathlib.Path
+            Parent directory receiving the materialized repository.
+
+        Returns
+        -------
+        pathlib.Path
+            Path to the materialized future repository.
+        """
 
 
 def _load_future_repo_export_helper() -> _FutureRepoExportModule:
@@ -39,7 +69,8 @@ def _load_future_repo_export_helper() -> _FutureRepoExportModule:
 
     Parameters
     ----------
-    None
+    tmp_path : pathlib.Path
+        Pytest fixture providing an isolated temporary directory.
 
     Returns
     -------
@@ -65,7 +96,8 @@ def test_package_export_plan_flattens_owned_paths_to_repository_root() -> None:
 
     Parameters
     ----------
-    None
+    tmp_path : pathlib.Path
+        Pytest fixture providing an isolated temporary directory.
 
     Returns
     -------
@@ -95,7 +127,8 @@ def test_core_export_plan_preserves_repository_relative_paths() -> None:
 
     Parameters
     ----------
-    None
+    tmp_path : pathlib.Path
+        Pytest fixture providing an isolated temporary directory.
 
     Returns
     -------
@@ -140,7 +173,8 @@ def test_materialize_future_repo_copies_owned_paths_into_empty_destination(
 
     Parameters
     ----------
-    None
+    tmp_path : pathlib.Path
+        Pytest fixture providing an isolated temporary directory.
 
     Returns
     -------
@@ -171,7 +205,8 @@ def test_materialize_future_repo_rejects_non_empty_destination(tmp_path: Path) -
 
     Parameters
     ----------
-    None
+    tmp_path : pathlib.Path
+        Pytest fixture providing an isolated temporary directory.
 
     Returns
     -------

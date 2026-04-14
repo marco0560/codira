@@ -223,6 +223,8 @@ class _FakeBackend:
         ----------
         root : pathlib.Path
             Repository root.
+        conn : sqlite3.Connection | None, optional
+            Optional SQLite connection.
 
         Returns
         -------
@@ -272,6 +274,8 @@ class _FakeBackend:
             Repository root.
         paths : list[str]
             Paths that would be deleted.
+        conn : sqlite3.Connection | None, optional
+            Optional SQLite connection.
 
         Returns
         -------
@@ -302,6 +306,12 @@ class _FakeBackend:
             Stable file metadata snapshot.
         analysis : codira.models.AnalysisResult
             Normalized analyzer output.
+        embedding_backend : object | None, optional
+            Optional embedding backend accepted for protocol compatibility.
+        previous_embeddings : dict[str, object] | None, optional
+            Previously persisted semantic artifacts accepted for compatibility.
+        conn : sqlite3.Connection | None, optional
+            Optional SQLite connection.
 
         Returns
         -------
@@ -327,6 +337,8 @@ class _FakeBackend:
             Repository root.
         paths : list[str]
             Reusable paths.
+        conn : sqlite3.Connection | None, optional
+            Optional SQLite connection.
 
         Returns
         -------
@@ -349,6 +361,8 @@ class _FakeBackend:
         ----------
         root : pathlib.Path
             Repository root.
+        conn : sqlite3.Connection | None, optional
+            Optional SQLite connection.
 
         Returns
         -------
