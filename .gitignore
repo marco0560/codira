@@ -9,6 +9,7 @@ venv/
 # -------------------------------
 .codira/
 issues.json
+milestones.json
 
 # -------------------------------
 # Python cache

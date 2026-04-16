@@ -73,7 +73,7 @@ def git_alias_entries() -> list[tuple[str, str]]:
         ),
         (
             "alias.re-clean",
-            "!git clean-repo && git gen-issues && git txz",
+            "!git clean-repo && git gen-issues && git gen-miles && git txz",
         ),
         (
             "alias.bootstrap",
@@ -107,6 +107,18 @@ def git_alias_entries() -> list[tuple[str, str]]:
                 "{number, title, body, url, labels(first: 20) "
                 "{nodes {name}}, milestone {number, title}, comments "
                 "{totalCount}}}}}' > issues.json; }; f"
+            ),
+        ),
+        (
+            "alias.gen-miles",
+            (
+                "!f() { rm -f milestones.json; timeout 10s gh api graphql "
+                '-f query=\'query {repository(owner: "marco0560", '
+                'name: "codira") {milestones(first: 20, states: OPEN, '
+                "orderBy: {field: DUE_DATE, direction: ASC}) "
+                "{nodes {number, title, dueOn, progressPercentage, issues(first: 100) "
+                "{nodes {number, title, state, labels(first: 20) "
+                "{nodes {name}}}}}}}}' > milestones.json ; }; f"
             ),
         ),
         (
