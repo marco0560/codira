@@ -54,7 +54,7 @@ def git_alias_entries() -> list[tuple[str, str]]:
         ("alias.co", "checkout"),
         ("alias.br", "branch"),
         ("alias.ci", "commit"),
-        ("alias.lg", "log --oneline --graph --decorate"),
+        ("alias.lg", "log --oneline --graph --decorate -50"),
         (
             "alias.check",
             (
