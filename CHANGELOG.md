@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/marco0560/codira/compare/v1.2.0...v1.3.0) (2026-04-16)
+
+
+### Features
+
+* **backend:** decouple backend from sqlite ([743fd1d](https://github.com/marco0560/codira/commit/743fd1d1b20fdb12eb68245ae69c240d0286f633)), closes [#8](https://github.com/marco0560/codira/issues/8)
+
 # [1.2.0](https://github.com/marco0560/codira/compare/v1.1.7...v1.2.0) (2026-04-14)
 
 
