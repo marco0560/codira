@@ -1,3 +1,10 @@
+## [1.3.1](https://github.com/marco0560/codira/compare/v1.3.0...v1.3.1) (2026-04-16)
+
+
+### Bug Fixes
+
+* **dev:** limit log alias to 50 commits to avoid noise ([55ed049](https://github.com/marco0560/codira/commit/55ed049c6a423c71a1a6ab72e75b86f81c73bd7c))
+
 # [1.3.0](https://github.com/marco0560/codira/compare/v1.2.0...v1.3.0) (2026-04-16)
 
 
