@@ -4429,7 +4429,7 @@ def context_for(
         If the repository index cannot be opened or queried.
     """
     normalized_prefix = normalize_prefix(root, prefix)
-    conn = active_index_backend().open_connection(root)
+    conn = cast("sqlite3.Connection", active_index_backend().open_connection(root))
     intent: QueryIntent = classify_query(query)
     plan = build_retrieval_plan(intent)
     diversity: DiversityDiagnostics | None = None

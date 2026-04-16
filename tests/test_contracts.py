@@ -285,6 +285,84 @@ class _FakeBackend:
         del conn
         return
 
+    def clear_index(
+        self,
+        root: Path,
+        *,
+        conn: object | None = None,
+    ) -> None:
+        """
+        Perform no-op index clearing for the fake backend.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        None
+            This fake backend keeps no state.
+        """
+        del root, conn
+        return
+
+    def purge_skipped_docstring_issues(
+        self,
+        root: Path,
+        *,
+        conn: object | None = None,
+    ) -> None:
+        """
+        Perform no-op skipped-docstring cleanup for the fake backend.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        None
+            This fake backend keeps no state.
+        """
+        del root, conn
+        return
+
+    def load_previous_embeddings_by_path(
+        self,
+        root: Path,
+        *,
+        paths: list[str],
+        embedding_backend: object,
+        conn: object | None = None,
+    ) -> dict[str, dict[str, object]]:
+        """
+        Return no reusable semantic artifacts for the fake backend.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        paths : list[str]
+            Paths selected for replacement.
+        embedding_backend : object
+            Active embedding backend placeholder.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        dict[str, dict[str, object]]
+            Empty reusable-artifact mapping.
+        """
+        del root, paths, embedding_backend, conn
+        return {}
+
     def persist_analysis(
         self,
         root: Path,
@@ -712,6 +790,78 @@ class _FakeBackend:
             This fake backend keeps no state.
         """
         del root, conn
+        return
+
+    def persist_runtime_inventory(
+        self,
+        root: Path,
+        *,
+        backend_name: str,
+        backend_version: str,
+        coverage_complete: bool,
+        analyzers: list[LanguageAnalyzer],
+        conn: object | None = None,
+    ) -> None:
+        """
+        Perform no-op runtime inventory persistence for the fake backend.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        backend_name : str
+            Active backend name.
+        backend_version : str
+            Active backend version.
+        coverage_complete : bool
+            Whether coverage was complete.
+        analyzers : list[codira.contracts.LanguageAnalyzer]
+            Active analyzers.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        None
+            This fake backend keeps no state.
+        """
+        del root, backend_name, backend_version, coverage_complete, analyzers, conn
+        return
+
+    def commit(self, root: Path, *, conn: object) -> None:
+        """
+        Perform no-op commit for the fake backend.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object
+            Backend connection placeholder.
+
+        Returns
+        -------
+        None
+            This fake backend keeps no state.
+        """
+        del root, conn
+        return
+
+    def close_connection(self, conn: object) -> None:
+        """
+        Perform no-op connection close for the fake backend.
+
+        Parameters
+        ----------
+        conn : object
+            Backend connection placeholder.
+
+        Returns
+        -------
+        None
+            This fake backend keeps no state.
+        """
+        del conn
         return
 
     def current_embedding_state_matches(

@@ -19,10 +19,12 @@ ADR-012.
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
-from codira.indexer import _dot_similarity, _rebuild_graph_indexes, _store_analysis
+from codira.contracts import BackendError
 from codira.prefix import normalize_prefix, prefix_clause
 from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
@@ -33,10 +35,16 @@ from codira.semantic.embeddings import (
 from codira.sqlite_backend_support import (
     _count_reused_embeddings,
     _current_embedding_state_matches,
+    _clear_index_tables,
     _delete_indexed_file_data,
+    _dot_similarity,
     _load_existing_file_hashes,
     _load_existing_file_ownership,
+    _load_previous_embeddings_by_path,
     _prune_orphaned_embeddings,
+    _purge_skipped_docstring_issues,
+    _rebuild_graph_indexes,
+    _store_analysis,
 )
 from codira.storage import get_db_path, init_db
 
@@ -44,6 +52,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from codira.contracts import IndexBackend
+    from codira.contracts import LanguageAnalyzer
     from codira.models import AnalysisResult, FileMetadataSnapshot
     from codira.semantic.embeddings import EmbeddingBackendSpec
     from codira.sqlite_backend_support import StoredEmbeddingRow
@@ -1143,6 +1152,110 @@ class SQLiteIndexBackend:
             if owns_connection:
                 conn.close()
 
+    def clear_index(
+        self,
+        root: Path,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        """
+        Remove all indexed artifacts from SQLite storage.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be cleared.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        None
+            Indexed rows are deleted in place.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            _clear_index_tables(conn)
+            if owns_connection:
+                conn.commit()
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def purge_skipped_docstring_issues(
+        self,
+        root: Path,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        """
+        Remove legacy docstring issues for files excluded from audit policy.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be cleaned.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        None
+            Matching issue rows are deleted in place.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            _purge_skipped_docstring_issues(conn)
+            if owns_connection:
+                conn.commit()
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def load_previous_embeddings_by_path(
+        self,
+        root: Path,
+        *,
+        paths: list[str],
+        embedding_backend: EmbeddingBackendSpec,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict[str, dict[str, StoredEmbeddingRow]]:
+        """
+        Load reusable stored symbol embeddings for paths being replaced.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        paths : list[str]
+            Absolute file paths selected for replacement.
+        embedding_backend : EmbeddingBackendSpec
+            Active embedding backend metadata.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        dict[str, dict[str, codira.sqlite_backend_support.StoredEmbeddingRow]]
+            Stored embeddings grouped by absolute file path.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            return _load_previous_embeddings_by_path(
+                conn,
+                list(paths),
+                backend=embedding_backend,
+            )
+        finally:
+            if owns_connection:
+                conn.close()
+
     def count_reusable_embeddings(
         self,
         root: Path,
@@ -1255,6 +1368,9 @@ class SQLiteIndexBackend:
             if owns_connection:
                 conn.commit()
             return written
+        except sqlite3.Error as exc:
+            msg = str(exc)
+            raise BackendError(msg) from exc
         finally:
             if owns_connection:
                 conn.close()
@@ -1290,6 +1406,113 @@ class SQLiteIndexBackend:
         finally:
             if owns_connection:
                 conn.close()
+
+    def persist_runtime_inventory(
+        self,
+        root: Path,
+        *,
+        backend_name: str,
+        backend_version: str,
+        coverage_complete: bool,
+        analyzers: Sequence[LanguageAnalyzer],
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        """
+        Persist backend and analyzer inventory for one successful index run.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be updated.
+        backend_name : str
+            Active backend name.
+        backend_version : str
+            Active backend version.
+        coverage_complete : bool
+            Whether canonical-directory coverage had no gaps.
+        analyzers : collections.abc.Sequence[codira.contracts.LanguageAnalyzer]
+            Active analyzers for the run.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        None
+            Runtime inventory rows are replaced in place.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            conn.execute("DELETE FROM index_runtime")
+            conn.execute("DELETE FROM index_analyzers")
+            conn.execute(
+                """
+                INSERT INTO index_runtime(
+                    singleton,
+                    backend_name,
+                    backend_version,
+                    coverage_complete
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (1, backend_name, backend_version, int(coverage_complete)),
+            )
+
+            for analyzer in sorted(analyzers, key=lambda item: str(item.name)):
+                conn.execute(
+                    """
+                    INSERT INTO index_analyzers(name, version, discovery_globs)
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        str(analyzer.name),
+                        str(analyzer.version),
+                        json.dumps(tuple(analyzer.discovery_globs)),
+                    ),
+                )
+            if owns_connection:
+                conn.commit()
+        except sqlite3.Error as exc:
+            msg = str(exc)
+            raise BackendError(msg) from exc
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def commit(self, root: Path, *, conn: sqlite3.Connection) -> None:
+        """
+        Commit pending writes on an open SQLite connection.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the connection.
+        conn : sqlite3.Connection
+            Open SQLite connection.
+
+        Returns
+        -------
+        None
+            Pending writes are committed.
+        """
+        del root
+        conn.commit()
+
+    def close_connection(self, conn: sqlite3.Connection) -> None:
+        """
+        Close an open SQLite connection.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Open SQLite connection.
+
+        Returns
+        -------
+        None
+            The connection is closed.
+        """
+        conn.close()
 
 
 def build_backend() -> IndexBackend:

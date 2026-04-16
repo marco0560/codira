@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    import sqlite3
     from collections.abc import Mapping, Sequence
     from pathlib import Path
 
@@ -33,6 +32,21 @@ if TYPE_CHECKING:
         IncludeEdgeRow,
         SymbolRow,
     )
+
+
+class BackendError(RuntimeError):
+    """
+    Backend-neutral persistence failure.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances carry the backend failure message through ``RuntimeError``.
+    """
 
 
 @runtime_checkable
@@ -207,7 +221,7 @@ class IndexBackend(Protocol):
     name: str
     version: str
 
-    def open_connection(self, root: Path) -> sqlite3.Connection:
+    def open_connection(self, root: Path) -> object:
         """
         Open a backend connection for one repository index.
 
@@ -218,7 +232,7 @@ class IndexBackend(Protocol):
 
         Returns
         -------
-        sqlite3.Connection
+        object
             Open backend connection handle.
         """
 
@@ -226,7 +240,7 @@ class IndexBackend(Protocol):
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> tuple[str, str, int] | None:
         """
         Return persisted backend and coverage metadata for the last index run.
@@ -249,7 +263,7 @@ class IndexBackend(Protocol):
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> list[tuple[str, str, str]]:
         """
         Return persisted analyzer inventory for the last index run.
@@ -286,7 +300,7 @@ class IndexBackend(Protocol):
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> dict[str, str]:
         """
         Load indexed file hashes used for incremental reuse decisions.
@@ -308,7 +322,7 @@ class IndexBackend(Protocol):
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> dict[str, tuple[str, str]]:
         """
         Load persisted analyzer ownership keyed by absolute path.
@@ -351,6 +365,73 @@ class IndexBackend(Protocol):
             Matching persisted artifacts are removed in place.
         """
 
+    def clear_index(self, root: Path, *, conn: object | None = None) -> None:
+        """
+        Remove all indexed artifacts from backend state.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state should be cleared.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        None
+            Indexed artifacts are removed in place.
+        """
+
+    def purge_skipped_docstring_issues(
+        self,
+        root: Path,
+        *,
+        conn: object | None = None,
+    ) -> None:
+        """
+        Remove backend-owned legacy docstring diagnostics skipped by policy.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state should be cleaned.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        None
+            Matching diagnostics are removed in place.
+        """
+
+    def load_previous_embeddings_by_path(
+        self,
+        root: Path,
+        *,
+        paths: Sequence[str],
+        embedding_backend: EmbeddingBackendSpec,
+        conn: object | None = None,
+    ) -> dict[str, dict[str, object]]:
+        """
+        Load reusable semantic artifacts for paths that will be replaced.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state should be queried.
+        paths : collections.abc.Sequence[str]
+            Absolute file paths selected for replacement.
+        embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+            Active semantic backend metadata used to filter reusable artifacts.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        dict[str, dict[str, object]]
+            Previous semantic artifacts grouped by absolute file path.
+        """
+
     def persist_analysis(
         self,
         root: Path,
@@ -359,7 +440,7 @@ class IndexBackend(Protocol):
         analysis: AnalysisResult,
         embedding_backend: EmbeddingBackendSpec | None = None,
         previous_embeddings: Mapping[str, object] | None = None,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> tuple[int, int]:
         """
         Persist normalized artifacts for one analyzed file snapshot.
@@ -390,7 +471,7 @@ class IndexBackend(Protocol):
         root: Path,
         *,
         paths: Sequence[str],
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> int:
         """
         Count semantic artifacts that remain reusable for unchanged files.
@@ -414,7 +495,7 @@ class IndexBackend(Protocol):
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> None:
         """
         Rebuild derived backend state after raw artifact persistence.
@@ -432,6 +513,72 @@ class IndexBackend(Protocol):
             Derived backend indexes are refreshed in place.
         """
 
+    def persist_runtime_inventory(
+        self,
+        root: Path,
+        *,
+        backend_name: str,
+        backend_version: str,
+        coverage_complete: bool,
+        analyzers: Sequence[LanguageAnalyzer],
+        conn: object | None = None,
+    ) -> None:
+        """
+        Persist backend and analyzer inventory for a completed index run.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state should be updated.
+        backend_name : str
+            Active backend name.
+        backend_version : str
+            Active backend version.
+        coverage_complete : bool
+            Whether canonical-directory coverage had no gaps.
+        analyzers : collections.abc.Sequence[codira.contracts.LanguageAnalyzer]
+            Active analyzers for the run.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        None
+            Runtime inventory rows are replaced in place.
+        """
+
+    def commit(self, root: Path, *, conn: object) -> None:
+        """
+        Commit pending backend writes on an open connection.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend connection is being committed.
+        conn : object
+            Backend-owned connection handle.
+
+        Returns
+        -------
+        None
+            Pending backend writes are committed.
+        """
+
+    def close_connection(self, conn: object) -> None:
+        """
+        Close an open backend connection handle.
+
+        Parameters
+        ----------
+        conn : object
+            Backend-owned connection handle.
+
+        Returns
+        -------
+        None
+            The backend handle is closed or released.
+        """
+
     def find_include_edges(
         self,
         root: Path,
@@ -440,7 +587,7 @@ class IndexBackend(Protocol):
         module: str | None = None,
         incoming: bool = False,
         prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> list[IncludeEdgeRow]:
         """
         Find exact include-like edges for an owner module or included target.
@@ -474,7 +621,7 @@ class IndexBackend(Protocol):
         logical_name: str,
         *,
         prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> list[SymbolRow]:
         """
         Resolve a logical callable name back to indexed symbol rows.
@@ -503,7 +650,7 @@ class IndexBackend(Protocol):
         root: Path,
         symbol: SymbolRow,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> str:
         """
         Return the logical graph identity for one indexed symbol row.
@@ -527,7 +674,7 @@ class IndexBackend(Protocol):
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> list[tuple[str, str, int, int]]:
         """
         Return stored embedding inventory grouped by backend metadata.
@@ -553,7 +700,7 @@ class IndexBackend(Protocol):
         limit: int,
         min_score: float,
         prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> ChannelResults:
         """
         Return ranked symbol candidates using stored embedding similarity.
@@ -583,7 +730,7 @@ class IndexBackend(Protocol):
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> None:
         """
         Remove embedding rows whose owning symbol no longer exists.
@@ -606,7 +753,7 @@ class IndexBackend(Protocol):
         root: Path,
         *,
         embedding_backend: EmbeddingBackendSpec,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> bool:
         """
         Check whether persisted embeddings match the active embedding backend.
@@ -633,7 +780,7 @@ class IndexBackend(Protocol):
         *,
         prefix: str | None = None,
         limit: int = 20,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> list[SymbolRow]:
         """
         Return indexed symbols belonging to one module.
@@ -663,7 +810,7 @@ class IndexBackend(Protocol):
         name: str,
         *,
         prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> list[SymbolRow]:
         """
         Find exact symbol-name matches in the index.
@@ -690,7 +837,7 @@ class IndexBackend(Protocol):
         root: Path,
         *,
         prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        conn: object | None = None,
     ) -> list[DocstringIssueRow]:
         """
         Return indexed docstring validation issues.

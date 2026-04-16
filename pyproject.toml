@@ -297,6 +297,9 @@ unfixable = [
 "src/codira/indexer.py" = [
     "PLR0913", # persistence helpers and backend methods preserve stable indexing contracts
 ]
+"src/codira/sqlite_backend_support.py" = [
+    "PLR0913", # SQLite persistence helpers preserve stable indexing contracts
+]
 "packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py" = [
     "PLR0913", # backend method arity mirrors the stable backend query and persistence contracts
 ]

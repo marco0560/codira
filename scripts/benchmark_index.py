@@ -29,7 +29,7 @@ from typing import cast
 
 from codira_backend_sqlite import SQLiteIndexBackend
 
-from codira import indexer
+from codira import indexer, sqlite_backend_support
 from codira.indexer import index_repo
 from codira.semantic import embeddings as embeddings_module
 
@@ -154,12 +154,12 @@ def main() -> int:
     original_collect_scan = indexer._collect_project_scan_state
     original_collect_analyses = indexer._collect_indexed_file_analyses
     original_persist_analyses = indexer._persist_indexed_file_analyses
-    original_flush_rows = indexer._flush_embedding_rows
+    original_flush_rows = sqlite_backend_support._flush_embedding_rows
     original_rebuild_indexes = SQLiteIndexBackend.rebuild_derived_indexes
     original_embed_texts = embeddings_module.embed_texts
-    original_indexer_embed_texts = cast(
+    original_sqlite_support_embed_texts = cast(
         "Callable[[Sequence[str]], list[list[float]]]",
-        indexer.embed_texts,  # type: ignore[attr-defined]
+        sqlite_backend_support.embed_texts,
     )
 
     def benchmark_collect_scan(*args: object, **kwargs: object) -> object:
@@ -227,10 +227,10 @@ def main() -> int:
     indexer._collect_project_scan_state = benchmark_collect_scan  # type: ignore[assignment]
     indexer._collect_indexed_file_analyses = benchmark_collect_analyses  # type: ignore[assignment]
     indexer._persist_indexed_file_analyses = benchmark_persist_analyses  # type: ignore[assignment]
-    indexer._flush_embedding_rows = benchmark_flush_rows  # type: ignore[assignment]
+    sqlite_backend_support._flush_embedding_rows = benchmark_flush_rows  # type: ignore[assignment]
     SQLiteIndexBackend.rebuild_derived_indexes = benchmark_rebuild_indexes  # type: ignore[method-assign]
     embeddings_module.embed_texts = benchmark_embed_texts
-    indexer.embed_texts = benchmark_embed_texts  # type: ignore[attr-defined]
+    sqlite_backend_support.embed_texts = benchmark_embed_texts
 
     total_start = perf_counter()
     try:
@@ -240,10 +240,10 @@ def main() -> int:
         indexer._collect_project_scan_state = original_collect_scan
         indexer._collect_indexed_file_analyses = original_collect_analyses
         indexer._persist_indexed_file_analyses = original_persist_analyses
-        indexer._flush_embedding_rows = original_flush_rows
+        sqlite_backend_support._flush_embedding_rows = original_flush_rows
         SQLiteIndexBackend.rebuild_derived_indexes = original_rebuild_indexes  # type: ignore[method-assign]
         embeddings_module.embed_texts = original_embed_texts
-        indexer.embed_texts = original_indexer_embed_texts  # type: ignore[assignment, attr-defined]
+        sqlite_backend_support.embed_texts = original_sqlite_support_embed_texts  # type: ignore[assignment]
 
     batch_sizes = stats.embedding_batch_sizes
     benchmark_report = {

@@ -303,7 +303,7 @@ def test_flush_embedding_rows_batches_and_reuses_identical_payloads(
         calls.append(list(texts))
         return [[float(index + 1)] * EMBEDDING_DIM for index, _text in enumerate(texts)]
 
-    monkeypatch.setattr("codira.indexer.embed_texts", fake_embed_texts)
+    monkeypatch.setattr("codira.sqlite_backend_support.embed_texts", fake_embed_texts)
     backend = embeddings_module.get_embedding_backend()
     rows = [
         PendingEmbeddingRow("symbol", 1, "stable-a", "shared payload"),
