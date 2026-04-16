@@ -845,6 +845,7 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
         "alias.install-repo-config",
         "alias.docs-build",
         "alias.gen-issues",
+        "alias.gen-miles",
         "alias.txz",
         "alias.release-audit",
         "alias.release-check",
