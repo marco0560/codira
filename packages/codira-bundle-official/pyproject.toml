@@ -4,17 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-bundle-official"
-version = "1.0.0"
+version = "1.3.1"
 description = "Curated first-party plugin bundle for codira"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "codira[semantic]==1.0.0",
+    "codira[semantic]==1.3.1",
     "codira-analyzer-python==1.0.0",
     "codira-analyzer-json==1.0.0",
     "codira-analyzer-c==1.0.0",
     "codira-analyzer-bash==1.0.0",
-    "codira-backend-sqlite==1.0.0",
+    "codira-backend-sqlite==1.3.1",
 ]
 
 [project.optional-dependencies]

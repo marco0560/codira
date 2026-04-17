@@ -1175,7 +1175,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-json==1.0.0",
         "codira-analyzer-c==1.0.0",
         "codira-analyzer-bash==1.0.0",
-        "codira-backend-sqlite==1.0.0",
+        "codira-backend-sqlite==1.3.1",
     ]
 
 
