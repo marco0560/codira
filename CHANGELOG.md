@@ -1,3 +1,10 @@
+## [1.3.2](https://github.com/marco0560/codira/compare/v1.3.1...v1.3.2) (2026-04-17)
+
+
+### Bug Fixes
+
+* **package:** align sqlite backend package release ([231e23e](https://github.com/marco0560/codira/commit/231e23e9ae806c99b0c4a13a02412972d54458c4))
+
 ## [1.3.1](https://github.com/marco0560/codira/compare/v1.3.0...v1.3.1) (2026-04-16)
 
 
