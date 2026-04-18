@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/marco0560/codira/compare/v1.3.2...v1.4.0) (2026-04-18)
+
+
+### Features
+
+* **tests:** introduce memory backend for testing ([30e2142](https://github.com/marco0560/codira/commit/30e2142c47a363abe6d31e0407f428278daafbb5)), closes [#9](https://github.com/marco0560/codira/issues/9)
+
 ## [1.3.2](https://github.com/marco0560/codira/compare/v1.3.1...v1.3.2) (2026-04-17)
 
 
