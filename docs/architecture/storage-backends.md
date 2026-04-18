@@ -60,3 +60,37 @@ Phase 21 makes SQLite use that metadata for deterministic rebuild policy:
 - per-file analyzer ownership participates in incremental reuse decisions
 - backend runtime inventory mismatches trigger automatic rebuilds
 - analyzer inventory mismatches trigger automatic rebuilds
+
+## Contributor Contract Validation Backend
+
+Issue #9 adds a minimal in-memory backend for contributor-facing contract
+validation. It lives in `tests/memory_backend.py` and is covered by
+`tests/test_memory_backend.py`.
+
+Use the in-memory backend when changing code that may affect the
+`IndexBackend` contract or observable backend behavior, including:
+
+- `src/codira/contracts.py`
+- `src/codira/indexer.py`
+- backend registry selection in `src/codira/registry.py`
+- query-facing backend methods such as symbol lookup, docstring issues, call
+  edges, callable references, include edges, and embedding inventory
+- indexing lifecycle behavior such as full rebuilds, incremental reuse,
+  deletion, runtime inventory, and analyzer inventory
+
+The backend is intentionally not a production backend:
+
+- it is not distributed as a `codira-backend-memory` package
+- it is not available from normal installs
+- it is not selected by running `CODIRA_INDEX_BACKEND=memory codira index`
+- it does not persist data outside the Python process
+
+Tests select it by installing a fake `codira.backends` entry point or by
+patching the active backend in the real indexing path. This keeps the registry
+and indexer contract exercised without presenting `memory` as a supported
+operator-facing backend.
+
+When extending the backend contract, update both the SQLite backend and the
+in-memory backend. Contract tests should compare observable behavior between
+SQLite and memory rather than SQLite internals, so regressions expose hidden
+coupling to SQL tables, row ids, or SQLite-specific query behavior.
