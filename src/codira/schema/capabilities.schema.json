@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codira.local/schema/capabilities.schema.json",
+  "title": "codira capability contract",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "ontology",
+    "commands",
+    "channels",
+    "retrieval_capabilities",
+    "retrieval_producers",
+    "analyzers",
+    "validation"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "ontology": {
+      "type": "object",
+      "required": ["version", "types"],
+      "properties": {
+        "version": { "type": "string" },
+        "types": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "module",
+              "type",
+              "callable",
+              "import",
+              "constant",
+              "variable",
+              "namespace"
+            ]
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "commands": { "type": "object" },
+    "channels": { "type": "object" },
+    "retrieval_capabilities": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "retrieval_producers": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "analyzers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "analyzer_name",
+          "analyzer_version",
+          "source",
+          "entrypoint",
+          "declaration_status",
+          "supports",
+          "does_not_support",
+          "mappings",
+          "checksum"
+        ],
+        "properties": {
+          "analyzer_name": { "type": "string", "minLength": 1 },
+          "analyzer_version": { "type": "string", "minLength": 1 },
+          "source": { "type": "string", "minLength": 1 },
+          "entrypoint": { "type": "string", "minLength": 1 },
+          "declaration_status": {
+            "enum": ["declared", "missing", "invalid"]
+          },
+          "supports": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "does_not_support": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "mappings": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "checksum": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "validation": {
+      "type": "object",
+      "required": ["status", "issues"],
+      "properties": {
+        "status": { "enum": ["ok", "degraded"] },
+        "issues": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

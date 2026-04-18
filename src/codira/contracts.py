@@ -104,6 +104,85 @@ RetrievalCapabilityName = Literal[
     "issue_annotations",
     "diagnostics_metadata",
 ]
+OntologyObjectType = Literal[
+    "module",
+    "type",
+    "callable",
+    "import",
+    "constant",
+    "variable",
+    "namespace",
+]
+
+CANONICAL_ONTOLOGY_TYPES: tuple[OntologyObjectType, ...] = (
+    "module",
+    "type",
+    "callable",
+    "import",
+    "constant",
+    "variable",
+    "namespace",
+)
+
+
+@dataclass(frozen=True)
+class AnalyzerCapabilityDeclaration:
+    """
+    Machine-readable declaration of one analyzer's ontology coverage.
+
+    Parameters
+    ----------
+    analyzer_name : str
+        Stable analyzer identifier.
+    analyzer_version : str
+        Analyzer implementation version.
+    source : str
+        Analyzer source class such as ``first_party`` or ``third_party``.
+    entrypoint : str
+        Importable factory or implementation identity.
+    supports : tuple[OntologyObjectType, ...]
+        Canonical ontology types the analyzer can emit.
+    does_not_support : tuple[OntologyObjectType, ...]
+        Canonical ontology types the analyzer explicitly does not emit.
+    mappings : dict[str, OntologyObjectType]
+        Analyzer-native artifact types mapped to canonical ontology types.
+    checksum : str | None, optional
+        Optional stable implementation checksum when available.
+    """
+
+    analyzer_name: str
+    analyzer_version: str
+    source: str
+    entrypoint: str
+    supports: tuple[OntologyObjectType, ...]
+    does_not_support: tuple[OntologyObjectType, ...]
+    mappings: dict[str, OntologyObjectType]
+    checksum: str | None = None
+
+
+@runtime_checkable
+class CapabilityDeclaringAnalyzer(Protocol):
+    """
+    Optional analyzer-side contract for Layer 0 capability declarations.
+
+    Implementations declare how analyzer-native artifacts map to the canonical
+    ontology without changing the existing indexing behavior.
+    """
+
+    def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
+        """
+        Return the analyzer's explicit capability declaration.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        AnalyzerCapabilityDeclaration
+            Deterministic ontology declaration for this analyzer.
+        """
+
 
 KNOWN_RETRIEVAL_CAPABILITIES: tuple[RetrievalCapabilityName, ...] = (
     "symbol_lookup",

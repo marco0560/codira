@@ -65,7 +65,7 @@ version_scheme = "no-guess-dev"
 local_scheme = "no-local-version"
 
 [tool.setuptools.package-data]
-codira = ["py.typed"]
+codira = ["py.typed", "schema/*.json"]
 
 [project.scripts]
 codira = "codira.cli:main"

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from codira.capabilities import build_capability_contract
 from codira.indexer import (
     CoverageIssue,
     IndexFailure,
@@ -267,7 +268,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         title="subcommands",
-        metavar=("{help,index,cov,sym,emb,calls,refs,audit,ctx,plugins}"),
+        metavar=("{help,index,cov,sym,emb,calls,refs,audit,ctx,plugins,caps}"),
     )
 
     sub.add_parser("help", help="Show help")
@@ -601,6 +602,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output structured JSON for machine consumption",
     )
 
+    capabilities_parser = sub.add_parser(
+        "caps",
+        aliases=["capabilities"],
+        help="Export the machine-readable capability contract",
+        description=(
+            "Export codira's deterministic Layer 0 capability contract, "
+            "including ontology, command, channel, analyzer, and retrieval "
+            "producer declarations."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  codira caps\n"
+            "  codira caps --json\n"
+            "  codira caps --strict --json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    capabilities_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output structured JSON for machine consumption",
+    )
+    capabilities_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail if active analyzers have missing or invalid declarations",
+    )
+
     return parser
 
 
@@ -675,6 +704,54 @@ def _run_help(parser: argparse.ArgumentParser) -> int:
         Process exit status for a successful help invocation.
     """
     parser.print_help()
+    return 0
+
+
+def _run_capabilities(*, as_json: bool, strict: bool) -> int:
+    """
+    Render the deterministic capability contract.
+
+    Parameters
+    ----------
+    as_json : bool
+        Whether to render the full JSON contract. Plain text prints a compact
+        summary for humans.
+    strict : bool
+        Whether validation issues should fail instead of producing degraded
+        metadata.
+
+    Returns
+    -------
+    int
+        Zero after rendering the capability contract.
+    """
+    payload = build_capability_contract(strict=strict)
+    if as_json:
+        _emit_json(payload)
+        return 0
+
+    ontology = payload["ontology"]
+    commands = payload["commands"]
+    analyzers = payload["analyzers"]
+    validation = payload["validation"]
+    print(f"schema_version: {payload['schema_version']}")
+    if isinstance(ontology, dict):
+        print(f"ontology_version: {ontology['version']}")
+        print("ontology_types: " + ", ".join(str(item) for item in ontology["types"]))
+    if isinstance(commands, dict):
+        print("commands: " + ", ".join(sorted(commands)))
+    if isinstance(analyzers, list):
+        analyzer_names = [
+            str(item["analyzer_name"])
+            for item in analyzers
+            if isinstance(item, dict) and "analyzer_name" in item
+        ]
+        print("analyzers: " + ", ".join(sorted(analyzer_names)))
+    if isinstance(validation, dict):
+        print(f"validation: {validation['status']}")
+        issues = validation.get("issues")
+        if isinstance(issues, list) and issues:
+            print("validation_issues: " + "; ".join(str(issue) for issue in issues))
     return 0
 
 
@@ -2583,6 +2660,8 @@ def main() -> int:
             )
         if args.command == "plugins":
             return _run_plugins(as_json=args.json)
+        if args.command in {"caps", "capabilities"}:
+            return _run_capabilities(as_json=args.json, strict=args.strict)
         if args.command == "ctx":
             _ensure_index(root)
 

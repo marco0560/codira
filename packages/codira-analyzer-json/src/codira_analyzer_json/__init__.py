@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
     from codira.contracts import LanguageAnalyzer
 
+from codira.contracts import AnalyzerCapabilityDeclaration
 from codira.models import AnalysisResult, DeclarationArtifact, ModuleArtifact
 
 JsonFamily = Literal[
@@ -809,6 +810,45 @@ class JsonAnalyzer:
     name = "json"
     version = "2"
     discovery_globs: tuple[str, ...] = ("*.json",)
+
+    def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
+        """
+        Return JSON analyzer ontology coverage.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        codira.contracts.AnalyzerCapabilityDeclaration
+            Explicit mapping from JSON artifacts to canonical ontology types.
+        """
+        return AnalyzerCapabilityDeclaration(
+            analyzer_name=self.name,
+            analyzer_version=self.version,
+            source="first_party",
+            entrypoint="codira_analyzer_json:build_analyzer",
+            supports=(
+                "module",
+                "type",
+                "callable",
+                "import",
+                "constant",
+                "variable",
+            ),
+            does_not_support=("namespace",),
+            mappings={
+                "module": "module",
+                "json_schema_definition": "type",
+                "json_schema_property": "variable",
+                "json_manifest_name": "constant",
+                "json_manifest_script": "callable",
+                "json_manifest_dependency": "import",
+                "json_release_plugin": "import",
+                "json_release_branch": "constant",
+            },
+        )
 
     def supports_path(self, path: Path) -> bool:
         """

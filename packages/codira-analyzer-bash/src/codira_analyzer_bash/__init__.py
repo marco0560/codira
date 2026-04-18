@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 from tree_sitter import Language, Node, Parser
 from tree_sitter_bash import language
 
+from codira.contracts import AnalyzerCapabilityDeclaration
 from codira.models import AnalysisResult, CallSite, FunctionArtifact, ModuleArtifact
 
 _BASH_SUFFIXES = {".sh", ".bash"}
@@ -285,6 +286,38 @@ class BashAnalyzer:
     name = "bash"
     version = "1"
     discovery_globs: tuple[str, ...] = ("*.sh", "*.bash")
+
+    def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
+        """
+        Return Bash analyzer ontology coverage.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        codira.contracts.AnalyzerCapabilityDeclaration
+            Explicit mapping from Bash artifacts to canonical ontology types.
+        """
+        return AnalyzerCapabilityDeclaration(
+            analyzer_name=self.name,
+            analyzer_version=self.version,
+            source="first_party",
+            entrypoint="codira_analyzer_bash:build_analyzer",
+            supports=("module", "callable"),
+            does_not_support=(
+                "type",
+                "import",
+                "constant",
+                "variable",
+                "namespace",
+            ),
+            mappings={
+                "module": "module",
+                "function": "callable",
+            },
+        )
 
     def supports_path(self, path: Path) -> bool:
         """
