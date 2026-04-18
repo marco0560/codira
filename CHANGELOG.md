@@ -1,3 +1,12 @@
+# [1.5.0](https://github.com/marco0560/codira/compare/v1.4.0...v1.5.0) (2026-04-18)
+
+
+### Features
+
+* **contracts:** add capability contract export ([b34abdf](https://github.com/marco0560/codira/commit/b34abdf7dc9577018584ace649c1276a42428248)), closes [#7](https://github.com/marco0560/codira/issues/7)
+* **contracts:** add capability contract export ([3322ad6](https://github.com/marco0560/codira/commit/3322ad6f2f743395470b737197381b9d02c934fc)), closes [#7](https://github.com/marco0560/codira/issues/7)
+* **contracts:** degrade missing capability declarations ([f214fa0](https://github.com/marco0560/codira/commit/f214fa00366a5e768059aa59568d5ec2af660e69))
+
 # [1.4.0](https://github.com/marco0560/codira/compare/v1.3.2...v1.4.0) (2026-04-18)
 
 
