@@ -907,6 +907,14 @@ def test_install_helper_can_target_exported_split_repositories() -> None:
             "/tmp/codira/.venv/bin/python",
             "-m",
             "pip",
+            "uninstall",
+            "-y",
+            "codira-bundle-official",
+        ),
+        (
+            "/tmp/codira/.venv/bin/python",
+            "-m",
+            "pip",
             "install",
             "-e",
             "/tmp/codira",
@@ -1092,6 +1100,14 @@ def test_install_helper_can_opt_into_bundle_package() -> None:
         repo_root=repo_root,
         include_bundle=True,
     ) == (
+        (
+            "/tmp/codira/.venv/bin/python",
+            "-m",
+            "pip",
+            "uninstall",
+            "-y",
+            "codira-bundle-official",
+        ),
         (
             "/tmp/codira/.venv/bin/python",
             "-m",

@@ -174,7 +174,7 @@ def build_install_commands(  # noqa: PLR0913
     package_root: Path | None = None,
 ) -> tuple[tuple[str, ...], ...]:
     """
-    Build the exact pip-install command plan for first-party packages.
+    Build the exact pip command plan for first-party packages.
 
     Parameters
     ----------
@@ -189,14 +189,16 @@ def build_install_commands(  # noqa: PLR0913
         Optional extras requested on the editable core install.
     include_bundle : bool, optional
         Whether to install the curated bundle meta-package in addition to the
-        first-party analyzer and backend packages.
+        first-party analyzer and backend packages. Existing bundle metadata is
+        uninstalled first so stale pins cannot conflict while refreshing core
+        and plugin packages.
     package_root : pathlib.Path | None, optional
         Optional directory containing split first-party repositories.
 
     Returns
     -------
     tuple[tuple[str, ...], ...]
-        Deterministic install commands for the source-tree package set.
+        Deterministic pip commands for the source-tree package set.
     """
     editable_install_argv: list[str] = [python, "-m", "pip", "install"]
     if include_core:
@@ -212,7 +214,19 @@ def build_install_commands(  # noqa: PLR0913
     ):
         editable_install_argv.extend(("-e", str(package_path)))
 
-    commands: list[tuple[str, ...]] = [tuple(editable_install_argv)]
+    commands: list[tuple[str, ...]] = []
+    if include_bundle:
+        commands.append(
+            (
+                python,
+                "-m",
+                "pip",
+                "uninstall",
+                "-y",
+                "codira-bundle-official",
+            )
+        )
+    commands.append(tuple(editable_install_argv))
     if include_bundle:
         commands.append(
             (

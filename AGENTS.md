@@ -81,6 +81,23 @@ Use at least the following shared skills for the corresponding task classes:
 If a required shared skill is unavailable, state that explicitly and apply the
 same rules manually.
 
+### Monorepo Plugin Packaging
+
+While first-party plugins and bundles live in this monorepo, every change to a
+plugin implementation, plugin public contract, entry point, package dependency,
+or package data MUST update the corresponding package metadata and tests in the
+same change.
+
+This includes the plugin distribution version, its `pyproject.toml`
+dependencies, package-data declarations, package-local metadata tests, and every
+bundle that pins or exposes that plugin. Bundle pins MUST remain compatible with
+the core `codira` version installed from the same monorepo checkout.
+
+This rule is temporary monorepo discipline. It prevents editable installs from
+mixing current source code with stale distribution metadata; once the packages
+are split into independent repositories, each repository's own release process
+will own this consistency requirement.
+
 ### Standard Loop
 
 1. Analyze request
