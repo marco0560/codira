@@ -1,3 +1,10 @@
+## [1.5.1](https://github.com/marco0560/codira/compare/v1.5.0...v1.5.1) (2026-04-18)
+
+
+### Bug Fixes
+
+* **package:** align monorepo plugin metadata ([7317657](https://github.com/marco0560/codira/commit/7317657baee562bcf8cbf8aedcf6eb1b12b462f5))
+
 # [1.5.0](https://github.com/marco0560/codira/compare/v1.4.0...v1.5.0) (2026-04-18)
 
 
