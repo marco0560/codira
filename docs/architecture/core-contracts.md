@@ -32,7 +32,7 @@ Invariants:
 Issue #7 adds a machine-readable capability contract exported by:
 
 ```bash
-codira capabilities --json
+codira caps --json
 ```
 
 The export includes:
@@ -54,9 +54,10 @@ The canonical ontology is intentionally small:
 - `namespace`
 
 Analyzer declarations must explicitly list both supported and unsupported
-ontology types. Missing declarations are hard failures for the capability
-export; codira must not infer analyzer semantics from emitted rows or from
-missing fields.
+ontology types. Missing declarations produce degraded capability metadata in
+the default export and remain hard failures under `codira caps --strict`;
+codira must not infer analyzer semantics from emitted rows or from missing
+fields.
 
 ## `RetrievalProducer`
 

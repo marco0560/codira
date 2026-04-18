@@ -58,6 +58,7 @@
           "analyzer_version",
           "source",
           "entrypoint",
+          "declaration_status",
           "supports",
           "does_not_support",
           "mappings",
@@ -68,6 +69,9 @@
           "analyzer_version": { "type": "string", "minLength": 1 },
           "source": { "type": "string", "minLength": 1 },
           "entrypoint": { "type": "string", "minLength": 1 },
+          "declaration_status": {
+            "enum": ["declared", "missing", "invalid"]
+          },
           "supports": {
             "type": "array",
             "items": { "type": "string" },
@@ -93,7 +97,7 @@
       "type": "object",
       "required": ["status", "issues"],
       "properties": {
-        "status": { "const": "ok" },
+        "status": { "enum": ["ok", "degraded"] },
         "issues": {
           "type": "array",
           "items": { "type": "string" }

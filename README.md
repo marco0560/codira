@@ -501,10 +501,11 @@ Expected result semantics:
 - reports installed or active plugin and capability surfaces
 - is useful when debugging environment or packaging issues
 
-### 8. `capabilities`
+### 8. `caps`
 
-Use `capabilities` when a tool, contributor, or agent needs codira to declare
-what it can answer before making retrieval decisions.
+Use `caps` when a tool, contributor, or agent needs codira to declare what it
+can answer before making retrieval decisions. The longer `capabilities` command
+is kept as a compatibility alias.
 
 Suggested use cases:
 
@@ -516,14 +517,17 @@ Suggested use cases:
 Examples:
 
 ```bash
-codira capabilities
-codira capabilities --json
+codira caps
+codira caps --json
+codira caps --strict --json
 ```
 
 Expected result semantics:
 
 - exports command, channel, analyzer, and retrieval-producer declarations
-- fails if an active analyzer does not explicitly declare ontology coverage
+- reports degraded metadata if an active analyzer does not explicitly declare
+  ontology coverage
+- fails on missing or invalid analyzer declarations only when `--strict` is set
 - describes capability surfaces only; it does not index or query repository
   content
 
@@ -588,7 +592,7 @@ Supported subcommands:
 - `refs`
 - `audit`
 - `ctx`
-- `capabilities`
+- `caps`
 
 Examples:
 

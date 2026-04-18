@@ -2,7 +2,7 @@
 
 Responsibilities
 ----------------
-- Define the Layer 0 capability contract exported by ``codira capabilities``.
+- Define the Layer 0 capability contract exported by ``codira caps``.
 - Validate analyzer declarations against the canonical ontology.
 - Assemble command, channel, analyzer, and retrieval-producer metadata without
   changing indexing or query behavior.
@@ -10,8 +10,8 @@ Responsibilities
 Design principles
 -----------------
 The capability export is explicit and deterministic. Missing analyzer
-declarations are reported as contract failures instead of being inferred from
-runtime behavior.
+declarations are reported as degraded contract metadata instead of being
+inferred from runtime behavior.
 
 Architectural role
 ------------------
@@ -112,11 +112,14 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
         "guarantee": "deterministic_plugin_snapshot",
         "limitations": ["entry-point discovery depends on installed distributions"],
     },
-    "capabilities": {
+    "caps": {
         "intent": "capability_contract_export",
+        "aliases": ["capabilities"],
         "channels": [],
         "guarantee": "deterministic_layer_0_contract_export",
-        "limitations": ["fails when active analyzers do not declare capabilities"],
+        "limitations": [
+            "reports degraded metadata when active analyzers do not declare capabilities"
+        ],
     },
 }
 
@@ -271,6 +274,8 @@ def _validate_declaration(
 
 def _declaration_payload(
     declaration: AnalyzerCapabilityDeclaration,
+    *,
+    declaration_status: str,
 ) -> dict[str, object]:
     """
     Convert an analyzer declaration to deterministic JSON-compatible data.
@@ -279,6 +284,8 @@ def _declaration_payload(
     ----------
     declaration : AnalyzerCapabilityDeclaration
         Analyzer declaration to serialize.
+    declaration_status : str
+        Validation status for the declaration.
 
     Returns
     -------
@@ -286,10 +293,38 @@ def _declaration_payload(
         JSON-compatible analyzer declaration payload.
     """
     payload = asdict(declaration)
+    payload["declaration_status"] = declaration_status
     payload["supports"] = list(declaration.supports)
     payload["does_not_support"] = list(declaration.does_not_support)
     payload["mappings"] = dict(sorted(declaration.mappings.items()))
     return payload
+
+
+def _missing_declaration_payload(analyzer: LanguageAnalyzer) -> dict[str, object]:
+    """
+    Build a degraded payload for an analyzer without declarations.
+
+    Parameters
+    ----------
+    analyzer : LanguageAnalyzer
+        Analyzer missing ``analyzer_capability_declaration()``.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-compatible analyzer payload with empty capability coverage.
+    """
+    return {
+        "analyzer_name": analyzer.name,
+        "analyzer_version": analyzer.version,
+        "source": "unknown",
+        "entrypoint": "unknown",
+        "declaration_status": "missing",
+        "supports": [],
+        "does_not_support": [],
+        "mappings": {},
+        "checksum": None,
+    }
 
 
 def _analyzer_declarations(
@@ -306,35 +341,40 @@ def _analyzer_declarations(
     Returns
     -------
     tuple[list[dict[str, object]], list[str]]
-        Serialized declarations and validation issues.
+        Serialized analyzer metadata and validation issues.
     """
-    declarations: list[AnalyzerCapabilityDeclaration] = []
+    payloads: list[dict[str, object]] = []
     issues: list[str] = []
 
     for analyzer in sorted(analyzers, key=lambda item: str(item.name)):
         if not isinstance(analyzer, CapabilityDeclaringAnalyzer):
             issues.append(f"{analyzer.name}: analyzer does not declare capabilities")
+            payloads.append(_missing_declaration_payload(analyzer))
             continue
         declaration = analyzer.analyzer_capability_declaration()
+        declaration_issues: list[str] = []
         if declaration.analyzer_name != analyzer.name:
-            issues.append(
+            declaration_issues.append(
                 f"{analyzer.name}: declaration name {declaration.analyzer_name!r} "
                 "does not match analyzer name"
             )
         if declaration.analyzer_version != analyzer.version:
-            issues.append(
+            declaration_issues.append(
                 f"{analyzer.name}: declaration version "
                 f"{declaration.analyzer_version!r} does not match analyzer version"
             )
-        issues.extend(_validate_declaration(declaration))
-        declarations.append(declaration)
+        declaration_issues.extend(_validate_declaration(declaration))
+        issues.extend(declaration_issues)
+        status = "invalid" if declaration_issues else "declared"
+        payloads.append(_declaration_payload(declaration, declaration_status=status))
 
-    payloads = [_declaration_payload(declaration) for declaration in declarations]
     return payloads, sorted(issues)
 
 
 def build_capability_contract(
     analyzers: Sequence[LanguageAnalyzer] | None = None,
+    *,
+    strict: bool = False,
 ) -> dict[str, object]:
     """
     Build the deterministic Layer 0 capability contract.
@@ -344,6 +384,9 @@ def build_capability_contract(
     analyzers : collections.abc.Sequence[LanguageAnalyzer] | None, optional
         Analyzer instances to describe. When omitted, active analyzers are
         loaded through the registry.
+    strict : bool, optional
+        Whether validation issues should raise instead of producing a degraded
+        contract payload.
 
     Returns
     -------
@@ -353,14 +396,16 @@ def build_capability_contract(
     Raises
     ------
     ValueError
-        If active analyzers are missing valid capability declarations.
+        If ``strict`` is true and active analyzers are missing valid capability
+        declarations.
     """
     active_analyzers = active_language_analyzers() if analyzers is None else analyzers
     analyzer_payloads, validation_issues = _analyzer_declarations(active_analyzers)
-    if validation_issues:
+    if strict and validation_issues:
         joined = "; ".join(validation_issues)
         msg = f"Invalid capability declarations: {joined}"
         raise ValueError(msg)
+    validation_status = "degraded" if validation_issues else "ok"
 
     return {
         "schema_version": CAPABILITY_SCHEMA_VERSION,
@@ -402,7 +447,7 @@ def build_capability_contract(
         "retrieval_producers": _retrieval_producer_payloads(),
         "analyzers": analyzer_payloads,
         "validation": {
-            "status": "ok",
-            "issues": [],
+            "status": validation_status,
+            "issues": validation_issues,
         },
     }
