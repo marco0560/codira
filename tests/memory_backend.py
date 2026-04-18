@@ -378,7 +378,18 @@ class MemoryIndexBackend:
     version = "1"
 
     def __init__(self) -> None:
-        """Initialize empty root-scoped backend storage."""
+        """
+        Initialize empty root-scoped backend storage.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The backend starts with no root state.
+        """
         self._states: dict[Path, _MemoryState] = {}
 
     def _state(self, root: Path) -> _MemoryState:
@@ -447,7 +458,21 @@ class MemoryIndexBackend:
         *,
         conn: object | None = None,
     ) -> tuple[str, str, int] | None:
-        """Return stored runtime inventory for ``root``."""
+        """
+        Return stored runtime inventory for ``root``.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        tuple[str, str, int] | None
+            Stored runtime inventory, or ``None`` when unavailable.
+        """
         return self._conn_state(root, conn).runtime_inventory
 
     def load_analyzer_inventory(
@@ -456,11 +481,37 @@ class MemoryIndexBackend:
         *,
         conn: object | None = None,
     ) -> list[tuple[str, str, str]]:
-        """Return stored analyzer inventory for ``root``."""
+        """
+        Return stored analyzer inventory for ``root``.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[tuple[str, str, str]]
+            Analyzer inventory rows.
+        """
         return list(self._conn_state(root, conn).analyzer_inventory)
 
     def initialize(self, root: Path) -> None:
-        """Ensure root-scoped memory state exists."""
+        """
+        Ensure root-scoped memory state exists.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+
+        Returns
+        -------
+        None
+            State is created in place when missing.
+        """
         self._state(root)
 
     def load_existing_file_hashes(
@@ -469,7 +520,21 @@ class MemoryIndexBackend:
         *,
         conn: object | None = None,
     ) -> dict[str, str]:
-        """Return indexed file hashes keyed by absolute path."""
+        """
+        Return indexed file hashes keyed by absolute path.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        dict[str, str]
+            File hashes keyed by absolute source path.
+        """
         state = self._conn_state(root, conn)
         return {file.path: file.hash for file in state.files.values()}
 
@@ -479,7 +544,21 @@ class MemoryIndexBackend:
         *,
         conn: object | None = None,
     ) -> dict[str, tuple[str, str]]:
-        """Return analyzer ownership keyed by absolute path."""
+        """
+        Return analyzer ownership keyed by absolute path.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        dict[str, tuple[str, str]]
+            Analyzer name and version keyed by absolute source path.
+        """
         state = self._conn_state(root, conn)
         return {
             file.path: (file.analyzer_name, file.analyzer_version)
@@ -493,7 +572,23 @@ class MemoryIndexBackend:
         paths: Sequence[str],
         conn: object | None = None,
     ) -> None:
-        """Remove artifacts owned by the supplied file paths."""
+        """
+        Remove artifacts owned by the supplied file paths.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        paths : collections.abc.Sequence[str]
+            Absolute file paths whose indexed artifacts should be removed.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        None
+            Matching artifacts are deleted in place.
+        """
         state = self._conn_state(root, conn)
         for path in sorted(paths):
             file_id = state.file_id_by_path.pop(path, None)
@@ -503,7 +598,21 @@ class MemoryIndexBackend:
             self._delete_file_artifacts(state, file_id)
 
     def clear_index(self, root: Path, *, conn: object | None = None) -> None:
-        """Remove all indexed artifacts while retaining runtime inventory."""
+        """
+        Remove all indexed artifacts while retaining runtime inventory.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        None
+            Indexed artifacts are cleared in place.
+        """
         state = self._conn_state(root, conn)
         state.next_file_id = 1
         state.next_symbol_id = 1
@@ -523,7 +632,21 @@ class MemoryIndexBackend:
         *,
         conn: object | None = None,
     ) -> None:
-        """Remove persisted docstring issues for files skipped by policy."""
+        """
+        Remove persisted docstring issues for files skipped by policy.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        None
+            Skipped-file docstring issues are removed in place.
+        """
         state = self._conn_state(root, conn)
         skipped_ids = {
             file.id
@@ -542,7 +665,25 @@ class MemoryIndexBackend:
         embedding_backend: EmbeddingBackendSpec,
         conn: object | None = None,
     ) -> dict[str, dict[str, object]]:
-        """Load reusable embeddings for paths selected for replacement."""
+        """
+        Load reusable embeddings for paths selected for replacement.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        paths : collections.abc.Sequence[str]
+            Absolute file paths selected for replacement.
+        embedding_backend : codira.contracts.EmbeddingBackendSpec
+            Active embedding backend metadata.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        dict[str, dict[str, object]]
+            Reusable embeddings keyed by path and stable symbol id.
+        """
         state = self._conn_state(root, conn)
         path_set = set(paths)
         symbol_by_id = {symbol.id: symbol for symbol in state.symbols}
@@ -577,7 +718,34 @@ class MemoryIndexBackend:
         previous_embeddings: Mapping[str, object] | None = None,
         conn: object | None = None,
     ) -> tuple[int, int]:
-        """Persist one normalized analysis result into memory."""
+        """
+        Persist one normalized analysis result into memory.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        file_metadata : codira.contracts.FileMetadataSnapshot
+            Metadata for the indexed file.
+        analysis : codira.contracts.AnalysisResult
+            Normalized analyzer output to persist.
+        embedding_backend : codira.contracts.EmbeddingBackendSpec | None, optional
+            Active embedding backend metadata.
+        previous_embeddings : collections.abc.Mapping[str, object] | None, optional
+            Previously persisted embeddings keyed by stable symbol id.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        tuple[int, int]
+            Recomputed and reused embedding counts.
+
+        Raises
+        ------
+        ValueError
+            If embedding backend metadata is not provided.
+        """
         if embedding_backend is None:
             msg = "MemoryIndexBackend requires explicit embedding backend metadata."
             raise ValueError(msg)
@@ -853,7 +1021,23 @@ class MemoryIndexBackend:
         paths: Sequence[str],
         conn: object | None = None,
     ) -> int:
-        """Count embedding rows owned by unchanged paths."""
+        """
+        Count embedding rows owned by unchanged paths.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        paths : collections.abc.Sequence[str]
+            Absolute file paths that were reused.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        int
+            Number of reusable embedding rows.
+        """
         state = self._conn_state(root, conn)
         path_set = set(paths)
         symbol_by_id = {symbol.id: symbol for symbol in state.symbols}
@@ -872,7 +1056,21 @@ class MemoryIndexBackend:
         *,
         conn: object | None = None,
     ) -> None:
-        """Derive graph edges lazily, so no rebuild work is required."""
+        """
+        Derive graph edges lazily, so no rebuild work is required.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        None
+            The backend state is validated but not mutated.
+        """
         self._conn_state(root, conn)
 
     def persist_runtime_inventory(
@@ -885,7 +1083,29 @@ class MemoryIndexBackend:
         analyzers: Sequence[LanguageAnalyzer],
         conn: object | None = None,
     ) -> None:
-        """Persist runtime and analyzer inventory for the last index run."""
+        """
+        Persist runtime and analyzer inventory for the last index run.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        backend_name : str
+            Active backend name.
+        backend_version : str
+            Active backend version.
+        coverage_complete : bool
+            Whether canonical-directory coverage had no gaps.
+        analyzers : collections.abc.Sequence[codira.contracts.LanguageAnalyzer]
+            Active analyzers for the run.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        None
+            Runtime inventory is replaced in place.
+        """
         state = self._conn_state(root, conn)
         state.runtime_inventory = (
             backend_name,
@@ -902,11 +1122,42 @@ class MemoryIndexBackend:
         ]
 
     def commit(self, root: Path, *, conn: object) -> None:
-        """Commit is a no-op for in-memory state."""
+        """
+        Commit pending writes for an in-memory connection.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object
+            Backend connection handle.
+
+        Returns
+        -------
+        None
+            Commit is a no-op for in-memory state.
+        """
         self._conn_state(root, conn)
 
     def close_connection(self, conn: object) -> None:
-        """Close is a no-op for in-memory state."""
+        """
+        Close an in-memory backend connection.
+
+        Parameters
+        ----------
+        conn : object
+            Backend connection handle.
+
+        Returns
+        -------
+        None
+            Close is a no-op for in-memory state.
+
+        Raises
+        ------
+        TypeError
+            If ``conn`` is not an in-memory backend connection.
+        """
         if not isinstance(conn, _MemoryConnection):
             msg = "MemoryIndexBackend received an incompatible connection handle."
             raise TypeError(msg)
@@ -921,7 +1172,29 @@ class MemoryIndexBackend:
         prefix: str | None = None,
         conn: object | None = None,
     ) -> list[IncludeEdgeRow]:
-        """Find include-like edges by owner module or target name."""
+        """
+        Find include-like edges by owner module or target name.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        name : str
+            Owner module or included target name to match.
+        module : str | None, optional
+            Optional owner module filter.
+        incoming : bool, optional
+            Whether to search incoming edges.
+        prefix : str | None, optional
+            Optional repository-relative path prefix.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.contracts.IncludeEdgeRow]
+            Matching include edge rows.
+        """
         state = self._conn_state(root, conn)
         normalized_prefix = normalize_prefix(root, prefix)
         rows = [
@@ -949,7 +1222,27 @@ class MemoryIndexBackend:
         prefix: str | None = None,
         conn: object | None = None,
     ) -> list[SymbolRow]:
-        """Resolve a logical symbol identity to indexed symbol rows."""
+        """
+        Resolve a logical symbol identity to indexed symbol rows.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        module_name : str
+            Module that owns the logical symbol.
+        logical_name : str
+            Logical symbol name.
+        prefix : str | None, optional
+            Optional repository-relative path prefix.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.contracts.SymbolRow]
+            Matching symbol rows.
+        """
         state = self._conn_state(root, conn)
         normalized_prefix = normalize_prefix(root, prefix)
         if "." in logical_name:
@@ -982,7 +1275,23 @@ class MemoryIndexBackend:
         *,
         conn: object | None = None,
     ) -> str:
-        """Return graph logical identity for one symbol row."""
+        """
+        Return graph logical identity for one symbol row.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        symbol : codira.contracts.SymbolRow
+            Symbol row whose logical identity should be resolved.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        str
+            Logical symbol name used in graph rows.
+        """
         self._conn_state(root, conn)
         symbol_type, module_name, name, file_path, lineno = symbol
         if symbol_type == "module":
@@ -1007,7 +1316,21 @@ class MemoryIndexBackend:
         *,
         conn: object | None = None,
     ) -> list[tuple[str, str, int, int]]:
-        """Return embedding counts grouped by backend metadata."""
+        """
+        Return embedding counts grouped by backend metadata.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[tuple[str, str, int, int]]
+            Backend name, version, vector dimension, and count rows.
+        """
         state = self._conn_state(root, conn)
         counts: dict[tuple[str, str, int], int] = {}
         for embedding in state.embeddings:
@@ -1028,7 +1351,29 @@ class MemoryIndexBackend:
         prefix: str | None = None,
         conn: object | None = None,
     ) -> ChannelResults:
-        """Return deterministic pseudo-vector embedding candidates."""
+        """
+        Return deterministic pseudo-vector embedding candidates.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        query : str
+            Query text to embed with the pseudo-vector backend.
+        limit : int
+            Maximum number of candidates to return.
+        min_score : float
+            Minimum similarity score.
+        prefix : str | None, optional
+            Optional repository-relative path prefix.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        codira.contracts.ChannelResults
+            Ranked embedding candidate rows.
+        """
         state = self._conn_state(root, conn)
         normalized_prefix = normalize_prefix(root, prefix)
         active = self.embedding_inventory(root, conn=conn)
@@ -1075,7 +1420,21 @@ class MemoryIndexBackend:
         *,
         conn: object | None = None,
     ) -> None:
-        """Remove embeddings whose owning symbol no longer exists."""
+        """
+        Remove embeddings whose owning symbol no longer exists.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        None
+            Orphaned embeddings are removed in place.
+        """
         state = self._conn_state(root, conn)
         symbol_ids = {symbol.id for symbol in state.symbols}
         state.embeddings = [
@@ -1091,7 +1450,23 @@ class MemoryIndexBackend:
         embedding_backend: EmbeddingBackendSpec,
         conn: object | None = None,
     ) -> bool:
-        """Return whether stored embeddings match the active backend."""
+        """
+        Return whether stored embeddings match the active backend.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        embedding_backend : codira.contracts.EmbeddingBackendSpec
+            Active embedding backend metadata.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        bool
+            ``True`` when stored embeddings are empty or match the backend.
+        """
         state = self._conn_state(root, conn)
         observed = {(row.backend, row.version) for row in state.embeddings}
         return not observed or observed == {
@@ -1107,7 +1482,27 @@ class MemoryIndexBackend:
         limit: int = 20,
         conn: object | None = None,
     ) -> list[SymbolRow]:
-        """Return indexed symbols belonging to one module."""
+        """
+        Return indexed symbols belonging to one module.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        module : str
+            Module name to list.
+        prefix : str | None, optional
+            Optional repository-relative path prefix.
+        limit : int, optional
+            Maximum number of rows to return.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.contracts.SymbolRow]
+            Matching symbol rows.
+        """
         state = self._conn_state(root, conn)
         normalized_prefix = normalize_prefix(root, prefix)
         rows = [
@@ -1126,7 +1521,25 @@ class MemoryIndexBackend:
         prefix: str | None = None,
         conn: object | None = None,
     ) -> list[SymbolRow]:
-        """Find exact symbol-name matches."""
+        """
+        Find exact symbol-name matches.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        name : str
+            Symbol name to match.
+        prefix : str | None, optional
+            Optional repository-relative path prefix.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.contracts.SymbolRow]
+            Matching symbol rows.
+        """
         state = self._conn_state(root, conn)
         normalized_prefix = normalize_prefix(root, prefix)
         rows = [
@@ -1144,7 +1557,23 @@ class MemoryIndexBackend:
         prefix: str | None = None,
         conn: object | None = None,
     ) -> list[DocstringIssueRow]:
-        """Return indexed docstring validation issues."""
+        """
+        Return indexed docstring validation issues.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        prefix : str | None, optional
+            Optional repository-relative path prefix.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.contracts.DocstringIssueRow]
+            Matching docstring issue rows.
+        """
         state = self._conn_state(root, conn)
         normalized_prefix = normalize_prefix(root, prefix)
         rows = [
@@ -1174,7 +1603,29 @@ class MemoryIndexBackend:
         prefix: str | None = None,
         conn: object | None = None,
     ) -> list[CallEdgeRow]:
-        """Find exact call edges by caller or callee logical name."""
+        """
+        Find exact call edges by caller or callee logical name.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        name : str
+            Caller or callee logical name to match.
+        module : str | None, optional
+            Optional module filter.
+        incoming : bool, optional
+            Whether to search incoming edges.
+        prefix : str | None, optional
+            Optional repository-relative path prefix.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.contracts.CallEdgeRow]
+            Matching call edge rows.
+        """
         return self._find_relations(
             root,
             name,
@@ -1195,7 +1646,29 @@ class MemoryIndexBackend:
         prefix: str | None = None,
         conn: object | None = None,
     ) -> list[CallEdgeRow]:
-        """Find exact callable-reference edges by owner or target name."""
+        """
+        Find exact callable-reference edges by owner or target name.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        name : str
+            Owner or target logical name to match.
+        module : str | None, optional
+            Optional module filter.
+        incoming : bool, optional
+            Whether to search incoming references.
+        prefix : str | None, optional
+            Optional repository-relative path prefix.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.contracts.CallEdgeRow]
+            Matching callable-reference edge rows.
+        """
         return self._find_relations(
             root,
             name,
@@ -1218,7 +1691,33 @@ class MemoryIndexBackend:
         lineno: int,
         logical_name: str,
     ) -> int:
-        """Append one symbol row and return its identifier."""
+        """
+        Append one symbol row and return its identifier.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+        file_id : int
+            Owning file identifier.
+        stable_id : str
+            Durable symbol identifier.
+        symbol_type : str
+            Symbol kind.
+        module_name : str
+            Owning module name.
+        name : str
+            Symbol display name.
+        lineno : int
+            Source line number.
+        logical_name : str
+            Graph-facing logical symbol name.
+
+        Returns
+        -------
+        int
+            Allocated in-memory symbol identifier.
+        """
         symbol_id = state.next_symbol_id
         state.next_symbol_id += 1
         state.symbols.append(
@@ -1255,7 +1754,49 @@ class MemoryIndexBackend:
         returns_value: bool = False,
         raises_exception: bool = False,
     ) -> None:
-        """Append validator findings for one artifact."""
+        """
+        Append validator findings for one artifact.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+        file_id : int
+            Owning file identifier.
+        label : str
+            Artifact label prefixed onto issue messages.
+        docstring : str | None
+            Artifact docstring to validate.
+        is_public : int
+            Public visibility flag passed to the validator.
+        stable_id : str
+            Durable symbol identifier.
+        symbol_type : str
+            Symbol kind.
+        module_name : str
+            Owning module name.
+        symbol_name : str
+            Symbol name stored on the issue row.
+        lineno : int
+            Source line number.
+        end_lineno : int | None
+            Ending source line number when available.
+        parameters : collections.abc.Sequence[str], optional
+            Callable parameters used by the validator.
+        require_callable_sections : bool, optional
+            Whether callable-specific sections must be present.
+        yields_value : bool, optional
+            Whether the callable yields values.
+        returns_value : bool, optional
+            Whether the callable returns values.
+        raises_exception : bool, optional
+            Whether the callable raises exceptions.
+
+        Returns
+        -------
+        None
+            Matching docstring issues are appended in place.
+        """
         for issue_type, message in validate_docstring(
             docstring,
             is_public=is_public,
@@ -1289,7 +1830,29 @@ class MemoryIndexBackend:
         calls: Sequence[CallSite],
         refs: Sequence[CallableReference],
     ) -> None:
-        """Append raw call and callable-reference records."""
+        """
+        Append raw call and callable-reference records.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+        file_id : int
+            Owning file identifier.
+        module_name : str
+            Owning module name.
+        owner_name : str
+            Logical owner name.
+        calls : collections.abc.Sequence[codira.contracts.CallSite]
+            Raw call sites to append.
+        refs : collections.abc.Sequence[codira.contracts.CallableReference]
+            Raw callable references to append.
+
+        Returns
+        -------
+        None
+            Relation records are appended in place.
+        """
         for call in calls:
             state.call_records.append(
                 _MemoryRelation(
@@ -1325,7 +1888,25 @@ class MemoryIndexBackend:
         embedding_backend: EmbeddingBackendSpec,
         previous_embeddings: Mapping[str, object],
     ) -> tuple[int, int]:
-        """Persist deterministic embedding rows and report reuse counts."""
+        """
+        Persist deterministic embedding rows and report reuse counts.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+        embedding_payloads : list[tuple[int, str, str]]
+            Symbol id, stable id, and embedding text rows to persist.
+        embedding_backend : codira.contracts.EmbeddingBackendSpec
+            Active embedding backend metadata.
+        previous_embeddings : collections.abc.Mapping[str, object]
+            Previously persisted embeddings keyed by stable symbol id.
+
+        Returns
+        -------
+        tuple[int, int]
+            Recomputed and reused embedding counts.
+        """
         recomputed = 0
         reused = 0
         for symbol_id, stable_id, text in sorted(embedding_payloads):
@@ -1356,7 +1937,21 @@ class MemoryIndexBackend:
         return (recomputed, reused)
 
     def _delete_file_artifacts(self, state: _MemoryState, file_id: int) -> None:
-        """Delete all artifacts owned by one file id."""
+        """
+        Delete all artifacts owned by one file id.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+        file_id : int
+            File identifier whose artifacts should be removed.
+
+        Returns
+        -------
+        None
+            Matching artifacts are deleted in place.
+        """
         deleted_symbol_ids = {
             symbol.id for symbol in state.symbols if symbol.file_id == file_id
         }
@@ -1383,7 +1978,19 @@ class MemoryIndexBackend:
         ]
 
     def _module_functions(self, state: _MemoryState) -> dict[str, set[str]]:
-        """Return top-level functions keyed by module name."""
+        """
+        Return top-level functions keyed by module name.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+
+        Returns
+        -------
+        dict[str, set[str]]
+            Top-level function names keyed by module name.
+        """
         module_functions: dict[str, set[str]] = {}
         for function in state.functions:
             if function.class_name is None:
@@ -1393,7 +2000,19 @@ class MemoryIndexBackend:
         return module_functions
 
     def _class_methods(self, state: _MemoryState) -> dict[tuple[str, str], set[str]]:
-        """Return method names keyed by ``(module, class)``."""
+        """
+        Return method names keyed by ``(module, class)``.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+
+        Returns
+        -------
+        dict[tuple[str, str], set[str]]
+            Method names keyed by module and class name.
+        """
         class_methods: dict[tuple[str, str], set[str]] = {}
         for function in state.functions:
             if function.class_name is not None:
@@ -1404,7 +2023,19 @@ class MemoryIndexBackend:
         return class_methods
 
     def _import_aliases(self, state: _MemoryState) -> dict[str, dict[str, str]]:
-        """Return import aliases keyed by owning module."""
+        """
+        Return import aliases keyed by owning module.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+
+        Returns
+        -------
+        dict[str, dict[str, str]]
+            Import alias maps keyed by owning module.
+        """
         aliases_by_module: dict[str, dict[str, str]] = {}
         for imp in sorted(
             state.imports,
@@ -1429,7 +2060,21 @@ class MemoryIndexBackend:
         state: _MemoryState,
         record: _MemoryRelation,
     ) -> tuple[str | None, str | None, int]:
-        """Resolve one raw call-style relation conservatively."""
+        """
+        Resolve one raw call-style relation conservatively.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+        record : _MemoryRelation
+            Raw relation record to resolve.
+
+        Returns
+        -------
+        tuple[str | None, str | None, int]
+            Target module, target logical name, and certainty flag.
+        """
         module_functions = self._module_functions(state)
         class_methods = self._class_methods(state)
         import_aliases = self._import_aliases(state).get(record.owner_module, {})
@@ -1476,7 +2121,21 @@ class MemoryIndexBackend:
         state: _MemoryState,
         records: Sequence[_MemoryRelation],
     ) -> list[CallEdgeRow]:
-        """Resolve raw relation records into public edge rows."""
+        """
+        Resolve raw relation records into public edge rows.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+        records : collections.abc.Sequence[_MemoryRelation]
+            Raw relation records to resolve.
+
+        Returns
+        -------
+        list[codira.contracts.CallEdgeRow]
+            Derived graph edge rows.
+        """
         rows = {
             (
                 record.owner_module,
@@ -1501,7 +2160,36 @@ class MemoryIndexBackend:
         prefix: str | None,
         conn: object | None,
     ) -> list[CallEdgeRow]:
-        """Find derived relation rows for calls or callable refs."""
+        """
+        Find derived relation rows for calls or callable refs.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        name : str
+            Owner or target logical name to match.
+        records_attr : str
+            State attribute containing raw relation records.
+        module : str | None
+            Optional module filter.
+        incoming : bool
+            Whether to search incoming relations.
+        prefix : str | None
+            Optional repository-relative path prefix.
+        conn : object | None
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.contracts.CallEdgeRow]
+            Matching derived relation rows.
+
+        Raises
+        ------
+        TypeError
+            If ``records_attr`` does not resolve to a relation list.
+        """
         state = self._conn_state(root, conn)
         normalized_prefix = normalize_prefix(root, prefix)
         records = getattr(state, records_attr)

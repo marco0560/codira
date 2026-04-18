@@ -1439,6 +1439,11 @@ class SQLiteIndexBackend:
         -------
         None
             Runtime inventory rows are replaced in place.
+
+        Raises
+        ------
+        BackendError
+            If SQLite rejects the inventory update.
         """
         owns_connection = conn is None
         if conn is None:
