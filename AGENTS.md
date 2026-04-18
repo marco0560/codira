@@ -1,36 +1,51 @@
-# AGENTS.md
+# AGENTS.md — codira Repository Contract
 
-## Purpose
+## 0. Mission
 
-This document defines the rules, workflow, and constraints for AI-assisted
-development in the `codira` project.
+You are operating on the codira repository.
 
-All agents (including ChatGPT) MUST follow these rules strictly.
+Priority order:
 
----
+1. Correctness
+2. Test integrity (authoritative behavior)
+3. Reproducibility
+4. Traceability
+5. Minimality of change
 
-## Core Principles
+Fluency is irrelevant.
 
-### 1. Source of Truth (SOT)
+## 1. Operating Mode
 
-- The repository filesystem is the ONLY source of truth.
-- Never assume files, modules, or structures that are not present.
-- Never reconstruct code from memory.
+Mode: HARD-FAIL DETERMINISTIC
 
-If something is not visible → STOP.
+Rules:
 
-If any required information is missing:
+- Never guess
+- Never infer missing code
+- Never reconstruct unseen files
+- Never approximate behavior
+
+If required information is missing:
 
 → STOP
 → Ask for clarification
 
----
+## 2. Sources of Truth (SOT)
 
-### 2. Deterministic Behavior
+Priority order:
 
-- No guessing
-- No approximations
-- No “best effort”
+1. Repository files (filesystem)
+2. Tests (`tests/`) → authoritative behavior contract
+3. Project documentation (`docs/`)
+4. User instructions
+
+Previous assistant output is NOT a source of truth.
+
+If something is not visible → STOP.
+
+## 3. Core Principles
+
+### 3.1 Determinism
 
 All outputs must be:
 
@@ -38,208 +53,168 @@ All outputs must be:
 - verifiable
 - minimal
 
----
+No “best effort”.
 
-### 3. Strict Patch Discipline
+### 3.2 Minimalism (LEAN)
+
+- Prefer the smallest correct solution
+- Avoid premature abstraction
+- Do not introduce frameworks or patterns unless required
+
+### 3.3 Scope Control
+
+Strictly limit changes to the requested task.
+
+Forbidden unless explicitly required:
+
+- Refactoring unrelated code
+- Renaming symbols
+- API changes
+- Stylistic churn
+
+If a change risks unintended impact:
+
+→ STOP
+→ Ask for clarification
+
+## 4. Execution Workflow (MANDATORY)
+
+For any non-trivial task:
+
+1. Analyze request
+2. Identify missing information
+3. Ask clarification questions if needed
+4. Propose a concrete plan
+5. WAIT for approval
+6. Execute the plan
+7. Validate (Section 7)
+8. Ensure behavioral correctness (tests)
+9. Produce commit block (if applicable)
+
+Do NOT skip steps.
+
+## 5. Deterministic Exploration
+
+Before modifying code:
+
+1. Verify symbols:
+
+    ```bash
+    rg <query>
+    ```
+
+2. If available, use repository tools (e.g. context/index tools)
+
+3. Read actual source files before editing
+
+Never modify code based only on assumptions.
+
+## 6. Strict Patch Discipline
 
 All code changes MUST be provided as:
 
 - explicit file paths
-- exact OLD / NEW blocks
+- exact OLD block (byte-identical)
+- exact NEW block
 
-No summaries. No partial edits.
+Rules:
 
----
+- No summaries
+- No partial edits
+- No reconstructed context
+- No “approximate matches”
 
-### 4. Minimalism (LEAN)
+If OLD block cannot be matched exactly → STOP.
 
-- Prefer the smallest correct solution
-- Avoid introducing abstractions prematurely
-- Avoid “framework thinking”
+## 7. Validation Contract
 
----
+All required checks MUST pass before concluding.
 
-## Development Workflow
-
-### Required Shared Skills
-
-When a shared skill exists and is applicable to the current task, agents MUST
-use it and follow its instructions.
-
-This requirement applies generally, not only to the examples below.
-
-Use at least the following shared skills for the corresponding task classes:
-
-- `deterministic-change-workflow` for non-trivial code changes, bug fixes, and
-  feature work
-- `numpy-docstring-enforcer` whenever modifying modules, classes, public
-  functions, or non-trivial private functions
-- `codira-workflow` before broad code exploration or patching
-- `commit-block-generator` for every commit, including direct local commits and
-  proposed commit blocks
-
-If a required shared skill is unavailable, state that explicitly and apply the
-same rules manually.
-
-### Monorepo Plugin Packaging
-
-While first-party plugins and bundles live in this monorepo, every change to a
-plugin implementation, plugin public contract, entry point, package dependency,
-or package data MUST update the corresponding package metadata and tests in the
-same change.
-
-This includes the plugin distribution version, its `pyproject.toml`
-dependencies, package-data declarations, package-local metadata tests, and every
-bundle that pins or exposes that plugin. Bundle pins MUST remain compatible with
-the core `codira` version installed from the same monorepo checkout.
-
-This rule is temporary monorepo discipline. It prevents editable installs from
-mixing current source code with stale distribution metadata; once the packages
-are split into independent repositories, each repository's own release process
-will own this consistency requirement.
-
-### Standard Loop
-
-1. Analyze request
-2. Propose plan, ask all necessary clarification questions
-3. Wait for approval or changes
-4. Execute plan
-5. Do NOT run `git check` in a terminal for agent validation.
-6. Run the underlying checks directly from `.venv`:
-
-   ```bash
-   source .venv/bin/activate
-   black --check .
-   ruff check .
-   mypy .
-   pytest -q
-   ```
-
-7. Verify:
-
-   - `black --check .` passes
-   - `ruff check .` passes
-   - `mypy .` passes
-   - `pytest -q` passes
-   - If any would fail → fix BEFORE concluding
-
-8. Manually validate behavior if needed
-9. At the end of every complex modification cycle, create a commit before
-   concluding.
-
-   Always use `commit-block-generator` before creating the commit.
-
-10. If a commit block is requested or appropriate, propose a **single** commit
-    block using the applicable shared skill.
-
-    The commit block must remain atomic and CI-compliant.
-
-### codira Workflow
-
-Use `codira` as a repository-local developer tool.
-
-Before broad code exploration or patching:
-
-1. Verify candidate symbols with `rg <query>` before editing.
-2. Run `codira ctx "<query>" --json` or `--prompt` as needed.
-3. Inspect the referenced files before applying changes.
-
-Use output modes as follows:
-
-- plain `ctx`: compact human-readable context
-- `ctx --json`: structured tool/agent workflows
-- `ctx --prompt`: copy-ready agent preamble
-- `ctx --explain`: retrieval diagnostics
-
-`codira` narrows search and improves determinism. It does not replace
-reading the actual source files before editing.
-
-### Virtual Environment
-
-This repository is operated from the local `.venv` environment.
-
-All Python-facing tools and entry points MUST resolve from `.venv`, not from
-the system installation or ambient `PATH`.
-
-Use one of these forms consistently:
-
-- `source .venv/bin/activate` before running project tools
-- explicit `.venv/bin/<tool>` paths when activation is not appropriate
-
-Assume all tool paths, Python interpreters, and console scripts are based on
-`.venv`.
-
----
-
-### Cleanup
-
-Before critical operations:
+Preferred:
 
 ```bash
-git clean-repo
-codira index
+pre-commit run --all-files
+pytest -q
 ```
 
----
-
-### Context Exploration
-
-Use:
+If `pre-commit` is not available, run equivalent toolchain:
 
 ```bash
-codira ctx <query>
+black --check .
+ruff check .
+mypy .
+pytest -q
 ```
 
-to inspect symbols and relationships.
+Rules:
 
----
+- Fix all failures BEFORE concluding
+- Do not ignore warnings/errors
+- Do not weaken tests to pass validation
 
-## Coding Standards
+## 8. Test Contract
 
-### Python
+Tests are the authoritative behavioral specification.
 
-- Type hints required
-- No `Any` unless justified
-- Prefer `Path` over string paths
+Requirements:
 
----
+- Deterministic
+- Environment-independent
+- No reliance on external systems unless explicitly allowed
 
-### Docstrings
+Forbidden:
 
-- Use **NumPy style**
-- Required for all modules, classes, non trivial functions
-- Must include:
+- Weakening assertions
+- Introducing flakiness
+- Bypassing failing tests
 
-  - Parameters
-  - Returns
+If tests contradict assumptions → tests win.
 
-- Includes if appropriate
+## 9. Environment Constraints
 
-  - `Raises` when exceptions are possible
-  - `Notes`
-  - `Examples`
+Assume execution inside project-local environment:
 
-Docstrings must:
+- `.venv` MUST be used when present
 
-- match actual behavior (no drift)
-- reflect current signature
-- include `Raises` when exceptions are possible
-- avoid redundancy
-- be concise and precise
+Use one of:
 
----
+```bash
+source .venv/bin/activate
+```
 
-### Error Handling
+or explicit paths:
 
-- Avoid broad `except Exception`
-- Catch only expected exceptions
-- Fail fast
+```bash
+.venv/bin/<tool>
+```
 
----
+Never rely on global/system Python or tools.
 
-## Architecture Rules
+## 10. Repository Awareness
 
-### Separation of Concerns
+Understand repository structure before changes.
+
+Typical subsystems may include:
+
+- CLI
+- Core logic
+- Data/processing layers
+- Validation/preflight
+- Output/rendering
+
+Consult when relevant:
+
+- `issues.json`
+- `milestones_plan.json`
+- other planning artifacts
+
+Do NOT reinterpret issue intent.
+
+## 11. Architecture Constraints
+
+Respect separation of concerns.
+
+Example pattern:
 
 | Layer      | Responsibility       |
 |------------|----------------------|
@@ -248,58 +223,111 @@ Docstrings must:
 | query      | database → results   |
 | CLI        | user interface       |
 
-Do not mix layers.
+Rules:
 
----
+- Do not mix layers
+- Do not bypass abstractions
+- Do not duplicate existing logic
 
-### Git is the Source of Truth for Cleanup
+## 12. Coding Standards
 
-- Cleanup logic MUST rely on git
-- Never implement custom filesystem heuristics
+### Python
 
----
+- Type hints required
+- Avoid `Any` unless justified
+- Prefer `Path` over string paths
 
-## Anti-Patterns (Forbidden)
+### Docstrings
 
-- Blind filesystem scanning when git provides truth
-- Re-implementing logic already present elsewhere
-- Introducing caching without clear invalidation rules
+Use NumPy style.
+
+Required for:
+
+- modules
+- classes
+- non-trivial functions
+
+Must include:
+
+- Parameters
+- Returns
+
+Include when applicable:
+
+- Raises
+- Notes
+- Examples
+
+Docstrings must reflect actual behavior (no drift).
+
+## 13. Error Handling
+
+- Fail fast
+- Catch only expected exceptions
+- Avoid broad `except Exception`
+
+## 14. Commit Contract
+
+If committing or proposing a commit:
+
+- Use `commit-block-generator` if available
+- Produce a **single atomic commit**
+
+Commit message MUST:
+
+- follow repository hook rules
+- match format: `type(scope): summary`
+- be CI-compliant
+
+Do NOT include toolchain status lines.
+
+## 15. Required Shared Skills
+
+When available, MUST be used:
+
+- `deterministic-change-workflow`
+- `numpy-docstring-enforcer`
+- `commit-block-generator`
+- repository-specific workflow tools
+
+If unavailable:
+
+→ state explicitly
+→ apply rules manually
+
+## 16. Anti-Patterns (Forbidden)
+
+- Guessing missing code
+- Blind filesystem scanning when structured tools exist
+- Re-implementing existing logic
+- Introducing caching without clear invalidation
 - Silent failures
+- Skipping validation
+- Modifying unrelated code
 
----
+## 17. Session Stability
 
-## Agent Roles
+Continuously monitor for:
 
-Agents may act as:
+- context drift
+- assumption creep
+- loss of file grounding
 
-- Senior Reviewer
-- Pair Programmer
-- Refactoring Assistant
+If detected:
 
-But MUST always:
+→ STOP
+→ Recommend RESET
 
-- respect SOT
-- avoid hallucination
-- produce deterministic output
-
----
-
-## When in Doubt
+## 18. When in Doubt
 
 STOP and ask for clarification.
 
 Never proceed with assumptions.
 
----
+## 19. Future Extensions
 
-## Future Extensions
+This contract may evolve to include:
 
-This file may evolve to include:
-
-- audit workflows
-- release discipline
-- semantic indexing policies
-
----
-
-END
+- release workflows
+- audit procedures
+- indexing/retrieval policies
