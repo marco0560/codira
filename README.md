@@ -501,7 +501,33 @@ Expected result semantics:
 - reports installed or active plugin and capability surfaces
 - is useful when debugging environment or packaging issues
 
-### 8. Common Flags and Modes
+### 8. `capabilities`
+
+Use `capabilities` when a tool, contributor, or agent needs codira to declare
+what it can answer before making retrieval decisions.
+
+Suggested use cases:
+
+- inspect the canonical ontology used by active analyzers
+- verify analyzer declarations after plugin changes
+- inspect command and retrieval-channel guarantees
+- feed deterministic capability metadata into agent workflows
+
+Examples:
+
+```bash
+codira capabilities
+codira capabilities --json
+```
+
+Expected result semantics:
+
+- exports command, channel, analyzer, and retrieval-producer declarations
+- fails if an active analyzer does not explicitly declare ontology coverage
+- describes capability surfaces only; it does not index or query repository
+  content
+
+### 9. Common Flags and Modes
 
 The most important cross-cutting flags are:
 
@@ -562,6 +588,7 @@ Supported subcommands:
 - `refs`
 - `audit`
 - `ctx`
+- `capabilities`
 
 Examples:
 

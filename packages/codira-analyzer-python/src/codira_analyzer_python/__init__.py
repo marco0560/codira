@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 from codira.normalization import analysis_result_from_parsed
 from codira.parser_ast import parse_file
+from codira.contracts import AnalyzerCapabilityDeclaration
 
 __all__ = ["PythonAnalyzer", "build_analyzer"]
 
@@ -51,6 +52,35 @@ class PythonAnalyzer:
     name = "python"
     version = "1"
     discovery_globs: tuple[str, ...] = ("*.py",)
+
+    def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
+        """
+        Return Python analyzer ontology coverage.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        codira.contracts.AnalyzerCapabilityDeclaration
+            Explicit mapping from Python artifacts to canonical ontology types.
+        """
+        return AnalyzerCapabilityDeclaration(
+            analyzer_name=self.name,
+            analyzer_version=self.version,
+            source="first_party",
+            entrypoint="codira_analyzer_python:build_analyzer",
+            supports=("module", "type", "callable", "import"),
+            does_not_support=("constant", "variable", "namespace"),
+            mappings={
+                "module": "module",
+                "class": "type",
+                "function": "callable",
+                "method": "callable",
+                "import": "import",
+            },
+        )
 
     def supports_path(self, path: Path) -> bool:
         """

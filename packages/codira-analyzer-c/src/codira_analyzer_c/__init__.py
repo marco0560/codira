@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 from tree_sitter import Language, Node, Parser
 from tree_sitter_c import language
 
+from codira.contracts import AnalyzerCapabilityDeclaration
 from codira.models import (
     AnalysisResult,
     CallSite,
@@ -1122,6 +1123,37 @@ class CAnalyzer:
     name = "c"
     version = "2"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
+
+    def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
+        """
+        Return C analyzer ontology coverage.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        codira.contracts.AnalyzerCapabilityDeclaration
+            Explicit mapping from C artifacts to canonical ontology types.
+        """
+        return AnalyzerCapabilityDeclaration(
+            analyzer_name=self.name,
+            analyzer_version=self.version,
+            source="first_party",
+            entrypoint="codira_analyzer_c:build_analyzer",
+            supports=("module", "type", "callable", "import"),
+            does_not_support=("constant", "variable", "namespace"),
+            mappings={
+                "module": "module",
+                "function": "callable",
+                "struct": "type",
+                "enum": "type",
+                "typedef": "type",
+                "include_local": "import",
+                "include_system": "import",
+            },
+        )
 
     def supports_path(self, path: Path) -> bool:
         """

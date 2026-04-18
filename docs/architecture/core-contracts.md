@@ -24,6 +24,39 @@ Invariants:
 - emitted artifact ordering must be deterministic
 - emitted embedding-bearing artifacts now carry durable analyzer-owned symbol
   identities used for cross-run reuse
+- first-party analyzers declare their canonical ontology coverage through
+  `analyzer_capability_declaration()`
+
+## Layer 0 Capability Contract
+
+Issue #7 adds a machine-readable capability contract exported by:
+
+```bash
+codira capabilities --json
+```
+
+The export includes:
+
+- the canonical ontology version and object types
+- command intents, channels, guarantees, and limitations
+- retrieval producer declarations and known capability names
+- analyzer declarations mapping native artifacts to ontology types
+- validation status for the active analyzer declarations
+
+The canonical ontology is intentionally small:
+
+- `module`
+- `type`
+- `callable`
+- `import`
+- `constant`
+- `variable`
+- `namespace`
+
+Analyzer declarations must explicitly list both supported and unsupported
+ontology types. Missing declarations are hard failures for the capability
+export; codira must not infer analyzer semantics from emitted rows or from
+missing fields.
 
 ## `RetrievalProducer`
 
