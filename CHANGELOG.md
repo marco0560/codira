@@ -1,3 +1,10 @@
+## [1.5.2](https://github.com/marco0560/codira/compare/v1.5.1...v1.5.2) (2026-04-19)
+
+
+### Bug Fixes
+
+* **ci:** added retry to dependancy installation in CI workflow ([533d692](https://github.com/marco0560/codira/commit/533d6924452ac815346e6725cece541f46d5be37))
+
 ## [1.5.1](https://github.com/marco0560/codira/compare/v1.5.0...v1.5.1) (2026-04-18)
 
 
