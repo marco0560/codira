@@ -1655,3 +1655,29 @@ def test_ci_workflow_fetches_tags_for_setuptools_scm() -> None:
     assert (
         "uses: actions/checkout@v5\n        with:\n          fetch-depth: 0" in workflow
     )
+
+
+def test_ci_workflow_retries_dependency_installation() -> None:
+    """
+    Keep CI dependency installation resilient to transient package downloads.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts dependency install commands are guarded by the retry
+        helper used for large semantic dependency downloads.
+    """
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "retry() {\n            for attempt in 1 2 3; do" in workflow
+    assert 'retry pip install -e ".[dev,docs,semantic]"' in workflow
+    assert (
+        "retry python scripts/install_first_party_packages.py --include-core "
+        "--core-extra dev --core-extra docs --core-extra semantic"
+    ) in workflow
