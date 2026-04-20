@@ -248,6 +248,26 @@ def _decorator_names(
     return decorators
 
 
+def _is_overload_stub(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """
+    Return whether a callable node is a typing overload stub.
+
+    Parameters
+    ----------
+    node : ast.FunctionDef | ast.AsyncFunctionDef
+        Function-like AST node whose decorators should be inspected.
+
+    Returns
+    -------
+    bool
+        ``True`` when the callable is decorated with ``@overload`` or
+        ``@typing.overload``.
+    """
+    return any(
+        name in {"overload", "typing.overload"} for name in _decorator_names(node)
+    )
+
+
 def _module_name_from_path(path: Path, root: Path) -> str:
     """
     Derive the dotted module name for a source file.
@@ -625,7 +645,9 @@ def parse_file(path: Path, root: Path) -> dict[str, Any]:
             }
 
             for child in node.body:
-                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if isinstance(
+                    child, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ) and not _is_overload_stub(child):
                     method_doc = ast.get_docstring(child)
                     class_entry["methods"].append(
                         {
@@ -650,7 +672,9 @@ def parse_file(path: Path, root: Path) -> dict[str, Any]:
 
             result["classes"].append(class_entry)
 
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not (
+            _is_overload_stub(node)
+        ):
             func_doc = ast.get_docstring(node)
             result["functions"].append(
                 {

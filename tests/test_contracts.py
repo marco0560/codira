@@ -993,6 +993,64 @@ def test_analysis_result_from_parsed_normalizes_python_artifacts(
     )
 
 
+def test_analysis_result_from_parsed_ignores_python_overload_stubs(
+    tmp_path: Path,
+) -> None:
+    """
+    Ignore typing overload stubs when normalizing runtime callables.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts overload declarations do not create duplicate runtime
+        function or method artifacts.
+    """
+    module = tmp_path / "pkg" / "sample.py"
+    module.parent.mkdir()
+    module.write_text(
+        "import typing\n"
+        "from typing import overload\n"
+        "\n"
+        "@overload\n"
+        "def build(value: int) -> int: ...\n"
+        "\n"
+        "@typing.overload\n"
+        "def build(value: str) -> str: ...\n"
+        "\n"
+        "def build(value):\n"
+        "    return value\n"
+        "\n"
+        "class Demo:\n"
+        "    @overload\n"
+        "    def load(self, value: int) -> int: ...\n"
+        "\n"
+        "    def load(self, value):\n"
+        "        return value\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_file(module, tmp_path)
+    result = analysis_result_from_parsed(module, parsed)
+
+    assert [(function.name, function.lineno) for function in result.functions] == [
+        ("build", 10)
+    ]
+    assert [(method.name, method.lineno) for method in result.classes[0].methods] == [
+        ("load", 17)
+    ]
+    assert tuple(function.stable_id for function in result.functions) == (
+        "python:function:pkg.sample:build",
+    )
+    assert tuple(method.stable_id for method in result.classes[0].methods) == (
+        "python:method:pkg.sample:Demo.load",
+    )
+
+
 def test_analysis_result_from_parsed_disambiguates_property_accessors(
     tmp_path: Path,
 ) -> None:
