@@ -1,3 +1,15 @@
+# [1.6.0](https://github.com/marco0560/codira/compare/v1.5.2...v1.6.0) (2026-04-20)
+
+
+### Bug Fixes
+
+* **scanner:** ignore typing overload stubs ([0146173](https://github.com/marco0560/codira/commit/0146173c494356e012da737c7911b99967c98295))
+
+
+### Features
+
+* **release:** add hyperfine benchmark plan ([c1ddb36](https://github.com/marco0560/codira/commit/c1ddb3652c8494f076090773729856f00714607b)), closes [#16](https://github.com/marco0560/codira/issues/16)
+
 ## [1.5.2](https://github.com/marco0560/codira/compare/v1.5.1...v1.5.2) (2026-04-19)
 
 
