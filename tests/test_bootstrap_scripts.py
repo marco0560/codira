@@ -478,6 +478,100 @@ class _ReleaseArtifactBuildModule(Protocol):
         """
 
 
+class _BenchmarkConfigFactory(Protocol):
+    """Protocol for constructing release benchmark configuration objects."""
+
+    def __call__(
+        self,
+        *,
+        hyperfine: str,
+        codira: str,
+        output: Path,
+        runs: int,
+        warmup: int,
+        query: str,
+    ) -> object:
+        """
+        Build one benchmark configuration object.
+
+        Parameters
+        ----------
+        hyperfine : str
+            Hyperfine executable to invoke.
+        codira : str
+            Codira executable to benchmark.
+        output : pathlib.Path
+            JSON output path.
+        runs : int
+            Measured Hyperfine runs per command.
+        warmup : int
+            Warmup runs per command.
+        query : str
+            Query text used for the context benchmark.
+
+        Returns
+        -------
+        object
+            Benchmark configuration accepted by the helper module.
+        """
+
+
+class _ReleaseBenchmarkModule(Protocol):
+    """Protocol for the release Hyperfine benchmark helper."""
+
+    DEFAULT_OUTPUT: Path
+    BenchmarkConfig: _BenchmarkConfigFactory
+
+    def benchmark_command_strings(self, *, codira: str, query: str) -> tuple[str, ...]:
+        """
+        Return shell-quoted Codira commands measured by Hyperfine.
+
+        Parameters
+        ----------
+        codira : str
+            Codira executable to benchmark.
+        query : str
+            Query text used for the context benchmark.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Command strings passed to Hyperfine.
+        """
+
+    def build_hyperfine_argv(self, config: object) -> tuple[str, ...]:
+        """
+        Build the Hyperfine release benchmark argv.
+
+        Parameters
+        ----------
+        config : BenchmarkConfig
+            Benchmark configuration.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Complete Hyperfine argv.
+        """
+
+    def resolve_output_path(self, root: Path, output: Path) -> Path:
+        """
+        Resolve the Hyperfine JSON output path.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root used for relative output paths.
+        output : pathlib.Path
+            Configured output path.
+
+        Returns
+        -------
+        pathlib.Path
+            Absolute output path.
+        """
+
+
 class _SplitRepoVerificationModule(Protocol):
     """Protocol for the exported split-repo verification helper."""
 
@@ -745,6 +839,34 @@ def _load_release_artifact_build_helper() -> _ReleaseArtifactBuildModule:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return cast("_ReleaseArtifactBuildModule", module)
+
+
+def _load_release_benchmark_helper() -> _ReleaseBenchmarkModule:
+    """
+    Load the release Hyperfine benchmark helper from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the release benchmark helper script.
+    """
+    helper_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "benchmark_release.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "benchmark_release",
+        helper_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_ReleaseBenchmarkModule", module)
 
 
 def _load_split_repo_verification_helper() -> _SplitRepoVerificationModule:
@@ -1462,6 +1584,55 @@ def test_release_artifact_helper_builds_build_and_twine_commands() -> None:
             "check",
             "/tmp/codira/packages/codira-bundle-official/dist/*",
         ),
+    )
+
+
+def test_release_benchmark_helper_builds_hyperfine_plan() -> None:
+    """
+    Keep release benchmarks explicit and reproducible.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the Hyperfine helper covers index, ctx, and audit with
+        stable run counts and JSON output.
+    """
+    helper = _load_release_benchmark_helper()
+    repo_root = Path("/tmp/codira")
+    output = repo_root / ".artifacts" / "benchmarks" / "release-hyperfine.json"
+    config = helper.BenchmarkConfig(
+        hyperfine="hyperfine",
+        codira="/tmp/codira/.venv/bin/codira",
+        output=output,
+        runs=7,
+        warmup=2,
+        query="plugin registry",
+    )
+
+    assert helper.resolve_output_path(repo_root, helper.DEFAULT_OUTPUT) == output
+    assert helper.benchmark_command_strings(
+        codira="/tmp/codira/.venv/bin/codira",
+        query="plugin registry",
+    ) == (
+        "/tmp/codira/.venv/bin/codira index --full",
+        "/tmp/codira/.venv/bin/codira ctx --json 'plugin registry'",
+        "/tmp/codira/.venv/bin/codira audit --json",
+    )
+    assert helper.build_hyperfine_argv(config) == (
+        "hyperfine",
+        "--warmup",
+        "2",
+        "--runs",
+        "7",
+        "--export-json",
+        "/tmp/codira/.artifacts/benchmarks/release-hyperfine.json",
+        "/tmp/codira/.venv/bin/codira index --full",
+        "/tmp/codira/.venv/bin/codira ctx --json 'plugin registry'",
+        "/tmp/codira/.venv/bin/codira audit --json",
     )
 
 

@@ -57,6 +57,15 @@ embedding batch sizes, and index summary counters.
 Use this script when evaluating indexing regressions or tuning embedding batch
 and Torch runtime settings.
 
+## `scripts/benchmark_release.py`
+
+Run the release-oriented Hyperfine benchmark plan for `codira index --full`,
+`codira ctx --json`, and `codira audit --json`.
+
+The default result file is
+`.artifacts/benchmarks/release-hyperfine.json`. Use `--dry-run` to inspect the
+exact Hyperfine invocation before measuring.
+
 ## `scripts/release_audit.sh`
 
 Run conservative release-readiness checks for the current branch and repository

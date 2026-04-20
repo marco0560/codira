@@ -8,8 +8,11 @@
 4. Run `ruff check src scripts tests packages`.
 5. Run `mypy src scripts tests packages`.
 6. Run `pytest -q`.
-7. Run `git release-audit`.
-8. Push the releasable staging commits with `git rel`.
+7. Run `python scripts/benchmark_release.py`.
+8. Review `.artifacts/benchmarks/release-hyperfine.json` for unexpected
+   regressions.
+9. Run `git release-audit`.
+10. Push the releasable staging commits with `git rel`.
 
 ## Coordinated Package Release
 

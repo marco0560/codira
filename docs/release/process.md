@@ -9,8 +9,16 @@ Before pushing release-bearing commits to `main`, verify the repository is in a
 publishable state:
 
 ```bash
+python scripts/benchmark_release.py
+```
+
+```bash
 git release-audit
 ```
+
+The benchmark command runs the release Hyperfine plan for indexing, context
+retrieval, and docstring audit operations. It writes JSON results to
+`.artifacts/benchmarks/release-hyperfine.json`.
 
 That audit checks:
 
