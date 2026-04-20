@@ -286,43 +286,16 @@ unfixable = [
 "src/codira/contracts.py" = [
     "PLR0913", # protocol method arity follows backend/query contracts
 ]
-"src/codira/query/graph_enrichment.py" = [
-    "PLR0913", # graph enrichment orchestration requires explicit graph/context inputs
-    "PLR0912", # bounded graph expansion branches by edge direction and relation type
-    "C901", # graph enrichment is orchestration-heavy rather than algorithmically complex
-]
-"src/codira/docstring.py" = [
-    "PLR0913", # validation API exposes independent semantic flags
-]
-"src/codira/indexer.py" = [
-    "PLR0913", # persistence helpers and backend methods preserve stable indexing contracts
-]
-"src/codira/sqlite_backend_support.py" = [
-    "PLR0913", # SQLite persistence helpers preserve stable indexing contracts
-]
 "packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py" = [
     "PLR0913", # backend method arity mirrors the stable backend query and persistence contracts
-]
-"src/codira/parser_ast.py" = [
-    "PLR0912", # parser normalization branches mirror Python AST node families
-]
-"src/codira/prompts/default.py" = [
-    "PLR0913", # prompt renderer combines distinct context inputs
-    "PLR0912", # prompt sections branch on symbol families and optional context blocks
 ]
 "src/codira/query/context.py" = [
     "PLR0913", # retrieval and rendering helpers preserve stable query interfaces
     "PLR0912", # retrieval orchestration branches across symbol families and output modes
     "C901", # context assembly remains intentionally centralized for deterministic ordering
 ]
-"src/codira/query/exact.py" = [
-    "PLR0913", # exact-query wrappers mirror backend query parameters
-]
 "src/codira/registry.py" = [
     "BLE001", # third-party plugin loading must degrade gracefully on arbitrary plugin failures
-]
-"src/codira/semantic/search.py" = [
-    "PLR0913", # semantic search wrapper mirrors backend similarity parameters
 ]
 
 [tool.ruff.lint.mccabe]

@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Callable, Sequence  # noqa: TC003
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 from codira_backend_sqlite import SQLiteIndexBackend
 

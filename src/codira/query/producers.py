@@ -97,6 +97,35 @@ class QueryChannelSpec:
     producer: QueryProducerSpec
 
 
+@dataclass(frozen=True)
+class EmbeddingRetrievalRequest:
+    """
+    Request parameters for stored embedding retrieval.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    query : str
+        User query string.
+    limit : int
+        Maximum number of ranked results to return.
+    min_score : float
+        Minimum similarity threshold for emitted results.
+    prefix : str | None
+        Repo-root-relative path prefix used to restrict matched symbol files.
+    conn : sqlite3.Connection | None
+        Existing database connection to reuse.
+    """
+
+    root: Path
+    query: str
+    limit: int
+    min_score: float
+    prefix: str | None = None
+    conn: sqlite3.Connection | None = None
+
+
 class EmbeddingRetrievalProducer(QueryProducerSpec):
     """
     Native retrieval producer for stored embedding similarity.
@@ -151,33 +180,17 @@ class EmbeddingRetrievalProducer(QueryProducerSpec):
         """
         return self.capabilities
 
-    def retrieve_candidates(  # noqa: PLR0913
+    def retrieve_candidates(
         self,
-        root: Path,
-        query: str,
-        *,
-        limit: int,
-        min_score: float,
-        prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        request: EmbeddingRetrievalRequest,
     ) -> ChannelResults:
         """
         Retrieve ranked candidates using stored embedding similarity.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root containing the index database.
-        query : str
-            User query string.
-        limit : int
-            Maximum number of ranked results to return.
-        min_score : float
-            Minimum similarity threshold for emitted results.
-        prefix : str | None, optional
-            Repo-root-relative path prefix used to restrict matched symbol files.
-        conn : sqlite3.Connection | None, optional
-            Existing database connection to reuse.
+        request : EmbeddingRetrievalRequest
+            Embedding retrieval request carrying query and filtering options.
 
         Returns
         -------
@@ -186,12 +199,12 @@ class EmbeddingRetrievalProducer(QueryProducerSpec):
         """
         backend = active_index_backend()
         return backend.embedding_candidates(
-            root,
-            query,
-            limit=limit,
-            min_score=min_score,
-            prefix=prefix,
-            conn=conn,
+            request.root,
+            request.query,
+            limit=request.limit,
+            min_score=request.min_score,
+            prefix=request.prefix,
+            conn=request.conn,
         )
 
 

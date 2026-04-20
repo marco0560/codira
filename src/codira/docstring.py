@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import inspect
 import re
+from dataclasses import dataclass
 
 REQUIRED_SECTIONS = [
     "Parameters",
@@ -34,6 +35,39 @@ OPTIONAL_SECTIONS = [
 KNOWN_SECTIONS = REQUIRED_SECTIONS + OPTIONAL_SECTIONS
 SECTION_HEADING_RE = re.compile(r"^[A-Z][A-Za-z ]+$")
 PARAMETER_LINE_RE = re.compile(r"^([*]{0,2}[A-Za-z_][A-Za-z0-9_]*)\s*:")
+
+
+@dataclass(frozen=True)
+class DocstringValidationRequest:
+    """
+    Request parameters for docstring validation.
+
+    Parameters
+    ----------
+    doc : str | None
+        Docstring text to validate.
+    is_public : int
+        Public visibility flag, where ``1`` means public and ``0`` means
+        private.
+    parameters : list[str]
+        Logical parameter names declared by the callable.
+    require_callable_sections : bool
+        Whether callable-specific sections must be present.
+    yields_value : bool
+        Whether the callable yields values.
+    returns_value : bool
+        Whether the callable returns values.
+    raises_exception : bool
+        Whether the callable raises exceptions.
+    """
+
+    doc: str | None
+    is_public: int
+    parameters: list[str]
+    require_callable_sections: bool = False
+    yields_value: bool = False
+    returns_value: bool = False
+    raises_exception: bool = False
 
 
 def _iter_lines(doc: str) -> list[str]:
@@ -294,39 +328,15 @@ def has_raises_section(doc: str) -> bool:
 
 
 def validate_docstring(
-    doc: str | None,
-    is_public: int,
-    *,
-    parameters: list[str] | None = None,
-    require_callable_sections: bool = False,
-    yields_value: bool = False,
-    returns_value: bool = False,
-    raises_exception: bool = False,
+    request: DocstringValidationRequest,
 ) -> list[tuple[str, str]]:
     """
     Validate a docstring against the project's minimal style rules.
 
     Parameters
     ----------
-    doc : str | None
-        Docstring text to validate.
-    is_public : int
-        Public visibility flag, where ``1`` means public and ``0`` means
-        private.
-    parameters : list[str] | None, optional
-        Logical parameter names declared by the callable.
-    require_callable_sections : bool, optional
-        Whether the audited object is a callable that must include the
-        project-required ``Parameters`` section and either ``Returns`` or
-        ``Yields`` even when they document ``None``.
-    yields_value : bool, optional
-        Whether the callable is a generator that yields values and should use
-        a ``Yields`` section instead of ``Returns``.
-    returns_value : bool, optional
-        Whether the callable explicitly returns a non-``None`` value. For
-        generators this corresponds to a terminal ``StopIteration.value``.
-    raises_exception : bool, optional
-        Whether the callable explicitly raises an exception.
+    request : DocstringValidationRequest
+        Docstring validation request carrying visibility and callable metadata.
 
     Returns
     -------
@@ -335,42 +345,46 @@ def validate_docstring(
     """
     issues: list[tuple[str, str]] = []
 
-    if not doc:
-        if not is_public:
+    if not request.doc:
+        if not request.is_public:
             return []
         return [("missing", "Missing docstring")]
 
-    sections = _section_map(doc)
+    sections = _section_map(request.doc)
 
-    if not is_numpy_style(doc) and _requires_structured_docstring(
-        require_callable_sections=require_callable_sections,
-        raises_exception=raises_exception,
+    if not is_numpy_style(request.doc) and _requires_structured_docstring(
+        require_callable_sections=request.require_callable_sections,
+        raises_exception=request.raises_exception,
     ):
         issues.append(("non_numpy", "Docstring not in NumPy style"))
 
-    for section in _malformed_sections(doc):
+    for section in _malformed_sections(request.doc):
         issues.append(
             ("malformed_section", f"Malformed NumPy section heading: {section}")
         )
 
     for section in find_missing_sections(
-        doc,
-        require_parameters_section=require_callable_sections,
-        require_returns_section=require_callable_sections and not yields_value,
-        require_yields_section=require_callable_sections and yields_value,
-        raises_exception=raises_exception,
+        request.doc,
+        require_parameters_section=request.require_callable_sections,
+        require_returns_section=(
+            request.require_callable_sections and not request.yields_value
+        ),
+        require_yields_section=(
+            request.require_callable_sections and request.yields_value
+        ),
+        raises_exception=request.raises_exception,
     ):
         issues.append(("missing_section", f"Missing section: {section}"))
 
     for section in find_unexpected_sections(
-        doc,
-        allow_returns_section=(not yields_value) or returns_value,
-        allow_yields_section=yields_value,
+        request.doc,
+        allow_returns_section=(not request.yields_value) or request.returns_value,
+        allow_yields_section=request.yields_value,
     ):
         issues.append(("unexpected_section", f"Unexpected section: {section}"))
 
-    documented_parameters = _parameter_section_names(doc)
-    for parameter in parameters or []:
+    documented_parameters = _parameter_section_names(request.doc)
+    for parameter in request.parameters:
         if "Parameters" not in sections:
             break
         if parameter not in documented_parameters:

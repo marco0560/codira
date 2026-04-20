@@ -22,6 +22,7 @@ import warnings
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
 
@@ -536,6 +537,104 @@ def _extract_call_records(node: ast.AST) -> list[dict[str, str | int]]:
     return calls
 
 
+def _reference_records_from_child(child: ast.AST) -> list[dict[str, str | int]]:
+    """
+    Collect callable-object reference records for one AST child.
+
+    Parameters
+    ----------
+    child : ast.AST
+        AST child node to inspect for direct callable-object values.
+
+    Returns
+    -------
+    list[dict[str, str | int]]
+        Callable-reference records extracted from the child node.
+    """
+    if isinstance(child, ast.Dict):
+        return _reference_records_from_values(child.values, kind="mapping_value")
+
+    if isinstance(child, (ast.List, ast.Tuple, ast.Set)):
+        return _reference_records_from_values(child.elts, kind="sequence_item")
+
+    if isinstance(child, ast.Assign):
+        return _reference_records_from_optional_value(
+            child.value,
+            kind="assignment_value",
+        )
+
+    if isinstance(child, ast.AnnAssign) and child.value is not None:
+        return _reference_records_from_optional_value(
+            child.value,
+            kind="assignment_value",
+        )
+
+    if isinstance(child, ast.Return) and child.value is not None:
+        return _reference_records_from_optional_value(
+            child.value,
+            kind="return_value",
+        )
+
+    return []
+
+
+def _reference_records_from_values(
+    values: Sequence[ast.expr | None],
+    *,
+    kind: str,
+) -> list[dict[str, str | int]]:
+    """
+    Collect callable-reference records from expression values.
+
+    Parameters
+    ----------
+    values : collections.abc.Sequence[ast.expr | None]
+        AST expression values to inspect.
+    kind : str
+        Reference kind assigned to emitted records.
+
+    Returns
+    -------
+    list[dict[str, str | int]]
+        Callable-reference records for expressions that resolve to callables.
+    """
+    refs: list[dict[str, str | int]] = []
+    for value in values:
+        if value is None:
+            continue
+        ref = _reference_record_from_expr(value, kind=kind)
+        if ref is not None:
+            refs.append(ref)
+    return refs
+
+
+def _reference_records_from_optional_value(
+    value: ast.expr,
+    *,
+    kind: str,
+) -> list[dict[str, str | int]]:
+    """
+    Collect a callable-reference record from one expression value.
+
+    Parameters
+    ----------
+    value : ast.expr
+        AST expression value to inspect.
+    kind : str
+        Reference kind assigned to the emitted record.
+
+    Returns
+    -------
+    list[dict[str, str | int]]
+        One callable-reference record when the expression resolves to a
+        callable, otherwise an empty list.
+    """
+    ref = _reference_record_from_expr(value, kind=kind)
+    if ref is None:
+        return []
+    return [ref]
+
+
 def _extract_callable_refs(node: ast.AST) -> list[dict[str, str | int]]:
     """
     Collect deterministic callable-object reference records from a subtree.
@@ -554,36 +653,7 @@ def _extract_callable_refs(node: ast.AST) -> list[dict[str, str | int]]:
     refs: list[dict[str, str | int]] = []
 
     for child in ast.walk(node):
-        if isinstance(child, ast.Dict):
-            for value in child.values:
-                ref = _reference_record_from_expr(value, kind="mapping_value")
-                if ref is not None:
-                    refs.append(ref)
-            continue
-
-        if isinstance(child, (ast.List, ast.Tuple, ast.Set)):
-            for value in child.elts:
-                ref = _reference_record_from_expr(value, kind="sequence_item")
-                if ref is not None:
-                    refs.append(ref)
-            continue
-
-        if isinstance(child, ast.Assign):
-            ref = _reference_record_from_expr(child.value, kind="assignment_value")
-            if ref is not None:
-                refs.append(ref)
-            continue
-
-        if isinstance(child, ast.AnnAssign) and child.value is not None:
-            ref = _reference_record_from_expr(child.value, kind="assignment_value")
-            if ref is not None:
-                refs.append(ref)
-            continue
-
-        if isinstance(child, ast.Return) and child.value is not None:
-            ref = _reference_record_from_expr(child.value, kind="return_value")
-            if ref is not None:
-                refs.append(ref)
+        refs.extend(_reference_records_from_child(child))
 
     refs.sort(
         key=lambda ref: (

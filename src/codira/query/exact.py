@@ -96,6 +96,70 @@ class CallTreeResult:
     edge_count: int
 
 
+@dataclass(frozen=True)
+class EdgeQueryRequest:
+    """
+    Request parameters for exact edge lookup helpers.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    name : str
+        Exact logical name to search for.
+    module : str | None
+        Optional module qualifier used to restrict results.
+    incoming : bool
+        Whether to search incoming edges instead of outgoing edges.
+    prefix : str | None
+        Repo-root-relative path prefix used to restrict owner files.
+    conn : sqlite3.Connection | None
+        Existing database connection to reuse.
+    """
+
+    root: Path
+    name: str
+    module: str | None = None
+    incoming: bool = False
+    prefix: str | None = None
+    conn: sqlite3.Connection | None = None
+
+
+@dataclass(frozen=True)
+class TreeQueryRequest:
+    """
+    Request parameters for bounded exact traversal helpers.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    name : str
+        Exact logical name to traverse around.
+    module : str | None
+        Optional module qualifier used to restrict the root.
+    incoming : bool
+        Whether traversal follows incoming edges.
+    prefix : str | None
+        Repo-root-relative path prefix used to restrict owner files.
+    max_depth : int
+        Maximum traversal depth below the root.
+    max_nodes : int
+        Maximum number of rendered nodes including the root.
+    conn : sqlite3.Connection | None
+        Existing database connection to reuse.
+    """
+
+    root: Path
+    name: str
+    module: str | None = None
+    incoming: bool = False
+    prefix: str | None = None
+    max_depth: int = 2
+    max_nodes: int = 20
+    conn: sqlite3.Connection | None = None
+
+
 def find_symbol(
     root: Path,
     name: str,
@@ -157,33 +221,15 @@ def docstring_issues(
 
 
 def find_call_edges(
-    root: Path,
-    name: str,
-    *,
-    module: str | None = None,
-    incoming: bool = False,
-    prefix: str | None = None,
-    conn: sqlite3.Connection | None = None,
+    request: EdgeQueryRequest,
 ) -> list[CallEdgeRow]:
     """
     Find exact call edges for a caller or callee logical name.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root containing the index database.
-    name : str
-        Exact logical caller or callee name to search for.
-    module : str | None, optional
-        Optional module qualifier used to restrict the result set.
-    incoming : bool, optional
-        When ``True``, return incoming edges for the callee; otherwise return
-        outgoing edges for the caller.
-    prefix : str | None, optional
-        Repo-root-relative path prefix used to restrict caller files.
-    conn : sqlite3.Connection | None, optional
-        Existing database connection to reuse. When omitted, the function
-        opens and closes its own connection.
+    request : EdgeQueryRequest
+        Exact edge lookup request.
 
     Returns
     -------
@@ -192,50 +238,25 @@ def find_call_edges(
     """
     backend = active_index_backend()
     return backend.find_call_edges(
-        root,
-        name,
-        module=module,
-        incoming=incoming,
-        prefix=prefix,
-        conn=conn,
+        request.root,
+        request.name,
+        module=request.module,
+        incoming=request.incoming,
+        prefix=request.prefix,
+        conn=request.conn,
     )
 
 
 def build_call_tree(
-    root: Path,
-    name: str,
-    *,
-    module: str | None = None,
-    incoming: bool = False,
-    prefix: str | None = None,
-    max_depth: int = 2,
-    max_nodes: int = 20,
-    conn: sqlite3.Connection | None = None,
+    request: TreeQueryRequest,
 ) -> CallTreeResult | None:
     """
     Build a bounded traversal tree for one exact `calls` query.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root containing the index database.
-    name : str
-        Exact logical caller or callee name to traverse around.
-    module : str | None, optional
-        Optional exact module filter for the selected side of the edge.
-    incoming : bool, optional
-        When ``True``, traverse callers of the named callee; otherwise traverse
-        callees of the named caller.
-    prefix : str | None, optional
-        Repo-root-relative path prefix used to restrict caller files.
-    max_depth : int, optional
-        Maximum traversal depth below the root. Depth ``0`` renders only the
-        root node.
-    max_nodes : int, optional
-        Maximum number of rendered nodes including the root.
-    conn : sqlite3.Connection | None, optional
-        Existing database connection to reuse. When omitted, the function
-        opens and closes its own connection through nested exact helpers.
+    request : TreeQueryRequest
+        Bounded traversal request.
 
     Returns
     -------
@@ -244,12 +265,14 @@ def build_call_tree(
         call edges.
     """
     initial_rows = find_call_edges(
-        root,
-        name,
-        module=module,
-        incoming=incoming,
-        prefix=prefix,
-        conn=conn,
+        EdgeQueryRequest(
+            root=request.root,
+            name=request.name,
+            module=request.module,
+            incoming=request.incoming,
+            prefix=request.prefix,
+            conn=request.conn,
+        )
     )
     if not initial_rows:
         return None
@@ -257,7 +280,9 @@ def build_call_tree(
     root_candidates: set[tuple[str | None, str]] = {
         (
             (callee_module, callee_name)
-            if incoming and callee_module is not None and callee_name is not None
+            if request.incoming
+            and callee_module is not None
+            and callee_name is not None
             else (caller_module, caller_name)
         )
         for caller_module, caller_name, callee_module, callee_name, _resolved in initial_rows
@@ -265,7 +290,7 @@ def build_call_tree(
     if len(root_candidates) == 1:
         root_module, root_name = next(iter(root_candidates))
     else:
-        root_module, root_name = module, name
+        root_module, root_name = request.module, request.name
 
     rendered_nodes = 1
     rendered_edges = 0
@@ -278,7 +303,7 @@ def build_call_tree(
         deduped: dict[tuple[str | None, str, bool], tuple[str | None, str, bool]] = {}
         for caller_module, caller_name, callee_module, callee_name, resolved in rows:
             key: tuple[str | None, str, bool]
-            if incoming:
+            if request.incoming:
                 key = (caller_module, caller_name, True)
             elif resolved and callee_module is not None and callee_name is not None:
                 key = (callee_module, callee_name, True)
@@ -304,22 +329,24 @@ def build_call_tree(
         nonlocal rendered_edges, rendered_nodes, truncated_by_depth, truncated_by_nodes
 
         rows = find_call_edges(
-            root,
-            current_name,
-            module=current_module,
-            incoming=incoming,
-            prefix=prefix,
-            conn=conn,
+            EdgeQueryRequest(
+                root=request.root,
+                name=current_name,
+                module=current_module,
+                incoming=request.incoming,
+                prefix=request.prefix,
+                conn=request.conn,
+            )
         )
         if not rows:
             return ()
-        if depth >= max_depth:
+        if depth >= request.max_depth:
             truncated_by_depth = True
             return ()
 
         children: list[CallTreeNode] = []
         for child_module, child_name, child_resolved in ordered_neighbors(rows):
-            if rendered_nodes >= max_nodes:
+            if rendered_nodes >= request.max_nodes:
                 truncated_by_nodes = True
                 break
 
@@ -374,7 +401,7 @@ def build_call_tree(
             depth=0,
             path=((root_module, root_name),),
         ),
-        incoming=incoming,
+        incoming=request.incoming,
         truncated_by_depth=truncated_by_depth,
         truncated_by_nodes=truncated_by_nodes,
         node_count=rendered_nodes,
@@ -383,33 +410,15 @@ def build_call_tree(
 
 
 def find_callable_refs(
-    root: Path,
-    name: str,
-    *,
-    module: str | None = None,
-    incoming: bool = False,
-    prefix: str | None = None,
-    conn: sqlite3.Connection | None = None,
+    request: EdgeQueryRequest,
 ) -> list[CallableRefRow]:
     """
     Find exact callable-object references for an owner or referenced target.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root containing the index database.
-    name : str
-        Exact logical owner or referenced target name to search for.
-    module : str | None, optional
-        Optional module qualifier used to restrict the result set.
-    incoming : bool, optional
-        When ``True``, return incoming references for the target; otherwise
-        return outgoing references for the owner.
-    prefix : str | None, optional
-        Repo-root-relative path prefix used to restrict owner files.
-    conn : sqlite3.Connection | None, optional
-        Existing database connection to reuse. When omitted, the function
-        opens and closes its own connection.
+    request : EdgeQueryRequest
+        Exact edge lookup request.
 
     Returns
     -------
@@ -418,50 +427,25 @@ def find_callable_refs(
     """
     backend = active_index_backend()
     return backend.find_callable_refs(
-        root,
-        name,
-        module=module,
-        incoming=incoming,
-        prefix=prefix,
-        conn=conn,
+        request.root,
+        request.name,
+        module=request.module,
+        incoming=request.incoming,
+        prefix=request.prefix,
+        conn=request.conn,
     )
 
 
 def build_ref_tree(
-    root: Path,
-    name: str,
-    *,
-    module: str | None = None,
-    incoming: bool = False,
-    prefix: str | None = None,
-    max_depth: int = 2,
-    max_nodes: int = 20,
-    conn: sqlite3.Connection | None = None,
+    request: TreeQueryRequest,
 ) -> CallTreeResult | None:
     """
     Build a bounded traversal tree for one exact `refs` query.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root containing the index database.
-    name : str
-        Exact logical owner or referenced target name to traverse around.
-    module : str | None, optional
-        Optional exact module filter for the selected side of the reference.
-    incoming : bool, optional
-        When ``True``, traverse owners that reference the named target;
-        otherwise traverse referenced targets for the named owner.
-    prefix : str | None, optional
-        Repo-root-relative path prefix used to restrict owner files.
-    max_depth : int, optional
-        Maximum traversal depth below the root. Depth ``0`` renders only the
-        root node.
-    max_nodes : int, optional
-        Maximum number of rendered nodes including the root.
-    conn : sqlite3.Connection | None, optional
-        Existing database connection to reuse. When omitted, the function
-        opens and closes its own connection through nested exact helpers.
+    request : TreeQueryRequest
+        Bounded traversal request.
 
     Returns
     -------
@@ -470,12 +454,14 @@ def build_ref_tree(
         callable references.
     """
     initial_rows = find_callable_refs(
-        root,
-        name,
-        module=module,
-        incoming=incoming,
-        prefix=prefix,
-        conn=conn,
+        EdgeQueryRequest(
+            root=request.root,
+            name=request.name,
+            module=request.module,
+            incoming=request.incoming,
+            prefix=request.prefix,
+            conn=request.conn,
+        )
     )
     if not initial_rows:
         return None
@@ -483,7 +469,9 @@ def build_ref_tree(
     root_candidates: set[tuple[str | None, str]] = {
         (
             (target_module, target_name)
-            if incoming and target_module is not None and target_name is not None
+            if request.incoming
+            and target_module is not None
+            and target_name is not None
             else (owner_module, owner_name)
         )
         for owner_module, owner_name, target_module, target_name, _resolved in initial_rows
@@ -491,7 +479,7 @@ def build_ref_tree(
     if len(root_candidates) == 1:
         root_module, root_name = next(iter(root_candidates))
     else:
-        root_module, root_name = module, name
+        root_module, root_name = request.module, request.name
 
     rendered_nodes = 1
     rendered_edges = 0
@@ -504,7 +492,7 @@ def build_ref_tree(
         deduped: dict[tuple[str | None, str, bool], tuple[str | None, str, bool]] = {}
         for owner_module, owner_name, target_module, target_name, resolved in rows:
             key: tuple[str | None, str, bool]
-            if incoming:
+            if request.incoming:
                 key = (owner_module, owner_name, True)
             elif resolved and target_module is not None and target_name is not None:
                 key = (target_module, target_name, True)
@@ -530,22 +518,24 @@ def build_ref_tree(
         nonlocal rendered_edges, rendered_nodes, truncated_by_depth, truncated_by_nodes
 
         rows = find_callable_refs(
-            root,
-            current_name,
-            module=current_module,
-            incoming=incoming,
-            prefix=prefix,
-            conn=conn,
+            EdgeQueryRequest(
+                root=request.root,
+                name=current_name,
+                module=current_module,
+                incoming=request.incoming,
+                prefix=request.prefix,
+                conn=request.conn,
+            )
         )
         if not rows:
             return ()
-        if depth >= max_depth:
+        if depth >= request.max_depth:
             truncated_by_depth = True
             return ()
 
         children: list[CallTreeNode] = []
         for child_module, child_name, child_resolved in ordered_neighbors(rows):
-            if rendered_nodes >= max_nodes:
+            if rendered_nodes >= request.max_nodes:
                 truncated_by_nodes = True
                 break
 
@@ -596,7 +586,7 @@ def build_ref_tree(
             depth=0,
             path=((root_module, root_name),),
         ),
-        incoming=incoming,
+        incoming=request.incoming,
         truncated_by_depth=truncated_by_depth,
         truncated_by_nodes=truncated_by_nodes,
         node_count=rendered_nodes,
@@ -605,33 +595,15 @@ def build_ref_tree(
 
 
 def find_include_edges(
-    root: Path,
-    name: str,
-    *,
-    module: str | None = None,
-    incoming: bool = False,
-    prefix: str | None = None,
-    conn: sqlite3.Connection | None = None,
+    request: EdgeQueryRequest,
 ) -> list[IncludeEdgeRow]:
     """
     Find exact include-like edges for an owner module or included target.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root containing the index database.
-    name : str
-        Exact owner module name or include target path to search for.
-    module : str | None, optional
-        Optional owner-module qualifier used to restrict incoming results.
-    incoming : bool, optional
-        When ``True``, return incoming include edges for the included target;
-        otherwise return outgoing include edges for the owner module.
-    prefix : str | None, optional
-        Repo-root-relative path prefix used to restrict owner files.
-    conn : sqlite3.Connection | None, optional
-        Existing database connection to reuse. When omitted, the function
-        opens and closes its own connection.
+    request : EdgeQueryRequest
+        Exact edge lookup request.
 
     Returns
     -------
@@ -641,12 +613,12 @@ def find_include_edges(
     """
     backend = active_index_backend()
     return backend.find_include_edges(
-        root,
-        name,
-        module=module,
-        incoming=incoming,
-        prefix=prefix,
-        conn=conn,
+        request.root,
+        request.name,
+        module=request.module,
+        incoming=request.incoming,
+        prefix=request.prefix,
+        conn=request.conn,
     )
 
 

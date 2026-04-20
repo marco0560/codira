@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 if __package__ in {None, ""}:
@@ -33,6 +34,37 @@ from scripts.first_party_packages import FIRST_PARTY_PACKAGE_DIRS
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIRST_PARTY_EDITABLE_PACKAGES = FIRST_PARTY_PACKAGE_DIRS
 BUNDLE_PACKAGE_DIR = "packages/codira-bundle-official"
+
+
+@dataclass(frozen=True)
+class InstallCommandRequest:
+    """
+    Request parameters for first-party install command construction.
+
+    Parameters
+    ----------
+    python : str
+        Python interpreter used to run `pip`.
+    repo_root : pathlib.Path
+        Repository root containing the package directories.
+    include_core : bool
+        Whether to include the editable core ``codira`` package before the
+        first-party package set.
+    core_extras : tuple[str, ...]
+        Optional extras requested on the editable core install.
+    include_bundle : bool
+        Whether to install the curated bundle meta-package in addition to the
+        first-party analyzer and backend packages.
+    package_root : pathlib.Path | None
+        Optional directory containing split first-party repositories.
+    """
+
+    python: str
+    repo_root: Path
+    include_core: bool = False
+    core_extras: tuple[str, ...] = ()
+    include_bundle: bool = False
+    package_root: Path | None = None
 
 
 def editable_core_requirement(
@@ -164,61 +196,43 @@ def non_bundle_package_paths(
     )
 
 
-def build_install_commands(  # noqa: PLR0913
-    *,
-    python: str,
-    repo_root: Path,
-    include_core: bool = False,
-    core_extras: tuple[str, ...] = (),
-    include_bundle: bool = False,
-    package_root: Path | None = None,
+def build_install_commands(
+    request: InstallCommandRequest,
 ) -> tuple[tuple[str, ...], ...]:
     """
     Build the exact pip command plan for first-party packages.
 
     Parameters
     ----------
-    python : str
-        Python interpreter used to run `pip`.
-    repo_root : pathlib.Path
-        Repository root containing the package directories.
-    include_core : bool, optional
-        Whether to include the editable core ``codira`` package before the
-        first-party package set.
-    core_extras : tuple[str, ...], optional
-        Optional extras requested on the editable core install.
-    include_bundle : bool, optional
-        Whether to install the curated bundle meta-package in addition to the
-        first-party analyzer and backend packages. Existing bundle metadata is
-        uninstalled first so stale pins cannot conflict while refreshing core
-        and plugin packages.
-    package_root : pathlib.Path | None, optional
-        Optional directory containing split first-party repositories.
+    request : InstallCommandRequest
+        Install command construction request.
 
     Returns
     -------
     tuple[tuple[str, ...], ...]
         Deterministic pip commands for the source-tree package set.
     """
-    editable_install_argv: list[str] = [python, "-m", "pip", "install"]
-    if include_core:
+    editable_install_argv: list[str] = [request.python, "-m", "pip", "install"]
+    if request.include_core:
         editable_install_argv.extend(
             (
                 "-e",
-                editable_core_requirement(repo_root, extras=core_extras),
+                editable_core_requirement(
+                    request.repo_root, extras=request.core_extras
+                ),
             )
         )
     for package_path in non_bundle_package_paths(
-        repo_root,
-        package_root=package_root,
+        request.repo_root,
+        package_root=request.package_root,
     ):
         editable_install_argv.extend(("-e", str(package_path)))
 
     commands: list[tuple[str, ...]] = []
-    if include_bundle:
+    if request.include_bundle:
         commands.append(
             (
-                python,
+                request.python,
                 "-m",
                 "pip",
                 "uninstall",
@@ -227,16 +241,21 @@ def build_install_commands(  # noqa: PLR0913
             )
         )
     commands.append(tuple(editable_install_argv))
-    if include_bundle:
+    if request.include_bundle:
         commands.append(
             (
-                python,
+                request.python,
                 "-m",
                 "pip",
                 "install",
                 "--no-deps",
                 "-e",
-                str(bundle_package_path(repo_root, package_root=package_root)),
+                str(
+                    bundle_package_path(
+                        request.repo_root,
+                        package_root=request.package_root,
+                    )
+                ),
             )
         )
     return tuple(commands)
@@ -313,12 +332,14 @@ def main(argv: list[str] | None = None) -> int:
     """
     args = parse_args(argv)
     commands = build_install_commands(
-        python=args.python,
-        repo_root=REPO_ROOT,
-        include_core=args.include_core,
-        core_extras=tuple(args.core_extras),
-        include_bundle=args.include_bundle,
-        package_root=args.package_root,
+        InstallCommandRequest(
+            python=args.python,
+            repo_root=REPO_ROOT,
+            include_core=args.include_core,
+            core_extras=tuple(args.core_extras),
+            include_bundle=args.include_bundle,
+            package_root=args.package_root,
+        )
     )
     for command in commands:
         print(" ".join(command))

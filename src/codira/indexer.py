@@ -296,6 +296,67 @@ class IndexPlan:
     decisions: list[IndexDecision]
 
 
+@dataclass(frozen=True)
+class PersistIndexedFileAnalysesRequest:
+    """
+    Request parameters for persisting analyzed files.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root being indexed.
+    conn : object
+        Open backend connection reused across writes.
+    backend : codira.contracts.IndexBackend
+        Concrete backend receiving normalized artifacts.
+    parsed_files : list[ParsedFile]
+        Analyzed file snapshots in deterministic order.
+    embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+        Active embedding backend metadata.
+    previous_embeddings_by_path : dict[str, dict[str, codira.indexer.StoredEmbeddingRow]]
+        Stored symbol embeddings captured before indexed files were replaced.
+    """
+
+    root: Path
+    conn: object
+    backend: IndexBackend
+    parsed_files: list[ParsedFile]
+    embedding_backend: EmbeddingBackendSpec
+    previous_embeddings_by_path: dict[str, dict[str, StoredEmbeddingRow]]
+
+
+@dataclass(frozen=True)
+class FinalizeIndexReportRequest:
+    """
+    Request parameters for building an index report.
+
+    Parameters
+    ----------
+    plan : IndexPlan
+        Deterministic file-level plan executed during the run.
+    parsed_files : list[ParsedFile]
+        Successfully analyzed files persisted during the run.
+    failures : list[IndexFailure]
+        Per-file analysis failures collected during parsing.
+    warnings : list[IndexWarning]
+        Per-file analysis warnings collected during parsing.
+    coverage_issues : list[CoverageIssue]
+        Uncovered canonical-directory files detected during the run.
+    embeddings_recomputed : int
+        Number of embeddings written during persistence.
+    embeddings_reused : int
+        Number of existing embeddings preserved for reused files.
+    """
+
+    plan: IndexPlan
+    parsed_files: list[ParsedFile]
+    failures: list[IndexFailure]
+    warnings: list[IndexWarning]
+    coverage_issues: list[CoverageIssue]
+    embeddings_recomputed: int
+    embeddings_reused: int
+
+
 def _is_binary_coverage_candidate(path: Path) -> bool:
     """
     Return whether a coverage candidate should be treated as binary.
@@ -633,31 +694,15 @@ def _raise_duplicate_stable_ids(path: Path, root: Path, stable_ids: list[str]) -
 
 
 def _persist_indexed_file_analyses(
-    root: Path,
-    *,
-    conn: object,
-    backend: IndexBackend,
-    parsed_files: list[ParsedFile],
-    embedding_backend: EmbeddingBackendSpec,
-    previous_embeddings_by_path: dict[str, dict[str, StoredEmbeddingRow]],
+    request: PersistIndexedFileAnalysesRequest,
 ) -> tuple[int, int, list[ParsedFile], list[IndexFailure]]:
     """
     Persist analyzed file snapshots through the selected index backend.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root being indexed.
-    conn : object
-        Open backend connection reused across writes.
-    backend : codira.contracts.IndexBackend
-        Concrete backend receiving normalized artifacts.
-    parsed_files : list[ParsedFile]
-        Analyzed file snapshots in deterministic order.
-    embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
-        Active embedding backend metadata.
-    previous_embeddings_by_path : dict[str, dict[str, codira.indexer.StoredEmbeddingRow]]
-        Stored symbol embeddings captured before indexed files were replaced.
+    request : PersistIndexedFileAnalysesRequest
+        File persistence request carrying backend and embedding state.
 
     Returns
     -------
@@ -669,25 +714,25 @@ def _persist_indexed_file_analyses(
     persisted_files: list[ParsedFile] = []
     failures: list[IndexFailure] = []
 
-    for path, file_metadata_snapshot, analysis in parsed_files:
+    for path, file_metadata_snapshot, analysis in request.parsed_files:
         try:
             duplicate_stable_ids = _duplicate_analysis_stable_ids(analysis)
             if duplicate_stable_ids:
                 _raise_duplicate_stable_ids(
                     file_metadata_snapshot.path,
-                    root,
+                    request.root,
                     duplicate_stable_ids,
                 )
-            recomputed, reused = backend.persist_analysis(
-                root,
+            recomputed, reused = request.backend.persist_analysis(
+                request.root,
                 file_metadata=file_metadata_snapshot,
                 analysis=analysis,
-                embedding_backend=embedding_backend,
-                previous_embeddings=previous_embeddings_by_path.get(
+                embedding_backend=request.embedding_backend,
+                previous_embeddings=request.previous_embeddings_by_path.get(
                     str(file_metadata_snapshot.path),
                     {},
                 ),
-                conn=conn,
+                conn=request.conn,
             )
         except (OSError, BackendError, RuntimeError, ValueError) as exc:
             failures.append(
@@ -911,35 +956,14 @@ def _prepare_index_storage(
     )
 
 
-def _finalize_index_report(
-    *,
-    plan: IndexPlan,
-    parsed_files: list[ParsedFile],
-    failures: list[IndexFailure],
-    warnings: list[IndexWarning],
-    coverage_issues: list[CoverageIssue],
-    embeddings_recomputed: int,
-    embeddings_reused: int,
-) -> IndexReport:
+def _finalize_index_report(request: FinalizeIndexReportRequest) -> IndexReport:
     """
     Build the deterministic report returned from one index run.
 
     Parameters
     ----------
-    plan : IndexPlan
-        Deterministic file-level plan executed during the run.
-    parsed_files : list[ParsedFile]
-        Successfully analyzed files persisted during the run.
-    failures : list[IndexFailure]
-        Per-file analysis failures collected during parsing.
-    warnings : list[IndexWarning]
-        Per-file analysis warnings collected during parsing.
-    coverage_issues : list[CoverageIssue]
-        Uncovered canonical-directory files detected during the run.
-    embeddings_recomputed : int
-        Number of embeddings written during persistence.
-    embeddings_reused : int
-        Number of existing embeddings preserved for reused files.
+    request : FinalizeIndexReportRequest
+        Index report request carrying plan, diagnostics, and embedding counts.
 
     Returns
     -------
@@ -947,7 +971,7 @@ def _finalize_index_report(
         Deterministic report sorted for stable rendering and tests.
     """
     decisions = sorted(
-        plan.decisions,
+        request.plan.decisions,
         key=lambda decision: (
             decision.action,
             decision.path,
@@ -955,7 +979,7 @@ def _finalize_index_report(
         ),
     )
     sorted_failures = sorted(
-        failures,
+        request.failures,
         key=lambda failure: (
             failure.path,
             failure.analyzer_name,
@@ -964,7 +988,7 @@ def _finalize_index_report(
         ),
     )
     sorted_warnings = sorted(
-        warnings,
+        request.warnings,
         key=lambda warning: (
             warning.path,
             warning.analyzer_name,
@@ -974,16 +998,16 @@ def _finalize_index_report(
         ),
     )
     return IndexReport(
-        indexed=len(parsed_files),
-        reused=len(plan.reused_paths),
-        deleted=len(plan.deleted_paths),
+        indexed=len(request.parsed_files),
+        reused=len(request.plan.reused_paths),
+        deleted=len(request.plan.deleted_paths),
         failed=len(sorted_failures),
-        embeddings_recomputed=embeddings_recomputed,
-        embeddings_reused=embeddings_reused,
+        embeddings_recomputed=request.embeddings_recomputed,
+        embeddings_reused=request.embeddings_reused,
         decisions=decisions,
         failures=sorted_failures,
         warnings=sorted_warnings,
-        coverage_issues=coverage_issues,
+        coverage_issues=request.coverage_issues,
     )
 
 
@@ -1072,12 +1096,14 @@ def index_repo(
             persisted_files,
             persistence_failures,
         ) = _persist_indexed_file_analyses(
-            root,
-            conn=conn,
-            backend=index_backend,
-            parsed_files=parsed_files,
-            embedding_backend=backend,
-            previous_embeddings_by_path=previous_embeddings_by_path,
+            PersistIndexedFileAnalysesRequest(
+                root=root,
+                conn=conn,
+                backend=index_backend,
+                parsed_files=parsed_files,
+                embedding_backend=backend,
+                previous_embeddings_by_path=previous_embeddings_by_path,
+            )
         )
         failures.extend(persistence_failures)
         embeddings_reused = unchanged_embeddings_reused + changed_file_embeddings_reused
@@ -1094,13 +1120,15 @@ def index_repo(
         index_backend.commit(root, conn=conn)
 
         return _finalize_index_report(
-            plan=plan,
-            parsed_files=persisted_files,
-            failures=failures,
-            warnings=collected_warnings,
-            coverage_issues=coverage_issues,
-            embeddings_recomputed=embeddings_recomputed,
-            embeddings_reused=embeddings_reused,
+            FinalizeIndexReportRequest(
+                plan=plan,
+                parsed_files=persisted_files,
+                failures=failures,
+                warnings=collected_warnings,
+                coverage_issues=coverage_issues,
+                embeddings_recomputed=embeddings_recomputed,
+                embeddings_reused=embeddings_reused,
+            )
         )
     finally:
         index_backend.close_connection(conn)

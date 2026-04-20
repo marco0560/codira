@@ -75,4 +75,33 @@ feat/batch-embedding-indexing
   repository and the same full-index workload:
   `8h01m03s` on `codira 1.4.0` versus `12m45s` on the current 1.7.x line,
   which is roughly a `37.7x` speedup by wall clock.
+* [x] Captured a local runtime-tuning baseline on 20/04/2026 for the
+  `codira` repository on `verona` with 12 CPU cores and 48 GB RAM. With all
+  Codira tuning variables unset, the effective baseline was:
+  `CODIRA_EMBED_BATCH_SIZE=32`,
+  `CODIRA_EMBED_DEVICE=cpu`,
+  `CODIRA_TORCH_NUM_THREADS` unset,
+  `CODIRA_TORCH_NUM_INTEROP_THREADS` unset,
+  `torch.get_num_threads()=6`, and
+  `torch.get_num_interop_threads()=6`.
+* [x] Ran release Hyperfine benchmarks on the same host and repository with
+  three tuning profiles:
+
+  | Profile | `codira index --full` | `codira ctx --json` | `codira audit --json` |
+  | --- | ---: | ---: | ---: |
+  | `threads=6`, `interop=1`, `batch=32` | `31.158s +/- 0.354s` | `6.923s +/- 0.172s` | `200.6ms +/- 3.1ms` |
+  | `threads=8`, `interop=1`, `batch=64` | `32.499s +/- 0.291s` | `6.924s +/- 0.166s` | `198.9ms +/- 0.8ms` |
+  | `threads=10`, `interop=1`, `batch=128` | `29.451s +/- 0.152s` | `6.666s +/- 0.099s` | `196.7ms +/- 6.2ms` |
+
+  A direct Hyperfine check with `.codira` removed before each run measured
+  `threads=8`, `interop=1`, `batch=64` at `32.123s +/- 0.256s` for
+  `codira index --full`, confirming that the release benchmark helper did not
+  materially distort the indexing measurement.
+* [x] Recorded the current operator recommendation for this host and repository:
+  use `CODIRA_TORCH_NUM_THREADS=10`,
+  `CODIRA_TORCH_NUM_INTEROP_THREADS=1`, and
+  `CODIRA_EMBED_BATCH_SIZE=128` for fastest measured full indexing. This is a
+  local operational baseline, not a universal default; rerun the same Hyperfine
+  profile matrix after significant changes to analyzers, embedding payloads,
+  storage, or repository size.
 * [x] Create the final branch commit.

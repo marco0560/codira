@@ -17,10 +17,57 @@ This module belongs to the **docstring verification layer** that keeps docstring
 from __future__ import annotations
 
 from codira.docstring import (
+    DocstringValidationRequest,
     find_missing_sections,
     find_unexpected_sections,
     validate_docstring,
 )
+
+
+def _validation_request(
+    doc: str | None,
+    *,
+    is_public: int,
+    parameters: list[str] | None = None,
+    require_callable_sections: bool = False,
+    yields_value: bool = False,
+    returns_value: bool = False,
+    raises_exception: bool = False,
+) -> DocstringValidationRequest:
+    """
+    Build a docstring-validation request for focused unit tests.
+
+    Parameters
+    ----------
+    doc : str | None
+        Docstring text under test.
+    is_public : int
+        Public visibility flag passed to the validator.
+    parameters : list[str] | None, optional
+        Callable parameters expected in the docstring.
+    require_callable_sections : bool, optional
+        Whether callable-specific sections are required.
+    yields_value : bool, optional
+        Whether the callable yields values.
+    returns_value : bool, optional
+        Whether the callable returns values.
+    raises_exception : bool, optional
+        Whether the callable raises exceptions.
+
+    Returns
+    -------
+    DocstringValidationRequest
+        Request object accepted by ``validate_docstring``.
+    """
+    return DocstringValidationRequest(
+        doc=doc,
+        is_public=is_public,
+        parameters=parameters or [],
+        require_callable_sections=require_callable_sections,
+        yields_value=yields_value,
+        returns_value=returns_value,
+        raises_exception=raises_exception,
+    )
 
 
 def test_find_missing_sections_respects_callable_metadata() -> None:
@@ -196,10 +243,12 @@ def test_validate_docstring_reports_missing_parameter_entry() -> None:
     """
 
     issues = validate_docstring(
-        doc,
-        is_public=1,
-        parameters=["x", "y"],
-        require_callable_sections=True,
+        _validation_request(
+            doc,
+            is_public=1,
+            parameters=["x", "y"],
+            require_callable_sections=True,
+        )
     )
 
     assert ("missing_parameter", "Parameter not documented: y") in issues
@@ -227,10 +276,12 @@ def test_validate_docstring_reports_malformed_section_heading() -> None:
     """
 
     issues = validate_docstring(
-        doc,
-        is_public=1,
-        parameters=["x"],
-        require_callable_sections=True,
+        _validation_request(
+            doc,
+            is_public=1,
+            parameters=["x"],
+            require_callable_sections=True,
+        )
     )
 
     assert (
@@ -267,11 +318,13 @@ def test_validate_docstring_requires_raises_only_when_explicit_raise_exists() ->
     """
 
     issues = validate_docstring(
-        doc,
-        is_public=1,
-        parameters=["x"],
-        require_callable_sections=True,
-        raises_exception=True,
+        _validation_request(
+            doc,
+            is_public=1,
+            parameters=["x"],
+            require_callable_sections=True,
+            raises_exception=True,
+        )
     )
 
     assert ("missing_section", "Missing section: Raises") in issues
@@ -300,11 +353,13 @@ def test_validate_docstring_requires_yields_for_generators() -> None:
     """
 
     issues = validate_docstring(
-        doc,
-        is_public=1,
-        parameters=["x"],
-        require_callable_sections=True,
-        yields_value=True,
+        _validation_request(
+            doc,
+            is_public=1,
+            parameters=["x"],
+            require_callable_sections=True,
+            yields_value=True,
+        )
     )
 
     assert ("missing_section", "Missing section: Yields") in issues
@@ -344,11 +399,13 @@ def test_validate_docstring_rejects_yields_for_regular_functions() -> None:
     """
 
     issues = validate_docstring(
-        doc,
-        is_public=1,
-        parameters=["x"],
-        require_callable_sections=True,
-        returns_value=True,
+        _validation_request(
+            doc,
+            is_public=1,
+            parameters=["x"],
+            require_callable_sections=True,
+            returns_value=True,
+        )
     )
 
     assert ("unexpected_section", "Unexpected section: Yields") in issues
@@ -387,11 +444,13 @@ def test_validate_docstring_rejects_returns_for_pure_generators() -> None:
     """
 
     issues = validate_docstring(
-        doc,
-        is_public=1,
-        parameters=["x"],
-        require_callable_sections=True,
-        yields_value=True,
+        _validation_request(
+            doc,
+            is_public=1,
+            parameters=["x"],
+            require_callable_sections=True,
+            yields_value=True,
+        )
     )
 
     assert ("unexpected_section", "Unexpected section: Returns") in issues
@@ -430,12 +489,14 @@ def test_validate_docstring_allows_returns_for_generators_with_terminal_value() 
     """
 
     issues = validate_docstring(
-        doc,
-        is_public=1,
-        parameters=["x"],
-        require_callable_sections=True,
-        yields_value=True,
-        returns_value=True,
+        _validation_request(
+            doc,
+            is_public=1,
+            parameters=["x"],
+            require_callable_sections=True,
+            yields_value=True,
+            returns_value=True,
+        )
     )
 
     assert ("unexpected_section", "Unexpected section: Returns") not in issues
@@ -455,7 +516,7 @@ def test_validate_docstring_skips_private_missing_docstrings() -> None:
         The test asserts that private callables are exempt from missing
         docstring errors.
     """
-    assert validate_docstring(None, is_public=0) == []
+    assert validate_docstring(_validation_request(None, is_public=0)) == []
 
 
 def test_validate_docstring_allows_summary_only_module_docstrings() -> None:
@@ -471,6 +532,6 @@ def test_validate_docstring_allows_summary_only_module_docstrings() -> None:
     None
         The test asserts that module-style summary docstrings are not flagged.
     """
-    issues = validate_docstring("Module summary.", is_public=1)
+    issues = validate_docstring(_validation_request("Module summary.", is_public=1))
 
     assert issues == []

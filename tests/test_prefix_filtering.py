@@ -27,12 +27,13 @@ from codira.indexer import index_repo
 from codira.prefix import normalize_prefix
 from codira.query.context import context_for
 from codira.query.exact import (
+    EdgeQueryRequest,
     docstring_issues,
     find_call_edges,
     find_callable_refs,
     find_symbol,
 )
-from codira.semantic.search import embedding_candidates
+from codira.semantic.search import EmbeddingCandidatesRequest, embedding_candidates
 from codira.storage import init_db
 
 if TYPE_CHECKING:
@@ -152,11 +153,13 @@ def test_embedding_candidates_respect_prefix(tmp_path: Path) -> None:
     index_repo(tmp_path)
 
     matches = embedding_candidates(
-        tmp_path,
-        "schema migration helper",
-        limit=5,
-        min_score=0.0,
-        prefix="pkg/b.py",
+        EmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="schema migration helper",
+            limit=5,
+            min_score=0.0,
+            prefix="pkg/b.py",
+        )
     )
 
     assert matches
@@ -182,37 +185,45 @@ def test_call_and_ref_queries_filter_on_owner_prefix(tmp_path: Path) -> None:
     index_repo(tmp_path)
 
     assert find_call_edges(
-        tmp_path,
-        "imported_helper",
-        module="pkg.b",
-        incoming=True,
-        prefix="pkg/a.py",
+        EdgeQueryRequest(
+            root=tmp_path,
+            name="imported_helper",
+            module="pkg.b",
+            incoming=True,
+            prefix="pkg/a.py",
+        )
     ) == [("pkg.a", "caller", "pkg.b", "imported_helper", 1)]
     assert (
         find_call_edges(
-            tmp_path,
-            "imported_helper",
-            module="pkg.b",
-            incoming=True,
-            prefix="pkg/b.py",
+            EdgeQueryRequest(
+                root=tmp_path,
+                name="imported_helper",
+                module="pkg.b",
+                incoming=True,
+                prefix="pkg/b.py",
+            )
         )
         == []
     )
 
     assert find_callable_refs(
-        tmp_path,
-        "imported_helper",
-        module="pkg.b",
-        incoming=True,
-        prefix="pkg/a.py",
+        EdgeQueryRequest(
+            root=tmp_path,
+            name="imported_helper",
+            module="pkg.b",
+            incoming=True,
+            prefix="pkg/a.py",
+        )
     ) == [("pkg.a", "registry", "pkg.b", "imported_helper", 1)]
     assert (
         find_callable_refs(
-            tmp_path,
-            "imported_helper",
-            module="pkg.b",
-            incoming=True,
-            prefix="pkg/b.py",
+            EdgeQueryRequest(
+                root=tmp_path,
+                name="imported_helper",
+                module="pkg.b",
+                incoming=True,
+                prefix="pkg/b.py",
+            )
         )
         == []
     )

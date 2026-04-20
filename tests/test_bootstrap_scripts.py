@@ -25,12 +25,16 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 if TYPE_CHECKING:
     from scripts.bootstrap_dev_environment import CommandSpec
+    from scripts.install_first_party_packages import (
+        InstallCommandRequest as InstallCommandRequestType,
+    )
 
 
 class _InstallHelperModule(Protocol):
     """Protocol for the standalone first-party install helper module."""
 
     FIRST_PARTY_EDITABLE_PACKAGES: tuple[str, ...]
+    InstallCommandRequest: type[InstallCommandRequestType]
 
     def first_party_package_root(
         self,
@@ -143,31 +147,15 @@ class _InstallHelperModule(Protocol):
 
     def build_install_commands(
         self,
-        *,
-        python: str,
-        repo_root: Path,
-        include_core: bool = False,
-        core_extras: tuple[str, ...] = (),
-        include_bundle: bool = False,
-        package_root: Path | None = None,
+        request: InstallCommandRequestType,
     ) -> tuple[tuple[str, ...], ...]:
         """
         Build the editable-install command plan for first-party packages.
 
         Parameters
         ----------
-        python : str
-            Python executable used in generated commands.
-        repo_root : pathlib.Path
-            Repository root used to resolve editable requirements.
-        include_core : bool, optional
-            Whether to include the core project in the install plan.
-        core_extras : tuple[str, ...], optional
-            Extras to apply to the core editable requirement.
-        include_bundle : bool, optional
-            Whether to include the official bundle package.
-        package_root : pathlib.Path | None, optional
-            Optional package directory override.
+        request : scripts.install_first_party_packages.InstallCommandRequest
+            Command construction request.
 
         Returns
         -------
@@ -1019,11 +1007,13 @@ def test_install_helper_can_target_exported_split_repositories() -> None:
         package_root=package_root,
     ) == (package_root / "codira-bundle-official")
     assert helper.build_install_commands(
-        python="/tmp/codira/.venv/bin/python",
-        repo_root=repo_root,
-        include_core=True,
-        include_bundle=True,
-        package_root=package_root,
+        helper.InstallCommandRequest(
+            python="/tmp/codira/.venv/bin/python",
+            repo_root=repo_root,
+            include_core=True,
+            include_bundle=True,
+            package_root=package_root,
+        )
     ) == (
         (
             "/tmp/codira/.venv/bin/python",
@@ -1126,8 +1116,10 @@ def test_build_install_argv_installs_each_first_party_package_editably() -> None
         repo_root / "packages/codira-backend-sqlite",
     )
     assert helper.build_install_commands(
-        python="/tmp/codira/.venv/bin/python",
-        repo_root=repo_root,
+        helper.InstallCommandRequest(
+            python="/tmp/codira/.venv/bin/python",
+            repo_root=repo_root,
+        )
     ) == (
         (
             "/tmp/codira/.venv/bin/python",
@@ -1174,10 +1166,12 @@ def test_install_helper_can_include_core_repo_with_requested_extras() -> None:
         == "/tmp/codira[semantic]"
     )
     assert helper.build_install_commands(
-        python="/tmp/codira/.venv/bin/python",
-        repo_root=repo_root,
-        include_core=True,
-        core_extras=("semantic",),
+        helper.InstallCommandRequest(
+            python="/tmp/codira/.venv/bin/python",
+            repo_root=repo_root,
+            include_core=True,
+            core_extras=("semantic",),
+        )
     ) == (
         (
             "/tmp/codira/.venv/bin/python",
@@ -1218,9 +1212,11 @@ def test_install_helper_can_opt_into_bundle_package() -> None:
     repo_root = Path("/tmp/codira")
 
     assert helper.build_install_commands(
-        python="/tmp/codira/.venv/bin/python",
-        repo_root=repo_root,
-        include_bundle=True,
+        helper.InstallCommandRequest(
+            python="/tmp/codira/.venv/bin/python",
+            repo_root=repo_root,
+            include_bundle=True,
+        )
     ) == (
         (
             "/tmp/codira/.venv/bin/python",

@@ -39,7 +39,7 @@ from codira.semantic.embeddings import (
     embed_text,
     embed_texts,
 )
-from codira.semantic.search import embedding_candidates
+from codira.semantic.search import EmbeddingCandidatesRequest, embedding_candidates
 from codira.storage import get_db_path, init_db
 
 if TYPE_CHECKING:
@@ -393,22 +393,28 @@ def test_embedding_candidates_are_deterministic_and_overlap(tmp_path: Path) -> N
     index_repo(tmp_path)
 
     first = embedding_candidates(
-        tmp_path,
-        "schema migration",
-        limit=5,
-        min_score=0.1,
+        EmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="schema migration",
+            limit=5,
+            min_score=0.1,
+        )
     )
     second = embedding_candidates(
-        tmp_path,
-        "migrate schema rules",
-        limit=5,
-        min_score=0.1,
+        EmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="migrate schema rules",
+            limit=5,
+            min_score=0.1,
+        )
     )
     repeated = embedding_candidates(
-        tmp_path,
-        "schema migration",
-        limit=5,
-        min_score=0.1,
+        EmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="schema migration",
+            limit=5,
+            min_score=0.1,
+        )
     )
 
     assert first == repeated
@@ -485,10 +491,12 @@ def test_c_embedding_candidates_include_include_context(tmp_path: Path) -> None:
     index_repo(tmp_path)
 
     results = embedding_candidates(
-        tmp_path,
-        "vector reduction stdio sample header",
-        limit=5,
-        min_score=0.1,
+        EmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="vector reduction stdio sample header",
+            limit=5,
+            min_score=0.1,
+        )
     )
 
     assert results
@@ -542,10 +550,12 @@ def test_c_embedding_candidates_include_header_source_pairing(tmp_path: Path) ->
     index_repo(tmp_path)
 
     header_results = embedding_candidates(
-        tmp_path,
-        "paired header native sample h",
-        limit=5,
-        min_score=0.1,
+        EmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="paired header native sample h",
+            limit=5,
+            min_score=0.1,
+        )
     )
     assert header_results
     header_symbols = {symbol for _score, symbol in header_results}
@@ -558,10 +568,12 @@ def test_c_embedding_candidates_include_header_source_pairing(tmp_path: Path) ->
     ) in header_symbols
 
     source_results = embedding_candidates(
-        tmp_path,
-        "paired source native sample c",
-        limit=5,
-        min_score=0.1,
+        EmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="paired source native sample c",
+            limit=5,
+            min_score=0.1,
+        )
     )
     assert source_results
     source_symbols = {symbol for _score, symbol in source_results}
@@ -615,10 +627,12 @@ def test_python_embedding_candidates_include_fixture_assertion_context(
     index_repo(tmp_path)
 
     fixture_results = embedding_candidates(
-        tmp_path,
-        "pytest fixture payload",
-        limit=5,
-        min_score=0.1,
+        EmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="pytest fixture payload",
+            limit=5,
+            min_score=0.1,
+        )
     )
     assert fixture_results
     fixture_symbols = {symbol for _score, symbol in fixture_results}
@@ -631,10 +645,12 @@ def test_python_embedding_candidates_include_fixture_assertion_context(
     ) in fixture_symbols
 
     setup_results = embedding_candidates(
-        tmp_path,
-        "setup function validation",
-        limit=5,
-        min_score=0.1,
+        EmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="setup function validation",
+            limit=5,
+            min_score=0.1,
+        )
     )
     assert setup_results
     setup_symbols = {symbol for _score, symbol in setup_results}
@@ -647,10 +663,12 @@ def test_python_embedding_candidates_include_fixture_assertion_context(
     ) in setup_symbols
 
     assertion_results = embedding_candidates(
-        tmp_path,
-        "assertions payload validation",
-        limit=5,
-        min_score=0.1,
+        EmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="assertions payload validation",
+            limit=5,
+            min_score=0.1,
+        )
     )
     assert assertion_results
     assertion_symbols = {symbol for _score, symbol in assertion_results}

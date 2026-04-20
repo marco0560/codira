@@ -28,6 +28,7 @@ from codira.cli import build_parser, main
 from codira.indexer import index_repo
 from codira.query.context import context_for
 from codira.query.exact import (
+    EdgeQueryRequest,
     find_call_edges,
     find_callable_refs,
     find_include_edges,
@@ -155,29 +156,37 @@ def test_call_edges_are_resolved_and_deduplicated(tmp_path: Path) -> None:
         ("pkg.a", "imported_caller", "pkg.b", "imported_helper", 1),
     ]
 
-    assert find_call_edges(tmp_path, "caller", module="pkg.a") == [
+    assert find_call_edges(
+        EdgeQueryRequest(root=tmp_path, name="caller", module="pkg.a")
+    ) == [
         ("pkg.a", "caller", "pkg.a", "dynamic", 1),
         ("pkg.a", "caller", "pkg.a", "helper", 1),
     ]
     assert find_call_edges(
-        tmp_path,
-        "imported_helper",
-        module="pkg.b",
-        incoming=True,
+        EdgeQueryRequest(
+            root=tmp_path,
+            name="imported_helper",
+            module="pkg.b",
+            incoming=True,
+        )
     ) == [
         ("pkg.a", "imported_caller", "pkg.b", "imported_helper", 1),
     ]
 
-    assert find_callable_refs(tmp_path, "registry", module="pkg.a") == [
+    assert find_callable_refs(
+        EdgeQueryRequest(root=tmp_path, name="registry", module="pkg.a")
+    ) == [
         ("pkg.a", "registry", "pkg.a", "Demo.helper", 1),
         ("pkg.a", "registry", "pkg.a", "helper", 1),
         ("pkg.a", "registry", "pkg.b", "imported_helper", 1),
     ]
     assert find_callable_refs(
-        tmp_path,
-        "helper",
-        module="pkg.a",
-        incoming=True,
+        EdgeQueryRequest(
+            root=tmp_path,
+            name="helper",
+            module="pkg.a",
+            incoming=True,
+        )
     ) == [
         ("pkg.a", "registry", "pkg.a", "helper", 1),
     ]
@@ -468,14 +477,18 @@ def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> N
     init_db(tmp_path)
     index_repo(tmp_path)
 
-    assert find_call_edges(tmp_path, "public_api", module="native.sample") == [
+    assert find_call_edges(
+        EdgeQueryRequest(root=tmp_path, name="public_api", module="native.sample")
+    ) == [
         ("native.sample", "public_api", "native.sample", "helper", 1),
     ]
     assert find_call_edges(
-        tmp_path,
-        "helper",
-        module="native.sample",
-        incoming=True,
+        EdgeQueryRequest(
+            root=tmp_path,
+            name="helper",
+            module="native.sample",
+            incoming=True,
+        )
     ) == [("native.sample", "public_api", "native.sample", "helper", 1)]
 
 
@@ -674,13 +687,17 @@ def test_c_include_edges_are_queryable_and_expand_context(tmp_path: Path) -> Non
     init_db(tmp_path)
     index_repo(tmp_path)
 
-    assert find_include_edges(tmp_path, "native.sample") == [
+    assert find_include_edges(
+        EdgeQueryRequest(root=tmp_path, name="native.sample")
+    ) == [
         ("native.sample", "native/sample.h", "include_local", 1),
     ]
     assert find_include_edges(
-        tmp_path,
-        "native/sample.h",
-        incoming=True,
+        EdgeQueryRequest(
+            root=tmp_path,
+            name="native/sample.h",
+            incoming=True,
+        )
     ) == [
         ("native.consumer", "native/sample.h", "include_local", 1),
         ("native.sample", "native/sample.h", "include_local", 1),

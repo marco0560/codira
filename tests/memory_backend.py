@@ -27,7 +27,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from codira.docstring import validate_docstring
+from codira.docstring import DocstringValidationRequest, validate_docstring
 from codira.prefix import normalize_prefix, path_has_prefix
 
 if TYPE_CHECKING:
@@ -1798,13 +1798,15 @@ class MemoryIndexBackend:
             Matching docstring issues are appended in place.
         """
         for issue_type, message in validate_docstring(
-            docstring,
-            is_public=is_public,
-            parameters=list(parameters),
-            require_callable_sections=require_callable_sections,
-            yields_value=yields_value,
-            returns_value=returns_value,
-            raises_exception=raises_exception,
+            DocstringValidationRequest(
+                doc=docstring,
+                is_public=is_public,
+                parameters=list(parameters),
+                require_callable_sections=require_callable_sections,
+                yields_value=yields_value,
+                returns_value=returns_value,
+                raises_exception=raises_exception,
+            )
         ):
             state.doc_issues.append(
                 _MemoryDocIssue(

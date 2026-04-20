@@ -17,6 +17,7 @@ This module belongs to the **semantic retrieval layer** that supplies embedding 
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from codira.registry import active_index_backend
@@ -28,17 +29,10 @@ if TYPE_CHECKING:
     from codira.types import ChannelResults
 
 
-def embedding_candidates(
-    root: Path,
-    query: str,
-    *,
-    limit: int,
-    min_score: float,
-    prefix: str | None = None,
-    conn: sqlite3.Connection | None = None,
-) -> ChannelResults:
+@dataclass(frozen=True)
+class EmbeddingCandidatesRequest:
     """
-    Return ranked symbol candidates using stored embedding similarity.
+    Request parameters for semantic embedding candidate retrieval.
 
     Parameters
     ----------
@@ -50,11 +44,30 @@ def embedding_candidates(
         Maximum number of ranked results to return.
     min_score : float
         Minimum similarity threshold for emitted results.
-    prefix : str | None, optional
+    prefix : str | None
         Repo-root-relative path prefix used to restrict matched symbol files.
-    conn : sqlite3.Connection | None, optional
-        Existing database connection to reuse. When omitted, the function
-        opens and closes its own connection.
+    conn : sqlite3.Connection | None
+        Existing database connection to reuse.
+    """
+
+    root: Path
+    query: str
+    limit: int
+    min_score: float
+    prefix: str | None = None
+    conn: sqlite3.Connection | None = None
+
+
+def embedding_candidates(
+    request: EmbeddingCandidatesRequest,
+) -> ChannelResults:
+    """
+    Return ranked symbol candidates using stored embedding similarity.
+
+    Parameters
+    ----------
+    request : EmbeddingCandidatesRequest
+        Embedding candidate request carrying query and filtering options.
 
     Returns
     -------
@@ -64,10 +77,10 @@ def embedding_candidates(
     """
     backend = active_index_backend()
     return backend.embedding_candidates(
-        root,
-        query,
-        limit=limit,
-        min_score=min_score,
-        prefix=prefix,
-        conn=conn,
+        request.root,
+        request.query,
+        limit=request.limit,
+        min_score=request.min_score,
+        prefix=request.prefix,
+        conn=request.conn,
     )

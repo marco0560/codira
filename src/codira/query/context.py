@@ -30,7 +30,7 @@ from codira.contracts import (
     split_declared_retrieval_capabilities,
 )
 from codira.prefix import normalize_prefix, path_has_prefix, prefix_clause
-from codira.prompts.default import build_prompt
+from codira.prompts.default import PromptBuildRequest, build_prompt
 from codira.query.classifier import (
     QueryIntent,
     RetrievalPlan,
@@ -38,15 +38,20 @@ from codira.query.classifier import (
     classify_query,
 )
 from codira.query.exact import (
+    EdgeQueryRequest,
     docstring_issues,
     find_include_edges,
     find_symbol,
 )
-from codira.query.graph_enrichment import expand_graph_related_symbols
+from codira.query.graph_enrichment import (
+    GraphExpansionRequest,
+    expand_graph_related_symbols,
+)
 from codira.query.producers import (
     CHANNEL_PRODUCER_SPECS,
     EMBEDDING_RETRIEVAL_PRODUCER,
     INCLUDE_GRAPH_RETRIEVAL_PRODUCER,
+    EmbeddingRetrievalRequest,
     QueryChannelSpec,
     QueryProducerSpec,
     channel_producer_specs,
@@ -137,6 +142,35 @@ MergeDiagnostics = dict[SymbolRow, MergeDiagnosticsEntry]
 ExpansionDiagnostics = dict[str, list[dict[str, object]]]
 ProducerDiagnosticsEntry = dict[str, object]
 SignalCollectionDiagnostics = dict[str, object]
+
+
+@dataclass(frozen=True)
+class GraphRetrievalRequest:
+    """
+    Request parameters for graph-derived retrieval signals.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    top_matches : list[codira.types.SymbolRow]
+        Current retrieval winners used as bounded graph-expansion seeds.
+    conn : sqlite3.Connection
+        Open database connection reused for exact graph lookups.
+    include_include_graph : bool
+        Whether include-graph evidence is enabled by the retrieval plan.
+    include_references : bool
+        Whether callable-reference evidence is enabled by the retrieval plan.
+    prefix : str | None
+        Absolute normalized prefix used to restrict owner files and symbols.
+    """
+
+    root: Path
+    top_matches: list[SymbolRow]
+    conn: sqlite3.Connection
+    include_include_graph: bool
+    include_references: bool
+    prefix: str | None
 
 
 @dataclass(frozen=True)
@@ -2233,32 +2267,17 @@ def _bounded_graph_retrieval_signals(
     return sorted(ranked_signals, key=signal_sort_key)
 
 
-def _collect_graph_retrieval_signals(  # noqa: PLR0913
-    root: Path,
-    top_matches: list[SymbolRow],
-    conn: sqlite3.Connection,
-    *,
-    include_include_graph: bool,
-    include_references: bool,
-    prefix: str | None,
+def _collect_graph_retrieval_signals(
+    request: GraphRetrievalRequest,
 ) -> list[RetrievalSignal]:
     """
     Collect bounded graph-derived retrieval signals around current top matches.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root containing the index database.
-    top_matches : list[codira.types.SymbolRow]
-        Current retrieval winners used as bounded graph-expansion seeds.
-    conn : sqlite3.Connection
-        Open database connection reused for exact graph lookups.
-    include_include_graph : bool
-        Whether include-graph evidence is enabled by the retrieval plan.
-    include_references : bool
-        Whether callable-reference evidence is enabled by the retrieval plan.
-    prefix : str | None
-        Absolute normalized prefix used to restrict owner files and symbols.
+    request : GraphRetrievalRequest
+        Graph retrieval request carrying current matches and enabled graph
+        expansion channels.
 
     Returns
     -------
@@ -2267,19 +2286,21 @@ def _collect_graph_retrieval_signals(  # noqa: PLR0913
     """
     raw_graph_signals: list[RetrievalSignal] = []
     expand_graph_related_symbols(
-        root,
-        top_matches,
-        conn,
-        include_include_graph=include_include_graph,
-        include_references=include_references,
-        prefix=prefix,
-        expanded=[],
-        seen_symbols=set(top_matches),
-        graph_signals=raw_graph_signals,
-        classify_file_language=_classify_file_language,
-        classify_file_role=_classify_file_role,
-        include_target_module_name=_include_target_module_name,
-        symbols_in_module=_symbols_in_module,
+        GraphExpansionRequest(
+            root=request.root,
+            top_matches=request.top_matches,
+            conn=request.conn,
+            include_include_graph=request.include_include_graph,
+            include_references=request.include_references,
+            prefix=request.prefix,
+            expanded=[],
+            seen_symbols=set(request.top_matches),
+            graph_signals=raw_graph_signals,
+            classify_file_language=_classify_file_language,
+            classify_file_role=_classify_file_role,
+            include_target_module_name=_include_target_module_name,
+            symbols_in_module=_symbols_in_module,
+        )
     )
     return _bounded_graph_retrieval_signals(raw_graph_signals)
 
@@ -2680,12 +2701,14 @@ def _retrieve_embedding_candidates(
         Ranked embedding-channel candidates for the query.
     """
     results = EMBEDDING_RETRIEVAL_PRODUCER.retrieve_candidates(
-        root,
-        query,
-        limit=EMBEDDING_RESULT_LIMIT,
-        min_score=EMBEDDING_MIN_SCORE,
-        prefix=prefix,
-        conn=conn,
+        EmbeddingRetrievalRequest(
+            root=root,
+            query=query,
+            limit=EMBEDDING_RESULT_LIMIT,
+            min_score=EMBEDDING_MIN_SCORE,
+            prefix=prefix,
+            conn=conn,
+        )
     )
     sorted_results = list(results)
     sorted_results.sort(key=_scored_symbol_sort_key)
@@ -3105,10 +3128,12 @@ def _expand_include_graph_neighbors(
         visited_modules.add(current_module)
 
         outgoing_edges: list[IncludeEdgeRow] = find_include_edges(
-            root,
-            current_module,
-            prefix=prefix,
-            conn=conn,
+            EdgeQueryRequest(
+                root=root,
+                name=current_module,
+                prefix=prefix,
+                conn=conn,
+            )
         )
         for _owner_module, target_name, kind, _lineno in outgoing_edges:
             target_module = _include_target_module_name(target_name, kind)
@@ -3132,11 +3157,13 @@ def _expand_include_graph_neighbors(
         )
 
     incoming_edges: list[IncludeEdgeRow] = find_include_edges(
-        root,
-        current_target_name,
-        incoming=True,
-        prefix=prefix,
-        conn=conn,
+        EdgeQueryRequest(
+            root=root,
+            name=current_target_name,
+            incoming=True,
+            prefix=prefix,
+            conn=conn,
+        )
     )
     for owner_module, _target_name, _kind, _lineno in incoming_edges:
         _append_symbols(
@@ -3229,23 +3256,25 @@ def _expand_graph_related_symbols(
         Deterministic include-graph diagnostics collected during expansion.
     """
     return expand_graph_related_symbols(
-        root,
-        top_matches,
-        conn,
-        include_include_graph=include_include_graph,
-        include_references=include_references,
-        prefix=prefix,
-        expanded=expanded,
-        seen_symbols=seen_symbols,
-        graph_signals=graph_signals,
-        classify_file_language=_classify_file_language,
-        classify_file_role=_classify_file_role,
-        include_target_module_name=_include_target_module_name,
-        symbols_in_module=lambda module_root, module_name: _symbols_in_module(
-            module_root,
-            module_name,
+        GraphExpansionRequest(
+            root=root,
+            top_matches=top_matches,
+            conn=conn,
+            include_include_graph=include_include_graph,
+            include_references=include_references,
             prefix=prefix,
-        ),
+            expanded=expanded,
+            seen_symbols=seen_symbols,
+            graph_signals=graph_signals,
+            classify_file_language=_classify_file_language,
+            classify_file_role=_classify_file_role,
+            include_target_module_name=_include_target_module_name,
+            symbols_in_module=lambda module_root, module_name: _symbols_in_module(
+                module_root,
+                module_name,
+                prefix=prefix,
+            ),
+        )
     )
 
 
@@ -3529,14 +3558,16 @@ def _render_agent_prompt(
         Prompt-formatted query context.
     """
     return build_prompt(
-        root,
-        query,
-        top_matches,
-        doc_issues,
-        expanded,
-        unique_refs,
-        prompt_symbol_line=_prompt_symbol_line,
-        format_enriched_symbol=_format_enriched_symbol,
+        PromptBuildRequest(
+            root=root,
+            query=query,
+            top_matches=top_matches,
+            doc_issues=doc_issues,
+            expanded=expanded,
+            unique_refs=unique_refs,
+            prompt_symbol_line=_prompt_symbol_line,
+            format_enriched_symbol=_format_enriched_symbol,
+        )
     )
 
 
@@ -4108,22 +4139,19 @@ def _append_explain_sections(
                     f" capability_version={producer['capability_version']}"
                     f" source={producer['source_kind']}:{producer['source_name']}"
                 )
+                lines.append(f"    known_capabilities={producer['known_capabilities']}")
                 lines.append(
-                    "    " f"known_capabilities={producer['known_capabilities']}"
-                )
-                lines.append(
-                    "    " f"unknown_capabilities={producer['unknown_capabilities']}"
+                    f"    unknown_capabilities={producer['unknown_capabilities']}"
                 )
         if signal_collection is not None:
             lines.append(
-                "signal_collection: "
-                f"total_signals={signal_collection['total_signals']}"
+                f"signal_collection: total_signals={signal_collection['total_signals']}"
             )
-            lines.append("  " f"families={signal_collection['families']}")
-            lines.append("  " f"capabilities={signal_collection['capabilities']}")
-            lines.append("  " f"used_producers={signal_collection['used_producers']}")
+            lines.append(f"  families={signal_collection['families']}")
+            lines.append(f"  capabilities={signal_collection['capabilities']}")
+            lines.append(f"  used_producers={signal_collection['used_producers']}")
             lines.append(
-                "  " f"ignored_producers={signal_collection['ignored_producers']}"
+                f"  ignored_producers={signal_collection['ignored_producers']}"
             )
 
         lines.append("")
@@ -4148,12 +4176,11 @@ def _append_explain_sections(
                     f" strength={entry.get('strength')}"
                 )
             if "distance" in entry:
-                lines.append("    " f"distance={entry['distance']}")
+                lines.append(f"    distance={entry['distance']}")
             if "source" in entry:
                 source = cast("dict[str, object]", entry["source"])
                 lines.append(
-                    "    "
-                    f"source={source['module']}.{source['name']}:{source['lineno']}"
+                    f"    source={source['module']}.{source['name']}:{source['lineno']}"
                 )
 
         lines.append("")
@@ -4188,9 +4215,9 @@ def _append_explain_sections(
                 f"{entry['module']}.{entry['name']}:{entry['lineno']}"
                 f" signal_count={entry['signal_count']}"
             )
-            lines.append("    " f"families={entry['families']}")
-            lines.append("    " f"capabilities={entry['capabilities']}")
-            lines.append("    " f"producers={entry['producers']}")
+            lines.append(f"    families={entry['families']}")
+            lines.append(f"    capabilities={entry['capabilities']}")
+            lines.append(f"    producers={entry['producers']}")
 
         lines.append("")
 
@@ -4225,7 +4252,7 @@ def _append_explain_sections(
                 f"role_bonus={merge_role_bonus:.4f} "
                 f"merge_score={merge_score:.4f}"
             )
-            lines.append("  " f"role={role} " f"role_bias={role_bias}")
+            lines.append(f"  role={role} role_bias={role_bias}")
 
             family_scores = cast("dict[str, float]", merge_details["families"])
             for family_name, score in family_scores.items():
@@ -4250,8 +4277,7 @@ def _append_explain_sections(
                 if not isinstance(entry, dict):
                     continue
                 label = (
-                    f"{entry.get('module')}.{entry.get('name')}:"
-                    f"{entry.get('lineno')}"
+                    f"{entry.get('module')}.{entry.get('name')}:{entry.get('lineno')}"
                 )
                 lines.append(
                     "  "
@@ -4267,8 +4293,7 @@ def _append_explain_sections(
                 if not isinstance(entry, dict):
                     continue
                 label = (
-                    f"{entry.get('module')}.{entry.get('name')}:"
-                    f"{entry.get('lineno')}"
+                    f"{entry.get('module')}.{entry.get('name')}:{entry.get('lineno')}"
                 )
                 lines.append(
                     "  "
@@ -4568,12 +4593,14 @@ def context_for(
         return "No relevant matches found."
 
     graph_retrieval_signals = _collect_graph_retrieval_signals(
-        root,
-        top_matches,
-        conn,
-        include_include_graph=plan.include_include_graph,
-        include_references=plan.include_references,
-        prefix=normalized_prefix,
+        GraphRetrievalRequest(
+            root=root,
+            top_matches=top_matches,
+            conn=conn,
+            include_include_graph=plan.include_include_graph,
+            include_references=plan.include_references,
+            prefix=normalized_prefix,
+        )
     )
     if graph_retrieval_signals:
         retrieval_signals = sorted(

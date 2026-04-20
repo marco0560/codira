@@ -25,7 +25,7 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from codira.docstring import validate_docstring
+from codira.docstring import DocstringValidationRequest, validate_docstring
 from codira.semantic.embeddings import embed_texts as embed_texts
 from codira.semantic.embeddings import serialize_vector
 
@@ -44,6 +44,8 @@ if TYPE_CHECKING:
     from codira.semantic.embeddings import EmbeddingBackendSpec
 
 CallRecord = dict[str, str | int]
+CallRow = tuple[int, str, str, str, str, str, int, int]
+RefRow = tuple[int, str, str, str, str, str, str, int, int]
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,213 @@ class StoredEmbeddingRow:
     content_hash: str
     dim: int
     vector: bytes
+
+
+@dataclass(frozen=True)
+class CallResolutionRequest:
+    """
+    Request parameters for parsed call resolution.
+
+    Parameters
+    ----------
+    call : dict[str, str | int]
+        Parsed call-site record.
+    caller_module : str
+        Module containing the caller.
+    caller_class : str | None
+        Owning class for method callers.
+    import_aliases : dict[str, str]
+        Mapping of locally bound import names to imported dotted targets.
+    module_functions : dict[str, set[str]]
+        Known top-level functions keyed by module name.
+    class_methods : dict[tuple[str, str], set[str]]
+        Known method names keyed by ``(module_name, class_name)``.
+    """
+
+    call: dict[str, str | int]
+    caller_module: str
+    caller_class: str | None
+    import_aliases: dict[str, str]
+    module_functions: dict[str, set[str]]
+    class_methods: dict[tuple[str, str], set[str]]
+
+
+@dataclass(frozen=True)
+class EmbeddingTextRequest:
+    """
+    Request parameters for deterministic embedding text construction.
+
+    Parameters
+    ----------
+    module_name : str
+        Dotted module name that owns the symbol.
+    symbol_name : str
+        Logical symbol name.
+    symbol_type : str
+        Indexed symbol type.
+    signature : str | None
+        Callable signature when present.
+    docstring : str | None
+        Symbol docstring when present.
+    extra_context : tuple[str, ...]
+        Additional deterministic semantic context lines.
+    """
+
+    module_name: str
+    symbol_name: str
+    symbol_type: str
+    signature: str | None = None
+    docstring: str | None = None
+    extra_context: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SymbolIndexInsertRequest:
+    """
+    Request parameters for inserting one symbol-index row.
+
+    Parameters
+    ----------
+    name : str
+        Symbol name stored in the index.
+    stable_id : str
+        Durable analyzer-owned symbol identity.
+    symbol_type : str
+        Stable symbol kind stored in the index.
+    module_name : str
+        Module name owning the symbol.
+    file_id : int
+        Integer identifier of the owner file.
+    lineno : int
+        Source line of the indexed symbol.
+    """
+
+    name: str
+    stable_id: str
+    symbol_type: str
+    module_name: str
+    file_id: int
+    lineno: int
+
+
+@dataclass(frozen=True)
+class EmbeddingRowRequest:
+    """
+    Request parameters for appending a pending embedding row.
+
+    Parameters
+    ----------
+    symbol_row_id : int
+        Inserted symbol row identifier referenced by the embedding.
+    stable_id : str
+        Durable analyzer-owned symbol identity.
+    module_name : str
+        Module name owning the symbol.
+    symbol_name : str
+        Logical symbol name used for embedding text.
+    symbol_type : str
+        Stable symbol kind used for embedding text.
+    signature : str | None
+        Callable or declaration signature when available.
+    docstring : str | None
+        Symbol docstring when available.
+    extra_context : tuple[str, ...]
+        Additional analyzer-specific context lines.
+    """
+
+    symbol_row_id: int
+    stable_id: str
+    module_name: str
+    symbol_name: str
+    symbol_type: str
+    signature: str | None = None
+    docstring: str | None = None
+    extra_context: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DocstringIssueRequest:
+    """
+    Request parameters for docstring issue persistence.
+
+    Parameters
+    ----------
+    file_id : int
+        Integer identifier of the owner file.
+    label : str
+        Stable artifact label prefixed onto each issue message.
+    docstring : str | None
+        Artifact docstring to validate.
+    is_public : int
+        Public-visibility flag passed to the validator.
+    function_id : int | None
+        Function row identifier when the issues belong to a callable.
+    class_id : int | None
+        Class row identifier when the issues belong to a class.
+    module_id : int | None
+        Module row identifier when the issues belong to a module.
+    parameters : list[str] | None
+        Callable parameters used by the validator.
+    require_callable_sections : bool
+        Whether callable-specific sections must be present.
+    yields_value : bool
+        Whether the callable yields values.
+    returns_value : bool
+        Whether the callable returns values.
+    raises_exception : bool
+        Whether the callable raises exceptions.
+    """
+
+    file_id: int
+    label: str
+    docstring: str | None
+    is_public: int
+    function_id: int | None = None
+    class_id: int | None = None
+    module_id: int | None = None
+    parameters: list[str] | None = None
+    require_callable_sections: bool = False
+    yields_value: bool = False
+    returns_value: bool = False
+    raises_exception: bool = False
+
+
+@dataclass(frozen=True)
+class ArtifactPersistenceRequest:
+    """
+    Request parameters shared by artifact persistence helpers.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection.
+    file_id : int
+        Integer identifier of the owner file.
+    module_id : int
+        Inserted module row identifier.
+    module_name : str
+        Module name owning the artifacts.
+    analysis : codira.models.AnalysisResult
+        Normalized analyzer output for the file.
+    c_embedding_context : tuple[str, ...]
+        C-family embedding context reused by declarations and classes.
+    embedding_rows : list[PendingEmbeddingRow]
+        Pending embedding rows collected for the file.
+    call_rows : list[CallRow]
+        Pending call rows collected for the file.
+    ref_rows : list[RefRow]
+        Pending callable-reference rows collected for the file.
+    """
+
+    conn: sqlite3.Connection
+    file_id: int
+    module_id: int
+    module_name: str
+    analysis: AnalysisResult
+    c_embedding_context: tuple[str, ...]
+    embedding_rows: list[PendingEmbeddingRow]
+    call_rows: list[CallRow]
+    ref_rows: list[RefRow]
 
 
 def _clear_index_tables(conn: sqlite3.Connection) -> None:
@@ -269,70 +478,65 @@ def _resolve_module_attribute_call(
 
 
 def _resolve_call_record(
-    call: dict[str, str | int],
-    *,
-    caller_module: str,
-    caller_class: str | None,
-    import_aliases: dict[str, str],
-    module_functions: dict[str, set[str]],
-    class_methods: dict[tuple[str, str], set[str]],
+    request: CallResolutionRequest,
 ) -> tuple[str | None, str | None, int]:
     """
     Resolve one parsed call-site record into a stored call edge.
 
     Parameters
     ----------
-    call : dict[str, str | int]
-        Parsed call-site record.
-    caller_module : str
-        Module containing the caller.
-    caller_class : str | None
-        Owning class for method callers.
-    import_aliases : dict[str, str]
-        Mapping of locally bound import names to imported dotted targets.
-    module_functions : dict[str, set[str]]
-        Known top-level functions keyed by module name.
-    class_methods : dict[tuple[str, str], set[str]]
-        Known method names keyed by ``(module_name, class_name)``.
+    request : CallResolutionRequest
+        Call resolution request carrying caller context and symbol maps.
 
     Returns
     -------
     tuple[str | None, str | None, int]
         ``(callee_module, callee_name, resolved)`` for the call edge.
     """
-    kind = str(call.get("kind", "unresolved"))
-    target = str(call.get("target", ""))
+    kind = str(request.call.get("kind", "unresolved"))
+    target = str(request.call.get("target", ""))
 
     candidates: set[tuple[str, str]] = set()
 
     if kind == "name" and target:
-        imported = import_aliases.get(target)
+        imported = request.import_aliases.get(target)
         if imported is not None:
-            resolved_import = _resolve_imported_function(imported, module_functions)
+            resolved_import = _resolve_imported_function(
+                imported,
+                request.module_functions,
+            )
             if resolved_import is not None:
                 candidates.add(resolved_import)
 
-        if target in module_functions.get(caller_module, set()):
-            candidates.add((caller_module, target))
+        if target in request.module_functions.get(request.caller_module, set()):
+            candidates.add((request.caller_module, target))
 
     elif kind == "attribute" and target:
-        base = str(call.get("base", ""))
-        if caller_class is not None and base in {"self", "cls"}:
-            methods = class_methods.get((caller_module, caller_class), set())
+        base = str(request.call.get("base", ""))
+        if request.caller_class is not None and base in {"self", "cls"}:
+            methods = request.class_methods.get(
+                (request.caller_module, request.caller_class),
+                set(),
+            )
             if target in methods:
                 candidates.add(
-                    (caller_module, _qualified_callable_name(target, caller_class))
+                    (
+                        request.caller_module,
+                        _qualified_callable_name(target, request.caller_class),
+                    )
                 )
 
-        methods = class_methods.get((caller_module, base), set())
+        methods = request.class_methods.get((request.caller_module, base), set())
         if target in methods:
-            candidates.add((caller_module, _qualified_callable_name(target, base)))
+            candidates.add(
+                (request.caller_module, _qualified_callable_name(target, base))
+            )
 
         resolved_module_call = _resolve_module_attribute_call(
             base,
             target,
-            import_aliases,
-            module_functions,
+            request.import_aliases,
+            request.module_functions,
         )
         if resolved_module_call is not None:
             candidates.add(resolved_module_call)
@@ -344,44 +548,26 @@ def _resolve_call_record(
     return (None, None, 0)
 
 
-def _embedding_text(
-    *,
-    module_name: str,
-    symbol_name: str,
-    symbol_type: str,
-    signature: str | None = None,
-    docstring: str | None = None,
-    extra_context: tuple[str, ...] = (),
-) -> str:
+def _embedding_text(request: EmbeddingTextRequest) -> str:
     """
     Build the deterministic text payload embedded for one symbol.
 
     Parameters
     ----------
-    module_name : str
-        Dotted module name that owns the symbol.
-    symbol_name : str
-        Logical symbol name.
-    symbol_type : str
-        Indexed symbol type.
-    signature : str | None, optional
-        Callable signature when present.
-    docstring : str | None, optional
-        Symbol docstring when present.
-    extra_context : tuple[str, ...], optional
-        Additional deterministic semantic context lines.
+    request : EmbeddingTextRequest
+        Embedding text construction request.
 
     Returns
     -------
     str
         Joined text payload used for embedding generation.
     """
-    parts = [symbol_type, module_name, symbol_name]
-    if signature:
-        parts.append(signature)
-    if docstring:
-        parts.append(docstring)
-    parts.extend(line for line in extra_context if line)
+    parts = [request.symbol_type, request.module_name, request.symbol_name]
+    if request.signature:
+        parts.append(request.signature)
+    if request.docstring:
+        parts.append(request.docstring)
+    parts.extend(line for line in request.extra_context if line)
     return "\n".join(parts)
 
 
@@ -702,12 +888,14 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
         caller_module = str(owner_module)
         caller_name = str(owner_name)
         callee_module, callee_name, resolved = _resolve_call_record(
-            record,
-            caller_module=caller_module,
-            caller_class=_caller_class_from_owner(caller_name),
-            import_aliases=import_aliases_by_module.get(caller_module, {}),
-            module_functions=module_functions,
-            class_methods=class_methods,
+            CallResolutionRequest(
+                call=record,
+                caller_module=caller_module,
+                caller_class=_caller_class_from_owner(caller_name),
+                import_aliases=import_aliases_by_module.get(caller_module, {}),
+                module_functions=module_functions,
+                class_methods=class_methods,
+            )
         )
         edges.add(
             (
@@ -754,12 +942,14 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
         caller_module = str(owner_module)
         caller_name = str(owner_name)
         target_module, target_name, resolved = _resolve_call_record(
-            record,
-            caller_module=caller_module,
-            caller_class=_caller_class_from_owner(caller_name),
-            import_aliases=import_aliases_by_module.get(caller_module, {}),
-            module_functions=module_functions,
-            class_methods=class_methods,
+            CallResolutionRequest(
+                call=record,
+                caller_module=caller_module,
+                caller_class=_caller_class_from_owner(caller_name),
+                import_aliases=import_aliases_by_module.get(caller_module, {}),
+                module_functions=module_functions,
+                class_methods=class_methods,
+            )
         )
         refs.add(
             (
@@ -886,13 +1076,7 @@ def _reference_tuple(
 
 def _insert_symbol_index_row(
     conn: sqlite3.Connection,
-    *,
-    name: str,
-    stable_id: str,
-    symbol_type: str,
-    module_name: str,
-    file_id: int,
-    lineno: int,
+    request: SymbolIndexInsertRequest,
 ) -> int:
     """
     Insert one symbol-index row and return its integer identifier.
@@ -901,18 +1085,8 @@ def _insert_symbol_index_row(
     ----------
     conn : sqlite3.Connection
         Open database connection.
-    name : str
-        Symbol name stored in the index.
-    stable_id : str
-        Durable analyzer-owned symbol identity.
-    symbol_type : str
-        Stable symbol kind stored in the index.
-    module_name : str
-        Module name owning the symbol.
-    file_id : int
-        Integer identifier of the owner file.
-    lineno : int
-        Source line of the indexed symbol.
+    request : SymbolIndexInsertRequest
+        Symbol-index row insert request.
 
     Returns
     -------
@@ -923,7 +1097,14 @@ def _insert_symbol_index_row(
         "INSERT INTO symbol_index"
         "(name, stable_id, type, module_name, file_id, lineno) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (name, stable_id, symbol_type, module_name, file_id, lineno),
+        (
+            request.name,
+            request.stable_id,
+            request.symbol_type,
+            request.module_name,
+            request.file_id,
+            request.lineno,
+        ),
     )
     assert cur.lastrowid is not None
     return int(cur.lastrowid)
@@ -931,15 +1112,7 @@ def _insert_symbol_index_row(
 
 def _append_embedding_row(
     embedding_rows: list[PendingEmbeddingRow],
-    *,
-    symbol_row_id: int,
-    stable_id: str,
-    module_name: str,
-    symbol_name: str,
-    symbol_type: str,
-    signature: str | None = None,
-    docstring: str | None = None,
-    extra_context: tuple[str, ...] = (),
+    request: EmbeddingRowRequest,
 ) -> None:
     """
     Append one normalized symbol embedding payload to the pending batch.
@@ -948,22 +1121,8 @@ def _append_embedding_row(
     ----------
     embedding_rows : list[codira.indexer.PendingEmbeddingRow]
         Pending embedding rows collected for the current file.
-    symbol_row_id : int
-        Inserted symbol row identifier referenced by the embedding.
-    stable_id : str
-        Durable analyzer-owned symbol identity.
-    module_name : str
-        Module name owning the symbol.
-    symbol_name : str
-        Logical symbol name used for embedding text.
-    symbol_type : str
-        Stable symbol kind used for embedding text.
-    signature : str | None, optional
-        Callable or declaration signature when available.
-    docstring : str | None, optional
-        Symbol docstring when available.
-    extra_context : tuple[str, ...], optional
-        Additional analyzer-specific context lines.
+    request : EmbeddingRowRequest
+        Pending embedding row request.
 
     Returns
     -------
@@ -973,15 +1132,17 @@ def _append_embedding_row(
     embedding_rows.append(
         PendingEmbeddingRow(
             object_type="symbol",
-            object_id=symbol_row_id,
-            stable_id=stable_id,
+            object_id=request.symbol_row_id,
+            stable_id=request.stable_id,
             text=_embedding_text(
-                module_name=module_name,
-                symbol_name=symbol_name,
-                symbol_type=symbol_type,
-                signature=signature,
-                docstring=docstring,
-                extra_context=extra_context,
+                EmbeddingTextRequest(
+                    module_name=request.module_name,
+                    symbol_name=request.symbol_name,
+                    symbol_type=request.symbol_type,
+                    signature=request.signature,
+                    docstring=request.docstring,
+                    extra_context=request.extra_context,
+                )
             ),
         )
     )
@@ -989,19 +1150,7 @@ def _append_embedding_row(
 
 def _persist_docstring_issues(
     conn: sqlite3.Connection,
-    *,
-    file_id: int,
-    label: str,
-    docstring: str | None,
-    is_public: int,
-    function_id: int | None = None,
-    class_id: int | None = None,
-    module_id: int | None = None,
-    parameters: list[str] | None = None,
-    require_callable_sections: bool = False,
-    yields_value: bool = False,
-    returns_value: bool = False,
-    raises_exception: bool = False,
+    request: DocstringIssueRequest,
 ) -> None:
     """
     Persist docstring-audit findings for one indexed artifact.
@@ -1010,30 +1159,8 @@ def _persist_docstring_issues(
     ----------
     conn : sqlite3.Connection
         Open database connection.
-    file_id : int
-        Integer identifier of the owner file.
-    label : str
-        Stable artifact label prefixed onto each issue message.
-    docstring : str | None
-        Artifact docstring to validate.
-    is_public : int
-        Public-visibility flag passed to the validator.
-    function_id : int | None, optional
-        Function row identifier when the issues belong to a callable.
-    class_id : int | None, optional
-        Class row identifier when the issues belong to a class.
-    module_id : int | None, optional
-        Module row identifier when the issues belong to a module.
-    parameters : list[str] | None, optional
-        Callable parameters used by the validator.
-    require_callable_sections : bool, optional
-        Whether callable-specific sections must be present.
-    yields_value : bool, optional
-        Whether the callable yields values.
-    returns_value : bool, optional
-        Whether the callable returns values.
-    raises_exception : bool, optional
-        Whether the callable raises exceptions.
+    request : DocstringIssueRequest
+        Docstring issue persistence request.
 
     Returns
     -------
@@ -1041,25 +1168,27 @@ def _persist_docstring_issues(
         Matching docstring issues are inserted in place.
     """
     for issue_type, message in validate_docstring(
-        docstring,
-        is_public=is_public,
-        parameters=parameters or [],
-        require_callable_sections=require_callable_sections,
-        yields_value=yields_value,
-        returns_value=returns_value,
-        raises_exception=raises_exception,
+        DocstringValidationRequest(
+            doc=request.docstring,
+            is_public=request.is_public,
+            parameters=request.parameters or [],
+            require_callable_sections=request.require_callable_sections,
+            yields_value=request.yields_value,
+            returns_value=request.returns_value,
+            raises_exception=request.raises_exception,
+        )
     ):
         conn.execute(
             "INSERT INTO docstring_issues"
             "(file_id, function_id, class_id, module_id, issue_type, message) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (
-                file_id,
-                function_id,
-                class_id,
-                module_id,
+                request.file_id,
+                request.function_id,
+                request.class_id,
+                request.module_id,
                 issue_type,
-                f"{label}: {message}",
+                f"{request.label}: {message}",
             ),
         )
 
@@ -1160,75 +1289,64 @@ def _persist_module_artifacts(
     module_id = int(cur.lastrowid)
     symbol_row_id = _insert_symbol_index_row(
         conn,
-        name=module_name,
-        stable_id=module.stable_id,
-        symbol_type="module",
-        module_name=module_name,
-        file_id=file_id,
-        lineno=1,
+        SymbolIndexInsertRequest(
+            name=module_name,
+            stable_id=module.stable_id,
+            symbol_type="module",
+            module_name=module_name,
+            file_id=file_id,
+            lineno=1,
+        ),
     )
     _append_embedding_row(
         embedding_rows,
-        symbol_row_id=symbol_row_id,
-        stable_id=module.stable_id,
-        module_name=module_name,
-        symbol_name=module_name,
-        symbol_type="module",
-        docstring=module.docstring,
-        extra_context=c_embedding_context,
+        EmbeddingRowRequest(
+            symbol_row_id=symbol_row_id,
+            stable_id=module.stable_id,
+            module_name=module_name,
+            symbol_name=module_name,
+            symbol_type="module",
+            docstring=module.docstring,
+            extra_context=c_embedding_context,
+        ),
     )
     _persist_docstring_issues(
         conn,
-        file_id=file_id,
-        module_id=module_id,
-        label=f"Module {module_name}",
-        docstring=module.docstring,
-        is_public=int(_should_audit_docstrings(analysis.source_path)),
+        DocstringIssueRequest(
+            file_id=file_id,
+            module_id=module_id,
+            label=f"Module {module_name}",
+            docstring=module.docstring,
+            is_public=int(_should_audit_docstrings(analysis.source_path)),
+        ),
     )
     return module_name, module_id, c_embedding_context
 
 
-def _persist_class_artifacts(
-    conn: sqlite3.Connection,
-    *,
-    file_id: int,
-    module_id: int,
-    module_name: str,
-    analysis: AnalysisResult,
-    c_embedding_context: tuple[str, ...],
-    embedding_rows: list[PendingEmbeddingRow],
-    call_rows: list[tuple[int, str, str, str, str, str, int, int]],
-    ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]],
-) -> None:
+def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
     """
     Persist classes and methods for one analyzed file.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
-        Open database connection.
-    file_id : int
-        Integer identifier of the owner file.
-    module_id : int
-        Inserted module row identifier.
-    module_name : str
-        Module name owning the classes.
-    analysis : codira.models.AnalysisResult
-        Normalized analyzer output for the file.
-    c_embedding_context : tuple[str, ...]
-        C-family embedding context reused by declarations and classes.
-    embedding_rows : list[codira.indexer.PendingEmbeddingRow]
-        Pending embedding rows collected for the file.
-    call_rows : list[tuple[int, str, str, str, str, str, int, int]]
-        Pending call rows collected for the file.
-    ref_rows : list[tuple[int, str, str, str, str, str, str, int, int]]
-        Pending callable-reference rows collected for the file.
+    request : ArtifactPersistenceRequest
+        Artifact persistence request carrying shared file state.
 
     Returns
     -------
     None
         Class and method rows are inserted in place.
     """
+    conn = request.conn
+    file_id = request.file_id
+    module_id = request.module_id
+    module_name = request.module_name
+    analysis = request.analysis
+    c_embedding_context = request.c_embedding_context
+    embedding_rows = request.embedding_rows
+    call_rows = request.call_rows
+    ref_rows = request.ref_rows
+
     for cls in analysis.classes:
         cur = conn.execute(
             "INSERT INTO classes"
@@ -1247,31 +1365,37 @@ def _persist_class_artifacts(
         class_id = int(cur.lastrowid)
         symbol_row_id = _insert_symbol_index_row(
             conn,
-            name=cls.name,
-            stable_id=cls.stable_id,
-            symbol_type="class",
-            module_name=module_name,
-            file_id=file_id,
-            lineno=cls.lineno,
+            SymbolIndexInsertRequest(
+                name=cls.name,
+                stable_id=cls.stable_id,
+                symbol_type="class",
+                module_name=module_name,
+                file_id=file_id,
+                lineno=cls.lineno,
+            ),
         )
         _append_embedding_row(
             embedding_rows,
-            symbol_row_id=symbol_row_id,
-            stable_id=cls.stable_id,
-            module_name=module_name,
-            symbol_name=cls.name,
-            symbol_type="class",
-            docstring=cls.docstring,
-            extra_context=c_embedding_context,
+            EmbeddingRowRequest(
+                symbol_row_id=symbol_row_id,
+                stable_id=cls.stable_id,
+                module_name=module_name,
+                symbol_name=cls.name,
+                symbol_type="class",
+                docstring=cls.docstring,
+                extra_context=c_embedding_context,
+            ),
         )
         if _should_audit_docstrings(analysis.source_path):
             _persist_docstring_issues(
                 conn,
-                file_id=file_id,
-                class_id=class_id,
-                label=f"Class {cls.name}",
-                docstring=cls.docstring,
-                is_public=1,
+                DocstringIssueRequest(
+                    file_id=file_id,
+                    class_id=class_id,
+                    label=f"Class {cls.name}",
+                    docstring=cls.docstring,
+                    is_public=1,
+                ),
             )
 
         for method in cls.methods:
@@ -1303,39 +1427,45 @@ def _persist_class_artifacts(
             function_id = int(cur.lastrowid)
             symbol_row_id = _insert_symbol_index_row(
                 conn,
-                name=method.name,
-                stable_id=method.stable_id,
-                symbol_type="method",
-                module_name=module_name,
-                file_id=file_id,
-                lineno=method.lineno,
+                SymbolIndexInsertRequest(
+                    name=method.name,
+                    stable_id=method.stable_id,
+                    symbol_type="method",
+                    module_name=module_name,
+                    file_id=file_id,
+                    lineno=method.lineno,
+                ),
             )
             _append_embedding_row(
                 embedding_rows,
-                symbol_row_id=symbol_row_id,
-                stable_id=method.stable_id,
-                module_name=module_name,
-                symbol_name=logical_name,
-                symbol_type="method",
-                signature=method.signature,
-                docstring=method.docstring,
-                extra_context=python_embedding_context or c_embedding_context,
+                EmbeddingRowRequest(
+                    symbol_row_id=symbol_row_id,
+                    stable_id=method.stable_id,
+                    module_name=module_name,
+                    symbol_name=logical_name,
+                    symbol_type="method",
+                    signature=method.signature,
+                    docstring=method.docstring,
+                    extra_context=python_embedding_context or c_embedding_context,
+                ),
             )
             if _should_audit_docstrings(analysis.source_path):
                 _persist_docstring_issues(
                     conn,
-                    file_id=file_id,
-                    function_id=function_id,
-                    label=f"Method {cls.name}.{method.name}",
-                    docstring=method.docstring,
-                    is_public=method.is_public,
-                    parameters=list(method.parameters),
-                    require_callable_sections=True,
-                    yields_value=bool(method.yields_value),
-                    returns_value=bool(method.returns_value),
-                    raises_exception=bool(method.raises)
-                    and _should_require_raises_section(
-                        analysis.source_path, method.name
+                    DocstringIssueRequest(
+                        file_id=file_id,
+                        function_id=function_id,
+                        label=f"Method {cls.name}.{method.name}",
+                        docstring=method.docstring,
+                        is_public=method.is_public,
+                        parameters=list(method.parameters),
+                        require_callable_sections=True,
+                        yields_value=bool(method.yields_value),
+                        returns_value=bool(method.returns_value),
+                        raises_exception=bool(method.raises)
+                        and _should_require_raises_section(
+                            analysis.source_path, method.name
+                        ),
                     ),
                 )
             for call in method.calls:
@@ -1348,47 +1478,30 @@ def _persist_class_artifacts(
                 )
 
 
-def _persist_function_artifacts(
-    conn: sqlite3.Connection,
-    *,
-    file_id: int,
-    module_id: int,
-    module_name: str,
-    analysis: AnalysisResult,
-    c_embedding_context: tuple[str, ...],
-    embedding_rows: list[PendingEmbeddingRow],
-    call_rows: list[tuple[int, str, str, str, str, str, int, int]],
-    ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]],
-) -> None:
+def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
     """
     Persist top-level functions for one analyzed file.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
-        Open database connection.
-    file_id : int
-        Integer identifier of the owner file.
-    module_id : int
-        Inserted module row identifier.
-    module_name : str
-        Module name owning the functions.
-    analysis : codira.models.AnalysisResult
-        Normalized analyzer output for the file.
-    c_embedding_context : tuple[str, ...]
-        C-family embedding context reused by declarations and functions.
-    embedding_rows : list[codira.indexer.PendingEmbeddingRow]
-        Pending embedding rows collected for the file.
-    call_rows : list[tuple[int, str, str, str, str, str, int, int]]
-        Pending call rows collected for the file.
-    ref_rows : list[tuple[int, str, str, str, str, str, str, int, int]]
-        Pending callable-reference rows collected for the file.
+    request : ArtifactPersistenceRequest
+        Artifact persistence request carrying shared file state.
 
     Returns
     -------
     None
         Function rows are inserted in place.
     """
+    conn = request.conn
+    file_id = request.file_id
+    module_id = request.module_id
+    module_name = request.module_name
+    analysis = request.analysis
+    c_embedding_context = request.c_embedding_context
+    embedding_rows = request.embedding_rows
+    call_rows = request.call_rows
+    ref_rows = request.ref_rows
+
     for fn in analysis.functions:
         python_embedding_context = _python_embedding_context(analysis, fn)
         cur = conn.execute(
@@ -1413,38 +1526,44 @@ def _persist_function_artifacts(
         function_id = int(cur.lastrowid)
         symbol_row_id = _insert_symbol_index_row(
             conn,
-            name=fn.name,
-            stable_id=fn.stable_id,
-            symbol_type="function",
-            module_name=module_name,
-            file_id=file_id,
-            lineno=fn.lineno,
+            SymbolIndexInsertRequest(
+                name=fn.name,
+                stable_id=fn.stable_id,
+                symbol_type="function",
+                module_name=module_name,
+                file_id=file_id,
+                lineno=fn.lineno,
+            ),
         )
         _append_embedding_row(
             embedding_rows,
-            symbol_row_id=symbol_row_id,
-            stable_id=fn.stable_id,
-            module_name=module_name,
-            symbol_name=fn.name,
-            symbol_type="function",
-            signature=fn.signature,
-            docstring=fn.docstring,
-            extra_context=python_embedding_context or c_embedding_context,
+            EmbeddingRowRequest(
+                symbol_row_id=symbol_row_id,
+                stable_id=fn.stable_id,
+                module_name=module_name,
+                symbol_name=fn.name,
+                symbol_type="function",
+                signature=fn.signature,
+                docstring=fn.docstring,
+                extra_context=python_embedding_context or c_embedding_context,
+            ),
         )
         if _should_audit_docstrings(analysis.source_path):
             _persist_docstring_issues(
                 conn,
-                file_id=file_id,
-                function_id=function_id,
-                label=f"Function {fn.name}",
-                docstring=fn.docstring,
-                is_public=fn.is_public,
-                parameters=list(fn.parameters),
-                require_callable_sections=True,
-                yields_value=bool(fn.yields_value),
-                returns_value=bool(fn.returns_value),
-                raises_exception=bool(fn.raises)
-                and _should_require_raises_section(analysis.source_path, fn.name),
+                DocstringIssueRequest(
+                    file_id=file_id,
+                    function_id=function_id,
+                    label=f"Function {fn.name}",
+                    docstring=fn.docstring,
+                    is_public=fn.is_public,
+                    parameters=list(fn.parameters),
+                    require_callable_sections=True,
+                    yields_value=bool(fn.yields_value),
+                    returns_value=bool(fn.returns_value),
+                    raises_exception=bool(fn.raises)
+                    and _should_require_raises_section(analysis.source_path, fn.name),
+                ),
             )
         for call in fn.calls:
             call_rows.append(_record_tuple(file_id, module_name, fn.name, call))
@@ -1452,58 +1571,51 @@ def _persist_function_artifacts(
             ref_rows.append(_reference_tuple(file_id, module_name, fn.name, ref))
 
 
-def _persist_declaration_artifacts(
-    conn: sqlite3.Connection,
-    *,
-    file_id: int,
-    module_name: str,
-    analysis: AnalysisResult,
-    c_embedding_context: tuple[str, ...],
-    embedding_rows: list[PendingEmbeddingRow],
-) -> None:
+def _persist_declaration_artifacts(request: ArtifactPersistenceRequest) -> None:
     """
     Persist declaration-style symbol artifacts for one analyzed file.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
-        Open database connection.
-    file_id : int
-        Integer identifier of the owner file.
-    module_name : str
-        Module name owning the declarations.
-    analysis : codira.models.AnalysisResult
-        Normalized analyzer output for the file.
-    c_embedding_context : tuple[str, ...]
-        C-family embedding context reused by declaration embeddings.
-    embedding_rows : list[codira.indexer.PendingEmbeddingRow]
-        Pending embedding rows collected for the file.
+    request : ArtifactPersistenceRequest
+        Artifact persistence request carrying shared file state.
 
     Returns
     -------
     None
         Declaration symbol rows are inserted in place.
     """
+    conn = request.conn
+    file_id = request.file_id
+    module_name = request.module_name
+    analysis = request.analysis
+    c_embedding_context = request.c_embedding_context
+    embedding_rows = request.embedding_rows
+
     for decl in analysis.declarations:
         symbol_row_id = _insert_symbol_index_row(
             conn,
-            name=decl.name,
-            stable_id=decl.stable_id,
-            symbol_type=decl.kind,
-            module_name=module_name,
-            file_id=file_id,
-            lineno=decl.lineno,
+            SymbolIndexInsertRequest(
+                name=decl.name,
+                stable_id=decl.stable_id,
+                symbol_type=decl.kind,
+                module_name=module_name,
+                file_id=file_id,
+                lineno=decl.lineno,
+            ),
         )
         _append_embedding_row(
             embedding_rows,
-            symbol_row_id=symbol_row_id,
-            stable_id=decl.stable_id,
-            module_name=module_name,
-            symbol_name=decl.name,
-            symbol_type=decl.kind,
-            signature=decl.signature,
-            docstring=decl.docstring,
-            extra_context=c_embedding_context,
+            EmbeddingRowRequest(
+                symbol_row_id=symbol_row_id,
+                stable_id=decl.stable_id,
+                module_name=module_name,
+                symbol_name=decl.name,
+                symbol_type=decl.kind,
+                signature=decl.signature,
+                docstring=decl.docstring,
+                extra_context=c_embedding_context,
+            ),
         )
 
 
@@ -1729,8 +1841,8 @@ def _store_analysis(
         analysis=analysis,
         embedding_rows=embedding_rows,
     )
-    _persist_class_artifacts(
-        conn,
+    artifact_request = ArtifactPersistenceRequest(
+        conn=conn,
         file_id=file_id,
         module_id=module_id,
         module_name=module_name,
@@ -1740,25 +1852,9 @@ def _store_analysis(
         call_rows=call_rows,
         ref_rows=ref_rows,
     )
-    _persist_function_artifacts(
-        conn,
-        file_id=file_id,
-        module_id=module_id,
-        module_name=module_name,
-        analysis=analysis,
-        c_embedding_context=c_embedding_context,
-        embedding_rows=embedding_rows,
-        call_rows=call_rows,
-        ref_rows=ref_rows,
-    )
-    _persist_declaration_artifacts(
-        conn,
-        file_id=file_id,
-        module_name=module_name,
-        analysis=analysis,
-        c_embedding_context=c_embedding_context,
-        embedding_rows=embedding_rows,
-    )
+    _persist_class_artifacts(artifact_request)
+    _persist_function_artifacts(artifact_request)
+    _persist_declaration_artifacts(artifact_request)
     _persist_import_artifacts(
         conn,
         module_id=module_id,

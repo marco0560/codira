@@ -42,6 +42,8 @@ from codira.query.context import context_for
 from codira.query.exact import (
     CallTreeNode,
     CallTreeResult,
+    EdgeQueryRequest,
+    TreeQueryRequest,
     build_call_tree,
     build_ref_tree,
     docstring_issues,
@@ -58,7 +60,7 @@ from codira.registry import (
 from codira.scanner import iter_project_files
 from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendError, get_embedding_backend
-from codira.semantic.search import embedding_candidates
+from codira.semantic.search import EmbeddingCandidatesRequest, embedding_candidates
 from codira.storage import (
     _read_metadata_file,
     _write_metadata_file,
@@ -1464,11 +1466,13 @@ def _run_embeddings(
         return 1
 
     matches = embedding_candidates(
-        root,
-        query,
-        limit=limit,
-        min_score=0.0,
-        prefix=prefix,
+        EmbeddingCandidatesRequest(
+            root=root,
+            query=query,
+            limit=limit,
+            min_score=0.0,
+            prefix=prefix,
+        )
     )
     if as_json:
         _emit_json(
@@ -1592,13 +1596,15 @@ def _run_calls(
 
     if as_tree:
         tree = build_call_tree(
-            root,
-            name,
-            module=module,
-            incoming=incoming,
-            prefix=prefix,
-            max_depth=max_depth,
-            max_nodes=max_nodes,
+            TreeQueryRequest(
+                root=root,
+                name=name,
+                module=module,
+                incoming=incoming,
+                prefix=prefix,
+                max_depth=max_depth,
+                max_nodes=max_nodes,
+            )
         )
         if as_json:
             _emit_json(
@@ -1654,11 +1660,13 @@ def _run_calls(
         return 0
 
     rows = find_call_edges(
-        root,
-        name,
-        module=module,
-        incoming=incoming,
-        prefix=prefix,
+        EdgeQueryRequest(
+            root=root,
+            name=name,
+            module=module,
+            incoming=incoming,
+            prefix=prefix,
+        )
     )
 
     if as_json:
@@ -2037,13 +2045,15 @@ def _run_refs(
 
     if as_tree:
         tree = build_ref_tree(
-            root,
-            name,
-            module=module,
-            incoming=incoming,
-            prefix=prefix,
-            max_depth=max_depth,
-            max_nodes=max_nodes,
+            TreeQueryRequest(
+                root=root,
+                name=name,
+                module=module,
+                incoming=incoming,
+                prefix=prefix,
+                max_depth=max_depth,
+                max_nodes=max_nodes,
+            )
         )
         if as_json:
             _emit_json(
@@ -2103,11 +2113,13 @@ def _run_refs(
         return 0
 
     rows = find_callable_refs(
-        root,
-        name,
-        module=module,
-        incoming=incoming,
-        prefix=prefix,
+        EdgeQueryRequest(
+            root=root,
+            name=name,
+            module=module,
+            incoming=incoming,
+            prefix=prefix,
+        )
     )
 
     if as_json:
