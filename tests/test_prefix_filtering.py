@@ -107,6 +107,101 @@ def _write_prefix_fixture(root: Path) -> None:
     )
 
 
+def _write_overload_audit_fixture(root: Path, *, documented_impl: bool) -> None:
+    """
+    Write one overload-bearing Python module for docstring-audit regressions.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Temporary repository root to populate.
+    documented_impl : bool
+        Whether the canonical implementation callables should carry compliant
+        NumPy-style docstrings.
+
+    Returns
+    -------
+    None
+        The overload-bearing fixture module is created under ``root``.
+    """
+    pkg = root / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text(
+        '"""Overload audit package."""\n', encoding="utf-8"
+    )
+
+    if documented_impl:
+        build_docstring = (
+            '    """Build one value.\n'
+            "\n"
+            "    Parameters\n"
+            "    ----------\n"
+            "    value : object\n"
+            "        Value passed through unchanged.\n"
+            "\n"
+            "    Returns\n"
+            "    -------\n"
+            "    object\n"
+            "        The provided value.\n"
+            '    """\n'
+        )
+        load_docstring = (
+            '        """Load one value.\n'
+            "\n"
+            "        Parameters\n"
+            "        ----------\n"
+            "        value : object\n"
+            "            Value passed through unchanged.\n"
+            "\n"
+            "        Returns\n"
+            "        -------\n"
+            "        object\n"
+            "            The provided value.\n"
+            '        """\n'
+        )
+    else:
+        build_docstring = ""
+        load_docstring = ""
+
+    (pkg / "sample.py").write_text(
+        '"""Overload audit fixture."""\n'
+        "\n"
+        "from typing import overload\n"
+        "\n"
+        "@overload\n"
+        "def build(value: int) -> int:\n"
+        '    """Typed integer overload."""\n'
+        "    ...\n"
+        "\n"
+        "@overload\n"
+        "def build(value: str) -> str:\n"
+        '    """Typed string overload."""\n'
+        "    ...\n"
+        "\n"
+        "def build(value):\n"
+        f"{build_docstring}"
+        "    return value\n"
+        "\n"
+        "class Demo:\n"
+        '    """Example overload owner."""\n'
+        "\n"
+        "    @overload\n"
+        "    def load(self, value: int) -> int:\n"
+        '        """Typed integer overload."""\n'
+        "        ...\n"
+        "\n"
+        "    @overload\n"
+        "    def load(self, value: str) -> str:\n"
+        '        """Typed string overload."""\n'
+        "        ...\n"
+        "\n"
+        "    def load(self, value):\n"
+        f"{load_docstring}"
+        "        return value\n",
+        encoding="utf-8",
+    )
+
+
 def test_find_symbol_respects_prefix(tmp_path: Path) -> None:
     """
     Restrict exact symbol lookup to files under one prefix.
@@ -343,6 +438,75 @@ def test_docstring_audit_skips_raises_requirement_for_pytest_tests(
     assert all(
         issue[1] != "Function test_example: Missing section: Raises" for issue in issues
     )
+
+
+def test_docstring_audit_ignores_overload_stub_obligations(tmp_path: Path) -> None:
+    """
+    Keep overload stubs from creating independent docstring audit noise.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts documented canonical callables remain audit-clean even
+        when overload stubs carry only summary docstrings.
+    """
+    _write_overload_audit_fixture(tmp_path, documented_impl=True)
+    init_db(tmp_path)
+    index_repo(tmp_path)
+
+    assert docstring_issues(tmp_path) == []
+
+
+def test_audit_json_reports_only_canonical_callables_for_overload_sets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Attribute overload-bearing audit failures only to canonical callables.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to control process state.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture CLI output.
+
+    Returns
+    -------
+    None
+        The test asserts JSON audit output reports only the canonical function
+        and method stable IDs when implementations lack docstrings.
+    """
+    _write_overload_audit_fixture(tmp_path, documented_impl=False)
+    init_db(tmp_path)
+    index_repo(tmp_path)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["codira", "audit", "--json"])
+
+    assert main() == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    rows = payload["results"]
+
+    assert payload["command"] == "audit"
+    assert payload["status"] == "ok"
+    assert [(row["symbol_type"], row["stable_id"], row["name"]) for row in rows] == [
+        ("function", "python:function:pkg.sample:build", "build"),
+        ("method", "python:method:pkg.sample:Demo.load", "Demo.load"),
+    ]
+    assert [row["message"] for row in rows] == [
+        "Function build: Missing docstring",
+        "Method Demo.load: Missing docstring",
+    ]
 
 
 def test_context_for_respects_prefix_across_symbols_and_references(
