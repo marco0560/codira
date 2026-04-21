@@ -23,7 +23,9 @@ from typing import TYPE_CHECKING
 from codira.query.classifier import build_retrieval_plan, classify_query
 from codira.query.context import (
     PRIMARY_SYMBOL_SCORING_RULES,
+    ExplainSectionsRequest,
     MainContextSectionsRequest,
+    _append_explain_signal_sections,
     _append_main_context_sections,
     _apply_scoring_rules,
     _classify_file_role,
@@ -278,3 +280,76 @@ def test_build_retrieval_plan_routes_channels_and_graph_policy() -> None:
 
     assert architecture_plan.channels == ("symbol", "semantic", "embedding")
     assert architecture_plan.include_include_graph is True
+
+
+def test_append_explain_signal_sections_renders_overload_evidence() -> None:
+    """
+    Render overload-derived evidence explicitly in explain sections.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts signal preview and merge sections expose overload
+        evidence details deterministically.
+    """
+    preview = [
+        {
+            "kind": "text_match",
+            "family": "semantic",
+            "producer_name": "query-enrichment-overloads",
+            "capability_name": "semantic_text",
+            "type": "function",
+            "module": "pkg.alpha",
+            "name": "run",
+            "lineno": 10,
+            "channel_name": "overloads",
+            "rank": 1,
+            "strength": 0.5,
+            "evidence_detail": "overload_signature:run(value, mode)",
+        }
+    ]
+    merge = [
+        {
+            "type": "function",
+            "module": "pkg.alpha",
+            "name": "run",
+            "lineno": 10,
+            "signal_count": 2,
+            "families": {"lexical": 1, "semantic": 1},
+            "capabilities": {"semantic_text": 1, "symbol_lookup": 1},
+            "evidence": {"overload_signature": 1},
+            "producers": ["query-channel-symbol", "query-enrichment-overloads"],
+        }
+    ]
+
+    lines: list[str] = []
+    _append_explain_signal_sections(
+        ExplainSectionsRequest(
+            lines=lines,
+            explain=True,
+            intent=None,
+            plan=None,
+            enabled_channels=None,
+            channel_priority=None,
+            ordered_channels=None,
+            producers=None,
+            signal_collection=None,
+            signal_preview=preview,
+            signal_merge=merge,
+            bundles=None,
+            provenance=None,
+            diversity=None,
+            expansion=None,
+            top_matches=[],
+        )
+    )
+
+    rendered = "\n".join(lines)
+
+    assert "channel=overloads rank=1 strength=0.5" in rendered
+    assert "evidence=overload_signature:run(value, mode)" in rendered
+    assert "evidence={'overload_signature': 1}" in rendered

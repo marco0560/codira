@@ -16,6 +16,8 @@ This module belongs to the **retrieval verification layer** that ensures stable 
 
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from codira.query.classifier import build_retrieval_plan, classify_query
@@ -23,6 +25,7 @@ from codira.query.context import (
     MERGE_RESULT_LIMIT,
     _bounded_graph_retrieval_signals,
     _channel_retrieval_producers,
+    _collect_overload_retrieval_signals,
     _collect_retrieval_signals,
     _dedupe_channel_results,
     _diversify_merged_symbols,
@@ -39,8 +42,11 @@ from codira.query.producers import (
     REFERENCE_RETRIEVAL_PRODUCER,
     selected_enrichment_producers,
 )
+from codira.query.signals import RetrievalSignal
 
 if TYPE_CHECKING:
+    import pytest
+
     from codira.query.producers import QueryProducerSpec
     from codira.types import ChannelResults, SymbolRow
 
@@ -648,6 +654,147 @@ def test_rank_signals_with_provenance_matches_channel_merge_contract() -> None:
         "merge_score": 1.75,
         "winner": "semantic",
     }
+
+
+def test_collect_overload_retrieval_signals_adds_bounded_api_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Add overload-derived support only for exact-symbol-backed callable matches.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to replace overload lookups deterministically.
+
+    Returns
+    -------
+    None
+        The test asserts signature-oriented queries emit one bounded overload
+        signal with explicit evidence detail.
+    """
+    alpha = _symbol("function", "pkg.alpha", "run", "src/a.py", 10)
+    beta = _symbol("function", "pkg.beta", "run", "src/b.py", 20)
+    signal_candidates = [
+        RetrievalSignal(
+            kind="exact_symbol",
+            family="lexical",
+            target=alpha,
+            producer_name="query-channel-symbol",
+            producer_version="1",
+            capability_name="symbol_lookup",
+            capability_version="1",
+            channel_name="symbol",
+            rank=1,
+            strength=9.0,
+        ),
+        RetrievalSignal(
+            kind="text_match",
+            family="semantic",
+            target=beta,
+            producer_name="query-channel-semantic",
+            producer_version="1",
+            capability_name="semantic_text",
+            capability_version="1",
+            channel_name="semantic",
+            rank=1,
+            strength=5.0,
+        ),
+    ]
+
+    overload_rows = {
+        alpha: [("ovl-1", "fn-1", 1, "run(value, mode)", 11, None, None)],
+        beta: [("ovl-2", "fn-2", 1, "run(path)", 21, None, None)],
+    }
+
+    monkeypatch.setattr(
+        "codira.query.context.find_symbol_overloads",
+        lambda root, symbol, conn=None: overload_rows.get(symbol, []),
+    )
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        signals = _collect_overload_retrieval_signals(
+            root=Path(),
+            query="run value mode signature",
+            intent=classify_query("run value mode signature"),
+            conn=conn,
+            candidate_signals=signal_candidates,
+        )
+    finally:
+        conn.close()
+
+    assert len(signals) == 1
+    assert signals[0].target == alpha
+    assert signals[0].channel_name == "overloads"
+    assert signals[0].producer_name == "query-enrichment-overloads"
+    assert signals[0].evidence_detail == "overload_signature:run(value, mode)"
+    assert signals[0].strength == 0.5
+
+
+def test_rank_signals_with_provenance_keeps_exact_symbol_winner_over_overload_boost() -> (
+    None
+):
+    """
+    Keep exact symbol hits ahead of auxiliary overload evidence.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts bounded overload support does not outrank an exact
+        symbol winner.
+    """
+    alpha = _symbol("function", "pkg.alpha", "run", "src/a.py", 10)
+    beta = _symbol("function", "pkg.beta", "run", "src/b.py", 20)
+    signals = [
+        RetrievalSignal(
+            kind="exact_symbol",
+            family="lexical",
+            target=alpha,
+            producer_name="query-channel-symbol",
+            producer_version="1",
+            capability_name="symbol_lookup",
+            capability_version="1",
+            channel_name="symbol",
+            rank=1,
+            strength=9.0,
+        ),
+        RetrievalSignal(
+            kind="text_match",
+            family="semantic",
+            target=beta,
+            producer_name="query-channel-semantic",
+            producer_version="1",
+            capability_name="semantic_text",
+            capability_version="1",
+            channel_name="semantic",
+            rank=1,
+            strength=5.0,
+        ),
+        RetrievalSignal(
+            kind="text_match",
+            family="semantic",
+            target=alpha,
+            producer_name="query-enrichment-overloads",
+            producer_version="1",
+            capability_name="semantic_text",
+            capability_version="1",
+            evidence_detail="overload_signature:run(value, mode)",
+            channel_name="overloads",
+            rank=1,
+            strength=0.5,
+        ),
+    ]
+
+    ranked, provenance = _rank_signals_with_provenance(signals)
+
+    assert ranked[0][0] == alpha
+    assert provenance[alpha]["winner"] == "symbol"
+    assert provenance[alpha]["channels"] == {"symbol": 9.0, "overloads": 0.1}
 
 
 def test_diversify_merged_symbols_caps_one_symbol_per_file() -> None:

@@ -58,6 +58,9 @@ class RetrievalSignal:
         Capability-contract version understood by the producer.
     source_symbol : codira.types.SymbolRow | None, optional
         Optional source symbol that led to the target evidence.
+    evidence_detail : str | None, optional
+        Optional stable detail string that explains a specialized evidence
+        subtype such as overload-signature support.
     channel_name : str | None, optional
         Legacy channel attribution retained during migration.
     rank : int | None, optional
@@ -76,6 +79,7 @@ class RetrievalSignal:
     capability_name: str
     capability_version: str
     source_symbol: SymbolRow | None = None
+    evidence_detail: str | None = None
     channel_name: str | None = None
     rank: int | None = None
     strength: float | None = None
@@ -104,6 +108,7 @@ def signal_sort_key(signal: RetrievalSignal) -> tuple[object, ...]:
         signal.producer_version,
         signal.capability_name,
         signal.capability_version,
+        signal.evidence_detail or "",
         signal.channel_name or "",
         signal.rank if signal.rank is not None else 10**9,
         signal.distance if signal.distance is not None else 10**9,

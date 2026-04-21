@@ -42,6 +42,7 @@ EnrichmentSourceName = Literal[
     "call_graph",
     "references",
     "include_graph",
+    "overloads",
 ]
 
 
@@ -343,6 +344,15 @@ INCLUDE_GRAPH_RETRIEVAL_PRODUCER = GraphRetrievalProducer(
     source_name="include_graph",
 )
 
+OVERLOAD_RETRIEVAL_PRODUCER = QueryProducerSpec(
+    producer_name="query-enrichment-overloads",
+    producer_version=QUERY_PRODUCER_VERSION,
+    capability_version=QUERY_CAPABILITY_VERSION,
+    capabilities=("semantic_text", "diagnostics_metadata"),
+    source_kind="enrichment",
+    source_name="overloads",
+)
+
 
 CHANNEL_PRODUCER_SPECS: dict[ChannelName, QueryProducerSpec] = {
     "symbol": QueryProducerSpec(
@@ -393,6 +403,7 @@ ENRICHMENT_PRODUCER_SPECS: dict[EnrichmentSourceName, QueryProducerSpec] = {
     "call_graph": CALL_GRAPH_RETRIEVAL_PRODUCER,
     "references": REFERENCE_RETRIEVAL_PRODUCER,
     "include_graph": INCLUDE_GRAPH_RETRIEVAL_PRODUCER,
+    "overloads": OVERLOAD_RETRIEVAL_PRODUCER,
 }
 
 
@@ -425,6 +436,7 @@ def selected_enrichment_producers(
     include_issue_annotations: bool,
     include_references: bool,
     include_include_graph: bool,
+    include_overloads: bool = False,
 ) -> list[QueryProducerSpec]:
     """
     Return enrichment producer metadata enabled for the current query.
@@ -437,6 +449,8 @@ def selected_enrichment_producers(
         Whether callable-reference enrichment should be included.
     include_include_graph : bool
         Whether include-graph enrichment should be included.
+    include_overloads : bool, optional
+        Whether overload-signature enrichment should be included.
 
     Returns
     -------
@@ -448,6 +462,8 @@ def selected_enrichment_producers(
 
     if include_issue_annotations:
         selected.insert(0, ENRICHMENT_PRODUCER_SPECS["doc_issues"])
+    if include_overloads:
+        selected.append(ENRICHMENT_PRODUCER_SPECS["overloads"])
     if include_references:
         selected.append(ENRICHMENT_PRODUCER_SPECS["references"])
     if include_include_graph:

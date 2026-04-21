@@ -42,6 +42,7 @@ from codira.query.exact import (
     docstring_issues,
     find_include_edges,
     find_symbol,
+    find_symbol_overloads,
 )
 from codira.query.graph_enrichment import (
     GraphExpansionRequest,
@@ -51,6 +52,7 @@ from codira.query.producers import (
     CHANNEL_PRODUCER_SPECS,
     EMBEDDING_RETRIEVAL_PRODUCER,
     INCLUDE_GRAPH_RETRIEVAL_PRODUCER,
+    OVERLOAD_RETRIEVAL_PRODUCER,
     EmbeddingRetrievalRequest,
     QueryChannelSpec,
     QueryProducerSpec,
@@ -126,12 +128,52 @@ CHANNEL_WEIGHTS: dict[ChannelName, float] = {
     "semantic": 1.0,
     "test": 1.0,
     "script": 1.0,
+    "overloads": 0.2,
     "call_graph": 0.35,
     "references": 0.3,
     "include_graph": 0.25,
 }
 MERGE_CROSS_FAMILY_BONUS = 0.15
 GRAPH_RETRIEVAL_LIMIT_PER_PRODUCER = 5
+OVERLOAD_RETRIEVAL_LIMIT = 5
+OVERLOAD_MATCH_HINTS = frozenset(
+    {
+        "arg",
+        "args",
+        "argument",
+        "arguments",
+        "keyword",
+        "keywords",
+        "kwargs",
+        "overload",
+        "overloads",
+        "parameter",
+        "parameters",
+        "return",
+        "returns",
+        "signature",
+        "signatures",
+        "typed",
+        "type",
+        "types",
+    }
+)
+OVERLOAD_QUERY_STOPWORDS = frozenset(
+    {
+        "api",
+        "callable",
+        "callables",
+        "class",
+        "classes",
+        "function",
+        "functions",
+        "method",
+        "methods",
+        "public",
+        "symbol",
+        "symbols",
+    }
+)
 FileRole = Literal["implementation", "interface", "test", "tooling", "other"]
 SelectionStage = Literal["primary", "deferred"]
 DeferralReason = Literal["file_cap", "role_cap", "language_cap"]
@@ -2994,6 +3036,197 @@ def _collect_retrieval_signals(
     return ordered_signals, diagnostics
 
 
+def _query_prefers_overload_evidence(
+    query: str,
+    *,
+    intent: QueryIntent,
+) -> bool:
+    """
+    Return whether overload-signature evidence should participate in ranking.
+
+    Parameters
+    ----------
+    query : str
+        Raw user query text.
+    intent : codira.query.classifier.QueryIntent
+        Deterministic query classification for the same query.
+
+    Returns
+    -------
+    bool
+        ``True`` when the query is API-surface oriented and contains typed or
+        signature-oriented hints that justify bounded overload evidence.
+    """
+    if intent.primary_intent != "api_surface":
+        return False
+
+    lowered = query.lower()
+    query_tokens = _tokenize(lowered)
+    return any(token in OVERLOAD_MATCH_HINTS for token in query_tokens) or any(
+        char in lowered for char in "(),[]"
+    )
+
+
+def _overload_query_tokens(
+    query: str,
+) -> set[str]:
+    """
+    Return normalized query tokens that can match overload signature detail.
+
+    Parameters
+    ----------
+    query : str
+        Raw user query text.
+
+    Returns
+    -------
+    set[str]
+        Signature-relevant query tokens with generic API-surface words
+        removed.
+    """
+    return {
+        token
+        for token in _tokenize(query)
+        if token not in OVERLOAD_QUERY_STOPWORDS and token not in OVERLOAD_MATCH_HINTS
+    }
+
+
+def _bounded_overload_strength(
+    overlap_count: int,
+) -> float:
+    """
+    Convert overload token overlap into a bounded auxiliary signal strength.
+
+    Parameters
+    ----------
+    overlap_count : int
+        Number of signature-relevant tokens shared with the query.
+
+    Returns
+    -------
+    float
+        Bounded overload evidence strength that can support ranking without
+        overwhelming primary retrieval channels.
+    """
+    return min(0.6, 0.2 + (0.15 * float(overlap_count)))
+
+
+def _collect_overload_retrieval_signals(
+    *,
+    root: Path,
+    query: str,
+    intent: QueryIntent,
+    conn: sqlite3.Connection,
+    candidate_signals: list[RetrievalSignal],
+) -> list[RetrievalSignal]:
+    """
+    Convert overload metadata into bounded retrieval signals for callables.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the active index.
+    query : str
+        Raw user query text.
+    intent : codira.query.classifier.QueryIntent
+        Deterministic query classification for the same query.
+    conn : sqlite3.Connection
+        Open backend connection used for overload lookups.
+    candidate_signals : list[codira.query.signals.RetrievalSignal]
+        Current normalized retrieval signals whose exact-symbol-backed
+        callables are eligible for overload support.
+
+    Returns
+    -------
+    list[codira.query.signals.RetrievalSignal]
+        Deterministically ordered overload-derived signals limited to current
+        callable candidates.
+    """
+    if not _query_prefers_overload_evidence(query, intent=intent):
+        return []
+
+    query_tokens = _overload_query_tokens(query)
+    if not query_tokens:
+        return []
+
+    exact_symbol_candidates = sorted(
+        {
+            signal.target
+            for signal in candidate_signals
+            if signal.channel_name == "symbol"
+            and signal.target[0] in {"function", "method"}
+        },
+        key=_symbol_sort_key,
+    )
+    if not exact_symbol_candidates:
+        return []
+
+    best_matches: list[tuple[float, SymbolRow, str]] = []
+
+    for symbol in exact_symbol_candidates:
+        if symbol[0] not in {"function", "method"}:
+            continue
+        overloads = find_symbol_overloads(root, symbol, conn=conn)
+        if not overloads:
+            continue
+
+        callable_name = symbol[2].lower()
+        best_signature: str | None = None
+        best_overlap = 0
+
+        for (
+            _stable_id,
+            _parent_id,
+            _ordinal,
+            signature,
+            _lineno,
+            _end_lineno,
+            _doc,
+        ) in overloads:
+            signature_tokens = {
+                token
+                for token in _tokenize(signature)
+                if token != callable_name and token not in OVERLOAD_MATCH_HINTS
+            }
+            overlap = len(query_tokens & signature_tokens)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_signature = signature
+
+        if best_signature is None or best_overlap <= 0:
+            continue
+
+        best_matches.append(
+            (_bounded_overload_strength(best_overlap), symbol, best_signature)
+        )
+
+    if not best_matches:
+        return []
+
+    ranked_matches = sorted(
+        best_matches,
+        key=lambda item: (-item[0], *_symbol_sort_key(item[1]), item[2]),
+    )[:OVERLOAD_RETRIEVAL_LIMIT]
+
+    signals = [
+        RetrievalSignal(
+            kind="text_match",
+            family="semantic",
+            target=symbol,
+            producer_name=OVERLOAD_RETRIEVAL_PRODUCER.producer_name,
+            producer_version=OVERLOAD_RETRIEVAL_PRODUCER.producer_version,
+            capability_name="semantic_text",
+            capability_version=OVERLOAD_RETRIEVAL_PRODUCER.capability_version,
+            evidence_detail=f"overload_signature:{signature}",
+            channel_name="overloads",
+            rank=rank,
+            strength=strength,
+        )
+        for rank, (strength, symbol, signature) in enumerate(ranked_matches, start=1)
+    ]
+    return sorted(signals, key=signal_sort_key)
+
+
 def _signal_collection_diagnostics(
     signals: list[RetrievalSignal],
     *,
@@ -3072,6 +3305,8 @@ def _signal_preview(
         }
         if signal.channel_name is not None:
             entry["channel_name"] = signal.channel_name
+        if signal.evidence_detail is not None:
+            entry["evidence_detail"] = signal.evidence_detail
         if signal.rank is not None:
             entry["rank"] = signal.rank
         if signal.strength is not None:
@@ -3124,6 +3359,7 @@ def _signal_summary_by_symbol(
         symbol_type, module_name, name, _file_path, lineno = symbol
         families: dict[str, int] = {}
         capabilities: dict[str, int] = {}
+        evidence: dict[str, int] = {}
         producers: set[str] = set()
 
         for signal in symbol_signals:
@@ -3131,20 +3367,24 @@ def _signal_summary_by_symbol(
             capabilities[signal.capability_name] = (
                 capabilities.get(signal.capability_name, 0) + 1
             )
+            if signal.evidence_detail is not None:
+                evidence_kind = signal.evidence_detail.split(":", 1)[0]
+                evidence[evidence_kind] = evidence.get(evidence_kind, 0) + 1
             producers.add(signal.producer_name)
 
-        entries.append(
-            {
-                "type": symbol_type,
-                "module": module_name,
-                "name": name,
-                "lineno": lineno,
-                "signal_count": len(symbol_signals),
-                "families": dict(sorted(families.items())),
-                "capabilities": dict(sorted(capabilities.items())),
-                "producers": sorted(producers),
-            }
-        )
+        entry = {
+            "type": symbol_type,
+            "module": module_name,
+            "name": name,
+            "lineno": lineno,
+            "signal_count": len(symbol_signals),
+            "families": dict(sorted(families.items())),
+            "capabilities": dict(sorted(capabilities.items())),
+            "producers": sorted(producers),
+        }
+        if evidence:
+            entry["evidence"] = dict(sorted(evidence.items()))
+        entries.append(entry)
 
     return entries
 
@@ -4774,29 +5014,7 @@ def _append_explain_signal_sections(
     if request.signal_preview is not None:
         request.lines.append("=== EXPLAIN: SIGNALS ===")
         for entry in request.signal_preview:
-            label = (
-                f"{entry['kind']} {entry['module']}.{entry['name']}:{entry['lineno']}"
-            )
-            request.lines.append(
-                "  "
-                f"{label} family={entry['family']}"
-                f" producer={entry['producer_name']}"
-                f" capability={entry['capability_name']}"
-            )
-            if "channel_name" in entry:
-                request.lines.append(
-                    "    "
-                    f"channel={entry['channel_name']}"
-                    f" rank={entry.get('rank')}"
-                    f" strength={entry.get('strength')}"
-                )
-            if "distance" in entry:
-                request.lines.append(f"    distance={entry['distance']}")
-            if "source" in entry:
-                source = cast("dict[str, object]", entry["source"])
-                request.lines.append(
-                    f"    source={source['module']}.{source['name']}:{source['lineno']}"
-                )
+            _append_explain_signal_preview_entry(request.lines, entry)
         request.lines.append("")
 
     if request.bundles is not None:
@@ -4819,15 +5037,83 @@ def _append_explain_signal_sections(
     if request.signal_merge is not None:
         request.lines.append("=== EXPLAIN: SIGNAL MERGE ===")
         for entry in request.signal_merge:
-            request.lines.append(
-                "  "
-                f"{entry['module']}.{entry['name']}:{entry['lineno']}"
-                f" signal_count={entry['signal_count']}"
-            )
-            request.lines.append(f"    families={entry['families']}")
-            request.lines.append(f"    capabilities={entry['capabilities']}")
-            request.lines.append(f"    producers={entry['producers']}")
+            _append_explain_signal_merge_entry(request.lines, entry)
         request.lines.append("")
+
+
+def _append_explain_signal_preview_entry(
+    lines: list[str],
+    entry: dict[str, object],
+) -> None:
+    """
+    Append one explain preview entry for a normalized retrieval signal.
+
+    Parameters
+    ----------
+    lines : list[str]
+        Mutable explain output buffer.
+    entry : dict[str, object]
+        One compact signal preview entry.
+
+    Returns
+    -------
+    None
+        The preview lines are appended to ``lines`` in place.
+    """
+    label = f"{entry['kind']} {entry['module']}.{entry['name']}:{entry['lineno']}"
+    lines.append(
+        "  "
+        f"{label} family={entry['family']}"
+        f" producer={entry['producer_name']}"
+        f" capability={entry['capability_name']}"
+    )
+    if "channel_name" in entry:
+        lines.append(
+            "    "
+            f"channel={entry['channel_name']}"
+            f" rank={entry.get('rank')}"
+            f" strength={entry.get('strength')}"
+        )
+    if "evidence_detail" in entry:
+        lines.append(f"    evidence={entry['evidence_detail']}")
+    if "distance" in entry:
+        lines.append(f"    distance={entry['distance']}")
+    if "source" in entry:
+        source = cast("dict[str, object]", entry["source"])
+        lines.append(
+            f"    source={source['module']}.{source['name']}:{source['lineno']}"
+        )
+
+
+def _append_explain_signal_merge_entry(
+    lines: list[str],
+    entry: dict[str, object],
+) -> None:
+    """
+    Append one explain merge summary entry for a ranked symbol.
+
+    Parameters
+    ----------
+    lines : list[str]
+        Mutable explain output buffer.
+    entry : dict[str, object]
+        One compact per-symbol signal summary entry.
+
+    Returns
+    -------
+    None
+        The merge-summary lines are appended to ``lines`` in place.
+    """
+    lines.append(
+        "  "
+        f"{entry['module']}.{entry['name']}:{entry['lineno']}"
+        f" signal_count={entry['signal_count']}"
+    )
+    lines.append(f"    families={entry['families']}")
+    lines.append(f"    capabilities={entry['capabilities']}")
+    if "evidence" in entry:
+        lines.append(f"    evidence={entry['evidence']}")
+    lines.append(f"    producers={entry['producers']}")
 
 
 def _append_explain_merge_sections(
@@ -5211,6 +5497,7 @@ def _initial_context_state(
         name for name, _channel in _get_channel_functions(plan)
     ]
     channel_producers = _channel_retrieval_producers(ordered_channels)
+    include_overloads = _query_prefers_overload_evidence(request.query, intent=intent)
 
     if request.explain:
         enabled = _enabled_channels(plan)
@@ -5221,6 +5508,7 @@ def _initial_context_state(
             ),
             include_references=plan.include_references,
             include_include_graph=plan.include_include_graph,
+            include_overloads=include_overloads,
         )
         producer_diagnostics = _producer_diagnostics(retrieval_producers)
         retrieval_signals, signal_collection = _collect_retrieval_signals(
@@ -5234,6 +5522,18 @@ def _initial_context_state(
         retrieval_signals, signal_collection = _collect_retrieval_signals(
             bundles,
             producers=channel_producers,
+        )
+    overload_retrieval_signals = _collect_overload_retrieval_signals(
+        root=request.root,
+        query=request.query,
+        intent=intent,
+        conn=conn,
+        candidate_signals=retrieval_signals,
+    )
+    if overload_retrieval_signals:
+        retrieval_signals = sorted(
+            [*retrieval_signals, *overload_retrieval_signals],
+            key=signal_sort_key,
         )
 
     ranked_merged, provenance = _rank_signals_with_provenance(
@@ -5479,16 +5779,12 @@ def _finalize_signal_diagnostics(
     ignored_producers = list(
         cast("list[str]", state.signal_collection["ignored_producers"])
     )
-    graph_producers = sorted(
-        {
-            signal.producer_name
-            for signal in state.retrieval_signals
-            if signal.family == "graph"
-        }
-    )
     used_set = set(used_producers)
     ignored_set = set(ignored_producers)
-    for producer_name in graph_producers:
+    active_signal_producers = sorted(
+        {signal.producer_name for signal in state.retrieval_signals}
+    )
+    for producer_name in active_signal_producers:
         used_set.add(producer_name)
         ignored_set.discard(producer_name)
     state.signal_collection = _signal_collection_diagnostics(
