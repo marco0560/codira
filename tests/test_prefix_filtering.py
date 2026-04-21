@@ -25,7 +25,7 @@ import pytest
 from codira.cli import main
 from codira.indexer import index_repo
 from codira.prefix import normalize_prefix
-from codira.query.context import context_for
+from codira.query.context import ContextRequest, context_for
 from codira.query.exact import (
     EdgeQueryRequest,
     docstring_issues,
@@ -370,10 +370,12 @@ def test_context_for_respects_prefix_across_symbols_and_references(
 
     payload = json.loads(
         context_for(
-            tmp_path,
-            "imported_helper",
-            prefix="pkg/b.py",
-            as_json=True,
+            ContextRequest(
+                root=tmp_path,
+                query="imported_helper",
+                prefix="pkg/b.py",
+                as_json=True,
+            )
         )
     )
 

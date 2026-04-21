@@ -278,22 +278,6 @@ unfixable = [
 "tests/helpers.py" = [
     "PLR0913", # test helper requires multiple independent knobs
 ]
-"src/codira/cli.py" = [
-    "PLR0913", # command handlers mirror stable CLI option sets
-    "PLR0912", # index usability checks intentionally fan out by staleness case
-    "C901", # index usability checks are orchestration-heavy, not algorithmically complex
-]
-"src/codira/contracts.py" = [
-    "PLR0913", # protocol method arity follows backend/query contracts
-]
-"packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py" = [
-    "PLR0913", # backend method arity mirrors the stable backend query and persistence contracts
-]
-"src/codira/query/context.py" = [
-    "PLR0913", # retrieval and rendering helpers preserve stable query interfaces
-    "PLR0912", # retrieval orchestration branches across symbol families and output modes
-    "C901", # context assembly remains intentionally centralized for deterministic ordering
-]
 "src/codira/registry.py" = [
     "BLE001", # third-party plugin loading must degrade gracefully on arbitrary plugin failures
 ]

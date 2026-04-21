@@ -38,7 +38,7 @@ from codira.indexer import (
     index_repo,
 )
 from codira.prefix import normalize_prefix
-from codira.query.context import context_for
+from codira.query.context import ContextRequest, context_for
 from codira.query.exact import (
     CallTreeNode,
     CallTreeResult,
@@ -72,6 +72,8 @@ from codira.storage import (
 from codira.version import installed_distribution_version, package_version
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import codira.indexer as indexer_types
     from codira.types import DocstringIssueRow
 
@@ -99,6 +101,199 @@ class IndexRebuildRequest:
     message: str
     reset_db: bool
     stderr: bool
+
+
+@dataclass(frozen=True)
+class IndexPayloadRequest:
+    """
+    Structured payload request for ``codira index --json``.
+
+    Parameters
+    ----------
+    full : bool
+        Whether the caller requested a full rebuild.
+    explain : bool
+        Whether the caller requested per-file decision details.
+    require_full_coverage : bool
+        Whether strict coverage gating was enabled.
+    status : str
+        Stable status code for the command outcome.
+    report : codira.indexer.IndexReport | None
+        Completed index report, or ``None`` when indexing stopped early.
+    coverage_issues : list[codira.indexer.CoverageIssue]
+        Coverage issues relevant to the command outcome.
+    """
+
+    full: bool
+    explain: bool
+    require_full_coverage: bool
+    status: str
+    report: IndexReport | None
+    coverage_issues: list[CoverageIssue]
+
+
+@dataclass(frozen=True)
+class EmbeddingCommandRequest:
+    """
+    Runtime options for the ``emb`` CLI command.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index.
+    query : str
+        Natural-language query to score.
+    limit : int
+        Maximum number of matches to print.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict matched files.
+    as_json : bool, optional
+        Whether to render structured JSON output.
+    query_prefix : str | None, optional
+        User-facing repo-root-relative prefix echoed in JSON output.
+    """
+
+    root: Path
+    query: str
+    limit: int
+    prefix: str | None = None
+    as_json: bool = False
+    query_prefix: str | None = None
+
+
+@dataclass(frozen=True)
+class RelationCommandRequest:
+    """
+    Runtime options shared by the ``calls`` and ``refs`` CLI commands.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index.
+    name : str
+        Exact logical name to inspect.
+    module : str | None, optional
+        Optional exact module filter for the selected side of the relation.
+    incoming : bool, optional
+        Whether to show incoming relations instead of outgoing relations.
+    as_tree : bool, optional
+        Whether to render a bounded traversal tree instead of a flat list.
+    as_dot : bool, optional
+        Whether to render the bounded tree as Graphviz DOT.
+    max_depth : int, optional
+        Maximum traversal depth used by tree mode.
+    max_nodes : int, optional
+        Maximum number of rendered nodes used by tree mode.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict owner files.
+    as_json : bool, optional
+        Whether to render structured JSON output.
+    query_prefix : str | None, optional
+        User-facing repo-root-relative prefix echoed in JSON output.
+    """
+
+    root: Path
+    name: str
+    module: str | None = None
+    incoming: bool = False
+    as_tree: bool = False
+    as_dot: bool = False
+    max_depth: int = 2
+    max_nodes: int = 20
+    prefix: str | None = None
+    as_json: bool = False
+    query_prefix: str | None = None
+
+
+@dataclass(frozen=True)
+class RelationCommandSpec:
+    """
+    Rendering and lookup hooks for one relation-oriented CLI command.
+
+    Parameters
+    ----------
+    command : {"calls", "refs"}
+        Stable command name used in JSON payloads.
+    missing_message : str
+        Human-readable relation label used in no-match output.
+    graph_name : str
+        Graphviz graph name used for DOT output.
+    missing_direction_outgoing : str
+        Human-readable label for missing outgoing results.
+    missing_direction_incoming : str
+        Human-readable label for missing incoming results.
+    plain_arrow : str
+        Flat-list arrow rendered between relation endpoints.
+    outgoing_tree_marker : str
+        Tree marker used for outgoing traversal.
+    incoming_tree_marker : str
+        Tree marker used for incoming traversal.
+    source_module_key : str
+        JSON key for the source module field.
+    source_name_key : str
+        JSON key for the source name field.
+    target_module_key : str
+        JSON key for the target module field.
+    target_name_key : str
+        JSON key for the target name field.
+    row_fetcher : collections.abc.Callable[
+        [codira.query.exact.EdgeQueryRequest],
+        list[tuple[str, str, str | None, str | None, int]],
+    ]
+        Exact lookup helper for flat relation rows.
+    tree_builder : collections.abc.Callable[
+        [codira.query.exact.TreeQueryRequest],
+        codira.query.exact.CallTreeResult | None,
+    ]
+        Exact traversal helper for tree mode.
+    """
+
+    command: str
+    missing_message: str
+    graph_name: str
+    missing_direction_outgoing: str
+    missing_direction_incoming: str
+    plain_arrow: str
+    outgoing_tree_marker: str
+    incoming_tree_marker: str
+    source_module_key: str
+    source_name_key: str
+    target_module_key: str
+    target_name_key: str
+    row_fetcher: Callable[
+        [EdgeQueryRequest],
+        list[tuple[str, str, str | None, str | None, int]],
+    ]
+    tree_builder: Callable[[TreeQueryRequest], CallTreeResult | None]
+
+
+@dataclass(frozen=True)
+class RelationSubcommandRequest:
+    """
+    Shared runtime context for one relation-oriented CLI subcommand.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command-line arguments.
+    parser : argparse.ArgumentParser
+        Active top-level parser used for error reporting.
+    root : pathlib.Path
+        Repository root containing the index.
+    prefix : str | None, optional
+        Normalized absolute prefix used for backend filtering.
+    raw_prefix : str | None, optional
+        User-facing repo-root-relative prefix echoed in JSON output.
+    command : {"calls", "refs"}
+        Stable relation subcommand name.
+    """
+
+    args: argparse.Namespace
+    parser: argparse.ArgumentParser
+    root: Path
+    prefix: str | None = None
+    raw_prefix: str | None = None
+    command: str = ""
 
 
 def _current_analyzer_inventory() -> list[tuple[str, str, str]]:
@@ -792,12 +987,14 @@ def _run_index(
         if as_json:
             _emit_json(
                 _index_payload(
-                    full=full,
-                    explain=explain,
-                    require_full_coverage=require_full_coverage,
-                    status="coverage_incomplete",
-                    report=None,
-                    coverage_issues=coverage_issues,
+                    IndexPayloadRequest(
+                        full=full,
+                        explain=explain,
+                        require_full_coverage=require_full_coverage,
+                        status="coverage_incomplete",
+                        report=None,
+                        coverage_issues=coverage_issues,
+                    )
                 )
             )
         else:
@@ -810,12 +1007,14 @@ def _run_index(
     if as_json:
         _emit_json(
             _index_payload(
-                full=full,
-                explain=explain,
-                require_full_coverage=require_full_coverage,
-                status="ok",
-                report=report,
-                coverage_issues=report.coverage_issues,
+                IndexPayloadRequest(
+                    full=full,
+                    explain=explain,
+                    require_full_coverage=require_full_coverage,
+                    status="ok",
+                    report=report,
+                    coverage_issues=report.coverage_issues,
+                )
             )
         )
         return 0
@@ -832,45 +1031,30 @@ def _run_index(
 
 
 def _index_payload(
-    *,
-    full: bool,
-    explain: bool,
-    require_full_coverage: bool,
-    status: str,
-    report: IndexReport | None,
-    coverage_issues: list[CoverageIssue],
+    request: IndexPayloadRequest,
 ) -> dict[str, object]:
     """
     Build the structured JSON payload for one index command run.
 
     Parameters
     ----------
-    full : bool
-        Whether the caller requested a full rebuild.
-    explain : bool
-        Whether the caller requested per-file decision details.
-    require_full_coverage : bool
-        Whether strict coverage gating was enabled.
-    status : str
-        Stable status code for the current command outcome.
-    report : codira.indexer.IndexReport | None
-        Completed index report, or ``None`` when indexing stopped early.
-    coverage_issues : list[codira.indexer.CoverageIssue]
-        Coverage issues relevant to the command outcome.
+    request : IndexPayloadRequest
+        Structured index payload request.
 
     Returns
     -------
     dict[str, object]
         JSON-serializable payload for ``codira index --json``.
     """
+    report = request.report
     return {
         "schema_version": QUERY_JSON_SCHEMA_VERSION,
         "command": "index",
-        "status": status,
+        "status": request.status,
         "query": {
-            "full": full,
-            "explain": explain,
-            "require_full_coverage": require_full_coverage,
+            "full": request.full,
+            "explain": request.explain,
+            "require_full_coverage": request.require_full_coverage,
         },
         "results": [],
         "summary": {
@@ -890,13 +1074,13 @@ def _index_payload(
                 "suffix": issue.suffix,
                 "reason": issue.reason,
             }
-            for issue in coverage_issues
+            for issue in request.coverage_issues
         ],
         "warnings": [] if report is None else _index_warning_payload(report.warnings),
         "failures": [] if report is None else _index_failure_payload(report.failures),
         "decisions": (
             []
-            if report is None or not explain
+            if report is None or not request.explain
             else _index_decision_payload(report.decisions)
         ),
     }
@@ -1407,50 +1591,35 @@ def _run_audit_docstrings(
 
 
 def _run_embeddings(
-    root: Path,
-    query: str,
-    *,
-    limit: int,
-    prefix: str | None = None,
-    as_json: bool = False,
-    query_prefix: str | None = None,
+    request: EmbeddingCommandRequest,
 ) -> int:
     """
     Print embedding-backend metadata and top embedding matches.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root containing the index.
-    query : str
-        Natural-language query to score.
-    limit : int
-        Maximum number of matches to print.
-    prefix : str | None, optional
-        Repo-root-relative path prefix used to restrict matched files.
-    as_json : bool, optional
-        Whether to render structured JSON output.
-    query_prefix : str | None, optional
-        User-facing repo-root-relative prefix echoed in JSON output.
+    request : EmbeddingCommandRequest
+        Runtime options for the embedding command.
 
     Returns
     -------
     int
         Zero when embedding inventory exists, otherwise one.
     """
+    root = request.root
     backend = get_embedding_backend()
     inventory = embedding_inventory(root)
 
     if not inventory:
-        if as_json:
+        if request.as_json:
             _emit_json(
                 _query_payload(
                     "emb",
                     "not_indexed",
                     {
-                        "text": query,
-                        "limit": limit,
-                        "prefix": query_prefix,
+                        "text": request.query,
+                        "limit": request.limit,
+                        "prefix": request.query_prefix,
                     },
                     [],
                     backend={
@@ -1468,21 +1637,21 @@ def _run_embeddings(
     matches = embedding_candidates(
         EmbeddingCandidatesRequest(
             root=root,
-            query=query,
-            limit=limit,
+            query=request.query,
+            limit=request.limit,
             min_score=0.0,
-            prefix=prefix,
+            prefix=request.prefix,
         )
     )
-    if as_json:
+    if request.as_json:
         _emit_json(
             _query_payload(
                 "emb",
                 "ok" if matches else "no_matches",
                 {
-                    "text": query,
-                    "limit": limit,
-                    "prefix": query_prefix,
+                    "text": request.query,
+                    "limit": request.limit,
+                    "prefix": request.query_prefix,
                 },
                 [
                     {
@@ -1539,186 +1708,333 @@ def _run_embeddings(
     return 0
 
 
-def _run_calls(
-    root: Path,
-    name: str,
+def _validate_relation_request(
+    request: RelationCommandRequest,
+) -> int | None:
+    """
+    Validate shared traversal limits for relation commands.
+
+    Parameters
+    ----------
+    request : RelationCommandRequest
+        Relation-command runtime options.
+
+    Returns
+    -------
+    int | None
+        Error exit code when validation fails, otherwise ``None``.
+    """
+    if request.max_depth < 0:
+        print("--max-depth must be >= 0", file=sys.stderr)
+        return 2
+    if request.max_nodes < 1:
+        print("--max-nodes must be >= 1", file=sys.stderr)
+        return 2
+    return None
+
+
+def _relation_query_metadata(
+    request: RelationCommandRequest,
     *,
-    module: str | None,
-    incoming: bool,
-    as_tree: bool = False,
-    as_dot: bool = False,
-    max_depth: int = 2,
-    max_nodes: int = 20,
-    prefix: str | None = None,
-    as_json: bool = False,
-    query_prefix: str | None = None,
+    tree: bool,
+) -> dict[str, object]:
+    """
+    Build the shared JSON query metadata for relation commands.
+
+    Parameters
+    ----------
+    request : RelationCommandRequest
+        Relation-command runtime options.
+    tree : bool
+        Whether the current render mode is tree traversal.
+
+    Returns
+    -------
+    dict[str, object]
+        Machine-readable query metadata.
+    """
+    query: dict[str, object] = {
+        "name": request.name,
+        "module": request.module,
+        "incoming": request.incoming,
+        "prefix": request.query_prefix,
+    }
+    if tree:
+        query["tree"] = True
+        query["max_depth"] = request.max_depth
+        query["max_nodes"] = request.max_nodes
+    return query
+
+
+def _relation_rows_payload(
+    rows: list[tuple[str, str, str | None, str | None, int]],
+    spec: RelationCommandSpec,
+) -> list[dict[str, object]]:
+    """
+    Serialize flat relation rows for JSON output.
+
+    Parameters
+    ----------
+    rows : list[tuple[str, str, str | None, str | None, int]]
+        Flat relation rows returned by the exact query layer.
+    spec : RelationCommandSpec
+        Command-specific rendering and naming hooks.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        JSON-serializable relation rows.
+    """
+    return [
+        {
+            spec.source_module_key: source_module,
+            spec.source_name_key: source_name,
+            spec.target_module_key: target_module,
+            spec.target_name_key: target_name,
+            "resolved": bool(resolved),
+        }
+        for source_module, source_name, target_module, target_name, resolved in rows
+    ]
+
+
+def _print_relation_rows(
+    rows: list[tuple[str, str, str | None, str | None, int]],
+    spec: RelationCommandSpec,
+) -> None:
+    """
+    Print flat relation rows in deterministic plain text.
+
+    Parameters
+    ----------
+    rows : list[tuple[str, str, str | None, str | None, int]]
+        Flat relation rows returned by the exact query layer.
+    spec : RelationCommandSpec
+        Command-specific rendering and naming hooks.
+
+    Returns
+    -------
+    None
+        Relation rows are printed to standard output.
+    """
+    for source_module, source_name, target_module, target_name, resolved in rows:
+        source = f"{source_module}.{source_name}"
+        if resolved:
+            assert target_module is not None
+            assert target_name is not None
+            target = f"{target_module}.{target_name}"
+        else:
+            target = "<unresolved>"
+        print(f"{source} {spec.plain_arrow} {target}")
+
+
+def _run_relation_tree(
+    request: RelationCommandRequest,
+    spec: RelationCommandSpec,
+) -> int:
+    """
+    Render one relation command in bounded tree mode.
+
+    Parameters
+    ----------
+    request : RelationCommandRequest
+        Relation-command runtime options.
+    spec : RelationCommandSpec
+        Command-specific rendering and naming hooks.
+
+    Returns
+    -------
+    int
+        Zero when the tree exists, otherwise one.
+    """
+    tree = spec.tree_builder(
+        TreeQueryRequest(
+            root=request.root,
+            name=request.name,
+            module=request.module,
+            incoming=request.incoming,
+            prefix=request.prefix,
+            max_depth=request.max_depth,
+            max_nodes=request.max_nodes,
+        )
+    )
+    if request.as_json:
+        _emit_json(
+            _query_payload(
+                spec.command,
+                "ok" if tree is not None else "no_matches",
+                _relation_query_metadata(request, tree=True),
+                [_call_tree_result_payload(tree)] if tree is not None else [],
+                truncated=(
+                    {
+                        "depth": tree.truncated_by_depth,
+                        "nodes": tree.truncated_by_nodes,
+                    }
+                    if tree is not None
+                    else {"depth": False, "nodes": False}
+                ),
+                node_count=tree.node_count if tree is not None else 0,
+                edge_count=tree.edge_count if tree is not None else 0,
+            )
+        )
+        return 0 if tree is not None else 1
+
+    if tree is None:
+        noun = (
+            spec.missing_direction_incoming
+            if request.incoming
+            else spec.missing_direction_outgoing
+        )
+        if request.module is None:
+            print(f"No {spec.missing_message} found for {noun}: {request.name}")
+        else:
+            print(
+                f"No {spec.missing_message} found for "
+                f"{noun}: {request.module}.{request.name}"
+            )
+        return 1
+
+    if request.as_dot:
+        for line in _render_relation_tree_dot(tree, graph_name=spec.graph_name):
+            print(line)
+        return 0
+
+    for line in _render_relation_tree_lines(
+        tree,
+        outgoing_marker=spec.outgoing_tree_marker,
+        incoming_marker=spec.incoming_tree_marker,
+    ):
+        print(line)
+    if tree.truncated_by_depth or tree.truncated_by_nodes:
+        truncation_bits: list[str] = []
+        if tree.truncated_by_depth:
+            truncation_bits.append(f"max_depth={request.max_depth}")
+        if tree.truncated_by_nodes:
+            truncation_bits.append(f"max_nodes={request.max_nodes}")
+        print(f"truncated: {', '.join(truncation_bits)}")
+    return 0
+
+
+def _run_relation_rows_mode(
+    request: RelationCommandRequest,
+    spec: RelationCommandSpec,
+) -> int:
+    """
+    Render one relation command in flat-row mode.
+
+    Parameters
+    ----------
+    request : RelationCommandRequest
+        Relation-command runtime options.
+    spec : RelationCommandSpec
+        Command-specific rendering and naming hooks.
+
+    Returns
+    -------
+    int
+        Zero when at least one row exists, otherwise one.
+    """
+    rows = spec.row_fetcher(
+        EdgeQueryRequest(
+            root=request.root,
+            name=request.name,
+            module=request.module,
+            incoming=request.incoming,
+            prefix=request.prefix,
+        )
+    )
+
+    if request.as_json:
+        _emit_json(
+            _query_payload(
+                spec.command,
+                "ok" if rows else "no_matches",
+                _relation_query_metadata(request, tree=False),
+                _relation_rows_payload(rows, spec),
+            )
+        )
+        return 0 if rows else 1
+
+    if not rows:
+        noun = (
+            spec.missing_direction_incoming
+            if request.incoming
+            else spec.missing_direction_outgoing
+        )
+        if request.module is None:
+            print(f"No {spec.missing_message} found for {noun}: {request.name}")
+        else:
+            print(
+                f"No {spec.missing_message} found for "
+                f"{noun}: {request.module}.{request.name}"
+            )
+        return 1
+
+    _print_relation_rows(rows, spec)
+    return 0
+
+
+def _run_relation_command(
+    request: RelationCommandRequest,
+    spec: RelationCommandSpec,
+) -> int:
+    """
+    Run one relation-oriented CLI command.
+
+    Parameters
+    ----------
+    request : RelationCommandRequest
+        Relation-command runtime options.
+    spec : RelationCommandSpec
+        Command-specific rendering and naming hooks.
+
+    Returns
+    -------
+    int
+        Process exit status for the command.
+    """
+    validation_error = _validate_relation_request(request)
+    if validation_error is not None:
+        return validation_error
+    if request.as_tree:
+        return _run_relation_tree(request, spec)
+    return _run_relation_rows_mode(request, spec)
+
+
+def _run_calls(
+    request: RelationCommandRequest,
 ) -> int:
     """
     Print indexed static call edges for one logical name.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root containing the index.
-    name : str
-        Exact logical caller or callee name to inspect.
-    module : str | None
-        Optional exact module filter for the selected side of the edge.
-    incoming : bool
-        Whether to show incoming edges for a callee instead of outgoing edges
-        for a caller.
-    as_tree : bool, optional
-        Whether to render a bounded traversal tree instead of a flat edge list.
-    as_dot : bool, optional
-        Whether to render the bounded tree as Graphviz DOT.
-    max_depth : int, optional
-        Maximum traversal depth used by the tree mode.
-    max_nodes : int, optional
-        Maximum number of rendered nodes used by the tree mode.
-    prefix : str | None, optional
-        Repo-root-relative path prefix used to restrict caller files.
-    as_json : bool, optional
-        Whether to render structured JSON output.
-    query_prefix : str | None, optional
-        User-facing repo-root-relative prefix echoed in JSON output.
+    request : RelationCommandRequest
+        Runtime options for the calls command.
 
     Returns
     -------
     int
         Zero when at least one edge is found, otherwise one.
     """
-    if max_depth < 0:
-        print("--max-depth must be >= 0", file=sys.stderr)
-        return 2
-    if max_nodes < 1:
-        print("--max-nodes must be >= 1", file=sys.stderr)
-        return 2
-
-    if as_tree:
-        tree = build_call_tree(
-            TreeQueryRequest(
-                root=root,
-                name=name,
-                module=module,
-                incoming=incoming,
-                prefix=prefix,
-                max_depth=max_depth,
-                max_nodes=max_nodes,
-            )
-        )
-        if as_json:
-            _emit_json(
-                _query_payload(
-                    "calls",
-                    "ok" if tree is not None else "no_matches",
-                    {
-                        "name": name,
-                        "module": module,
-                        "incoming": incoming,
-                        "tree": True,
-                        "max_depth": max_depth,
-                        "max_nodes": max_nodes,
-                        "prefix": query_prefix,
-                    },
-                    [_call_tree_result_payload(tree)] if tree is not None else [],
-                    truncated=(
-                        {
-                            "depth": tree.truncated_by_depth,
-                            "nodes": tree.truncated_by_nodes,
-                        }
-                        if tree is not None
-                        else {"depth": False, "nodes": False}
-                    ),
-                    node_count=tree.node_count if tree is not None else 0,
-                    edge_count=tree.edge_count if tree is not None else 0,
-                )
-            )
-            return 0 if tree is not None else 1
-
-        if tree is None:
-            direction = "callee" if incoming else "caller"
-            if module is None:
-                print(f"No call edges found for {direction}: {name}")
-            else:
-                print(f"No call edges found for {direction}: {module}.{name}")
-            return 1
-
-        if as_dot:
-            for line in _render_relation_tree_dot(tree, graph_name="codira_calls"):
-                print(line)
-            return 0
-
-        for line in _render_call_tree_lines(tree):
-            print(line)
-        if tree.truncated_by_depth or tree.truncated_by_nodes:
-            truncation_bits: list[str] = []
-            if tree.truncated_by_depth:
-                truncation_bits.append(f"max_depth={max_depth}")
-            if tree.truncated_by_nodes:
-                truncation_bits.append(f"max_nodes={max_nodes}")
-            print(f"truncated: {', '.join(truncation_bits)}")
-        return 0
-
-    rows = find_call_edges(
-        EdgeQueryRequest(
-            root=root,
-            name=name,
-            module=module,
-            incoming=incoming,
-            prefix=prefix,
-        )
+    return _run_relation_command(
+        request,
+        RelationCommandSpec(
+            command="calls",
+            missing_message="call edges",
+            graph_name="codira_calls",
+            missing_direction_outgoing="caller",
+            missing_direction_incoming="callee",
+            plain_arrow="->",
+            outgoing_tree_marker="-> ",
+            incoming_tree_marker="<- ",
+            source_module_key="caller_module",
+            source_name_key="caller_name",
+            target_module_key="callee_module",
+            target_name_key="callee_name",
+            row_fetcher=find_call_edges,
+            tree_builder=build_call_tree,
+        ),
     )
-
-    if as_json:
-        _emit_json(
-            _query_payload(
-                "calls",
-                "ok" if rows else "no_matches",
-                {
-                    "name": name,
-                    "module": module,
-                    "incoming": incoming,
-                    "prefix": query_prefix,
-                },
-                [
-                    {
-                        "caller_module": caller_module,
-                        "caller_name": caller_name,
-                        "callee_module": callee_module,
-                        "callee_name": callee_name,
-                        "resolved": bool(resolved),
-                    }
-                    for (
-                        caller_module,
-                        caller_name,
-                        callee_module,
-                        callee_name,
-                        resolved,
-                    ) in rows
-                ],
-            )
-        )
-        return 0 if rows else 1
-
-    if not rows:
-        direction = "callee" if incoming else "caller"
-        if module is None:
-            print(f"No call edges found for {direction}: {name}")
-        else:
-            print(f"No call edges found for {direction}: {module}.{name}")
-        return 1
-
-    for caller_module, caller_name, callee_module, callee_name, resolved in rows:
-        caller = f"{caller_module}.{caller_name}"
-        if resolved:
-            assert callee_module is not None
-            assert callee_name is not None
-            callee = f"{callee_module}.{callee_name}"
-        else:
-            callee = "<unresolved>"
-        print(f"{caller} -> {callee}")
-
-    return 0
 
 
 def _call_tree_display(module: str | None, name: str, *, resolved: bool) -> str:
@@ -1989,189 +2305,40 @@ def _render_relation_tree_lines(
 
 
 def _run_refs(
-    root: Path,
-    name: str,
-    *,
-    module: str | None,
-    incoming: bool,
-    as_tree: bool = False,
-    as_dot: bool = False,
-    max_depth: int = 2,
-    max_nodes: int = 20,
-    prefix: str | None = None,
-    as_json: bool = False,
-    query_prefix: str | None = None,
+    request: RelationCommandRequest,
 ) -> int:
     """
     Print indexed callable-object references for one logical name.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root containing the index.
-    name : str
-        Exact logical owner or referenced target name to inspect.
-    module : str | None
-        Optional exact module filter for the selected side of the reference.
-    incoming : bool
-        Whether to show incoming references for a target instead of outgoing
-        references for an owner.
-    as_tree : bool, optional
-        Whether to render a bounded traversal tree instead of a flat reference list.
-    as_dot : bool, optional
-        Whether to render the bounded tree as Graphviz DOT.
-    max_depth : int, optional
-        Maximum traversal depth used by the tree mode.
-    max_nodes : int, optional
-        Maximum number of rendered nodes used by the tree mode.
-    prefix : str | None, optional
-        Repo-root-relative path prefix used to restrict owner files.
-    as_json : bool, optional
-        Whether to render structured JSON output.
-    query_prefix : str | None, optional
-        User-facing repo-root-relative prefix echoed in JSON output.
+    request : RelationCommandRequest
+        Runtime options for the refs command.
 
     Returns
     -------
     int
         Zero when at least one reference is found, otherwise one.
     """
-    if max_depth < 0:
-        print("--max-depth must be >= 0", file=sys.stderr)
-        return 2
-    if max_nodes < 1:
-        print("--max-nodes must be >= 1", file=sys.stderr)
-        return 2
-
-    if as_tree:
-        tree = build_ref_tree(
-            TreeQueryRequest(
-                root=root,
-                name=name,
-                module=module,
-                incoming=incoming,
-                prefix=prefix,
-                max_depth=max_depth,
-                max_nodes=max_nodes,
-            )
-        )
-        if as_json:
-            _emit_json(
-                _query_payload(
-                    "refs",
-                    "ok" if tree is not None else "no_matches",
-                    {
-                        "name": name,
-                        "module": module,
-                        "incoming": incoming,
-                        "tree": True,
-                        "max_depth": max_depth,
-                        "max_nodes": max_nodes,
-                        "prefix": query_prefix,
-                    },
-                    [_call_tree_result_payload(tree)] if tree is not None else [],
-                    truncated=(
-                        {
-                            "depth": tree.truncated_by_depth,
-                            "nodes": tree.truncated_by_nodes,
-                        }
-                        if tree is not None
-                        else {"depth": False, "nodes": False}
-                    ),
-                    node_count=tree.node_count if tree is not None else 0,
-                    edge_count=tree.edge_count if tree is not None else 0,
-                )
-            )
-            return 0 if tree is not None else 1
-
-        if tree is None:
-            direction = "target" if incoming else "owner"
-            if module is None:
-                print(f"No callable references found for {direction}: {name}")
-            else:
-                print(f"No callable references found for {direction}: {module}.{name}")
-            return 1
-
-        if as_dot:
-            for line in _render_relation_tree_dot(tree, graph_name="codira_refs"):
-                print(line)
-            return 0
-
-        for line in _render_relation_tree_lines(
-            tree,
-            outgoing_marker="=> ",
-            incoming_marker="<= ",
-        ):
-            print(line)
-        if tree.truncated_by_depth or tree.truncated_by_nodes:
-            truncation_bits: list[str] = []
-            if tree.truncated_by_depth:
-                truncation_bits.append(f"max_depth={max_depth}")
-            if tree.truncated_by_nodes:
-                truncation_bits.append(f"max_nodes={max_nodes}")
-            print(f"truncated: {', '.join(truncation_bits)}")
-        return 0
-
-    rows = find_callable_refs(
-        EdgeQueryRequest(
-            root=root,
-            name=name,
-            module=module,
-            incoming=incoming,
-            prefix=prefix,
-        )
+    return _run_relation_command(
+        request,
+        RelationCommandSpec(
+            command="refs",
+            missing_message="callable references",
+            graph_name="codira_refs",
+            missing_direction_outgoing="owner",
+            missing_direction_incoming="target",
+            plain_arrow="=>",
+            outgoing_tree_marker="=> ",
+            incoming_tree_marker="<= ",
+            source_module_key="owner_module",
+            source_name_key="owner_name",
+            target_module_key="target_module",
+            target_name_key="target_name",
+            row_fetcher=find_callable_refs,
+            tree_builder=build_ref_tree,
+        ),
     )
-
-    if as_json:
-        _emit_json(
-            _query_payload(
-                "refs",
-                "ok" if rows else "no_matches",
-                {
-                    "name": name,
-                    "module": module,
-                    "incoming": incoming,
-                    "prefix": query_prefix,
-                },
-                [
-                    {
-                        "owner_module": owner_module,
-                        "owner_name": owner_name,
-                        "target_module": target_module,
-                        "target_name": target_name,
-                        "resolved": bool(resolved),
-                    }
-                    for (
-                        owner_module,
-                        owner_name,
-                        target_module,
-                        target_name,
-                        resolved,
-                    ) in rows
-                ],
-            )
-        )
-        return 0 if rows else 1
-
-    if not rows:
-        direction = "target" if incoming else "owner"
-        if module is None:
-            print(f"No callable references found for {direction}: {name}")
-        else:
-            print(f"No callable references found for {direction}: {module}.{name}")
-        return 1
-
-    for owner_module, owner_name, target_module, target_name, resolved in rows:
-        owner = f"{owner_module}.{owner_name}"
-        if resolved:
-            assert target_module is not None
-            assert target_name is not None
-            target = f"{target_module}.{target_name}"
-        else:
-            target = "<unresolved>"
-        print(f"{owner} => {target}")
-
-    return 0
 
 
 def _get_head_commit(root: Path) -> str | None:
@@ -2571,6 +2738,322 @@ def _run_plugins(*, as_json: bool = False) -> int:
     return 0
 
 
+def _run_symbol_command(
+    args: argparse.Namespace,
+    root: Path,
+    *,
+    prefix: str | None,
+    raw_prefix: str | None,
+) -> int:
+    """
+    Run the ``sym`` command after index freshness checks.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command-line arguments.
+    root : pathlib.Path
+        Repository root containing the index.
+    prefix : str | None
+        Normalized absolute prefix used for backend filtering.
+    raw_prefix : str | None
+        User-facing repo-root-relative prefix echoed in JSON output.
+
+    Returns
+    -------
+    int
+        Process exit status for the symbol command.
+    """
+    _ensure_index(root)
+    return _run_symbol(
+        root,
+        args.name,
+        prefix=prefix,
+        as_json=args.json,
+        query_prefix=raw_prefix,
+    )
+
+
+def _run_embeddings_command(
+    args: argparse.Namespace,
+    root: Path,
+    *,
+    prefix: str | None,
+    raw_prefix: str | None,
+) -> int:
+    """
+    Run the ``emb`` command after index freshness checks.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command-line arguments.
+    root : pathlib.Path
+        Repository root containing the index.
+    prefix : str | None
+        Normalized absolute prefix used for backend filtering.
+    raw_prefix : str | None
+        User-facing repo-root-relative prefix echoed in JSON output.
+
+    Returns
+    -------
+    int
+        Process exit status for the embedding command.
+    """
+    _ensure_index(root)
+    return _run_embeddings(
+        EmbeddingCommandRequest(
+            root=root,
+            query=args.query,
+            limit=args.limit,
+            prefix=prefix,
+            as_json=args.json,
+            query_prefix=raw_prefix,
+        )
+    )
+
+
+def _validate_relation_output_flags(
+    parser: argparse.ArgumentParser,
+    *,
+    command: str,
+    dot: bool,
+    tree: bool,
+    as_json: bool,
+) -> None:
+    """
+    Validate mutually constrained output flags for relation commands.
+
+    Parameters
+    ----------
+    parser : argparse.ArgumentParser
+        Active top-level parser used for error reporting.
+    command : str
+        Command name shown in parser errors.
+    dot : bool
+        Whether DOT output was requested.
+    tree : bool
+        Whether tree output was requested.
+    as_json : bool
+        Whether JSON output was requested.
+
+    Returns
+    -------
+    None
+        Invalid flag combinations terminate through ``parser.error``.
+    """
+    if dot and not tree:
+        parser.error(f"--dot requires --tree for {command}")
+    if dot and as_json:
+        parser.error(f"--dot cannot be combined with --json for {command}")
+
+
+def _run_relation_subcommand(
+    request: RelationSubcommandRequest,
+) -> int:
+    """
+    Run one relation-oriented subcommand after shared validation.
+
+    Parameters
+    ----------
+    request : RelationSubcommandRequest
+        Shared relation-subcommand runtime context.
+
+    Returns
+    -------
+    int
+        Process exit status for the relation command.
+    """
+    _validate_relation_output_flags(
+        request.parser,
+        command=request.command,
+        dot=request.args.dot,
+        tree=request.args.tree,
+        as_json=request.args.json,
+    )
+    _ensure_index(request.root)
+    relation_request = RelationCommandRequest(
+        root=request.root,
+        name=request.args.name,
+        module=request.args.module,
+        incoming=request.args.incoming,
+        as_tree=request.args.tree,
+        as_dot=request.args.dot,
+        max_depth=request.args.max_depth,
+        max_nodes=request.args.max_nodes,
+        prefix=request.prefix,
+        as_json=request.args.json,
+        query_prefix=request.raw_prefix,
+    )
+    if request.command == "calls":
+        return _run_calls(relation_request)
+    return _run_refs(relation_request)
+
+
+def _run_audit_command(
+    args: argparse.Namespace,
+    root: Path,
+    *,
+    prefix: str | None,
+    raw_prefix: str | None,
+) -> int:
+    """
+    Run the docstring audit command after index freshness checks.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command-line arguments.
+    root : pathlib.Path
+        Repository root containing the index.
+    prefix : str | None
+        Normalized absolute prefix used for backend filtering.
+    raw_prefix : str | None
+        User-facing repo-root-relative prefix echoed in JSON output.
+
+    Returns
+    -------
+    int
+        Process exit status for the audit command.
+    """
+    _ensure_index(root)
+    return _run_audit_docstrings(
+        root,
+        prefix=prefix,
+        as_json=args.json,
+        query_prefix=raw_prefix,
+    )
+
+
+def _run_context_command(
+    args: argparse.Namespace,
+    root: Path,
+    *,
+    prefix: str | None,
+) -> int:
+    """
+    Run the context command after index freshness checks.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command-line arguments.
+    root : pathlib.Path
+        Repository root containing the index.
+    prefix : str | None
+        Normalized absolute prefix used for backend filtering.
+
+    Returns
+    -------
+    int
+        Zero after printing the rendered context output.
+    """
+    _ensure_index(root)
+    result = context_for(
+        ContextRequest(
+            root=root,
+            query=args.query,
+            prefix=prefix,
+            as_json=args.json,
+            as_prompt=args.prompt,
+            explain=args.explain,
+        )
+    )
+    print(result)
+    return 0
+
+
+def _command_handlers(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    root: Path,
+    *,
+    prefix: str | None,
+    raw_prefix: str | None,
+) -> dict[str, Callable[[], int]]:
+    """
+    Build the subcommand dispatch table for the CLI.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command-line arguments.
+    parser : argparse.ArgumentParser
+        Active top-level parser.
+    root : pathlib.Path
+        Repository root containing the index.
+    prefix : str | None
+        Normalized absolute prefix used for backend filtering.
+    raw_prefix : str | None
+        User-facing repo-root-relative prefix echoed in JSON output.
+
+    Returns
+    -------
+    dict[str, collections.abc.Callable[[], int]]
+        Command-to-callable dispatch table.
+    """
+    return {
+        "help": lambda: _run_help(parser),
+        "index": lambda: _run_index(
+            root,
+            full=args.full,
+            explain=args.explain,
+            require_full_coverage=args.require_full_coverage,
+            as_json=args.json,
+        ),
+        "cov": lambda: _run_coverage(root, as_json=args.json),
+        "sym": lambda: _run_symbol_command(
+            args,
+            root,
+            prefix=prefix,
+            raw_prefix=raw_prefix,
+        ),
+        "emb": lambda: _run_embeddings_command(
+            args,
+            root,
+            prefix=prefix,
+            raw_prefix=raw_prefix,
+        ),
+        "calls": lambda: _run_relation_subcommand(
+            RelationSubcommandRequest(
+                args=args,
+                parser=parser,
+                root=root,
+                prefix=prefix,
+                raw_prefix=raw_prefix,
+                command="calls",
+            )
+        ),
+        "refs": lambda: _run_relation_subcommand(
+            RelationSubcommandRequest(
+                args=args,
+                parser=parser,
+                root=root,
+                prefix=prefix,
+                raw_prefix=raw_prefix,
+                command="refs",
+            )
+        ),
+        "audit": lambda: _run_audit_command(
+            args,
+            root,
+            prefix=prefix,
+            raw_prefix=raw_prefix,
+        ),
+        "plugins": lambda: _run_plugins(as_json=args.json),
+        "caps": lambda: _run_capabilities(as_json=args.json, strict=args.strict),
+        "capabilities": lambda: _run_capabilities(
+            as_json=args.json,
+            strict=args.strict,
+        ),
+        "ctx": lambda: _run_context_command(
+            args,
+            root,
+            prefix=prefix,
+        ),
+    }
+
+
 def main() -> int:
     """
     Dispatch the codira command-line interface.
@@ -2591,102 +3074,19 @@ def main() -> int:
     root = Path.cwd()
     raw_prefix = getattr(args, "prefix", None)
     prefix = _resolve_prefix_argument(parser, root, raw_prefix)
+    command = args.command or "help"
 
     try:
-        if args.command in (None, "help"):
-            return _run_help(parser)
-        if args.command == "index":
-            return _run_index(
-                root,
-                full=args.full,
-                explain=args.explain,
-                require_full_coverage=args.require_full_coverage,
-                as_json=args.json,
-            )
-        if args.command == "cov":
-            return _run_coverage(root, as_json=args.json)
-        if args.command == "sym":
-            _ensure_index(root)
-            return _run_symbol(
-                root,
-                args.name,
-                prefix=prefix,
-                as_json=args.json,
-                query_prefix=raw_prefix,
-            )
-        if args.command == "emb":
-            _ensure_index(root)
-            return _run_embeddings(
-                root,
-                args.query,
-                limit=args.limit,
-                prefix=prefix,
-                as_json=args.json,
-                query_prefix=raw_prefix,
-            )
-        if args.command == "calls":
-            if args.dot and not args.tree:
-                parser.error("--dot requires --tree for calls")
-            if args.dot and args.json:
-                parser.error("--dot cannot be combined with --json for calls")
-            _ensure_index(root)
-            return _run_calls(
-                root,
-                args.name,
-                module=args.module,
-                incoming=args.incoming,
-                as_tree=args.tree,
-                as_dot=args.dot,
-                max_depth=args.max_depth,
-                max_nodes=args.max_nodes,
-                prefix=prefix,
-                as_json=args.json,
-                query_prefix=raw_prefix,
-            )
-        if args.command == "refs":
-            if args.dot and not args.tree:
-                parser.error("--dot requires --tree for refs")
-            if args.dot and args.json:
-                parser.error("--dot cannot be combined with --json for refs")
-            _ensure_index(root)
-            return _run_refs(
-                root,
-                args.name,
-                module=args.module,
-                incoming=args.incoming,
-                as_tree=args.tree,
-                as_dot=args.dot,
-                max_depth=args.max_depth,
-                max_nodes=args.max_nodes,
-                prefix=prefix,
-                as_json=args.json,
-                query_prefix=raw_prefix,
-            )
-        if args.command == "audit":
-            _ensure_index(root)
-            return _run_audit_docstrings(
-                root,
-                prefix=prefix,
-                as_json=args.json,
-                query_prefix=raw_prefix,
-            )
-        if args.command == "plugins":
-            return _run_plugins(as_json=args.json)
-        if args.command in {"caps", "capabilities"}:
-            return _run_capabilities(as_json=args.json, strict=args.strict)
-        if args.command == "ctx":
-            _ensure_index(root)
-
-            result = context_for(
-                root,
-                args.query,
-                prefix=prefix,
-                as_json=args.json,
-                as_prompt=args.prompt,
-                explain=args.explain,
-            )
-            print(result)
-            return 0
+        handlers = _command_handlers(
+            args,
+            parser,
+            root,
+            prefix=prefix,
+            raw_prefix=raw_prefix,
+        )
+        handler = handlers.get(command)
+        if handler is not None:
+            return handler()
     except EmbeddingBackendError as exc:
         print(f"[codira] {exc}", file=sys.stderr)
         return 2

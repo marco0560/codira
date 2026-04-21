@@ -73,7 +73,7 @@ from codira.types import (
 from codira.version import package_version
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
 # Current schema version
 SCHEMA_VERSION = "1.1"
@@ -171,6 +171,465 @@ class GraphRetrievalRequest:
     include_include_graph: bool
     include_references: bool
     prefix: str | None
+
+
+@dataclass(frozen=True)
+class ChannelBundleRequest:
+    """
+    Request parameters for executing enabled retrieval channels.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing indexed files.
+    query : str
+        User query string.
+    conn : sqlite3.Connection
+        Open database connection.
+    intent : codira.query.classifier.QueryIntent
+        Structured query classification.
+    plan : codira.query.classifier.RetrievalPlan
+        Deterministic retrieval plan derived from the query intent.
+    prefix : str | None
+        Absolute normalized prefix used to restrict candidate files.
+    """
+
+    root: Path
+    query: str
+    conn: sqlite3.Connection
+    intent: QueryIntent
+    plan: RetrievalPlan
+    prefix: str | None
+
+
+@dataclass(frozen=True)
+class PromptRenderRequest:
+    """
+    Request parameters for prompt-oriented context rendering.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root used to relativize paths.
+    query : str
+        Original user query.
+    top_matches : list[codira.types.SymbolRow]
+        Primary ranked matches.
+    doc_issues : list[tuple[str, str]]
+        Related docstring issues.
+    expanded : list[codira.types.SymbolRow]
+        Secondary symbols collected by module expansion.
+    unique_refs : list[codira.types.ReferenceRow]
+        Cross-reference locations for the selected symbols.
+    """
+
+    root: Path
+    query: str
+    top_matches: list[SymbolRow]
+    doc_issues: list[tuple[str, str]]
+    expanded: list[SymbolRow]
+    unique_refs: list[ReferenceRow]
+
+
+@dataclass(frozen=True)
+class ContextJsonRenderRequest:
+    """
+    Request parameters for JSON context rendering.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root used to format file paths.
+    top_matches : list[codira.types.SymbolRow]
+        Primary ranked symbols.
+    doc_issues : list[tuple[str, str]]
+        Related docstring issues.
+    expanded : list[codira.types.SymbolRow]
+        Secondary symbols collected by module expansion.
+    unique_refs : list[codira.types.ReferenceRow]
+        Cross-reference locations for selected symbols.
+    confidence_map : dict[codira.types.SymbolRow, float] | None, optional
+        Confidence values keyed by symbol.
+    explain : bool, optional
+        Whether explain metadata should be included.
+    intent : codira.query.classifier.QueryIntent | None, optional
+        Structured query classification.
+    plan : codira.query.classifier.RetrievalPlan | None, optional
+        Deterministic retrieval plan derived from query intent.
+    enabled_channels : set[codira.types.ChannelName] | None, optional
+        Channels enabled for the query.
+    channel_priority : dict[codira.types.ChannelName, int] | None, optional
+        Channel priority mapping.
+    ordered_channels : list[codira.types.ChannelName] | None, optional
+        Ordered channel names.
+    producers : list[ProducerDiagnosticsEntry] | None, optional
+        Retrieval-producer diagnostics synthesized from query producer specs.
+    signal_collection : SignalCollectionDiagnostics | None, optional
+        Compact diagnostics describing capability-gated signal collection.
+    signal_preview : list[dict[str, object]] | None, optional
+        Compact preview of normalized retrieval signals.
+    signal_merge : list[dict[str, object]] | None, optional
+        Per-top-match signal attribution summaries.
+    bundles : list[codira.types.ChannelBundle] | None, optional
+        Raw channel results.
+    provenance : codira.query.context.MergeDiagnostics | None, optional
+        Merge diagnostics for ranked symbols.
+    diversity : codira.query.context.DiversityDiagnostics | None, optional
+        Diversity-selection diagnostics for merged symbols.
+    expansion : codira.query.context.ExpansionDiagnostics | None, optional
+        Expansion diagnostics for graph-derived module expansion.
+    """
+
+    root: Path
+    top_matches: list[SymbolRow]
+    doc_issues: list[tuple[str, str]]
+    expanded: list[SymbolRow]
+    unique_refs: list[ReferenceRow]
+    confidence_map: dict[SymbolRow, float] | None = None
+    explain: bool = False
+    intent: QueryIntent | None = None
+    plan: RetrievalPlan | None = None
+    enabled_channels: set[ChannelName] | None = None
+    channel_priority: dict[ChannelName, int] | None = None
+    ordered_channels: list[ChannelName] | None = None
+    producers: list[ProducerDiagnosticsEntry] | None = None
+    signal_collection: SignalCollectionDiagnostics | None = None
+    signal_preview: list[dict[str, object]] | None = None
+    signal_merge: list[dict[str, object]] | None = None
+    bundles: list[ChannelBundle] | None = None
+    provenance: MergeDiagnostics | None = None
+    diversity: DiversityDiagnostics | None = None
+    expansion: ExpansionDiagnostics | None = None
+
+
+@dataclass(frozen=True)
+class ExplainSectionsRequest:
+    """
+    Request parameters for plain-text explain-section rendering.
+
+    Parameters
+    ----------
+    lines : list[str]
+        Mutable output buffer.
+    explain : bool
+        Whether explain sections should be rendered.
+    intent : codira.query.classifier.QueryIntent | None
+        Structured query classification.
+    plan : codira.query.classifier.RetrievalPlan | None
+        Deterministic retrieval plan derived from query intent.
+    enabled_channels : set[codira.types.ChannelName] | None
+        Channels enabled for the query.
+    channel_priority : dict[codira.types.ChannelName, int] | None
+        Channel priority mapping.
+    ordered_channels : list[codira.types.ChannelName] | None
+        Ordered channel names.
+    producers : list[ProducerDiagnosticsEntry] | None
+        Retrieval-producer diagnostics synthesized from query producer specs.
+    signal_collection : SignalCollectionDiagnostics | None
+        Compact diagnostics describing capability-gated signal collection.
+    signal_preview : list[dict[str, object]] | None
+        Compact preview of normalized retrieval signals.
+    signal_merge : list[dict[str, object]] | None
+        Per-top-match signal attribution summaries.
+    bundles : list[codira.types.ChannelBundle] | None
+        Raw channel results.
+    provenance : codira.query.context.MergeDiagnostics | None
+        Merge diagnostics for ranked symbols.
+    diversity : codira.query.context.DiversityDiagnostics | None
+        Diversity-selection diagnostics for merged symbols.
+    expansion : codira.query.context.ExpansionDiagnostics | None
+        Expansion diagnostics for graph-derived module expansion.
+    top_matches : list[codira.types.SymbolRow]
+        Primary merged symbols to explain.
+    """
+
+    lines: list[str]
+    explain: bool
+    intent: QueryIntent | None
+    plan: RetrievalPlan | None
+    enabled_channels: set[ChannelName] | None
+    channel_priority: dict[ChannelName, int] | None
+    ordered_channels: list[ChannelName] | None
+    producers: list[ProducerDiagnosticsEntry] | None
+    signal_collection: SignalCollectionDiagnostics | None
+    signal_preview: list[dict[str, object]] | None
+    signal_merge: list[dict[str, object]] | None
+    bundles: list[ChannelBundle] | None
+    provenance: MergeDiagnostics | None
+    diversity: DiversityDiagnostics | None
+    expansion: ExpansionDiagnostics | None
+    top_matches: list[SymbolRow]
+
+
+@dataclass(frozen=True)
+class MainContextSectionsRequest:
+    """
+    Request parameters for the main plain-text context sections.
+
+    Parameters
+    ----------
+    lines : list[str]
+        Mutable output buffer.
+    root : pathlib.Path
+        Repository root used to relativize paths.
+    top_matches : list[codira.types.SymbolRow]
+        Primary ranked symbols.
+    doc_issues : list[tuple[str, str]]
+        Related docstring issues.
+    expanded : list[codira.types.SymbolRow]
+        Secondary symbols collected by module expansion.
+    unique_refs : list[codira.types.ReferenceRow]
+        Cross-reference locations for selected symbols.
+    """
+
+    lines: list[str]
+    root: Path
+    top_matches: list[SymbolRow]
+    doc_issues: list[tuple[str, str]]
+    expanded: list[SymbolRow]
+    unique_refs: list[ReferenceRow]
+
+
+@dataclass(frozen=True)
+class ContextRenderRequest:
+    """
+    Request parameters for final context rendering.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root used to relativize paths.
+    query : str
+        Original user query.
+    top_matches : list[codira.types.SymbolRow]
+        Primary ranked symbols.
+    doc_issues : list[tuple[str, str]]
+        Related docstring issues.
+    expanded : list[codira.types.SymbolRow]
+        Secondary symbols collected by module expansion.
+    unique_refs : list[codira.types.ReferenceRow]
+        Cross-reference locations for selected symbols.
+    confidence_map : dict[codira.types.SymbolRow, float] | None, optional
+        Confidence values keyed by symbol.
+    as_json : bool, optional
+        Whether to render JSON output.
+    as_prompt : bool, optional
+        Whether to render prompt output.
+    explain : bool, optional
+        Whether to include explain metadata.
+    intent : codira.query.classifier.QueryIntent | None, optional
+        Structured query classification.
+    plan : codira.query.classifier.RetrievalPlan | None, optional
+        Deterministic retrieval plan derived from query intent.
+    enabled_channels : set[codira.types.ChannelName] | None, optional
+        Channels enabled for the query.
+    channel_priority : dict[codira.types.ChannelName, int] | None, optional
+        Channel priority mapping.
+    ordered_channels : list[codira.types.ChannelName] | None, optional
+        Ordered channel names.
+    producers : list[ProducerDiagnosticsEntry] | None, optional
+        Retrieval-producer diagnostics synthesized from query producer specs.
+    signal_collection : SignalCollectionDiagnostics | None, optional
+        Compact diagnostics describing capability-gated signal collection.
+    signal_preview : list[dict[str, object]] | None, optional
+        Compact preview of normalized retrieval signals.
+    signal_merge : list[dict[str, object]] | None, optional
+        Per-top-match signal attribution summaries.
+    bundles : list[codira.types.ChannelBundle] | None, optional
+        Raw channel results.
+    provenance : codira.query.context.MergeDiagnostics | None, optional
+        Merge diagnostics for ranked symbols.
+    diversity : codira.query.context.DiversityDiagnostics | None, optional
+        Diversity-selection diagnostics for merged symbols.
+    expansion : codira.query.context.ExpansionDiagnostics | None, optional
+        Expansion diagnostics for graph-derived module expansion.
+    """
+
+    root: Path
+    query: str
+    top_matches: list[SymbolRow]
+    doc_issues: list[tuple[str, str]]
+    expanded: list[SymbolRow]
+    unique_refs: list[ReferenceRow]
+    confidence_map: dict[SymbolRow, float] | None = None
+    as_json: bool = False
+    as_prompt: bool = False
+    explain: bool = False
+    intent: QueryIntent | None = None
+    plan: RetrievalPlan | None = None
+    enabled_channels: set[ChannelName] | None = None
+    channel_priority: dict[ChannelName, int] | None = None
+    ordered_channels: list[ChannelName] | None = None
+    producers: list[ProducerDiagnosticsEntry] | None = None
+    signal_collection: SignalCollectionDiagnostics | None = None
+    signal_preview: list[dict[str, object]] | None = None
+    signal_merge: list[dict[str, object]] | None = None
+    bundles: list[ChannelBundle] | None = None
+    provenance: MergeDiagnostics | None = None
+    diversity: DiversityDiagnostics | None = None
+    expansion: ExpansionDiagnostics | None = None
+
+
+@dataclass(frozen=True)
+class ContextRequest:
+    """
+    Request parameters for end-to-end context retrieval.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Root directory of the indexed repository.
+    query : str
+        Query string used to retrieve relevant symbols and context.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict files and references.
+    as_json : bool, optional
+        Whether to emit the JSON representation.
+    as_prompt : bool, optional
+        Whether to emit the prompt-oriented representation.
+    explain : bool, optional
+        Whether to include retrieval diagnostics.
+    """
+
+    root: Path
+    query: str
+    prefix: str | None = None
+    as_json: bool = False
+    as_prompt: bool = False
+    explain: bool = False
+
+
+@dataclass(frozen=True)
+class ExpansionCollectionRequest:
+    """
+    Request parameters for module expansion and reference collection.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root used for file discovery and path normalization.
+    top_matches : list[codira.types.SymbolRow]
+        Primary ranked symbols for the query.
+    conn : sqlite3.Connection
+        Open database connection reused for graph lookups and symbol expansion.
+    include_include_graph : bool
+        Whether include-graph expansion is enabled by the retrieval plan.
+    include_references : bool
+        Whether cross-module reference collection is enabled by the retrieval
+        plan.
+    prefix : str | None, optional
+        Absolute normalized prefix used to restrict owner files, expanded
+        symbols, and scanned references.
+    graph_signals : list[codira.query.signals.RetrievalSignal] | None, optional
+        Mutable signal buffer that receives normalized graph evidence when
+        supplied.
+    """
+
+    root: Path
+    top_matches: list[SymbolRow]
+    conn: sqlite3.Connection
+    include_include_graph: bool
+    include_references: bool
+    prefix: str | None = None
+    graph_signals: list[RetrievalSignal] | None = None
+
+
+@dataclass(frozen=True)
+class GraphRelatedExpansionRequest:
+    """
+    Request parameters for graph-based related-symbol expansion.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    top_matches : list[codira.types.SymbolRow]
+        Primary ranked symbols for the query.
+    conn : sqlite3.Connection
+        Open database connection reused for exact graph lookups.
+    include_include_graph : bool
+        Whether include-graph expansion is enabled.
+    include_references : bool
+        Whether callable-reference expansion is enabled.
+    prefix : str | None, optional
+        Absolute normalized prefix used to restrict owner files and symbols.
+    expanded : list[codira.types.SymbolRow]
+        Pending expanded symbols collected for the query.
+    seen_symbols : set[codira.types.SymbolRow]
+        Symbols already admitted to the expanded result set.
+    graph_signals : list[codira.query.signals.RetrievalSignal] | None, optional
+        Mutable signal buffer that receives normalized graph evidence when
+        supplied.
+    """
+
+    root: Path
+    top_matches: list[SymbolRow]
+    conn: sqlite3.Connection
+    include_include_graph: bool
+    include_references: bool
+    prefix: str | None
+    expanded: list[SymbolRow]
+    seen_symbols: set[SymbolRow]
+    graph_signals: list[RetrievalSignal] | None = None
+
+
+@dataclass
+class ContextExecutionState:
+    """
+    Mutable state threaded through end-to-end context retrieval.
+
+    Parameters
+    ----------
+    normalized_prefix : str | None
+        Absolute normalized prefix used to restrict files and references.
+    intent : codira.query.classifier.QueryIntent
+        Structured query classification.
+    plan : codira.query.classifier.RetrievalPlan
+        Deterministic retrieval plan derived from the query intent.
+    bundles : list[codira.types.ChannelBundle]
+        Channel bundles collected for the query.
+    ordered_channels : list[codira.types.ChannelName] | None
+        Ordered channel names when explain metadata is retained.
+    enabled : set[codira.types.ChannelName] | None
+        Channels enabled for the query when explain output is requested.
+    priority : dict[codira.types.ChannelName, int] | None
+        Channel priority mapping when explain output is requested.
+    producer_diagnostics : list[ProducerDiagnosticsEntry] | None
+        Retrieval-producer diagnostics synthesized from query producer specs.
+    signal_collection : SignalCollectionDiagnostics | None
+        Compact diagnostics describing capability-gated signal collection.
+    retrieval_signals : list[codira.query.signals.RetrievalSignal]
+        Normalized retrieval signals collected for ranking.
+    provenance : codira.query.context.MergeDiagnostics | None
+        Merge diagnostics for ranked symbols.
+    top_matches : list[codira.types.SymbolRow]
+        Current ranked symbol winners.
+    diversity : codira.query.context.DiversityDiagnostics | None
+        Diversity-selection diagnostics for merged symbols.
+    expansion : codira.query.context.ExpansionDiagnostics | None
+        Expansion diagnostics for graph-derived module expansion.
+    signal_preview : list[dict[str, object]] | None
+        Compact preview of normalized retrieval signals.
+    signal_merge : list[dict[str, object]] | None
+        Per-top-match signal attribution summaries.
+    """
+
+    normalized_prefix: str | None
+    intent: QueryIntent
+    plan: RetrievalPlan
+    bundles: list[ChannelBundle]
+    ordered_channels: list[ChannelName] | None
+    enabled: set[ChannelName] | None
+    priority: dict[ChannelName, int] | None
+    producer_diagnostics: list[ProducerDiagnosticsEntry] | None
+    signal_collection: SignalCollectionDiagnostics | None
+    retrieval_signals: list[RetrievalSignal]
+    provenance: MergeDiagnostics | None
+    top_matches: list[SymbolRow]
+    diversity: DiversityDiagnostics | None = None
+    expansion: ExpansionDiagnostics | None = None
+    signal_preview: list[dict[str, object]] | None = None
+    signal_merge: list[dict[str, object]] | None = None
 
 
 @dataclass(frozen=True)
@@ -588,6 +1047,258 @@ def _snippet_from_node(
     return _normalize_snippet_lines(snippet, limit)
 
 
+def _load_cached_python_file(
+    path: Path,
+    cache: dict[Path, tuple[str, list[str], ast.Module]],
+) -> tuple[str, list[str], ast.Module | None] | None:
+    """
+    Load and cache one Python source file used for context rendering.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Absolute source path to load.
+    cache : dict[pathlib.Path, tuple[str, list[str], ast.Module]]
+        Parsed-file cache shared across multiple lookups.
+
+    Returns
+    -------
+    tuple[str, list[str], ast.Module | None] | None
+        Cached source, split lines, and parsed AST when available. Returns
+        ``None`` when the file cannot be read.
+    """
+    if path in cache:
+        source, source_lines, tree = cache[path]
+        return (source, source_lines, tree)
+
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    source_lines = source.splitlines()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return (source, source_lines, None)
+
+    cache[path] = (source, source_lines, tree)
+    return (source, source_lines, tree)
+
+
+def _nearest_ast_node(
+    candidates: Sequence[ast.AST],
+    lineno: int,
+) -> ast.AST | None:
+    """
+    Return the candidate node closest to the indexed line number.
+
+    Parameters
+    ----------
+    candidates : collections.abc.Sequence[ast.AST]
+        Candidate AST nodes sharing the same symbol name.
+    lineno : int
+        Indexed line number used for deterministic disambiguation.
+
+    Returns
+    -------
+    ast.AST | None
+        Nearest candidate node, or ``None`` when no candidates exist.
+    """
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda node: abs(getattr(node, "lineno", 0) - lineno),
+    )
+
+
+def _module_code_context(
+    tree: ast.Module,
+    source_lines: list[str],
+    lineno: int,
+) -> CodeContext:
+    """
+    Build module-level code context from one parsed AST.
+
+    Parameters
+    ----------
+    tree : ast.Module
+        Parsed module AST.
+    source_lines : list[str]
+        Source file split into lines.
+    lineno : int
+        Indexed line number used for fallback snippets.
+
+    Returns
+    -------
+    codira.types.CodeContext
+        Module-level signature, docstring preview, and snippet.
+    """
+    return (
+        None,
+        _truncate_lines(
+            ast.get_docstring(tree, clean=True),
+            DOCSTRING_PREVIEW_LINE_LIMIT,
+        ),
+        _snippet_from_lines(source_lines, lineno),
+    )
+
+
+def _context_from_ast_node(
+    node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
+    source: str,
+    source_lines: list[str],
+) -> CodeContext:
+    """
+    Build code context for one resolved class or callable AST node.
+
+    Parameters
+    ----------
+    node : ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+        Resolved AST node for the indexed symbol.
+    source : str
+        Full source text used for signature rendering.
+    source_lines : list[str]
+        Source file split into lines.
+
+    Returns
+    -------
+    codira.types.CodeContext
+        Signature, truncated docstring preview, and source snippet.
+    """
+    return (
+        _render_signature(node, source),
+        _truncate_lines(
+            ast.get_docstring(node, clean=True),
+            DOCSTRING_PREVIEW_LINE_LIMIT,
+        ),
+        _snippet_from_node(node, source_lines),
+    )
+
+
+def _class_symbol_candidates(
+    tree: ast.Module,
+    name: str,
+) -> list[ast.ClassDef]:
+    """
+    Collect top-level class candidates matching one symbol name.
+
+    Parameters
+    ----------
+    tree : ast.Module
+        Parsed module AST.
+    name : str
+        Symbol name to match.
+
+    Returns
+    -------
+    list[ast.ClassDef]
+        Matching top-level class definitions.
+    """
+    return [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == name
+    ]
+
+
+def _function_symbol_candidates(
+    tree: ast.Module,
+    name: str,
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """
+    Collect top-level function candidates matching one symbol name.
+
+    Parameters
+    ----------
+    tree : ast.Module
+        Parsed module AST.
+    name : str
+        Symbol name to match.
+
+    Returns
+    -------
+    list[ast.FunctionDef | ast.AsyncFunctionDef]
+        Matching top-level function definitions.
+    """
+    return [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == name
+    ]
+
+
+def _method_symbol_candidates(
+    tree: ast.Module,
+    name: str,
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """
+    Collect method candidates matching one symbol name.
+
+    Parameters
+    ----------
+    tree : ast.Module
+        Parsed module AST.
+    name : str
+        Method name to match.
+
+    Returns
+    -------
+    list[ast.FunctionDef | ast.AsyncFunctionDef]
+        Matching methods across top-level classes.
+    """
+    return [
+        child
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        for child in node.body
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and child.name == name
+    ]
+
+
+def _symbol_context_candidate(
+    tree: ast.Module,
+    symbol_type: str,
+    name: str,
+    lineno: int,
+) -> ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """
+    Resolve the nearest AST node for one indexed symbol.
+
+    Parameters
+    ----------
+    tree : ast.Module
+        Parsed module AST.
+    symbol_type : str
+        Indexed symbol kind.
+    name : str
+        Symbol name to match.
+    lineno : int
+        Indexed line number used for deterministic disambiguation.
+
+    Returns
+    -------
+    ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef | None
+        Resolved AST node, or ``None`` when no candidate matches.
+    """
+    candidates: Sequence[ast.AST]
+    if symbol_type == "class":
+        candidates = _class_symbol_candidates(tree, name)
+    elif symbol_type == "function":
+        candidates = _function_symbol_candidates(tree, name)
+    elif symbol_type == "method":
+        candidates = _method_symbol_candidates(tree, name)
+    else:
+        return None
+    node = _nearest_ast_node(candidates, lineno)
+    if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        return node
+    return None
+
+
 def _extract_code_context(
     root: Path,
     symbol: SymbolRow,
@@ -615,98 +1326,21 @@ def _extract_code_context(
     if not path.is_absolute():
         path = root / path
 
-    if path in cache:
-        source, source_lines, tree = cache[path]
-    else:
-        try:
-            source = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return (None, None, [])
+    loaded = _load_cached_python_file(path, cache)
+    if loaded is None:
+        return (None, None, [])
 
-        source_lines = source.splitlines()
-
-        try:
-            tree = ast.parse(source)
-        except SyntaxError:
-            return (None, None, _snippet_from_lines(source_lines, lineno))
-
-        cache[path] = (source, source_lines, tree)
+    source, source_lines, tree = loaded
+    if tree is None:
+        return (None, None, _snippet_from_lines(source_lines, lineno))
 
     if symbol_type == "module":
-        module_doc = ast.get_docstring(tree, clean=True)
-        snippet = _snippet_from_lines(source_lines, lineno)
-        return (
-            None,
-            _truncate_lines(module_doc, DOCSTRING_PREVIEW_LINE_LIMIT),
-            snippet,
-        )
+        return _module_code_context(tree, source_lines, lineno)
 
-    # --- CLASS MATCH ---
-    if symbol_type == "class":
-        class_candidates: list[ast.ClassDef] = []
+    candidate = _symbol_context_candidate(tree, symbol_type, name, lineno)
+    if candidate is not None:
+        return _context_from_ast_node(candidate, source, source_lines)
 
-        for node in tree.body:
-            if isinstance(node, ast.ClassDef) and node.name == name:
-                class_candidates.append(node)
-
-        if class_candidates:
-            node = min(class_candidates, key=lambda n: abs(n.lineno - lineno))
-            signature = _render_signature(node, source)
-            docstring = ast.get_docstring(node, clean=True)
-            snippet = _snippet_from_node(node, source_lines)
-            return (
-                signature,
-                _truncate_lines(docstring, DOCSTRING_PREVIEW_LINE_LIMIT),
-                snippet,
-            )
-
-    # --- FUNCTION MATCH ---
-    if symbol_type == "function":
-        func_candidates: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
-
-        for node in tree.body:
-            if (
-                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name == name
-            ):
-                func_candidates.append(node)
-
-        if func_candidates:
-            node = min(func_candidates, key=lambda n: abs(n.lineno - lineno))
-            signature = _render_signature(node, source)
-            docstring = ast.get_docstring(node, clean=True)
-            snippet = _snippet_from_node(node, source_lines)
-            return (
-                signature,
-                _truncate_lines(docstring, DOCSTRING_PREVIEW_LINE_LIMIT),
-                snippet,
-            )
-
-    # --- METHOD MATCH ---
-    if symbol_type == "method":
-        method_candidates: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
-
-        for node in tree.body:
-            if isinstance(node, ast.ClassDef):
-                for child in node.body:
-                    if (
-                        isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                        and child.name == name
-                    ):
-                        method_candidates.append(child)
-
-        if method_candidates:
-            node = min(method_candidates, key=lambda n: abs(n.lineno - lineno))
-            signature = _render_signature(node, source)
-            docstring = ast.get_docstring(node, clean=True)
-            snippet = _snippet_from_node(node, source_lines)
-            return (
-                signature,
-                _truncate_lines(docstring, DOCSTRING_PREVIEW_LINE_LIMIT),
-                snippet,
-            )
-
-    # --- FALLBACK ---
     return (None, None, _snippet_from_lines(source_lines, lineno))
 
 
@@ -1883,57 +2517,57 @@ def _channel_order() -> list[ChannelName]:
 
 
 def _build_channel_bundles(
-    root: Path,
-    query: str,
-    conn: sqlite3.Connection,
-    intent: QueryIntent,
-    plan: RetrievalPlan,
-    prefix: str | None,
+    request: ChannelBundleRequest,
 ) -> list[ChannelBundle]:
     """
     Execute the enabled retrieval channels for a query.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root containing indexed files.
-    query : str
-        User query string.
-    conn : sqlite3.Connection
-        Open database connection.
-    intent : codira.query.classifier.QueryIntent
-        Structured query classification.
-    plan : codira.query.classifier.RetrievalPlan
-        Deterministic retrieval plan derived from the query intent.
-    prefix : str | None
-        Absolute normalized prefix used to restrict candidate files.
+    request : ChannelBundleRequest
+        Retrieval-channel execution request.
 
     Returns
     -------
     list[codira.types.ChannelBundle]
         Channel names paired with their ranked results.
     """
-    channel_fns = _get_channel_functions(plan)
+    channel_fns = _get_channel_functions(request.plan)
 
-    return [(name, fn(root, query, conn, intent, prefix)) for name, fn in channel_fns]
+    return [
+        (
+            name,
+            fn(
+                request.root,
+                request.query,
+                request.conn,
+                request.intent,
+                request.prefix,
+            ),
+        )
+        for name, fn in channel_fns
+    ]
 
 
 def _channel_retrieval_producers(
-    ordered_channels: list[ChannelName],
+    ordered_channels: list[ChannelName] | None,
 ) -> list[QueryProducerSpec]:
     """
     Build query producer specs for channel-only aggregation paths.
 
     Parameters
     ----------
-    ordered_channels : list[codira.types.ChannelName]
-        Channel order active for the query.
+    ordered_channels : list[codira.types.ChannelName] | None
+        Channel order active for the query. When ``None``, no channel
+        producers are emitted.
 
     Returns
     -------
     list[codira.query.producers.QueryProducerSpec]
         Channel producers without enrichment-specific entries.
     """
+    if ordered_channels is None:
+        return []
     return channel_producer_specs(ordered_channels)
 
 
@@ -3214,41 +3848,16 @@ def _add_related_symbol(
 
 
 def _expand_graph_related_symbols(
-    root: Path,
-    top_matches: list[SymbolRow],
-    conn: sqlite3.Connection,
-    *,
-    include_include_graph: bool,
-    include_references: bool,
-    prefix: str | None,
-    expanded: list[SymbolRow],
-    seen_symbols: set[SymbolRow],
-    graph_signals: list[RetrievalSignal] | None = None,
+    request: GraphRelatedExpansionRequest,
 ) -> list[dict[str, object]]:
     """
     Expand top matches through include, call, and callable-reference graphs.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root containing the index database.
-    top_matches : list[codira.types.SymbolRow]
-        Primary ranked symbols for the query.
-    conn : sqlite3.Connection
-        Open database connection reused for exact graph lookups.
-    include_include_graph : bool
-        Whether include-graph expansion is enabled.
-    include_references : bool
-        Whether callable-reference expansion is enabled.
-    prefix : str | None
-        Absolute normalized prefix used to restrict owner files and symbols.
-    expanded : list[codira.types.SymbolRow]
-        Pending expanded symbols collected for the query.
-    seen_symbols : set[codira.types.SymbolRow]
-        Symbols already admitted to the expanded result set.
-    graph_signals : list[codira.query.signals.RetrievalSignal] | None, optional
-        Mutable signal buffer that receives normalized graph evidence when
-        supplied.
+    request : GraphRelatedExpansionRequest
+        Graph-expansion request carrying ranked matches, expansion toggles,
+        prefix filtering, and mutable expansion buffers.
 
     Returns
     -------
@@ -3257,22 +3866,22 @@ def _expand_graph_related_symbols(
     """
     return expand_graph_related_symbols(
         GraphExpansionRequest(
-            root=root,
-            top_matches=top_matches,
-            conn=conn,
-            include_include_graph=include_include_graph,
-            include_references=include_references,
-            prefix=prefix,
-            expanded=expanded,
-            seen_symbols=seen_symbols,
-            graph_signals=graph_signals,
+            root=request.root,
+            top_matches=request.top_matches,
+            conn=request.conn,
+            include_include_graph=request.include_include_graph,
+            include_references=request.include_references,
+            prefix=request.prefix,
+            expanded=request.expanded,
+            seen_symbols=request.seen_symbols,
+            graph_signals=request.graph_signals,
             classify_file_language=_classify_file_language,
             classify_file_role=_classify_file_role,
             include_target_module_name=_include_target_module_name,
             symbols_in_module=lambda module_root, module_name: _symbols_in_module(
                 module_root,
                 module_name,
-                prefix=prefix,
+                prefix=request.prefix,
             ),
         )
     )
@@ -3416,38 +4025,15 @@ def _collect_reference_rows(
 
 
 def _expand_and_collect_references(
-    root: Path,
-    top_matches: list[SymbolRow],
-    conn: sqlite3.Connection,
-    *,
-    include_include_graph: bool,
-    include_references: bool,
-    prefix: str | None = None,
-    graph_signals: list[RetrievalSignal] | None = None,
+    request: ExpansionCollectionRequest,
 ) -> tuple[list[SymbolRow], list[ReferenceRow], ExpansionDiagnostics]:
     """
     Perform module expansion and collect cross-module references.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root used for file discovery and path normalization.
-    top_matches : list[codira.types.SymbolRow]
-        Primary ranked symbols for the query.
-    conn : sqlite3.Connection
-        Open database connection reused for graph lookups and symbol
-        expansion.
-    include_include_graph : bool
-        Whether include-graph expansion is enabled by the retrieval plan.
-    include_references : bool
-        Whether cross-module reference collection is enabled by the retrieval
-        plan.
-    prefix : str | None, optional
-        Absolute normalized prefix used to restrict owner files, expanded
-        symbols, and scanned references.
-    graph_signals : list[codira.query.signals.RetrievalSignal] | None, optional
-        Mutable signal buffer that receives normalized graph evidence when
-        supplied.
+    request : ExpansionCollectionRequest
+        Module-expansion and reference-collection request.
 
     Returns
     -------
@@ -3467,31 +4053,33 @@ def _expand_and_collect_references(
     symbols around the primary matches.
     """
     expanded: list[SymbolRow] = []
-    seen_symbols: set[SymbolRow] = set(top_matches)
+    seen_symbols: set[SymbolRow] = set(request.top_matches)
     include_expansion = _expand_graph_related_symbols(
-        root,
-        top_matches,
-        conn,
-        include_include_graph=include_include_graph,
-        include_references=include_references,
-        prefix=prefix,
-        expanded=expanded,
-        seen_symbols=seen_symbols,
-        graph_signals=graph_signals,
+        GraphRelatedExpansionRequest(
+            root=request.root,
+            top_matches=request.top_matches,
+            conn=request.conn,
+            include_include_graph=request.include_include_graph,
+            include_references=request.include_references,
+            prefix=request.prefix,
+            expanded=expanded,
+            seen_symbols=seen_symbols,
+            graph_signals=request.graph_signals,
+        )
     )
     _expand_module_related_symbols(
-        root,
-        top_matches,
-        prefix=prefix,
+        request.root,
+        request.top_matches,
+        prefix=request.prefix,
         expanded=expanded,
         seen_symbols=seen_symbols,
     )
     expanded = _finalize_expanded_symbols(expanded)
     unique_refs = _collect_reference_rows(
-        root,
-        top_matches,
-        include_references=include_references,
-        prefix=prefix,
+        request.root,
+        request.top_matches,
+        include_references=request.include_references,
+        prefix=request.prefix,
     )
     diagnostics: ExpansionDiagnostics = {"include_graph": include_expansion}
     return expanded, unique_refs, diagnostics
@@ -3527,30 +4115,15 @@ def _prompt_symbol_line(root: Path, symbol: SymbolRow) -> str:
 
 
 def _render_agent_prompt(
-    root: Path,
-    query: str,
-    top_matches: list[SymbolRow],
-    doc_issues: list[tuple[str, str]],
-    expanded: list[SymbolRow],
-    unique_refs: list[ReferenceRow],
+    request: PromptRenderRequest,
 ) -> str:
     """
     Render the agent prompt variant of the query context.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root used to relativize paths.
-    query : str
-        Original user query.
-    top_matches : list[codira.types.SymbolRow]
-        Primary ranked matches.
-    doc_issues : list[tuple[str, str]]
-        Related docstring issues.
-    expanded : list[codira.types.SymbolRow]
-        Secondary symbols collected by module expansion.
-    unique_refs : list[codira.types.ReferenceRow]
-        Cross-reference locations for the selected symbols.
+    request : PromptRenderRequest
+        Prompt-render request.
 
     Returns
     -------
@@ -3559,12 +4132,12 @@ def _render_agent_prompt(
     """
     return build_prompt(
         PromptBuildRequest(
-            root=root,
-            query=query,
-            top_matches=top_matches,
-            doc_issues=doc_issues,
-            expanded=expanded,
-            unique_refs=unique_refs,
+            root=request.root,
+            query=request.query,
+            top_matches=request.top_matches,
+            doc_issues=request.doc_issues,
+            expanded=request.expanded,
+            unique_refs=request.unique_refs,
             prompt_symbol_line=_prompt_symbol_line,
             format_enriched_symbol=_format_enriched_symbol,
         )
@@ -3588,849 +4161,1358 @@ def _approx_token_count(lines: list[str]) -> int:
     return sum(len(line.split()) for line in lines)
 
 
-def _render_context_json(
+def _context_blocks_payload(
     root: Path,
     top_matches: list[SymbolRow],
-    doc_issues: list[tuple[str, str]],
+) -> list[list[str]]:
+    """
+    Build bounded enriched context blocks for JSON rendering.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root used to relativize paths.
+    top_matches : list[codira.types.SymbolRow]
+        Primary ranked symbols.
+
+    Returns
+    -------
+    list[list[str]]
+        Token-capped enriched context blocks.
+    """
+    context_blocks: list[list[str]] = []
+    current_tokens = 0
+
+    for symbol in top_matches[:ENRICHED_CONTEXT_LIMIT]:
+        block = _format_enriched_symbol(root, symbol, {})
+        block_tokens = _approx_token_count(block)
+        if current_tokens + block_tokens > MAX_TOKENS:
+            break
+        context_blocks.append(block)
+        current_tokens += block_tokens
+
+    return context_blocks
+
+
+def _top_matches_payload(
+    top_matches: list[SymbolRow],
+    confidence_map: dict[SymbolRow, float] | None,
+) -> list[dict[str, object]]:
+    """
+    Serialize top matches for JSON context output.
+
+    Parameters
+    ----------
+    top_matches : list[codira.types.SymbolRow]
+        Primary ranked symbols.
+    confidence_map : dict[codira.types.SymbolRow, float] | None
+        Confidence values keyed by symbol.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        JSON-serializable top-match rows.
+    """
+    return [
+        {
+            "type": symbol_type,
+            "module": module_name,
+            "name": name,
+            "file": file_path,
+            "lineno": lineno,
+            "confidence": (
+                confidence_map.get(
+                    (symbol_type, module_name, name, file_path, lineno), 1.0
+                )
+                if confidence_map
+                else 1.0
+            ),
+        }
+        for symbol_type, module_name, name, file_path, lineno in top_matches
+    ]
+
+
+def _module_expansion_payload(
     expanded: list[SymbolRow],
-    unique_refs: list[ReferenceRow],
-    *,
-    confidence_map: dict[SymbolRow, float] | None = None,
-    explain: bool = False,
-    intent: QueryIntent | None = None,
-    plan: RetrievalPlan | None = None,
-    enabled_channels: set[ChannelName] | None = None,
-    channel_priority: dict[ChannelName, int] | None = None,
-    ordered_channels: list[ChannelName] | None = None,
-    producers: list[ProducerDiagnosticsEntry] | None = None,
-    signal_collection: SignalCollectionDiagnostics | None = None,
-    signal_preview: list[dict[str, object]] | None = None,
-    signal_merge: list[dict[str, object]] | None = None,
-    bundles: list[ChannelBundle] | None = None,
-    provenance: MergeDiagnostics | None = None,
-    diversity: DiversityDiagnostics | None = None,
-    expansion: ExpansionDiagnostics | None = None,
+) -> list[dict[str, object]]:
+    """
+    Serialize expanded module symbols for JSON context output.
+
+    Parameters
+    ----------
+    expanded : list[codira.types.SymbolRow]
+        Secondary symbols collected by module expansion.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        JSON-serializable expansion rows.
+    """
+    return [
+        {
+            "type": symbol_type,
+            "module": module_name,
+            "name": name,
+            "file": file_path,
+            "lineno": lineno,
+        }
+        for symbol_type, module_name, name, file_path, lineno in expanded
+    ]
+
+
+def _channel_results_payload(
+    bundles: list[ChannelBundle],
+) -> dict[str, list[dict[str, object]]]:
+    """
+    Serialize per-channel ranked results for explain-mode JSON output.
+
+    Parameters
+    ----------
+    bundles : list[codira.types.ChannelBundle]
+        Raw channel results.
+
+    Returns
+    -------
+    dict[str, list[dict[str, object]]]
+        Per-channel JSON rows capped to the leading five results.
+    """
+    channel_results: dict[str, list[dict[str, object]]] = {}
+
+    for channel_name, channel in bundles:
+        channel_results[channel_name] = [
+            {
+                "type": symbol_type,
+                "module": module_name,
+                "name": name,
+                "lineno": lineno,
+                "score": round(score, 2),
+            }
+            for score, (symbol_type, module_name, name, _file_path, lineno) in channel[
+                :5
+            ]
+        ]
+
+    return channel_results
+
+
+def _merge_explain_payload(
+    top_matches: list[SymbolRow],
+    provenance: MergeDiagnostics,
+    intent: QueryIntent | None,
+) -> list[dict[str, object]]:
+    """
+    Serialize merge diagnostics for explain-mode JSON output.
+
+    Parameters
+    ----------
+    top_matches : list[codira.types.SymbolRow]
+        Primary ranked symbols.
+    provenance : codira.query.context.MergeDiagnostics
+        Merge diagnostics for ranked symbols.
+    intent : codira.query.classifier.QueryIntent | None
+        Structured query classification.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        JSON-serializable merge diagnostics for the selected symbols.
+    """
+    merge_entries: list[dict[str, object]] = []
+
+    for symbol in top_matches:
+        merge_details = provenance.get(symbol)
+        if not merge_details:
+            continue
+
+        symbol_type, module_name, name, _file_path, lineno = symbol
+        role = _classify_file_role(symbol[3], module_name)
+        role_bias = _file_role_bias(role, intent)
+        merge_entries.append(
+            {
+                "type": symbol_type,
+                "module": module_name,
+                "name": name,
+                "lineno": lineno,
+                "channels": cast("dict[str, float]", merge_details["channels"]),
+                "families": cast("dict[str, float]", merge_details["families"]),
+                "rrf_score": round(cast("float", merge_details["rrf_score"]), 4),
+                "evidence_bonus": round(
+                    cast("float", merge_details["evidence_bonus"]),
+                    4,
+                ),
+                "role_bonus": round(cast("float", merge_details["role_bonus"]), 4),
+                "merge_score": round(cast("float", merge_details["merge_score"]), 4),
+                "winner": cast("str", merge_details["winner"]),
+                "role": role,
+                "role_bias": role_bias,
+            }
+        )
+
+    return merge_entries
+
+
+def _context_environment_payload() -> dict[str, object]:
+    """
+    Build the stable environment subsection for JSON explain output.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-serializable environment metadata.
+    """
+    embedding_backend = get_embedding_backend()
+    return {
+        "codira_version": __version__,
+        "schema_version": SCHEMA_VERSION,
+        "embedding_backend": {
+            "name": embedding_backend.name,
+            "version": embedding_backend.version,
+            "dim": embedding_backend.dim,
+        },
+    }
+
+
+def _intent_explain_payload(intent: QueryIntent) -> dict[str, object]:
+    """
+    Serialize one classified query intent for explain output.
+
+    Parameters
+    ----------
+    intent : QueryIntent
+        Structured query classification.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-serializable intent payload.
+    """
+    return {
+        "is_identifier_query": intent.is_identifier_query,
+        "is_test_related": intent.is_test_related,
+        "is_script_related": intent.is_script_related,
+        "is_multi_term": intent.is_multi_term,
+        "primary_intent": intent.primary_intent,
+        "raw": intent.raw,
+    }
+
+
+def _planner_explain_payload(plan: RetrievalPlan) -> dict[str, object]:
+    """
+    Serialize one retrieval plan for explain output.
+
+    Parameters
+    ----------
+    plan : RetrievalPlan
+        Deterministic retrieval plan derived from query intent.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-serializable planner payload.
+    """
+    return {
+        "primary_intent": plan.primary_intent,
+        "channels": list(plan.channels),
+        "include_doc_issues": plan.include_doc_issues,
+        "include_include_graph": plan.include_include_graph,
+        "include_references": plan.include_references,
+    }
+
+
+def _update_optional_explain_payload(
+    explain_block: dict[str, object],
+    request: ContextJsonRenderRequest,
+) -> None:
+    """
+    Merge optional explain sections into the JSON explain payload.
+
+    Parameters
+    ----------
+    explain_block : dict[str, object]
+        Mutable explain payload under construction.
+    request : ContextJsonRenderRequest
+        JSON render request carrying optional explain metadata.
+
+    Returns
+    -------
+    None
+        Optional sections are added to ``explain_block`` in place.
+    """
+    optional_sections: list[tuple[str, object | None]] = [
+        (
+            "enabled_channels",
+            (
+                sorted(request.enabled_channels)
+                if request.enabled_channels is not None
+                else None
+            ),
+        ),
+        ("channel_priority", request.channel_priority),
+        ("ordered_channels", request.ordered_channels),
+        ("retrieval_producers", request.producers),
+        ("signal_collection", request.signal_collection),
+        ("signals", request.signal_preview),
+        ("signal_merge", request.signal_merge),
+        (
+            "channel_results",
+            (
+                _channel_results_payload(request.bundles)
+                if request.bundles is not None
+                else None
+            ),
+        ),
+        (
+            "merge",
+            (
+                _merge_explain_payload(
+                    request.top_matches,
+                    request.provenance,
+                    request.intent,
+                )
+                if request.provenance is not None
+                else None
+            ),
+        ),
+        ("diversity", request.diversity),
+        ("expansion", request.expansion),
+    ]
+    for key, value in optional_sections:
+        if value is not None:
+            explain_block[key] = value
+
+
+def _context_explain_payload(
+    request: ContextJsonRenderRequest,
+) -> dict[str, object]:
+    """
+    Build the explain block for JSON context output.
+
+    Parameters
+    ----------
+    request : ContextJsonRenderRequest
+        JSON render request carrying explain-mode metadata.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-serializable explain block.
+    """
+    explain_block: dict[str, object] = {"environment": _context_environment_payload()}
+
+    if request.intent:
+        explain_block["intent"] = _intent_explain_payload(request.intent)
+    if request.plan is not None:
+        explain_block["planner"] = _planner_explain_payload(request.plan)
+    _update_optional_explain_payload(explain_block, request)
+    return explain_block
+
+
+def _render_context_json(
+    request: ContextJsonRenderRequest,
 ) -> str:
     """
     Render context output as structured JSON.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root used to format file paths.
-    top_matches : list[codira.types.SymbolRow]
-        Primary ranked symbols.
-    doc_issues : list[tuple[str, str]]
-        Related docstring issues.
-    expanded : list[codira.types.SymbolRow]
-        Secondary symbols collected by module expansion.
-    unique_refs : list[codira.types.ReferenceRow]
-        Cross-reference locations for selected symbols.
-    confidence_map : dict[codira.types.SymbolRow, float] | None, optional
-        Confidence values keyed by symbol.
-    explain : bool, optional
-        Whether explain metadata should be included.
-    intent : codira.query.classifier.QueryIntent | None, optional
-        Structured query classification.
-    plan : codira.query.classifier.RetrievalPlan | None, optional
-        Deterministic retrieval plan derived from query intent.
-    enabled_channels : set[codira.types.ChannelName] | None, optional
-        Channels enabled for the query.
-    channel_priority : dict[codira.types.ChannelName, int] | None, optional
-        Channel priority mapping.
-    ordered_channels : list[codira.types.ChannelName] | None, optional
-        Ordered channel names.
-    producers : list[dict[str, object]] | None, optional
-        Retrieval-producer diagnostics synthesized from query producer specs.
-    signal_collection : dict[str, object] | None, optional
-        Compact diagnostics describing capability-gated signal collection.
-    signal_preview : list[dict[str, object]] | None, optional
-        Compact preview of normalized retrieval signals.
-    signal_merge : list[dict[str, object]] | None, optional
-        Per-top-match signal attribution summaries.
-    bundles : list[codira.types.ChannelBundle] | None, optional
-        Raw channel results.
-    provenance : codira.query.context.MergeDiagnostics | None, optional
-        Merge diagnostics for ranked symbols.
-    diversity : codira.query.context.DiversityDiagnostics | None, optional
-        Diversity-selection diagnostics for merged symbols.
-    expansion : codira.query.context.ExpansionDiagnostics | None, optional
-        Expansion diagnostics for graph-derived module expansion.
+    request : ContextJsonRenderRequest
+        JSON render request.
 
     Returns
     -------
     str
         JSON-encoded context payload.
     """
-    status = "ok" if top_matches else "no_matches"
-    _context_blocks: list[list[str]] = []
-    _current_tokens = 0
-
-    for s in top_matches[:ENRICHED_CONTEXT_LIMIT]:
-        block = _format_enriched_symbol(root, s, {})
-        block_tokens = _approx_token_count(block)
-
-        if _current_tokens + block_tokens > MAX_TOKENS:
-            break
-
-        _context_blocks.append(block)
-        _current_tokens += block_tokens
+    status = "ok" if request.top_matches else "no_matches"
 
     result: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "status": status,
-        "top_matches": [
-            {
-                "type": t,
-                "module": m,
-                "name": n,
-                "file": f,
-                "lineno": lin,
-                "confidence": (
-                    confidence_map.get((t, m, n, f, lin), 1.0)
-                    if confidence_map
-                    else 1.0
-                ),
-            }
-            for t, m, n, f, lin in top_matches
+        "top_matches": _top_matches_payload(
+            request.top_matches,
+            request.confidence_map,
+        ),
+        "doc_issues": [
+            {"type": issue_type, "message": message}
+            for issue_type, message in request.doc_issues
         ],
-        "doc_issues": [{"type": t, "message": m} for t, m in doc_issues],
-        "context": _context_blocks,
-        "module_expansion": [
-            {
-                "type": t,
-                "module": m,
-                "name": n,
-                "file": f,
-                "lineno": lin,
-            }
-            for t, m, n, f, lin in expanded
+        "context": _context_blocks_payload(request.root, request.top_matches),
+        "module_expansion": _module_expansion_payload(request.expanded),
+        "references": [
+            {"file": file_path, "lineno": lineno}
+            for file_path, lineno in request.unique_refs
         ],
-        "references": [{"file": f, "lineno": lin} for f, lin in unique_refs],
     }
 
-    if explain:
-        embedding_backend = get_embedding_backend()
-        explain_block: dict[str, object] = {}
-
-        explain_block["environment"] = {
-            "codira_version": __version__,
-            "schema_version": SCHEMA_VERSION,
-            "embedding_backend": {
-                "name": embedding_backend.name,
-                "version": embedding_backend.version,
-                "dim": embedding_backend.dim,
-            },
-        }
-
-        if intent:
-            explain_block["intent"] = {
-                "is_identifier_query": intent.is_identifier_query,
-                "is_test_related": intent.is_test_related,
-                "is_script_related": intent.is_script_related,
-                "is_multi_term": intent.is_multi_term,
-                "primary_intent": intent.primary_intent,
-                "raw": intent.raw,
-            }
-
-        if plan is not None:
-            explain_block["planner"] = {
-                "primary_intent": plan.primary_intent,
-                "channels": list(plan.channels),
-                "include_doc_issues": plan.include_doc_issues,
-                "include_include_graph": plan.include_include_graph,
-                "include_references": plan.include_references,
-            }
-
-        if enabled_channels is not None:
-            explain_block["enabled_channels"] = sorted(enabled_channels)
-
-        if channel_priority is not None:
-            explain_block["channel_priority"] = channel_priority
-
-        if ordered_channels is not None:
-            explain_block["ordered_channels"] = ordered_channels
-
-        if producers is not None:
-            explain_block["retrieval_producers"] = producers
-
-        if signal_collection is not None:
-            explain_block["signal_collection"] = signal_collection
-
-        if signal_preview is not None:
-            explain_block["signals"] = signal_preview
-
-        if signal_merge is not None:
-            explain_block["signal_merge"] = signal_merge
-
-        if bundles is not None:
-            channel_results: dict[str, list[dict[str, object]]] = {}
-
-            for channel_name, channel in bundles:
-                entries: list[dict[str, object]] = []
-
-                for score, symbol in channel[:5]:
-                    symbol_type, module_name, name, _, lineno = symbol
-
-                    entries.append(
-                        {
-                            "type": symbol_type,
-                            "module": module_name,
-                            "name": name,
-                            "lineno": lineno,
-                            "score": round(score, 2),
-                        }
-                    )
-
-                channel_results[channel_name] = entries
-
-            explain_block["channel_results"] = channel_results
-
-        if provenance is not None:
-            merge_entries: list[dict[str, object]] = []
-
-            for symbol in top_matches:
-                merge_details = provenance.get(symbol)
-                if not merge_details:
-                    continue
-
-                symbol_type, module_name, name, _, lineno = symbol
-                role = _classify_file_role(symbol[3], module_name)
-                role_bias = _file_role_bias(role, intent)
-                merge_channels = cast("dict[str, float]", merge_details["channels"])
-                merge_families = cast("dict[str, float]", merge_details["families"])
-                merge_rrf_score = cast("float", merge_details["rrf_score"])
-                merge_evidence_bonus = cast("float", merge_details["evidence_bonus"])
-                merge_role_bonus = cast("float", merge_details["role_bonus"])
-                merge_score = cast("float", merge_details["merge_score"])
-                merge_winner = cast("str", merge_details["winner"])
-
-                merge_entries.append(
-                    {
-                        "type": symbol_type,
-                        "module": module_name,
-                        "name": name,
-                        "lineno": lineno,
-                        "channels": merge_channels,
-                        "families": merge_families,
-                        "rrf_score": round(merge_rrf_score, 4),
-                        "evidence_bonus": round(merge_evidence_bonus, 4),
-                        "role_bonus": round(merge_role_bonus, 4),
-                        "merge_score": round(merge_score, 4),
-                        "winner": merge_winner,
-                        "role": role,
-                        "role_bias": role_bias,
-                    }
-                )
-
-            explain_block["merge"] = merge_entries
-
-        if diversity is not None:
-            explain_block["diversity"] = diversity
-
-        if expansion is not None:
-            explain_block["expansion"] = expansion
-
-        result["explain"] = explain_block
+    if request.explain:
+        result["explain"] = _context_explain_payload(request)
 
     return json.dumps(result, indent=2)
 
 
 def _render_context_prompt(
-    root: Path,
-    query: str,
-    top_matches: list[SymbolRow],
-    doc_issues: list[tuple[str, str]],
-    expanded: list[SymbolRow],
-    unique_refs: list[ReferenceRow],
+    request: PromptRenderRequest,
 ) -> str:
     """
     Render context output in prompt form.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root used to relativize paths.
-    query : str
-        Original user query.
-    top_matches : list[codira.types.SymbolRow]
-        Primary ranked symbols.
-    doc_issues : list[tuple[str, str]]
-        Related docstring issues.
-    expanded : list[codira.types.SymbolRow]
-        Secondary symbols collected by module expansion.
-    unique_refs : list[codira.types.ReferenceRow]
-        Cross-reference locations for selected symbols.
+    request : PromptRenderRequest
+        Prompt-render request.
 
     Returns
     -------
     str
         Prompt-formatted query context.
     """
-    return _render_agent_prompt(
-        root,
-        query,
-        top_matches,
-        doc_issues,
-        expanded,
-        unique_refs,
-    )
+    return _render_agent_prompt(request)
 
 
 def _render_context(
-    root: Path,
-    query: str,
-    top_matches: list[SymbolRow],
-    doc_issues: list[tuple[str, str]],
-    expanded: list[SymbolRow],
-    unique_refs: list[ReferenceRow],
-    *,
-    confidence_map: dict[SymbolRow, float] | None = None,
-    as_json: bool = False,
-    as_prompt: bool = False,
-    explain: bool = False,
-    intent: QueryIntent | None = None,
-    plan: RetrievalPlan | None = None,
-    enabled_channels: set[ChannelName] | None = None,
-    channel_priority: dict[ChannelName, int] | None = None,
-    ordered_channels: list[ChannelName] | None = None,
-    producers: list[ProducerDiagnosticsEntry] | None = None,
-    signal_collection: SignalCollectionDiagnostics | None = None,
-    signal_preview: list[dict[str, object]] | None = None,
-    signal_merge: list[dict[str, object]] | None = None,
-    bundles: list[ChannelBundle] | None = None,
-    provenance: MergeDiagnostics | None = None,
-    diversity: DiversityDiagnostics | None = None,
-    expansion: ExpansionDiagnostics | None = None,
+    request: ContextRenderRequest,
 ) -> str:
     """
     Render final structured context output.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root used to relativize paths.
-    query : str
-        Original user query.
-    top_matches : list[codira.types.SymbolRow]
-        Primary ranked symbols.
-    doc_issues : list[tuple[str, str]]
-        Related docstring issues.
-    expanded : list[codira.types.SymbolRow]
-        Secondary symbols collected by module expansion.
-    unique_refs : list[codira.types.ReferenceRow]
-        Cross-reference locations for selected symbols.
-    confidence_map : dict[codira.types.SymbolRow, float] | None, optional
-        Confidence values keyed by symbol.
-    as_json : bool, optional
-        Whether to render JSON output.
-    as_prompt : bool, optional
-        Whether to render prompt output.
-    explain : bool, optional
-        Whether to include explain metadata.
-    intent : codira.query.classifier.QueryIntent | None, optional
-        Structured query classification.
-    plan : codira.query.classifier.RetrievalPlan | None, optional
-        Deterministic retrieval plan derived from query intent.
-    enabled_channels : set[codira.types.ChannelName] | None, optional
-        Channels enabled for the query.
-    channel_priority : dict[codira.types.ChannelName, int] | None, optional
-        Channel priority mapping.
-    ordered_channels : list[codira.types.ChannelName] | None, optional
-        Ordered channel names.
-    producers : list[dict[str, object]] | None, optional
-        Retrieval-producer diagnostics synthesized from query producer specs.
-    signal_collection : dict[str, object] | None, optional
-        Compact diagnostics describing capability-gated signal collection.
-    signal_preview : list[dict[str, object]] | None, optional
-        Compact preview of normalized retrieval signals.
-    signal_merge : list[dict[str, object]] | None, optional
-        Per-top-match signal attribution summaries.
-    bundles : list[codira.types.ChannelBundle] | None, optional
-        Raw channel results.
-    provenance : codira.query.context.MergeDiagnostics | None, optional
-        Merge diagnostics for ranked symbols.
-    diversity : codira.query.context.DiversityDiagnostics | None, optional
-        Diversity-selection diagnostics for merged symbols.
-    expansion : codira.query.context.ExpansionDiagnostics | None, optional
-        Expansion diagnostics for graph-derived module expansion.
+    request : ContextRenderRequest
+        Final context render request.
 
     Returns
     -------
     str
         Rendered context in plain-text, JSON, or prompt form.
     """
-    if as_json:
+    if request.as_json:
         return _render_context_json(
-            root,
-            top_matches,
-            doc_issues,
-            expanded,
-            unique_refs,
-            confidence_map=confidence_map,
-            explain=explain,
-            intent=intent,
-            plan=plan,
-            enabled_channels=enabled_channels,
-            channel_priority=channel_priority,
-            ordered_channels=ordered_channels,
-            producers=producers,
-            signal_collection=signal_collection,
-            signal_preview=signal_preview,
-            signal_merge=signal_merge,
-            bundles=bundles,
-            provenance=provenance,
-            diversity=diversity,
-            expansion=expansion,
+            ContextJsonRenderRequest(
+                root=request.root,
+                top_matches=request.top_matches,
+                doc_issues=request.doc_issues,
+                expanded=request.expanded,
+                unique_refs=request.unique_refs,
+                confidence_map=request.confidence_map,
+                explain=request.explain,
+                intent=request.intent,
+                plan=request.plan,
+                enabled_channels=request.enabled_channels,
+                channel_priority=request.channel_priority,
+                ordered_channels=request.ordered_channels,
+                producers=request.producers,
+                signal_collection=request.signal_collection,
+                signal_preview=request.signal_preview,
+                signal_merge=request.signal_merge,
+                bundles=request.bundles,
+                provenance=request.provenance,
+                diversity=request.diversity,
+                expansion=request.expansion,
+            )
         )
 
-    if as_prompt:
+    if request.as_prompt:
         return _render_context_prompt(
-            root,
-            query,
-            top_matches,
-            doc_issues,
-            expanded,
-            unique_refs,
+            PromptRenderRequest(
+                root=request.root,
+                query=request.query,
+                top_matches=request.top_matches,
+                doc_issues=request.doc_issues,
+                expanded=request.expanded,
+                unique_refs=request.unique_refs,
+            )
         )
 
     lines: list[str] = []
 
-    if explain:
+    if request.explain:
         _append_explain_sections(
-            lines,
-            explain=explain,
-            intent=intent,
-            plan=plan,
-            enabled_channels=enabled_channels,
-            channel_priority=channel_priority,
-            ordered_channels=ordered_channels,
-            producers=producers,
-            signal_collection=signal_collection,
-            signal_preview=signal_preview,
-            signal_merge=signal_merge,
-            bundles=bundles,
-            provenance=provenance,
-            diversity=diversity,
-            expansion=expansion,
-            top_matches=top_matches,
+            ExplainSectionsRequest(
+                lines=lines,
+                explain=request.explain,
+                intent=request.intent,
+                plan=request.plan,
+                enabled_channels=request.enabled_channels,
+                channel_priority=request.channel_priority,
+                ordered_channels=request.ordered_channels,
+                producers=request.producers,
+                signal_collection=request.signal_collection,
+                signal_preview=request.signal_preview,
+                signal_merge=request.signal_merge,
+                bundles=request.bundles,
+                provenance=request.provenance,
+                diversity=request.diversity,
+                expansion=request.expansion,
+                top_matches=request.top_matches,
+            )
         )
 
     _append_main_context_sections(
-        lines,
-        root,
-        top_matches,
-        doc_issues,
-        expanded,
-        unique_refs,
+        MainContextSectionsRequest(
+            lines=lines,
+            root=request.root,
+            top_matches=request.top_matches,
+            doc_issues=request.doc_issues,
+            expanded=request.expanded,
+            unique_refs=request.unique_refs,
+        )
     )
 
     return "\n".join(lines)
 
 
-def _append_explain_sections(
-    lines: list[str],
-    *,
-    explain: bool,
-    intent: QueryIntent | None,
-    plan: RetrievalPlan | None,
-    enabled_channels: set[ChannelName] | None,
-    channel_priority: dict[ChannelName, int] | None,
-    ordered_channels: list[ChannelName] | None,
-    producers: list[ProducerDiagnosticsEntry] | None,
-    signal_collection: SignalCollectionDiagnostics | None,
-    signal_preview: list[dict[str, object]] | None,
-    signal_merge: list[dict[str, object]] | None,
-    bundles: list[ChannelBundle] | None,
-    provenance: MergeDiagnostics | None,
-    diversity: DiversityDiagnostics | None,
-    expansion: ExpansionDiagnostics | None,
-    top_matches: list[SymbolRow],
+def _append_explain_environment(
+    request: ExplainSectionsRequest,
 ) -> None:
     """
-    Append explain-mode sections to the plain-text output buffer.
+    Append explain environment, intent, and routing sections.
 
     Parameters
     ----------
-    lines : list[str]
-        Mutable output buffer.
-    explain : bool
-        Whether explain sections should be rendered.
-    intent : codira.query.classifier.QueryIntent | None
-        Structured query classification.
-    plan : codira.query.classifier.RetrievalPlan | None
-        Deterministic retrieval plan derived from query intent.
-    enabled_channels : set[codira.types.ChannelName] | None
-        Channels enabled for the query.
-    channel_priority : dict[codira.types.ChannelName, int] | None
-        Channel priority mapping.
-    ordered_channels : list[codira.types.ChannelName] | None
-        Ordered channel names.
-    producers : list[dict[str, object]] | None
-        Retrieval-producer diagnostics synthesized from query producer specs.
-    signal_collection : dict[str, object] | None
-        Compact diagnostics describing capability-gated signal collection.
-    signal_preview : list[dict[str, object]] | None
-        Compact preview of normalized retrieval signals.
-    signal_merge : list[dict[str, object]] | None
-        Per-top-match signal attribution summaries.
-    bundles : list[codira.types.ChannelBundle] | None
-        Raw channel results.
-    provenance : codira.query.context.MergeDiagnostics | None
-        Merge diagnostics for ranked symbols.
-    diversity : codira.query.context.DiversityDiagnostics | None
-        Diversity-selection diagnostics for merged symbols.
-    expansion : codira.query.context.ExpansionDiagnostics | None
-        Expansion diagnostics for graph-derived module expansion.
-    top_matches : list[codira.types.SymbolRow]
-        Primary merged symbols to explain.
+    request : ExplainSectionsRequest
+        Explain-section render request.
 
     Returns
     -------
     None
-        The explain sections are appended to ``lines`` in place.
-
-    Notes
-    -----
-    Rendering is gated by ``explain``. When explain mode is disabled, the
-    function leaves ``lines`` unchanged.
+        Environment, intent, and routing sections are appended in place.
     """
-    if explain:
-        lines.append("=== EXPLAIN: ENVIRONMENT ===")
-        embedding_backend = get_embedding_backend()
-        lines.append(f"codira_version: {__version__}")
-        lines.append(f"schema_version: {SCHEMA_VERSION}")
-        lines.append(
-            "embedding_backend: "
-            f"{embedding_backend.name}"
-            f" version={embedding_backend.version}"
-            f" dim={embedding_backend.dim}"
+    embedding_backend = get_embedding_backend()
+    request.lines.append("=== EXPLAIN: ENVIRONMENT ===")
+    request.lines.append(f"codira_version: {__version__}")
+    request.lines.append(f"schema_version: {SCHEMA_VERSION}")
+    request.lines.append(
+        "embedding_backend: "
+        f"{embedding_backend.name}"
+        f" version={embedding_backend.version}"
+        f" dim={embedding_backend.dim}"
+    )
+    request.lines.append("")
+    request.lines.append("=== EXPLAIN: QUERY INTENT ===")
+    if request.intent:
+        request.lines.append(
+            f"is_identifier_query: {request.intent.is_identifier_query}"
         )
-        lines.append("")
-        lines.append("=== EXPLAIN: QUERY INTENT ===")
-        if intent:
-            lines.append(f"is_identifier_query: {intent.is_identifier_query}")
-            lines.append(f"is_test_related: {intent.is_test_related}")
-            lines.append(f"is_script_related: {intent.is_script_related}")
-            lines.append(f"is_multi_term: {intent.is_multi_term}")
-            lines.append(f"primary_intent: {intent.primary_intent}")
-            lines.append(f"raw: {intent.raw}")
+        request.lines.append(f"is_test_related: {request.intent.is_test_related}")
+        request.lines.append(f"is_script_related: {request.intent.is_script_related}")
+        request.lines.append(f"is_multi_term: {request.intent.is_multi_term}")
+        request.lines.append(f"primary_intent: {request.intent.primary_intent}")
+        request.lines.append(f"raw: {request.intent.raw}")
 
-        lines.append("\n=== EXPLAIN: CHANNEL ROUTING ===")
-        if plan is not None:
-            lines.append(f"planner.primary_intent: {plan.primary_intent}")
-            lines.append(f"planner.channels: {list(plan.channels)}")
-            lines.append(f"planner.include_doc_issues: {plan.include_doc_issues}")
-            lines.append(f"planner.include_include_graph: {plan.include_include_graph}")
-            lines.append(f"planner.include_references: {plan.include_references}")
-        if enabled_channels is not None:
-            lines.append(f"enabled_channels: {sorted(enabled_channels)}")
-        if channel_priority is not None:
-            lines.append(f"channel_priority: {channel_priority}")
-        if ordered_channels is not None:
-            lines.append(f"ordered_channels: {ordered_channels}")
-        if producers is not None:
-            lines.append("retrieval_producers:")
-            for producer in producers:
-                lines.append(
-                    "  "
-                    f"{producer['producer_name']}"
-                    f" v{producer['producer_version']}"
-                    f" capability_version={producer['capability_version']}"
-                    f" source={producer['source_kind']}:{producer['source_name']}"
-                )
-                lines.append(f"    known_capabilities={producer['known_capabilities']}")
-                lines.append(
-                    f"    unknown_capabilities={producer['unknown_capabilities']}"
-                )
-        if signal_collection is not None:
-            lines.append(
-                f"signal_collection: total_signals={signal_collection['total_signals']}"
+    request.lines.append("\n=== EXPLAIN: CHANNEL ROUTING ===")
+    if request.plan is not None:
+        request.lines.append(f"planner.primary_intent: {request.plan.primary_intent}")
+        request.lines.append(f"planner.channels: {list(request.plan.channels)}")
+        request.lines.append(
+            f"planner.include_doc_issues: {request.plan.include_doc_issues}"
+        )
+        request.lines.append(
+            f"planner.include_include_graph: {request.plan.include_include_graph}"
+        )
+        request.lines.append(
+            f"planner.include_references: {request.plan.include_references}"
+        )
+    if request.enabled_channels is not None:
+        request.lines.append(f"enabled_channels: {sorted(request.enabled_channels)}")
+    if request.channel_priority is not None:
+        request.lines.append(f"channel_priority: {request.channel_priority}")
+    if request.ordered_channels is not None:
+        request.lines.append(f"ordered_channels: {request.ordered_channels}")
+    if request.producers is not None:
+        request.lines.append("retrieval_producers:")
+        for producer in request.producers:
+            request.lines.append(
+                "  "
+                f"{producer['producer_name']}"
+                f" v{producer['producer_version']}"
+                f" capability_version={producer['capability_version']}"
+                f" source={producer['source_kind']}:{producer['source_name']}"
             )
-            lines.append(f"  families={signal_collection['families']}")
-            lines.append(f"  capabilities={signal_collection['capabilities']}")
-            lines.append(f"  used_producers={signal_collection['used_producers']}")
-            lines.append(
-                f"  ignored_producers={signal_collection['ignored_producers']}"
+            request.lines.append(
+                f"    known_capabilities={producer['known_capabilities']}"
             )
+            request.lines.append(
+                f"    unknown_capabilities={producer['unknown_capabilities']}"
+            )
+    if request.signal_collection is not None:
+        request.lines.append(
+            f"signal_collection: total_signals={request.signal_collection['total_signals']}"
+        )
+        request.lines.append(f"  families={request.signal_collection['families']}")
+        request.lines.append(
+            f"  capabilities={request.signal_collection['capabilities']}"
+        )
+        request.lines.append(
+            f"  used_producers={request.signal_collection['used_producers']}"
+        )
+        request.lines.append(
+            f"  ignored_producers={request.signal_collection['ignored_producers']}"
+        )
+    request.lines.append("")
 
-        lines.append("")
 
-    if explain and signal_preview is not None:
-        lines.append("=== EXPLAIN: SIGNALS ===")
-        for entry in signal_preview:
+def _append_explain_signal_sections(
+    request: ExplainSectionsRequest,
+) -> None:
+    """
+    Append explain sections for signals, channel results, and signal merge.
+
+    Parameters
+    ----------
+    request : ExplainSectionsRequest
+        Explain-section render request.
+
+    Returns
+    -------
+    None
+        Signal-oriented explain sections are appended in place.
+    """
+    if request.signal_preview is not None:
+        request.lines.append("=== EXPLAIN: SIGNALS ===")
+        for entry in request.signal_preview:
             label = (
                 f"{entry['kind']} {entry['module']}.{entry['name']}:{entry['lineno']}"
             )
-            lines.append(
+            request.lines.append(
                 "  "
                 f"{label} family={entry['family']}"
                 f" producer={entry['producer_name']}"
                 f" capability={entry['capability_name']}"
             )
             if "channel_name" in entry:
-                lines.append(
+                request.lines.append(
                     "    "
                     f"channel={entry['channel_name']}"
                     f" rank={entry.get('rank')}"
                     f" strength={entry.get('strength')}"
                 )
             if "distance" in entry:
-                lines.append(f"    distance={entry['distance']}")
+                request.lines.append(f"    distance={entry['distance']}")
             if "source" in entry:
                 source = cast("dict[str, object]", entry["source"])
-                lines.append(
+                request.lines.append(
                     f"    source={source['module']}.{source['name']}:{source['lineno']}"
                 )
+        request.lines.append("")
 
-        lines.append("")
-
-    if explain and bundles is not None:
-        lines.append("=== EXPLAIN: CHANNEL RESULTS ===")
-
-        for channel_name, channel in sorted(bundles, key=lambda item: item[0]):
-            lines.append(f"{channel_name}:")
-
+    if request.bundles is not None:
+        request.lines.append("=== EXPLAIN: CHANNEL RESULTS ===")
+        for channel_name, channel in sorted(request.bundles, key=lambda item: item[0]):
+            request.lines.append(f"{channel_name}:")
             if not channel:
-                lines.append("  (no results)")
+                request.lines.append("  (no results)")
                 continue
-
             for score, symbol in channel[:5]:
-                symbol_type, module_name, name, _, lineno = symbol
+                symbol_type, module_name, name, _file_path, lineno = symbol
+                label = (
+                    f"{module_name}:{lineno}"
+                    if symbol_type == "module"
+                    else f"{module_name}.{name}:{lineno}"
+                )
+                request.lines.append(f"  {score:.2f} -> {label}")
+        request.lines.append("")
 
-                if symbol_type == "module":
-                    label = f"{module_name}:{lineno}"
-                else:
-                    label = f"{module_name}.{name}:{lineno}"
-
-                lines.append(f"  {score:.2f} -> {label}")
-
-        lines.append("")
-
-    if explain and signal_merge is not None:
-        lines.append("=== EXPLAIN: SIGNAL MERGE ===")
-        for entry in signal_merge:
-            lines.append(
+    if request.signal_merge is not None:
+        request.lines.append("=== EXPLAIN: SIGNAL MERGE ===")
+        for entry in request.signal_merge:
+            request.lines.append(
                 "  "
                 f"{entry['module']}.{entry['name']}:{entry['lineno']}"
                 f" signal_count={entry['signal_count']}"
             )
-            lines.append(f"    families={entry['families']}")
-            lines.append(f"    capabilities={entry['capabilities']}")
-            lines.append(f"    producers={entry['producers']}")
+            request.lines.append(f"    families={entry['families']}")
+            request.lines.append(f"    capabilities={entry['capabilities']}")
+            request.lines.append(f"    producers={entry['producers']}")
+        request.lines.append("")
 
-        lines.append("")
 
-    if explain and provenance is not None:
-        lines.append("=== EXPLAIN: MERGE ===")
+def _append_explain_merge_sections(
+    request: ExplainSectionsRequest,
+) -> None:
+    """
+    Append explain sections for merge and diversity diagnostics.
 
-        for symbol in top_matches:
-            symbol_type, module_name, name, _, lineno = symbol
+    Parameters
+    ----------
+    request : ExplainSectionsRequest
+        Explain-section render request.
 
-            if symbol_type == "module":
-                label = f"{module_name}:{lineno}"
-            else:
-                label = f"{module_name}.{name}:{lineno}"
-
-            merge_details = provenance.get(symbol)
-
+    Returns
+    -------
+    None
+        Merge-oriented explain sections are appended in place.
+    """
+    if request.provenance is not None:
+        request.lines.append("=== EXPLAIN: MERGE ===")
+        for symbol in request.top_matches:
+            symbol_type, module_name, name, _file_path, lineno = symbol
+            label = (
+                f"{module_name}:{lineno}"
+                if symbol_type == "module"
+                else f"{module_name}.{name}:{lineno}"
+            )
+            merge_details = request.provenance.get(symbol)
             if not merge_details:
                 continue
-
-            lines.append(label)
+            request.lines.append(label)
             role = _classify_file_role(symbol[3], module_name)
-            role_bias = _file_role_bias(role, intent)
-            merge_rrf_score = cast("float", merge_details["rrf_score"])
-            merge_evidence_bonus = cast("float", merge_details["evidence_bonus"])
-            merge_role_bonus = cast("float", merge_details["role_bonus"])
-            merge_score = cast("float", merge_details["merge_score"])
-            lines.append(
+            role_bias = _file_role_bias(role, request.intent)
+            request.lines.append(
                 "  "
                 f"winner={cast('str', merge_details['winner'])} "
-                f"rrf_score={merge_rrf_score:.4f} "
-                f"evidence_bonus={merge_evidence_bonus:.4f} "
-                f"role_bonus={merge_role_bonus:.4f} "
-                f"merge_score={merge_score:.4f}"
+                f"rrf_score={cast('float', merge_details['rrf_score']):.4f} "
+                f"evidence_bonus={cast('float', merge_details['evidence_bonus']):.4f} "
+                f"role_bonus={cast('float', merge_details['role_bonus']):.4f} "
+                f"merge_score={cast('float', merge_details['merge_score']):.4f}"
             )
-            lines.append(f"  role={role} role_bias={role_bias}")
+            request.lines.append(f"  role={role} role_bias={role_bias}")
+            for family_name, score in cast(
+                "dict[str, float]",
+                merge_details["families"],
+            ).items():
+                request.lines.append(f"  family.{family_name}: {score:.2f}")
+            for channel_name, score in cast(
+                "dict[str, float]",
+                merge_details["channels"],
+            ).items():
+                request.lines.append(f"  channel.{channel_name}: {score:.2f}")
+        request.lines.append("")
 
-            family_scores = cast("dict[str, float]", merge_details["families"])
-            for family_name, score in family_scores.items():
-                lines.append(f"  family.{family_name}: {score:.2f}")
+    if request.diversity is not None:
+        request.lines.append("=== EXPLAIN: DIVERSITY ===")
+        request.lines.append(f"max_per_file: {MERGE_MAX_PER_FILE}")
+        request.lines.append(f"role_caps: {MERGE_ROLE_CAPS}")
+        request.lines.append(f"language_caps: {MERGE_LANGUAGE_CAPS}")
 
-            channel_scores = cast("dict[str, float]", merge_details["channels"])
-            for channel_name, score in channel_scores.items():
-                lines.append(f"  channel.{channel_name}: {score:.2f}")
-
-        lines.append("")
-
-    if explain and diversity is not None:
-        lines.append("=== EXPLAIN: DIVERSITY ===")
-        lines.append(f"max_per_file: {MERGE_MAX_PER_FILE}")
-        lines.append(f"role_caps: {MERGE_ROLE_CAPS}")
-        lines.append(f"language_caps: {MERGE_LANGUAGE_CAPS}")
-
-        selected_entries = diversity.get("selected")
+        selected_entries = request.diversity.get("selected")
         if isinstance(selected_entries, list) and selected_entries:
-            lines.append("selected:")
-            for entry in selected_entries[: len(top_matches)]:
+            request.lines.append("selected:")
+            for entry in selected_entries[: len(request.top_matches)]:
                 if not isinstance(entry, dict):
                     continue
                 label = (
                     f"{entry.get('module')}.{entry.get('name')}:{entry.get('lineno')}"
                 )
-                lines.append(
+                request.lines.append(
                     "  "
                     f"{label} role={entry.get('role')} "
                     f"language={entry.get('language')} "
                     f"stage={entry.get('selection_stage')}"
                 )
 
-        deferred_entries = diversity.get("deferred")
+        deferred_entries = request.diversity.get("deferred")
         if isinstance(deferred_entries, list) and deferred_entries:
-            lines.append("deferred:")
+            request.lines.append("deferred:")
             for entry in deferred_entries[:5]:
                 if not isinstance(entry, dict):
                     continue
                 label = (
                     f"{entry.get('module')}.{entry.get('name')}:{entry.get('lineno')}"
                 )
-                lines.append(
+                request.lines.append(
                     "  "
                     f"{label} role={entry.get('role')} "
                     f"language={entry.get('language')} "
                     f"reason={entry.get('reason')}"
                 )
+        request.lines.append("")
 
-        lines.append("")
 
-    if explain and expansion is not None:
-        include_entries = expansion.get("include_graph")
-        if isinstance(include_entries, list) and include_entries:
-            lines.append("=== EXPLAIN: EXPANSION ===")
-            lines.append("include_graph:")
-            for entry in include_entries[:10]:
-                if not isinstance(entry, dict):
-                    continue
-                lines.append(
-                    "  "
-                    f"seed={entry.get('seed_module')} "
-                    f"via={entry.get('via_module')} "
-                    f"target={entry.get('target_name')} "
-                    f"direction={entry.get('direction')} "
-                    f"expanded={entry.get('expanded_module')}.{entry.get('expanded_name')}"
-                )
-            lines.append("")
+def _append_explain_expansion_section(
+    request: ExplainSectionsRequest,
+) -> None:
+    """
+    Append the explain section for include-graph expansion diagnostics.
+
+    Parameters
+    ----------
+    request : ExplainSectionsRequest
+        Explain-section render request.
+
+    Returns
+    -------
+    None
+        Expansion diagnostics are appended in place when present.
+    """
+    if request.expansion is None:
+        return
+    include_entries = request.expansion.get("include_graph")
+    if not (isinstance(include_entries, list) and include_entries):
+        return
+    request.lines.append("=== EXPLAIN: EXPANSION ===")
+    request.lines.append("include_graph:")
+    for entry in include_entries[:10]:
+        if not isinstance(entry, dict):
+            continue
+        request.lines.append(
+            "  "
+            f"seed={entry.get('seed_module')} "
+            f"via={entry.get('via_module')} "
+            f"target={entry.get('target_name')} "
+            f"direction={entry.get('direction')} "
+            f"expanded={entry.get('expanded_module')}.{entry.get('expanded_name')}"
+        )
+    request.lines.append("")
+
+
+def _append_explain_sections(
+    request: ExplainSectionsRequest,
+) -> None:
+    """
+    Append explain-mode sections to the plain-text output buffer.
+
+    Parameters
+    ----------
+    request : ExplainSectionsRequest
+        Explain-section render request.
+
+    Returns
+    -------
+    None
+        The explain sections are appended to ``request.lines`` in place.
+
+    Notes
+    -----
+    Rendering is gated by ``request.explain``. When explain mode is disabled,
+    the function leaves ``request.lines`` unchanged.
+    """
+    if not request.explain:
+        return
+    _append_explain_environment(request)
+    _append_explain_signal_sections(request)
+    _append_explain_merge_sections(request)
+    _append_explain_expansion_section(request)
+
+
+def _append_top_matches_section(request: MainContextSectionsRequest) -> None:
+    """
+    Append the top-match section to the plain-text context output.
+
+    Parameters
+    ----------
+    request : MainContextSectionsRequest
+        Main plain-text section render request.
+
+    Returns
+    -------
+    None
+        Top matches are appended to ``request.lines`` in place.
+    """
+    request.lines.append("=== TOP MATCHES ===")
+    if not request.top_matches:
+        request.lines.append("No direct symbol matches found.")
+        return
+    for symbol in request.top_matches:
+        request.lines.append(_format_symbol(symbol, include_path=True))
+
+
+def _normalized_doc_issue_message(message: str) -> str:
+    """
+    Normalize one doc-issue message for plain-text display.
+
+    Parameters
+    ----------
+    message : str
+        Raw stored doc-issue message.
+
+    Returns
+    -------
+    str
+        User-facing doc-issue message.
+    """
+    if message.startswith("Module ") and message.endswith("Missing docstring"):
+        return message.replace(
+            "Missing docstring",
+            "Missing module-level docstring",
+        )
+    return message
+
+
+def _append_doc_issues_section(request: MainContextSectionsRequest) -> None:
+    """
+    Append the related-docstring-issues section to the context output.
+
+    Parameters
+    ----------
+    request : MainContextSectionsRequest
+        Main plain-text section render request.
+
+    Returns
+    -------
+    None
+        Docstring issues are appended to ``request.lines`` in place.
+    """
+    request.lines.append("\n=== RELATED DOCSTRING ISSUES ===")
+    if not request.doc_issues:
+        request.lines.append("No related docstring issues.")
+        return
+    for issue_type, message in request.doc_issues:
+        request.lines.append(f"{issue_type}: {_normalized_doc_issue_message(message)}")
+
+
+def _append_suggested_context_section(request: MainContextSectionsRequest) -> None:
+    """
+    Append enriched symbol context blocks to the plain-text output.
+
+    Parameters
+    ----------
+    request : MainContextSectionsRequest
+        Main plain-text section render request.
+
+    Returns
+    -------
+    None
+        Enriched context is appended to ``request.lines`` in place.
+    """
+    request.lines.append("\n=== SUGGESTED CONTEXT ===")
+    cache: dict[Path, tuple[str, list[str], ast.Module]] = {}
+    for index, symbol in enumerate(request.top_matches[:ENRICHED_CONTEXT_LIMIT]):
+        if index > 0:
+            request.lines.append("")
+        request.lines.extend(_format_enriched_symbol(request.root, symbol, cache))
+
+
+def _append_module_expansion_section(request: MainContextSectionsRequest) -> None:
+    """
+    Append the module-expansion section to the plain-text context output.
+
+    Parameters
+    ----------
+    request : MainContextSectionsRequest
+        Main plain-text section render request.
+
+    Returns
+    -------
+    None
+        Module-expansion entries are appended to ``request.lines`` in place.
+    """
+    request.lines.append("\n=== MODULE EXPANSION ===")
+    if not request.expanded:
+        request.lines.append("No module expansion available.")
+        return
+    for symbol in request.expanded:
+        request.lines.append(_format_symbol(symbol, include_path=False))
+
+
+def _relative_reference_text(root: Path, file_path: str) -> str:
+    """
+    Convert one absolute reference path into a repo-relative display path.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root used to relativize paths.
+    file_path : str
+        Absolute or external file path recorded in one reference row.
+
+    Returns
+    -------
+    str
+        Relative path when the file lives under ``root``, otherwise the
+        original path text.
+    """
+    try:
+        return str(Path(file_path).relative_to(root))
+    except ValueError:
+        return str(file_path)
+
+
+def _append_cross_module_references_section(
+    request: MainContextSectionsRequest,
+) -> None:
+    """
+    Append the cross-module-reference section to the context output.
+
+    Parameters
+    ----------
+    request : MainContextSectionsRequest
+        Main plain-text section render request.
+
+    Returns
+    -------
+    None
+        Cross-module references are appended to ``request.lines`` in place.
+    """
+    request.lines.append("\n=== CROSS-MODULE REFERENCES ===")
+    if not request.unique_refs:
+        request.lines.append("No cross-module references found.")
+        return
+    for file_path, lineno in request.unique_refs:
+        request.lines.append(
+            f"{_relative_reference_text(request.root, file_path)}:{lineno}"
+        )
 
 
 def _append_main_context_sections(
-    lines: list[str],
-    root: Path,
-    top_matches: list[SymbolRow],
-    doc_issues: list[tuple[str, str]],
-    expanded: list[SymbolRow],
-    unique_refs: list[ReferenceRow],
+    request: MainContextSectionsRequest,
 ) -> None:
     """
     Append the main plain-text context sections to the output buffer.
 
     Parameters
     ----------
-    lines : list[str]
-        Mutable output buffer.
-    root : pathlib.Path
-        Repository root used to relativize paths.
-    top_matches : list[codira.types.SymbolRow]
-        Primary ranked symbols.
-    doc_issues : list[tuple[str, str]]
-        Related docstring issues.
-    expanded : list[codira.types.SymbolRow]
-        Secondary symbols collected by module expansion.
-    unique_refs : list[codira.types.ReferenceRow]
-        Cross-reference locations for selected symbols.
+    request : MainContextSectionsRequest
+        Main plain-text section render request.
 
     Returns
     -------
     None
-        The main context sections are appended to ``lines`` in place.
+        The main context sections are appended to ``request.lines`` in place.
 
     Notes
     -----
-    The function preserves the ranked order of ``top_matches`` and only emits
+    The function preserves the ranked order of ``request.top_matches`` and only emits
     enriched blocks for the configured leading subset.
     """
-    lines.append("=== TOP MATCHES ===")
-    if not top_matches:
-        lines.append("No direct symbol matches found.")
+    _append_top_matches_section(request)
+    _append_doc_issues_section(request)
+    _append_suggested_context_section(request)
+    _append_module_expansion_section(request)
+    _append_cross_module_references_section(request)
+
+
+def _initial_context_state(
+    request: ContextRequest,
+    conn: sqlite3.Connection,
+) -> ContextExecutionState:
+    """
+    Build the initial retrieval state from channel execution.
+
+    Parameters
+    ----------
+    request : ContextRequest
+        End-to-end context retrieval request.
+    conn : sqlite3.Connection
+        Open backend connection used for query execution.
+
+    Returns
+    -------
+    ContextExecutionState
+        Initial retrieval state after channel execution and first ranking pass.
+    """
+    normalized_prefix = normalize_prefix(request.root, request.prefix)
+    intent = classify_query(request.query)
+    plan = build_retrieval_plan(intent)
+    bundles = _build_channel_bundles(
+        ChannelBundleRequest(
+            root=request.root,
+            query=request.query,
+            conn=conn,
+            intent=intent,
+            plan=plan,
+            prefix=normalized_prefix,
+        )
+    )
+    ordered_channels: list[ChannelName] | None = [
+        name for name, _channel in _get_channel_functions(plan)
+    ]
+    channel_producers = _channel_retrieval_producers(ordered_channels)
+
+    if request.explain:
+        enabled = _enabled_channels(plan)
+        priority = _channel_priority(plan)
+        retrieval_producers = channel_producers + selected_enrichment_producers(
+            include_issue_annotations=(
+                _is_issue_query(request.query) or plan.include_doc_issues
+            ),
+            include_references=plan.include_references,
+            include_include_graph=plan.include_include_graph,
+        )
+        producer_diagnostics = _producer_diagnostics(retrieval_producers)
+        retrieval_signals, signal_collection = _collect_retrieval_signals(
+            bundles,
+            producers=retrieval_producers,
+        )
     else:
-        for symbol in top_matches:
-            lines.append(_format_symbol(symbol, include_path=True))
+        enabled = None
+        priority = None
+        producer_diagnostics = None
+        retrieval_signals, signal_collection = _collect_retrieval_signals(
+            bundles,
+            producers=channel_producers,
+        )
 
-    lines.append("\n=== RELATED DOCSTRING ISSUES ===")
-    if not doc_issues:
-        lines.append("No related docstring issues.")
+    ranked_merged, provenance = _rank_signals_with_provenance(
+        retrieval_signals,
+        intent=intent,
+    )
+    if request.explain:
+        top_matches, diversity = _diversify_merged_symbols_explain(
+            [symbol for symbol, _score in ranked_merged]
+        )
     else:
-        for issue_type, message in doc_issues:
-            if message.startswith("Module ") and message.endswith("Missing docstring"):
-                message = message.replace(
-                    "Missing docstring",
-                    "Missing module-level docstring",
-                )
-            lines.append(f"{issue_type}: {message}")
+        top_matches = _diversify_merged_symbols(
+            [symbol for symbol, _score in ranked_merged]
+        )
+        diversity = None
+        ordered_channels = None
 
-    lines.append("\n=== SUGGESTED CONTEXT ===")
-    cache: dict[Path, tuple[str, list[str], ast.Module]] = {}
-    for index, symbol in enumerate(top_matches[:ENRICHED_CONTEXT_LIMIT]):
-        if index > 0:
-            lines.append("")
-        lines.extend(_format_enriched_symbol(root, symbol, cache))
+    return ContextExecutionState(
+        normalized_prefix=normalized_prefix,
+        intent=intent,
+        plan=plan,
+        bundles=bundles,
+        ordered_channels=ordered_channels,
+        enabled=enabled,
+        priority=priority,
+        producer_diagnostics=producer_diagnostics,
+        signal_collection=signal_collection,
+        retrieval_signals=retrieval_signals,
+        provenance=provenance,
+        top_matches=top_matches[:10],
+        diversity=diversity,
+    )
 
-    lines.append("\n=== MODULE EXPANSION ===")
-    if not expanded:
-        lines.append("No module expansion available.")
+
+def _append_issue_driven_matches(
+    request: ContextRequest,
+    state: ContextExecutionState,
+    conn: sqlite3.Connection,
+) -> None:
+    """
+    Append issue-driven symbols to the current top-match list.
+
+    Parameters
+    ----------
+    request : ContextRequest
+        End-to-end context retrieval request.
+    state : ContextExecutionState
+        Mutable retrieval state.
+    conn : sqlite3.Connection
+        Open backend connection used for query execution.
+
+    Returns
+    -------
+    None
+        Issue-driven symbols are appended to ``state.top_matches`` in place.
+    """
+    if not _is_issue_query(request.query):
+        return
+    for symbol in _issue_driven_symbols(
+        request.root,
+        request.query,
+        conn,
+        prefix=state.normalized_prefix,
+    ):
+        if symbol not in state.top_matches:
+            state.top_matches.append(symbol)
+    state.top_matches = state.top_matches[:10]
+
+
+def _filter_redundant_module_matches(
+    top_matches: list[SymbolRow],
+) -> list[SymbolRow]:
+    """
+    Remove module rows duplicated by more specific symbol matches.
+
+    Parameters
+    ----------
+    top_matches : list[codira.types.SymbolRow]
+        Current ranked symbol winners.
+
+    Returns
+    -------
+    list[codira.types.SymbolRow]
+        Filtered ranked symbols with redundant module rows removed.
+    """
+    modules_with_functions = {
+        module_name
+        for symbol_type, module_name, _name, _file_path, _lineno in top_matches
+        if symbol_type != "module"
+    }
+    return [
+        symbol
+        for symbol in top_matches
+        if not (symbol[0] == "module" and symbol[1] in modules_with_functions)
+    ]
+
+
+def _empty_context_result(
+    request: ContextRequest,
+    state: ContextExecutionState,
+) -> str:
+    """
+    Render the empty-result response for one context query.
+
+    Parameters
+    ----------
+    request : ContextRequest
+        End-to-end context retrieval request.
+    state : ContextExecutionState
+        Mutable retrieval state.
+
+    Returns
+    -------
+    str
+        Empty-result context payload in the requested output mode.
+    """
+    if request.as_json or request.as_prompt:
+        return _render_context(
+            ContextRenderRequest(
+                root=request.root,
+                query=request.query,
+                top_matches=[],
+                doc_issues=[],
+                expanded=[],
+                unique_refs=[],
+                as_json=request.as_json,
+                as_prompt=request.as_prompt,
+                explain=request.explain,
+                plan=state.plan,
+                producers=state.producer_diagnostics,
+                signal_collection=state.signal_collection,
+                signal_preview=state.signal_preview,
+                signal_merge=state.signal_merge,
+                diversity=state.diversity,
+                expansion=state.expansion,
+            )
+        )
+    return "No relevant matches found."
+
+
+def _apply_graph_signal_rerank(
+    state: ContextExecutionState,
+    conn: sqlite3.Connection,
+    root: Path,
+) -> None:
+    """
+    Collect graph signals and rerank top matches when graph evidence exists.
+
+    Parameters
+    ----------
+    state : ContextExecutionState
+        Mutable retrieval state.
+    conn : sqlite3.Connection
+        Open backend connection used for graph lookups.
+    root : pathlib.Path
+        Repository root containing the index.
+
+    Returns
+    -------
+    None
+        ``state.top_matches``, ``state.retrieval_signals``, ``state.provenance``,
+        and optional diversity diagnostics are updated in place.
+    """
+    graph_retrieval_signals = _collect_graph_retrieval_signals(
+        GraphRetrievalRequest(
+            root=root,
+            top_matches=state.top_matches,
+            conn=conn,
+            include_include_graph=state.plan.include_include_graph,
+            include_references=state.plan.include_references,
+            prefix=state.normalized_prefix,
+        )
+    )
+    if not graph_retrieval_signals:
+        return
+    state.retrieval_signals = sorted(
+        [*state.retrieval_signals, *graph_retrieval_signals],
+        key=signal_sort_key,
+    )
+    ranked_merged, state.provenance = _rank_signals_with_provenance(
+        state.retrieval_signals,
+        intent=state.intent,
+    )
+    if state.enabled is not None:
+        state.top_matches, state.diversity = _diversify_merged_symbols_explain(
+            [symbol for symbol, _score in ranked_merged]
+        )
     else:
-        for symbol in expanded:
-            lines.append(_format_symbol(symbol, include_path=False))
+        state.top_matches = _diversify_merged_symbols(
+            [symbol for symbol, _score in ranked_merged]
+        )
 
-    lines.append("\n=== CROSS-MODULE REFERENCES ===")
-    if not unique_refs:
-        lines.append("No cross-module references found.")
-    else:
-        for file_path, lineno in unique_refs:
-            try:
-                rel_path = str(Path(file_path).relative_to(root))
-            except ValueError:
-                rel_path = str(file_path)
 
-            lines.append(f"{rel_path}:{lineno}")
+def _confidence_map_for_matches(
+    query: str,
+    top_matches: list[SymbolRow],
+) -> dict[SymbolRow, float]:
+    """
+    Build lightweight deterministic confidence estimates for top matches.
+
+    Parameters
+    ----------
+    query : str
+        Original user query.
+    top_matches : list[codira.types.SymbolRow]
+        Current ranked symbol winners.
+
+    Returns
+    -------
+    dict[codira.types.SymbolRow, float]
+        Confidence values keyed by symbol.
+    """
+    confidence_map: dict[SymbolRow, float] = {}
+    query_tokens = list(_tokenize(query))
+
+    for rank, symbol in enumerate(top_matches):
+        base = 1.0 - (rank / max(len(top_matches), 1))
+        overlap = sum(1 for token in query_tokens if token in symbol[2].lower())
+        confidence_map[symbol] = min(base + (0.1 * overlap), 1.0)
+
+    return confidence_map
+
+
+def _finalize_signal_diagnostics(
+    state: ContextExecutionState,
+) -> None:
+    """
+    Finalize explain-mode signal diagnostics after all retrieval stages.
+
+    Parameters
+    ----------
+    state : ContextExecutionState
+        Mutable retrieval state.
+
+    Returns
+    -------
+    None
+        Explain-mode signal diagnostics are updated in place.
+    """
+    if state.signal_collection is None:
+        return
+    used_producers = list(cast("list[str]", state.signal_collection["used_producers"]))
+    ignored_producers = list(
+        cast("list[str]", state.signal_collection["ignored_producers"])
+    )
+    graph_producers = sorted(
+        {
+            signal.producer_name
+            for signal in state.retrieval_signals
+            if signal.family == "graph"
+        }
+    )
+    used_set = set(used_producers)
+    ignored_set = set(ignored_producers)
+    for producer_name in graph_producers:
+        used_set.add(producer_name)
+        ignored_set.discard(producer_name)
+    state.signal_collection = _signal_collection_diagnostics(
+        sorted(state.retrieval_signals, key=signal_sort_key),
+        used_producers=sorted(used_set),
+        ignored_producers=sorted(ignored_set),
+    )
+    state.signal_preview = _signal_preview(state.retrieval_signals)
+    state.signal_merge = _signal_summary_by_symbol(
+        state.retrieval_signals,
+        state.top_matches,
+    )
 
 
 def context_for(
-    root: Path,
-    query: str,
-    *,
-    prefix: str | None = None,
-    as_json: bool = False,
-    as_prompt: bool = False,
-    explain: bool = False,
+    request: ContextRequest,
 ) -> str:
     """
     Build a structured context block for a given query.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Root directory of the indexed repository.
-    query : str
-        Query string used to retrieve relevant symbols and context.
-    prefix : str | None, optional
-        Repo-root-relative path prefix used to restrict files and references.
-    as_json : bool, optional
-        Whether to emit the JSON representation.
-    as_prompt : bool, optional
-        Whether to emit the prompt-oriented representation.
-    explain : bool, optional
-        Whether to include retrieval diagnostics.
+    request : ContextRequest
+        End-to-end context retrieval request.
 
     Returns
     -------
@@ -4453,270 +5535,84 @@ def context_for(
     sqlite3.Error
         If the repository index cannot be opened or queried.
     """
-    normalized_prefix = normalize_prefix(root, prefix)
-    conn = cast("sqlite3.Connection", active_index_backend().open_connection(root))
-    intent: QueryIntent = classify_query(query)
-    plan = build_retrieval_plan(intent)
-    diversity: DiversityDiagnostics | None = None
-    expansion: ExpansionDiagnostics | None = None
-    producer_diagnostics: list[ProducerDiagnosticsEntry] | None = None
-    signal_collection: SignalCollectionDiagnostics | None = None
-    retrieval_signals: list[RetrievalSignal] = []
-    signal_preview: list[dict[str, object]] | None = None
-    signal_merge: list[dict[str, object]] | None = None
-
-    # --- PHASE 1+2: candidate retrieval + scoring ---
-    bundles = _build_channel_bundles(
-        root,
-        query,
-        conn,
-        intent,
-        plan,
-        normalized_prefix,
+    conn = cast(
+        "sqlite3.Connection",
+        active_index_backend().open_connection(request.root),
     )
+    try:
+        state = _initial_context_state(request, conn)
+        _append_issue_driven_matches(request, state, conn)
+        state.top_matches = _filter_redundant_module_matches(state.top_matches)
 
-    ordered_channels: list[ChannelName] | None = [
-        name for name, _ in _get_channel_functions(plan)
-    ]
-    assert ordered_channels is not None
-    channel_producers = _channel_retrieval_producers(ordered_channels)
+        if not state.top_matches:
+            return _empty_context_result(request, state)
 
-    if explain:
-        enabled = _enabled_channels(plan)
-        priority = _channel_priority(plan)
-        retrieval_producers = channel_producers + selected_enrichment_producers(
-            include_issue_annotations=_is_issue_query(query) or plan.include_doc_issues,
-            include_references=plan.include_references,
-            include_include_graph=plan.include_include_graph,
-        )
-        producer_diagnostics = _producer_diagnostics(retrieval_producers)
-        retrieval_signals, signal_collection = _collect_retrieval_signals(
-            bundles,
-            producers=retrieval_producers,
-        )
-    else:
-        enabled = None
-        priority = None
-        retrieval_signals, _signal_collection = _collect_retrieval_signals(
-            bundles,
-            producers=channel_producers,
+        _apply_graph_signal_rerank(state, conn, request.root)
+        confidence_map = _confidence_map_for_matches(
+            request.query,
+            state.top_matches,
         )
 
-    ranked_merged, provenance = _rank_signals_with_provenance(
-        retrieval_signals,
-        intent=intent,
-    )
-    if explain:
-        top_matches, diversity = _diversify_merged_symbols_explain(
-            [symbol for symbol, _score in ranked_merged]
-        )
-    else:
-        top_matches = _diversify_merged_symbols(
-            [symbol for symbol, _score in ranked_merged]
-        )
-        ordered_channels = None
-
-    # --- PHASE 2B: issue-driven candidate enrichment ---
-    if _is_issue_query(query):
-        for symbol in _issue_driven_symbols(
-            root,
-            query,
-            conn,
-            prefix=normalized_prefix,
-        ):
-            if symbol not in top_matches:
-                top_matches.append(symbol)
-
-    top_matches = top_matches[:10]
-
-    # --- PHASE 2C: remove module entries
-    # if same module already represented by functions ---
-    modules_with_functions = {
-        module for t, module, name, _, _ in top_matches if t != "module"
-    }
-
-    filtered_matches: list[SymbolRow] = []
-
-    for sym in top_matches:
-        t, module, _, _, _ = sym
-        if t == "module" and module in modules_with_functions:
-            continue
-        filtered_matches.append(sym)
-
-    top_matches = filtered_matches
-    confidence_map: dict[SymbolRow, float] = {}
-
-    if not top_matches:
-        if as_json:
-            result = _render_context(
-                root,
-                query,
-                [],
-                [],
-                [],
-                [],
-                as_json=True,
-                explain=explain,
-                diversity=diversity,
-                expansion=expansion,
-                plan=plan,
-                producers=producer_diagnostics,
-                signal_collection=signal_collection,
-                signal_preview=signal_preview,
-                signal_merge=signal_merge,
-            )
-            conn.close()
-            return result
-
-        if as_prompt:
-            result = _render_context(
-                root,
-                query,
-                [],
-                [],
-                [],
-                [],
-                as_prompt=True,
-                explain=explain,
-                diversity=diversity,
-                expansion=expansion,
-                plan=plan,
-                producers=producer_diagnostics,
-                signal_collection=signal_collection,
-                signal_preview=signal_preview,
-                signal_merge=signal_merge,
-            )
-            conn.close()
-            return result
-
-        conn.close()
-        return "No relevant matches found."
-
-    graph_retrieval_signals = _collect_graph_retrieval_signals(
-        GraphRetrievalRequest(
-            root=root,
-            top_matches=top_matches,
-            conn=conn,
-            include_include_graph=plan.include_include_graph,
-            include_references=plan.include_references,
-            prefix=normalized_prefix,
-        )
-    )
-    if graph_retrieval_signals:
-        retrieval_signals = sorted(
-            [*retrieval_signals, *graph_retrieval_signals],
-            key=signal_sort_key,
-        )
-        ranked_merged, provenance = _rank_signals_with_provenance(
-            retrieval_signals,
-            intent=intent,
-        )
-        if explain:
-            top_matches, diversity = _diversify_merged_symbols_explain(
-                [symbol for symbol, _score in ranked_merged]
+        if state.plan.include_doc_issues:
+            doc_issues, related_symbols = _collect_doc_issues_and_related(
+                request.root,
+                request.query,
+                state.top_matches,
+                conn,
+                prefix=state.normalized_prefix,
             )
         else:
-            top_matches = _diversify_merged_symbols(
-                [symbol for symbol, _score in ranked_merged]
+            doc_issues, related_symbols = [], []
+
+        doc_issues = doc_issues[:MAX_ISSUES]
+        for match in related_symbols:
+            if match not in state.top_matches:
+                state.top_matches.append(match)
+        state.top_matches = state.top_matches[:10]
+
+        expanded, unique_refs, state.expansion = _expand_and_collect_references(
+            ExpansionCollectionRequest(
+                root=request.root,
+                top_matches=state.top_matches,
+                conn=conn,
+                include_include_graph=state.plan.include_include_graph,
+                include_references=state.plan.include_references,
+                prefix=state.normalized_prefix,
             )
-
-    # --- confidence estimation (lightweight, deterministic) ---
-    query_tokens = list(_tokenize(query))
-
-    for rank, symbol in enumerate(top_matches):
-        base = 1.0 - (rank / max(len(top_matches), 1))
-        name = symbol[2].lower()
-        overlap = sum(1 for t in query_tokens if t in name)
-
-        confidence = base + (0.1 * overlap)
-
-        confidence = min(confidence, 1.0)
-
-        confidence_map[symbol] = confidence
-
-    # --- PHASE 3: related docstring issues ---
-    if plan.include_doc_issues:
-        doc_issues, related_symbols = _collect_doc_issues_and_related(
-            root,
-            query,
-            top_matches,
-            conn,
-            prefix=normalized_prefix,
         )
-    else:
-        doc_issues, related_symbols = [], []
 
-    doc_issues = doc_issues[:MAX_ISSUES]
+        if request.explain:
+            _finalize_signal_diagnostics(state)
 
-    for match in related_symbols:
-        if match not in top_matches:
-            top_matches.append(match)
-
-    top_matches = top_matches[:10]
-
-    # --- PHASE 4+5: module expansion + references ---
-    expanded, unique_refs, expansion = _expand_and_collect_references(
-        root,
-        top_matches,
-        conn,
-        include_include_graph=plan.include_include_graph,
-        include_references=plan.include_references,
-        prefix=normalized_prefix,
-    )
-
-    if explain and signal_collection is not None:
-        used_producers = list(cast("list[str]", signal_collection["used_producers"]))
-        ignored_producers = list(
-            cast("list[str]", signal_collection["ignored_producers"])
+        return _render_context(
+            ContextRenderRequest(
+                root=request.root,
+                query=request.query,
+                top_matches=state.top_matches,
+                doc_issues=doc_issues,
+                expanded=expanded,
+                unique_refs=unique_refs,
+                confidence_map=confidence_map,
+                as_json=request.as_json,
+                as_prompt=request.as_prompt,
+                explain=request.explain,
+                intent=state.intent,
+                plan=state.plan,
+                enabled_channels=state.enabled,
+                channel_priority=state.priority,
+                ordered_channels=state.ordered_channels,
+                producers=state.producer_diagnostics,
+                signal_collection=state.signal_collection,
+                signal_preview=state.signal_preview,
+                signal_merge=state.signal_merge,
+                bundles=state.bundles if request.explain else None,
+                provenance=state.provenance if request.explain else None,
+                diversity=state.diversity if request.explain else None,
+                expansion=state.expansion if request.explain else None,
+            )
         )
-        graph_producers = sorted(
-            {
-                signal.producer_name
-                for signal in retrieval_signals
-                if signal.family == "graph"
-            }
-        )
-        used_set = set(used_producers)
-        ignored_set = set(ignored_producers)
-        for producer_name in graph_producers:
-            used_set.add(producer_name)
-            ignored_set.discard(producer_name)
-        signal_collection = _signal_collection_diagnostics(
-            sorted(retrieval_signals, key=signal_sort_key),
-            used_producers=sorted(used_set),
-            ignored_producers=sorted(ignored_set),
-        )
-        signal_preview = _signal_preview(retrieval_signals)
-        signal_merge = _signal_summary_by_symbol(retrieval_signals, top_matches)
-
-    # --- PHASE 6: rendering ---
-    result = _render_context(
-        root,
-        query,
-        top_matches,
-        doc_issues,
-        expanded,
-        unique_refs,
-        confidence_map=confidence_map,
-        as_json=as_json,
-        as_prompt=as_prompt,
-        explain=explain,
-        intent=intent,
-        plan=plan,
-        enabled_channels=enabled,
-        channel_priority=priority,
-        ordered_channels=ordered_channels,
-        producers=producer_diagnostics,
-        signal_collection=signal_collection,
-        signal_preview=signal_preview,
-        signal_merge=signal_merge,
-        bundles=bundles if explain else None,
-        provenance=provenance if explain else None,
-        diversity=diversity if explain else None,
-        expansion=expansion if explain else None,
-    )
-    conn.close()
-    return result
+    finally:
+        conn.close()
 
 
 __version__ = package_version()

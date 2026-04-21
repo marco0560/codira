@@ -20,7 +20,7 @@ import json
 from typing import TYPE_CHECKING
 
 from codira.indexer import index_repo
-from codira.query.context import context_for
+from codira.query.context import ContextRequest, context_for
 from codira.query.exact import find_symbol
 from codira.storage import init_db
 
@@ -187,8 +187,12 @@ def test_context_for_json_is_stable_across_repeated_runs(tmp_path: Path) -> None
     init_db(tmp_path)
     index_repo(tmp_path)
 
-    first = json.loads(context_for(tmp_path, "shared_symbol", as_json=True))
-    second = json.loads(context_for(tmp_path, "shared_symbol", as_json=True))
+    first = json.loads(
+        context_for(ContextRequest(root=tmp_path, query="shared_symbol", as_json=True))
+    )
+    second = json.loads(
+        context_for(ContextRequest(root=tmp_path, query="shared_symbol", as_json=True))
+    )
 
     assert first == second
     assert [row["module"] for row in first["top_matches"]] == [
@@ -219,10 +223,22 @@ def test_context_for_prefers_implementation_unless_tests_are_requested(
     index_repo(tmp_path)
 
     default_context = json.loads(
-        context_for(tmp_path, "cache invalidation", as_json=True)
+        context_for(
+            ContextRequest(
+                root=tmp_path,
+                query="cache invalidation",
+                as_json=True,
+            )
+        )
     )
     test_context = json.loads(
-        context_for(tmp_path, "cache invalidation tests", as_json=True)
+        context_for(
+            ContextRequest(
+                root=tmp_path,
+                query="cache invalidation tests",
+                as_json=True,
+            )
+        )
     )
 
     assert default_context["top_matches"][0]["module"] == "pkg.core"
@@ -249,14 +265,23 @@ def test_context_for_explain_reports_phase_17_retrieval_plan(tmp_path: Path) -> 
     index_repo(tmp_path)
 
     test_payload = json.loads(
-        context_for(tmp_path, "cache invalidation tests", as_json=True, explain=True)
+        context_for(
+            ContextRequest(
+                root=tmp_path,
+                query="cache invalidation tests",
+                as_json=True,
+                explain=True,
+            )
+        )
     )
     architecture_payload = json.loads(
         context_for(
-            tmp_path,
-            "architecture graph cache flow",
-            as_json=True,
-            explain=True,
+            ContextRequest(
+                root=tmp_path,
+                query="architecture graph cache flow",
+                as_json=True,
+                explain=True,
+            )
         )
     )
 

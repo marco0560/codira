@@ -37,6 +37,7 @@ from codira.cli import (
     _write_index_metadata,
     main,
 )
+from codira.contracts import BackendPersistAnalysisRequest
 from codira.indexer import audit_repo_coverage, index_repo
 from codira.models import (
     AnalysisResult,
@@ -473,16 +474,18 @@ def test_persist_analysis_deduplicates_identical_call_and_ref_rows(
     init_db(tmp_path)
     backend = SQLiteIndexBackend()
     backend.persist_analysis(
-        tmp_path,
-        file_metadata=FileMetadataSnapshot(
-            path=module,
-            sha256=cast("str", metadata["hash"]),
-            mtime=cast("float", metadata["mtime"]),
-            size=cast("int", metadata["size"]),
-            analyzer_name="python",
-            analyzer_version="1",
-        ),
-        analysis=analysis,
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=FileMetadataSnapshot(
+                path=module,
+                sha256=cast("str", metadata["hash"]),
+                mtime=cast("float", metadata["mtime"]),
+                size=cast("int", metadata["size"]),
+                analyzer_name="python",
+                analyzer_version="1",
+            ),
+            analysis=analysis,
+        )
     )
 
     conn = sqlite3.connect(get_db_path(tmp_path))

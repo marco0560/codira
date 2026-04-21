@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from codira.query.classifier import build_retrieval_plan, classify_query
 from codira.query.context import (
     PRIMARY_SYMBOL_SCORING_RULES,
+    MainContextSectionsRequest,
     _append_main_context_sections,
     _apply_scoring_rules,
     _classify_file_role,
@@ -102,7 +103,16 @@ def test_append_main_context_sections_separates_enriched_blocks(tmp_path: Path) 
     ]
 
     lines: list[str] = []
-    _append_main_context_sections(lines, tmp_path, top_matches, [], [], [])
+    _append_main_context_sections(
+        MainContextSectionsRequest(
+            lines=lines,
+            root=tmp_path,
+            top_matches=top_matches,
+            doc_issues=[],
+            expanded=[],
+            unique_refs=[],
+        )
+    )
 
     rendered = "\n".join(lines)
 

@@ -10,7 +10,7 @@ from memory_backend import MemoryIndexBackend, build_backend
 
 import codira.indexer as indexer_module
 import codira.registry as registry_module
-from codira.contracts import IndexBackend
+from codira.contracts import BackendRelationQueryRequest, IndexBackend
 from codira.indexer import index_repo
 from codira.semantic.embeddings import EMBEDDING_DIM
 
@@ -35,19 +35,12 @@ if TYPE_CHECKING:
 
         def find_call_edges(
             self,
-            root: Path,
-            name: str,
-            *,
-            module: str | None = None,
-            incoming: bool = False,
+            request: BackendRelationQueryRequest,
         ) -> list[tuple[str, str, str | None, str | None, int]]: ...
 
         def find_callable_refs(
             self,
-            root: Path,
-            name: str,
-            *,
-            module: str | None = None,
+            request: BackendRelationQueryRequest,
         ) -> list[tuple[str, str, str | None, str | None, int]]: ...
 
         def docstring_issues(self, root: Path) -> list[DocstringIssueRow]: ...
@@ -313,20 +306,26 @@ def _backend_observations(
             backend.find_logical_symbols(root, "pkg.sample", "Demo.method"),
         ),
         "caller_edges": backend.find_call_edges(
-            root,
-            "caller",
-            module="pkg.sample",
+            BackendRelationQueryRequest(
+                root=root,
+                name="caller",
+                module="pkg.sample",
+            )
         ),
         "incoming_imported": backend.find_call_edges(
-            root,
-            "imported_helper",
-            module="pkg.helpers",
-            incoming=True,
+            BackendRelationQueryRequest(
+                root=root,
+                name="imported_helper",
+                module="pkg.helpers",
+                incoming=True,
+            )
         ),
         "caller_refs": backend.find_callable_refs(
-            root,
-            "caller",
-            module="pkg.sample",
+            BackendRelationQueryRequest(
+                root=root,
+                name="caller",
+                module="pkg.sample",
+            )
         ),
         "issues": _normalize_issues(root, backend.docstring_issues(root)),
         "embedding_counts": sorted(row[3] for row in backend.embedding_inventory(root)),

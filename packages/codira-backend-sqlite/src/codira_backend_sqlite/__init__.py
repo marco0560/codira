@@ -21,13 +21,19 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
-from codira.contracts import BackendError
+from codira.contracts import (
+    BackendEmbeddingCandidatesRequest,
+    BackendError,
+    BackendPersistAnalysisRequest,
+    BackendRelationQueryRequest,
+    BackendRuntimeInventoryRequest,
+)
 from codira.prefix import normalize_prefix, prefix_clause
 from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
+    EmbeddingBackendSpec,
     deserialize_vector,
     embed_text,
     get_embedding_backend,
@@ -52,9 +58,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from codira.contracts import IndexBackend
-    from codira.contracts import LanguageAnalyzer
-    from codira.models import AnalysisResult, FileMetadataSnapshot
-    from codira.semantic.embeddings import EmbeddingBackendSpec
     from codira.sqlite_backend_support import StoredEmbeddingRow
     from codira.types import (
         ChannelResults,
@@ -436,37 +439,27 @@ class SQLiteIndexBackend:
 
     def find_call_edges(
         self,
-        root: Path,
-        name: str,
-        *,
-        module: str | None = None,
-        incoming: bool = False,
-        prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        request: BackendRelationQueryRequest,
     ) -> list[CallEdgeRow]:
         """
         Find exact call edges for a caller or callee logical name.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root whose index should be queried.
-        name : str
-            Exact logical caller or callee name to search for.
-        module : str | None, optional
-            Optional module qualifier used to restrict the result set.
-        incoming : bool, optional
-            Whether to return incoming edges for the callee.
-        prefix : str | None, optional
-            Repo-root-relative path prefix used to restrict caller files.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        request : BackendRelationQueryRequest
+            Exact relation lookup request.
 
         Returns
         -------
         list[tuple[str, str, str | None, str | None, int]]
             Matching call-edge rows ordered deterministically.
         """
+        root = request.root
+        name = request.name
+        module = request.module
+        incoming = request.incoming
+        prefix = request.prefix
+        conn = cast("sqlite3.Connection | None", request.conn)
         owns_connection = conn is None
         normalized_prefix = normalize_prefix(root, prefix)
         if conn is None:
@@ -528,37 +521,27 @@ class SQLiteIndexBackend:
 
     def find_callable_refs(
         self,
-        root: Path,
-        name: str,
-        *,
-        module: str | None = None,
-        incoming: bool = False,
-        prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        request: BackendRelationQueryRequest,
     ) -> list[CallableRefRow]:
         """
         Find exact callable-object references for an owner or target.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root whose index should be queried.
-        name : str
-            Exact logical owner or referenced target name to search for.
-        module : str | None, optional
-            Optional module qualifier used to restrict the result set.
-        incoming : bool, optional
-            Whether to return incoming references for the target.
-        prefix : str | None, optional
-            Repo-root-relative path prefix used to restrict owner files.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        request : BackendRelationQueryRequest
+            Exact relation lookup request.
 
         Returns
         -------
         list[tuple[str, str, str | None, str | None, int]]
             Matching callable-reference rows ordered deterministically.
         """
+        root = request.root
+        name = request.name
+        module = request.module
+        incoming = request.incoming
+        prefix = request.prefix
+        conn = cast("sqlite3.Connection | None", request.conn)
         owns_connection = conn is None
         normalized_prefix = normalize_prefix(root, prefix)
         if conn is None:
@@ -620,31 +603,15 @@ class SQLiteIndexBackend:
 
     def find_include_edges(
         self,
-        root: Path,
-        name: str,
-        *,
-        module: str | None = None,
-        incoming: bool = False,
-        prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        request: BackendRelationQueryRequest,
     ) -> list[IncludeEdgeRow]:
         """
         Find exact include-like edges for an owner module or included target.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root whose index should be queried.
-        name : str
-            Exact owner module name or include target path to search for.
-        module : str | None, optional
-            Optional owner-module qualifier used to restrict incoming results.
-        incoming : bool, optional
-            Whether to return incoming edges for the included target.
-        prefix : str | None, optional
-            Repo-root-relative path prefix used to restrict owner files.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        request : BackendRelationQueryRequest
+            Exact relation lookup request.
 
         Returns
         -------
@@ -652,6 +619,12 @@ class SQLiteIndexBackend:
             Matching include-edge rows ordered deterministically as
             ``(owner_module, target_name, kind, lineno)`` tuples.
         """
+        root = request.root
+        name = request.name
+        module = request.module
+        incoming = request.incoming
+        prefix = request.prefix
+        conn = cast("sqlite3.Connection | None", request.conn)
         owns_connection = conn is None
         normalized_prefix = normalize_prefix(root, prefix)
         if conn is None:
@@ -886,31 +859,15 @@ class SQLiteIndexBackend:
 
     def embedding_candidates(
         self,
-        root: Path,
-        query: str,
-        *,
-        limit: int,
-        min_score: float,
-        prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        request: BackendEmbeddingCandidatesRequest,
     ) -> ChannelResults:
         """
         Return ranked symbol candidates using stored embedding similarity.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root whose index should be queried.
-        query : str
-            User query string.
-        limit : int
-            Maximum number of ranked results to return.
-        min_score : float
-            Minimum similarity threshold for emitted results.
-        prefix : str | None, optional
-            Repo-root-relative path prefix used to restrict matched symbol files.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        request : BackendEmbeddingCandidatesRequest
+            Embedding candidate lookup request.
 
         Returns
         -------
@@ -918,6 +875,12 @@ class SQLiteIndexBackend:
             Ranked symbol candidates ordered by descending similarity and stable
             symbol identity.
         """
+        root = request.root
+        query = request.query
+        limit = request.limit
+        min_score = request.min_score
+        prefix = request.prefix
+        conn = cast("sqlite3.Connection | None", request.conn)
         owns_connection = conn is None
         normalized_prefix = normalize_prefix(root, prefix)
         if conn is None:
@@ -1291,32 +1254,17 @@ class SQLiteIndexBackend:
 
     def persist_analysis(
         self,
-        root: Path,
-        *,
-        file_metadata: FileMetadataSnapshot,
-        analysis: AnalysisResult,
-        embedding_backend: EmbeddingBackendSpec | None = None,
-        previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
-        conn: sqlite3.Connection | None = None,
+        request: BackendPersistAnalysisRequest,
     ) -> tuple[int, int]:
         """
         Persist normalized artifacts for one analyzed file.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root whose index should be updated.
-        file_metadata : codira.models.FileMetadataSnapshot
-            Stable file metadata snapshot.
-        analysis : codira.models.AnalysisResult
-            Normalized analyzer output.
-        embedding_backend : EmbeddingBackendSpec | None, optional
-            Active embedding backend metadata. When omitted, the current
-            default backend is loaded.
-        previous_embeddings : dict[str, codira.sqlite_backend_support.StoredEmbeddingRow] | None, optional
-            Stored symbol embeddings captured before replacing file-owned rows.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        request : BackendPersistAnalysisRequest
+            Persistence request carrying file metadata, normalized analysis,
+            embedding backend metadata, reusable embeddings, and optional
+            connection reuse.
 
         Returns
         -------
@@ -1335,30 +1283,40 @@ class SQLiteIndexBackend:
         ValueError
             If validated persistence inputs are semantically inconsistent.
         """
+        root = request.root
+        conn = cast("sqlite3.Connection | None", request.conn)
         owns_connection = conn is None
         if conn is None:
             conn = self.open_connection(root)
         active_backend = (
-            get_embedding_backend() if embedding_backend is None else embedding_backend
+            get_embedding_backend()
+            if request.embedding_backend is None
+            else request.embedding_backend
         )
         try:
             if owns_connection:
                 written = _store_analysis(
                     conn,
-                    file_metadata,
-                    analysis,
+                    request.file_metadata,
+                    request.analysis,
                     backend=active_backend,
-                    previous_embeddings=previous_embeddings,
+                    previous_embeddings=cast(
+                        "dict[str, StoredEmbeddingRow] | None",
+                        request.previous_embeddings,
+                    ),
                 )
             else:
                 conn.execute("SAVEPOINT persist_analysis")
                 try:
                     written = _store_analysis(
                         conn,
-                        file_metadata,
-                        analysis,
+                        request.file_metadata,
+                        request.analysis,
                         backend=active_backend,
-                        previous_embeddings=previous_embeddings,
+                        previous_embeddings=cast(
+                            "dict[str, StoredEmbeddingRow] | None",
+                            request.previous_embeddings,
+                        ),
                     )
                 except (OSError, sqlite3.Error, RuntimeError, ValueError):
                     conn.execute("ROLLBACK TO SAVEPOINT persist_analysis")
@@ -1409,31 +1367,15 @@ class SQLiteIndexBackend:
 
     def persist_runtime_inventory(
         self,
-        root: Path,
-        *,
-        backend_name: str,
-        backend_version: str,
-        coverage_complete: bool,
-        analyzers: Sequence[LanguageAnalyzer],
-        conn: sqlite3.Connection | None = None,
+        request: BackendRuntimeInventoryRequest,
     ) -> None:
         """
         Persist backend and analyzer inventory for one successful index run.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root whose index should be updated.
-        backend_name : str
-            Active backend name.
-        backend_version : str
-            Active backend version.
-        coverage_complete : bool
-            Whether canonical-directory coverage had no gaps.
-        analyzers : collections.abc.Sequence[codira.contracts.LanguageAnalyzer]
-            Active analyzers for the run.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        request : BackendRuntimeInventoryRequest
+            Runtime inventory persistence request.
 
         Returns
         -------
@@ -1445,6 +1387,12 @@ class SQLiteIndexBackend:
         BackendError
             If SQLite rejects the inventory update.
         """
+        root = request.root
+        backend_name = request.backend_name
+        backend_version = request.backend_version
+        coverage_complete = request.coverage_complete
+        analyzers = request.analyzers
+        conn = cast("sqlite3.Connection | None", request.conn)
         owns_connection = conn is None
         if conn is None:
             conn = self.open_connection(root)

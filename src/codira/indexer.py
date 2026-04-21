@@ -23,7 +23,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from codira.contracts import BackendError
+from codira.contracts import (
+    BackendError,
+    BackendPersistAnalysisRequest,
+    BackendRuntimeInventoryRequest,
+)
 from codira.models import (
     AnalysisResult,
     FileMetadataSnapshot,
@@ -724,15 +728,17 @@ def _persist_indexed_file_analyses(
                     duplicate_stable_ids,
                 )
             recomputed, reused = request.backend.persist_analysis(
-                request.root,
-                file_metadata=file_metadata_snapshot,
-                analysis=analysis,
-                embedding_backend=request.embedding_backend,
-                previous_embeddings=request.previous_embeddings_by_path.get(
-                    str(file_metadata_snapshot.path),
-                    {},
-                ),
-                conn=request.conn,
+                BackendPersistAnalysisRequest(
+                    root=request.root,
+                    file_metadata=file_metadata_snapshot,
+                    analysis=analysis,
+                    embedding_backend=request.embedding_backend,
+                    previous_embeddings=request.previous_embeddings_by_path.get(
+                        str(file_metadata_snapshot.path),
+                        {},
+                    ),
+                    conn=request.conn,
+                )
             )
         except (OSError, BackendError, RuntimeError, ValueError) as exc:
             failures.append(
@@ -1110,12 +1116,14 @@ def index_repo(
 
         index_backend.rebuild_derived_indexes(root, conn=conn)
         index_backend.persist_runtime_inventory(
-            root,
-            backend_name=str(index_backend.name),
-            backend_version=str(index_backend.version),
-            coverage_complete=not coverage_issues,
-            analyzers=analyzers,
-            conn=conn,
+            BackendRuntimeInventoryRequest(
+                root=root,
+                backend_name=str(index_backend.name),
+                backend_version=str(index_backend.version),
+                coverage_complete=not coverage_issues,
+                analyzers=analyzers,
+                conn=conn,
+            )
         )
         index_backend.commit(root, conn=conn)
 

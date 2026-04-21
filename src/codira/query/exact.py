@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from codira.contracts import BackendRelationQueryRequest
 from codira.registry import active_index_backend
 
 if TYPE_CHECKING:
@@ -96,33 +97,7 @@ class CallTreeResult:
     edge_count: int
 
 
-@dataclass(frozen=True)
-class EdgeQueryRequest:
-    """
-    Request parameters for exact edge lookup helpers.
-
-    Parameters
-    ----------
-    root : pathlib.Path
-        Repository root containing the index database.
-    name : str
-        Exact logical name to search for.
-    module : str | None
-        Optional module qualifier used to restrict results.
-    incoming : bool
-        Whether to search incoming edges instead of outgoing edges.
-    prefix : str | None
-        Repo-root-relative path prefix used to restrict owner files.
-    conn : sqlite3.Connection | None
-        Existing database connection to reuse.
-    """
-
-    root: Path
-    name: str
-    module: str | None = None
-    incoming: bool = False
-    prefix: str | None = None
-    conn: sqlite3.Connection | None = None
+EdgeQueryRequest = BackendRelationQueryRequest
 
 
 @dataclass(frozen=True)
@@ -237,14 +212,7 @@ def find_call_edges(
         Matching call-edge rows ordered deterministically.
     """
     backend = active_index_backend()
-    return backend.find_call_edges(
-        request.root,
-        request.name,
-        module=request.module,
-        incoming=request.incoming,
-        prefix=request.prefix,
-        conn=request.conn,
-    )
+    return backend.find_call_edges(request)
 
 
 def build_call_tree(
@@ -426,14 +394,7 @@ def find_callable_refs(
         Matching callable-reference rows ordered deterministically.
     """
     backend = active_index_backend()
-    return backend.find_callable_refs(
-        request.root,
-        request.name,
-        module=request.module,
-        incoming=request.incoming,
-        prefix=request.prefix,
-        conn=request.conn,
-    )
+    return backend.find_callable_refs(request)
 
 
 def build_ref_tree(
@@ -612,14 +573,7 @@ def find_include_edges(
         ``(owner_module, target_name, kind, lineno)`` tuples.
     """
     backend = active_index_backend()
-    return backend.find_include_edges(
-        request.root,
-        request.name,
-        module=request.module,
-        incoming=request.incoming,
-        prefix=request.prefix,
-        conn=request.conn,
-    )
+    return backend.find_include_edges(request)
 
 
 def find_logical_symbols(

@@ -23,7 +23,7 @@ from typing import cast
 from jsonschema import validate  # type: ignore[import-untyped]
 
 from codira.indexer import index_repo
-from codira.query.context import context_for
+from codira.query.context import ContextRequest, context_for
 from codira.storage import init_db
 
 
@@ -76,10 +76,12 @@ def test_context_output_matches_schema(tmp_path: Path) -> None:
 
     # Use a stable query that always produces results
     output = context_for(
-        root,
-        "validate docstring",
-        as_json=True,
-        explain=True,
+        ContextRequest(
+            root=root,
+            query="validate docstring",
+            as_json=True,
+            explain=True,
+        )
     )
 
     data = json.loads(output)
@@ -125,10 +127,12 @@ def test_context_no_matches_schema(tmp_path: Path) -> None:
     index_repo(root)
 
     output = context_for(
-        root,
-        "zzzzzzzzzzzzzzzzzzzzzz",  # unlikely to match anything
-        as_json=True,
-        explain=True,
+        ContextRequest(
+            root=root,
+            query="zzzzzzzzzzzzzzzzzzzzzz",  # unlikely to match anything
+            as_json=True,
+            explain=True,
+        )
     )
 
     data = json.loads(output)

@@ -26,7 +26,7 @@ import pytest
 
 from codira.cli import build_parser, main
 from codira.indexer import index_repo
-from codira.query.context import context_for
+from codira.query.context import ContextRequest, context_for
 from codira.query.exact import (
     EdgeQueryRequest,
     find_call_edges,
@@ -538,16 +538,20 @@ def test_context_for_expands_related_cross_module_graph_symbols(
 
     imported_data = json.loads(
         context_for(
-            tmp_path,
-            "imported_helper",
-            as_json=True,
+            ContextRequest(
+                root=tmp_path,
+                query="imported_helper",
+                as_json=True,
+            )
         )
     )
     registry_data = json.loads(
         context_for(
-            tmp_path,
-            "registry",
-            as_json=True,
+            ContextRequest(
+                root=tmp_path,
+                query="registry",
+                as_json=True,
+            )
         )
     )
 
@@ -588,10 +592,12 @@ def test_context_for_explain_marks_call_graph_and_reference_producers_as_used(
 
     payload = json.loads(
         context_for(
-            tmp_path,
-            "imported_helper",
-            as_json=True,
-            explain=True,
+            ContextRequest(
+                root=tmp_path,
+                query="imported_helper",
+                as_json=True,
+                explain=True,
+            )
         )
     )
     signal_collection = payload["explain"]["signal_collection"]
@@ -625,10 +631,12 @@ def test_context_for_uses_bounded_graph_retrieval_to_score_top_matches(
 
     payload = json.loads(
         context_for(
-            tmp_path,
-            "helper registry",
-            as_json=True,
-            explain=True,
+            ContextRequest(
+                root=tmp_path,
+                query="helper registry",
+                as_json=True,
+                explain=True,
+            )
         )
     )
 
@@ -705,9 +713,11 @@ def test_c_include_edges_are_queryable_and_expand_context(tmp_path: Path) -> Non
 
     header_data = json.loads(
         context_for(
-            tmp_path,
-            "Node",
-            as_json=True,
+            ContextRequest(
+                root=tmp_path,
+                query="Node",
+                as_json=True,
+            )
         )
     )
     related = {
@@ -756,7 +766,9 @@ def test_c_include_graph_expands_transitively(tmp_path: Path) -> None:
     init_db(tmp_path)
     index_repo(tmp_path)
 
-    payload = json.loads(context_for(tmp_path, "public_api", as_json=True))
+    payload = json.loads(
+        context_for(ContextRequest(root=tmp_path, query="public_api", as_json=True))
+    )
     related = {
         (row["module"], row["name"])
         for row in payload["top_matches"] + payload["module_expansion"]
@@ -801,10 +813,12 @@ def test_c_include_graph_explain_reports_expansion_entries(tmp_path: Path) -> No
 
     payload = json.loads(
         context_for(
-            tmp_path,
-            "public_api",
-            as_json=True,
-            explain=True,
+            ContextRequest(
+                root=tmp_path,
+                query="public_api",
+                as_json=True,
+                explain=True,
+            )
         )
     )
     explain = payload["explain"]

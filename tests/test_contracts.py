@@ -32,6 +32,10 @@ from codira.analyzers import BashAnalyzer, CAnalyzer, JsonAnalyzer, PythonAnalyz
 from codira.analyzers.c import _disambiguate_function_stable_ids
 from codira.contracts import (
     KNOWN_RETRIEVAL_CAPABILITIES,
+    BackendEmbeddingCandidatesRequest,
+    BackendPersistAnalysisRequest,
+    BackendRelationQueryRequest,
+    BackendRuntimeInventoryRequest,
     IndexBackend,
     LanguageAnalyzer,
     RetrievalProducer,
@@ -64,20 +68,20 @@ from codira.registry import (
     active_language_analyzers,
     missing_language_analyzer_hint,
 )
-from codira.semantic.embeddings import (
-    EMBEDDING_BACKEND,
-    EMBEDDING_DIM,
-    EMBEDDING_VERSION,
-)
-
-if TYPE_CHECKING:
-    from pytest import MonkeyPatch
 from codira.scanner import (
     discovery_file_globs,
     iter_canonical_project_files,
     iter_project_files,
 )
+from codira.semantic.embeddings import (
+    EMBEDDING_BACKEND,
+    EMBEDDING_DIM,
+    EMBEDDING_VERSION,
+)
 from codira.storage import get_db_path
+
+if TYPE_CHECKING:
+    from pytest import MonkeyPatch
 
 
 class _FakeAnalyzer:
@@ -365,39 +369,23 @@ class _FakeBackend:
 
     def persist_analysis(
         self,
-        root: Path,
-        *,
-        file_metadata: FileMetadataSnapshot,
-        analysis: AnalysisResult,
-        embedding_backend: object | None = None,
-        previous_embeddings: dict[str, object] | None = None,
-        conn: sqlite3.Connection | None = None,
+        request: BackendPersistAnalysisRequest,
     ) -> tuple[int, int]:
         """
         Count normalized functions as a stand-in for persisted artifacts.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        file_metadata : codira.models.FileMetadataSnapshot
-            Stable file metadata snapshot.
-        analysis : codira.models.AnalysisResult
-            Normalized analyzer output.
-        embedding_backend : object | None, optional
-            Optional embedding backend accepted for protocol compatibility.
-        previous_embeddings : dict[str, object] | None, optional
-            Previously persisted semantic artifacts accepted for compatibility.
-        conn : sqlite3.Connection | None, optional
-            Optional SQLite connection.
+        request : BackendPersistAnalysisRequest
+            Persistence request carrying metadata, normalized analysis, and
+            optional backend state placeholders.
 
         Returns
         -------
         tuple[int, int]
             Recomputed and reused semantic-artifact counts.
         """
-        del root, file_metadata, embedding_backend, previous_embeddings, conn
-        return (len(analysis.iter_functions()), 0)
+        return (len(request.analysis.iter_functions()), 0)
 
     def count_reusable_embeddings(
         self,
@@ -542,110 +530,62 @@ class _FakeBackend:
 
     def find_call_edges(
         self,
-        root: Path,
-        name: str,
-        *,
-        module: str | None = None,
-        incoming: bool = False,
-        prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        request: BackendRelationQueryRequest,
     ) -> list[tuple[str, str, str | None, str | None, int]]:
         """
         Return no call edges for protocol validation.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        name : str
-            Logical caller or callee.
-        module : str | None, optional
-            Optional module filter.
-        incoming : bool, optional
-            Whether incoming edges would be requested.
-        prefix : str | None, optional
-            Optional path filter.
-        conn : sqlite3.Connection | None, optional
-            Optional SQLite connection.
+        request : BackendRelationQueryRequest
+            Exact relation lookup request.
 
         Returns
         -------
         list[tuple[str, str, str | None, str | None, int]]
             Empty call-edge rows for protocol validation.
         """
-        del root, name, module, incoming, prefix, conn
+        del request
         return []
 
     def find_callable_refs(
         self,
-        root: Path,
-        name: str,
-        *,
-        module: str | None = None,
-        incoming: bool = False,
-        prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        request: BackendRelationQueryRequest,
     ) -> list[tuple[str, str, str | None, str | None, int]]:
         """
         Return no callable references for protocol validation.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        name : str
-            Logical owner or target.
-        module : str | None, optional
-            Optional module filter.
-        incoming : bool, optional
-            Whether incoming references would be requested.
-        prefix : str | None, optional
-            Optional path filter.
-        conn : sqlite3.Connection | None, optional
-            Optional SQLite connection.
+        request : BackendRelationQueryRequest
+            Exact relation lookup request.
 
         Returns
         -------
         list[tuple[str, str, str | None, str | None, int]]
             Empty callable-reference rows for protocol validation.
         """
-        del root, name, module, incoming, prefix, conn
+        del request
         return []
 
     def find_include_edges(
         self,
-        root: Path,
-        name: str,
-        *,
-        module: str | None = None,
-        incoming: bool = False,
-        prefix: str | None = None,
-        conn: object | None = None,
+        request: BackendRelationQueryRequest,
     ) -> list[tuple[str, str, str, int]]:
         """
         Return no include edges for protocol validation.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        name : str
-            Owner module or include target.
-        module : str | None, optional
-            Optional module filter.
-        incoming : bool, optional
-            Whether incoming include edges would be requested.
-        prefix : str | None, optional
-            Optional owner-file prefix filter.
-        conn : object | None, optional
-            Optional backend connection.
+        request : BackendRelationQueryRequest
+            Exact relation lookup request.
 
         Returns
         -------
         list[tuple[str, str, str, int]]
             Empty include-edge rows for protocol validation.
         """
-        del root, name, module, incoming, prefix, conn
+        del request
         return []
 
     def find_logical_symbols(
@@ -734,38 +674,22 @@ class _FakeBackend:
 
     def embedding_candidates(
         self,
-        root: Path,
-        query: str,
-        *,
-        limit: int,
-        min_score: float,
-        prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        request: BackendEmbeddingCandidatesRequest,
     ) -> list[tuple[float, tuple[str, str, str, str, int]]]:
         """
         Return no embedding candidates for protocol validation.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        query : str
-            Query string.
-        limit : int
-            Maximum result count.
-        min_score : float
-            Minimum similarity threshold.
-        prefix : str | None, optional
-            Optional path filter.
-        conn : sqlite3.Connection | None, optional
-            Optional SQLite connection.
+        request : BackendEmbeddingCandidatesRequest
+            Embedding candidate lookup request.
 
         Returns
         -------
         list[tuple[float, tuple[str, str, str, str, int]]]
             Empty candidate rows for protocol validation.
         """
-        del root, query, limit, min_score, prefix, conn
+        del request
         return []
 
     def prune_orphaned_embeddings(
@@ -794,38 +718,22 @@ class _FakeBackend:
 
     def persist_runtime_inventory(
         self,
-        root: Path,
-        *,
-        backend_name: str,
-        backend_version: str,
-        coverage_complete: bool,
-        analyzers: list[LanguageAnalyzer],
-        conn: object | None = None,
+        request: BackendRuntimeInventoryRequest,
     ) -> None:
         """
         Perform no-op runtime inventory persistence for the fake backend.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        backend_name : str
-            Active backend name.
-        backend_version : str
-            Active backend version.
-        coverage_complete : bool
-            Whether coverage was complete.
-        analyzers : list[codira.contracts.LanguageAnalyzer]
-            Active analyzers.
-        conn : object | None, optional
-            Optional backend connection.
+        request : BackendRuntimeInventoryRequest
+            Runtime inventory persistence request.
 
         Returns
         -------
         None
             This fake backend keeps no state.
         """
-        del root, backend_name, backend_version, coverage_complete, analyzers, conn
+        del request
         return
 
     def commit(self, root: Path, *, conn: object) -> None:
@@ -2661,9 +2569,11 @@ def test_c_import_kinds_persist_through_sqlite_backend(tmp_path: Path) -> None:
         size=source.stat().st_size,
     )
     backend.persist_analysis(
-        tmp_path,
-        file_metadata=snapshot,
-        analysis=analysis,
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+        )
     )
 
     conn = sqlite3.connect(get_db_path(tmp_path))
@@ -2718,9 +2628,11 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
         size=source.stat().st_size,
     )
     backend.persist_analysis(
-        tmp_path,
-        file_metadata=snapshot,
-        analysis=analysis,
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+        )
     )
 
     assert backend.find_symbol(tmp_path, "Node") == [
@@ -2768,16 +2680,20 @@ def test_c_declaration_comments_contribute_to_embedding_candidates(
         size=source.stat().st_size,
     )
     backend.persist_analysis(
-        tmp_path,
-        file_metadata=snapshot,
-        analysis=analysis,
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+        )
     )
 
     results = backend.embedding_candidates(
-        tmp_path,
-        "palette lookup themes",
-        limit=5,
-        min_score=0.0,
+        BackendEmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="palette lookup themes",
+            limit=5,
+            min_score=0.0,
+        )
     )
 
     assert results
@@ -2923,9 +2839,11 @@ def test_sqlite_index_backend_persists_and_deletes_normalized_analysis(
 
     assert isinstance(backend, IndexBackend)
     recomputed, reused = backend.persist_analysis(
-        tmp_path,
-        file_metadata=snapshot,
-        analysis=analysis,
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+        )
     )
     backend.rebuild_derived_indexes(tmp_path)
 
@@ -2958,10 +2876,12 @@ def test_sqlite_index_backend_persists_and_deletes_normalized_analysis(
         (EMBEDDING_BACKEND, EMBEDDING_VERSION, EMBEDDING_DIM, 2)
     ]
     assert backend.embedding_candidates(
-        tmp_path,
-        "return supplied value",
-        limit=5,
-        min_score=0.0,
+        BackendEmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="return supplied value",
+            limit=5,
+            min_score=0.0,
+        )
     )
     assert backend.count_reusable_embeddings(tmp_path, paths=[str(module)]) == 2
 
@@ -3099,9 +3019,11 @@ def test_sqlite_backend_persists_file_analyzer_ownership(tmp_path: Path) -> None
     analysis = PythonAnalyzer().analyze_file(module, tmp_path)
 
     backend.persist_analysis(
-        tmp_path,
-        file_metadata=snapshot,
-        analysis=analysis,
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+        )
     )
 
     conn = sqlite3.connect(get_db_path(tmp_path))

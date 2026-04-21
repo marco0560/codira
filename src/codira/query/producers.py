@@ -28,7 +28,10 @@ if TYPE_CHECKING:
     from codira.query.classifier import QueryIntent
     from codira.types import ChannelName, ChannelResults, SymbolRow
 
-from codira.contracts import RetrievalProducerInfo
+from codira.contracts import (
+    BackendEmbeddingCandidatesRequest,
+    RetrievalProducerInfo,
+)
 from codira.query.signals import RetrievalSignal
 from codira.registry import active_index_backend
 
@@ -199,12 +202,14 @@ class EmbeddingRetrievalProducer(QueryProducerSpec):
         """
         backend = active_index_backend()
         return backend.embedding_candidates(
-            request.root,
-            request.query,
-            limit=request.limit,
-            min_score=request.min_score,
-            prefix=request.prefix,
-            conn=request.conn,
+            BackendEmbeddingCandidatesRequest(
+                root=request.root,
+                query=request.query,
+                limit=request.limit,
+                min_score=request.min_score,
+                prefix=request.prefix,
+                conn=request.conn,
+            )
         )
 
 

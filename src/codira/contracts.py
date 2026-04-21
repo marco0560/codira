@@ -184,6 +184,122 @@ class CapabilityDeclaringAnalyzer(Protocol):
         """
 
 
+@dataclass(frozen=True)
+class BackendRelationQueryRequest:
+    """
+    Backend request for exact relation and include-edge lookup.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose index should be queried.
+    name : str
+        Exact logical or include-target name to search for.
+    module : str | None, optional
+        Optional module qualifier used to restrict results.
+    incoming : bool, optional
+        Whether to return incoming edges instead of outgoing edges.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict owner files.
+    conn : object | None, optional
+        Existing backend connection to reuse.
+    """
+
+    root: Path
+    name: str
+    module: str | None = None
+    incoming: bool = False
+    prefix: str | None = None
+    conn: object | None = None
+
+
+@dataclass(frozen=True)
+class BackendEmbeddingCandidatesRequest:
+    """
+    Backend request for ranked embedding candidate lookup.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose index should be queried.
+    query : str
+        User query string.
+    limit : int
+        Maximum number of ranked results to return.
+    min_score : float
+        Minimum similarity threshold for emitted results.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict matched symbol files.
+    conn : object | None, optional
+        Existing backend connection to reuse.
+    """
+
+    root: Path
+    query: str
+    limit: int
+    min_score: float
+    prefix: str | None = None
+    conn: object | None = None
+
+
+@dataclass(frozen=True)
+class BackendRuntimeInventoryRequest:
+    """
+    Backend request for persisting runtime inventory after indexing.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose backend state should be updated.
+    backend_name : str
+        Active backend name.
+    backend_version : str
+        Active backend version.
+    coverage_complete : bool
+        Whether canonical-directory coverage had no gaps.
+    analyzers : collections.abc.Sequence[codira.contracts.LanguageAnalyzer]
+        Active analyzers for the run.
+    conn : object | None, optional
+        Existing backend connection to reuse.
+    """
+
+    root: Path
+    backend_name: str
+    backend_version: str
+    coverage_complete: bool
+    analyzers: Sequence[LanguageAnalyzer]
+    conn: object | None = None
+
+
+@dataclass(frozen=True)
+class BackendPersistAnalysisRequest:
+    """
+    Backend request for persisting one analyzed file snapshot.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose backend state should be updated.
+    file_metadata : codira.models.FileMetadataSnapshot
+        Stable file metadata captured during scanning.
+    analysis : codira.models.AnalysisResult
+        Normalized analyzer output for the file.
+    embedding_backend : codira.contracts.EmbeddingBackendSpec | None, optional
+        Optional semantic embedding backend used during persistence.
+    previous_embeddings : collections.abc.Mapping[str, object] | None, optional
+        Previously persisted semantic artifacts eligible for reuse.
+    conn : object | None, optional
+        Existing backend connection to reuse.
+    """
+
+    root: Path
+    file_metadata: FileMetadataSnapshot
+    analysis: AnalysisResult
+    embedding_backend: EmbeddingBackendSpec | None = None
+    previous_embeddings: Mapping[str, object] | None = None
+    conn: object | None = None
+
+
 KNOWN_RETRIEVAL_CAPABILITIES: tuple[RetrievalCapabilityName, ...] = (
     "symbol_lookup",
     "semantic_text",
@@ -513,31 +629,16 @@ class IndexBackend(Protocol):
 
     def persist_analysis(
         self,
-        root: Path,
-        *,
-        file_metadata: FileMetadataSnapshot,
-        analysis: AnalysisResult,
-        embedding_backend: EmbeddingBackendSpec | None = None,
-        previous_embeddings: Mapping[str, object] | None = None,
-        conn: object | None = None,
+        request: BackendPersistAnalysisRequest,
     ) -> tuple[int, int]:
         """
         Persist normalized artifacts for one analyzed file snapshot.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root whose backend state should be updated.
-        file_metadata : codira.models.FileMetadataSnapshot
-            Stable file metadata captured during scanning.
-        analysis : codira.models.AnalysisResult
-            Normalized analyzer output for the file.
-        embedding_backend : codira.contracts.EmbeddingBackendSpec | None, optional
-            Optional semantic embedding backend used during persistence.
-        previous_embeddings : collections.abc.Mapping[str, object] | None, optional
-            Previously persisted semantic artifacts eligible for reuse.
-        conn : object | None, optional
-            Existing backend connection to reuse.
+        request : BackendPersistAnalysisRequest
+            Persistence request carrying file metadata, normalized analysis,
+            embedding state, and optional reusable artifacts.
 
         Returns
         -------
@@ -594,31 +695,15 @@ class IndexBackend(Protocol):
 
     def persist_runtime_inventory(
         self,
-        root: Path,
-        *,
-        backend_name: str,
-        backend_version: str,
-        coverage_complete: bool,
-        analyzers: Sequence[LanguageAnalyzer],
-        conn: object | None = None,
+        request: BackendRuntimeInventoryRequest,
     ) -> None:
         """
         Persist backend and analyzer inventory for a completed index run.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root whose backend state should be updated.
-        backend_name : str
-            Active backend name.
-        backend_version : str
-            Active backend version.
-        coverage_complete : bool
-            Whether canonical-directory coverage had no gaps.
-        analyzers : collections.abc.Sequence[codira.contracts.LanguageAnalyzer]
-            Active analyzers for the run.
-        conn : object | None, optional
-            Existing backend connection to reuse.
+        request : BackendRuntimeInventoryRequest
+            Runtime inventory persistence request.
 
         Returns
         -------
@@ -660,31 +745,15 @@ class IndexBackend(Protocol):
 
     def find_include_edges(
         self,
-        root: Path,
-        name: str,
-        *,
-        module: str | None = None,
-        incoming: bool = False,
-        prefix: str | None = None,
-        conn: object | None = None,
+        request: BackendRelationQueryRequest,
     ) -> list[IncludeEdgeRow]:
         """
         Find exact include-like edges for an owner module or included target.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root whose index should be queried.
-        name : str
-            Exact owner module name or include target path to search for.
-        module : str | None, optional
-            Optional owner-module qualifier used to restrict incoming results.
-        incoming : bool, optional
-            Whether to return incoming edges for the included target.
-        prefix : str | None, optional
-            Repo-root-relative path prefix used to restrict owner files.
-        conn : object | None, optional
-            Existing backend connection to reuse.
+        request : BackendRelationQueryRequest
+            Exact relation lookup request.
 
         Returns
         -------
@@ -773,31 +842,15 @@ class IndexBackend(Protocol):
 
     def embedding_candidates(
         self,
-        root: Path,
-        query: str,
-        *,
-        limit: int,
-        min_score: float,
-        prefix: str | None = None,
-        conn: object | None = None,
+        request: BackendEmbeddingCandidatesRequest,
     ) -> ChannelResults:
         """
         Return ranked symbol candidates using stored embedding similarity.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root whose index should be queried.
-        query : str
-            User query string.
-        limit : int
-            Maximum number of ranked results to return.
-        min_score : float
-            Minimum similarity threshold for emitted results.
-        prefix : str | None, optional
-            Repo-root-relative path prefix used to restrict matched symbol files.
-        conn : object | None, optional
-            Existing backend connection to reuse.
+        request : BackendEmbeddingCandidatesRequest
+            Embedding candidate lookup request.
 
         Returns
         -------
@@ -938,31 +991,15 @@ class IndexBackend(Protocol):
 
     def find_call_edges(
         self,
-        root: Path,
-        name: str,
-        *,
-        module: str | None = None,
-        incoming: bool = False,
-        prefix: str | None = None,
-        conn: object | None = None,
+        request: BackendRelationQueryRequest,
     ) -> list[tuple[str, str, str | None, str | None, int]]:
         """
         Find exact call edges for a caller or callee logical name.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root whose index should be queried.
-        name : str
-            Exact logical caller or callee name to search for.
-        module : str | None, optional
-            Optional module qualifier used to restrict the result set.
-        incoming : bool, optional
-            Whether to return incoming edges for the callee.
-        prefix : str | None, optional
-            Repo-root-relative path prefix used to restrict caller files.
-        conn : object | None, optional
-            Existing backend connection to reuse.
+        request : BackendRelationQueryRequest
+            Exact relation lookup request.
 
         Returns
         -------
@@ -972,31 +1009,15 @@ class IndexBackend(Protocol):
 
     def find_callable_refs(
         self,
-        root: Path,
-        name: str,
-        *,
-        module: str | None = None,
-        incoming: bool = False,
-        prefix: str | None = None,
-        conn: object | None = None,
+        request: BackendRelationQueryRequest,
     ) -> list[tuple[str, str, str | None, str | None, int]]:
         """
         Find exact callable-object references for an owner or target.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root whose index should be queried.
-        name : str
-            Exact logical owner or referenced target name to search for.
-        module : str | None, optional
-            Optional module qualifier used to restrict the result set.
-        incoming : bool, optional
-            Whether to return incoming references for the target.
-        prefix : str | None, optional
-            Repo-root-relative path prefix used to restrict owner files.
-        conn : object | None, optional
-            Existing backend connection to reuse.
+        request : BackendRelationQueryRequest
+            Exact relation lookup request.
 
         Returns
         -------

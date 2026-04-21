@@ -35,13 +35,13 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import Protocol
 
-    from codira.contracts import LanguageAnalyzer
-    from codira.models import (
-        AnalysisResult,
-        CallableReference,
-        CallSite,
-        FileMetadataSnapshot,
+    from codira.contracts import (
+        BackendEmbeddingCandidatesRequest,
+        BackendPersistAnalysisRequest,
+        BackendRelationQueryRequest,
+        BackendRuntimeInventoryRequest,
     )
+    from codira.models import CallableReference, CallSite
     from codira.semantic.embeddings import EmbeddingBackendSpec
     from codira.types import (
         ChannelResults,
@@ -56,6 +56,9 @@ if TYPE_CHECKING:
         content_hash: str
         dim: int
         vector: bytes
+
+else:
+    EmbeddingBackendSpec = object
 
 
 CallEdgeRow = tuple[str, str, str | None, str | None, int]
@@ -710,31 +713,17 @@ class MemoryIndexBackend:
 
     def persist_analysis(
         self,
-        root: Path,
-        *,
-        file_metadata: FileMetadataSnapshot,
-        analysis: AnalysisResult,
-        embedding_backend: EmbeddingBackendSpec | None = None,
-        previous_embeddings: Mapping[str, object] | None = None,
-        conn: object | None = None,
+        request: BackendPersistAnalysisRequest,
     ) -> tuple[int, int]:
         """
         Persist one normalized analysis result into memory.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        file_metadata : codira.contracts.FileMetadataSnapshot
-            Metadata for the indexed file.
-        analysis : codira.contracts.AnalysisResult
-            Normalized analyzer output to persist.
-        embedding_backend : codira.contracts.EmbeddingBackendSpec | None, optional
-            Active embedding backend metadata.
-        previous_embeddings : collections.abc.Mapping[str, object] | None, optional
-            Previously persisted embeddings keyed by stable symbol id.
-        conn : object | None, optional
-            Optional backend connection.
+        request : BackendPersistAnalysisRequest
+            Persistence request carrying metadata, normalized analysis,
+            embedding backend metadata, reusable embeddings, and an optional
+            backend connection.
 
         Returns
         -------
@@ -746,24 +735,25 @@ class MemoryIndexBackend:
         ValueError
             If embedding backend metadata is not provided.
         """
-        if embedding_backend is None:
+        if request.embedding_backend is None:
             msg = "MemoryIndexBackend requires explicit embedding backend metadata."
             raise ValueError(msg)
 
-        state = self._conn_state(root, conn)
+        state = self._conn_state(request.root, request.conn)
         file_id = state.next_file_id
         state.next_file_id += 1
-        path_text = str(file_metadata.path)
+        path_text = str(request.file_metadata.path)
         state.files[file_id] = _MemoryFile(
             id=file_id,
             path=path_text,
-            hash=file_metadata.sha256,
-            analyzer_name=file_metadata.analyzer_name,
-            analyzer_version=file_metadata.analyzer_version,
+            hash=request.file_metadata.sha256,
+            analyzer_name=request.file_metadata.analyzer_name,
+            analyzer_version=request.file_metadata.analyzer_version,
         )
         state.file_id_by_path[path_text] = file_id
 
         embedding_payloads: list[tuple[int, str, str]] = []
+        analysis = request.analysis
         module_name = analysis.module.name
         module_symbol_id = self._append_symbol(
             state,
@@ -1010,8 +1000,8 @@ class MemoryIndexBackend:
         return self._persist_embeddings(
             state,
             embedding_payloads=embedding_payloads,
-            embedding_backend=embedding_backend,
-            previous_embeddings=previous_embeddings or {},
+            embedding_backend=request.embedding_backend,
+            previous_embeddings=request.previous_embeddings or {},
         )
 
     def count_reusable_embeddings(
@@ -1075,42 +1065,27 @@ class MemoryIndexBackend:
 
     def persist_runtime_inventory(
         self,
-        root: Path,
-        *,
-        backend_name: str,
-        backend_version: str,
-        coverage_complete: bool,
-        analyzers: Sequence[LanguageAnalyzer],
-        conn: object | None = None,
+        request: BackendRuntimeInventoryRequest,
     ) -> None:
         """
         Persist runtime and analyzer inventory for the last index run.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        backend_name : str
-            Active backend name.
-        backend_version : str
-            Active backend version.
-        coverage_complete : bool
-            Whether canonical-directory coverage had no gaps.
-        analyzers : collections.abc.Sequence[codira.contracts.LanguageAnalyzer]
-            Active analyzers for the run.
-        conn : object | None, optional
-            Optional backend connection.
+        request : BackendRuntimeInventoryRequest
+            Runtime inventory persistence request.
 
         Returns
         -------
         None
             Runtime inventory is replaced in place.
         """
-        state = self._conn_state(root, conn)
+        root = request.root
+        state = self._conn_state(root, request.conn)
         state.runtime_inventory = (
-            backend_name,
-            backend_version,
-            int(coverage_complete),
+            request.backend_name,
+            request.backend_version,
+            int(request.coverage_complete),
         )
         state.analyzer_inventory = [
             (
@@ -1118,7 +1093,7 @@ class MemoryIndexBackend:
                 str(analyzer.version),
                 json.dumps(tuple(analyzer.discovery_globs)),
             )
-            for analyzer in sorted(analyzers, key=lambda item: str(item.name))
+            for analyzer in sorted(request.analyzers, key=lambda item: str(item.name))
         ]
 
     def commit(self, root: Path, *, conn: object) -> None:
@@ -1164,39 +1139,24 @@ class MemoryIndexBackend:
 
     def find_include_edges(
         self,
-        root: Path,
-        name: str,
-        *,
-        module: str | None = None,
-        incoming: bool = False,
-        prefix: str | None = None,
-        conn: object | None = None,
+        request: BackendRelationQueryRequest,
     ) -> list[IncludeEdgeRow]:
         """
         Find include-like edges by owner module or target name.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        name : str
-            Owner module or included target name to match.
-        module : str | None, optional
-            Optional owner module filter.
-        incoming : bool, optional
-            Whether to search incoming edges.
-        prefix : str | None, optional
-            Optional repository-relative path prefix.
-        conn : object | None, optional
-            Optional backend connection.
+        request : BackendRelationQueryRequest
+            Exact relation lookup request.
 
         Returns
         -------
         list[codira.contracts.IncludeEdgeRow]
             Matching include edge rows.
         """
-        state = self._conn_state(root, conn)
-        normalized_prefix = normalize_prefix(root, prefix)
+        root = request.root
+        state = self._conn_state(root, request.conn)
+        normalized_prefix = normalize_prefix(root, request.prefix)
         rows = [
             (imp.module_name, imp.name, imp.kind, imp.lineno)
             for imp in state.imports
@@ -1204,11 +1164,11 @@ class MemoryIndexBackend:
             and path_has_prefix(state.files[imp.file_id].path, normalized_prefix)
             and (
                 (
-                    incoming
-                    and imp.name == name
-                    and (module is None or module == imp.module_name)
+                    request.incoming
+                    and imp.name == request.name
+                    and (request.module is None or request.module == imp.module_name)
                 )
-                or (not incoming and imp.module_name == name)
+                or (not request.incoming and imp.module_name == request.name)
             )
         ]
         return sorted(rows, key=lambda row: (row[0], row[3], row[1], row[2]))
@@ -1343,44 +1303,32 @@ class MemoryIndexBackend:
 
     def embedding_candidates(
         self,
-        root: Path,
-        query: str,
-        *,
-        limit: int,
-        min_score: float,
-        prefix: str | None = None,
-        conn: object | None = None,
+        request: BackendEmbeddingCandidatesRequest,
     ) -> ChannelResults:
         """
         Return deterministic pseudo-vector embedding candidates.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        query : str
-            Query text to embed with the pseudo-vector backend.
-        limit : int
-            Maximum number of candidates to return.
-        min_score : float
-            Minimum similarity score.
-        prefix : str | None, optional
-            Optional repository-relative path prefix.
-        conn : object | None, optional
-            Optional backend connection.
+        request : BackendEmbeddingCandidatesRequest
+            Embedding candidate lookup request.
 
         Returns
         -------
         codira.contracts.ChannelResults
             Ranked embedding candidate rows.
         """
-        state = self._conn_state(root, conn)
-        normalized_prefix = normalize_prefix(root, prefix)
-        active = self.embedding_inventory(root, conn=conn)
+        root = request.root
+        state = self._conn_state(root, request.conn)
+        normalized_prefix = normalize_prefix(root, request.prefix)
+        active = self.embedding_inventory(root, conn=request.conn)
         if not active:
             return []
         backend_name, backend_version, dim, _count = active[0]
-        query_vector = _deserialize_vector(_pseudo_vector_blob(query, dim=dim), dim=dim)
+        query_vector = _deserialize_vector(
+            _pseudo_vector_blob(request.query, dim=dim),
+            dim=dim,
+        )
         symbol_by_id = {symbol.id: symbol for symbol in state.symbols}
         results: ChannelResults = []
         for embedding in state.embeddings:
@@ -1399,7 +1347,7 @@ class MemoryIndexBackend:
                 query_vector,
                 _deserialize_vector(embedding.vector, dim=embedding.dim),
             )
-            if score < min_score:
+            if score < request.min_score:
                 continue
             results.append((score, symbol.row(file_path)))
         results.sort(
@@ -1412,7 +1360,7 @@ class MemoryIndexBackend:
                 item[1][0],
             )
         )
-        return results[:limit]
+        return results[: request.limit]
 
     def prune_orphaned_embeddings(
         self,
@@ -1595,31 +1543,15 @@ class MemoryIndexBackend:
 
     def find_call_edges(
         self,
-        root: Path,
-        name: str,
-        *,
-        module: str | None = None,
-        incoming: bool = False,
-        prefix: str | None = None,
-        conn: object | None = None,
+        request: BackendRelationQueryRequest,
     ) -> list[CallEdgeRow]:
         """
         Find exact call edges by caller or callee logical name.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        name : str
-            Caller or callee logical name to match.
-        module : str | None, optional
-            Optional module filter.
-        incoming : bool, optional
-            Whether to search incoming edges.
-        prefix : str | None, optional
-            Optional repository-relative path prefix.
-        conn : object | None, optional
-            Optional backend connection.
+        request : BackendRelationQueryRequest
+            Exact relation lookup request.
 
         Returns
         -------
@@ -1627,42 +1559,26 @@ class MemoryIndexBackend:
             Matching call edge rows.
         """
         return self._find_relations(
-            root,
-            name,
+            request.root,
+            request.name,
             records_attr="call_records",
-            module=module,
-            incoming=incoming,
-            prefix=prefix,
-            conn=conn,
+            module=request.module,
+            incoming=request.incoming,
+            prefix=request.prefix,
+            conn=request.conn,
         )
 
     def find_callable_refs(
         self,
-        root: Path,
-        name: str,
-        *,
-        module: str | None = None,
-        incoming: bool = False,
-        prefix: str | None = None,
-        conn: object | None = None,
+        request: BackendRelationQueryRequest,
     ) -> list[CallEdgeRow]:
         """
         Find exact callable-reference edges by owner or target name.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        name : str
-            Owner or target logical name to match.
-        module : str | None, optional
-            Optional module filter.
-        incoming : bool, optional
-            Whether to search incoming references.
-        prefix : str | None, optional
-            Optional repository-relative path prefix.
-        conn : object | None, optional
-            Optional backend connection.
+        request : BackendRelationQueryRequest
+            Exact relation lookup request.
 
         Returns
         -------
@@ -1670,13 +1586,13 @@ class MemoryIndexBackend:
             Matching callable-reference edge rows.
         """
         return self._find_relations(
-            root,
-            name,
+            request.root,
+            request.name,
             records_attr="callable_ref_records",
-            module=module,
-            incoming=incoming,
-            prefix=prefix,
-            conn=conn,
+            module=request.module,
+            incoming=request.incoming,
+            prefix=request.prefix,
+            conn=request.conn,
         )
 
     def _append_symbol(
