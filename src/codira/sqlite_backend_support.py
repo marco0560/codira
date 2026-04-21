@@ -40,6 +40,7 @@ if TYPE_CHECKING:
         CallSite,
         FileMetadataSnapshot,
         FunctionArtifact,
+        OverloadArtifact,
     )
     from codira.semantic.embeddings import EmbeddingBackendSpec
 
@@ -320,6 +321,7 @@ def _clear_index_tables(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM callable_refs")
     conn.execute("DELETE FROM call_records")
     conn.execute("DELETE FROM callable_ref_records")
+    conn.execute("DELETE FROM overloads")
     conn.execute("DELETE FROM embeddings")
     conn.execute("DELETE FROM symbol_index")
     conn.execute("DELETE FROM imports")
@@ -1468,6 +1470,11 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
                         ),
                     ),
                 )
+            _persist_overload_artifacts(
+                conn,
+                function_id=function_id,
+                overloads=method.overloads,
+            )
             for call in method.calls:
                 call_rows.append(
                     _record_tuple(file_id, module_name, logical_name, call)
@@ -1565,10 +1572,57 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
                     and _should_require_raises_section(analysis.source_path, fn.name),
                 ),
             )
+        _persist_overload_artifacts(
+            conn,
+            function_id=function_id,
+            overloads=fn.overloads,
+        )
         for call in fn.calls:
             call_rows.append(_record_tuple(file_id, module_name, fn.name, call))
         for ref in fn.callable_refs:
             ref_rows.append(_reference_tuple(file_id, module_name, fn.name, ref))
+
+
+def _persist_overload_artifacts(
+    conn: sqlite3.Connection,
+    *,
+    function_id: int,
+    overloads: tuple[OverloadArtifact, ...],
+) -> None:
+    """
+    Persist overload metadata rows for one canonical callable.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection.
+    function_id : int
+        Inserted function row identifier that owns the overloads.
+    overloads : tuple[codira.models.OverloadArtifact, ...]
+        Ordered overload declarations attached to the callable.
+
+    Returns
+    -------
+    None
+        Overload rows are inserted in place.
+    """
+    for overload in overloads:
+        conn.execute(
+            "INSERT INTO overloads"
+            "(function_id, stable_id, parent_stable_id, ordinal, signature, "
+            "docstring, lineno, end_lineno) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                function_id,
+                overload.stable_id,
+                overload.parent_stable_id,
+                overload.ordinal,
+                overload.signature,
+                overload.docstring,
+                overload.lineno,
+                overload.end_lineno,
+            ),
+        )
 
 
 def _persist_declaration_artifacts(request: ArtifactPersistenceRequest) -> None:
@@ -2021,6 +2075,17 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
         conn.execute(
             "DELETE FROM docstring_issues WHERE file_id = ?",
             (file_id,),
+        )
+        conn.execute(
+            f"""
+            DELETE FROM overloads
+            WHERE function_id IN (
+                SELECT id
+                FROM functions
+                WHERE module_id IN ({_placeholders(module_ids)})
+            )
+            """,
+            tuple(module_ids),
         )
         conn.execute(
             f"DELETE FROM imports WHERE module_id IN ({_placeholders(module_ids)})",

@@ -51,6 +51,7 @@ from codira.query.exact import (
     find_call_edges,
     find_callable_refs,
     find_symbol,
+    find_symbol_overloads,
 )
 from codira.registry import (
     active_index_backend,
@@ -1446,19 +1447,68 @@ def _run_symbol(
     rows = find_symbol(root, name, prefix=prefix)
 
     if as_json:
+
+        def _symbol_json_result(
+            symbol_type: str,
+            module_name: str,
+            symbol_name: str,
+            file_path: str,
+            lineno: int,
+        ) -> dict[str, object]:
+            row: dict[str, object] = {
+                "type": symbol_type,
+                "module": module_name,
+                "name": symbol_name,
+                "file": file_path,
+                "lineno": lineno,
+            }
+            overloads = find_symbol_overloads(
+                root,
+                (
+                    symbol_type,
+                    module_name,
+                    symbol_name,
+                    file_path,
+                    lineno,
+                ),
+            )
+            if overloads:
+                row["overloads"] = [
+                    {
+                        "kind": "overload",
+                        "stable_id": stable_id,
+                        "parent_stable_id": parent_stable_id,
+                        "ordinal": ordinal,
+                        "signature": signature,
+                        "lineno": overload_lineno,
+                        "end_lineno": end_lineno,
+                        "docstring": docstring,
+                    }
+                    for (
+                        stable_id,
+                        parent_stable_id,
+                        ordinal,
+                        signature,
+                        overload_lineno,
+                        end_lineno,
+                        docstring,
+                    ) in overloads
+                ]
+            return row
+
         _emit_json(
             _query_payload(
                 "sym",
                 "ok" if rows else "no_matches",
                 {"name": name, "prefix": query_prefix},
                 [
-                    {
-                        "type": symbol_type,
-                        "module": module_name,
-                        "name": symbol_name,
-                        "file": file_path,
-                        "lineno": lineno,
-                    }
+                    _symbol_json_result(
+                        symbol_type,
+                        module_name,
+                        symbol_name,
+                        file_path,
+                        lineno,
+                    )
                     for symbol_type, module_name, symbol_name, file_path, lineno in rows
                 ],
             )

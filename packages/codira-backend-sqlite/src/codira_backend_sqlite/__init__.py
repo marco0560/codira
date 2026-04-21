@@ -63,6 +63,7 @@ if TYPE_CHECKING:
         ChannelResults,
         DocstringIssueRow,
         IncludeEdgeRow,
+        OverloadRow,
         SymbolRow,
     )
 
@@ -299,6 +300,94 @@ class SQLiteIndexBackend:
             return [
                 (str(t), str(m), str(n), str(f), int(lineno))
                 for t, m, n, f, lineno in rows
+            ]
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def find_symbol_overloads(
+        self,
+        root: Path,
+        symbol: SymbolRow,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[OverloadRow]:
+        """
+        Return overload metadata attached to one canonical callable symbol.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        symbol : codira.types.SymbolRow
+            Canonical function or method symbol row.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        list[codira.types.OverloadRow]
+            Ordered overload metadata rows for the symbol.
+        """
+        symbol_type, module_name, symbol_name, file_path, lineno = symbol
+        if symbol_type not in {"function", "method"}:
+            return []
+
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            rows = conn.execute(
+                """
+                SELECT
+                    o.stable_id,
+                    o.parent_stable_id,
+                    o.ordinal,
+                    o.signature,
+                    o.lineno,
+                    o.end_lineno,
+                    o.docstring
+                FROM overloads o
+                JOIN functions fn
+                  ON o.function_id = fn.id
+                JOIN modules m
+                  ON fn.module_id = m.id
+                JOIN files f
+                  ON m.file_id = f.id
+                WHERE f.path = ?
+                  AND m.name = ?
+                  AND fn.name = ?
+                  AND fn.lineno = ?
+                  AND fn.is_method = ?
+                ORDER BY o.lineno, o.ordinal
+                """,
+                (
+                    file_path,
+                    module_name,
+                    symbol_name,
+                    lineno,
+                    1 if symbol_type == "method" else 0,
+                ),
+            ).fetchall()
+            return [
+                (
+                    str(stable_id),
+                    str(parent_stable_id),
+                    int(ordinal),
+                    str(signature),
+                    int(overload_lineno),
+                    None if end_lineno is None else int(end_lineno),
+                    None if docstring is None else str(docstring),
+                )
+                for (
+                    stable_id,
+                    parent_stable_id,
+                    ordinal,
+                    signature,
+                    overload_lineno,
+                    end_lineno,
+                    docstring,
+                ) in rows
             ]
         finally:
             if owns_connection:

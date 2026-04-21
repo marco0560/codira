@@ -269,6 +269,31 @@ def _is_overload_stub(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     )
 
 
+def _overload_entry(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> dict[str, str | int | None]:
+    """
+    Convert one overload stub into a normalized parsed mapping.
+
+    Parameters
+    ----------
+    node : ast.FunctionDef | ast.AsyncFunctionDef
+        Overload-decorated callable AST node.
+
+    Returns
+    -------
+    dict[str, str | int | None]
+        Parsed overload metadata used by normalization.
+    """
+    overload_doc = ast.get_docstring(node)
+    return {
+        "lineno": node.lineno,
+        "end_lineno": getattr(node, "end_lineno", None),
+        "signature": _signature_text(node),
+        "docstring": overload_doc,
+    }
+
+
 def _module_name_from_path(path: Path, root: Path) -> str:
     """
     Derive the dotted module name for a source file.
@@ -701,6 +726,7 @@ def parse_file(path: Path, root: Path) -> dict[str, Any]:
         "functions": [],
         "imports": [],
     }
+    pending_functions: dict[str, list[dict[str, str | int | None]]] = {}
 
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
@@ -713,11 +739,16 @@ def parse_file(path: Path, root: Path) -> dict[str, Any]:
                 "has_docstring": int(class_doc is not None),
                 "methods": [],
             }
+            pending_overloads: dict[str, list[dict[str, str | int | None]]] = {}
 
             for child in node.body:
-                if isinstance(
-                    child, (ast.FunctionDef, ast.AsyncFunctionDef)
-                ) and not _is_overload_stub(child):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                    _is_overload_stub(child)
+                ):
+                    pending_overloads.setdefault(child.name, []).append(
+                        _overload_entry(child)
+                    )
+                elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     method_doc = ast.get_docstring(child)
                     class_entry["methods"].append(
                         {
@@ -737,35 +768,40 @@ def parse_file(path: Path, root: Path) -> dict[str, Any]:
                             "decorators": _decorator_names(child),
                             "calls": _extract_call_records(child),
                             "callable_refs": _extract_callable_refs(child),
+                            "overloads": pending_overloads.pop(child.name, ()),
                         }
                     )
 
             result["classes"].append(class_entry)
 
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not (
-            _is_overload_stub(node)
-        ):
-            func_doc = ast.get_docstring(node)
-            result["functions"].append(
-                {
-                    "name": node.name,
-                    "lineno": node.lineno,
-                    "end_lineno": getattr(node, "end_lineno", None),
-                    "signature": _signature_text(node),
-                    "docstring": func_doc,
-                    "has_docstring": int(func_doc is not None),
-                    "is_method": 0,
-                    "is_public": _is_public(node.name),
-                    "parameters": _parameter_names(node),
-                    "returns_value": int(_returns_value(node)),
-                    "yields_value": int(_yields_value(node)),
-                    "raises": int(_raises_exception(node)),
-                    "has_asserts": int(_has_asserts(node)),
-                    "decorators": _decorator_names(node),
-                    "calls": _extract_call_records(node),
-                    "callable_refs": _extract_callable_refs(node),
-                }
-            )
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if _is_overload_stub(node):
+                pending_functions.setdefault(node.name, []).append(
+                    _overload_entry(node)
+                )
+            else:
+                func_doc = ast.get_docstring(node)
+                result["functions"].append(
+                    {
+                        "name": node.name,
+                        "lineno": node.lineno,
+                        "end_lineno": getattr(node, "end_lineno", None),
+                        "signature": _signature_text(node),
+                        "docstring": func_doc,
+                        "has_docstring": int(func_doc is not None),
+                        "is_method": 0,
+                        "is_public": _is_public(node.name),
+                        "parameters": _parameter_names(node),
+                        "returns_value": int(_returns_value(node)),
+                        "yields_value": int(_yields_value(node)),
+                        "raises": int(_raises_exception(node)),
+                        "has_asserts": int(_has_asserts(node)),
+                        "decorators": _decorator_names(node),
+                        "calls": _extract_call_records(node),
+                        "callable_refs": _extract_callable_refs(node),
+                        "overloads": pending_functions.pop(node.name, ()),
+                    }
+                )
 
         elif isinstance(node, ast.Import):
             for alias in node.names:
@@ -788,5 +824,7 @@ def parse_file(path: Path, root: Path) -> dict[str, Any]:
                         "lineno": node.lineno,
                     }
                 )
+
+    return result
 
     return result

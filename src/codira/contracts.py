@@ -30,6 +30,7 @@ if TYPE_CHECKING:
         ChannelResults,
         DocstringIssueRow,
         IncludeEdgeRow,
+        OverloadRow,
         SymbolRow,
     )
 
@@ -962,6 +963,31 @@ class IndexBackend(Protocol):
         -------
         list[codira.types.SymbolRow]
             Matching symbol rows ordered deterministically.
+        """
+
+    def find_symbol_overloads(
+        self,
+        root: Path,
+        symbol: SymbolRow,
+        *,
+        conn: object | None = None,
+    ) -> list[OverloadRow]:
+        """
+        Return overload metadata attached to one canonical callable symbol.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        symbol : codira.types.SymbolRow
+            Canonical function or method symbol row.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        list[codira.types.OverloadRow]
+            Ordered overload metadata rows for the symbol.
         """
 
     def docstring_issues(

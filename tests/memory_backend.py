@@ -41,12 +41,13 @@ if TYPE_CHECKING:
         BackendRelationQueryRequest,
         BackendRuntimeInventoryRequest,
     )
-    from codira.models import CallableReference, CallSite
+    from codira.models import CallableReference, CallSite, OverloadArtifact
     from codira.semantic.embeddings import EmbeddingBackendSpec
     from codira.types import (
         ChannelResults,
         DocstringIssueRow,
         IncludeEdgeRow,
+        OverloadRow,
         SymbolRow,
     )
 
@@ -180,6 +181,24 @@ class _MemoryEmbedding:
 
 
 @dataclass(frozen=True)
+class _MemoryOverload:
+    """Stored overload metadata attached to one canonical callable."""
+
+    file_id: int
+    module_name: str
+    symbol_type: str
+    symbol_name: str
+    symbol_lineno: int
+    stable_id: str
+    parent_stable_id: str
+    ordinal: int
+    signature: str
+    lineno: int
+    end_lineno: int | None
+    docstring: str | None
+
+
+@dataclass(frozen=True)
 class _StoredEmbedding:
     """Reusable embedding row returned by ``load_previous_embeddings_by_path``."""
 
@@ -202,6 +221,7 @@ class _MemoryState:
     imports: list[_MemoryImport] = field(default_factory=list)
     call_records: list[_MemoryRelation] = field(default_factory=list)
     callable_ref_records: list[_MemoryRelation] = field(default_factory=list)
+    overloads: list[_MemoryOverload] = field(default_factory=list)
     doc_issues: list[_MemoryDocIssue] = field(default_factory=list)
     embeddings: list[_MemoryEmbedding] = field(default_factory=list)
     runtime_inventory: tuple[str, str, int] | None = None
@@ -626,6 +646,7 @@ class MemoryIndexBackend:
         state.imports.clear()
         state.call_records.clear()
         state.callable_ref_records.clear()
+        state.overloads.clear()
         state.doc_issues.clear()
         state.embeddings.clear()
 
@@ -895,6 +916,15 @@ class MemoryIndexBackend:
                     calls=method.calls,
                     refs=method.callable_refs,
                 )
+                self._append_overloads(
+                    state,
+                    file_id=file_id,
+                    module_name=module_name,
+                    symbol_type="method",
+                    symbol_name=method.name,
+                    symbol_lineno=method.lineno,
+                    overloads=method.overloads,
+                )
 
         for fn in analysis.functions:
             function_symbol_id = self._append_symbol(
@@ -958,6 +988,15 @@ class MemoryIndexBackend:
                 owner_name=fn.name,
                 calls=fn.calls,
                 refs=fn.callable_refs,
+            )
+            self._append_overloads(
+                state,
+                file_id=file_id,
+                module_name=module_name,
+                symbol_type="function",
+                symbol_name=fn.name,
+                symbol_lineno=fn.lineno,
+                overloads=fn.overloads,
             )
 
         for decl in analysis.declarations:
@@ -1498,6 +1537,53 @@ class MemoryIndexBackend:
         ]
         return sorted(rows, key=lambda row: (row[0], row[1], row[3], row[4]))
 
+    def find_symbol_overloads(
+        self,
+        root: Path,
+        symbol: SymbolRow,
+        *,
+        conn: object | None = None,
+    ) -> list[OverloadRow]:
+        """
+        Return overload metadata attached to one canonical callable symbol.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        symbol : codira.types.SymbolRow
+            Canonical function or method symbol row.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.types.OverloadRow]
+            Ordered overload metadata rows for the symbol.
+        """
+        state = self._conn_state(root, conn)
+        symbol_type, module_name, symbol_name, file_path, lineno = symbol
+        if symbol_type not in {"function", "method"}:
+            return []
+        rows = [
+            (
+                overload.stable_id,
+                overload.parent_stable_id,
+                overload.ordinal,
+                overload.signature,
+                overload.lineno,
+                overload.end_lineno,
+                overload.docstring,
+            )
+            for overload in state.overloads
+            if overload.symbol_type == symbol_type
+            and overload.module_name == module_name
+            and overload.symbol_name == symbol_name
+            and overload.symbol_lineno == lineno
+            and state.files[overload.file_id].path == file_path
+        ]
+        return sorted(rows, key=lambda row: (row[4], row[2], row[0]))
+
     def docstring_issues(
         self,
         root: Path,
@@ -1738,6 +1824,60 @@ class MemoryIndexBackend:
                 )
             )
 
+    def _append_overloads(
+        self,
+        state: _MemoryState,
+        *,
+        file_id: int,
+        module_name: str,
+        symbol_type: str,
+        symbol_name: str,
+        symbol_lineno: int,
+        overloads: Sequence[OverloadArtifact],
+    ) -> None:
+        """
+        Append overload metadata rows for one canonical callable.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+        file_id : int
+            Owning file identifier.
+        module_name : str
+            Owning module name.
+        symbol_type : str
+            Canonical callable kind.
+        symbol_name : str
+            Canonical callable name.
+        symbol_lineno : int
+            Canonical callable definition line number.
+        overloads : collections.abc.Sequence[codira.models.OverloadArtifact]
+            Ordered overload artifacts attached to the callable.
+
+        Returns
+        -------
+        None
+            Overload rows are appended in place.
+        """
+        for overload in overloads:
+            state.overloads.append(
+                _MemoryOverload(
+                    file_id=file_id,
+                    module_name=module_name,
+                    symbol_type=symbol_type,
+                    symbol_name=symbol_name,
+                    symbol_lineno=symbol_lineno,
+                    stable_id=str(overload.stable_id),
+                    parent_stable_id=str(overload.parent_stable_id),
+                    ordinal=int(overload.ordinal),
+                    signature=str(overload.signature),
+                    lineno=int(overload.lineno),
+                    end_lineno=overload.end_lineno,
+                    docstring=overload.docstring,
+                )
+            )
+
     def _append_relations(
         self,
         state: _MemoryState,
@@ -1885,6 +2025,9 @@ class MemoryIndexBackend:
         ]
         state.callable_ref_records = [
             record for record in state.callable_ref_records if record.file_id != file_id
+        ]
+        state.overloads = [
+            overload for overload in state.overloads if overload.file_id != file_id
         ]
         state.doc_issues = [
             issue for issue in state.doc_issues if issue.file_id != file_id

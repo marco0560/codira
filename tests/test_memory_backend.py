@@ -10,9 +10,16 @@ from memory_backend import MemoryIndexBackend, build_backend
 
 import codira.indexer as indexer_module
 import codira.registry as registry_module
-from codira.contracts import BackendRelationQueryRequest, IndexBackend
+from codira.contracts import (
+    BackendPersistAnalysisRequest,
+    BackendRelationQueryRequest,
+    IndexBackend,
+)
 from codira.indexer import index_repo
-from codira.semantic.embeddings import EMBEDDING_DIM
+from codira.models import FileMetadataSnapshot
+from codira.normalization import analysis_result_from_parsed
+from codira.parser_ast import parse_file
+from codira.semantic.embeddings import EMBEDDING_DIM, get_embedding_backend
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -25,6 +32,12 @@ if TYPE_CHECKING:
         """Backend query surface used by comparison helpers."""
 
         def find_symbol(self, root: Path, name: str) -> list[SymbolRow]: ...
+
+        def find_symbol_overloads(
+            self,
+            root: Path,
+            symbol: SymbolRow,
+        ) -> list[tuple[str, str, int, str, int, int | None, str | None]]: ...
 
         def find_logical_symbols(
             self,
@@ -160,6 +173,39 @@ def _write_fixture(root: Path) -> None:
         "    def method(self):\n"
         '        """Call a local helper."""\n'
         "        return helper()\n",
+        encoding="utf-8",
+    )
+
+
+def _write_overload_fixture(root: Path) -> None:
+    """
+    Write a Python package containing typed overload declarations.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Temporary repository root to populate.
+
+    Returns
+    -------
+    None
+        Files are written below ``root``.
+    """
+    pkg = root / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text('"""Fixture package."""\n', encoding="utf-8")
+    (pkg / "sample.py").write_text(
+        "from typing import overload\n"
+        "\n"
+        "@overload\n"
+        "def build(value: int) -> int: ...\n"
+        "\n"
+        "@overload\n"
+        "def build(value: str) -> str: ...\n"
+        "\n"
+        "def build(value):\n"
+        '    """Return the supplied value."""\n'
+        "    return value\n",
         encoding="utf-8",
     )
 
@@ -457,3 +503,87 @@ def test_memory_backend_supports_incremental_reuse_and_deletion(
     assert second.embeddings_reused > 0
     assert third.deleted == 1
     assert backend.find_symbol(tmp_path, "caller") == []
+
+
+def test_memory_backend_matches_sqlite_for_overload_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Compare memory and SQLite overload detail behavior.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest temporary root.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch backend selection and embeddings.
+
+    Returns
+    -------
+    None
+        The test asserts both backends expose identical overload rows.
+    """
+    sqlite_root = tmp_path / "sqlite-overload"
+    memory_root = tmp_path / "memory-overload"
+    sqlite_root.mkdir()
+    memory_root.mkdir()
+    _write_overload_fixture(sqlite_root)
+    _write_overload_fixture(memory_root)
+    sqlite_backend = SQLiteIndexBackend()
+    memory_backend = MemoryIndexBackend()
+    sqlite_module = sqlite_root / "pkg" / "sample.py"
+    memory_module = memory_root / "pkg" / "sample.py"
+
+    monkeypatch.setattr("codira.sqlite_backend_support.embed_texts", _fake_embed_texts)
+    sqlite_backend.initialize(sqlite_root)
+    sqlite_backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=sqlite_root,
+            file_metadata=FileMetadataSnapshot(
+                path=sqlite_module,
+                sha256="sqlite-overload",
+                mtime=1.0,
+                size=sqlite_module.stat().st_size,
+            ),
+            analysis=analysis_result_from_parsed(
+                sqlite_module,
+                parse_file(sqlite_module, sqlite_root),
+            ),
+        )
+    )
+    memory_backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=memory_root,
+            file_metadata=FileMetadataSnapshot(
+                path=memory_module,
+                sha256="memory-overload",
+                mtime=1.0,
+                size=memory_module.stat().st_size,
+            ),
+            analysis=analysis_result_from_parsed(
+                memory_module,
+                parse_file(memory_module, memory_root),
+            ),
+            embedding_backend=get_embedding_backend(),
+        )
+    )
+
+    sqlite_symbol = (
+        "function",
+        "pkg.sample",
+        "build",
+        str(sqlite_module),
+        9,
+    )
+    memory_symbol = (
+        "function",
+        "pkg.sample",
+        "build",
+        str(memory_module),
+        9,
+    )
+
+    assert sqlite_backend.find_symbol_overloads(sqlite_root, sqlite_symbol) == (
+        memory_backend.find_symbol_overloads(memory_root, memory_symbol)
+    )

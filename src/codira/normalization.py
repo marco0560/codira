@@ -34,6 +34,7 @@ from codira.models import (
     ImportArtifact,
     ImportKind,
     ModuleArtifact,
+    OverloadArtifact,
 )
 
 
@@ -108,6 +109,38 @@ def _python_function_stable_id(
     if any(name.endswith(".deleter") for name in decorator_names):
         return f"{stable_id}:deleter"
     return stable_id
+
+
+def _python_overload_stable_id(
+    module_name: str,
+    function_name: str,
+    ordinal: int,
+    *,
+    class_name: str | None = None,
+) -> str:
+    """
+    Build the stable identity for one Python overload declaration.
+
+    Parameters
+    ----------
+    module_name : str
+        Dotted Python module name.
+    function_name : str
+        Unqualified callable name.
+    ordinal : int
+        Deterministic declaration order among overloads for the callable.
+    class_name : str | None, optional
+        Owning class name for method overloads.
+
+    Returns
+    -------
+    str
+        Durable Python overload identity.
+    """
+    qualified_name = (
+        function_name if class_name is None else f"{class_name}.{function_name}"
+    )
+    return f"python:overload:{module_name}:{qualified_name}:{ordinal}"
 
 
 def _int_value(value: object, *, default: int = 0) -> int:
@@ -305,16 +338,19 @@ def _function_from_mapping(
     """
     call_rows = cast("Sequence[Mapping[str, object]]", raw.get("calls", ()))
     ref_rows = cast("Sequence[Mapping[str, object]]", raw.get("callable_refs", ()))
+    overload_rows = cast("Sequence[Mapping[str, object]]", raw.get("overloads", ()))
     parameters = cast("Sequence[object]", raw.get("parameters", ()))
+    function_name = str(raw["name"])
+    function_stable_id = _python_function_stable_id(
+        module_name,
+        function_name,
+        class_name=class_name,
+        decorators=cast("Sequence[object]", raw.get("decorators", ())),
+    )
 
     return FunctionArtifact(
-        name=str(raw["name"]),
-        stable_id=_python_function_stable_id(
-            module_name,
-            str(raw["name"]),
-            class_name=class_name,
-            decorators=cast("Sequence[object]", raw.get("decorators", ())),
-        ),
+        name=function_name,
+        stable_id=function_stable_id,
         lineno=_int_value(raw["lineno"]),
         end_lineno=_optional_int_value(raw.get("end_lineno")),
         signature=str(raw["signature"]),
@@ -332,6 +368,23 @@ def _function_from_mapping(
         ),
         calls=tuple(_call_site_from_mapping(row) for row in call_rows),
         callable_refs=tuple(_callable_reference_from_mapping(row) for row in ref_rows),
+        overloads=tuple(
+            OverloadArtifact(
+                stable_id=_python_overload_stable_id(
+                    module_name,
+                    function_name,
+                    ordinal,
+                    class_name=class_name,
+                ),
+                parent_stable_id=function_stable_id,
+                ordinal=ordinal,
+                signature=str(overload_row["signature"]),
+                lineno=_int_value(overload_row["lineno"]),
+                end_lineno=_optional_int_value(overload_row.get("end_lineno")),
+                docstring=cast("str | None", overload_row.get("docstring")),
+            )
+            for ordinal, overload_row in enumerate(overload_rows, start=1)
+        ),
     )
 
 

@@ -46,6 +46,40 @@ DeclarationKind = Literal[
 
 
 @dataclass(frozen=True)
+class OverloadArtifact:
+    """
+    Normalized overload declaration attached to one canonical callable.
+
+    Parameters
+    ----------
+    stable_id : str
+        Durable analyzer-owned identity for the overload declaration.
+    parent_stable_id : str
+        Stable identity of the canonical function or method that owns the
+        overload.
+    ordinal : int
+        Deterministic declaration order among overload variants for the same
+        parent callable.
+    signature : str
+        Simplified overload signature text used for rendering.
+    lineno : int
+        First source line of the overload declaration.
+    end_lineno : int | None
+        Inclusive last source line when reported by the parser.
+    docstring : str | None
+        Overload docstring when present.
+    """
+
+    stable_id: str
+    parent_stable_id: str
+    ordinal: int
+    signature: str
+    lineno: int
+    end_lineno: int | None
+    docstring: str | None
+
+
+@dataclass(frozen=True)
 class FileMetadataSnapshot:
     """
     Stable file metadata used during indexing decisions.
@@ -222,6 +256,8 @@ class FunctionArtifact:
         Ordered call-site records owned by the function.
     callable_refs : tuple[codira.models.CallableReference, ...]
         Ordered callable-object reference records owned by the function.
+    overloads : tuple[codira.models.OverloadArtifact, ...], optional
+        Ordered overload declarations attached to the canonical callable.
     """
 
     name: str
@@ -241,6 +277,7 @@ class FunctionArtifact:
     decorators: tuple[str, ...]
     calls: tuple[CallSite, ...]
     callable_refs: tuple[CallableReference, ...]
+    overloads: tuple[OverloadArtifact, ...] = ()
 
     def logical_name(self, *, class_name: str | None = None) -> str:
         """
@@ -383,6 +420,23 @@ class AnalysisResult:
             Call-site records ordered by function ownership order.
         """
         return tuple(call for fn in self.iter_functions() for call in fn.calls)
+
+    def iter_overloads(self) -> tuple[OverloadArtifact, ...]:
+        """
+        Return all overload declarations in deterministic ownership order.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple[codira.models.OverloadArtifact, ...]
+            Overload declarations ordered by callable ownership order.
+        """
+        return tuple(
+            overload for fn in self.iter_functions() for overload in fn.overloads
+        )
 
     def iter_callable_references(self) -> tuple[CallableReference, ...]:
         """

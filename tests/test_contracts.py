@@ -30,6 +30,7 @@ import codira.indexer as indexer_module
 import codira.registry as registry_module
 from codira.analyzers import BashAnalyzer, CAnalyzer, JsonAnalyzer, PythonAnalyzer
 from codira.analyzers.c import _disambiguate_function_stable_ids
+from codira.cli import _run_symbol
 from codira.contracts import (
     KNOWN_RETRIEVAL_CAPABILITIES,
     BackendEmbeddingCandidatesRequest,
@@ -81,7 +82,7 @@ from codira.semantic.embeddings import (
 from codira.storage import get_db_path
 
 if TYPE_CHECKING:
-    from pytest import MonkeyPatch
+    from pytest import CaptureFixture, MonkeyPatch
 
 
 class _FakeAnalyzer:
@@ -499,6 +500,33 @@ class _FakeBackend:
             Empty symbol rows for protocol validation.
         """
         del root, name, prefix, conn
+        return []
+
+    def find_symbol_overloads(
+        self,
+        root: Path,
+        symbol: tuple[str, str, str, str, int],
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[tuple[str, str, int, str, int, int | None, str | None]]:
+        """
+        Return no overload metadata for protocol validation.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        symbol : tuple[str, str, str, str, int]
+            Canonical symbol row.
+        conn : sqlite3.Connection | None, optional
+            Optional SQLite connection.
+
+        Returns
+        -------
+        list[tuple[str, str, int, str, int, int | None, str | None]]
+            Empty overload rows for protocol validation.
+        """
+        del root, symbol, conn
         return []
 
     def docstring_issues(
@@ -957,6 +985,180 @@ def test_analysis_result_from_parsed_ignores_python_overload_stubs(
     assert tuple(method.stable_id for method in result.classes[0].methods) == (
         "python:method:pkg.sample:Demo.load",
     )
+    assert tuple(overload.stable_id for overload in result.functions[0].overloads) == (
+        "python:overload:pkg.sample:build:1",
+        "python:overload:pkg.sample:build:2",
+    )
+    assert tuple(
+        overload.parent_stable_id for overload in result.functions[0].overloads
+    ) == (
+        "python:function:pkg.sample:build",
+        "python:function:pkg.sample:build",
+    )
+    assert tuple(overload.ordinal for overload in result.functions[0].overloads) == (
+        1,
+        2,
+    )
+    assert tuple(overload.signature for overload in result.functions[0].overloads) == (
+        "build(value)",
+        "build(value)",
+    )
+    assert tuple(
+        overload.stable_id for overload in result.classes[0].methods[0].overloads
+    ) == ("python:overload:pkg.sample:Demo.load:1",)
+    assert tuple(
+        overload.parent_stable_id for overload in result.classes[0].methods[0].overloads
+    ) == ("python:method:pkg.sample:Demo.load",)
+
+
+def test_sqlite_backend_persists_python_overload_metadata(
+    tmp_path: Path,
+) -> None:
+    """
+    Persist overload metadata as child rows under canonical callables.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts overload rows round-trip through the SQLite backend.
+    """
+    module = tmp_path / "pkg" / "sample.py"
+    module.parent.mkdir()
+    module.write_text(
+        "from typing import overload\n"
+        "\n"
+        "@overload\n"
+        "def build(value: int) -> int: ...\n"
+        "\n"
+        "@overload\n"
+        "def build(value: str) -> str: ...\n"
+        "\n"
+        "def build(value):\n"
+        "    return value\n",
+        encoding="utf-8",
+    )
+
+    backend = SQLiteIndexBackend()
+    backend.initialize(tmp_path)
+
+    parsed = parse_file(module, tmp_path)
+    analysis = analysis_result_from_parsed(module, parsed)
+    snapshot = FileMetadataSnapshot(
+        path=module,
+        sha256="overload123",
+        mtime=1.0,
+        size=module.stat().st_size,
+    )
+
+    backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+        )
+    )
+
+    symbol = backend.find_symbol(tmp_path, "build")[0]
+    assert backend.find_symbol_overloads(tmp_path, symbol) == [
+        (
+            "python:overload:pkg.sample:build:1",
+            "python:function:pkg.sample:build",
+            1,
+            "build(value)",
+            4,
+            4,
+            None,
+        ),
+        (
+            "python:overload:pkg.sample:build:2",
+            "python:function:pkg.sample:build",
+            2,
+            "build(value)",
+            7,
+            7,
+            None,
+        ),
+    ]
+
+
+def test_run_symbol_json_includes_overload_metadata(
+    tmp_path: Path,
+    capsys: CaptureFixture[str],
+) -> None:
+    """
+    Render overload metadata only in JSON symbol output.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    capsys : pytest.CaptureFixture[str]
+        Captured output fixture.
+
+    Returns
+    -------
+    None
+        The test asserts the JSON payload carries overload detail.
+    """
+    module = tmp_path / "pkg" / "sample.py"
+    module.parent.mkdir()
+    module.write_text(
+        "from typing import overload\n"
+        "\n"
+        "@overload\n"
+        "def build(value: int) -> int: ...\n"
+        "\n"
+        "def build(value):\n"
+        "    return value\n",
+        encoding="utf-8",
+    )
+
+    backend = SQLiteIndexBackend()
+    backend.initialize(tmp_path)
+    parsed = parse_file(module, tmp_path)
+    analysis = analysis_result_from_parsed(module, parsed)
+    snapshot = FileMetadataSnapshot(
+        path=module,
+        sha256="json-overload",
+        mtime=1.0,
+        size=module.stat().st_size,
+    )
+    backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+        )
+    )
+
+    assert _run_symbol(tmp_path, "build", as_json=True) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"] == [
+        {
+            "type": "function",
+            "module": "pkg.sample",
+            "name": "build",
+            "file": str(module),
+            "lineno": 6,
+            "overloads": [
+                {
+                    "kind": "overload",
+                    "stable_id": "python:overload:pkg.sample:build:1",
+                    "parent_stable_id": "python:function:pkg.sample:build",
+                    "ordinal": 1,
+                    "signature": "build(value)",
+                    "lineno": 4,
+                    "end_lineno": 4,
+                    "docstring": None,
+                }
+            ],
+        }
+    ]
 
 
 def test_analysis_result_from_parsed_disambiguates_property_accessors(
@@ -3067,7 +3269,7 @@ def test_sqlite_backend_persists_runtime_inventory(tmp_path: Path) -> None:
     index_repo(tmp_path)
 
     backend = SQLiteIndexBackend()
-    assert backend.load_runtime_inventory(tmp_path) == ("sqlite", "11", 1)
+    assert backend.load_runtime_inventory(tmp_path) == ("sqlite", "12", 1)
     assert backend.load_analyzer_inventory(tmp_path) == [
         (
             analyzer.name,

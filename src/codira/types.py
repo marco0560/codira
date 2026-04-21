@@ -21,6 +21,7 @@ import ast
 from pathlib import Path
 
 SymbolRow = tuple[str, str, str, str, int]
+OverloadRow = tuple[str, str, int, str, int, int | None, str | None]
 DocstringIssueRow = tuple[str, str, str, str, str, str, str, int, int | None]
 ScoredSymbol = tuple[float, SymbolRow]
 ChannelResults = list[ScoredSymbol]

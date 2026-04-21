@@ -331,6 +331,46 @@ def _refresh_docstring_issues_schema(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS docstring_issues")
 
 
+def _refresh_overloads_schema(conn: sqlite3.Connection) -> None:
+    """
+    Recreate the ``overloads`` table when an older schema is present.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection to migrate in place.
+
+    Returns
+    -------
+    None
+        The table is replaced only when its columns do not match the current
+        schema definition.
+    """
+    columns = conn.execute("PRAGMA table_info(overloads)").fetchall()
+    if not columns:
+        return
+
+    current = [str(row[1]) for row in columns]
+    expected = [
+        "id",
+        "function_id",
+        "stable_id",
+        "parent_stable_id",
+        "ordinal",
+        "signature",
+        "docstring",
+        "lineno",
+        "end_lineno",
+    ]
+
+    if current == expected:
+        return
+
+    conn.execute("DROP INDEX IF EXISTS idx_overloads_stable_id")
+    conn.execute("DROP INDEX IF EXISTS idx_overloads_function")
+    conn.execute("DROP TABLE IF EXISTS overloads")
+
+
 def _refresh_imports_schema(conn: sqlite3.Connection) -> None:
     """
     Recreate the ``imports`` table when an older schema is present.
@@ -416,11 +456,14 @@ def _refresh_files_schema(conn: sqlite3.Connection) -> None:
     conn.execute("DROP INDEX IF EXISTS idx_call_records_owner")
     conn.execute("DROP INDEX IF EXISTS idx_callable_ref_records_file")
     conn.execute("DROP INDEX IF EXISTS idx_callable_ref_records_owner")
+    conn.execute("DROP INDEX IF EXISTS idx_overloads_stable_id")
+    conn.execute("DROP INDEX IF EXISTS idx_overloads_function")
     conn.execute("DROP INDEX IF EXISTS idx_functions_name")
     conn.execute("DROP INDEX IF EXISTS idx_classes_name")
     conn.execute("DROP TABLE IF EXISTS embeddings")
     conn.execute("DROP TABLE IF EXISTS symbol_index")
     conn.execute("DROP TABLE IF EXISTS docstring_issues")
+    conn.execute("DROP TABLE IF EXISTS overloads")
     conn.execute("DROP TABLE IF EXISTS callable_ref_records")
     conn.execute("DROP TABLE IF EXISTS call_records")
     conn.execute("DROP TABLE IF EXISTS callable_refs")
@@ -658,6 +701,7 @@ def init_db(root: Path) -> None:
         _refresh_call_records_schema(conn)
         _refresh_callable_ref_records_schema(conn)
         _refresh_docstring_issues_schema(conn)
+        _refresh_overloads_schema(conn)
         _refresh_imports_schema(conn)
         _refresh_symbol_index_schema(conn)
         _refresh_embeddings_schema(conn)

@@ -17,7 +17,7 @@ This module belongs to the **storage infrastructure layer** and anchors table de
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 DDL = [
     """
@@ -94,6 +94,20 @@ DDL = [
         kind TEXT NOT NULL,
         lineno INTEGER NOT NULL,
         FOREIGN KEY(module_id) REFERENCES modules(id)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS overloads (
+        id INTEGER PRIMARY KEY,
+        function_id INTEGER NOT NULL,
+        stable_id TEXT NOT NULL,
+        parent_stable_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        signature TEXT NOT NULL,
+        docstring TEXT,
+        lineno INTEGER NOT NULL,
+        end_lineno INTEGER,
+        FOREIGN KEY(function_id) REFERENCES functions(id)
     );
     """,
     """
@@ -200,6 +214,14 @@ DDL = [
     """
     CREATE INDEX IF NOT EXISTS idx_callable_refs_resolved
     ON callable_refs(resolved);
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_overloads_stable_id
+    ON overloads(stable_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_overloads_function
+    ON overloads(function_id, ordinal, lineno);
     """,
     """
     CREATE TABLE IF NOT EXISTS call_records (

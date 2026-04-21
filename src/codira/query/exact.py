@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     import sqlite3
     from pathlib import Path
 
-    from codira.types import DocstringIssueRow, IncludeEdgeRow, SymbolRow
+    from codira.types import DocstringIssueRow, IncludeEdgeRow, OverloadRow, SymbolRow
 
 CallEdgeRow = tuple[str, str, str | None, str | None, int]
 CallableRefRow = tuple[str, str, str | None, str | None, int]
@@ -193,6 +193,34 @@ def docstring_issues(
     """
     backend = active_index_backend()
     return backend.docstring_issues(root, prefix=prefix, conn=conn)
+
+
+def find_symbol_overloads(
+    root: Path,
+    symbol: SymbolRow,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[OverloadRow]:
+    """
+    Return overload metadata attached to one canonical callable symbol.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    symbol : codira.types.SymbolRow
+        Canonical function or method symbol row.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the function
+        opens and closes its own connection.
+
+    Returns
+    -------
+    list[codira.types.OverloadRow]
+        Ordered overload metadata rows for the symbol.
+    """
+    backend = active_index_backend()
+    return backend.find_symbol_overloads(root, symbol, conn=conn)
 
 
 def find_call_edges(

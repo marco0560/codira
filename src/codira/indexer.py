@@ -660,6 +660,7 @@ def _duplicate_analysis_stable_ids(analysis: AnalysisResult) -> list[str]:
     for cls in analysis.classes:
         stable_ids.extend(method.stable_id for method in cls.methods)
     stable_ids.extend(fn.stable_id for fn in analysis.functions)
+    stable_ids.extend(overload.stable_id for overload in analysis.iter_overloads())
     stable_ids.extend(decl.stable_id for decl in analysis.declarations)
     counts = Counter(stable_ids)
     return sorted(stable_id for stable_id, count in counts.items() if count > 1)
