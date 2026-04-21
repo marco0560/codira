@@ -1,3 +1,11 @@
+# [1.7.0](https://github.com/marco0560/codira/compare/v1.6.0...v1.7.0) (2026-04-21)
+
+
+### Features
+
+* **contracts:** attach overload metadata to callables ([d2bce4e](https://github.com/marco0560/codira/commit/d2bce4e5c53798084d42043d3dc07ff624359222)), closes [#21](https://github.com/marco0560/codira/issues/21) [#21](https://github.com/marco0560/codira/issues/21)
+* **query:** add overload evidence to ctx ranking ([a5c733d](https://github.com/marco0560/codira/commit/a5c733d78c3c57e65628f9bf1b6f4855c90a5bca)), closes [#21](https://github.com/marco0560/codira/issues/21)
+
 # [1.6.0](https://github.com/marco0560/codira/compare/v1.5.2...v1.6.0) (2026-04-20)
 
 
