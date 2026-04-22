@@ -1,3 +1,10 @@
+# [1.12.0](https://github.com/marco0560/codira/compare/v1.11.0...v1.12.0) (2026-04-22)
+
+
+### Features
+
+* **cli:** add Python constant JSON detail ([d9eda30](https://github.com/marco0560/codira/commit/d9eda30da9c7b81e76ea7f2b8d2744c5f1aa0db2))
+
 # [1.11.0](https://github.com/marco0560/codira/compare/v1.10.0...v1.11.0) (2026-04-22)
 
 
