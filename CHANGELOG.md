@@ -1,3 +1,10 @@
+# [1.10.0](https://github.com/marco0560/codira/compare/v1.9.0...v1.10.0) (2026-04-22)
+
+
+### Features
+
+* **analyzer:** add C union declarations ([bc93022](https://github.com/marco0560/codira/commit/bc93022313363282805c9820dab43d20bbc526a2))
+
 # [1.9.0](https://github.com/marco0560/codira/compare/v1.8.0...v1.9.0) (2026-04-22)
 
 
