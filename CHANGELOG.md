@@ -1,3 +1,10 @@
+# [1.8.0](https://github.com/marco0560/codira/compare/v1.7.0...v1.8.0) (2026-04-22)
+
+
+### Features
+
+* **analyzer:** add python type alias declarations ([45931ec](https://github.com/marco0560/codira/commit/45931ec33135275cf6c3ebc1e12915cf88865567)), closes [#21](https://github.com/marco0560/codira/issues/21) [#21](https://github.com/marco0560/codira/issues/21)
+
 # [1.7.0](https://github.com/marco0560/codira/compare/v1.6.0...v1.7.0) (2026-04-21)
 
 
