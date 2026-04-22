@@ -12,14 +12,16 @@ It does not change runtime behavior.
 
 Current repository behavior and parser shape establish the following facts:
 
-1. object-like macros are now supported through `preproc_def`
-2. function-like macros remain excluded through `preproc_function_def`
-3. ordinary `static const` and `const` declarations still parse as generic
-   `declaration` nodes with `init_declarator` children
-4. the current C analyzer declaration path only normalizes categories with
-   explicit top-level classifier nodes or similarly bounded naming rules
-5. `ADR-016` still defers arbitrary variables and generic constants without a
-   stable declaration rule
+1. object-like macros are supported through `preproc_def`
+2. function-like macros parse cleanly as `preproc_function_def`
+3. ordinary `static const`, `const`, and `extern const` declarations parse as
+   generic `declaration` nodes with either `init_declarator` children or direct
+   declarator children
+4. multiple declarators, computed expressions, aggregate initializers, and
+   declaration-only `const` rows are all structurally visible in the current
+   parse tree
+5. the current C analyzer declaration path can extend this surface without
+   inventing heuristic text parsing
 
 That means C `const` support cannot be justified merely because the parser can
 see a declaration name. The accepted boundary still requires deterministic
@@ -28,139 +30,131 @@ behavior.
 
 ## Compared Options
 
-### Option 1 — Reject C `const` declarations for now
+### Option 1 — Keep the narrow `static const` / literal-only boundary
 
 Pros:
 
-* preserves the current low-noise declaration boundary completely
-* avoids conflating `const` declarations with ordinary variables
-* avoids premature rules for pointer forms, linkage, and multiple declarators
+* preserves the current low-noise declaration boundary almost completely
+* keeps exported declarations and declaration-only rows out of the symbol set
+* avoids broader questions about multiple declarators and expression forms
 
 Cons:
 
-* leaves a real user-facing category unmodeled even when it is structurally
-  stable
-* creates an asymmetry between bounded Python constants and obviously literal
-  C constants
+* excludes several syntactically stable constant forms users still mean when
+  they ask for named constants
+* forces an arbitrary distinction between literal-only and non-literal constant
+  declarations even though both are parse-visible
 
 Assessment:
 
-* defensible, but stricter than necessary if a narrower perimeter can be
-  defined cleanly
+* too restrictive for the broader constant model requested in issue `#25`
 
-### Option 2 — Accept only `static const` with one declarator and a
-literal-only initializer
+### Option 2 — Accept the expanded `const` declaration family plus
+function-like macros
 
 Examples:
 
 ```c
-static const int LIMIT = 3;
-static const char *NAME = "codira";
+#define CALL(x) ((x) + 1)
+const int LIMIT2 = 3;
+extern const int SIZE = 3;
+static const int A = 1, B = 2;
+static const int VALUE = 1 + 2;
+static const int VALUES[] = {1, 2};
+const int DECL_ONLY;
 ```
-
-Accepted initializer families for this option would need to be explicit and
-syntactic:
-
-* numeric literals
-* character literals
-* string literals
-
-Deferred even inside this option:
-
-* aggregate initializers
-* compound literals
-* macro-expanded values
-* expression trees such as `1 + 2`
-* multiple declarators in one statement
 
 Pros:
 
-* `static` provides a narrow boundary that does not immediately blur into
-  exported variables
-* one-declarator statements make stable identity straightforward
-* literal-only values stay deterministic without semantic evaluation
-* the ontology mapping can remain analyzer-specific and explicit
+* every requested form is directly visible in the existing tree-sitter parse
+  tree
+* stable identity remains straightforward because each exposed name still maps
+  to one owner-scoped declaration row
+* the analyzer contract can stay explicit by keeping these rows under the
+  existing canonical `constant` ontology
+* this covers the user-facing constant shapes that the current narrow slice
+  still omitted
 
 Cons:
 
-* pointer declarators still require careful syntactic filtering
-* some user-meaningful constants remain excluded
-* initializer classification would need a dedicated parser-side rule rather
-  than reuse of the current generic declaration path
+* the constant-versus-variable boundary becomes materially broader
+* declaration-only rows add symbols without initializer evidence
+* function-like macros continue to blur the constant-versus-callable intuition
 
 Assessment:
 
-* this is the narrowest plausible implementation perimeter that still adds new
-  value without violating `ADR-016`
+* acceptable if the repository explicitly chooses broader C constant coverage
+  over the narrower low-noise boundary
 
-### Option 3 — Accept a broader literal-initialized subset
+### Option 3 — Reject C declaration constants but include only macros
 
 Examples:
 
 ```c
-const int LIMIT = 3;
-const char *TITLE = "codira";
+#define PORT 8080
+#define CALL(x) ((x) + 1)
 ```
 
 Pros:
 
-* covers more real-world declarations immediately
-* reduces user-visible inconsistency between internal and exported constants
+* keeps the declaration boundary tight
+* avoids variable-adjacent declaration rows entirely
 
 Cons:
 
-* exported `const` declarations are much closer to ordinary variables
-* linkage and header-level declaration forms become harder to model without
-  noise
-* the accepted boundary would drift toward generic variable support too early
+* does not satisfy the broader constant coverage requested in issue `#25`
+* leaves ordinary named `const` declarations unmodeled
 
 Assessment:
 
-* too broad for the current repository boundary
+* simpler, but no longer aligned with the requested outcome
 
 ## Recommendation
 
-Do **not** broaden C constant support beyond the current macro slice in the
-same feature family.
+Broaden C constant support to include both function-like macros and
+`const`-qualified declaration families.
 
-If the repository later chooses one follow-up implementation slice, the only
-acceptable first perimeter is:
+Accepted perimeter:
 
-* `static const` declarations only
-* exactly one declarator per declaration statement
-* required initializer
-* initializer must be a direct literal node, not a computed expression
+* object-like macros
+* function-like macros
+* `const` declarations
+* `static const` declarations
+* `extern const` declarations
+* declaration-only `const` rows without initializer evidence
+* multiple declarators per declaration statement
+* computed expressions and aggregate initializers
 * default plain-text `sym` behavior must remain unchanged unless exact lookup
   is requested
 
-The following remain explicitly out of scope:
+The following still remain out of scope:
 
-* non-`static` `const` declarations
-* `extern const` declarations
-* declaration-only `const` rows without initializer evidence
-* multiple declarators in one statement
-* aggregate initializers, computed expressions, and macro-expanded values
-* any treatment of generic variables as first-level symbols
+* non-`const` variables
+* declarations whose exposed declarator is a function prototype
+* generic variable support without `const`
+* changing the canonical ontology away from `constant`
 
 ## Implementation Perimeter for a Future Slice
 
 If implementation is approved later, the design-to-code plan should start with
 these required rules:
 
-1. classify accepted rows under one explicit analyzer-owned declaration kind
-   rather than overloading the generic variable surface
+1. classify accepted rows under the existing explicit analyzer-owned constant
+   and macro declaration kinds rather than overloading the generic variable
+   surface
 2. derive one stable ID per accepted declaration name using the existing
    owner-scoped declaration identity model
-3. map the accepted kind explicitly to the canonical `constant` ontology
-4. add regression tests proving excluded forms stay excluded
+3. map both declaration `constant` rows and macro rows explicitly to the
+   canonical `constant` ontology
+4. add regression tests proving non-`const` variables and function
+   declarations stay excluded
 5. bump only the touched analyzer and bundle versions at the end of the slice
 
 ## Outcome
 
-Issue `#25` resolves to a bounded design decision, not an immediate runtime
-feature:
+Issue `#25` resolves to a broader C constant model:
 
-* reject broader C `const` support now
-* keep the current runtime boundary unchanged
-* allow only the narrow `static const` / one-declarator / literal-only
-  perimeter as a possible future implementation candidate
+* function-like macros are accepted as constant-like symbols
+* `const`-qualified declaration rows are accepted as constant symbols
+* the runtime boundary excludes only non-`const` variables and function
+  declaration forms

@@ -1587,7 +1587,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "sentence-transformers>=5.4,<6.0",
         "codira-analyzer-python==1.5.2",
         "codira-analyzer-json==1.5.0",
-        "codira-analyzer-c==1.5.4",
+        "codira-analyzer-c==1.5.5",
         "codira-analyzer-bash==1.5.0",
         "codira-backend-sqlite==1.5.2",
     ]
@@ -2147,6 +2147,10 @@ def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:
         "static const int A = 1, B = 2;\n"
         "static const int VALUE = 1 + 2;\n"
         "static const int VALUES[] = {1, 2};\n"
+        "const int DECL_ONLY;\n"
+        "extern const int DECL_EXT;\n"
+        "const int fn(void);\n"
+        "const int (*fp)(void);\n"
         "\n"
         "/* Stable exported macros. */\n"
         "#define PORT 8080\n"
@@ -2176,41 +2180,58 @@ def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:
     ] == [
         ("constant", "LIMIT", 2),
         ("constant", "NAME2", 3),
-        ("macro", "PORT", 11),
-        ("macro", "NAME", 12),
-        ("struct", "Node", 16),
-        ("typedef", "Node", 16),
-        ("enum", "Color", 19),
-        ("union", "Value", 21),
-        ("struct", "Pair", 23),
-        ("typedef", "size_t", 26),
+        ("constant", "LIMIT2", 4),
+        ("constant", "SIZE", 5),
+        ("constant", "A", 6),
+        ("constant", "B", 6),
+        ("constant", "VALUE", 7),
+        ("constant", "VALUES", 8),
+        ("constant", "DECL_ONLY", 9),
+        ("constant", "DECL_EXT", 10),
+        ("macro", "PORT", 15),
+        ("macro", "NAME", 16),
+        ("macro", "CALL", 17),
+        ("struct", "Node", 20),
+        ("typedef", "Node", 20),
+        ("enum", "Color", 23),
+        ("union", "Value", 25),
+        ("struct", "Pair", 27),
+        ("typedef", "size_t", 30),
     ]
     assert result.declarations[0].signature == "static const int LIMIT = 3;"
     assert result.declarations[1].signature == 'static const char *NAME2 = "codira";'
-    assert result.declarations[2].signature == "#define PORT 8080"
-    assert result.declarations[3].signature == '#define NAME "codira"'
-    assert result.declarations[4].signature == "struct Node { int value; }"
-    assert (
-        result.declarations[5].signature == "typedef struct Node { int value; } Node;"
-    )
+    assert result.declarations[2].signature == "const int LIMIT2 = 3;"
+    assert result.declarations[3].signature == "extern const int SIZE = 3;"
+    assert result.declarations[4].signature == "static const int A = 1, B = 2;"
+    assert result.declarations[5].signature == "static const int A = 1, B = 2;"
+    assert result.declarations[6].signature == "static const int VALUE = 1 + 2;"
     assert result.declarations[0].docstring == "Stable internal constants."
     assert result.declarations[1].docstring is None
-    assert result.declarations[2].docstring == "Stable exported macros."
+    assert result.declarations[2].docstring is None
     assert result.declarations[3].docstring is None
-    assert result.declarations[4].docstring == "Node representation for graph edges."
-    assert result.declarations[5].docstring == "Node representation for graph edges."
-    assert result.declarations[6].docstring == "Available palette values."
+    assert result.declarations[4].docstring is None
+    assert result.declarations[5].docstring is None
+    assert result.declarations[6].docstring is None
     assert result.declarations[7].docstring is None
     assert result.declarations[8].docstring is None
-    assert result.declarations[9].docstring == "Stable integer alias."
-    assert result.declarations[6].enum_members == (
+    assert result.declarations[9].docstring is None
+    assert result.declarations[10].docstring == "Stable exported macros."
+    assert result.declarations[11].docstring is None
+    assert result.declarations[12].docstring is None
+    assert result.declarations[13].docstring == "Node representation for graph edges."
+    assert result.declarations[14].docstring == "Node representation for graph edges."
+    assert result.declarations[15].docstring == "Available palette values."
+    assert result.declarations[16].docstring is None
+    assert result.declarations[17].docstring is None
+    assert result.declarations[18].docstring == "Stable integer alias."
+    assert result.declarations[15].enum_members == (
         EnumMemberArtifact(
             stable_id="c:enum_member:native/types.h:Color:1",
             parent_stable_id="c:enum:native/types.h:Color",
             ordinal=1,
             name="RED",
             signature="RED",
-            lineno=19,
+            lineno=23,
         ),
         EnumMemberArtifact(
             stable_id="c:enum_member:native/types.h:Color:2",
@@ -2218,11 +2239,11 @@ def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:
             ordinal=2,
             name="BLUE",
             signature="BLUE",
-            lineno=19,
+            lineno=23,
         ),
     )
-    assert result.declarations[7].signature == "union Value { int i; float f; }"
-    assert result.declarations[7].stable_id == "c:union:native/types.h:Value"
+    assert result.declarations[16].signature == "union Value { int i; float f; }"
+    assert result.declarations[16].stable_id == "c:union:native/types.h:Value"
 
 
 def test_c_analyzer_preserves_suffix_in_declaration_stable_ids(
@@ -3159,6 +3180,10 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
         "static const int A = 1, B = 2;\n"
         "static const int VALUE = 1 + 2;\n"
         "static const int VALUES[] = {1, 2};\n"
+        "const int DECL_ONLY;\n"
+        "extern const int DECL_EXT;\n"
+        "const int fn(void);\n"
+        "const int (*fp)(void);\n"
         "#define CALL(x) ((x) + 1)\n"
         "typedef struct Node { int value; } Node;\n"
         "enum Color { RED, BLUE };\n"
@@ -3191,9 +3216,33 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
     assert backend.find_symbol(tmp_path, "NAME2") == [
         ("constant", "native.types", "NAME2", str(source), 4),
     ]
+    assert backend.find_symbol(tmp_path, "LIMIT2") == [
+        ("constant", "native.types", "LIMIT2", str(source), 5),
+    ]
+    assert backend.find_symbol(tmp_path, "SIZE") == [
+        ("constant", "native.types", "SIZE", str(source), 6),
+    ]
+    assert backend.find_symbol(tmp_path, "A") == [
+        ("constant", "native.types", "A", str(source), 7),
+    ]
+    assert backend.find_symbol(tmp_path, "B") == [
+        ("constant", "native.types", "B", str(source), 7),
+    ]
+    assert backend.find_symbol(tmp_path, "VALUE") == [
+        ("constant", "native.types", "VALUE", str(source), 8),
+    ]
+    assert backend.find_symbol(tmp_path, "VALUES") == [
+        ("constant", "native.types", "VALUES", str(source), 9),
+    ]
+    assert backend.find_symbol(tmp_path, "DECL_ONLY") == [
+        ("constant", "native.types", "DECL_ONLY", str(source), 10),
+    ]
+    assert backend.find_symbol(tmp_path, "DECL_EXT") == [
+        ("constant", "native.types", "DECL_EXT", str(source), 11),
+    ]
     assert backend.find_symbol(tmp_path, "Node") == [
-        ("struct", "native.types", "Node", str(source), 11),
-        ("typedef", "native.types", "Node", str(source), 11),
+        ("struct", "native.types", "Node", str(source), 15),
+        ("typedef", "native.types", "Node", str(source), 15),
     ]
     assert backend.find_symbol(tmp_path, "PORT") == [
         ("macro", "native.types", "PORT", str(source), 1),
@@ -3201,21 +3250,19 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
     assert backend.find_symbol(tmp_path, "NAME") == [
         ("macro", "native.types", "NAME", str(source), 2),
     ]
-    assert backend.find_symbol(tmp_path, "CALL") == []
-    assert backend.find_symbol(tmp_path, "LIMIT2") == []
-    assert backend.find_symbol(tmp_path, "SIZE") == []
-    assert backend.find_symbol(tmp_path, "A") == []
-    assert backend.find_symbol(tmp_path, "B") == []
-    assert backend.find_symbol(tmp_path, "VALUE") == []
-    assert backend.find_symbol(tmp_path, "VALUES") == []
+    assert backend.find_symbol(tmp_path, "CALL") == [
+        ("macro", "native.types", "CALL", str(source), 14),
+    ]
+    assert backend.find_symbol(tmp_path, "fn") == []
+    assert backend.find_symbol(tmp_path, "fp") == []
     assert backend.find_symbol(tmp_path, "Color") == [
-        ("enum", "native.types", "Color", str(source), 12),
+        ("enum", "native.types", "Color", str(source), 16),
     ]
     assert backend.find_symbol(tmp_path, "Value") == [
-        ("union", "native.types", "Value", str(source), 13),
+        ("union", "native.types", "Value", str(source), 17),
     ]
     assert backend.find_symbol(tmp_path, "size_t") == [
-        ("typedef", "native.types", "size_t", str(source), 15),
+        ("typedef", "native.types", "size_t", str(source), 19),
     ]
 
     enum_symbol = backend.find_symbol(tmp_path, "Color")[0]
@@ -3226,7 +3273,7 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
             1,
             "RED",
             "RED",
-            12,
+            16,
         ),
         (
             "c:enum_member:native/types.h:Color:2",
@@ -3234,7 +3281,7 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
             2,
             "BLUE",
             "BLUE",
-            12,
+            16,
         ),
     ]
 

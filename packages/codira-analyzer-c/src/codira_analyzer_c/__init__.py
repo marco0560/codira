@@ -908,7 +908,7 @@ def _declaration_name(node: Node, source: bytes) -> str | None:
             return _node_text(alias_node, source)
         return None
 
-    if node.type == "preproc_def":
+    if node.type in {"preproc_def", "preproc_function_def"}:
         identifier = next(
             (child for child in node.named_children if child.type == "identifier"),
             None,
@@ -1071,35 +1071,15 @@ def _declaration_artifact(
     )
 
 
-def _is_direct_const_literal(node: Node | None) -> bool:
-    """
-    Decide whether one initializer node is an accepted direct C literal.
-
-    Parameters
-    ----------
-    node : tree_sitter.Node | None
-        Initializer node attached to one declarator.
-
-    Returns
-    -------
-    bool
-        ``True`` when the initializer is a direct numeric, character, or
-        string literal.
-    """
-    if node is None:
-        return False
-    return node.type in {"number_literal", "char_literal", "string_literal"}
-
-
-def _const_declaration_artifact(
+def _const_declaration_artifacts(
     node: Node,
     source: bytes,
     *,
     docstring: str | None,
     owner_id: str,
-) -> DeclarationArtifact | None:
+) -> tuple[DeclarationArtifact, ...]:
     """
-    Build one bounded C ``static const`` declaration artifact when accepted.
+    Build normalized C ``const`` declaration artifacts when accepted.
 
     Parameters
     ----------
@@ -1114,26 +1094,11 @@ def _const_declaration_artifact(
 
     Returns
     -------
-    codira.models.DeclarationArtifact | None
-        Normalized constant declaration when the node fits the bounded issue
-        `#25` perimeter, otherwise ``None``.
+    tuple[codira.models.DeclarationArtifact, ...]
+        Normalized constant declarations owned by the accepted node.
     """
     if node.type != "declaration":
-        return None
-
-    init_declarators = [
-        child for child in node.named_children if child.type == "init_declarator"
-    ]
-    if len(init_declarators) != 1:
-        return None
-
-    storage_class_specifiers = [
-        _node_text(child, source)
-        for child in node.named_children
-        if child.type == "storage_class_specifier"
-    ]
-    if storage_class_specifiers != ["static"]:
-        return None
+        return ()
 
     type_qualifiers = {
         _node_text(child, source)
@@ -1141,29 +1106,43 @@ def _const_declaration_artifact(
         if child.type == "type_qualifier"
     }
     if "const" not in type_qualifiers:
-        return None
+        return ()
 
-    init_declarator = init_declarators[0]
-    declarator = init_declarator.child_by_field_name("declarator")
-    if declarator is None:
-        return None
+    declarators: list[Node] = []
+    for child in node.named_children:
+        if child.type == "init_declarator":
+            declarator = child.child_by_field_name("declarator")
+            if declarator is not None:
+                declarators.append(declarator)
+            continue
+        if child.type in {
+            "identifier",
+            "pointer_declarator",
+            "array_declarator",
+            "parenthesized_declarator",
+            "function_declarator",
+        }:
+            declarators.append(child)
 
-    initializer = init_declarator.child_by_field_name("value")
-    if not _is_direct_const_literal(initializer):
-        return None
+    artifacts: list[DeclarationArtifact] = []
+    for declarator in declarators:
+        if _find_parameter_list(declarator) is not None:
+            continue
+        name = _unwrap_declarator_name(declarator, source)
+        if name is None:
+            continue
+        artifacts.append(
+            DeclarationArtifact(
+                name=name,
+                stable_id=_declaration_stable_id(owner_id, "constant", name),
+                kind="constant",
+                lineno=node.start_point.row + 1,
+                signature=" ".join(_node_text(node, source).split()),
+                docstring=docstring,
+            )
+        )
 
-    name = _unwrap_declarator_name(declarator, source)
-    if name is None:
-        return None
-
-    return DeclarationArtifact(
-        name=name,
-        stable_id=_declaration_stable_id(owner_id, "constant", name),
-        kind="constant",
-        lineno=node.start_point.row + 1,
-        signature=" ".join(_node_text(node, source).split()),
-        docstring=docstring,
-    )
+    return tuple(artifacts)
 
 
 def _extract_declarations(
@@ -1193,7 +1172,7 @@ def _extract_declarations(
     attached_comments = _attached_comment_map(root, source)
 
     for child in root.children:
-        if child.type == "preproc_def":
+        if child.type in {"preproc_def", "preproc_function_def"}:
             declaration = _declaration_artifact(
                 child,
                 source,
@@ -1206,13 +1185,13 @@ def _extract_declarations(
             continue
 
         if child.type == "declaration":
-            declaration = _const_declaration_artifact(
+            declarations = _const_declaration_artifacts(
                 child,
                 source,
                 docstring=_resolve_declaration_docstring(attached_comments, child),
                 owner_id=owner_id,
             )
-            if declaration is not None:
+            for declaration in declarations:
                 declarations_by_stable_id[declaration.stable_id] = declaration
             continue
 
@@ -1379,7 +1358,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "6"
+    version = "7"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
