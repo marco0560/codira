@@ -51,6 +51,7 @@ from codira.query.exact import (
     find_call_edges,
     find_callable_refs,
     find_symbol,
+    find_symbol_enum_members,
     find_symbol_overloads,
 )
 from codira.registry import (
@@ -1493,6 +1494,36 @@ def _run_symbol(
                         end_lineno,
                         docstring,
                     ) in overloads
+                ]
+            enum_members = find_symbol_enum_members(
+                root,
+                (
+                    symbol_type,
+                    module_name,
+                    symbol_name,
+                    file_path,
+                    lineno,
+                ),
+            )
+            if enum_members:
+                row["enum_members"] = [
+                    {
+                        "kind": "enum_member",
+                        "stable_id": stable_id,
+                        "parent_stable_id": parent_stable_id,
+                        "ordinal": ordinal,
+                        "name": member_name,
+                        "signature": signature,
+                        "lineno": member_lineno,
+                    }
+                    for (
+                        stable_id,
+                        parent_stable_id,
+                        ordinal,
+                        member_name,
+                        signature,
+                        member_lineno,
+                    ) in enum_members
                 ]
             return row
 

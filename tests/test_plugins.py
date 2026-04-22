@@ -715,6 +715,7 @@ def test_core_can_discover_installed_first_party_packages_from_built_wheels(
                 "-m",
                 "pip",
                 "wheel",
+                "--no-build-isolation",
                 "--no-deps",
                 "--wheel-dir",
                 str(wheel_dir),

@@ -17,7 +17,7 @@ This module belongs to the **storage infrastructure layer** and anchors table de
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 DDL = [
     """
@@ -108,6 +108,22 @@ DDL = [
         lineno INTEGER NOT NULL,
         end_lineno INTEGER,
         FOREIGN KEY(function_id) REFERENCES functions(id)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS enum_members (
+        id INTEGER PRIMARY KEY,
+        file_id INTEGER NOT NULL,
+        module_name TEXT NOT NULL,
+        symbol_name TEXT NOT NULL,
+        symbol_lineno INTEGER NOT NULL,
+        stable_id TEXT NOT NULL,
+        parent_stable_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        lineno INTEGER NOT NULL,
+        FOREIGN KEY(file_id) REFERENCES files(id)
     );
     """,
     """
@@ -222,6 +238,14 @@ DDL = [
     """
     CREATE INDEX IF NOT EXISTS idx_overloads_function
     ON overloads(function_id, ordinal, lineno);
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_enum_members_stable_id
+    ON enum_members(stable_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_enum_members_symbol
+    ON enum_members(file_id, module_name, symbol_name, symbol_lineno, ordinal, lineno);
     """,
     """
     CREATE TABLE IF NOT EXISTS call_records (

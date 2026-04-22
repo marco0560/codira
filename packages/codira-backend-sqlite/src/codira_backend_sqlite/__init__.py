@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from codira.types import (
         ChannelResults,
         DocstringIssueRow,
+        EnumMemberRow,
         IncludeEdgeRow,
         OverloadRow,
         SymbolRow,
@@ -387,6 +388,87 @@ class SQLiteIndexBackend:
                     overload_lineno,
                     end_lineno,
                     docstring,
+                ) in rows
+            ]
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def find_symbol_enum_members(
+        self,
+        root: Path,
+        symbol: SymbolRow,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[EnumMemberRow]:
+        """
+        Return enum-member metadata attached to one canonical enum symbol.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        symbol : codira.types.SymbolRow
+            Canonical enum symbol row.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        list[codira.types.EnumMemberRow]
+            Ordered enum-member metadata rows for the symbol.
+        """
+        symbol_type, module_name, symbol_name, file_path, lineno = symbol
+        if symbol_type != "enum":
+            return []
+
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            rows = conn.execute(
+                """
+                SELECT
+                    stable_id,
+                    parent_stable_id,
+                    ordinal,
+                    name,
+                    signature,
+                    lineno
+                FROM enum_members
+                WHERE file_id = (
+                    SELECT id
+                    FROM files
+                    WHERE path = ?
+                )
+                  AND module_name = ?
+                  AND symbol_name = ?
+                  AND symbol_lineno = ?
+                ORDER BY ordinal, lineno, name
+                """,
+                (
+                    file_path,
+                    module_name,
+                    symbol_name,
+                    lineno,
+                ),
+            ).fetchall()
+            return [
+                (
+                    str(stable_id),
+                    str(parent_stable_id),
+                    int(ordinal),
+                    str(member_name),
+                    str(signature),
+                    int(member_lineno),
+                )
+                for (
+                    stable_id,
+                    parent_stable_id,
+                    ordinal,
+                    member_name,
+                    signature,
+                    member_lineno,
                 ) in rows
             ]
         finally:

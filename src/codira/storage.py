@@ -371,6 +371,48 @@ def _refresh_overloads_schema(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS overloads")
 
 
+def _refresh_enum_members_schema(conn: sqlite3.Connection) -> None:
+    """
+    Recreate the ``enum_members`` table when an older schema is present.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection to migrate in place.
+
+    Returns
+    -------
+    None
+        The table is replaced only when its columns do not match the current
+        schema definition.
+    """
+    columns = conn.execute("PRAGMA table_info(enum_members)").fetchall()
+    if not columns:
+        return
+
+    current = [str(row[1]) for row in columns]
+    expected = [
+        "id",
+        "file_id",
+        "module_name",
+        "symbol_name",
+        "symbol_lineno",
+        "stable_id",
+        "parent_stable_id",
+        "ordinal",
+        "name",
+        "signature",
+        "lineno",
+    ]
+
+    if current == expected:
+        return
+
+    conn.execute("DROP INDEX IF EXISTS idx_enum_members_stable_id")
+    conn.execute("DROP INDEX IF EXISTS idx_enum_members_symbol")
+    conn.execute("DROP TABLE IF EXISTS enum_members")
+
+
 def _refresh_imports_schema(conn: sqlite3.Connection) -> None:
     """
     Recreate the ``imports`` table when an older schema is present.
@@ -702,6 +744,7 @@ def init_db(root: Path) -> None:
         _refresh_callable_ref_records_schema(conn)
         _refresh_docstring_issues_schema(conn)
         _refresh_overloads_schema(conn)
+        _refresh_enum_members_schema(conn)
         _refresh_imports_schema(conn)
         _refresh_symbol_index_schema(conn)
         _refresh_embeddings_schema(conn)

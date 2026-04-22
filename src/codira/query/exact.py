@@ -27,7 +27,13 @@ if TYPE_CHECKING:
     import sqlite3
     from pathlib import Path
 
-    from codira.types import DocstringIssueRow, IncludeEdgeRow, OverloadRow, SymbolRow
+    from codira.types import (
+        DocstringIssueRow,
+        EnumMemberRow,
+        IncludeEdgeRow,
+        OverloadRow,
+        SymbolRow,
+    )
 
 CallEdgeRow = tuple[str, str, str | None, str | None, int]
 CallableRefRow = tuple[str, str, str | None, str | None, int]
@@ -221,6 +227,34 @@ def find_symbol_overloads(
     """
     backend = active_index_backend()
     return backend.find_symbol_overloads(root, symbol, conn=conn)
+
+
+def find_symbol_enum_members(
+    root: Path,
+    symbol: SymbolRow,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[EnumMemberRow]:
+    """
+    Return enum-member metadata attached to one canonical enum symbol.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    symbol : codira.types.SymbolRow
+        Canonical enum symbol row.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the function
+        opens and closes its own connection.
+
+    Returns
+    -------
+    list[codira.types.EnumMemberRow]
+        Ordered enum-member metadata rows for the symbol.
+    """
+    backend = active_index_backend()
+    return backend.find_symbol_enum_members(root, symbol, conn=conn)
 
 
 def find_call_edges(

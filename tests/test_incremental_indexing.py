@@ -131,10 +131,10 @@ class _PythonAnalyzerV3:
         return PythonAnalyzer().analyze_file(path, root)
 
 
-class _SQLiteBackendV13(SQLiteIndexBackend):
+class _SQLiteBackendV14(SQLiteIndexBackend):
     """SQLite backend stub with a bumped version for runtime tests."""
 
-    version = 13
+    version = 14
 
 
 def test_cli_reports_unexpected_index_errors_without_traceback(
@@ -1662,11 +1662,11 @@ def test_ensure_index_rebuilds_when_backend_inventory_changes(
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(
         "codira.cli.active_index_backend",
-        lambda: _SQLiteBackendV13(),
+        lambda: _SQLiteBackendV14(),
     )
     monkeypatch.setattr(
         "codira.indexer.active_index_backend",
-        lambda: _SQLiteBackendV13(),
+        lambda: _SQLiteBackendV14(),
     )
 
     _ensure_index(tmp_path)
@@ -1674,7 +1674,7 @@ def test_ensure_index_rebuilds_when_backend_inventory_changes(
     backend = SQLiteIndexBackend()
 
     assert "Index stale (backend plugin changed)" in captured.err
-    assert backend.load_runtime_inventory(tmp_path) == ("sqlite", "13", 1)
+    assert backend.load_runtime_inventory(tmp_path) == ("sqlite", "14", 1)
 
 
 def test_init_db_preserves_existing_commit_metadata(tmp_path: Path) -> None:

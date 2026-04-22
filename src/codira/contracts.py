@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from codira.types import (
         ChannelResults,
         DocstringIssueRow,
+        EnumMemberRow,
         IncludeEdgeRow,
         OverloadRow,
         SymbolRow,
@@ -988,6 +989,31 @@ class IndexBackend(Protocol):
         -------
         list[codira.types.OverloadRow]
             Ordered overload metadata rows for the symbol.
+        """
+
+    def find_symbol_enum_members(
+        self,
+        root: Path,
+        symbol: SymbolRow,
+        *,
+        conn: object | None = None,
+    ) -> list[EnumMemberRow]:
+        """
+        Return enum-member metadata attached to one canonical enum symbol.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        symbol : codira.types.SymbolRow
+            Canonical enum symbol row.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        list[codira.types.EnumMemberRow]
+            Ordered enum-member metadata rows for the symbol.
         """
 
     def docstring_issues(

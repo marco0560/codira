@@ -81,6 +81,35 @@ class OverloadArtifact:
 
 
 @dataclass(frozen=True)
+class EnumMemberArtifact:
+    """
+    Normalized enum member attached to one canonical enum declaration.
+
+    Parameters
+    ----------
+    stable_id : str
+        Durable analyzer-owned identity for the enum member declaration.
+    parent_stable_id : str
+        Stable identity of the canonical enum declaration that owns the member.
+    ordinal : int
+        Deterministic declaration order among members for the same enum.
+    name : str
+        Exposed enum member name.
+    signature : str
+        Collapsed enum member text used for rendering.
+    lineno : int
+        First source line of the enum member declaration.
+    """
+
+    stable_id: str
+    parent_stable_id: str
+    ordinal: int
+    name: str
+    signature: str
+    lineno: int
+
+
+@dataclass(frozen=True)
 class FileMetadataSnapshot:
     """
     Stable file metadata used during indexing decisions.
@@ -151,6 +180,9 @@ class DeclarationArtifact:
         Collapsed declaration text used for semantic indexing.
     docstring : str | None, optional
         Leading comment summary used as semantic text when present.
+    enum_members : tuple[codira.models.EnumMemberArtifact, ...], optional
+        Ordered enum members attached to the declaration when ``kind`` is
+        ``"enum"``.
     """
 
     name: str
@@ -159,6 +191,7 @@ class DeclarationArtifact:
     lineno: int
     signature: str
     docstring: str | None = None
+    enum_members: tuple[EnumMemberArtifact, ...] = ()
 
 
 @dataclass(frozen=True)

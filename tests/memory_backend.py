@@ -41,11 +41,17 @@ if TYPE_CHECKING:
         BackendRelationQueryRequest,
         BackendRuntimeInventoryRequest,
     )
-    from codira.models import CallableReference, CallSite, OverloadArtifact
+    from codira.models import (
+        CallableReference,
+        CallSite,
+        EnumMemberArtifact,
+        OverloadArtifact,
+    )
     from codira.semantic.embeddings import EmbeddingBackendSpec
     from codira.types import (
         ChannelResults,
         DocstringIssueRow,
+        EnumMemberRow,
         IncludeEdgeRow,
         OverloadRow,
         SymbolRow,
@@ -199,6 +205,22 @@ class _MemoryOverload:
 
 
 @dataclass(frozen=True)
+class _MemoryEnumMember:
+    """Stored enum-member metadata attached to one canonical enum symbol."""
+
+    file_id: int
+    module_name: str
+    symbol_name: str
+    symbol_lineno: int
+    stable_id: str
+    parent_stable_id: str
+    ordinal: int
+    name: str
+    signature: str
+    lineno: int
+
+
+@dataclass(frozen=True)
 class _StoredEmbedding:
     """Reusable embedding row returned by ``load_previous_embeddings_by_path``."""
 
@@ -222,6 +244,7 @@ class _MemoryState:
     call_records: list[_MemoryRelation] = field(default_factory=list)
     callable_ref_records: list[_MemoryRelation] = field(default_factory=list)
     overloads: list[_MemoryOverload] = field(default_factory=list)
+    enum_members: list[_MemoryEnumMember] = field(default_factory=list)
     doc_issues: list[_MemoryDocIssue] = field(default_factory=list)
     embeddings: list[_MemoryEmbedding] = field(default_factory=list)
     runtime_inventory: tuple[str, str, int] | None = None
@@ -647,6 +670,7 @@ class MemoryIndexBackend:
         state.call_records.clear()
         state.callable_ref_records.clear()
         state.overloads.clear()
+        state.enum_members.clear()
         state.doc_issues.clear()
         state.embeddings.clear()
 
@@ -1022,6 +1046,14 @@ class MemoryIndexBackend:
                         docstring=decl.docstring,
                     ),
                 )
+            )
+            self._append_enum_members(
+                state,
+                file_id=file_id,
+                module_name=module_name,
+                symbol_name=decl.name,
+                symbol_lineno=decl.lineno,
+                enum_members=decl.enum_members,
             )
 
         for imp in analysis.imports:
@@ -1584,6 +1616,51 @@ class MemoryIndexBackend:
         ]
         return sorted(rows, key=lambda row: (row[4], row[2], row[0]))
 
+    def find_symbol_enum_members(
+        self,
+        root: Path,
+        symbol: SymbolRow,
+        *,
+        conn: object | None = None,
+    ) -> list[EnumMemberRow]:
+        """
+        Return enum-member metadata attached to one canonical enum symbol.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        symbol : codira.types.SymbolRow
+            Canonical enum symbol row.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.types.EnumMemberRow]
+            Ordered enum-member metadata rows for the symbol.
+        """
+        state = self._conn_state(root, conn)
+        symbol_type, module_name, symbol_name, file_path, lineno = symbol
+        if symbol_type != "enum":
+            return []
+        rows = [
+            (
+                enum_member.stable_id,
+                enum_member.parent_stable_id,
+                enum_member.ordinal,
+                enum_member.name,
+                enum_member.signature,
+                enum_member.lineno,
+            )
+            for enum_member in state.enum_members
+            if enum_member.module_name == module_name
+            and enum_member.symbol_name == symbol_name
+            and enum_member.symbol_lineno == lineno
+            and state.files[enum_member.file_id].path == file_path
+        ]
+        return sorted(rows, key=lambda row: (row[2], row[5], row[3]))
+
     def docstring_issues(
         self,
         root: Path,
@@ -1878,6 +1955,55 @@ class MemoryIndexBackend:
                 )
             )
 
+    def _append_enum_members(
+        self,
+        state: _MemoryState,
+        *,
+        file_id: int,
+        module_name: str,
+        symbol_name: str,
+        symbol_lineno: int,
+        enum_members: Sequence[EnumMemberArtifact],
+    ) -> None:
+        """
+        Append enum-member metadata rows for one canonical enum declaration.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+        file_id : int
+            Owning file identifier.
+        module_name : str
+            Owning module name.
+        symbol_name : str
+            Canonical enum declaration name.
+        symbol_lineno : int
+            Canonical enum declaration line number.
+        enum_members : collections.abc.Sequence[codira.models.EnumMemberArtifact]
+            Ordered enum members attached to the declaration.
+
+        Returns
+        -------
+        None
+            Enum-member rows are appended in place.
+        """
+        for enum_member in enum_members:
+            state.enum_members.append(
+                _MemoryEnumMember(
+                    file_id=file_id,
+                    module_name=module_name,
+                    symbol_name=symbol_name,
+                    symbol_lineno=symbol_lineno,
+                    stable_id=str(enum_member.stable_id),
+                    parent_stable_id=str(enum_member.parent_stable_id),
+                    ordinal=int(enum_member.ordinal),
+                    name=str(enum_member.name),
+                    signature=str(enum_member.signature),
+                    lineno=int(enum_member.lineno),
+                )
+            )
+
     def _append_relations(
         self,
         state: _MemoryState,
@@ -2028,6 +2154,11 @@ class MemoryIndexBackend:
         ]
         state.overloads = [
             overload for overload in state.overloads if overload.file_id != file_id
+        ]
+        state.enum_members = [
+            enum_member
+            for enum_member in state.enum_members
+            if enum_member.file_id != file_id
         ]
         state.doc_issues = [
             issue for issue in state.doc_issues if issue.file_id != file_id

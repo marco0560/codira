@@ -51,6 +51,7 @@ from codira.indexer import (
 from codira.models import (
     AnalysisResult,
     CallSite,
+    EnumMemberArtifact,
     FileMetadataSnapshot,
     FunctionArtifact,
     ModuleArtifact,
@@ -525,6 +526,33 @@ class _FakeBackend:
         -------
         list[tuple[str, str, int, str, int, int | None, str | None]]
             Empty overload rows for protocol validation.
+        """
+        del root, symbol, conn
+        return []
+
+    def find_symbol_enum_members(
+        self,
+        root: Path,
+        symbol: tuple[str, str, str, str, int],
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[tuple[str, str, int, str, str, int]]:
+        """
+        Return no enum-member metadata for protocol validation.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        symbol : tuple[str, str, str, str, int]
+            Canonical symbol row.
+        conn : sqlite3.Connection | None, optional
+            Optional SQLite connection.
+
+        Returns
+        -------
+        list[tuple[str, str, int, str, str, int]]
+            Empty enum-member rows for protocol validation.
         """
         del root, symbol, conn
         return []
@@ -1214,6 +1242,91 @@ def test_run_symbol_json_includes_overload_metadata(
     ]
 
 
+def test_run_symbol_json_includes_enum_member_metadata(
+    tmp_path: Path,
+    capsys: CaptureFixture[str],
+) -> None:
+    """
+    Render enum-member metadata only in JSON symbol output.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    capsys : pytest.CaptureFixture[str]
+        Captured output fixture.
+
+    Returns
+    -------
+    None
+        The test asserts the JSON payload carries enum-member detail.
+    """
+    source = tmp_path / "native" / "types.h"
+    source.parent.mkdir()
+    source.write_text(
+        "enum Color { RED, GREEN = 3, BLUE };\n",
+        encoding="utf-8",
+    )
+
+    backend = SQLiteIndexBackend()
+    backend.initialize(tmp_path)
+    analysis = CAnalyzer().analyze_file(source, tmp_path)
+    snapshot = FileMetadataSnapshot(
+        path=source,
+        sha256="json-enum-members",
+        mtime=1.0,
+        size=source.stat().st_size,
+    )
+    backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+        )
+    )
+
+    assert _run_symbol(tmp_path, "Color", as_json=True) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"] == [
+        {
+            "type": "enum",
+            "module": "native.types",
+            "name": "Color",
+            "file": str(source),
+            "lineno": 1,
+            "enum_members": [
+                {
+                    "kind": "enum_member",
+                    "stable_id": "c:enum_member:native/types.h:Color:1",
+                    "parent_stable_id": "c:enum:native/types.h:Color",
+                    "ordinal": 1,
+                    "name": "RED",
+                    "signature": "RED",
+                    "lineno": 1,
+                },
+                {
+                    "kind": "enum_member",
+                    "stable_id": "c:enum_member:native/types.h:Color:2",
+                    "parent_stable_id": "c:enum:native/types.h:Color",
+                    "ordinal": 2,
+                    "name": "GREEN",
+                    "signature": "GREEN = 3",
+                    "lineno": 1,
+                },
+                {
+                    "kind": "enum_member",
+                    "stable_id": "c:enum_member:native/types.h:Color:3",
+                    "parent_stable_id": "c:enum:native/types.h:Color",
+                    "ordinal": 3,
+                    "name": "BLUE",
+                    "signature": "BLUE",
+                    "lineno": 1,
+                },
+            ],
+        }
+    ]
+
+
 def test_analysis_result_from_parsed_disambiguates_property_accessors(
     tmp_path: Path,
 ) -> None:
@@ -1394,9 +1507,9 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "sentence-transformers>=5.4,<6.0",
         "codira-analyzer-python==1.5.1",
         "codira-analyzer-json==1.5.0",
-        "codira-analyzer-c==1.5.0",
+        "codira-analyzer-c==1.5.1",
         "codira-analyzer-bash==1.5.0",
-        "codira-backend-sqlite==1.5.1",
+        "codira-backend-sqlite==1.5.2",
     ]
 
 
@@ -1979,6 +2092,24 @@ def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:
     assert result.declarations[2].docstring == "Available palette values."
     assert result.declarations[3].docstring is None
     assert result.declarations[4].docstring == "Stable integer alias."
+    assert result.declarations[2].enum_members == (
+        EnumMemberArtifact(
+            stable_id="c:enum_member:native/types.h:Color:1",
+            parent_stable_id="c:enum:native/types.h:Color",
+            ordinal=1,
+            name="RED",
+            signature="RED",
+            lineno=5,
+        ),
+        EnumMemberArtifact(
+            stable_id="c:enum_member:native/types.h:Color:2",
+            parent_stable_id="c:enum:native/types.h:Color",
+            ordinal=2,
+            name="BLUE",
+            signature="BLUE",
+            lineno=5,
+        ),
+    )
 
 
 def test_c_analyzer_preserves_suffix_in_declaration_stable_ids(
@@ -2901,6 +3032,26 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
         ("typedef", "native.types", "size_t", str(source), 4),
     ]
 
+    enum_symbol = backend.find_symbol(tmp_path, "Color")[0]
+    assert backend.find_symbol_enum_members(tmp_path, enum_symbol) == [
+        (
+            "c:enum_member:native/types.h:Color:1",
+            "c:enum:native/types.h:Color",
+            1,
+            "RED",
+            "RED",
+            2,
+        ),
+        (
+            "c:enum_member:native/types.h:Color:2",
+            "c:enum:native/types.h:Color",
+            2,
+            "BLUE",
+            "BLUE",
+            2,
+        ),
+    ]
+
 
 def test_python_type_aliases_persist_as_exact_symbols(tmp_path: Path) -> None:
     """
@@ -3374,7 +3525,7 @@ def test_sqlite_backend_persists_runtime_inventory(tmp_path: Path) -> None:
     index_repo(tmp_path)
 
     backend = SQLiteIndexBackend()
-    assert backend.load_runtime_inventory(tmp_path) == ("sqlite", "12", 1)
+    assert backend.load_runtime_inventory(tmp_path) == ("sqlite", "13", 1)
     assert backend.load_analyzer_inventory(tmp_path) == [
         (
             analyzer.name,

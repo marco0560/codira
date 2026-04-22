@@ -35,6 +35,7 @@ from codira.models import (
     CallSite,
     DeclarationArtifact,
     DeclarationKind,
+    EnumMemberArtifact,
     FunctionArtifact,
     ImportArtifact,
     ImportKind,
@@ -201,6 +202,31 @@ def _declaration_stable_id(
         Durable C declaration identity.
     """
     return f"c:{kind}:{owner_id}:{declaration_name}"
+
+
+def _enum_member_stable_id(
+    owner_id: str,
+    enum_name: str,
+    ordinal: int,
+) -> str:
+    """
+    Build the durable identity for one C enum member declaration.
+
+    Parameters
+    ----------
+    owner_id : str
+        File-scoped owner identity preserving the source suffix.
+    enum_name : str
+        Owning enum declaration name.
+    ordinal : int
+        Deterministic declaration order among members for the enum.
+
+    Returns
+    -------
+    str
+        Durable C enum-member identity.
+    """
+    return f"c:enum_member:{owner_id}:{enum_name}:{ordinal}"
 
 
 def _node_text(node: Node, source: bytes) -> str:
@@ -913,6 +939,74 @@ def _resolve_declaration_docstring(
     return attached_comments.get(node.start_byte, inherited_comment)
 
 
+def _extract_enum_members(
+    node: Node,
+    source: bytes,
+    *,
+    owner_id: str,
+    enum_name: str,
+    parent_stable_id: str,
+) -> tuple[EnumMemberArtifact, ...]:
+    """
+    Extract deterministic enum members from one named enum declaration.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Enum-specifier node that owns the enumerator list.
+    source : bytes
+        Full source buffer.
+    owner_id : str
+        File-scoped owner identity preserving the source suffix.
+    enum_name : str
+        Owning enum declaration name.
+    parent_stable_id : str
+        Stable identity of the owning enum declaration artifact.
+
+    Returns
+    -------
+    tuple[codira.models.EnumMemberArtifact, ...]
+        Ordered enum-member artifacts attached to the enum declaration.
+    """
+    enumerator_list = next(
+        (child for child in node.named_children if child.type == "enumerator_list"),
+        None,
+    )
+    if enumerator_list is None:
+        return ()
+
+    members: list[EnumMemberArtifact] = []
+    for ordinal, enumerator in enumerate(
+        (
+            child
+            for child in enumerator_list.named_children
+            if child.type == "enumerator"
+        ),
+        start=1,
+    ):
+        name = next(
+            (
+                _node_text(child, source)
+                for child in enumerator.named_children
+                if child.type in {"identifier", "field_identifier"}
+            ),
+            None,
+        )
+        if name is None:
+            continue
+        members.append(
+            EnumMemberArtifact(
+                stable_id=_enum_member_stable_id(owner_id, enum_name, ordinal),
+                parent_stable_id=parent_stable_id,
+                ordinal=ordinal,
+                name=name,
+                signature=" ".join(_node_text(enumerator, source).split()),
+                lineno=enumerator.start_point.row + 1,
+            )
+        )
+    return tuple(members)
+
+
 def _declaration_artifact(
     node: Node,
     source: bytes,
@@ -954,6 +1048,17 @@ def _declaration_artifact(
         lineno=node.start_point.row + 1,
         signature=" ".join(_node_text(node, source).split()),
         docstring=docstring,
+        enum_members=(
+            _extract_enum_members(
+                node,
+                source,
+                owner_id=owner_id,
+                enum_name=name,
+                parent_stable_id=_declaration_stable_id(owner_id, kind, name),
+            )
+            if kind == "enum"
+            else ()
+        ),
     )
 
 
@@ -1121,7 +1226,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "2"
+    version = "3"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:

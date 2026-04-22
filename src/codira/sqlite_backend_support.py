@@ -38,6 +38,7 @@ if TYPE_CHECKING:
         AnalysisResult,
         CallableReference,
         CallSite,
+        EnumMemberArtifact,
         FileMetadataSnapshot,
         FunctionArtifact,
         OverloadArtifact,
@@ -302,6 +303,35 @@ class ArtifactPersistenceRequest:
     ref_rows: list[RefRow]
 
 
+@dataclass(frozen=True)
+class EnumMemberPersistenceRequest:
+    """
+    Request parameters for enum-member metadata persistence.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection.
+    file_id : int
+        Inserted file row identifier that owns the enum declaration.
+    module_name : str
+        Module name that owns the enum declaration.
+    symbol_name : str
+        Canonical enum declaration name.
+    symbol_lineno : int
+        Canonical enum declaration line number.
+    enum_members : tuple[codira.models.EnumMemberArtifact, ...]
+        Ordered enum-member declarations attached to the enum.
+    """
+
+    conn: sqlite3.Connection
+    file_id: int
+    module_name: str
+    symbol_name: str
+    symbol_lineno: int
+    enum_members: tuple[EnumMemberArtifact, ...]
+
+
 def _clear_index_tables(conn: sqlite3.Connection) -> None:
     """
     Remove all indexed rows from the database tables.
@@ -322,6 +352,7 @@ def _clear_index_tables(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM call_records")
     conn.execute("DELETE FROM callable_ref_records")
     conn.execute("DELETE FROM overloads")
+    conn.execute("DELETE FROM enum_members")
     conn.execute("DELETE FROM embeddings")
     conn.execute("DELETE FROM symbol_index")
     conn.execute("DELETE FROM imports")
@@ -1625,6 +1656,41 @@ def _persist_overload_artifacts(
         )
 
 
+def _persist_enum_member_artifacts(request: EnumMemberPersistenceRequest) -> None:
+    """
+    Persist enum-member metadata rows for one canonical enum declaration.
+
+    Parameters
+    ----------
+    request : EnumMemberPersistenceRequest
+        Persistence request describing the owning enum and attached members.
+
+    Returns
+    -------
+    None
+        Enum-member rows are inserted in place.
+    """
+    for enum_member in request.enum_members:
+        request.conn.execute(
+            "INSERT INTO enum_members"
+            "(file_id, module_name, symbol_name, symbol_lineno, stable_id, "
+            "parent_stable_id, ordinal, name, signature, lineno) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                request.file_id,
+                request.module_name,
+                request.symbol_name,
+                request.symbol_lineno,
+                enum_member.stable_id,
+                enum_member.parent_stable_id,
+                enum_member.ordinal,
+                enum_member.name,
+                enum_member.signature,
+                enum_member.lineno,
+            ),
+        )
+
+
 def _persist_declaration_artifacts(request: ArtifactPersistenceRequest) -> None:
     """
     Persist declaration-style symbol artifacts for one analyzed file.
@@ -1670,6 +1736,16 @@ def _persist_declaration_artifacts(request: ArtifactPersistenceRequest) -> None:
                 docstring=decl.docstring,
                 extra_context=c_embedding_context,
             ),
+        )
+        _persist_enum_member_artifacts(
+            EnumMemberPersistenceRequest(
+                conn=conn,
+                file_id=file_id,
+                module_name=module_name,
+                symbol_name=decl.name,
+                symbol_lineno=decl.lineno,
+                enum_members=decl.enum_members,
+            )
         )
 
 
@@ -2086,6 +2162,10 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
             )
             """,
             tuple(module_ids),
+        )
+        conn.execute(
+            "DELETE FROM enum_members WHERE file_id = ?",
+            (file_id,),
         )
         conn.execute(
             f"DELETE FROM imports WHERE module_id IN ({_placeholders(module_ids)})",

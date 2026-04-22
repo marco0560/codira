@@ -64,6 +64,7 @@ def build_build_argv(
         "-m",
         "pip",
         "wheel",
+        "--no-build-isolation",
         "--no-deps",
         "--wheel-dir",
         str(wheel_dir),
