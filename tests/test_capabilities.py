@@ -96,6 +96,7 @@ def test_c_analyzer_declares_explicit_ontology_mapping() -> None:
     assert declaration.mappings == {
         "module": "module",
         "function": "callable",
+        "constant": "constant",
         "macro": "constant",
         "struct": "type",
         "union": "type",

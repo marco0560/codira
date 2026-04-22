@@ -191,7 +191,7 @@ def _declaration_stable_id(
     ----------
     owner_id : str
         File-scoped owner identity preserving the source suffix.
-    kind : {"macro", "struct", "union", "enum", "typedef"}
+    kind : {"constant", "macro", "struct", "union", "enum", "typedef"}
         Stable declaration classifier.
     declaration_name : str
         Exposed declaration name.
@@ -1071,6 +1071,101 @@ def _declaration_artifact(
     )
 
 
+def _is_direct_const_literal(node: Node | None) -> bool:
+    """
+    Decide whether one initializer node is an accepted direct C literal.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node | None
+        Initializer node attached to one declarator.
+
+    Returns
+    -------
+    bool
+        ``True`` when the initializer is a direct numeric, character, or
+        string literal.
+    """
+    if node is None:
+        return False
+    return node.type in {"number_literal", "char_literal", "string_literal"}
+
+
+def _const_declaration_artifact(
+    node: Node,
+    source: bytes,
+    *,
+    docstring: str | None,
+    owner_id: str,
+) -> DeclarationArtifact | None:
+    """
+    Build one bounded C ``static const`` declaration artifact when accepted.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Top-level declaration node being considered.
+    source : bytes
+        Full source buffer.
+    docstring : str | None
+        Docstring to attach to the declaration.
+    owner_id : str
+        File-scoped owner identity preserving the source suffix.
+
+    Returns
+    -------
+    codira.models.DeclarationArtifact | None
+        Normalized constant declaration when the node fits the bounded issue
+        `#25` perimeter, otherwise ``None``.
+    """
+    if node.type != "declaration":
+        return None
+
+    init_declarators = [
+        child for child in node.named_children if child.type == "init_declarator"
+    ]
+    if len(init_declarators) != 1:
+        return None
+
+    storage_class_specifiers = [
+        _node_text(child, source)
+        for child in node.named_children
+        if child.type == "storage_class_specifier"
+    ]
+    if storage_class_specifiers != ["static"]:
+        return None
+
+    type_qualifiers = {
+        _node_text(child, source)
+        for child in node.named_children
+        if child.type == "type_qualifier"
+    }
+    if "const" not in type_qualifiers:
+        return None
+
+    init_declarator = init_declarators[0]
+    declarator = init_declarator.child_by_field_name("declarator")
+    if declarator is None:
+        return None
+
+    initializer = init_declarator.child_by_field_name("value")
+    if not _is_direct_const_literal(initializer):
+        return None
+
+    name = _unwrap_declarator_name(declarator, source)
+    if name is None:
+        return None
+
+    return DeclarationArtifact(
+        name=name,
+        stable_id=_declaration_stable_id(owner_id, "constant", name),
+        kind="constant",
+        lineno=node.start_point.row + 1,
+        signature=" ".join(_node_text(node, source).split()),
+        docstring=docstring,
+    )
+
+
 def _extract_declarations(
     root: Node,
     source: bytes,
@@ -1104,6 +1199,17 @@ def _extract_declarations(
                 source,
                 docstring=_resolve_declaration_docstring(attached_comments, child),
                 kind="macro",
+                owner_id=owner_id,
+            )
+            if declaration is not None:
+                declarations_by_stable_id[declaration.stable_id] = declaration
+            continue
+
+        if child.type == "declaration":
+            declaration = _const_declaration_artifact(
+                child,
+                source,
+                docstring=_resolve_declaration_docstring(attached_comments, child),
                 owner_id=owner_id,
             )
             if declaration is not None:
@@ -1273,7 +1379,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "5"
+    version = "6"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
@@ -1299,6 +1405,7 @@ class CAnalyzer:
             mappings={
                 "module": "module",
                 "function": "callable",
+                "constant": "constant",
                 "macro": "constant",
                 "struct": "type",
                 "union": "type",
