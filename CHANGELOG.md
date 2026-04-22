@@ -1,3 +1,10 @@
+# [1.9.0](https://github.com/marco0560/codira/compare/v1.8.0...v1.9.0) (2026-04-22)
+
+
+### Features
+
+* **analyzer:** add C enum member metadata ([0cfca75](https://github.com/marco0560/codira/commit/0cfca75b0a1049843e8594177e319273d03fac3c))
+
 # [1.8.0](https://github.com/marco0560/codira/compare/v1.7.0...v1.8.0) (2026-04-22)
 
 
