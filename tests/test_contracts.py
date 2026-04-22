@@ -1507,7 +1507,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "sentence-transformers>=5.4,<6.0",
         "codira-analyzer-python==1.5.1",
         "codira-analyzer-json==1.5.0",
-        "codira-analyzer-c==1.5.1",
+        "codira-analyzer-c==1.5.2",
         "codira-analyzer-bash==1.5.0",
         "codira-backend-sqlite==1.5.2",
     ]
@@ -2053,7 +2053,8 @@ def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:
     Returns
     -------
     None
-        The test asserts deterministic struct, enum, and typedef extraction.
+        The test asserts deterministic struct, union, enum, and typedef
+        extraction.
     """
     source = tmp_path / "native" / "types.h"
     source.parent.mkdir()
@@ -2063,6 +2064,8 @@ def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:
         "\n"
         "// Available palette values.\n"
         "enum Color { RED, BLUE };\n"
+        "\n"
+        "union Value { int i; float f; };\n"
         "\n"
         "struct Pair { int left; int right; };\n"
         "\n"
@@ -2080,8 +2083,9 @@ def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:
         ("struct", "Node", 2),
         ("typedef", "Node", 2),
         ("enum", "Color", 5),
-        ("struct", "Pair", 7),
-        ("typedef", "size_t", 10),
+        ("union", "Value", 7),
+        ("struct", "Pair", 9),
+        ("typedef", "size_t", 12),
     ]
     assert result.declarations[0].signature == "struct Node { int value; }"
     assert (
@@ -2091,7 +2095,8 @@ def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:
     assert result.declarations[1].docstring == "Node representation for graph edges."
     assert result.declarations[2].docstring == "Available palette values."
     assert result.declarations[3].docstring is None
-    assert result.declarations[4].docstring == "Stable integer alias."
+    assert result.declarations[4].docstring is None
+    assert result.declarations[5].docstring == "Stable integer alias."
     assert result.declarations[2].enum_members == (
         EnumMemberArtifact(
             stable_id="c:enum_member:native/types.h:Color:1",
@@ -2110,6 +2115,8 @@ def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:
             lineno=5,
         ),
     )
+    assert result.declarations[3].signature == "union Value { int i; float f; }"
+    assert result.declarations[3].stable_id == "c:union:native/types.h:Value"
 
 
 def test_c_analyzer_preserves_suffix_in_declaration_stable_ids(
@@ -2142,6 +2149,46 @@ def test_c_analyzer_preserves_suffix_in_declaration_stable_ids(
     assert implementation_result.declarations[0].stable_id == (
         "c:struct:native/common.c:name_info"
     )
+
+
+def test_c_analyzer_extracts_typedef_wrapped_union_declarations(tmp_path: Path) -> None:
+    """
+    Normalize typedef-wrapped C unions into explicit declaration artifacts.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts typedef-wrapped unions emit both union and typedef
+        declarations deterministically.
+    """
+    source = tmp_path / "native" / "token.h"
+    source.parent.mkdir()
+    source.write_text(
+        "typedef union Token { int kind; char c; } Token;\n",
+        encoding="utf-8",
+    )
+
+    result = CAnalyzer().analyze_file(source, tmp_path)
+
+    assert [
+        (declaration.kind, declaration.name, declaration.lineno)
+        for declaration in result.declarations
+    ] == [
+        ("union", "Token", 1),
+        ("typedef", "Token", 1),
+    ]
+    assert result.declarations[0].signature == "union Token { int kind; char c; }"
+    assert (
+        result.declarations[1].signature
+        == "typedef union Token { int kind; char c; } Token;"
+    )
+    assert result.declarations[0].stable_id == "c:union:native/token.h:Token"
+    assert result.declarations[1].stable_id == "c:typedef:native/token.h:Token"
 
 
 def test_c_analyzer_keeps_last_duplicate_named_declaration(tmp_path: Path) -> None:
@@ -2999,6 +3046,7 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
     source.write_text(
         "typedef struct Node { int value; } Node;\n"
         "enum Color { RED, BLUE };\n"
+        "union Value { int i; float f; };\n"
         "struct Pair { int left; int right; };\n"
         "typedef unsigned long size_t;\n",
         encoding="utf-8",
@@ -3028,8 +3076,11 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
     assert backend.find_symbol(tmp_path, "Color") == [
         ("enum", "native.types", "Color", str(source), 2),
     ]
+    assert backend.find_symbol(tmp_path, "Value") == [
+        ("union", "native.types", "Value", str(source), 3),
+    ]
     assert backend.find_symbol(tmp_path, "size_t") == [
-        ("typedef", "native.types", "size_t", str(source), 4),
+        ("typedef", "native.types", "size_t", str(source), 5),
     ]
 
     enum_symbol = backend.find_symbol(tmp_path, "Color")[0]

@@ -191,7 +191,7 @@ def _declaration_stable_id(
     ----------
     owner_id : str
         File-scoped owner identity preserving the source suffix.
-    kind : {"struct", "enum", "typedef"}
+    kind : {"struct", "union", "enum", "typedef"}
         Stable declaration classifier.
     declaration_name : str
         Exposed declaration name.
@@ -1101,6 +1101,18 @@ def _extract_declarations(
                 declarations_by_stable_id[declaration.stable_id] = declaration
             continue
 
+        if child.type == "union_specifier":
+            declaration = _declaration_artifact(
+                child,
+                source,
+                docstring=_resolve_declaration_docstring(attached_comments, child),
+                kind="union",
+                owner_id=owner_id,
+            )
+            if declaration is not None:
+                declarations_by_stable_id[declaration.stable_id] = declaration
+            continue
+
         if child.type == "enum_specifier":
             declaration = _declaration_artifact(
                 child,
@@ -1128,6 +1140,20 @@ def _extract_declarations(
                         inherited_comment=child_comment,
                     ),
                     kind="struct",
+                    owner_id=owner_id,
+                )
+                if declaration is not None:
+                    declarations_by_stable_id[declaration.stable_id] = declaration
+            elif named_child.type == "union_specifier":
+                declaration = _declaration_artifact(
+                    named_child,
+                    source,
+                    docstring=_resolve_declaration_docstring(
+                        attached_comments,
+                        named_child,
+                        inherited_comment=child_comment,
+                    ),
+                    kind="union",
                     owner_id=owner_id,
                 )
                 if declaration is not None:
@@ -1226,7 +1252,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "3"
+    version = "4"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
@@ -1253,6 +1279,7 @@ class CAnalyzer:
                 "module": "module",
                 "function": "callable",
                 "struct": "type",
+                "union": "type",
                 "enum": "type",
                 "typedef": "type",
                 "include_local": "import",

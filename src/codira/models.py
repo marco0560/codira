@@ -34,6 +34,7 @@ ImportKind = Literal["import", "include_local", "include_system"]
 DeclarationKind = Literal[
     "type_alias",
     "struct",
+    "union",
     "enum",
     "typedef",
     "json_schema_definition",
