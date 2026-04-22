@@ -1587,7 +1587,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "sentence-transformers>=5.4,<6.0",
         "codira-analyzer-python==1.5.2",
         "codira-analyzer-json==1.5.0",
-        "codira-analyzer-c==1.5.2",
+        "codira-analyzer-c==1.5.3",
         "codira-analyzer-bash==1.5.0",
         "codira-backend-sqlite==1.5.2",
     ]
@@ -2133,12 +2133,17 @@ def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:
     Returns
     -------
     None
-        The test asserts deterministic struct, union, enum, and typedef
+        The test asserts deterministic macro, struct, union, enum, and typedef
         extraction.
     """
     source = tmp_path / "native" / "types.h"
     source.parent.mkdir()
     source.write_text(
+        "/* Stable exported macros. */\n"
+        "#define PORT 8080\n"
+        '#define NAME "codira"\n'
+        "#define CALL(x) ((x) + 1)\n"
+        "\n"
         "/* Node representation for graph edges. */\n"
         "typedef struct Node { int value; } Node;\n"
         "\n"
@@ -2160,31 +2165,37 @@ def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:
         (declaration.kind, declaration.name, declaration.lineno)
         for declaration in result.declarations
     ] == [
-        ("struct", "Node", 2),
-        ("typedef", "Node", 2),
-        ("enum", "Color", 5),
-        ("union", "Value", 7),
-        ("struct", "Pair", 9),
-        ("typedef", "size_t", 12),
+        ("macro", "PORT", 2),
+        ("macro", "NAME", 3),
+        ("struct", "Node", 7),
+        ("typedef", "Node", 7),
+        ("enum", "Color", 10),
+        ("union", "Value", 12),
+        ("struct", "Pair", 14),
+        ("typedef", "size_t", 17),
     ]
-    assert result.declarations[0].signature == "struct Node { int value; }"
+    assert result.declarations[0].signature == "#define PORT 8080"
+    assert result.declarations[1].signature == '#define NAME "codira"'
+    assert result.declarations[2].signature == "struct Node { int value; }"
     assert (
-        result.declarations[1].signature == "typedef struct Node { int value; } Node;"
+        result.declarations[3].signature == "typedef struct Node { int value; } Node;"
     )
-    assert result.declarations[0].docstring == "Node representation for graph edges."
-    assert result.declarations[1].docstring == "Node representation for graph edges."
-    assert result.declarations[2].docstring == "Available palette values."
-    assert result.declarations[3].docstring is None
-    assert result.declarations[4].docstring is None
-    assert result.declarations[5].docstring == "Stable integer alias."
-    assert result.declarations[2].enum_members == (
+    assert result.declarations[0].docstring == "Stable exported macros."
+    assert result.declarations[1].docstring is None
+    assert result.declarations[2].docstring == "Node representation for graph edges."
+    assert result.declarations[3].docstring == "Node representation for graph edges."
+    assert result.declarations[4].docstring == "Available palette values."
+    assert result.declarations[5].docstring is None
+    assert result.declarations[6].docstring is None
+    assert result.declarations[7].docstring == "Stable integer alias."
+    assert result.declarations[4].enum_members == (
         EnumMemberArtifact(
             stable_id="c:enum_member:native/types.h:Color:1",
             parent_stable_id="c:enum:native/types.h:Color",
             ordinal=1,
             name="RED",
             signature="RED",
-            lineno=5,
+            lineno=10,
         ),
         EnumMemberArtifact(
             stable_id="c:enum_member:native/types.h:Color:2",
@@ -2192,11 +2203,11 @@ def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:
             ordinal=2,
             name="BLUE",
             signature="BLUE",
-            lineno=5,
+            lineno=10,
         ),
     )
-    assert result.declarations[3].signature == "union Value { int i; float f; }"
-    assert result.declarations[3].stable_id == "c:union:native/types.h:Value"
+    assert result.declarations[5].signature == "union Value { int i; float f; }"
+    assert result.declarations[5].stable_id == "c:union:native/types.h:Value"
 
 
 def test_c_analyzer_preserves_suffix_in_declaration_stable_ids(
@@ -3124,6 +3135,9 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
     source = tmp_path / "native" / "types.h"
     source.parent.mkdir()
     source.write_text(
+        "#define PORT 8080\n"
+        '#define NAME "codira"\n'
+        "#define CALL(x) ((x) + 1)\n"
         "typedef struct Node { int value; } Node;\n"
         "enum Color { RED, BLUE };\n"
         "union Value { int i; float f; };\n"
@@ -3150,17 +3164,24 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
     )
 
     assert backend.find_symbol(tmp_path, "Node") == [
-        ("struct", "native.types", "Node", str(source), 1),
-        ("typedef", "native.types", "Node", str(source), 1),
+        ("struct", "native.types", "Node", str(source), 4),
+        ("typedef", "native.types", "Node", str(source), 4),
     ]
+    assert backend.find_symbol(tmp_path, "PORT") == [
+        ("macro", "native.types", "PORT", str(source), 1),
+    ]
+    assert backend.find_symbol(tmp_path, "NAME") == [
+        ("macro", "native.types", "NAME", str(source), 2),
+    ]
+    assert backend.find_symbol(tmp_path, "CALL") == []
     assert backend.find_symbol(tmp_path, "Color") == [
-        ("enum", "native.types", "Color", str(source), 2),
+        ("enum", "native.types", "Color", str(source), 5),
     ]
     assert backend.find_symbol(tmp_path, "Value") == [
-        ("union", "native.types", "Value", str(source), 3),
+        ("union", "native.types", "Value", str(source), 6),
     ]
     assert backend.find_symbol(tmp_path, "size_t") == [
-        ("typedef", "native.types", "size_t", str(source), 5),
+        ("typedef", "native.types", "size_t", str(source), 8),
     ]
 
     enum_symbol = backend.find_symbol(tmp_path, "Color")[0]
@@ -3171,7 +3192,7 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
             1,
             "RED",
             "RED",
-            2,
+            5,
         ),
         (
             "c:enum_member:native/types.h:Color:2",
@@ -3179,7 +3200,7 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
             2,
             "BLUE",
             "BLUE",
-            2,
+            5,
         ),
     ]
 

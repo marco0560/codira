@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-analyzer-c"
-version = "1.5.2"
+version = "1.5.3"
 description = "First-party C-family analyzer plugin for codira"
 readme = "README.md"
 requires-python = ">=3.13"

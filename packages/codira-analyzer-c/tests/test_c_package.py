@@ -24,7 +24,7 @@ def test_c_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.5.2"
+    assert project["project"]["version"] == "1.5.3"
     assert "codira>=1.5.0,<2.0.0" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "c": "codira_analyzer_c:build_analyzer"

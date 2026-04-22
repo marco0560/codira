@@ -191,7 +191,7 @@ def _declaration_stable_id(
     ----------
     owner_id : str
         File-scoped owner identity preserving the source suffix.
-    kind : {"struct", "union", "enum", "typedef"}
+    kind : {"macro", "struct", "union", "enum", "typedef"}
         Stable declaration classifier.
     declaration_name : str
         Exposed declaration name.
@@ -908,6 +908,15 @@ def _declaration_name(node: Node, source: bytes) -> str | None:
             return _node_text(alias_node, source)
         return None
 
+    if node.type == "preproc_def":
+        identifier = next(
+            (child for child in node.named_children if child.type == "identifier"),
+            None,
+        )
+        if identifier is None:
+            return None
+        return _node_text(identifier, source)
+
     for named_child in node.named_children:
         if named_child.type in {"type_identifier", "identifier"}:
             return _node_text(named_child, source)
@@ -1089,6 +1098,18 @@ def _extract_declarations(
     attached_comments = _attached_comment_map(root, source)
 
     for child in root.children:
+        if child.type == "preproc_def":
+            declaration = _declaration_artifact(
+                child,
+                source,
+                docstring=_resolve_declaration_docstring(attached_comments, child),
+                kind="macro",
+                owner_id=owner_id,
+            )
+            if declaration is not None:
+                declarations_by_stable_id[declaration.stable_id] = declaration
+            continue
+
         if child.type == "struct_specifier":
             declaration = _declaration_artifact(
                 child,
@@ -1252,7 +1273,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "4"
+    version = "5"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
@@ -1273,11 +1294,12 @@ class CAnalyzer:
             analyzer_version=self.version,
             source="first_party",
             entrypoint="codira_analyzer_c:build_analyzer",
-            supports=("module", "type", "callable", "import"),
-            does_not_support=("constant", "variable", "namespace"),
+            supports=("module", "type", "callable", "import", "constant"),
+            does_not_support=("variable", "namespace"),
             mappings={
                 "module": "module",
                 "function": "callable",
+                "macro": "constant",
                 "struct": "type",
                 "union": "type",
                 "enum": "type",
