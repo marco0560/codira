@@ -1,3 +1,10 @@
+# [1.16.0](https://github.com/marco0560/codira/compare/v1.15.0...v1.16.0) (2026-04-22)
+
+
+### Features
+
+* **cli:** decouple target and output directories ([8c0ee11](https://github.com/marco0560/codira/commit/8c0ee1117a9a6c1c44a2de430d49450a51643f33)), closes [#19](https://github.com/marco0560/codira/issues/19) [#19](https://github.com/marco0560/codira/issues/19)
+
 # [1.15.0](https://github.com/marco0560/codira/compare/v1.14.0...v1.15.0) (2026-04-22)
 
 
