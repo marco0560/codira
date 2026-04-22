@@ -6,7 +6,7 @@ This note resolves issue `#25` by defining whether bounded C `const`
 declarations should enter the first-level declaration surface after the
 completion of issue `#21`.
 
-It does not change runtime behavior.
+This note now records the implemented outcome.
 
 ## Verified Findings
 
@@ -134,10 +134,9 @@ The following still remain out of scope:
 * generic variable support without `const`
 * changing the canonical ontology away from `constant`
 
-## Implementation Perimeter for a Future Slice
+## Implemented Perimeter
 
-If implementation is approved later, the design-to-code plan should start with
-these required rules:
+The implemented slice follows these rules:
 
 1. classify accepted rows under the existing explicit analyzer-owned constant
    and macro declaration kinds rather than overloading the generic variable
@@ -152,7 +151,7 @@ these required rules:
 
 ## Outcome
 
-Issue `#25` resolves to a broader C constant model:
+Issue `#25` is implemented as a broader C constant model:
 
 * function-like macros are accepted as constant-like symbols
 * `const`-qualified declaration rows are accepted as constant symbols
