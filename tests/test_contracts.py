@@ -1011,6 +1011,59 @@ def test_analysis_result_from_parsed_ignores_python_overload_stubs(
     ) == ("python:method:pkg.sample:Demo.load",)
 
 
+def test_analysis_result_from_parsed_extracts_python_type_alias_declarations(
+    tmp_path: Path,
+) -> None:
+    """
+    Normalize explicit top-level Python type aliases as declarations.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts only explicit top-level type aliases become
+        declaration artifacts.
+    """
+    module = tmp_path / "pkg" / "sample.py"
+    module.parent.mkdir()
+    module.write_text(
+        "import typing\n"
+        "from typing import TypeAlias\n"
+        "\n"
+        "type UserId = int\n"
+        "Slug: TypeAlias = str\n"
+        "Metadata: typing.TypeAlias = dict[str, int]\n"
+        "VALUE = 1\n"
+        "\n"
+        "class Demo:\n"
+        "    Alias: TypeAlias = str\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_file(module, tmp_path)
+    result = analysis_result_from_parsed(module, parsed)
+
+    assert [(decl.kind, decl.name, decl.lineno) for decl in result.declarations] == [
+        ("type_alias", "UserId", 4),
+        ("type_alias", "Slug", 5),
+        ("type_alias", "Metadata", 6),
+    ]
+    assert [(decl.name, decl.signature) for decl in result.declarations] == [
+        ("UserId", "type UserId = int"),
+        ("Slug", "Slug: TypeAlias = str"),
+        ("Metadata", "Metadata: typing.TypeAlias = dict[str, int]"),
+    ]
+    assert tuple(decl.stable_id for decl in result.declarations) == (
+        "python:type_alias:pkg.sample:UserId",
+        "python:type_alias:pkg.sample:Slug",
+        "python:type_alias:pkg.sample:Metadata",
+    )
+
+
 def test_sqlite_backend_persists_python_overload_metadata(
     tmp_path: Path,
 ) -> None:
@@ -1339,11 +1392,11 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
     ]
     assert optional_dependencies["bundle-official"] == [
         "sentence-transformers>=5.4,<6.0",
-        "codira-analyzer-python==1.5.0",
+        "codira-analyzer-python==1.5.1",
         "codira-analyzer-json==1.5.0",
         "codira-analyzer-c==1.5.0",
         "codira-analyzer-bash==1.5.0",
-        "codira-backend-sqlite==1.5.0",
+        "codira-backend-sqlite==1.5.1",
     ]
 
 
@@ -2849,6 +2902,58 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
     ]
 
 
+def test_python_type_aliases_persist_as_exact_symbols(tmp_path: Path) -> None:
+    """
+    Persist explicit Python type aliases into the exact-symbol index.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts explicit Python type aliases become queryable
+        declaration symbols.
+    """
+    source = tmp_path / "pkg" / "sample.py"
+    source.parent.mkdir()
+    source.write_text(
+        "from typing import TypeAlias\n"
+        "\n"
+        "type UserId = int\n"
+        "Slug: TypeAlias = str\n",
+        encoding="utf-8",
+    )
+
+    backend = SQLiteIndexBackend()
+    backend.initialize(tmp_path)
+    analysis = PythonAnalyzer().analyze_file(source, tmp_path)
+    snapshot = FileMetadataSnapshot(
+        path=source,
+        sha256="abc123",
+        mtime=1.0,
+        size=source.stat().st_size,
+        analyzer_name="python",
+        analyzer_version=PythonAnalyzer().version,
+    )
+    backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+        )
+    )
+
+    assert backend.find_symbol(tmp_path, "UserId") == [
+        ("type_alias", "pkg.sample", "UserId", str(source), 3),
+    ]
+    assert backend.find_symbol(tmp_path, "Slug") == [
+        ("type_alias", "pkg.sample", "Slug", str(source), 4),
+    ]
+
+
 def test_c_declaration_comments_contribute_to_embedding_candidates(
     tmp_path: Path,
 ) -> None:
@@ -3216,7 +3321,7 @@ def test_sqlite_backend_persists_file_analyzer_ownership(tmp_path: Path) -> None
         mtime=1.0,
         size=module.stat().st_size,
         analyzer_name="python",
-        analyzer_version="1",
+        analyzer_version=PythonAnalyzer().version,
     )
     analysis = PythonAnalyzer().analyze_file(module, tmp_path)
 
@@ -3241,7 +3346,7 @@ def test_sqlite_backend_persists_file_analyzer_ownership(tmp_path: Path) -> None
     finally:
         conn.close()
 
-    assert row == ("python", "1")
+    assert row == ("python", PythonAnalyzer().version)
 
 
 def test_sqlite_backend_persists_runtime_inventory(tmp_path: Path) -> None:

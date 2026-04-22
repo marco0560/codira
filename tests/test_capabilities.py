@@ -66,6 +66,7 @@ def test_python_analyzer_declares_explicit_ontology_mapping() -> None:
     assert declaration.mappings == {
         "module": "module",
         "class": "type",
+        "type_alias": "type",
         "function": "callable",
         "method": "callable",
         "import": "import",

@@ -30,6 +30,8 @@ from codira.models import (
     CallKind,
     CallSite,
     ClassArtifact,
+    DeclarationArtifact,
+    DeclarationKind,
     FunctionArtifact,
     ImportArtifact,
     ImportKind,
@@ -141,6 +143,31 @@ def _python_overload_stable_id(
         function_name if class_name is None else f"{class_name}.{function_name}"
     )
     return f"python:overload:{module_name}:{qualified_name}:{ordinal}"
+
+
+def _python_declaration_stable_id(
+    module_name: str,
+    declaration_name: str,
+    kind: str,
+) -> str:
+    """
+    Build the stable identity for one Python declaration artifact.
+
+    Parameters
+    ----------
+    module_name : str
+        Dotted Python module name.
+    declaration_name : str
+        Exposed declaration name.
+    kind : str
+        Stable declaration classifier.
+
+    Returns
+    -------
+    str
+        Durable Python declaration identity.
+    """
+    return f"python:{kind}:{module_name}:{declaration_name}"
 
 
 def _int_value(value: object, *, default: int = 0) -> int:
@@ -388,6 +415,38 @@ def _function_from_mapping(
     )
 
 
+def _declaration_from_mapping(
+    raw: Mapping[str, object],
+    *,
+    module_name: str,
+) -> DeclarationArtifact:
+    """
+    Convert one parsed declaration mapping into a normalized model.
+
+    Parameters
+    ----------
+    raw : collections.abc.Mapping[str, object]
+        Parsed declaration entry.
+    module_name : str
+        Dotted Python module name.
+
+    Returns
+    -------
+    codira.models.DeclarationArtifact
+        Normalized declaration artifact.
+    """
+    declaration_name = str(raw["name"])
+    kind = cast("DeclarationKind", str(raw["kind"]))
+    return DeclarationArtifact(
+        name=declaration_name,
+        stable_id=_python_declaration_stable_id(module_name, declaration_name, kind),
+        kind=kind,
+        lineno=_int_value(raw["lineno"]),
+        signature=str(raw["signature"]),
+        docstring=cast("str | None", raw.get("docstring")),
+    )
+
+
 def analysis_result_from_parsed(
     source_path: Path,
     parsed: Mapping[str, object],
@@ -410,6 +469,9 @@ def analysis_result_from_parsed(
     module = cast("Mapping[str, object]", parsed["module"])
     classes = cast("Sequence[Mapping[str, object]]", parsed.get("classes", ()))
     functions = cast("Sequence[Mapping[str, object]]", parsed.get("functions", ()))
+    declarations = cast(
+        "Sequence[Mapping[str, object]]", parsed.get("declarations", ())
+    )
     imports = cast("Sequence[Mapping[str, object]]", parsed.get("imports", ()))
 
     module_name = str(module["name"])
@@ -450,7 +512,10 @@ def analysis_result_from_parsed(
         functions=tuple(
             _function_from_mapping(row, module_name=module_name) for row in functions
         ),
-        declarations=(),
+        declarations=tuple(
+            _declaration_from_mapping(row, module_name=module_name)
+            for row in declarations
+        ),
         imports=tuple(
             ImportArtifact(
                 name=str(import_row["name"]),

@@ -50,7 +50,7 @@ class PythonAnalyzer:
     """
 
     name = "python"
-    version = "1"
+    version = "2"
     discovery_globs: tuple[str, ...] = ("*.py",)
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
@@ -76,6 +76,7 @@ class PythonAnalyzer:
             mappings={
                 "module": "module",
                 "class": "type",
+                "type_alias": "type",
                 "function": "callable",
                 "method": "callable",
                 "import": "import",

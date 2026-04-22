@@ -83,7 +83,7 @@ def _write_module(path: Path, source: str) -> None:
     path.write_text(source, encoding="utf-8")
 
 
-class _PythonAnalyzerV2:
+class _PythonAnalyzerV3:
     """
     Python analyzer stub with a bumped version for staleness tests.
 
@@ -93,7 +93,7 @@ class _PythonAnalyzerV2:
     """
 
     name = "python"
-    version = "2"
+    version = "3"
     discovery_globs: tuple[str, ...] = ("*.py",)
 
     def supports_path(self, path: Path) -> bool:
@@ -767,7 +767,7 @@ def test_index_repo_reindexes_unchanged_files_when_analyzer_changes(
 
     monkeypatch.setattr(
         "codira.indexer.active_language_analyzers",
-        lambda: [_PythonAnalyzerV2()],
+        lambda: [_PythonAnalyzerV3()],
     )
     report = index_repo(tmp_path)
 
@@ -787,7 +787,7 @@ def test_index_repo_reindexes_unchanged_files_when_analyzer_changes(
         and decision.reason == "analyzer plugin or version changed"
         for decision in report.decisions
     )
-    assert owners == [("python", "2")]
+    assert owners == [("python", "3")]
 
 
 def test_index_cli_reports_summary_and_decisions(
@@ -1612,11 +1612,11 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(
         "codira.cli.active_language_analyzers",
-        lambda: [_PythonAnalyzerV2()],
+        lambda: [_PythonAnalyzerV3()],
     )
     monkeypatch.setattr(
         "codira.indexer.active_language_analyzers",
-        lambda: [_PythonAnalyzerV2()],
+        lambda: [_PythonAnalyzerV3()],
     )
 
     _ensure_index(tmp_path)
@@ -1624,7 +1624,7 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
     backend = SQLiteIndexBackend()
 
     assert "Index stale (analyzer plugin inventory changed)" in captured.err
-    assert backend.load_analyzer_inventory(tmp_path) == [("python", "2", '["*.py"]')]
+    assert backend.load_analyzer_inventory(tmp_path) == [("python", "3", '["*.py"]')]
 
 
 def test_ensure_index_rebuilds_when_backend_inventory_changes(

@@ -66,6 +66,172 @@ def _signature_text(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     return f"{node.name}({', '.join(arg_names)})"
 
 
+def _collapsed_source_text(source: str, node: ast.AST) -> str:
+    """
+    Return one node's source text collapsed to stable single-space formatting.
+
+    Parameters
+    ----------
+    source : str
+        Full source text containing the node.
+    node : ast.AST
+        Syntax node whose source text should be rendered.
+
+    Returns
+    -------
+    str
+        Source segment for the node with whitespace collapsed
+        deterministically.
+    """
+    segment = ast.get_source_segment(source, node)
+    if segment is None:
+        segment = ast.unparse(node)
+    return " ".join(segment.split())
+
+
+def _is_type_alias_annotation(annotation: ast.expr) -> bool:
+    """
+    Return whether one annotation denotes ``TypeAlias`` explicitly.
+
+    Parameters
+    ----------
+    annotation : ast.expr
+        Annotation expression to classify.
+
+    Returns
+    -------
+    bool
+        ``True`` when the annotation is ``TypeAlias`` or
+        ``typing.TypeAlias``.
+    """
+    return ast.unparse(annotation) in {"TypeAlias", "typing.TypeAlias"}
+
+
+def _type_alias_entry(
+    node: ast.TypeAlias | ast.AnnAssign,
+    source: str,
+) -> dict[str, str | int | None] | None:
+    """
+    Convert one explicit top-level Python type alias into parsed metadata.
+
+    Parameters
+    ----------
+    node : ast.TypeAlias | ast.AnnAssign
+        Syntax node representing one explicit type alias.
+    source : str
+        Full source text containing the alias node.
+
+    Returns
+    -------
+    dict[str, str | int | None] | None
+        Parsed declaration metadata, or ``None`` when the node does not expose
+        a deterministic alias name.
+    """
+    if isinstance(node, ast.TypeAlias):
+        if not isinstance(node.name, ast.Name):
+            return None
+        return {
+            "name": node.name.id,
+            "kind": "type_alias",
+            "lineno": node.lineno,
+            "signature": _collapsed_source_text(source, node),
+            "docstring": None,
+        }
+
+    if (
+        isinstance(node.target, ast.Name)
+        and node.value is not None
+        and _is_type_alias_annotation(node.annotation)
+    ):
+        return {
+            "name": node.target.id,
+            "kind": "type_alias",
+            "lineno": node.lineno,
+            "signature": _collapsed_source_text(source, node),
+            "docstring": None,
+        }
+
+    return None
+
+
+def _append_import_entries(
+    result: dict[str, Any],
+    node: ast.AST,
+) -> bool:
+    """
+    Append parsed import metadata for one top-level node when applicable.
+
+    Parameters
+    ----------
+    result : dict[str, typing.Any]
+        Mutable parser result under construction.
+    node : ast.AST
+        Top-level syntax node to inspect.
+
+    Returns
+    -------
+    bool
+        ``True`` when the node was recognized as an import statement.
+    """
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            result["imports"].append(
+                {
+                    "name": alias.name,
+                    "alias": alias.asname,
+                    "lineno": node.lineno,
+                }
+            )
+        return True
+
+    if isinstance(node, ast.ImportFrom):
+        module = node.module or ""
+        for alias in node.names:
+            dotted = f"{module}.{alias.name}" if module else alias.name
+            result["imports"].append(
+                {
+                    "name": dotted,
+                    "alias": alias.asname,
+                    "lineno": node.lineno,
+                }
+            )
+        return True
+
+    return False
+
+
+def _append_type_alias_declaration(
+    result: dict[str, Any],
+    node: ast.AST,
+    source: str,
+) -> bool:
+    """
+    Append parsed explicit type-alias metadata for one top-level node.
+
+    Parameters
+    ----------
+    result : dict[str, typing.Any]
+        Mutable parser result under construction.
+    node : ast.AST
+        Top-level syntax node to inspect.
+    source : str
+        Full source text containing the node.
+
+    Returns
+    -------
+    bool
+        ``True`` when the node was recognized as an explicit type alias.
+    """
+    if not isinstance(node, (ast.TypeAlias, ast.AnnAssign)):
+        return False
+
+    declaration = _type_alias_entry(node, source)
+    if declaration is None:
+        return False
+    result["declarations"].append(declaration)
+    return True
+
+
 def _parameter_names(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> list[str]:
@@ -724,6 +890,7 @@ def parse_file(path: Path, root: Path) -> dict[str, Any]:
         },
         "classes": [],
         "functions": [],
+        "declarations": [],
         "imports": [],
     }
     pending_functions: dict[str, list[dict[str, str | int | None]]] = {}
@@ -803,28 +970,11 @@ def parse_file(path: Path, root: Path) -> dict[str, Any]:
                     }
                 )
 
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                result["imports"].append(
-                    {
-                        "name": alias.name,
-                        "alias": alias.asname,
-                        "lineno": node.lineno,
-                    }
-                )
-
-        elif isinstance(node, ast.ImportFrom):
-            module = node.module or ""
-            for alias in node.names:
-                dotted = f"{module}.{alias.name}" if module else alias.name
-                result["imports"].append(
-                    {
-                        "name": dotted,
-                        "alias": alias.asname,
-                        "lineno": node.lineno,
-                    }
-                )
-
-    return result
+        elif _append_import_entries(result, node) or _append_type_alias_declaration(
+            result,
+            node,
+            source,
+        ):
+            continue
 
     return result
