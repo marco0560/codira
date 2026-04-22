@@ -30,7 +30,7 @@ Audit script for codira project.
 Modes:
 (default)        Light scan:
 - Semgrep with public rules (deterministic, fast)
-- pip-audit on Poetry dependencies
+- pip-audit on the installed project environment
 
 --deep           Deep scan:
 - Semgrep full scan (auto / cloud rules)
@@ -42,7 +42,7 @@ Options:
 
 Requirements:
 
-* poetry installed and project environment set up
+* project virtual environment set up
 * uv (uvx) available in PATH
 
 Notes:
@@ -95,7 +95,7 @@ echo
 echo -e "${BLUE}[*] Dependency audit (pip-audit)${RESET}"
 
 REQS=$(mktemp)
-poetry export -f requirements.txt --without-hashes > "$REQS"
+.venv/bin/python -m pip freeze > "$REQS"
 
 if ! uvx pip-audit -r "$REQS"; then
     echo -e "${RED}[!] Vulnerable dependencies found${RESET}"

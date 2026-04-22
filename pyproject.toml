@@ -48,11 +48,6 @@ docs = [
 requires = ["setuptools>=61", "setuptools_scm[toml]>=8"]
 build-backend = "setuptools.build_meta"
 
-[tool.poetry]
-name = "codira"
-version = "1.1.0"  # placeholder for Poetry only; actual versioning via setuptools_scm
-package-mode = false
-
 [tool.setuptools]
 package-dir = {"" = "src"}
 

@@ -1573,7 +1573,8 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         including documentation navigation plugins.
     """
     with Path("pyproject.toml").open("rb") as pyproject_file:
-        project = tomllib.load(pyproject_file)["project"]
+        pyproject = tomllib.load(pyproject_file)
+    project = pyproject["project"]
 
     optional_dependencies = project["optional-dependencies"]
 
@@ -1591,6 +1592,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-bash==1.5.0",
         "codira-backend-sqlite==1.5.2",
     ]
+    assert pyproject.get("tool", {}).get("poetry") is None
 
 
 def test_active_phase_8_registries_expose_default_backend_and_analyzers() -> None:
