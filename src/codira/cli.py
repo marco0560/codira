@@ -18,6 +18,7 @@ This module belongs to the **CLI layer** that wraps storage, indexing, and query
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import shutil
 import sqlite3
@@ -296,6 +297,95 @@ class RelationSubcommandRequest:
     prefix: str | None = None
     raw_prefix: str | None = None
     command: str = ""
+
+
+def _collapsed_ast_source(source: str, node: ast.AST) -> str:
+    """
+    Return one AST node's source text collapsed to stable single spacing.
+
+    Parameters
+    ----------
+    source : str
+        Full source text containing the node.
+    node : ast.AST
+        Syntax node whose source should be rendered.
+
+    Returns
+    -------
+    str
+        Source segment with whitespace collapsed deterministically.
+    """
+    segment = ast.get_source_segment(source, node)
+    if segment is None:
+        segment = ast.unparse(node)
+    return " ".join(segment.split())
+
+
+def _python_constant_json_detail(
+    *,
+    file_path: str,
+    symbol_name: str,
+    lineno: int,
+) -> dict[str, object] | None:
+    """
+    Return detail metadata for one indexed Python constant symbol.
+
+    Parameters
+    ----------
+    file_path : str
+        Absolute source path recorded for the symbol row.
+    symbol_name : str
+        Exact constant symbol name.
+    lineno : int
+        Indexed declaration line number.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Constant detail payload when the current source still contains a
+        matching module-level constant declaration at the indexed location.
+    """
+    path = Path(file_path)
+    if path.suffix != ".py":
+        return None
+
+    try:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=file_path)
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return None
+
+    for node in tree.body:
+        target: ast.expr | None = None
+        value: ast.expr | None = None
+
+        if isinstance(node, ast.Assign):
+            if len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            target = node.target
+            value = node.value
+        else:
+            continue
+
+        if not isinstance(target, ast.Name):
+            continue
+        if target.id != symbol_name or node.lineno != lineno or value is None:
+            continue
+
+        annotation: str | None = None
+        if isinstance(node, ast.AnnAssign):
+            annotation = _collapsed_ast_source(source, node.annotation)
+
+        return {
+            "kind": "constant_detail",
+            "annotation": annotation,
+            "value": _collapsed_ast_source(source, value),
+        }
+
+    return None
 
 
 def _current_analyzer_inventory() -> list[tuple[str, str, str]]:
@@ -1525,6 +1615,14 @@ def _run_symbol(
                         member_lineno,
                     ) in enum_members
                 ]
+            if symbol_type == "constant":
+                constant_detail = _python_constant_json_detail(
+                    file_path=file_path,
+                    symbol_name=symbol_name,
+                    lineno=lineno,
+                )
+                if constant_detail is not None:
+                    row["constant_detail"] = constant_detail
             return row
 
         _emit_json(

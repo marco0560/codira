@@ -1344,6 +1344,69 @@ def test_run_symbol_json_includes_enum_member_metadata(
     ]
 
 
+def test_run_symbol_json_includes_python_constant_detail(
+    tmp_path: Path,
+    capsys: CaptureFixture[str],
+) -> None:
+    """
+    Render Python constant detail only in JSON symbol output.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    capsys : pytest.CaptureFixture[str]
+        Captured output fixture.
+
+    Returns
+    -------
+    None
+        The test asserts the JSON payload carries constant detail.
+    """
+    module = tmp_path / "pkg" / "sample.py"
+    module.parent.mkdir()
+    module.write_text(
+        'NAME: str = "codira"\n',
+        encoding="utf-8",
+    )
+
+    backend = SQLiteIndexBackend()
+    backend.initialize(tmp_path)
+    analysis = PythonAnalyzer().analyze_file(module, tmp_path)
+    snapshot = FileMetadataSnapshot(
+        path=module,
+        sha256="json-constant",
+        mtime=1.0,
+        size=module.stat().st_size,
+        analyzer_name="python",
+        analyzer_version=PythonAnalyzer().version,
+    )
+    backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+        )
+    )
+
+    assert _run_symbol(tmp_path, "NAME", as_json=True) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"] == [
+        {
+            "type": "constant",
+            "module": "pkg.sample",
+            "name": "NAME",
+            "file": str(module),
+            "lineno": 1,
+            "constant_detail": {
+                "kind": "constant_detail",
+                "annotation": "str",
+                "value": '"codira"',
+            },
+        }
+    ]
+
+
 def test_analysis_result_from_parsed_disambiguates_property_accessors(
     tmp_path: Path,
 ) -> None:
