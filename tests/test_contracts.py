@@ -1060,13 +1060,15 @@ def test_analysis_result_from_parsed_extracts_python_type_alias_declarations(
     module.parent.mkdir()
     module.write_text(
         "import typing\n"
-        "from typing import TypeAlias\n"
+        "from typing import Final, TypeAlias\n"
         "\n"
         "type UserId = int\n"
         "Slug: TypeAlias = str\n"
         "Metadata: typing.TypeAlias = dict[str, int]\n"
         "VALUE = 1\n"
         "TIMEOUT = (1, 2, 3)\n"
+        "PORT: int = 8080\n"
+        'NAME: Final[str] = "codira"\n'
         "ALIAS = VALUE + 1\n"
         "_PRIVATE = 2\n"
         "\n"
@@ -1084,6 +1086,8 @@ def test_analysis_result_from_parsed_extracts_python_type_alias_declarations(
         ("type_alias", "Metadata", 6),
         ("constant", "VALUE", 7),
         ("constant", "TIMEOUT", 8),
+        ("constant", "PORT", 9),
+        ("constant", "NAME", 10),
     ]
     assert [(decl.name, decl.signature) for decl in result.declarations] == [
         ("UserId", "type UserId = int"),
@@ -1091,6 +1095,8 @@ def test_analysis_result_from_parsed_extracts_python_type_alias_declarations(
         ("Metadata", "Metadata: typing.TypeAlias = dict[str, int]"),
         ("VALUE", "VALUE = 1"),
         ("TIMEOUT", "TIMEOUT = (1, 2, 3)"),
+        ("PORT", "PORT: int = 8080"),
+        ("NAME", 'NAME: Final[str] = "codira"'),
     ]
     assert tuple(decl.stable_id for decl in result.declarations) == (
         "python:type_alias:pkg.sample:UserId",
@@ -1098,6 +1104,8 @@ def test_analysis_result_from_parsed_extracts_python_type_alias_declarations(
         "python:type_alias:pkg.sample:Metadata",
         "python:constant:pkg.sample:VALUE",
         "python:constant:pkg.sample:TIMEOUT",
+        "python:constant:pkg.sample:PORT",
+        "python:constant:pkg.sample:NAME",
     )
 
 
@@ -3183,7 +3191,12 @@ def test_python_constants_persist_as_exact_symbols(tmp_path: Path) -> None:
     source = tmp_path / "pkg" / "sample.py"
     source.parent.mkdir()
     source.write_text(
-        "VALUE = 1\n" "TIMEOUT = (1, 2, 3)\n" "ALIAS = VALUE + 1\n" "_PRIVATE = 2\n",
+        "VALUE = 1\n"
+        "TIMEOUT = (1, 2, 3)\n"
+        "PORT: int = 8080\n"
+        'NAME: str = "codira"\n'
+        "ALIAS = VALUE + 1\n"
+        "_PRIVATE = 2\n",
         encoding="utf-8",
     )
 
@@ -3211,6 +3224,12 @@ def test_python_constants_persist_as_exact_symbols(tmp_path: Path) -> None:
     ]
     assert backend.find_symbol(tmp_path, "TIMEOUT") == [
         ("constant", "pkg.sample", "TIMEOUT", str(source), 2),
+    ]
+    assert backend.find_symbol(tmp_path, "PORT") == [
+        ("constant", "pkg.sample", "PORT", str(source), 3),
+    ]
+    assert backend.find_symbol(tmp_path, "NAME") == [
+        ("constant", "pkg.sample", "NAME", str(source), 4),
     ]
     assert backend.find_symbol(tmp_path, "ALIAS") == []
     assert backend.find_symbol(tmp_path, "_PRIVATE") == []
