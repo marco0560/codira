@@ -50,7 +50,7 @@ class PythonAnalyzer:
     """
 
     name = "python"
-    version = "2"
+    version = "3"
     discovery_globs: tuple[str, ...] = ("*.py",)
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
@@ -71,12 +71,13 @@ class PythonAnalyzer:
             analyzer_version=self.version,
             source="first_party",
             entrypoint="codira_analyzer_python:build_analyzer",
-            supports=("module", "type", "callable", "import"),
-            does_not_support=("constant", "variable", "namespace"),
+            supports=("module", "type", "callable", "import", "constant"),
+            does_not_support=("variable", "namespace"),
             mappings={
                 "module": "module",
                 "class": "type",
                 "type_alias": "type",
+                "constant": "constant",
                 "function": "callable",
                 "method": "callable",
                 "import": "import",

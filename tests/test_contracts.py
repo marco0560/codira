@@ -1066,6 +1066,9 @@ def test_analysis_result_from_parsed_extracts_python_type_alias_declarations(
         "Slug: TypeAlias = str\n"
         "Metadata: typing.TypeAlias = dict[str, int]\n"
         "VALUE = 1\n"
+        "TIMEOUT = (1, 2, 3)\n"
+        "ALIAS = VALUE + 1\n"
+        "_PRIVATE = 2\n"
         "\n"
         "class Demo:\n"
         "    Alias: TypeAlias = str\n",
@@ -1079,16 +1082,22 @@ def test_analysis_result_from_parsed_extracts_python_type_alias_declarations(
         ("type_alias", "UserId", 4),
         ("type_alias", "Slug", 5),
         ("type_alias", "Metadata", 6),
+        ("constant", "VALUE", 7),
+        ("constant", "TIMEOUT", 8),
     ]
     assert [(decl.name, decl.signature) for decl in result.declarations] == [
         ("UserId", "type UserId = int"),
         ("Slug", "Slug: TypeAlias = str"),
         ("Metadata", "Metadata: typing.TypeAlias = dict[str, int]"),
+        ("VALUE", "VALUE = 1"),
+        ("TIMEOUT", "TIMEOUT = (1, 2, 3)"),
     ]
     assert tuple(decl.stable_id for decl in result.declarations) == (
         "python:type_alias:pkg.sample:UserId",
         "python:type_alias:pkg.sample:Slug",
         "python:type_alias:pkg.sample:Metadata",
+        "python:constant:pkg.sample:VALUE",
+        "python:constant:pkg.sample:TIMEOUT",
     )
 
 
@@ -1505,7 +1514,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
     ]
     assert optional_dependencies["bundle-official"] == [
         "sentence-transformers>=5.4,<6.0",
-        "codira-analyzer-python==1.5.1",
+        "codira-analyzer-python==1.5.2",
         "codira-analyzer-json==1.5.0",
         "codira-analyzer-c==1.5.2",
         "codira-analyzer-bash==1.5.0",
@@ -3154,6 +3163,57 @@ def test_python_type_aliases_persist_as_exact_symbols(tmp_path: Path) -> None:
     assert backend.find_symbol(tmp_path, "Slug") == [
         ("type_alias", "pkg.sample", "Slug", str(source), 4),
     ]
+
+
+def test_python_constants_persist_as_exact_symbols(tmp_path: Path) -> None:
+    """
+    Persist bounded Python constants into the exact-symbol index.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts module-level constant declarations become queryable
+        exact symbols while non-constant assignments remain excluded.
+    """
+    source = tmp_path / "pkg" / "sample.py"
+    source.parent.mkdir()
+    source.write_text(
+        "VALUE = 1\n" "TIMEOUT = (1, 2, 3)\n" "ALIAS = VALUE + 1\n" "_PRIVATE = 2\n",
+        encoding="utf-8",
+    )
+
+    backend = SQLiteIndexBackend()
+    backend.initialize(tmp_path)
+    analysis = PythonAnalyzer().analyze_file(source, tmp_path)
+    snapshot = FileMetadataSnapshot(
+        path=source,
+        sha256="constants123",
+        mtime=1.0,
+        size=source.stat().st_size,
+        analyzer_name="python",
+        analyzer_version=PythonAnalyzer().version,
+    )
+    backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+        )
+    )
+
+    assert backend.find_symbol(tmp_path, "VALUE") == [
+        ("constant", "pkg.sample", "VALUE", str(source), 1),
+    ]
+    assert backend.find_symbol(tmp_path, "TIMEOUT") == [
+        ("constant", "pkg.sample", "TIMEOUT", str(source), 2),
+    ]
+    assert backend.find_symbol(tmp_path, "ALIAS") == []
+    assert backend.find_symbol(tmp_path, "_PRIVATE") == []
 
 
 def test_c_declaration_comments_contribute_to_embedding_candidates(

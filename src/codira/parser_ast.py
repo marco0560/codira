@@ -154,6 +154,79 @@ def _type_alias_entry(
     return None
 
 
+def _looks_like_constant_name(name: str) -> bool:
+    """
+    Return whether one name matches the bounded constant naming rule.
+
+    Parameters
+    ----------
+    name : str
+        Candidate assignment target name.
+
+    Returns
+    -------
+    bool
+        ``True`` when the name is public, contains at least one alphabetic
+        character, and all alphabetic characters are uppercase.
+    """
+    return (
+        not name.startswith("_")
+        and any(char.isalpha() for char in name)
+        and name.isupper()
+    )
+
+
+def _constant_entry(
+    node: ast.Assign | ast.AnnAssign,
+    source: str,
+) -> dict[str, str | int | None] | None:
+    """
+    Convert one explicit top-level Python constant assignment into metadata.
+
+    Parameters
+    ----------
+    node : ast.Assign | ast.AnnAssign
+        Syntax node representing one constant-like assignment.
+    source : str
+        Full source text containing the assignment node.
+
+    Returns
+    -------
+    dict[str, str | int | None] | None
+        Parsed declaration metadata, or ``None`` when the assignment falls
+        outside the bounded constant rule.
+    """
+    target: ast.expr | None
+    value: ast.expr | None
+
+    if isinstance(node, ast.Assign):
+        if len(node.targets) != 1:
+            return None
+        target = node.targets[0]
+        value = node.value
+    else:
+        target = node.target
+        value = node.value
+
+    if not isinstance(target, ast.Name) or value is None:
+        return None
+    if not _looks_like_constant_name(target.id):
+        return None
+
+    try:
+        ast.literal_eval(value)
+    except (ValueError, SyntaxError):
+        return None
+
+    return {
+        "name": target.id,
+        "kind": "constant",
+        "lineno": node.lineno,
+        "signature": _collapsed_source_text(source, node),
+        "docstring": None,
+    }
+
+
 def _append_import_entries(
     result: dict[str, Any],
     node: ast.AST,
@@ -226,6 +299,39 @@ def _append_type_alias_declaration(
         return False
 
     declaration = _type_alias_entry(node, source)
+    if declaration is None:
+        return False
+    result["declarations"].append(declaration)
+    return True
+
+
+def _append_constant_declaration(
+    result: dict[str, Any],
+    node: ast.AST,
+    source: str,
+) -> bool:
+    """
+    Append parsed explicit constant metadata for one top-level node.
+
+    Parameters
+    ----------
+    result : dict[str, typing.Any]
+        Mutable parser result under construction.
+    node : ast.AST
+        Top-level syntax node to inspect.
+    source : str
+        Full source text containing the node.
+
+    Returns
+    -------
+    bool
+        ``True`` when the node was recognized as a bounded constant
+        declaration.
+    """
+    if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+        return False
+
+    declaration = _constant_entry(node, source)
     if declaration is None:
         return False
     result["declarations"].append(declaration)
@@ -970,10 +1076,18 @@ def parse_file(path: Path, root: Path) -> dict[str, Any]:
                     }
                 )
 
-        elif _append_import_entries(result, node) or _append_type_alias_declaration(
-            result,
-            node,
-            source,
+        elif (
+            _append_import_entries(result, node)
+            or _append_type_alias_declaration(
+                result,
+                node,
+                source,
+            )
+            or _append_constant_declaration(
+                result,
+                node,
+                source,
+            )
         ):
             continue
 

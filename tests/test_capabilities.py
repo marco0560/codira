@@ -62,12 +62,13 @@ def test_python_analyzer_declares_explicit_ontology_mapping() -> None:
     declaration = PythonAnalyzer().analyzer_capability_declaration()
 
     assert declaration.analyzer_name == "python"
-    assert declaration.supports == ("module", "type", "callable", "import")
-    assert declaration.does_not_support == ("constant", "variable", "namespace")
+    assert declaration.supports == ("module", "type", "callable", "import", "constant")
+    assert declaration.does_not_support == ("variable", "namespace")
     assert declaration.mappings == {
         "module": "module",
         "class": "type",
         "type_alias": "type",
+        "constant": "constant",
         "function": "callable",
         "method": "callable",
         "import": "import",
