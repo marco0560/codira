@@ -221,3 +221,43 @@ explicitly:
 * treating every assignment as a symbol
 * making imports or re-exports default first-level symbols
 * allowing overload metadata to outrank canonical implementations by default
+
+## Completion Status
+
+Issue `#21` is materially complete.
+
+Completed implementation slices:
+
+* overload child metadata attached to canonical Python callables
+* additive storage and schema support for overload metadata
+* `sym --json` overload detail without new plain-text noise
+* bounded `ctx` ranking support for overload-derived signature evidence
+* `audit` policy coverage that keeps canonical callables authoritative
+* Python `type_alias` first-level declaration support
+* C enum-member child metadata
+* C `union` first-level declaration support
+* bounded Python named constant support
+* Python constant JSON detail
+* C object-like macro declaration support through `preproc_def`
+
+## Final Accepted Boundary
+
+The durable boundary for issue `#21` after implementation is:
+
+* canonical first-level declaration expansion is limited to deterministic,
+  analyzer-owned categories with stable IDs and non-noisy default query
+  behavior
+* overload metadata remains subordinate child detail on the owning callable
+* enum members remain subordinate child detail on the owning enum
+* object-like C macros are accepted as bounded C constants
+
+The following categories remain deferred:
+
+* `static const` and non-`static` `const` C declarations
+* function-like C macros
+* arbitrary variables or assignment targets
+* imports and re-exports as first-level symbols
+* generic constants without a stable declaration rule
+
+Follow-up design work for deferred C constant categories should proceed under a
+separate issue, not by reopening issue `#21`.
