@@ -21,6 +21,7 @@ import contextlib
 import json
 import sqlite3
 import tempfile
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,12 @@ from codira.schema import DDL, SCHEMA_VERSION
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+
+_STORAGE_ROOT_OVERRIDES: ContextVar[dict[Path, Path] | None] = ContextVar(
+    "_STORAGE_ROOT_OVERRIDES",
+    default=None,
+)
 
 
 def _read_metadata_file(path: Path) -> dict[str, str]:
@@ -99,6 +106,56 @@ def get_index_lock_path(root: Path) -> Path:
         Path to the ``index.lock`` file under ``.codira``.
     """
     return get_codira_dir(root) / "index.lock"
+
+
+def get_storage_root(root: Path) -> Path:
+    """
+    Return the effective storage root for one repository target root.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository target root.
+
+    Returns
+    -------
+    pathlib.Path
+        Effective storage root after applying any active CLI override.
+    """
+
+    resolved_root = root.resolve()
+    overrides = _STORAGE_ROOT_OVERRIDES.get()
+    if overrides is None:
+        return resolved_root
+    return overrides.get(resolved_root, resolved_root)
+
+
+@contextlib.contextmanager
+def override_storage_root(root: Path, storage_root: Path) -> Iterator[None]:
+    """
+    Temporarily route ``.codira`` storage for one target root elsewhere.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository target root used for reads and prefix normalization.
+    storage_root : pathlib.Path
+        Output root under which ``.codira`` state should be read and written.
+
+    Yields
+    ------
+    None
+        Control while the storage override remains active.
+    """
+
+    current = _STORAGE_ROOT_OVERRIDES.get()
+    overrides = {} if current is None else dict(current)
+    overrides[root.resolve()] = storage_root.resolve()
+    token = _STORAGE_ROOT_OVERRIDES.set(overrides)
+    try:
+        yield
+    finally:
+        _STORAGE_ROOT_OVERRIDES.reset(token)
 
 
 @contextlib.contextmanager
@@ -676,9 +733,9 @@ def get_codira_dir(root: Path) -> Path:
     Returns
     -------
     pathlib.Path
-        Path to the ``.codira`` directory under ``root``.
+        Path to the ``.codira`` directory under the effective storage root.
     """
-    return root / ".codira"
+    return get_storage_root(root) / ".codira"
 
 
 def get_db_path(root: Path) -> Path:
@@ -731,7 +788,7 @@ def init_db(root: Path) -> None:
         ``root / ".codira"``.
     """
     repo_dir = get_codira_dir(root)
-    repo_dir.mkdir(exist_ok=True)
+    repo_dir.mkdir(parents=True, exist_ok=True)
 
     db_path = get_db_path(root)
 

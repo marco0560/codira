@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -26,6 +27,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+import pytest
 from codira_backend_sqlite import SQLiteIndexBackend
 
 import codira.registry as registry_module
@@ -59,8 +61,6 @@ from codira.storage import acquire_index_lock, get_db_path, init_db
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-    import pytest
 
 
 def _write_module(path: Path, source: str) -> None:
@@ -1575,6 +1575,273 @@ def test_index_cli_emits_json_for_required_coverage_failure(
     assert payload["failures"] == []
     assert payload["decisions"] == []
     assert not get_db_path(tmp_path).exists()
+
+
+def test_index_cli_supports_target_and_output_directory_overrides(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Build and query an index with separate target and output directories.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture CLI output.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch argv and cwd.
+
+    Returns
+    -------
+    None
+        The test asserts reads come from the target tree while ``.codira``
+        state is written under the separate output root.
+    """
+    target = tmp_path / "readonly-target"
+    output = tmp_path / "cli-output"
+    module = target / "src" / "sample.py"
+    _write_module(
+        module,
+        'def demo():\n    """Return a constant."""\n    return 1\n',
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codira",
+            "index",
+            "--path",
+            str(target),
+            "--output-dir",
+            str(output),
+            "--json",
+        ],
+    )
+
+    assert main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ok"
+    assert get_db_path(output).exists()
+    assert not get_db_path(target).exists()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codira",
+            "sym",
+            "demo",
+            "--path",
+            str(target),
+            "--output-dir",
+            str(output),
+            "--json",
+        ],
+    )
+
+    assert main() == 0
+    query_payload = json.loads(capsys.readouterr().out)
+    assert query_payload["results"] == [
+        {
+            "type": "function",
+            "module": "sample",
+            "name": "demo",
+            "file": str(module),
+            "lineno": 1,
+        }
+    ]
+
+
+def test_index_cli_uses_environment_target_and_output_directories(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Resolve target and output directories from environment variables.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture CLI output.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch argv, cwd, and environment variables.
+
+    Returns
+    -------
+    None
+        The test asserts environment-driven path resolution uses the selected
+        target and output roots.
+    """
+    target = tmp_path / "env-target"
+    output = tmp_path / "env-output"
+    module = target / "src" / "env_sample.py"
+    _write_module(
+        module,
+        'def env_demo():\n    """Return a constant."""\n    return 1\n',
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODIRA_TARGET_DIR", str(target))
+    monkeypatch.setenv("CODIRA_OUTPUT_DIR", str(output))
+    monkeypatch.setattr(sys, "argv", ["codira", "index", "--json"])
+
+    assert main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ok"
+    assert get_db_path(output).exists()
+    assert not get_db_path(target).exists()
+
+
+def test_index_cli_flags_override_environment_target_and_output_directories(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Prefer CLI target/output overrides over environment variables.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture CLI output.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch argv, cwd, and environment variables.
+
+    Returns
+    -------
+    None
+        The test asserts CLI flags win over environment-provided roots.
+    """
+    env_target = tmp_path / "env-target"
+    env_output = tmp_path / "env-output"
+    cli_target = tmp_path / "cli-target"
+    cli_output = tmp_path / "cli-output"
+    _write_module(
+        env_target / "src" / "env_module.py",
+        'def env_symbol():\n    """Return a constant."""\n    return 1\n',
+    )
+    cli_module = cli_target / "src" / "cli_module.py"
+    _write_module(
+        cli_module,
+        'def cli_symbol():\n    """Return a constant."""\n    return 1\n',
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODIRA_TARGET_DIR", str(env_target))
+    monkeypatch.setenv("CODIRA_OUTPUT_DIR", str(env_output))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codira",
+            "index",
+            "--path",
+            str(cli_target),
+            "--output-dir",
+            str(cli_output),
+            "--json",
+        ],
+    )
+
+    assert main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ok"
+    assert get_db_path(cli_output).exists()
+    assert not get_db_path(env_output).exists()
+    assert not get_db_path(cli_target).exists()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codira",
+            "sym",
+            "cli_symbol",
+            "--path",
+            str(cli_target),
+            "--output-dir",
+            str(cli_output),
+            "--json",
+        ],
+    )
+
+    assert main() == 0
+    query_payload = json.loads(capsys.readouterr().out)
+    assert query_payload["results"][0]["file"] == str(cli_module)
+
+
+def test_index_cli_supports_read_only_target_with_separate_output_directory(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Index a read-only target tree when ``.codira`` is redirected elsewhere.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture CLI output.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch argv and cwd.
+
+    Returns
+    -------
+    None
+        The test asserts indexing succeeds without writing into the target
+        tree.
+    """
+    if os.name == "nt":
+        pytest.skip("POSIX permission semantics are required for this test")
+
+    target = tmp_path / "readonly-target"
+    output = tmp_path / "writable-output"
+    module = target / "src" / "sample.py"
+    src_dir = module.parent
+    _write_module(
+        module,
+        'def readonly_demo():\n    """Return a constant."""\n    return 1\n',
+    )
+    target.chmod(0o555)
+    src_dir.chmod(0o555)
+    module.chmod(0o444)
+    try:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "codira",
+                "index",
+                "--path",
+                str(target),
+                "--output-dir",
+                str(output),
+                "--json",
+            ],
+        )
+
+        assert main() == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["status"] == "ok"
+        assert get_db_path(output).exists()
+        assert not get_db_path(target).exists()
+    finally:
+        module.chmod(0o644)
+        src_dir.chmod(0o755)
+        target.chmod(0o755)
 
 
 def test_ensure_index_rebuilds_when_analyzer_inventory_changes(

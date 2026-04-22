@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import json
 import shutil
 import sqlite3
@@ -37,6 +38,11 @@ from codira.indexer import (
     IndexWarning,
     audit_repo_coverage,
     index_repo,
+)
+from codira.path_resolution import (
+    CODIRA_OUTPUT_DIR_ENV,
+    CODIRA_TARGET_DIR_ENV,
+    resolve_runtime_paths,
 )
 from codira.prefix import normalize_prefix
 from codira.query.context import ContextRequest, context_for
@@ -71,6 +77,7 @@ from codira.storage import (
     get_db_path,
     get_metadata_path,
     init_db,
+    override_storage_root,
 )
 from codira.version import installed_distribution_version, package_version
 
@@ -84,6 +91,9 @@ GIT_EXE = shutil.which("git") or "git"
 __version__ = package_version()
 
 QUERY_JSON_SCHEMA_VERSION = "1.0"
+_REPO_PATH_COMMANDS = frozenset(
+    {"index", "cov", "sym", "emb", "calls", "refs", "audit", "ctx"}
+)
 
 
 @dataclass(frozen=True)
@@ -527,6 +537,36 @@ def build_parser() -> argparse.ArgumentParser:
     argparse.ArgumentParser
         Parser configured with the supported codira subcommands.
     """
+
+    def _add_repo_path_arguments(command_parser: argparse.ArgumentParser) -> None:
+        """
+        Add shared target/output path overrides to one repo-bound command.
+
+        Parameters
+        ----------
+        command_parser : argparse.ArgumentParser
+            Subparser that operates on one repository index.
+
+        Returns
+        -------
+        None
+            Shared path arguments are added in place.
+        """
+
+        command_parser.add_argument(
+            "--path",
+            help=(
+                "Repository target directory to read " f"(env: {CODIRA_TARGET_DIR_ENV})"
+            ),
+        )
+        command_parser.add_argument(
+            "--output-dir",
+            help=(
+                "Directory under which .codira state is stored "
+                f"(env: {CODIRA_OUTPUT_DIR_ENV})"
+            ),
+        )
+
     parser = argparse.ArgumentParser(
         prog="codira",
         description=(
@@ -537,6 +577,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             "  codira index\n"
             "  codira index --require-full-coverage\n"
+            "  codira index --path /mnt/readonly/repo --output-dir /tmp/codira-run\n"
             "  codira sym build_parser\n"
             '  codira emb "schema migration rules"\n'
             '  codira ctx "find schema migration logic"\n'
@@ -574,7 +615,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  codira index\n"
             "  codira index --explain\n"
             "  codira index --full\n"
-            "  codira index --require-full-coverage"
+            "  codira index --require-full-coverage\n"
+            "  codira index --path /mnt/readonly/repo --output-dir /tmp/codira-run"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -603,6 +645,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Output structured JSON for machine consumption",
     )
+    _add_repo_path_arguments(index_parser)
 
     coverage_parser = sub.add_parser(
         "cov",
@@ -619,6 +662,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Output structured JSON for machine consumption",
     )
+    _add_repo_path_arguments(coverage_parser)
 
     symbol_parser = sub.add_parser(
         "sym",
@@ -642,6 +686,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--prefix",
         help="Restrict results to files under this repo-root-relative path prefix",
     )
+    _add_repo_path_arguments(symbol_parser)
 
     embeddings_parser = sub.add_parser(
         "emb",
@@ -679,6 +724,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--prefix",
         help="Restrict matches to files under this repo-root-relative path prefix",
     )
+    _add_repo_path_arguments(embeddings_parser)
 
     calls_parser = sub.add_parser(
         "calls",
@@ -742,6 +788,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--prefix",
         help="Restrict caller files to this repo-root-relative path prefix",
     )
+    _add_repo_path_arguments(calls_parser)
 
     refs_parser = sub.add_parser(
         "refs",
@@ -807,6 +854,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--prefix",
         help="Restrict owner files to this repo-root-relative path prefix",
     )
+    _add_repo_path_arguments(refs_parser)
 
     audit_parser = sub.add_parser(
         "audit",
@@ -829,6 +877,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--prefix",
         help="Restrict issues to files under this repo-root-relative path prefix",
     )
+    _add_repo_path_arguments(audit_parser)
 
     context_parser = sub.add_parser(
         "ctx",
@@ -874,6 +923,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--prefix",
         help="Restrict retrieval to files under this repo-root-relative path prefix",
     )
+    _add_repo_path_arguments(context_parser)
 
     plugins_parser = sub.add_parser(
         "plugins",
@@ -3250,22 +3300,30 @@ def main() -> int:
     args = parser.parse_args()
     if args.version:
         return _run_version()
-    root = Path.cwd()
+    command = args.command or "help"
+    storage_context: contextlib.AbstractContextManager[None]
+    if command in _REPO_PATH_COMMANDS:
+        resolved_paths = resolve_runtime_paths(parser, args)
+        root = resolved_paths.target_root
+        storage_context = override_storage_root(root, resolved_paths.output_root)
+    else:
+        root = Path.cwd()
+        storage_context = contextlib.nullcontext()
     raw_prefix = getattr(args, "prefix", None)
     prefix = _resolve_prefix_argument(parser, root, raw_prefix)
-    command = args.command or "help"
 
     try:
-        handlers = _command_handlers(
-            args,
-            parser,
-            root,
-            prefix=prefix,
-            raw_prefix=raw_prefix,
-        )
-        handler = handlers.get(command)
-        if handler is not None:
-            return handler()
+        with storage_context:
+            handlers = _command_handlers(
+                args,
+                parser,
+                root,
+                prefix=prefix,
+                raw_prefix=raw_prefix,
+            )
+            handler = handlers.get(command)
+            if handler is not None:
+                return handler()
     except EmbeddingBackendError as exc:
         print(f"[codira] {exc}", file=sys.stderr)
         return 2

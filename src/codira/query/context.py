@@ -1806,12 +1806,14 @@ def _apply_scoring_rules(
     return sum(getattr(features, rule.feature) * rule.weight for rule in rules)
 
 
-def _format_symbol(symbol: SymbolRow, *, include_path: bool) -> str:
+def _format_symbol(root: Path, symbol: SymbolRow, *, include_path: bool) -> str:
     """
     Format a symbol row for human-readable output.
 
     Parameters
     ----------
+    root : pathlib.Path
+        Repository root used to relativize paths.
     symbol : codira.types.SymbolRow
         Symbol row to render.
     include_path : bool
@@ -1831,7 +1833,7 @@ def _format_symbol(symbol: SymbolRow, *, include_path: bool) -> str:
 
     if include_path:
         try:
-            rel_path = str(Path(file_path).relative_to(Path.cwd()))
+            rel_path = str(Path(file_path).relative_to(root))
         except ValueError:
             rel_path = str(file_path)
         return f"{head} ({rel_path})"
@@ -5293,7 +5295,7 @@ def _append_top_matches_section(request: MainContextSectionsRequest) -> None:
         request.lines.append("No direct symbol matches found.")
         return
     for symbol in request.top_matches:
-        request.lines.append(_format_symbol(symbol, include_path=True))
+        request.lines.append(_format_symbol(request.root, symbol, include_path=True))
 
 
 def _normalized_doc_issue_message(message: str) -> str:
@@ -5381,7 +5383,7 @@ def _append_module_expansion_section(request: MainContextSectionsRequest) -> Non
         request.lines.append("No module expansion available.")
         return
     for symbol in request.expanded:
-        request.lines.append(_format_symbol(symbol, include_path=False))
+        request.lines.append(_format_symbol(request.root, symbol, include_path=False))
 
 
 def _relative_reference_text(root: Path, file_path: str) -> str:

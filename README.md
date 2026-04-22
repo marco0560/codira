@@ -189,6 +189,25 @@ codira index
 Indexing also precomputes local deterministic embeddings for indexed symbols.
 Unchanged files are reused by default.
 
+Index a repository other than the current working directory and store
+`.codira` state somewhere else:
+
+```bash
+codira index --path /mnt/readonly/repo --output-dir /tmp/codira-run
+```
+
+Use environment variables when you want the same target/output roots across
+multiple commands:
+
+```bash
+export CODIRA_TARGET_DIR=/mnt/readonly/repo
+export CODIRA_OUTPUT_DIR=/tmp/codira-run
+
+codira index
+codira sym build_parser
+codira ctx "schema migration rules"
+```
+
 Force a full rebuild:
 
 ```bash
