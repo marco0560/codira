@@ -1,3 +1,10 @@
+# [1.14.0](https://github.com/marco0560/codira/compare/v1.13.0...v1.14.0) (2026-04-22)
+
+
+### Features
+
+* **analyzer:** add bounded C static const declarations ([3450897](https://github.com/marco0560/codira/commit/3450897018d6ce2a24b25a75bddb0f4b925db70e)), closes [#25](https://github.com/marco0560/codira/issues/25)
+
 # [1.13.0](https://github.com/marco0560/codira/compare/v1.12.0...v1.13.0) (2026-04-22)
 
 
