@@ -1,3 +1,10 @@
+# [1.11.0](https://github.com/marco0560/codira/compare/v1.10.0...v1.11.0) (2026-04-22)
+
+
+### Features
+
+* **analyzer:** add Python named constants ([b4442bc](https://github.com/marco0560/codira/commit/b4442bc3968cbc260434e32a4d4b3e3364974bb5))
+
 # [1.10.0](https://github.com/marco0560/codira/compare/v1.9.0...v1.10.0) (2026-04-22)
 
 
