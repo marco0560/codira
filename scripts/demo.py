@@ -1,4 +1,24 @@
 #!/usr/bin/env python3
+"""
+Codira demo script.
+
+Demonstrates end-to-end usage of the Codira CLI on a user-selected
+repository using explicit path resolution (issue #19 compliant).
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+
+Notes
+-----
+All Codira commands are executed with explicit ``--path`` to decouple
+target repository from the current working directory.
+"""
+
 from __future__ import annotations
 
 import json
@@ -30,35 +50,90 @@ CODIRA: list[str] = [str(CODIRA_BIN)]
 
 
 def section(title: str) -> None:
+    """
+    Print a formatted section header.
+
+    Parameters
+    ----------
+    title : str
+        Section title to display.
+
+    Returns
+    -------
+    None
+    """
     print()
     print(f"=== {title} ===")
 
 
 def quote_cmd(cmd: list[str]) -> str:
+    """
+    Quote a command for display.
+
+    Parameters
+    ----------
+    cmd : list[str]
+        Command parts.
+
+    Returns
+    -------
+    str
+        Shell-escaped command string.
+    """
     return " ".join(shlex.quote(part) for part in cmd)
 
 
 def run(
     cmd: list[str],
-    cwd: Path | None = None,
+    path: Path | None = None,
     check: bool = True,
     capture: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    """
+    Execute a Codira command.
+
+    Parameters
+    ----------
+    cmd : list[str]
+        Codira subcommand and arguments.
+    path : Path | None
+        Target repository path passed via ``--path``.
+    check : bool
+        Whether to exit on non-zero return code.
+    capture : bool
+        Whether to capture and print stdout/stderr.
+
+    Returns
+    -------
+    subprocess.CompletedProcess[str]
+        Completed process object.
+
+    Raises
+    ------
+    SystemExit
+        If command fails and ``check`` is True.
+    """
     full_cmd = CODIRA + cmd
+    if path is not None:
+        full_cmd += ["--path", str(path)]
+
     print(f"> {quote_cmd(full_cmd)}")
+
     proc = subprocess.run(
         full_cmd,
-        cwd=str(cwd) if cwd else None,
         text=True,
         capture_output=capture,
     )
+
     if capture:
         if proc.stdout:
             print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n")
         if proc.stderr:
             print(proc.stderr, file=sys.stderr)
+
     if check and proc.returncode != 0:
         raise SystemExit(proc.returncode)
+
     return proc
 
 
@@ -66,14 +141,31 @@ def run(
 
 
 def _ctx_json(repo: Path, query: str) -> dict[str, Any] | None:
+    """
+    Execute ``codira ctx --json`` and parse output.
+
+    Parameters
+    ----------
+    repo : Path
+        Target repository.
+    query : str
+        Query string.
+
+    Returns
+    -------
+    dict[str, Any] | None
+        Parsed JSON result or None on failure.
+    """
     section(f"Discover candidates via ctx --json: {query}")
+
     proc = subprocess.run(
-        CODIRA + ["ctx", "--json", query],
-        cwd=repo,
+        CODIRA + ["ctx", "--json", query, "--path", str(repo)],
         text=True,
         capture_output=True,
     )
-    print(f"> {quote_cmd(CODIRA + ['ctx', '--json', query])}")
+
+    print(f"> {quote_cmd(CODIRA + ['ctx', '--json', query, '--path', str(repo)])}")
+
     if proc.stdout:
         print(proc.stdout)
 
@@ -81,14 +173,31 @@ def _ctx_json(repo: Path, query: str) -> dict[str, Any] | None:
         return None
 
     try:
-        data: dict[str, Any] = json.loads(proc.stdout)
+        raw = json.loads(proc.stdout)
     except json.JSONDecodeError:
         return None
-    else:
-        return data
+
+    if not isinstance(raw, dict):
+        return None
+
+    data: dict[str, Any] = raw
+    return data
 
 
 def _extract_candidates(data: dict[str, Any]) -> list[tuple[str, float]]:
+    """
+    Extract candidate symbols from ctx output.
+
+    Parameters
+    ----------
+    data : dict[str, Any]
+        Parsed ctx JSON.
+
+    Returns
+    -------
+    list[tuple[str, float]]
+        Candidate symbol names with confidence scores.
+    """
     candidates: list[tuple[str, float]] = []
 
     for item in data.get("top_matches", []):
@@ -108,9 +217,23 @@ def _extract_candidates(data: dict[str, Any]) -> list[tuple[str, float]]:
 
 
 def _has_symbol(repo: Path, name: str) -> bool:
+    """
+    Check if a symbol exists.
+
+    Parameters
+    ----------
+    repo : Path
+        Target repository.
+    name : str
+        Symbol name.
+
+    Returns
+    -------
+    bool
+        True if symbol exists.
+    """
     proc = subprocess.run(
-        CODIRA + ["sym", name],
-        cwd=repo,
+        CODIRA + ["sym", name, "--path", str(repo)],
         text=True,
         capture_output=True,
     )
@@ -118,9 +241,23 @@ def _has_symbol(repo: Path, name: str) -> bool:
 
 
 def _run_graph(repo: Path, args: list[str]) -> str:
+    """
+    Execute graph-related command.
+
+    Parameters
+    ----------
+    repo : Path
+        Target repository.
+    args : list[str]
+        Command arguments.
+
+    Returns
+    -------
+    str
+        Command stdout.
+    """
     proc = subprocess.run(
-        CODIRA + args,
-        cwd=repo,
+        CODIRA + args + ["--path", str(repo)],
         text=True,
         capture_output=True,
     )
@@ -128,6 +265,23 @@ def _run_graph(repo: Path, args: list[str]) -> str:
 
 
 def _score_candidate(repo: Path, name: str, confidence: float) -> float:
+    """
+    Score a candidate symbol.
+
+    Parameters
+    ----------
+    repo : Path
+        Target repository.
+    name : str
+        Symbol name.
+    confidence : float
+        Base confidence score.
+
+    Returns
+    -------
+    float
+        Final score.
+    """
     calls = _run_graph(repo, ["calls", name])
     calls_in = _run_graph(repo, ["calls", name, "--incoming"])
     refs = _run_graph(repo, ["refs", name])
@@ -152,26 +306,25 @@ def _score_candidate(repo: Path, name: str, confidence: float) -> float:
     return score
 
 
-def _select_best_symbol(
-    repo: Path, candidates: list[tuple[str, float]]
-) -> tuple[str | None, float]:
-    best_name: str | None = None
-    best_score = -1.0
-
-    for name, confidence in candidates:
-        if not _has_symbol(repo, name):
-            continue
-
-        score = _score_candidate(repo, name, confidence)
-
-        if score > best_score:
-            best_score = score
-            best_name = name
-
-    return best_name, best_score
-
-
 def discover_symbol_with_edges(repo: Path) -> str:
+    """
+    Discover a symbol with meaningful graph connectivity.
+
+    Parameters
+    ----------
+    repo : Path
+        Target repository.
+
+    Returns
+    -------
+    str
+        Selected symbol name.
+
+    Raises
+    ------
+    SystemExit
+        If no suitable symbol is found.
+    """
     queries = ["core logic", "call graph", "main"]
 
     best_name: str | None = None
@@ -183,11 +336,16 @@ def discover_symbol_with_edges(repo: Path) -> str:
             continue
 
         candidates = _extract_candidates(data)
-        name, score = _select_best_symbol(repo, candidates)
 
-        if name is not None and score > best_score:
-            best_name = name
-            best_score = score
+        for name, confidence in candidates:
+            if not _has_symbol(repo, name):
+                continue
+
+            score = _score_candidate(repo, name, confidence)
+
+            if score > best_score:
+                best_score = score
+                best_name = name
 
     if best_name:
         print(f"Selected best symbol: {best_name} (score={best_score:.2f})")
@@ -201,6 +359,17 @@ def discover_symbol_with_edges(repo: Path) -> str:
 
 
 def main() -> None:
+    """
+    Run the Codira demo workflow.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
     section("Codira Demo Script")
 
     section("STEP 0 — Version")
@@ -217,72 +386,71 @@ def main() -> None:
         raise SystemExit(msg)
 
     print(f"Using repository: {repo}")
-    print("NOTE: cd-based workflow (will change after issue #19)")
 
     section("STEP 2 — Index")
-    run(["index"], cwd=repo, capture=True)
+    run(["index"], path=repo, capture=True)
 
     section("STEP 3 — Plugins")
-    run(["plugins"], cwd=repo, capture=True)
+    run(["plugins"], path=repo, capture=True)
 
     section("STEP 4 — Capabilities")
-    run(["caps"], cwd=repo, capture=True)
+    run(["caps"], path=repo, capture=True)
 
     section("STEP 5 — Coverage")
-    run(["cov"], cwd=repo, check=False, capture=True)
+    run(["cov"], path=repo, check=False, capture=True)
 
     section("STEP 6 — Discover symbol")
     symbol = discover_symbol_with_edges(repo)
     print(f"Chosen symbol: {symbol}")
 
     section("STEP 7 — Symbol lookup")
-    run(["sym", symbol], cwd=repo, capture=True)
+    run(["sym", symbol], path=repo, capture=True)
 
     section("STEP 8 — Embeddings")
-    run(["emb", "core logic"], cwd=repo, check=False, capture=True)
+    run(["emb", "core logic"], path=repo, check=False, capture=True)
 
     section("STEP 9 — Context")
-    run(["ctx", "core logic"], cwd=repo, capture=True)
+    run(["ctx", "core logic"], path=repo, capture=True)
 
     section("STEP 10 — Context (prompt)")
-    run(["ctx", "--prompt", "improve test coverage"], cwd=repo, capture=True)
+    run(["ctx", "--prompt", "improve test coverage"], path=repo, capture=True)
 
     section("STEP 11 — Context (json)")
-    run(["ctx", "--json", "core logic"], cwd=repo, capture=True)
+    run(["ctx", "--json", "core logic"], path=repo, capture=True)
 
     section("STEP 12 — Context (explain)")
-    run(["ctx", "--explain", "ranking"], cwd=repo, capture=True)
+    run(["ctx", "--explain", "ranking"], path=repo, capture=True)
 
     section("STEP 13 — Calls")
-    run(["calls", symbol], cwd=repo, check=False, capture=True)
+    run(["calls", symbol], path=repo, check=False, capture=True)
 
     section("STEP 14 — Calls tree")
-    run(["calls", symbol, "--tree"], cwd=repo, check=False, capture=True)
+    run(["calls", symbol, "--tree"], path=repo, check=False, capture=True)
 
     section("STEP 15 — Calls dot")
-    run(["calls", symbol, "--tree", "--dot"], cwd=repo, check=False, capture=True)
+    run(["calls", symbol, "--tree", "--dot"], path=repo, check=False, capture=True)
 
     section("STEP 16 — Calls incoming")
-    run(["calls", symbol, "--incoming"], cwd=repo, check=False, capture=True)
+    run(["calls", symbol, "--incoming"], path=repo, check=False, capture=True)
 
     section("STEP 17 — Refs")
-    run(["refs", symbol], cwd=repo, check=False, capture=True)
+    run(["refs", symbol], path=repo, check=False, capture=True)
 
     section("STEP 18 — Refs incoming tree")
-    run(["refs", symbol, "--incoming", "--tree"], cwd=repo, check=False, capture=True)
+    run(["refs", symbol, "--incoming", "--tree"], path=repo, check=False, capture=True)
 
     section("STEP 19 — Refs dot")
-    run(["refs", symbol, "--tree", "--dot"], cwd=repo, check=False, capture=True)
+    run(["refs", symbol, "--tree", "--dot"], path=repo, check=False, capture=True)
 
     section("STEP 20 — Audit gate")
     ans = input("Does the repo use NumPy docstrings? [y/N]: ").lower()
 
     if ans == "y":
         section("STEP 21 — Audit")
-        run(["audit"], cwd=repo, check=False, capture=True)
+        run(["audit"], path=repo, check=False, capture=True)
 
         section("STEP 22 — Audit JSON")
-        run(["audit", "--json"], cwd=repo, check=False, capture=True)
+        run(["audit", "--json"], path=repo, check=False, capture=True)
     else:
         print("Skipping audit (likely noisy)")
 
