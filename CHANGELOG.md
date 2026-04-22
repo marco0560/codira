@@ -1,3 +1,10 @@
+# [1.13.0](https://github.com/marco0560/codira/compare/v1.12.0...v1.13.0) (2026-04-22)
+
+
+### Features
+
+* **analyzer:** add C macro declarations ([71e133a](https://github.com/marco0560/codira/commit/71e133afaeaae7f1ae03565118e5f9682e34229b)), closes [#21](https://github.com/marco0560/codira/issues/21)
+
 # [1.12.0](https://github.com/marco0560/codira/compare/v1.11.0...v1.12.0) (2026-04-22)
 
 
