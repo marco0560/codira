@@ -1,3 +1,10 @@
+# [1.15.0](https://github.com/marco0560/codira/compare/v1.14.0...v1.15.0) (2026-04-22)
+
+
+### Features
+
+* **analyzer:** broaden C constant symbols ([53f0e51](https://github.com/marco0560/codira/commit/53f0e511c61287790fa9cfc5a03ae148d59b66f6)), closes [#25](https://github.com/marco0560/codira/issues/25)
+
 # [1.14.0](https://github.com/marco0560/codira/compare/v1.13.0...v1.14.0) (2026-04-22)
 
 
