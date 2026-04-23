@@ -35,6 +35,26 @@ from scripts.first_party_packages import package_paths
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _path_text(path: Path) -> str:
+    """
+    Render a path with deterministic forward-slash separators.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to render for command arguments.
+
+    Returns
+    -------
+    str
+        POSIX-style path text.
+    """
+    text = str(path)
+    if text.startswith("\\") and not text.startswith("\\\\"):
+        return path.as_posix()
+    return text
+
+
 def release_package_paths(repo_root: Path) -> tuple[Path, ...]:
     """
     Return the core package and first-party packages in release order.
@@ -74,7 +94,7 @@ def build_artifact_argv(*, python: str, package_path: Path) -> tuple[str, ...]:
         "build",
         "--wheel",
         "--sdist",
-        str(package_path),
+        _path_text(package_path),
     )
 
 
@@ -99,7 +119,7 @@ def artifact_check_argv(*, python: str, package_path: Path) -> tuple[str, ...]:
         "-m",
         "twine",
         "check",
-        str(package_path / "dist" / "*"),
+        _path_text(package_path / "dist" / "*"),
     )
 
 

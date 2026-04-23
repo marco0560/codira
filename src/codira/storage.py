@@ -23,12 +23,19 @@ import sqlite3
 import tempfile
 from contextvars import ContextVar
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from codira.schema import DDL, SCHEMA_VERSION
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from typing import Protocol
+
+    class _FcntlModule(Protocol):
+        LOCK_EX: int
+        LOCK_UN: int
+
+        def flock(self, fd: int, operation: int, /) -> None: ...
 
 
 _STORAGE_ROOT_OVERRIDES: ContextVar[dict[Path, Path] | None] = ContextVar(
@@ -179,10 +186,11 @@ def acquire_index_lock(root: Path) -> Iterator[None]:
         If the current platform does not provide ``fcntl.flock``.
     """
     try:
-        import fcntl
+        import fcntl as _fcntl
     except ImportError as error:  # pragma: no cover - exercised on non-POSIX
         msg = "Index locking requires fcntl.flock on this platform."
         raise RuntimeError(msg) from error
+    fcntl = cast("_FcntlModule", _fcntl)
 
     lock_path = get_index_lock_path(root)
     lock_path.parent.mkdir(parents=True, exist_ok=True)

@@ -83,10 +83,16 @@ def prefix_clause(prefix: str | None, column: str) -> tuple[str, list[str]]:
     if prefix is None:
         return "", []
 
-    return (
-        f" AND ({column} = ? OR {column} LIKE ?)",
-        [prefix, f"{prefix}/%"],
+    prefix_path = Path(prefix)
+    variants = tuple(
+        dict.fromkeys((str(prefix_path.resolve(strict=False)), prefix_path.as_posix()))
     )
+    clauses: list[str] = []
+    params: list[str] = []
+    for variant in variants:
+        clauses.extend((f"{column} = ?", f"{column} LIKE ?", f"{column} LIKE ?"))
+        params.extend((variant, f"{variant}/%", f"{variant}\\%"))
+    return f" AND ({' OR '.join(clauses)})", params
 
 
 def path_has_prefix(path: str | Path, prefix: str | None) -> bool:
@@ -108,5 +114,10 @@ def path_has_prefix(path: str | Path, prefix: str | None) -> bool:
     if prefix is None:
         return True
 
-    path_text = str(path)
-    return path_text == prefix or path_text.startswith(f"{prefix}/")
+    path_obj = Path(path).resolve(strict=False)
+    prefix_obj = Path(prefix).resolve(strict=False)
+    try:
+        path_obj.relative_to(prefix_obj)
+    except ValueError:
+        return False
+    return True

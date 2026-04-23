@@ -37,6 +37,26 @@ PACKAGE_REPOS: tuple[str, ...] = (
 BUNDLE_REPO = "codira-bundle-official"
 
 
+def _path_text(path: Path) -> str:
+    """
+    Render a path with deterministic forward-slash separators.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to render for command arguments.
+
+    Returns
+    -------
+    str
+        POSIX-style path text.
+    """
+    text = str(path)
+    if text.startswith("\\") and not text.startswith("\\\\"):
+        return path.as_posix()
+    return text
+
+
 def split_repo_names() -> tuple[str, ...]:
     """
     Return the exported split repositories that should be verified.
@@ -78,7 +98,14 @@ def build_repo_validation_commands(
     """
     install_commands: list[tuple[str, ...]] = [
         (python, "-m", "pip", "install", "--upgrade", "pip"),
-        (python, "-m", "pip", "install", "-e", f"{core_repo_root}[semantic]"),
+        (
+            python,
+            "-m",
+            "pip",
+            "install",
+            "-e",
+            f"{_path_text(core_repo_root)}[semantic]",
+        ),
     ]
     if exported_repo_root.name == BUNDLE_REPO:
         for repo_name in PACKAGE_REPOS:
@@ -89,7 +116,7 @@ def build_repo_validation_commands(
                     "pip",
                     "install",
                     "-e",
-                    str(exported_repo_root.parent / repo_name),
+                    _path_text(exported_repo_root.parent / repo_name),
                 )
             )
     install_commands.append(
@@ -99,7 +126,7 @@ def build_repo_validation_commands(
             "pip",
             "install",
             "-e",
-            f"{exported_repo_root}[test]",
+            f"{_path_text(exported_repo_root)}[test]",
         )
     )
 

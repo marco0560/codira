@@ -36,6 +36,26 @@ FIRST_PARTY_EDITABLE_PACKAGES = FIRST_PARTY_PACKAGE_DIRS
 BUNDLE_PACKAGE_DIR = "packages/codira-bundle-official"
 
 
+def _path_text(path: Path) -> str:
+    """
+    Render a path with deterministic forward-slash separators.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to render for command arguments and testable diagnostics.
+
+    Returns
+    -------
+    str
+        POSIX-style path text.
+    """
+    text = str(path)
+    if text.startswith("\\") and not text.startswith("\\\\"):
+        return path.as_posix()
+    return text
+
+
 @dataclass(frozen=True)
 class InstallCommandRequest:
     """
@@ -89,8 +109,8 @@ def editable_core_requirement(
         requested.
     """
     if not extras:
-        return str(repo_root)
-    return f"{repo_root}[{','.join(extras)}]"
+        return _path_text(repo_root)
+    return f"{_path_text(repo_root)}[{','.join(extras)}]"
 
 
 def first_party_package_root(repo_root: Path, package_root: Path | None) -> Path:
@@ -226,7 +246,7 @@ def build_install_commands(
         request.repo_root,
         package_root=request.package_root,
     ):
-        editable_install_argv.extend(("-e", str(package_path)))
+        editable_install_argv.extend(("-e", _path_text(package_path)))
 
     commands: list[tuple[str, ...]] = []
     if request.include_bundle:
@@ -250,7 +270,7 @@ def build_install_commands(
                 "install",
                 "--no-deps",
                 "-e",
-                str(
+                _path_text(
                     bundle_package_path(
                         request.repo_root,
                         package_root=request.package_root,

@@ -34,6 +34,26 @@ DEFAULT_WHEEL_DIR = REPO_ROOT / ".artifacts" / "release-wheels"
 DEFAULT_INSTALL_DIR = REPO_ROOT / ".artifacts" / "release-site-packages"
 
 
+def _path_text(path: Path) -> str:
+    """
+    Render a path with deterministic forward-slash separators.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to render for command arguments.
+
+    Returns
+    -------
+    str
+        POSIX-style path text.
+    """
+    text = str(path)
+    if text.startswith("\\") and not text.startswith("\\\\"):
+        return path.as_posix()
+    return text
+
+
 def build_first_party_wheels_argv(
     *,
     python: str,
@@ -59,9 +79,9 @@ def build_first_party_wheels_argv(
     """
     return (
         python,
-        str(repo_root / "scripts" / "build_first_party_packages.py"),
+        _path_text(repo_root / "scripts" / "build_first_party_packages.py"),
         "--wheel-dir",
-        str(wheel_dir),
+        _path_text(wheel_dir),
     )
 
 
@@ -96,8 +116,8 @@ def build_root_wheel_argv(
         "--no-build-isolation",
         "--no-deps",
         "--wheel-dir",
-        str(wheel_dir),
-        str(repo_root),
+        _path_text(wheel_dir),
+        _path_text(repo_root),
     )
 
 
@@ -148,8 +168,8 @@ def build_install_wheels_argv(
         "install",
         "--no-deps",
         "--target",
-        str(install_dir),
-        *(str(path) for path in wheel_paths),
+        _path_text(install_dir),
+        *(_path_text(path) for path in wheel_paths),
     )
 
 

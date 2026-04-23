@@ -569,7 +569,7 @@ def _select_language_analyzer(
         if analyzer.supports_path(path):
             return analyzer
 
-    msg = f"No language analyzer registered for path: {path}"
+    msg = f"No language analyzer registered for path: {path.as_posix()}"
     hint = missing_language_analyzer_hint(path)
     if hint is not None:
         msg = f"{msg}. {hint}"

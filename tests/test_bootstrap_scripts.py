@@ -1397,9 +1397,9 @@ def test_release_install_rehearsal_builds_first_party_and_core_wheels() -> None:
         wheel_dir=wheel_dir,
     ) == (
         "python",
-        str(repo_root / "scripts" / "build_first_party_packages.py"),
+        (repo_root / "scripts" / "build_first_party_packages.py").as_posix(),
         "--wheel-dir",
-        str(wheel_dir),
+        wheel_dir.as_posix(),
     )
     assert helper.build_root_wheel_argv(
         python="python",
@@ -1413,8 +1413,8 @@ def test_release_install_rehearsal_builds_first_party_and_core_wheels() -> None:
         "--no-build-isolation",
         "--no-deps",
         "--wheel-dir",
-        str(wheel_dir),
-        str(repo_root),
+        wheel_dir.as_posix(),
+        repo_root.as_posix(),
     )
 
 

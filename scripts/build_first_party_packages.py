@@ -36,6 +36,26 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WHEEL_DIR = REPO_ROOT / ".artifacts" / "first-party-wheels"
 
 
+def _path_text(path: Path) -> str:
+    """
+    Render a path with deterministic forward-slash separators.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to render for command arguments.
+
+    Returns
+    -------
+    str
+        POSIX-style path text.
+    """
+    text = str(path)
+    if text.startswith("\\") and not text.startswith("\\\\"):
+        return path.as_posix()
+    return text
+
+
 def build_build_argv(
     *,
     python: str,
@@ -67,8 +87,8 @@ def build_build_argv(
         "--no-build-isolation",
         "--no-deps",
         "--wheel-dir",
-        str(wheel_dir),
-        str(package_path),
+        _path_text(wheel_dir),
+        _path_text(package_path),
     )
 
 

@@ -2874,14 +2874,41 @@ def _ensure_index(root: Path) -> None:
     If the on-disk index is missing or stale, the function rebuilds it
     automatically and refreshes the stored Git commit metadata.
     """
+    initial_error: Exception | None = None
     try:
         request = _inspect_index_rebuild_request(root)
-    except (OSError, sqlite3.Error, RuntimeError, ValueError):
+    except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
         request = None
+        initial_error = error
+
+    if request is None and initial_error is None:
+        return
+
+    def run_refresh_without_lock(refresh_request: IndexRebuildRequest) -> None:
+        """
+        Rebuild the index without advisory locking on platforms lacking flock.
+
+        Parameters
+        ----------
+        refresh_request : IndexRebuildRequest
+            Rebuild request already derived from the current on-disk state.
+
+        Returns
+        -------
+        None
+            The index is refreshed in place without cross-process locking.
+        """
+        try:
+            _run_locked_index_refresh(root, refresh_request)
+        except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
+            print("ERROR: failed to build index automatically")
+            print("Run manually: codira index")
+            print(f"Details: {error}")
+            raise SystemExit(1) from error
 
     try:
         with acquire_index_lock(root):
-            if request is None:
+            if initial_error is not None:
                 try:
                     request = _inspect_index_rebuild_request(root)
                 except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
@@ -2906,6 +2933,9 @@ def _ensure_index(root: Path) -> None:
                 print(f"Details: {error}")
                 raise SystemExit(1) from error
     except RuntimeError as error:
+        if "fcntl.flock" in str(error) and request is not None:
+            run_refresh_without_lock(request)
+            return
         _fail_unreadable_index(error)
 
 

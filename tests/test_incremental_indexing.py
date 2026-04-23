@@ -334,7 +334,7 @@ def test_index_repo_purges_stale_shell_docstring_issues(tmp_path: Path) -> None:
         file_id = int(
             conn.execute(
                 "SELECT id FROM files WHERE path = ?",
-                (shell_path.as_posix(),),
+                (str(shell_path),),
             ).fetchone()[0]
         )
         conn.execute(
@@ -2119,6 +2119,9 @@ def test_acquire_index_lock_blocks_other_processes(tmp_path: Path) -> None:
     None
         The test asserts another process cannot acquire the lock early.
     """
+    if os.name == "nt":
+        pytest.skip("fcntl.flock is unavailable on Windows")
+
     acquired_marker = tmp_path / "acquired.txt"
     release_marker = tmp_path / "release.txt"
     source_root = Path(__file__).resolve().parents[1] / "src"

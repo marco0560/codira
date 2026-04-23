@@ -26,7 +26,7 @@ from __future__ import annotations
 import argparse
 import shutil
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -52,12 +52,12 @@ class FutureRepoExportEntry:
     ----------
     source : pathlib.Path
         Repository-local source path to copy from the monorepo checkout.
-    target_relative : pathlib.Path
+    target_relative : pathlib.PurePosixPath
         Relative path that the exported repository should contain.
     """
 
     source: Path
-    target_relative: Path
+    target_relative: PurePosixPath
 
 
 def export_manifest_for(repository: str) -> FutureRepoSplitManifest:
@@ -163,7 +163,7 @@ def materialize_future_repo(
     return export_dir
 
 
-def _target_relative_path(repository: str, source_relative: str) -> Path:
+def _target_relative_path(repository: str, source_relative: str) -> PurePosixPath:
     """
     Map one manifest path from the monorepo to the exported repository root.
 
@@ -176,7 +176,7 @@ def _target_relative_path(repository: str, source_relative: str) -> Path:
 
     Returns
     -------
-    pathlib.Path
+    pathlib.PurePosixPath
         Relative path inside the exported repository.
 
     Raises
@@ -185,7 +185,7 @@ def _target_relative_path(repository: str, source_relative: str) -> Path:
         If the manifest path is incompatible with the repository export rules.
     """
     if repository == "codira":
-        return Path(source_relative.rstrip("/"))
+        return PurePosixPath(source_relative.rstrip("/"))
     package_prefix = f"packages/{repository}/"
     if not source_relative.startswith(package_prefix):
         message = (
@@ -193,7 +193,7 @@ def _target_relative_path(repository: str, source_relative: str) -> Path:
         )
         raise ValueError(message)
     suffix = source_relative.removeprefix(package_prefix).rstrip("/")
-    return Path(suffix)
+    return PurePosixPath(suffix)
 
 
 def _copy_export_entry(entry: FutureRepoExportEntry, export_dir: Path) -> None:
@@ -219,7 +219,7 @@ def _copy_export_entry(entry: FutureRepoExportEntry, export_dir: Path) -> None:
     if not entry.source.exists():
         message = f"Missing owned path declared in split manifest: {entry.source}"
         raise FileNotFoundError(message)
-    target = export_dir / entry.target_relative
+    target = export_dir.joinpath(*entry.target_relative.parts)
     if entry.source.is_dir():
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(entry.source, target, dirs_exist_ok=True)

@@ -28,7 +28,15 @@ __pycache__/
 # -------------------------------
 .mypy_cache/
 .pytest_cache/
+.pytest_cache_local/
+.pytest_tmp/
+.pytest_diag*/
+.pre-commit-cache/
+.pt_*/
 .ruff_cache/
+.ruff_cache_run/
+.tmp_pytest_run/
+pytest-cache-files-*/
 
 # -----------------------------------
 # Virtual Studio Code configuration

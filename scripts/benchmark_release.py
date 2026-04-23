@@ -31,6 +31,26 @@ DEFAULT_QUERY = "schema migration logic"
 DEFAULT_OUTPUT = Path(".artifacts") / "benchmarks" / "release-hyperfine.json"
 
 
+def _path_text(path: Path) -> str:
+    """
+    Render a path with deterministic forward-slash separators.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path to render for command arguments.
+
+    Returns
+    -------
+    str
+        POSIX-style path text.
+    """
+    text = str(path)
+    if text.startswith("\\") and not text.startswith("\\\\"):
+        return path.as_posix()
+    return text
+
+
 @dataclass(frozen=True)
 class BenchmarkConfig:
     """
@@ -130,7 +150,7 @@ def build_hyperfine_argv(config: BenchmarkConfig) -> tuple[str, ...]:
         "--runs",
         str(config.runs),
         "--export-json",
-        str(config.output),
+        _path_text(config.output),
         *benchmark_command_strings(codira=config.codira, query=config.query),
     )
 
