@@ -1,3 +1,10 @@
+## [1.16.1](https://github.com/marco0560/codira/compare/v1.16.0...v1.16.1) (2026-04-23)
+
+
+### Bug Fixes
+
+* **dev:** normalize path handling for local tooling and queries ([3106495](https://github.com/marco0560/codira/commit/3106495599a3c9d1ece41f7d9f03da23b9ba3fa2))
+
 # [1.16.0](https://github.com/marco0560/codira/compare/v1.15.0...v1.16.0) (2026-04-22)
 
 
