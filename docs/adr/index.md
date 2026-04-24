@@ -16,7 +16,11 @@ The repository currently tracks these architecture decision records:
 - [ADR-012 — Phase 2 package set for default analyzers and backend](ADR-012-phase-2-package-set-default-analyzers-backend.md)
 - [ADR-013 — Final multirepo repository set and release coordination policy](ADR-013-final-multirepo-repository-set-release-coordination-policy.md)
 - [ADR-014 — Canonical monorepo with generated distribution repositories](ADR-014-canonical-monorepo-generated-distribution-repositories.md)
+- [ADR-015 — Codira Development Roadmap](ADR-015-codira-development-roadmap.md)
 - [ADR-016 — Richer symbol modeling for overload metadata and named declarations](ADR-016-richer-symbol-modeling-for-overload-metadata-and-named-declarations.md)
+- [ADR-017 — Python Runtime Support Policy](ADR-017-python-runtime-support-policy.md)
+- [ADR-018 — CI Platform Coverage Policy](ADR-018-ci-platform-coverage-policy.md)
+- [ADR-019 — Index Freshness and Automatic Rebuild Policy](ADR-019-index-freshness-automatic-rebuild-policy.md)
 
 `ADR-004` is the active migration record for the current architecture branch
 and should be read together with the documents under `docs/architecture/`.

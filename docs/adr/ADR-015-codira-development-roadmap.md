@@ -5,7 +5,7 @@
 
 ## Context
 
-This roadmap is derived from the current issue set (notably :contentReference[oaicite:0]{index=0}) and reflects:
+This roadmap is derived from the current issue set and reflects:
 
 - strong emphasis on deterministic behavior
 - ongoing architectural stabilization (#7, #8, #9, #10)
