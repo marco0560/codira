@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from scripts.bootstrap_dev_environment import CommandSpec
     from scripts.install_first_party_packages import (
         InstallCommandRequest as InstallCommandRequestType,
@@ -632,6 +634,79 @@ class _BootstrapHelperModule(Protocol):
         """
 
 
+class _RepoToolRunnerModule(Protocol):
+    """Protocol for the repository tool runner helper."""
+
+    def tool_state_root(
+        self, repo_root: Path, *, temp_root: Path | None = None
+    ) -> Path:
+        """
+        Return the per-checkout tool-state root.
+
+        Parameters
+        ----------
+        repo_root : pathlib.Path
+            Repository root for the current checkout.
+        temp_root : pathlib.Path | None, optional
+            Temporary root override.
+
+        Returns
+        -------
+        pathlib.Path
+            Tool-state root outside the repository.
+        """
+
+    def tool_environment(
+        self,
+        base_env: Mapping[str, str],
+        *,
+        state_root: Path,
+    ) -> dict[str, str]:
+        """
+        Build the redirected tool environment.
+
+        Parameters
+        ----------
+        base_env : collections.abc.Mapping[str, str]
+            Baseline process environment.
+        state_root : pathlib.Path
+            Non-repository state root.
+
+        Returns
+        -------
+        dict[str, str]
+            Child process environment.
+        """
+
+    def build_tool_argv(
+        self,
+        tool: str,
+        tool_args: tuple[str, ...],
+        *,
+        state_root: Path,
+        python: str,
+    ) -> tuple[str, ...]:
+        """
+        Build the redirected tool argument vector.
+
+        Parameters
+        ----------
+        tool : str
+            Supported tool name.
+        tool_args : tuple[str, ...]
+            Tool arguments.
+        state_root : pathlib.Path
+            Non-repository state root.
+        python : str
+            Python executable.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Complete command argument vector.
+        """
+
+
 def _load_first_party_package_inventory() -> _PackageInventoryModule:
     """
     Load the shared first-party package inventory helper.
@@ -771,6 +846,29 @@ def _load_bootstrap_helper() -> _BootstrapHelperModule:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return cast("_BootstrapHelperModule", module)
+
+
+def _load_repo_tool_runner() -> _RepoToolRunnerModule:
+    """
+    Load the repository tool runner helper from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the tool runner script.
+    """
+    helper_path = Path(__file__).resolve().parents[1] / "scripts" / "run_repo_tool.py"
+    spec = importlib.util.spec_from_file_location("run_repo_tool", helper_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_RepoToolRunnerModule", module)
 
 
 def _load_release_install_rehearsal_helper() -> _ReleaseInstallRehearsalModule:
@@ -964,12 +1062,140 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
     }
 
     assert {key for key in entries if key.startswith("alias.")} == expected_aliases
-    assert entries["alias.check"].endswith("pytest -q'")
+    assert "scripts/run_repo_tool.py black --check ." in entries["alias.check"]
+    assert "scripts/run_repo_tool.py ruff check ." in entries["alias.check"]
+    assert "scripts/run_repo_tool.py mypy ." in entries["alias.check"]
+    assert "scripts/run_repo_tool.py pytest -q" in entries["alias.check"]
+    assert "source .venv/bin/activate" not in entries["alias.check"]
+    assert entries["alias.fix"].endswith("scripts/run_repo_tool.py ruff check . --fix")
     assert "alias.ctx" not in entries
     assert "user.name" not in entries
     assert "user.email" not in entries
     assert not any(key.startswith("remote.") for key in entries)
     assert not any("credential" in key for key in entries)
+
+
+def test_repo_tool_runner_uses_non_repository_tool_state(tmp_path: Path) -> None:
+    """
+    Keep sanctioned tool state outside the repository cleanup surface.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for deterministic path assertions.
+
+    Returns
+    -------
+    None
+        The test asserts cache and temp environment variables point below the
+        selected non-repository tool-state root.
+    """
+    helper = _load_repo_tool_runner()
+    repo_root = tmp_path / "repo"
+    temp_root = tmp_path / "system-temp"
+    repo_root.mkdir()
+    temp_root.mkdir()
+
+    state_root = helper.tool_state_root(repo_root, temp_root=temp_root)
+    env = helper.tool_environment(
+        {
+            "PRE_COMMIT_HOME": str(repo_root / ".pre-commit-cache"),
+            "TMP": str(repo_root / ".tmp"),
+        },
+        state_root=state_root,
+    )
+
+    assert state_root.parent.parent == temp_root
+    assert repo_root not in state_root.parents
+    assert env["PRE_COMMIT_HOME"] == str(state_root / "pre-commit")
+    assert env["MYPY_CACHE_DIR"] == str(state_root / "mypy")
+    assert env["RUFF_CACHE_DIR"] == str(state_root / "ruff")
+    assert env["TMP"] == str(state_root / "tmp")
+    assert env["TEMP"] == str(state_root / "tmp")
+    assert env["TMPDIR"] == str(state_root / "tmp")
+
+
+def test_repo_tool_runner_adds_tool_specific_cache_arguments(tmp_path: Path) -> None:
+    """
+    Route tool-specific cache flags through the central wrapper.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for deterministic path assertions.
+
+    Returns
+    -------
+    None
+        The test asserts pytest and ruff receive explicit non-repository cache
+        arguments while pre-commit resolves through its Python module.
+    """
+    helper = _load_repo_tool_runner()
+    state_root = tmp_path / "state"
+
+    assert helper.build_tool_argv(
+        "pytest",
+        ("-q",),
+        state_root=state_root,
+        python="python",
+    ) == (
+        "python",
+        "-m",
+        "pytest",
+        "-o",
+        f"cache_dir={state_root / 'pytest-cache'}",
+        "--basetemp",
+        str(state_root / "pytest-tmp"),
+        "-q",
+    )
+    assert helper.build_tool_argv(
+        "ruff",
+        ("check", ".", "--fix"),
+        state_root=state_root,
+        python="python",
+    ) == (
+        "python",
+        "-m",
+        "ruff",
+        "check",
+        "--cache-dir",
+        str(state_root / "ruff"),
+        ".",
+        "--fix",
+    )
+    assert helper.build_tool_argv(
+        "pre-commit",
+        ("run", "--all-files"),
+        state_root=state_root,
+        python="python",
+    ) == ("python", "-m", "pre_commit", "run", "--all-files")
+
+
+def test_git_hooks_route_validation_through_repo_tool_runner() -> None:
+    """
+    Keep Git hook validation aligned with the central tool-state wrapper.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts hooks do not bypass ``scripts/run_repo_tool.py``.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    pre_commit_hook = (repo_root / ".githooks" / "pre-commit").read_text(
+        encoding="utf-8"
+    )
+    pre_push_hook = (repo_root / ".githooks" / "pre-push").read_text(encoding="utf-8")
+
+    assert "scripts/run_repo_tool.py" in pre_commit_hook
+    assert "scripts/run_repo_tool.py" in pre_push_hook
+    assert ".venv/bin/pre-commit" not in pre_commit_hook
+    assert ".venv/bin/pre-commit" not in pre_push_hook
+    assert "-m mypy" not in pre_push_hook
+    assert "-m pytest" not in pre_push_hook
 
 
 def test_install_helper_can_target_exported_split_repositories() -> None:
@@ -1806,6 +2032,62 @@ def test_build_bootstrap_commands_reuses_shared_first_party_install_command() ->
         "--core-extra",
         "semantic",
     )
+
+
+def test_build_bootstrap_validation_commands_use_repo_tool_runner() -> None:
+    """
+    Keep bootstrap validation from creating repo-local tool cache directories.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts validation commands execute through the shared tool
+        runner wrapper.
+    """
+    bootstrap_helper = _load_bootstrap_helper()
+    repo_root = Path("/tmp/codira")
+    commands = bootstrap_helper.build_bootstrap_commands(
+        repo_root=repo_root,
+        python="/usr/bin/python3",
+        skip_validation=False,
+    )
+    validation_commands = {
+        command.description: command.argv
+        for command in commands
+        if command.description
+        in {"Run pre-commit hooks", "Run black", "Run ruff", "Run mypy", "Run tests"}
+    }
+    python_bin = str(repo_root / ".venv" / "bin" / "python")
+
+    assert validation_commands == {
+        "Run pre-commit hooks": (
+            python_bin,
+            "scripts/run_repo_tool.py",
+            "pre-commit",
+            "run",
+            "--all-files",
+        ),
+        "Run black": (
+            python_bin,
+            "scripts/run_repo_tool.py",
+            "black",
+            "--check",
+            ".",
+        ),
+        "Run ruff": (
+            python_bin,
+            "scripts/run_repo_tool.py",
+            "ruff",
+            "check",
+            ".",
+        ),
+        "Run mypy": (python_bin, "scripts/run_repo_tool.py", "mypy", "."),
+        "Run tests": (python_bin, "scripts/run_repo_tool.py", "pytest"),
+    }
 
 
 def test_ci_workflow_fetches_tags_for_setuptools_scm() -> None:

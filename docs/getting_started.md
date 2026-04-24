@@ -133,11 +133,11 @@ codira refs _retrieve_script_candidates --incoming --tree --dot
 The repository expects contributors to run:
 
 ```bash
-source .venv/bin/activate
-black --check src scripts tests
-ruff check src scripts tests
-mypy src scripts tests
-pytest -q
+python scripts/run_repo_tool.py black --check src scripts tests
+python scripts/run_repo_tool.py ruff check src scripts tests
+python scripts/run_repo_tool.py mypy src scripts tests
+python scripts/run_repo_tool.py pytest -q
 ```
 
-Use the repository `.venv` for all Python-facing commands.
+Run Python-facing tools through `scripts/run_repo_tool.py` so tool cache and
+temporary state stays outside the repository cleanup surface.

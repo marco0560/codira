@@ -58,11 +58,23 @@ def git_alias_entries() -> list[tuple[str, str]]:
         (
             "alias.check",
             (
-                "!bash -lc 'source .venv/bin/activate && black --check . && "
-                "ruff check . && mypy . && pytest -q'"
+                "!f(){ bash scripts/run_with_repo_python.sh "
+                "scripts/run_repo_tool.py black --check . && "
+                "bash scripts/run_with_repo_python.sh "
+                "scripts/run_repo_tool.py ruff check . && "
+                "bash scripts/run_with_repo_python.sh "
+                "scripts/run_repo_tool.py mypy . && "
+                "bash scripts/run_with_repo_python.sh "
+                "scripts/run_repo_tool.py pytest -q; }; f"
             ),
         ),
-        ("alias.fix", "!ruff check . --fix"),
+        (
+            "alias.fix",
+            (
+                "!bash scripts/run_with_repo_python.sh "
+                "scripts/run_repo_tool.py ruff check . --fix"
+            ),
+        ),
         (
             "alias.clean-repo",
             "!bash scripts/run_with_repo_python.sh scripts/clean_repo.py",

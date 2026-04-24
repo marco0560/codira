@@ -3,16 +3,15 @@
 ## Monorepo Staging
 
 1. Ensure the working tree is clean.
-2. Run `source .venv/bin/activate`.
-3. Run `black --check src scripts tests packages`.
-4. Run `ruff check src scripts tests packages`.
-5. Run `mypy src scripts tests packages`.
-6. Run `pytest -q`.
-7. Run `python scripts/benchmark_release.py`.
-8. Review `.artifacts/benchmarks/release-hyperfine.json` for unexpected
+2. Run `python scripts/run_repo_tool.py black --check src scripts tests packages`.
+3. Run `python scripts/run_repo_tool.py ruff check src scripts tests packages`.
+4. Run `python scripts/run_repo_tool.py mypy src scripts tests packages`.
+5. Run `python scripts/run_repo_tool.py pytest -q`.
+6. Run `python scripts/benchmark_release.py`.
+7. Review `.artifacts/benchmarks/release-hyperfine.json` for unexpected
    regressions.
-9. Run `git release-audit`.
-10. Push the releasable staging commits with `git rel`.
+8. Run `git release-audit`.
+9. Push the releasable staging commits with `git rel`.
 
 ## Coordinated Package Release
 
