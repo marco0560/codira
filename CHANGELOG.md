@@ -1,3 +1,10 @@
+# [1.18.0](https://github.com/marco0560/codira/compare/v1.17.1...v1.18.0) (2026-04-25)
+
+
+### Features
+
+* **dev:** use symlist in demo workflow ([424e526](https://github.com/marco0560/codira/commit/424e526f800768a1efafe934979c25bb2e90b4cc))
+
 ## [1.17.1](https://github.com/marco0560/codira/compare/v1.17.0...v1.17.1) (2026-04-25)
 
 
