@@ -140,31 +140,31 @@ def run(
 # --- codira interaction layer ---
 
 
-def _ctx_json(repo: Path, query: str) -> dict[str, Any] | None:
+def _symlist_json(repo: Path) -> dict[str, Any] | None:
     """
-    Execute ``codira ctx --json`` and parse output.
+    Execute ``codira symlist --json`` and parse output.
 
     Parameters
     ----------
     repo : Path
         Target repository.
-    query : str
-        Query string.
 
     Returns
     -------
     dict[str, Any] | None
-        Parsed JSON result or None on failure.
+        Parsed JSON result, or None on failure.
     """
-    section(f"Discover candidates via ctx --json: {query}")
+    section("Discover candidates via symlist --json")
+
+    cmd = CODIRA + ["symlist", "--json", "--limit", "100", "--path", str(repo)]
 
     proc = subprocess.run(
-        CODIRA + ["ctx", "--json", query, "--path", str(repo)],
+        cmd,
         text=True,
         capture_output=True,
     )
 
-    print(f"> {quote_cmd(CODIRA + ['ctx', '--json', query, '--path', str(repo)])}")
+    print(f"> {quote_cmd(cmd)}")
 
     if proc.stdout:
         print(proc.stdout)
@@ -184,36 +184,64 @@ def _ctx_json(repo: Path, query: str) -> dict[str, Any] | None:
     return data
 
 
-def _extract_candidates(data: dict[str, Any]) -> list[tuple[str, float]]:
+def _metric_total(item: dict[str, Any], key: str) -> int:
     """
-    Extract candidate symbols from ctx output.
+    Extract a graph metric total from a symbol inventory item.
 
     Parameters
     ----------
-    data : dict[str, Any]
-        Parsed ctx JSON.
+    item : dict[str, Any]
+        Parsed symbol inventory item.
+    key : str
+        Metric field name.
 
     Returns
     -------
-    list[tuple[str, float]]
-        Candidate symbol names with confidence scores.
+    int
+        Metric total when present, otherwise zero.
     """
-    candidates: list[tuple[str, float]] = []
+    metric = item.get(key)
+    if not isinstance(metric, dict):
+        return 0
 
-    for item in data.get("top_matches", []):
-        if isinstance(item, dict) and item.get("type") in {"function", "method"}:
-            name = item.get("name")
-            conf = item.get("confidence", 0.0)
-            if isinstance(name, str) and isinstance(conf, (int, float)):
-                candidates.append((name, float(conf)))
+    total = metric.get("total", 0)
+    if isinstance(total, int):
+        return total
 
-    for item in data.get("module_expansion", []):
-        if isinstance(item, dict) and item.get("type") in {"function", "method"}:
-            name = item.get("name")
-            if isinstance(name, str):
-                candidates.append((name, 0.5))
+    return 0
 
-    return candidates
+
+def _repo_relative_prefix(repo: Path, file_path: str) -> str:
+    """
+    Convert a symbol inventory file path into a repo-root-relative prefix.
+
+    Parameters
+    ----------
+    repo : Path
+        Target repository.
+    file_path : str
+        File path emitted by ``codira symlist --json``.
+
+    Returns
+    -------
+    str
+        Repo-root-relative file prefix.
+
+    Raises
+    ------
+    SystemExit
+        If the file path cannot be expressed under the repository root.
+    """
+    repo_root = repo.resolve()
+    path = Path(file_path)
+    if not path.is_absolute():
+        path = repo_root / path
+
+    try:
+        return path.resolve(strict=False).relative_to(repo_root).as_posix()
+    except ValueError as exc:
+        msg = f"ERROR: symlist returned file outside repository: {file_path}"
+        raise SystemExit(msg) from exc
 
 
 def _has_symbol(repo: Path, name: str) -> bool:
@@ -240,73 +268,66 @@ def _has_symbol(repo: Path, name: str) -> bool:
     return proc.returncode == 0 and "No symbol found:" not in proc.stdout
 
 
-def _run_graph(repo: Path, args: list[str]) -> str:
+def _score_inventory_item(item: dict[str, Any]) -> int:
     """
-    Execute graph-related command.
+    Score a symbol inventory item by graph connectivity.
 
     Parameters
     ----------
-    repo : Path
-        Target repository.
-    args : list[str]
-        Command arguments.
+    item : dict[str, Any]
+        Parsed symbol inventory item.
 
     Returns
     -------
-    str
-        Command stdout.
+    int
+        Connectivity score.
     """
-    proc = subprocess.run(
-        CODIRA + args + ["--path", str(repo)],
-        text=True,
-        capture_output=True,
+    return (
+        _metric_total(item, "calls_out") * 2
+        + _metric_total(item, "calls_in") * 2
+        + _metric_total(item, "refs_out")
+        + _metric_total(item, "refs_in") * 2
     )
-    return proc.stdout
 
 
-def _score_candidate(repo: Path, name: str, confidence: float) -> float:
+def _extract_candidates(repo: Path, data: dict[str, Any]) -> list[tuple[str, str, int]]:
     """
-    Score a candidate symbol.
+    Extract candidate symbols from symlist output.
 
     Parameters
     ----------
     repo : Path
         Target repository.
-    name : str
-        Symbol name.
-    confidence : float
-        Base confidence score.
+    data : dict[str, Any]
+        Parsed symlist JSON.
 
     Returns
     -------
-    float
-        Final score.
+    list[tuple[str, str, int]]
+        Candidate symbol name, repo-root-relative file prefix, and score.
     """
-    calls = _run_graph(repo, ["calls", name])
-    calls_in = _run_graph(repo, ["calls", name, "--incoming"])
-    refs = _run_graph(repo, ["refs", name])
-    refs_in = _run_graph(repo, ["refs", name, "--incoming"])
+    candidates: list[tuple[str, str, int]] = []
 
-    score = 0.0
+    for item in data.get("symbols", []):
+        if not isinstance(item, dict) or item.get("type") not in {"function", "method"}:
+            continue
 
-    if "No call edges found" not in calls:
-        score += 2
-    if "No call edges found" not in calls_in:
-        score += 2
-    if "No callable references found" not in refs:
-        score += 1
-    if "No callable references found" not in refs_in:
-        score += 2
-    if "<unresolved>" not in calls:
-        score += 1
+        name = item.get("name")
+        file_path = item.get("file")
+        if not isinstance(name, str) or not isinstance(file_path, str):
+            continue
 
-    score += confidence
+        score = _score_inventory_item(item)
+        if score <= 0:
+            continue
 
-    print(f"> scored candidate: {name} -> {score:.2f}")
-    return score
+        prefix = _repo_relative_prefix(repo, file_path)
+        candidates.append((name, prefix, score))
+
+    return candidates
 
 
-def discover_symbol_with_edges(repo: Path) -> str:
+def discover_symbol_with_edges(repo: Path) -> tuple[str, str]:
     """
     Discover a symbol with meaningful graph connectivity.
 
@@ -317,39 +338,37 @@ def discover_symbol_with_edges(repo: Path) -> str:
 
     Returns
     -------
-    str
-        Selected symbol name.
+    tuple[str, str]
+        Selected symbol name and repo-root-relative file prefix.
 
     Raises
     ------
     SystemExit
         If no suitable symbol is found.
     """
-    queries = ["core logic", "call graph", "main"]
+    data = _symlist_json(repo)
+    if not data:
+        msg = "ERROR: symlist discovery failed"
+        raise SystemExit(msg)
 
     best_name: str | None = None
-    best_score = -1.0
+    best_prefix: str | None = None
+    best_score = -1
 
-    for q in queries:
-        data = _ctx_json(repo, q)
-        if not data:
+    for name, prefix, score in _extract_candidates(repo, data):
+        if not _has_symbol(repo, name):
             continue
 
-        candidates = _extract_candidates(data)
+        print(f"> scored candidate: {name} -> {score}")
 
-        for name, confidence in candidates:
-            if not _has_symbol(repo, name):
-                continue
+        if score > best_score:
+            best_score = score
+            best_name = name
+            best_prefix = prefix
 
-            score = _score_candidate(repo, name, confidence)
-
-            if score > best_score:
-                best_score = score
-                best_name = name
-
-    if best_name:
-        print(f"Selected best symbol: {best_name} (score={best_score:.2f})")
-        return best_name
+    if best_name and best_prefix:
+        print(f"Selected best symbol: {best_name} (score={best_score})")
+        return best_name, best_prefix
 
     msg = "ERROR: no suitable symbol found"
     raise SystemExit(msg)
@@ -400,56 +419,63 @@ def main() -> None:
     run(["cov"], path=repo, check=False, capture=True)
 
     section("STEP 6 — Discover symbol")
-    symbol = discover_symbol_with_edges(repo)
+    symbol, symbol_prefix = discover_symbol_with_edges(repo)
     print(f"Chosen symbol: {symbol}")
 
-    section("STEP 7 — Symbol lookup")
+    section("STEP 7 — Symbol inventory prefix example")
+    run(
+        ["symlist", "--prefix", symbol_prefix, "--limit", "100"],
+        path=repo,
+        capture=True,
+    )
+
+    section("STEP 8 — Symbol lookup")
     run(["sym", symbol], path=repo, capture=True)
 
-    section("STEP 8 — Embeddings")
+    section("STEP 9 — Embeddings")
     run(["emb", "core logic"], path=repo, check=False, capture=True)
 
-    section("STEP 9 — Context")
+    section("STEP 10 — Context")
     run(["ctx", "core logic"], path=repo, capture=True)
 
-    section("STEP 10 — Context (prompt)")
+    section("STEP 11 — Context (prompt)")
     run(["ctx", "--prompt", "improve test coverage"], path=repo, capture=True)
 
-    section("STEP 11 — Context (json)")
+    section("STEP 12 — Context (json)")
     run(["ctx", "--json", "core logic"], path=repo, capture=True)
 
-    section("STEP 12 — Context (explain)")
+    section("STEP 13 — Context (explain)")
     run(["ctx", "--explain", "ranking"], path=repo, capture=True)
 
-    section("STEP 13 — Calls")
+    section("STEP 14 — Calls")
     run(["calls", symbol], path=repo, check=False, capture=True)
 
-    section("STEP 14 — Calls tree")
+    section("STEP 15 — Calls tree")
     run(["calls", symbol, "--tree"], path=repo, check=False, capture=True)
 
-    section("STEP 15 — Calls dot")
+    section("STEP 16 — Calls dot")
     run(["calls", symbol, "--tree", "--dot"], path=repo, check=False, capture=True)
 
-    section("STEP 16 — Calls incoming")
+    section("STEP 17 — Calls incoming")
     run(["calls", symbol, "--incoming"], path=repo, check=False, capture=True)
 
-    section("STEP 17 — Refs")
+    section("STEP 18 — Refs")
     run(["refs", symbol], path=repo, check=False, capture=True)
 
-    section("STEP 18 — Refs incoming tree")
+    section("STEP 19 — Refs incoming tree")
     run(["refs", symbol, "--incoming", "--tree"], path=repo, check=False, capture=True)
 
-    section("STEP 19 — Refs dot")
+    section("STEP 20 — Refs dot")
     run(["refs", symbol, "--tree", "--dot"], path=repo, check=False, capture=True)
 
-    section("STEP 20 — Audit gate")
+    section("STEP 21 — Audit gate")
     ans = input("Does the repo use NumPy docstrings? [y/N]: ").lower()
 
     if ans == "y":
-        section("STEP 21 — Audit")
+        section("STEP 22 — Audit")
         run(["audit"], path=repo, check=False, capture=True)
 
-        section("STEP 22 — Audit JSON")
+        section("STEP 23 — Audit JSON")
         run(["audit", "--json"], path=repo, check=False, capture=True)
     else:
         print("Skipping audit (likely noisy)")
