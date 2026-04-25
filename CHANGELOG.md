@@ -1,3 +1,10 @@
+## [1.17.1](https://github.com/marco0560/codira/compare/v1.17.0...v1.17.1) (2026-04-25)
+
+
+### Bug Fixes
+
+* **cli:** fixed symbol inventory output formatting ([be922cc](https://github.com/marco0560/codira/commit/be922ccae580bb4cede1bc2b29ce57bbb6e38252))
+
 # [1.17.0](https://github.com/marco0560/codira/compare/v1.16.1...v1.17.0) (2026-04-25)
 
 
