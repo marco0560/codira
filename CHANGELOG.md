@@ -1,3 +1,16 @@
+# [1.17.0](https://github.com/marco0560/codira/compare/v1.16.1...v1.17.0) (2026-04-25)
+
+
+### Bug Fixes
+
+* **config:** exclude node_modules from pytest ([5e6c673](https://github.com/marco0560/codira/commit/5e6c673561602dd8858e8ffa88add4565dbc4abc))
+
+
+### Features
+
+* **ci:** centralize dev tooling via run_repo_tool and isolate tool state ([68efe8f](https://github.com/marco0560/codira/commit/68efe8fe3cb25bc0637648b43d366518d26950f3)), closes [#19](https://github.com/marco0560/codira/issues/19)
+* **cli:** add symlist symbol inventory ([d1a0794](https://github.com/marco0560/codira/commit/d1a07940bf4c9081d1e16ad1ec5456f49b9c2ad2)), closes [#26](https://github.com/marco0560/codira/issues/26)
+
 ## [1.16.1](https://github.com/marco0560/codira/compare/v1.16.0...v1.16.1) (2026-04-23)
 
 
