@@ -164,6 +164,7 @@ norecursedirs = [
   ".venv",
   "build",
   "dist",
+  "node_modules",
   "pytest-cache-files-*",
 ]
 
