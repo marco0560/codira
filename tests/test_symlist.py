@@ -263,13 +263,13 @@ def test_symlist_human_output_is_grouped_by_module(
             "--prefix",
             "pkg/a.py",
             "--limit",
-            "1",
+            "2",
         ],
     )
 
     assert main() == 0
     assert capsys.readouterr().out.splitlines() == [
         "pkg.a",
-        "  caller  calls_out=2 (0 unresolved) calls_in=0 (0 unresolved) "
-        "refs_out=0 (0 unresolved) refs_in=0 (0 unresolved)",
+        "  caller  calls_out=2",
+        "  dynamic  calls_out=1 (1 unresolved) calls_in=1",
     ]

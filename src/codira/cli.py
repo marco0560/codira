@@ -1825,7 +1825,7 @@ def _symbol_inventory_payload(
     }
 
 
-def _format_graph_metric(name: str, metric: BackendGraphMetric) -> str:
+def _format_graph_metric(name: str, metric: BackendGraphMetric) -> str | None:
     """
     Render one compact human-readable graph metric.
 
@@ -1838,9 +1838,13 @@ def _format_graph_metric(name: str, metric: BackendGraphMetric) -> str:
 
     Returns
     -------
-    str
-        Human-readable metric fragment.
+    str | None
+        Human-readable metric fragment, or ``None`` when all values are zero.
     """
+    if metric.total == 0:
+        return None
+    if metric.unresolved == 0:
+        return f"{name}={metric.total}"
     return f"{name}={metric.total} ({metric.unresolved} unresolved)"
 
 
@@ -1881,14 +1885,17 @@ def _run_symbol_inventory(request: SymbolInventoryCommandRequest) -> int:
             current_module = item.module
             print(item.module)
         metrics = " ".join(
-            (
+            metric
+            for metric in (
                 _format_graph_metric("calls_out", item.calls_out),
                 _format_graph_metric("calls_in", item.calls_in),
                 _format_graph_metric("refs_out", item.refs_out),
                 _format_graph_metric("refs_in", item.refs_in),
             )
+            if metric is not None
         )
-        print(f"  {item.name}  {metrics}")
+        suffix = f"  {metrics}" if metrics else ""
+        print(f"  {item.name}{suffix}")
     return 0
 
 
