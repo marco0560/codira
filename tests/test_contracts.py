@@ -37,6 +37,7 @@ from codira.contracts import (
     BackendPersistAnalysisRequest,
     BackendRelationQueryRequest,
     BackendRuntimeInventoryRequest,
+    BackendSymbolInventoryItem,
     IndexBackend,
     LanguageAnalyzer,
     RetrievalProducer,
@@ -501,6 +502,39 @@ class _FakeBackend:
             Empty symbol rows for protocol validation.
         """
         del root, name, prefix, conn
+        return []
+
+    def symbol_inventory(
+        self,
+        root: Path,
+        *,
+        prefix: str | None = None,
+        include_tests: bool = False,
+        limit: int = 1000,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[BackendSymbolInventoryItem]:
+        """
+        Return no inventory rows for protocol validation.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        prefix : str | None, optional
+            Optional path filter.
+        include_tests : bool, optional
+            Whether test modules are included.
+        limit : int, optional
+            Maximum result count.
+        conn : sqlite3.Connection | None, optional
+            Optional SQLite connection.
+
+        Returns
+        -------
+        list[codira.contracts.BackendSymbolInventoryItem]
+            Empty symbol inventory rows for protocol validation.
+        """
+        del root, prefix, include_tests, limit, conn
         return []
 
     def find_symbol_overloads(

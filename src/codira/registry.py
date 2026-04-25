@@ -63,6 +63,7 @@ REQUIRED_BACKEND_METHODS: tuple[str, ...] = (
     "close_connection",
     "list_symbols_in_module",
     "find_symbol",
+    "symbol_inventory",
     "docstring_issues",
     "find_call_edges",
     "find_callable_refs",

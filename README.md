@@ -261,6 +261,14 @@ codira sym build_parser --json
 codira sym build_parser --prefix src/codira
 ```
 
+List indexed symbols with graph metrics:
+
+```bash
+codira symlist
+codira symlist --json
+codira symlist --limit 20
+```
+
 Inspect embedding-only matches and backend metadata:
 
 ```bash
@@ -373,7 +381,36 @@ Expected result semantics:
 - returns exact symbol-name matches, not semantic approximations
 - is best when the symbol name is already known
 
-### 2. `emb`
+### 2. `symlist`
+
+Use `symlist` when you want an indexed symbol inventory with static call and
+callable-reference connectivity counts.
+
+Suggested use cases:
+
+- inspect repository structure after indexing
+- identify symbols with many incoming calls or references
+- export a deterministic symbol inventory for tooling with `--json`
+- include test symbols explicitly with `--include-tests`
+
+Examples:
+
+```bash
+codira symlist
+codira symlist --json
+codira symlist --limit 20
+codira symlist --include-tests
+codira symlist --prefix src/codira
+```
+
+Expected result semantics:
+
+- sorts symbols by `(module, name)` before applying `--limit`
+- excludes `tests` modules by default
+- reports `calls_out`, `calls_in`, `refs_out`, and `refs_in` counts
+- includes unresolved outgoing graph edges in total and unresolved counts
+
+### 3. `emb`
 
 Use `emb` to inspect the embedding channel by itself.
 
@@ -395,7 +432,7 @@ Expected result semantics:
 - shows embedding-ranked matches only
 - does not include the multi-channel merge used by `ctx`
 
-### 3. `calls`
+### 4. `calls`
 
 Use `calls` to inspect direct indexed static call edges.
 
@@ -421,7 +458,7 @@ Expected result semantics:
 - tree mode remains bounded by `--max-depth` and `--max-nodes`
 - DOT export is opt-in and only available for bounded tree mode
 
-### 4. `refs`
+### 5. `refs`
 
 Use `refs` to inspect callable-object references rather than direct call sites.
 
@@ -446,7 +483,7 @@ Expected result semantics:
   and returned function objects
 - is complementary to `calls`, not interchangeable with it
 
-### 5. `ctx`
+### 6. `ctx`
 
 Use `ctx` when you have a task or question rather than an exact symbol
 name.
@@ -474,7 +511,7 @@ Expected result semantics:
 - can expand related cross-module symbols after ranking
 - is a focused context pack, not a full repository report
 
-### 6. `audit`
+### 7. `audit`
 
 Use `audit` to inspect indexed docstring problems directly.
 
@@ -497,7 +534,7 @@ Expected result semantics:
 - reports indexed docstring issues, not arbitrary style suggestions
 - is most useful after a fresh `codira index`
 
-### 7. `plugins`
+### 8. `plugins`
 
 Use `plugins` to inspect which capabilities are active and where they come
 from.
@@ -520,7 +557,7 @@ Expected result semantics:
 - reports installed or active plugin and capability surfaces
 - is useful when debugging environment or packaging issues
 
-### 8. `caps`
+### 9. `caps`
 
 Use `caps` when a tool, contributor, or agent needs codira to declare what it
 can answer before making retrieval decisions. The longer `capabilities` command
@@ -550,7 +587,7 @@ Expected result semantics:
 - describes capability surfaces only; it does not index or query repository
   content
 
-### 9. Common Flags and Modes
+### 10. Common Flags and Modes
 
 The most important cross-cutting flags are:
 
@@ -577,6 +614,7 @@ Examples:
 
 ```bash
 codira sym build_parser --prefix src/codira
+codira symlist --prefix src/codira
 codira emb "schema migration rules" --prefix src/codira/query
 codira calls imported_helper --module pkg.b --incoming --prefix src/codira/query
 codira refs _retrieve_script_candidates --incoming --prefix src/codira/query
@@ -587,6 +625,7 @@ codira ctx "missing numpy docstring" --json --prefix src/codira/query
 Semantics:
 
 - `sym --prefix P NAME`: only symbols whose defining file is under `P`
+- `symlist --prefix P`: only inventory symbols whose defining file is under `P`
 - `emb --prefix P QUERY`: only matched symbols whose file is under `P`
 - `ctx --prefix P QUERY`: retrieval, expansion, issues, and references
   are restricted to files under `P`
@@ -606,6 +645,7 @@ machine-readable result instead of human-oriented text.
 Supported subcommands:
 
 - `sym`
+- `symlist`
 - `emb`
 - `calls`
 - `refs`
@@ -617,6 +657,7 @@ Examples:
 
 ```bash
 codira sym build_parser --json
+codira symlist --json --limit 20
 codira emb "schema migration rules" --json --prefix src/codira/query
 codira calls imported_helper --module pkg.b --incoming --json
 codira refs _retrieve_script_candidates --incoming --json --prefix src/codira/query
@@ -648,6 +689,16 @@ Status values:
 
 `ctx --json` keeps its existing richer retrieval schema. It is not part
 of the lightweight query-envelope contract above.
+
+`symlist --json` uses an inventory schema:
+
+```json
+{
+  "schema_version": "1.0",
+  "status": "ok",
+  "symbols": []
+}
+```
 
 ## Using `--prompt`
 

@@ -60,6 +60,7 @@ from codira.query.exact import (
     find_symbol,
     find_symbol_enum_members,
     find_symbol_overloads,
+    symbol_inventory,
 )
 from codira.registry import (
     active_index_backend,
@@ -85,6 +86,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     import codira.indexer as indexer_types
+    from codira.contracts import BackendGraphMetric, BackendSymbolInventoryItem
     from codira.types import DocstringIssueRow
 
 GIT_EXE = shutil.which("git") or "git"
@@ -92,7 +94,7 @@ __version__ = package_version()
 
 QUERY_JSON_SCHEMA_VERSION = "1.0"
 _REPO_PATH_COMMANDS = frozenset(
-    {"index", "cov", "sym", "emb", "calls", "refs", "audit", "ctx"}
+    {"index", "cov", "sym", "symlist", "emb", "calls", "refs", "audit", "ctx"}
 )
 
 
@@ -170,6 +172,35 @@ class EmbeddingCommandRequest:
     query: str
     limit: int
     prefix: str | None = None
+    as_json: bool = False
+    query_prefix: str | None = None
+
+
+@dataclass(frozen=True)
+class SymbolInventoryCommandRequest:
+    """
+    Runtime options for the ``symlist`` CLI command.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict symbols.
+    include_tests : bool, optional
+        Whether symbols from ``tests`` modules are included.
+    limit : int, optional
+        Maximum number of symbols to print after sorting.
+    as_json : bool, optional
+        Whether to render structured JSON output.
+    query_prefix : str | None, optional
+        User-facing repo-root-relative prefix echoed in JSON output.
+    """
+
+    root: Path
+    prefix: str | None = None
+    include_tests: bool = False
+    limit: int = 1000
     as_json: bool = False
     query_prefix: str | None = None
 
@@ -580,6 +611,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  codira index --path /mnt/readonly/repo --output-dir /tmp/codira-run\n"
             "  codira sym build_parser\n"
             '  codira emb "schema migration rules"\n'
+            "  codira symlist --limit 20\n"
             '  codira ctx "find schema migration logic"\n'
             "  codira ctx --prompt "
             '"add a regression test for symbol lookup"\n'
@@ -598,7 +630,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         title="subcommands",
-        metavar=("{help,index,cov,sym,emb,calls,refs,audit,ctx,plugins,caps}"),
+        metavar=("{help,index,cov,sym,symlist,emb,calls,refs,audit,ctx,plugins,caps}"),
     )
 
     sub.add_parser("help", help="Show help")
@@ -687,6 +719,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="Restrict results to files under this repo-root-relative path prefix",
     )
     _add_repo_path_arguments(symbol_parser)
+
+    symlist_parser = sub.add_parser(
+        "symlist",
+        help="List indexed symbols with graph metrics",
+        description=(
+            "List indexed symbols with static call and callable-reference "
+            "connectivity counts."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  codira symlist\n"
+            "  codira symlist --json\n"
+            "  codira symlist --limit 20\n"
+            "  codira symlist --include-tests\n"
+            "  codira symlist --prefix src/codira"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    symlist_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output structured JSON for machine consumption",
+    )
+    symlist_parser.add_argument(
+        "--prefix",
+        help="Restrict symbols to files under this repo-root-relative path prefix",
+    )
+    symlist_parser.add_argument(
+        "--include-tests",
+        action="store_true",
+        help="Include symbols from tests modules",
+    )
+    symlist_parser.add_argument(
+        "--limit",
+        type=int,
+        default=1000,
+        help="Maximum number of symbols to print after sorting (default: 1000)",
+    )
+    _add_repo_path_arguments(symlist_parser)
 
     embeddings_parser = sub.add_parser(
         "emb",
@@ -1704,6 +1775,120 @@ def _run_symbol(
         else:
             print(f"{symbol_type}: {module_name}.{symbol_name} {file_path}:{lineno}")
 
+    return 0
+
+
+def _graph_metric_payload(metric: BackendGraphMetric) -> dict[str, int]:
+    """
+    Convert one graph metric to the public JSON shape.
+
+    Parameters
+    ----------
+    metric : codira.contracts.BackendGraphMetric
+        Graph metric returned by the active backend.
+
+    Returns
+    -------
+    dict[str, int]
+        JSON-ready metric payload.
+    """
+    return {"total": metric.total, "unresolved": metric.unresolved}
+
+
+def _symbol_inventory_payload(
+    item: BackendSymbolInventoryItem,
+) -> dict[str, object]:
+    """
+    Convert one symbol inventory row to the public JSON shape.
+
+    Parameters
+    ----------
+    item : codira.contracts.BackendSymbolInventoryItem
+        Backend-neutral inventory row.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-ready symbol inventory payload.
+    """
+    return {
+        "id": f"{item.module}:{item.name}",
+        "type": item.symbol_type,
+        "module": item.module,
+        "name": item.name,
+        "file": item.file,
+        "lineno": item.lineno,
+        "calls_out": _graph_metric_payload(item.calls_out),
+        "calls_in": _graph_metric_payload(item.calls_in),
+        "refs_out": _graph_metric_payload(item.refs_out),
+        "refs_in": _graph_metric_payload(item.refs_in),
+    }
+
+
+def _format_graph_metric(name: str, metric: BackendGraphMetric) -> str:
+    """
+    Render one compact human-readable graph metric.
+
+    Parameters
+    ----------
+    name : str
+        Metric label to render.
+    metric : codira.contracts.BackendGraphMetric
+        Metric values returned by the active backend.
+
+    Returns
+    -------
+    str
+        Human-readable metric fragment.
+    """
+    return f"{name}={metric.total} ({metric.unresolved} unresolved)"
+
+
+def _run_symbol_inventory(request: SymbolInventoryCommandRequest) -> int:
+    """
+    Print indexed symbols with graph connectivity metrics.
+
+    Parameters
+    ----------
+    request : SymbolInventoryCommandRequest
+        Runtime options for the ``symlist`` command.
+
+    Returns
+    -------
+    int
+        Zero after rendering the inventory.
+    """
+    rows = symbol_inventory(
+        request.root,
+        prefix=request.prefix,
+        include_tests=request.include_tests,
+        limit=request.limit,
+    )
+
+    if request.as_json:
+        _emit_json(
+            {
+                "schema_version": QUERY_JSON_SCHEMA_VERSION,
+                "status": "ok",
+                "symbols": [_symbol_inventory_payload(item) for item in rows],
+            }
+        )
+        return 0
+
+    current_module: str | None = None
+    for item in rows:
+        if item.module != current_module:
+            current_module = item.module
+            print(item.module)
+        metrics = " ".join(
+            (
+                _format_graph_metric("calls_out", item.calls_out),
+                _format_graph_metric("calls_in", item.calls_in),
+                _format_graph_metric("refs_out", item.refs_out),
+                _format_graph_metric("refs_in", item.refs_in),
+            )
+        )
+        print(f"  {item.name}  {metrics}")
     return 0
 
 
@@ -3072,6 +3257,45 @@ def _run_embeddings_command(
     )
 
 
+def _run_symbol_inventory_command(
+    args: argparse.Namespace,
+    root: Path,
+    *,
+    prefix: str | None,
+    raw_prefix: str | None,
+) -> int:
+    """
+    Run the ``symlist`` command after index freshness checks.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command-line arguments.
+    root : pathlib.Path
+        Repository root containing the index.
+    prefix : str | None
+        Normalized absolute prefix used for backend filtering.
+    raw_prefix : str | None
+        User-facing repo-root-relative prefix echoed in JSON output.
+
+    Returns
+    -------
+    int
+        Process exit status for the symbol inventory command.
+    """
+    _ensure_index(root)
+    return _run_symbol_inventory(
+        SymbolInventoryCommandRequest(
+            root=root,
+            prefix=prefix,
+            include_tests=args.include_tests,
+            limit=args.limit,
+            as_json=args.json,
+            query_prefix=raw_prefix,
+        )
+    )
+
+
 def _validate_relation_output_flags(
     parser: argparse.ArgumentParser,
     *,
@@ -3262,6 +3486,12 @@ def _command_handlers(
         ),
         "cov": lambda: _run_coverage(root, as_json=args.json),
         "sym": lambda: _run_symbol_command(
+            args,
+            root,
+            prefix=prefix,
+            raw_prefix=raw_prefix,
+        ),
+        "symlist": lambda: _run_symbol_inventory_command(
             args,
             root,
             prefix=prefix,

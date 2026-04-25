@@ -26,9 +26,11 @@ from typing import TYPE_CHECKING, cast
 from codira.contracts import (
     BackendEmbeddingCandidatesRequest,
     BackendError,
+    BackendGraphMetric,
     BackendPersistAnalysisRequest,
     BackendRelationQueryRequest,
     BackendRuntimeInventoryRequest,
+    BackendSymbolInventoryItem,
 )
 from codira.prefix import normalize_prefix, prefix_clause
 from codira.schema import SCHEMA_VERSION
@@ -305,6 +307,173 @@ class SQLiteIndexBackend:
         finally:
             if owns_connection:
                 conn.close()
+
+    def symbol_inventory(
+        self,
+        root: Path,
+        *,
+        prefix: str | None = None,
+        include_tests: bool = False,
+        limit: int = 1000,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[BackendSymbolInventoryItem]:
+        """
+        Return indexed symbols with graph connectivity metrics.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        prefix : str | None, optional
+            Repo-root-relative path prefix used to restrict symbol files.
+        include_tests : bool, optional
+            Whether symbols from ``tests`` modules are included.
+        limit : int, optional
+            Maximum number of rows to return after deterministic sorting.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        list[codira.contracts.BackendSymbolInventoryItem]
+            Symbol inventory rows ordered deterministically.
+        """
+        if limit < 0:
+            msg = "Limit must be non-negative."
+            raise ValueError(msg)
+
+        owns_connection = conn is None
+        normalized_prefix = normalize_prefix(root, prefix)
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            test_sql = (
+                ""
+                if include_tests
+                else "AND s.module_name != 'tests' AND s.module_name NOT LIKE 'tests.%'"
+            )
+            rows = conn.execute(
+                f"""
+                SELECT s.type, s.module_name, s.name, f.path, s.lineno
+                FROM symbol_index s
+                JOIN files f
+                  ON s.file_id = f.id
+                WHERE 1 = 1
+                {prefix_sql}
+                {test_sql}
+                ORDER BY s.module_name, s.name, s.type, f.path, s.lineno
+                """,
+                tuple(prefix_params),
+            ).fetchall()
+            symbols: list[tuple[str, str, str, str, int]] = []
+            seen_identities: set[tuple[str, str]] = set()
+            for symbol_type, module_name, symbol_name, file_path, lineno in rows:
+                identity = (str(module_name), str(symbol_name))
+                if identity in seen_identities:
+                    continue
+                seen_identities.add(identity)
+                symbols.append(
+                    (
+                        str(symbol_type),
+                        identity[0],
+                        identity[1],
+                        str(file_path),
+                        int(lineno),
+                    )
+                )
+
+            limited_symbols = symbols[:limit]
+            return [
+                BackendSymbolInventoryItem(
+                    symbol_type=symbol_type,
+                    module=module_name,
+                    name=symbol_name,
+                    file=file_path,
+                    lineno=lineno,
+                    calls_out=self._symbol_metric(
+                        conn,
+                        "call_edges",
+                        "caller_module",
+                        "caller_name",
+                        module_name,
+                        symbol_name,
+                    ),
+                    calls_in=self._symbol_metric(
+                        conn,
+                        "call_edges",
+                        "callee_module",
+                        "callee_name",
+                        module_name,
+                        symbol_name,
+                    ),
+                    refs_out=self._symbol_metric(
+                        conn,
+                        "callable_refs",
+                        "owner_module",
+                        "owner_name",
+                        module_name,
+                        symbol_name,
+                    ),
+                    refs_in=self._symbol_metric(
+                        conn,
+                        "callable_refs",
+                        "target_module",
+                        "target_name",
+                        module_name,
+                        symbol_name,
+                    ),
+                )
+                for symbol_type, module_name, symbol_name, file_path, lineno in limited_symbols
+            ]
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def _symbol_metric(
+        self,
+        conn: sqlite3.Connection,
+        table: str,
+        module_column: str,
+        name_column: str,
+        module_name: str,
+        symbol_name: str,
+    ) -> BackendGraphMetric:
+        """
+        Count graph edges for one symbol identity.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Open backend connection.
+        table : {"call_edges", "callable_refs"}
+            Graph table to aggregate.
+        module_column : str
+            Column storing the selected relation endpoint module.
+        name_column : str
+            Column storing the selected relation endpoint name.
+        module_name : str
+            Module component of the symbol identity.
+        symbol_name : str
+            Name component of the symbol identity.
+
+        Returns
+        -------
+        codira.contracts.BackendGraphMetric
+            Total and unresolved counts for the selected relation direction.
+        """
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*), COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
+            FROM {table}
+            WHERE {module_column} = ?
+              AND {name_column} = ?
+            """,
+            (module_name, symbol_name),
+        ).fetchone()
+        if row is None:
+            return BackendGraphMetric(total=0, unresolved=0)
+        return BackendGraphMetric(total=int(row[0]), unresolved=int(row[1]))
 
     def find_symbol_overloads(
         self,

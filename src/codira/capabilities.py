@@ -70,6 +70,15 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
             "coverage depends on analyzer declarations and parser support",
         ],
     },
+    "symlist": {
+        "intent": "symbol_inventory",
+        "channels": ["symbol", "call_graph", "references"],
+        "guarantee": "deterministic_symbol_inventory_order",
+        "limitations": [
+            "graph metrics are derived from indexed static relations",
+            "test modules are excluded unless requested",
+        ],
+    },
     "emb": {
         "intent": "embedding_similarity_lookup",
         "channels": ["embedding"],

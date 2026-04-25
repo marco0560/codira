@@ -27,6 +27,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
+from codira.contracts import BackendGraphMetric, BackendSymbolInventoryItem
 from codira.docstring import DocstringValidationRequest, validate_docstring
 from codira.prefix import normalize_prefix, path_has_prefix
 
@@ -1568,6 +1569,150 @@ class MemoryIndexBackend:
             and path_has_prefix(state.files[symbol.file_id].path, normalized_prefix)
         ]
         return sorted(rows, key=lambda row: (row[0], row[1], row[3], row[4]))
+
+    def symbol_inventory(
+        self,
+        root: Path,
+        *,
+        prefix: str | None = None,
+        include_tests: bool = False,
+        limit: int = 1000,
+        conn: object | None = None,
+    ) -> list[BackendSymbolInventoryItem]:
+        """
+        Return indexed symbols with graph connectivity metrics.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        prefix : str | None, optional
+            Optional repository-relative path prefix.
+        include_tests : bool, optional
+            Whether symbols from ``tests`` modules are included.
+        limit : int, optional
+            Maximum number of rows to return.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.contracts.BackendSymbolInventoryItem]
+            Matching symbol inventory rows.
+        """
+        if limit < 0:
+            msg = "Limit must be non-negative."
+            raise ValueError(msg)
+
+        state = self._conn_state(root, conn)
+        normalized_prefix = normalize_prefix(root, prefix)
+        rows = [
+            symbol.row(state.files[symbol.file_id].path)
+            for symbol in state.symbols
+            if path_has_prefix(state.files[symbol.file_id].path, normalized_prefix)
+            and (
+                include_tests
+                or (
+                    symbol.module_name != "tests"
+                    and not symbol.module_name.startswith("tests.")
+                )
+            )
+        ]
+        sorted_rows = sorted(
+            rows,
+            key=lambda row: (row[1], row[2], row[0], row[3], row[4]),
+        )
+        symbols: list[SymbolRow] = []
+        seen_identities: set[tuple[str, str]] = set()
+        for row in sorted_rows:
+            identity = (row[1], row[2])
+            if identity in seen_identities:
+                continue
+            seen_identities.add(identity)
+            symbols.append(row)
+
+        call_edges = self._derived_relations(state, state.call_records)
+        callable_refs = self._derived_relations(state, state.callable_ref_records)
+        return [
+            BackendSymbolInventoryItem(
+                symbol_type=symbol_type,
+                module=module_name,
+                name=symbol_name,
+                file=file_path,
+                lineno=lineno,
+                calls_out=self._inventory_metric(
+                    call_edges,
+                    module_name=module_name,
+                    symbol_name=symbol_name,
+                    module_index=0,
+                    name_index=1,
+                ),
+                calls_in=self._inventory_metric(
+                    call_edges,
+                    module_name=module_name,
+                    symbol_name=symbol_name,
+                    module_index=2,
+                    name_index=3,
+                ),
+                refs_out=self._inventory_metric(
+                    callable_refs,
+                    module_name=module_name,
+                    symbol_name=symbol_name,
+                    module_index=0,
+                    name_index=1,
+                ),
+                refs_in=self._inventory_metric(
+                    callable_refs,
+                    module_name=module_name,
+                    symbol_name=symbol_name,
+                    module_index=2,
+                    name_index=3,
+                ),
+            )
+            for symbol_type, module_name, symbol_name, file_path, lineno in symbols[
+                :limit
+            ]
+        ]
+
+    def _inventory_metric(
+        self,
+        rows: Sequence[CallEdgeRow],
+        *,
+        module_name: str,
+        symbol_name: str,
+        module_index: int,
+        name_index: int,
+    ) -> BackendGraphMetric:
+        """
+        Count inventory graph edges for one symbol identity.
+
+        Parameters
+        ----------
+        rows : collections.abc.Sequence[CallEdgeRow]
+            Derived relation rows to inspect.
+        module_name : str
+            Module component of the symbol identity.
+        symbol_name : str
+            Name component of the symbol identity.
+        module_index : int
+            Relation tuple index containing the endpoint module.
+        name_index : int
+            Relation tuple index containing the endpoint name.
+
+        Returns
+        -------
+        codira.contracts.BackendGraphMetric
+            Total and unresolved counts for the selected endpoint.
+        """
+        matched_rows = [
+            row
+            for row in rows
+            if row[module_index] == module_name and row[name_index] == symbol_name
+        ]
+        return BackendGraphMetric(
+            total=len(matched_rows),
+            unresolved=sum(1 for row in matched_rows if row[4] == 0),
+        )
 
     def find_symbol_overloads(
         self,

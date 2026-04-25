@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from codira.contracts import BackendRelationQueryRequest
+from codira.contracts import BackendRelationQueryRequest, BackendSymbolInventoryItem
 from codira.registry import active_index_backend
 
 if TYPE_CHECKING:
@@ -170,6 +170,46 @@ def find_symbol(
     """
     backend = active_index_backend()
     return backend.find_symbol(root, name, prefix=prefix, conn=conn)
+
+
+def symbol_inventory(
+    root: Path,
+    *,
+    prefix: str | None = None,
+    include_tests: bool = False,
+    limit: int = 1000,
+    conn: sqlite3.Connection | None = None,
+) -> list[BackendSymbolInventoryItem]:
+    """
+    Return indexed symbols with graph connectivity metrics.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict symbol files.
+    include_tests : bool, optional
+        Whether symbols from ``tests`` modules are included.
+    limit : int, optional
+        Maximum number of rows to return after deterministic sorting.
+    conn : sqlite3.Connection | None, optional
+        Existing database connection to reuse. When omitted, the backend
+        opens and closes its own connection.
+
+    Returns
+    -------
+    list[codira.contracts.BackendSymbolInventoryItem]
+        Symbol inventory rows ordered deterministically.
+    """
+    backend = active_index_backend()
+    return backend.symbol_inventory(
+        root,
+        prefix=prefix,
+        include_tests=include_tests,
+        limit=limit,
+        conn=conn,
+    )
 
 
 def docstring_issues(

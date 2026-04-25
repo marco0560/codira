@@ -51,6 +51,61 @@ class BackendError(RuntimeError):
     """
 
 
+@dataclass(frozen=True)
+class BackendGraphMetric:
+    """
+    Count one direction of graph connectivity for a symbol.
+
+    Parameters
+    ----------
+    total : int
+        Total number of edges in the selected direction.
+    unresolved : int
+        Number of edges in ``total`` whose target could not be resolved.
+    """
+
+    total: int
+    unresolved: int
+
+
+@dataclass(frozen=True)
+class BackendSymbolInventoryItem:
+    """
+    Symbol inventory row with graph connectivity metrics.
+
+    Parameters
+    ----------
+    symbol_type : str
+        Indexed symbol kind.
+    module : str
+        Module that owns the symbol identity.
+    name : str
+        Symbol name inside ``module``.
+    file : str
+        Defining file path.
+    lineno : int
+        Defining line number.
+    calls_out : BackendGraphMetric
+        Outgoing static call-edge counts.
+    calls_in : BackendGraphMetric
+        Incoming static call-edge counts.
+    refs_out : BackendGraphMetric
+        Outgoing callable-reference counts.
+    refs_in : BackendGraphMetric
+        Incoming callable-reference counts.
+    """
+
+    symbol_type: str
+    module: str
+    name: str
+    file: str
+    lineno: int
+    calls_out: BackendGraphMetric
+    calls_in: BackendGraphMetric
+    refs_out: BackendGraphMetric
+    refs_in: BackendGraphMetric
+
+
 @runtime_checkable
 class LanguageAnalyzer(Protocol):
     """
@@ -964,6 +1019,37 @@ class IndexBackend(Protocol):
         -------
         list[codira.types.SymbolRow]
             Matching symbol rows ordered deterministically.
+        """
+
+    def symbol_inventory(
+        self,
+        root: Path,
+        *,
+        prefix: str | None = None,
+        include_tests: bool = False,
+        limit: int = 1000,
+        conn: object | None = None,
+    ) -> list[BackendSymbolInventoryItem]:
+        """
+        Return indexed symbols with graph connectivity metrics.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        prefix : str | None, optional
+            Repo-root-relative path prefix used to restrict symbol files.
+        include_tests : bool, optional
+            Whether symbols from ``tests`` modules are included.
+        limit : int, optional
+            Maximum number of rows to return after deterministic sorting.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        list[codira.contracts.BackendSymbolInventoryItem]
+            Symbol inventory rows ordered deterministically.
         """
 
     def find_symbol_overloads(
