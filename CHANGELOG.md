@@ -1,3 +1,10 @@
+## [1.18.3](https://github.com/marco0560/codira/compare/v1.18.2...v1.18.3) (2026-04-26)
+
+
+### Bug Fixes
+
+* **git:** make aliases portable ([4af0eae](https://github.com/marco0560/codira/commit/4af0eaebe8a71761637582d3e304a03664a8dfa5))
+
 ## [1.18.2](https://github.com/marco0560/codira/compare/v1.18.1...v1.18.2) (2026-04-26)
 
 
