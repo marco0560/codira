@@ -1146,10 +1146,9 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
     }
 
     assert {key for key in entries if key.startswith("alias.")} == expected_aliases
-    assert "scripts/run_repo_tool.py black --check ." in entries["alias.check"]
-    assert "scripts/run_repo_tool.py ruff check ." in entries["alias.check"]
-    assert "scripts/run_repo_tool.py mypy ." in entries["alias.check"]
-    assert "scripts/run_repo_tool.py pytest -q" in entries["alias.check"]
+    assert entries["alias.check"].endswith(
+        "scripts/run_with_repo_python.sh scripts/validate_repo.py"
+    )
     assert "source .venv/bin/activate" not in entries["alias.check"]
     assert entries["alias.fix"].endswith("scripts/run_repo_tool.py ruff check . --fix")
     assert "alias.ctx" not in entries
@@ -2204,9 +2203,9 @@ def test_build_bootstrap_commands_reuses_shared_first_party_install_command() ->
     )
 
 
-def test_build_bootstrap_validation_commands_use_repo_tool_runner() -> None:
+def test_build_bootstrap_validation_commands_use_standard_validation_wrapper() -> None:
     """
-    Keep bootstrap validation from creating repo-local tool cache directories.
+    Keep bootstrap validation aligned with the standard validation wrapper.
 
     Parameters
     ----------
@@ -2215,8 +2214,7 @@ def test_build_bootstrap_validation_commands_use_repo_tool_runner() -> None:
     Returns
     -------
     None
-        The test asserts validation commands execute through the shared tool
-        runner wrapper.
+        The test asserts validation executes through ``scripts/validate_repo.py``.
     """
     bootstrap_helper = _load_bootstrap_helper()
     repo_root = Path("/tmp/codira")
@@ -2228,35 +2226,15 @@ def test_build_bootstrap_validation_commands_use_repo_tool_runner() -> None:
     validation_commands = {
         command.description: command.argv
         for command in commands
-        if command.description
-        in {"Run pre-commit hooks", "Run black", "Run ruff", "Run mypy", "Run tests"}
+        if command.description == "Run standard validation"
     }
     python_bin = str(repo_root / ".venv" / "bin" / "python")
 
     assert validation_commands == {
-        "Run pre-commit hooks": (
+        "Run standard validation": (
             python_bin,
-            "scripts/run_repo_tool.py",
-            "pre-commit",
-            "run",
-            "--all-files",
+            "scripts/validate_repo.py",
         ),
-        "Run black": (
-            python_bin,
-            "scripts/run_repo_tool.py",
-            "black",
-            "--check",
-            ".",
-        ),
-        "Run ruff": (
-            python_bin,
-            "scripts/run_repo_tool.py",
-            "ruff",
-            "check",
-            ".",
-        ),
-        "Run mypy": (python_bin, "scripts/run_repo_tool.py", "mypy", "."),
-        "Run tests": (python_bin, "scripts/run_repo_tool.py", "pytest"),
     }
 
 

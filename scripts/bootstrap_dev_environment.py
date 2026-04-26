@@ -160,46 +160,8 @@ def build_bootstrap_commands(
         commands.extend(
             [
                 CommandSpec(
-                    "Run pre-commit hooks",
-                    (
-                        str(python_bin),
-                        "scripts/run_repo_tool.py",
-                        "pre-commit",
-                        "run",
-                        "--all-files",
-                    ),
-                    repo_root,
-                ),
-                CommandSpec(
-                    "Run black",
-                    (
-                        str(python_bin),
-                        "scripts/run_repo_tool.py",
-                        "black",
-                        "--check",
-                        ".",
-                    ),
-                    repo_root,
-                ),
-                CommandSpec(
-                    "Run ruff",
-                    (
-                        str(python_bin),
-                        "scripts/run_repo_tool.py",
-                        "ruff",
-                        "check",
-                        ".",
-                    ),
-                    repo_root,
-                ),
-                CommandSpec(
-                    "Run mypy",
-                    (str(python_bin), "scripts/run_repo_tool.py", "mypy", "."),
-                    repo_root,
-                ),
-                CommandSpec(
-                    "Run tests",
-                    (str(python_bin), "scripts/run_repo_tool.py", "pytest"),
+                    "Run standard validation",
+                    (str(python_bin), "scripts/validate_repo.py"),
                     repo_root,
                 ),
             ]

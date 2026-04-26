@@ -133,11 +133,9 @@ codira refs _retrieve_script_candidates --incoming --tree --dot
 The repository expects contributors to run:
 
 ```bash
-python scripts/run_repo_tool.py black --check src scripts tests
-python scripts/run_repo_tool.py ruff check src scripts tests
-python scripts/run_repo_tool.py mypy src scripts tests
-python scripts/run_repo_tool.py pytest -q
+python scripts/validate_repo.py
 ```
 
-Run Python-facing tools through `scripts/run_repo_tool.py` so tool cache and
-temporary state stays outside the repository cleanup surface.
+Run Python-facing tools through `scripts/validate_repo.py` or
+`scripts/run_repo_tool.py` so tool cache and temporary state stays outside the
+repository cleanup surface.

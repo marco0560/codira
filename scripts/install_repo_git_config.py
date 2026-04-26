@@ -57,16 +57,7 @@ def git_alias_entries() -> list[tuple[str, str]]:
         ("alias.lg", "log --oneline --graph --decorate -50"),
         (
             "alias.check",
-            (
-                "!f(){ bash scripts/run_with_repo_python.sh "
-                "scripts/run_repo_tool.py black --check . && "
-                "bash scripts/run_with_repo_python.sh "
-                "scripts/run_repo_tool.py ruff check . && "
-                "bash scripts/run_with_repo_python.sh "
-                "scripts/run_repo_tool.py mypy . && "
-                "bash scripts/run_with_repo_python.sh "
-                "scripts/run_repo_tool.py pytest -q; }; f"
-            ),
+            ("!bash scripts/run_with_repo_python.sh " "scripts/validate_repo.py"),
         ),
         (
             "alias.fix",
