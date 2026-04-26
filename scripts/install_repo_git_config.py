@@ -98,7 +98,7 @@ def git_alias_entries() -> list[tuple[str, str]]:
         ),
         (
             "alias.docs-build",
-            "!bash -lc 'source .venv/bin/activate && mkdocs build --strict'",
+            "!bash scripts/run_with_repo_python.sh -m mkdocs build --strict",
         ),
         (
             "alias.gen-issues",
@@ -127,13 +127,13 @@ def git_alias_entries() -> list[tuple[str, str]]:
         (
             "alias.txz",
             (
-                '!f(){ name="${1:-repo}"; tmp="$(mktemp -d)"; '
-                "trap 'rm -rf \"$tmp\"' EXIT; rsync -a --delete "
+                '!f(){ name="${1:-repo}"; XZ_OPT="-9e -T0" tar '
                 '--exclude=".git" --exclude="*.tar.xz" --exclude=".codira" '
                 '--exclude=".venv" --exclude="node_modules" '
-                '--exclude="__pycache__" ./ "$tmp/repo/" && '
-                'XZ_OPT="-9e -T0" tar -C "$tmp" -cJf "$PWD/$name.tar.xz" '
-                "repo; }; f"
+                '--exclude="__pycache__" '
+                "--transform='s,^\\.$,repo,' "
+                "--transform='s,^\\./,repo/,' "
+                '-cJf "$PWD/$name.tar.xz" .; }; f'
             ),
         ),
         ("alias.release-audit", "!bash scripts/release_audit.sh"),

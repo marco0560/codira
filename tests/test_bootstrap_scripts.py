@@ -1151,6 +1151,12 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
     )
     assert "source .venv/bin/activate" not in entries["alias.check"]
     assert entries["alias.fix"].endswith("scripts/run_repo_tool.py ruff check . --fix")
+    assert entries["alias.docs-build"] == (
+        "!bash scripts/run_with_repo_python.sh -m mkdocs build --strict"
+    )
+    assert "rsync" not in entries["alias.txz"]
+    assert "--transform='s,^\\.$,repo,'" in entries["alias.txz"]
+    assert "--transform='s,^\\./,repo/,'" in entries["alias.txz"]
     assert "alias.ctx" not in entries
     assert "user.name" not in entries
     assert "user.email" not in entries

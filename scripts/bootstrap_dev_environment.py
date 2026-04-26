@@ -150,7 +150,7 @@ def build_bootstrap_commands(
             repo_root,
         ),
         CommandSpec(
-            "Install repo-local Git configuration",
+            "Install repo-local Git aliases and configuration",
             (str(python_bin), "scripts/install_repo_git_config.py"),
             repo_root,
         ),
