@@ -140,17 +140,23 @@ All required checks MUST pass before concluding.
 Preferred:
 
 ```bash
-pre-commit run --all-files
-pytest -q
+python scripts/validate_repo.py
 ```
+
+Repository Python tooling MUST be run through `scripts/validate_repo.py` or
+`scripts/run_repo_tool.py`. Do not set `PRE_COMMIT_HOME`, `RUFF_CACHE_DIR`,
+`TMP`, `TEMP`, `TMPDIR`, pytest `--basetemp`, or pytest cache paths to
+repository-local directories. The repository wrapper routes cache and temporary
+state outside the checkout and prevents undeletable tool-state directories from
+polluting the worktree.
 
 Fallback:
 
 ```bash
-black --check .
-ruff check .
-mypy .
-pytest -q
+python scripts/run_repo_tool.py black --check .
+python scripts/run_repo_tool.py ruff check .
+python scripts/run_repo_tool.py mypy .
+python scripts/run_repo_tool.py pytest -q tests
 ```
 
 Rules:

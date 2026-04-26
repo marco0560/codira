@@ -25,6 +25,17 @@ that contact GitHub use the operator's own Git or `gh` authentication.
 Resolve the repository Python interpreter deterministically and execute Python
 arguments through it.
 
+## `scripts/run_repo_tool.py`
+
+Run Python-facing repository tools with cache and temporary state redirected
+outside the checkout. Use this helper instead of hand-setting tool cache or
+temporary directories under the repository.
+
+## `scripts/validate_repo.py`
+
+Run the standard local validation sequence through `scripts/run_repo_tool.py`.
+This is the preferred one-command validation entry point for local changes.
+
 ## `scripts/check_commit_messages.py`
 
 Validate commit headers for semantic-release compatibility.

@@ -41,6 +41,8 @@ else:
     )
 
 future_repo_split_manifests = _future_repo_split_manifests
+GENERATED_EXPORT_ARTIFACTS = frozenset({"__pycache__"})
+GENERATED_EXPORT_SUFFIXES = (".pyc", ".pyo")
 
 
 @dataclass(frozen=True)
@@ -222,10 +224,40 @@ def _copy_export_entry(entry: FutureRepoExportEntry, export_dir: Path) -> None:
     target = export_dir.joinpath(*entry.target_relative.parts)
     if entry.source.is_dir():
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(entry.source, target, dirs_exist_ok=True)
+        shutil.copytree(
+            entry.source,
+            target,
+            dirs_exist_ok=True,
+            ignore=_ignore_generated_export_artifacts,
+        )
         return
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(entry.source, target)
+
+
+def _ignore_generated_export_artifacts(directory: str, names: list[str]) -> set[str]:
+    """
+    Return generated Python artifacts that should not be exported.
+
+    Parameters
+    ----------
+    directory : str
+        Directory being copied by ``shutil.copytree``.
+    names : list[str]
+        Child names present in ``directory``.
+
+    Returns
+    -------
+    set[str]
+        Child names to exclude from the export copy.
+    """
+
+    return {
+        name
+        for name in names
+        if name in GENERATED_EXPORT_ARTIFACTS
+        or name.endswith(GENERATED_EXPORT_SUFFIXES)
+    }
 
 
 def _build_parser() -> argparse.ArgumentParser:

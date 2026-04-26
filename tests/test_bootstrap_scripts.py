@@ -678,6 +678,21 @@ class _RepoToolRunnerModule(Protocol):
             Child process environment.
         """
 
+    def create_pytest_basetemp(self, state_root: Path) -> Path:
+        """
+        Reserve a unique pytest base temporary directory path.
+
+        Parameters
+        ----------
+        state_root : pathlib.Path
+            Non-repository state root.
+
+        Returns
+        -------
+        pathlib.Path
+            Unique pytest base temporary directory path.
+        """
+
     def build_tool_argv(
         self,
         tool: str,
@@ -685,6 +700,7 @@ class _RepoToolRunnerModule(Protocol):
         *,
         state_root: Path,
         python: str,
+        pytest_basetemp: Path | None = None,
     ) -> tuple[str, ...]:
         """
         Build the redirected tool argument vector.
@@ -699,11 +715,56 @@ class _RepoToolRunnerModule(Protocol):
             Non-repository state root.
         python : str
             Python executable.
+        pytest_basetemp : pathlib.Path | None, optional
+            Explicit pytest base temporary directory.
 
         Returns
         -------
         tuple[str, ...]
             Complete command argument vector.
+        """
+
+
+class _ValidationHelperModule(Protocol):
+    """Protocol for the repository validation helper."""
+
+    RUN_REPO_TOOL: Path
+
+    def build_validation_commands(
+        self,
+        *,
+        python: str = sys.executable,
+    ) -> tuple[tuple[str, ...], ...]:
+        """
+        Build validation command vectors.
+
+        Parameters
+        ----------
+        python : str, optional
+            Python executable used to invoke the tool runner.
+
+        Returns
+        -------
+        tuple[tuple[str, ...], ...]
+            Ordered validation command vectors.
+        """
+
+    def run_validation(
+        self,
+        commands: tuple[tuple[str, ...], ...] | None = None,
+    ) -> int:
+        """
+        Execute validation command vectors.
+
+        Parameters
+        ----------
+        commands : tuple[tuple[str, ...], ...] | None, optional
+            Explicit command vectors to execute.
+
+        Returns
+        -------
+        int
+            Validation exit status.
         """
 
 
@@ -869,6 +930,29 @@ def _load_repo_tool_runner() -> _RepoToolRunnerModule:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return cast("_RepoToolRunnerModule", module)
+
+
+def _load_validation_helper() -> _ValidationHelperModule:
+    """
+    Load the repository validation helper from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the validation helper script.
+    """
+    helper_path = Path(__file__).resolve().parents[1] / "scripts" / "validate_repo.py"
+    spec = importlib.util.spec_from_file_location("validate_repo", helper_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_ValidationHelperModule", module)
 
 
 def _load_release_install_rehearsal_helper() -> _ReleaseInstallRehearsalModule:
@@ -1132,12 +1216,14 @@ def test_repo_tool_runner_adds_tool_specific_cache_arguments(tmp_path: Path) -> 
     """
     helper = _load_repo_tool_runner()
     state_root = tmp_path / "state"
+    pytest_basetemp = state_root / "tmp" / "pytest-fixed"
 
     assert helper.build_tool_argv(
         "pytest",
         ("-q",),
         state_root=state_root,
         python="python",
+        pytest_basetemp=pytest_basetemp,
     ) == (
         "python",
         "-m",
@@ -1145,7 +1231,7 @@ def test_repo_tool_runner_adds_tool_specific_cache_arguments(tmp_path: Path) -> 
         "-o",
         f"cache_dir={state_root / 'pytest-cache'}",
         "--basetemp",
-        str(state_root / "pytest-tmp"),
+        str(pytest_basetemp),
         "-q",
     )
     assert helper.build_tool_argv(
@@ -1169,6 +1255,90 @@ def test_repo_tool_runner_adds_tool_specific_cache_arguments(tmp_path: Path) -> 
         state_root=state_root,
         python="python",
     ) == ("python", "-m", "pre_commit", "run", "--all-files")
+
+
+def test_repo_tool_runner_creates_unique_pytest_basetemp(tmp_path: Path) -> None:
+    """
+    Avoid reusing or pre-creating pytest temporary directories.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for deterministic path assertions.
+
+    Returns
+    -------
+    None
+        The test asserts pytest base temporary directory paths are unique, stay
+        under the non-repository state root, and are left for pytest to create.
+    """
+    helper = _load_repo_tool_runner()
+    state_root = tmp_path / "state"
+
+    first = helper.create_pytest_basetemp(state_root)
+    second = helper.create_pytest_basetemp(state_root)
+
+    assert first != second
+    assert first.parent == state_root / "tmp"
+    assert second.parent == state_root / "tmp"
+    assert not first.exists()
+    assert not second.exists()
+
+
+def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
+    """
+    Keep the standard validation entry point on the safe tool-state path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts validation commands delegate through
+        ``scripts/run_repo_tool.py`` instead of creating cache directories
+        directly.
+    """
+    helper = _load_validation_helper()
+
+    assert helper.build_validation_commands(python="python") == (
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
+            "pre-commit",
+            "run",
+            "--all-files",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
+            "pytest",
+            "-q",
+            "tests",
+        ),
+    )
+
+
+def test_validation_helper_returns_first_failing_exit_status() -> None:
+    """
+    Stop validation at the first failing delegated command.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts a failing first command determines the wrapper exit
+        status.
+    """
+    helper = _load_validation_helper()
+    failing_command = (sys.executable, "-c", "raise SystemExit(7)")
+    skipped_command = (sys.executable, "-c", "raise SystemExit(0)")
+
+    assert helper.run_validation((failing_command, skipped_command)) == 7
 
 
 def test_git_hooks_route_validation_through_repo_tool_runner() -> None:

@@ -27,6 +27,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -174,12 +175,44 @@ def tool_environment(
     return env
 
 
+def create_pytest_basetemp(state_root: Path) -> Path:
+    """
+    Reserve a unique pytest base temporary directory path.
+
+    Parameters
+    ----------
+    state_root : pathlib.Path
+        Non-repository root for cache and temporary state.
+
+    Returns
+    -------
+    pathlib.Path
+        Unique non-existing pytest base temporary directory path below
+        ``state_root / "tmp"``.
+
+    Notes
+    -----
+    Pytest removes ``--basetemp`` at session start. Reusing one stable path can
+    make future validation runs fail on Windows when an earlier session leaves
+    a locked directory behind. Returning a path that does not exist yet also
+    avoids forcing pytest to delete a directory created by this wrapper.
+    """
+
+    tmp_root = state_root / "tmp"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    while True:
+        candidate = tmp_root / f"pytest-{uuid.uuid4().hex}"
+        if not candidate.exists():
+            return candidate
+
+
 def build_tool_argv(
     tool: str,
     tool_args: Sequence[str],
     *,
     state_root: Path,
     python: str,
+    pytest_basetemp: Path | None = None,
 ) -> tuple[str, ...]:
     """
     Build the tool command line with explicit non-repository state arguments.
@@ -194,6 +227,9 @@ def build_tool_argv(
         Non-repository root for cache and temporary state.
     python : str
         Python executable used to invoke module-backed tools.
+    pytest_basetemp : pathlib.Path | None, optional
+        Explicit pytest base temporary directory. When omitted for pytest, a
+        unique directory is created under ``state_root / "tmp"``.
 
     Returns
     -------
@@ -212,12 +248,17 @@ def build_tool_argv(
 
     argv = (python, "-m", module)
     if tool == "pytest":
+        selected_basetemp = (
+            create_pytest_basetemp(state_root)
+            if pytest_basetemp is None
+            else pytest_basetemp
+        )
         return (
             *argv,
             "-o",
             f"cache_dir={state_root / 'pytest-cache'}",
             "--basetemp",
-            str(state_root / "pytest-tmp"),
+            str(selected_basetemp),
             *tool_args,
         )
     if tool == "ruff" and tool_args and tool_args[0] in {"check", "format"}:

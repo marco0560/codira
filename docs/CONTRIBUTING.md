@@ -10,14 +10,13 @@ modules, or workflows that are not present in the repo.
 Run the standard local validation loop before concluding a change:
 
 ```bash
-python scripts/run_repo_tool.py black --check src scripts tests
-python scripts/run_repo_tool.py ruff check src scripts tests
-python scripts/run_repo_tool.py mypy src scripts tests
-python scripts/run_repo_tool.py pytest -q
+python scripts/validate_repo.py
 ```
 
-Run Python-facing tools through `scripts/run_repo_tool.py` so tool cache and
-temporary state stays outside the repository cleanup surface.
+Run Python-facing tools through `scripts/validate_repo.py` or
+`scripts/run_repo_tool.py` so tool cache and temporary state stays outside the
+repository cleanup surface. Do not point pre-commit, ruff, pytest, or process
+temporary directories at repository-local paths.
 
 CI and the pre-push hook also run broader repository checks such as
 `mypy .`, which includes the first-party packages under `packages/`.
