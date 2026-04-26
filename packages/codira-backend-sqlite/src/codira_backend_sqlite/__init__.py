@@ -337,6 +337,11 @@ class SQLiteIndexBackend:
         -------
         list[codira.contracts.BackendSymbolInventoryItem]
             Symbol inventory rows ordered deterministically.
+
+        Raises
+        ------
+        ValueError
+            If ``limit`` is negative.
         """
         if limit < 0:
             msg = "Limit must be non-negative."

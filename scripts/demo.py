@@ -388,6 +388,11 @@ def main() -> None:
     Returns
     -------
     None
+
+    Raises
+    ------
+    SystemExit
+        If the entered repository path is not a directory.
     """
     section("Codira Demo Script")
 

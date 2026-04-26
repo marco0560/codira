@@ -1599,6 +1599,11 @@ class MemoryIndexBackend:
         -------
         list[codira.contracts.BackendSymbolInventoryItem]
             Matching symbol inventory rows.
+
+        Raises
+        ------
+        ValueError
+            If ``limit`` is negative.
         """
         if limit < 0:
             msg = "Limit must be non-negative."
