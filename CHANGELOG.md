@@ -1,3 +1,10 @@
+## [1.18.1](https://github.com/marco0560/codira/compare/v1.18.0...v1.18.1) (2026-04-26)
+
+
+### Bug Fixes
+
+* **dev:** route validation temp state safely ([15a6740](https://github.com/marco0560/codira/commit/15a674003648c60e27e9515316b76c388c3896e9))
+
 # [1.18.0](https://github.com/marco0560/codira/compare/v1.17.1...v1.18.0) (2026-04-25)
 
 
