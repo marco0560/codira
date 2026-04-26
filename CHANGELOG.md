@@ -1,3 +1,10 @@
+## [1.18.2](https://github.com/marco0560/codira/compare/v1.18.1...v1.18.2) (2026-04-26)
+
+
+### Bug Fixes
+
+* **bootstrap:** align validation wrapper ([2b5f914](https://github.com/marco0560/codira/commit/2b5f91436d3dc02aa294aa7a82a673a44772b9f5))
+
 ## [1.18.1](https://github.com/marco0560/codira/compare/v1.18.0...v1.18.1) (2026-04-26)
 
 
