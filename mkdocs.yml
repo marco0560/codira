@@ -62,6 +62,7 @@ nav:
       - Issue 009 execution: process/issue-009-capability-signal-layer-execution.md
       - Issue 009 inventory: process/issue-009-capability-signal-layer-inventory.md
       - Embedding performance execution: process/embedding-performance-execution.md
+      - Performance benchmarking: process/performance-benchmarking.md
   - ADRs:
       - Index: adr/index.md
       - "... | flat | glob=adr/ADR-*.md"

@@ -68,6 +68,30 @@ embedding batch sizes, and index summary counters.
 Use this script when evaluating indexing regressions or tuning embedding batch
 and Torch runtime settings.
 
+When `--output` is supplied, the JSON artifact is written to that path and
+includes run metadata: UTC timestamp, Codira version, Git commit, active plugin
+inventory, and profiler/tool availability.
+
+## `scripts/benchmark_campaign.py`
+
+Run a manifest-driven performance measurement campaign across repository size
+categories.
+
+The campaign runner builds phase-timing, Hyperfine, cProfile, and optional
+Pyinstrument command plans for each configured repository. Use `--dry-run` to
+write and inspect `.artifacts/benchmarks/<run-id>/campaign-plan.json` without
+executing benchmark commands.
+
+Example:
+
+```bash
+python scripts/benchmark_campaign.py benchmarks.json --dry-run
+python scripts/benchmark_campaign.py benchmarks.json --runs 10
+```
+
+See `docs/process/performance-benchmarking.md` for the manifest format,
+artifact layout, and plugin metadata requirements.
+
 ## `scripts/benchmark_release.py`
 
 Run the release-oriented Hyperfine benchmark plan for `codira index --full`,

@@ -19,11 +19,13 @@ This module belongs to the **tooling verification layer** guarding repository-lo
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
 if TYPE_CHECKING:
+    import argparse
     from collections.abc import Mapping
 
     from scripts.bootstrap_dev_environment import CommandSpec
@@ -562,6 +564,108 @@ class _ReleaseBenchmarkModule(Protocol):
         """
 
 
+class _BenchmarkTimingModule(Protocol):
+    """Protocol for the shared benchmark timing helper."""
+
+    FIRST_PARTY_PLUGIN_PROVIDERS: tuple[str, ...]
+
+    def first_party_plugin_providers(self) -> tuple[str, ...]:
+        """
+        Return first-party plugin providers expected in benchmark metadata.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple[str, ...]
+            First-party analyzer and backend distribution names.
+        """
+
+    def benchmark_metadata(
+        self,
+        root: Path,
+        *,
+        manifest: Path | None = None,
+        hyperfine: str = "hyperfine",
+    ) -> dict[str, object]:
+        """
+        Build common benchmark artifact metadata.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the benchmark run.
+        manifest : pathlib.Path | None, optional
+            Campaign manifest path.
+        hyperfine : str, optional
+            Hyperfine executable checked for availability.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-serializable benchmark metadata.
+        """
+
+
+class _BenchmarkCampaignModule(Protocol):
+    """Protocol for the benchmark campaign helper."""
+
+    CampaignConfig: type
+    RepositoryBenchmark: type
+
+    def build_parser(self) -> argparse.ArgumentParser:
+        """
+        Build the benchmark campaign parser.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        object
+            Configured parser object.
+        """
+
+    def load_manifest(self, path: Path) -> tuple[object, ...]:
+        """
+        Load benchmark repositories from a manifest.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Manifest path to read.
+
+        Returns
+        -------
+        tuple[object, ...]
+            Repository benchmark targets.
+        """
+
+    def command_plan(
+        self,
+        repositories: tuple[object, ...],
+        config: object,
+    ) -> list[dict[str, object]]:
+        """
+        Build benchmark campaign command rows.
+
+        Parameters
+        ----------
+        repositories : tuple[object, ...]
+            Repository benchmark targets.
+        config : object
+            Campaign configuration.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            JSON-serializable command plan rows.
+        """
+
+
 class _SplitRepoVerificationModule(Protocol):
     """Protocol for the exported split-repo verification helper."""
 
@@ -1055,6 +1159,57 @@ def _load_release_benchmark_helper() -> _ReleaseBenchmarkModule:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return cast("_ReleaseBenchmarkModule", module)
+
+
+def _load_benchmark_timing_helper() -> _BenchmarkTimingModule:
+    """
+    Load the shared benchmark timing helper from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the benchmark timing helper script.
+    """
+    helper_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "benchmark_timing.py"
+    )
+    spec = importlib.util.spec_from_file_location("benchmark_timing", helper_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_BenchmarkTimingModule", module)
+
+
+def _load_benchmark_campaign_helper() -> _BenchmarkCampaignModule:
+    """
+    Load the benchmark campaign helper from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the benchmark campaign helper script.
+    """
+    helper_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "benchmark_campaign.py"
+    )
+    sys.path.insert(0, str(helper_path.parent))
+    spec = importlib.util.spec_from_file_location("benchmark_campaign", helper_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_BenchmarkCampaignModule", module)
 
 
 def _load_split_repo_verification_helper() -> _SplitRepoVerificationModule:
@@ -2107,6 +2262,126 @@ def test_release_benchmark_helper_builds_hyperfine_plan() -> None:
         "/tmp/codira/.venv/bin/codira ctx --json 'plugin registry'",
         "/tmp/codira/.venv/bin/codira audit --json",
     )
+
+
+def test_benchmark_metadata_includes_first_party_plugins() -> None:
+    """
+    Keep benchmark artifacts tied to the first-party plugin set.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts benchmark metadata exposes Codira identity, Git
+        revision, tool availability, and all first-party analyzer/backend
+        providers.
+    """
+    helper = _load_benchmark_timing_helper()
+    expected_providers = (
+        "codira-analyzer-python",
+        "codira-analyzer-json",
+        "codira-analyzer-c",
+        "codira-analyzer-bash",
+        "codira-backend-sqlite",
+    )
+
+    metadata = helper.benchmark_metadata(
+        Path(__file__).resolve().parents[1],
+        hyperfine="definitely-missing-hyperfine",
+    )
+    plugins = cast("list[dict[str, object]]", metadata["plugins"])
+    tools = cast("dict[str, object]", metadata["tools"])
+    providers = {
+        str(plugin["provider"])
+        for plugin in plugins
+        if plugin.get("origin") == "first_party"
+    }
+
+    assert helper.first_party_plugin_providers() == expected_providers
+    assert metadata["run_at"]
+    assert metadata["codira_version"]
+    assert metadata["git_commit"]
+    assert set(expected_providers) <= providers
+    assert tools["hyperfine"] is False
+    assert "pyinstrument" in tools
+    assert "snakeviz" in tools
+
+
+def test_benchmark_campaign_helper_builds_dry_run_plan(tmp_path: Path) -> None:
+    """
+    Keep performance campaign command construction reproducible.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for manifest and target repositories.
+
+    Returns
+    -------
+    None
+        The test asserts the campaign helper loads all repository categories
+        and emits a dry-run command plan with phase, Hyperfine, and profiler
+        commands.
+    """
+    helper = _load_benchmark_campaign_helper()
+    small = tmp_path / "codira"
+    medium = tmp_path / "fontshow"
+    large = tmp_path / "texlive"
+    for path in (small, medium, large):
+        path.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {
+                        "label": "codira",
+                        "category": "small",
+                        "path": str(small),
+                    },
+                    {
+                        "label": "fontshow",
+                        "category": "medium",
+                        "path": str(medium),
+                        "query": "plugin registry",
+                    },
+                    {
+                        "label": "texlive",
+                        "category": "large",
+                        "path": str(large),
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260430T120000Z",
+        codira="/tmp/codira/.venv/bin/codira",
+        hyperfine="hyperfine",
+        python="python",
+        runs=3,
+        warmup=1,
+        dry_run=True,
+    )
+
+    repositories = helper.load_manifest(manifest)
+    plan = helper.command_plan(repositories, config)
+    help_text = helper.build_parser().format_help()
+
+    assert [row["category"] for row in plan] == ["small", "medium", "large"]
+    assert "--dry-run" in help_text
+    assert "Examples:" in help_text
+    assert plan[0]["modes"] == ["cold", "warm", "partial_change"]
+    display_commands = cast("list[str]", plan[0]["display_commands"])
+    assert any("benchmark_index.py" in command for command in display_commands)
+    assert any("hyperfine" in command for command in display_commands)
+    assert any("cProfile" in command for command in display_commands)
 
 
 def test_split_repo_verification_uses_local_core_checkout_before_package_install() -> (

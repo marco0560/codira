@@ -21,89 +21,23 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
+from benchmark_timing import (  # type: ignore[import-not-found]
+    PhaseTimer,
+    benchmark_metadata,
+    write_json_artifact,
+)
 from codira_backend_sqlite import SQLiteIndexBackend
 
 from codira import indexer, sqlite_backend_support
 from codira.indexer import index_repo
 from codira.semantic import embeddings as embeddings_module
-
-
-@dataclass
-class BenchmarkStats:
-    """
-    Collected benchmark timings and embedding batch metrics.
-
-    Parameters
-    ----------
-    phase_seconds : dict[str, float], optional
-        Accumulated timing keyed by instrumented phase name.
-    embedding_batch_sizes : list[int], optional
-        Observed batch sizes passed into the embedding backend.
-    """
-
-    phase_seconds: dict[str, float] = field(default_factory=dict)
-    embedding_batch_sizes: list[int] = field(default_factory=list)
-
-    def add_phase_time(self, name: str, elapsed: float) -> None:
-        """
-        Accumulate one measured duration under a stable phase name.
-
-        Parameters
-        ----------
-        name : str
-            Phase label receiving the elapsed duration.
-        elapsed : float
-            Measured seconds to add.
-
-        Returns
-        -------
-        None
-            The timing map is updated in place.
-        """
-        self.phase_seconds[name] = self.phase_seconds.get(name, 0.0) + elapsed
-
-
-def _timed_call(
-    stats: BenchmarkStats,
-    phase_name: str,
-    func: Callable[..., object],
-    *args: object,
-    **kwargs: object,
-) -> object:
-    """
-    Execute one callable while accumulating its elapsed duration.
-
-    Parameters
-    ----------
-    stats : BenchmarkStats
-        Benchmark accumulator updated in place.
-    phase_name : str
-        Stable label for the timed phase.
-    func : collections.abc.Callable[..., object]
-        Callable to execute.
-    *args : object
-        Positional arguments forwarded to ``func``.
-    **kwargs : object
-        Keyword arguments forwarded to ``func``.
-
-    Returns
-    -------
-    object
-        Return value from ``func``.
-    """
-    start = perf_counter()
-    try:
-        return func(*args, **kwargs)
-    finally:
-        stats.add_phase_time(phase_name, perf_counter() - start)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -133,6 +67,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force a full index rebuild during the benchmark run.",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Write the benchmark JSON artifact to this path.",
+    )
     return parser
 
 
@@ -151,11 +90,21 @@ def main() -> int:
     """
     args = build_parser().parse_args()
     root = Path(args.root).resolve()
-    stats = BenchmarkStats()
+    timer = PhaseTimer()
+    embedding_batch_sizes: list[int] = []
 
     original_collect_scan = indexer._collect_project_scan_state
     original_collect_analyses = indexer._collect_indexed_file_analyses
     original_persist_analyses = indexer._persist_indexed_file_analyses
+    original_select_analyzer = indexer._select_language_analyzer
+    original_iter_project_files = cast(
+        "Callable[..., object]",
+        indexer.iter_project_files,  # type: ignore[attr-defined]
+    )
+    original_file_metadata = cast(
+        "Callable[..., object]",
+        indexer.file_metadata,  # type: ignore[attr-defined]
+    )
     original_flush_rows = sqlite_backend_support._flush_embedding_rows
     original_rebuild_indexes = SQLiteIndexBackend.rebuild_derived_indexes
     original_embed_texts = embeddings_module.embed_texts
@@ -165,36 +114,55 @@ def main() -> int:
     )
 
     def benchmark_collect_scan(*args: object, **kwargs: object) -> object:
-        return _timed_call(
-            stats,
-            "collect_project_scan_state",
+        return timer.timed_call(
+            "scan_state",
             original_collect_scan,
             *args,
             **kwargs,
         )
 
     def benchmark_collect_analyses(*args: object, **kwargs: object) -> object:
-        return _timed_call(
-            stats,
-            "collect_indexed_file_analyses",
+        return timer.timed_call(
+            "parsing",
             original_collect_analyses,
             *args,
             **kwargs,
         )
 
     def benchmark_persist_analyses(*args: object, **kwargs: object) -> object:
-        return _timed_call(
-            stats,
-            "persist_indexed_file_analyses",
+        return timer.timed_call(
+            "indexing",
             original_persist_analyses,
             *args,
             **kwargs,
         )
 
+    def benchmark_select_analyzer(*args: object, **kwargs: object) -> object:
+        return timer.timed_call(
+            "filtering",
+            original_select_analyzer,
+            *args,
+            **kwargs,
+        )
+
+    def benchmark_iter_project_files(*args: object, **kwargs: object) -> object:
+        with timer.measure("discovery"):
+            paths = tuple(
+                cast("Iterable[Path]", original_iter_project_files(*args, **kwargs))
+            )
+        return iter(paths)
+
+    def benchmark_file_metadata(*args: object, **kwargs: object) -> object:
+        return timer.timed_call(
+            "metadata",
+            original_file_metadata,
+            *args,
+            **kwargs,
+        )
+
     def benchmark_flush_rows(*args: object, **kwargs: object) -> object:
-        return _timed_call(
-            stats,
-            "flush_embedding_rows",
+        return timer.timed_call(
+            "embeddings",
             original_flush_rows,
             *args,
             **kwargs,
@@ -206,9 +174,8 @@ def main() -> int:
         *,
         conn: object | None = None,
     ) -> None:
-        _timed_call(
-            stats,
-            "rebuild_derived_indexes",
+        timer.timed_call(
+            "indexing",
             original_rebuild_indexes,
             self,
             root,
@@ -217,10 +184,9 @@ def main() -> int:
 
     def benchmark_embed_texts(texts: Sequence[str]) -> list[list[float]]:
         batch = list(texts)
-        stats.embedding_batch_sizes.append(len(batch))
-        result = _timed_call(
-            stats,
-            "embed_texts",
+        embedding_batch_sizes.append(len(batch))
+        result = timer.timed_call(
+            "embeddings",
             original_embed_texts,
             batch,
         )
@@ -229,6 +195,9 @@ def main() -> int:
     indexer._collect_project_scan_state = benchmark_collect_scan  # type: ignore[assignment]
     indexer._collect_indexed_file_analyses = benchmark_collect_analyses  # type: ignore[assignment]
     indexer._persist_indexed_file_analyses = benchmark_persist_analyses  # type: ignore[assignment]
+    indexer._select_language_analyzer = benchmark_select_analyzer  # type: ignore[assignment]
+    indexer.iter_project_files = benchmark_iter_project_files  # type: ignore[attr-defined, assignment]
+    indexer.file_metadata = benchmark_file_metadata  # type: ignore[attr-defined, assignment]
     sqlite_backend_support._flush_embedding_rows = benchmark_flush_rows  # type: ignore[assignment]
     SQLiteIndexBackend.rebuild_derived_indexes = benchmark_rebuild_indexes  # type: ignore[method-assign]
     embeddings_module.embed_texts = benchmark_embed_texts
@@ -242,28 +211,30 @@ def main() -> int:
         indexer._collect_project_scan_state = original_collect_scan
         indexer._collect_indexed_file_analyses = original_collect_analyses
         indexer._persist_indexed_file_analyses = original_persist_analyses
+        indexer._select_language_analyzer = original_select_analyzer
+        indexer.iter_project_files = original_iter_project_files  # type: ignore[attr-defined, assignment]
+        indexer.file_metadata = original_file_metadata  # type: ignore[attr-defined, assignment]
         sqlite_backend_support._flush_embedding_rows = original_flush_rows
         SQLiteIndexBackend.rebuild_derived_indexes = original_rebuild_indexes  # type: ignore[method-assign]
         embeddings_module.embed_texts = original_embed_texts
         sqlite_backend_support.embed_texts = original_sqlite_support_embed_texts  # type: ignore[assignment]
 
-    batch_sizes = stats.embedding_batch_sizes
     benchmark_report = {
+        "metadata": benchmark_metadata(root),
         "root": str(root),
         "full": bool(args.full),
         "timings": {
-            **{
-                name: round(value, 6)
-                for name, value in sorted(stats.phase_seconds.items())
-            },
+            **timer.rounded(),
             "total": round(total_elapsed, 6),
         },
         "embedding_batches": {
-            "calls": len(batch_sizes),
-            "total_rows": sum(batch_sizes),
-            "max_batch_size": max(batch_sizes, default=0),
+            "calls": len(embedding_batch_sizes),
+            "total_rows": sum(embedding_batch_sizes),
+            "max_batch_size": max(embedding_batch_sizes, default=0),
             "avg_batch_size": (
-                round(sum(batch_sizes) / len(batch_sizes), 3) if batch_sizes else 0.0
+                round(sum(embedding_batch_sizes) / len(embedding_batch_sizes), 3)
+                if embedding_batch_sizes
+                else 0.0
             ),
         },
         "report": {
@@ -276,6 +247,8 @@ def main() -> int:
             "coverage_issues": len(report.coverage_issues),
         },
     }
+    if args.output is not None:
+        write_json_artifact(Path(args.output), benchmark_report)
     print(json.dumps(benchmark_report, indent=2, sort_keys=True))
     return 0
 

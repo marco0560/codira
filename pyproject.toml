@@ -31,6 +31,8 @@ dev = [
   "pre-commit",
   "pytest",
   "pytest-cov",
+  "pyinstrument",
+  "snakeviz",
   "packaging",
   "build",
   "setuptools>=61",
