@@ -1,3 +1,10 @@
+## [1.19.3](https://github.com/marco0560/codira/compare/v1.19.2...v1.19.3) (2026-04-30)
+
+
+### Bug Fixes
+
+* **dev:** capture black wrapper output ([e1a8c4e](https://github.com/marco0560/codira/commit/e1a8c4ede6c30bcc0275280e2e8729f7966ca3f7))
+
 ## [1.19.2](https://github.com/marco0560/codira/compare/v1.19.1...v1.19.2) (2026-04-30)
 
 
