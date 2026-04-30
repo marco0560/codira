@@ -20,13 +20,16 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
 if TYPE_CHECKING:
     import argparse
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
+
+    import pytest
 
     from scripts.bootstrap_dev_environment import CommandSpec
     from scripts.install_first_party_packages import (
@@ -741,6 +744,8 @@ class _BootstrapHelperModule(Protocol):
 class _RepoToolRunnerModule(Protocol):
     """Protocol for the repository tool runner helper."""
 
+    subprocess: object
+
     def tool_state_root(
         self, repo_root: Path, *, temp_root: Path | None = None
     ) -> Path:
@@ -844,6 +849,31 @@ class _RepoToolRunnerModule(Protocol):
         -------
         tuple[tuple[str, ...], list[str]]
             Black options and path targets.
+        """
+
+    def run_black_serial(
+        self,
+        tool_args: tuple[str, ...],
+        *,
+        env: Mapping[str, str],
+        python: str,
+    ) -> int:
+        """
+        Run Black one target at a time.
+
+        Parameters
+        ----------
+        tool_args : tuple[str, ...]
+            Black arguments supplied to ``black-serial``.
+        env : collections.abc.Mapping[str, str]
+            Environment for Black child processes.
+        python : str
+            Python executable used to invoke Black.
+
+        Returns
+        -------
+        int
+            Exit status from the serial Black run.
         """
 
 
@@ -1456,6 +1486,82 @@ def test_repo_tool_runner_splits_black_serial_args() -> None:
     assert helper.split_black_serial_args(()) == ((), ["."])
 
 
+def test_repo_tool_runner_captures_black_child_output(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Keep Black child output isolated from the caller terminal.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace target expansion and subprocess execution.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to inspect replayed wrapper output.
+
+    Returns
+    -------
+    None
+        The test asserts Black runs with captured streams and the wrapper
+        replays those streams after the child exits.
+    """
+
+    helper = _load_repo_tool_runner()
+    calls: list[dict[str, object]] = []
+
+    def fake_expand(targets: Sequence[str]) -> list[str]:
+        return ["scripts/validate_repo.py"]
+
+    def fake_run(
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        capture_output: bool,
+        text: bool,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(
+            {
+                "argv": argv,
+                "cwd": cwd,
+                "env": dict(env),
+                "capture_output": capture_output,
+                "text": text,
+                "check": check,
+            }
+        )
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout="black stdout\n",
+            stderr="black stderr\n",
+        )
+
+    monkeypatch.setattr(helper, "expand_black_serial_targets", fake_expand)
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    assert (
+        helper.run_black_serial(("--check", "."), env={"X": "1"}, python="python")
+        == 0
+    )
+    captured = capsys.readouterr()
+
+    assert captured.out == "black stdout\n"
+    assert captured.err == "black stderr\n"
+    assert calls == [
+        {
+            "argv": ("python", "-m", "black", "--check", "scripts/validate_repo.py"),
+            "cwd": Path(__file__).resolve().parents[1],
+            "env": {"X": "1"},
+            "capture_output": True,
+            "text": True,
+            "check": False,
+        }
+    ]
+
+
 def test_repo_tool_runner_creates_unique_pytest_basetemp(tmp_path: Path) -> None:
     """
     Avoid reusing or pre-creating pytest temporary directories.
@@ -1505,9 +1611,11 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
         (
             "python",
             str(helper.RUN_REPO_TOOL),
-            "black-serial",
+            "black",
             "--check",
-            ".",
+            "src",
+            "scripts",
+            "tests",
         ),
         (
             "python",

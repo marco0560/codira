@@ -15,6 +15,7 @@ milestones.json
 # Build artifacts
 # -------------------------------
 .artifacts/
+benchmarks/
 
 # -------------------------------
 # Python cache

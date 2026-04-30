@@ -359,6 +359,56 @@ def expand_black_serial_targets(targets: Sequence[str]) -> list[str]:
     return sorted(expanded)
 
 
+def replay_completed_output(completed: subprocess.CompletedProcess[str]) -> None:
+    """
+    Replay captured child process output from the wrapper process.
+
+    Parameters
+    ----------
+    completed : subprocess.CompletedProcess[str]
+        Completed child process with text stdout and stderr.
+
+    Returns
+    -------
+    None
+        Captured output is written to the wrapper's standard streams.
+    """
+
+    if completed.stdout:
+        sys.stdout.write(completed.stdout)
+    if completed.stderr:
+        sys.stderr.write(completed.stderr)
+
+
+def run_black_command(argv: tuple[str, ...], *, env: Mapping[str, str]) -> int:
+    """
+    Run Black while isolating its output from the caller terminal.
+
+    Parameters
+    ----------
+    argv : tuple[str, ...]
+        Complete Black command argument vector.
+    env : collections.abc.Mapping[str, str]
+        Environment for the child Black process.
+
+    Returns
+    -------
+    int
+        Black process exit status.
+    """
+
+    completed = subprocess.run(
+        argv,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    replay_completed_output(completed)
+    return completed.returncode
+
+
 def run_black_serial(
     tool_args: Sequence[str],
     *,
@@ -386,14 +436,12 @@ def run_black_serial(
 
     options, targets = split_black_serial_args(tool_args)
     for target in expand_black_serial_targets(targets):
-        completed = subprocess.run(
+        return_code = run_black_command(
             (python, "-m", "black", *options, target),
-            cwd=REPO_ROOT,
             env=env,
-            check=False,
         )
-        if completed.returncode != 0:
-            return completed.returncode
+        if return_code != 0:
+            return return_code
     return 0
 
 
@@ -452,6 +500,8 @@ def main() -> int:
         state_root=state_root,
         python=sys.executable,
     )
+    if args.tool == "black":
+        return run_black_command(argv, env=env)
     completed = subprocess.run(argv, cwd=REPO_ROOT, env=env, check=False)
     return completed.returncode
 

@@ -40,7 +40,7 @@ class ValidationStep:
 
 
 VALIDATION_STEPS: tuple[ValidationStep, ...] = (
-    ValidationStep("black", "black-serial", ("--check", ".")),
+    ValidationStep("black", "black", ("--check", "src", "scripts", "tests")),
     ValidationStep("ruff", "ruff", ("check", ".")),
     ValidationStep("mypy", "mypy", (".",)),
     ValidationStep("pre-commit-noncode", "pre-commit-noncode", ("run", "--all-files")),
