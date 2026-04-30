@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -35,10 +36,14 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+GIT_EXE = shutil.which("git")
 SUPPORTED_TOOLS = {
     "black": "black",
+    "black-serial": "black",
+    "coverage": "coverage",
     "mypy": "mypy",
     "pre-commit": "pre_commit",
+    "pre-commit-noncode": "pre_commit",
     "pytest": "pytest",
     "ruff": "ruff",
 }
@@ -166,6 +171,7 @@ def tool_environment(
     tmp_root = state_root / "tmp"
     env = dict(base_env)
     env["CODIRA_TOOL_STATE_ROOT"] = str(state_root)
+    env["COVERAGE_FILE"] = str(state_root / "coverage" / ".coverage")
     env["MYPY_CACHE_DIR"] = str(state_root / "mypy")
     env["PRE_COMMIT_HOME"] = str(state_root / "pre-commit")
     env["RUFF_CACHE_DIR"] = str(state_root / "ruff")
@@ -272,6 +278,118 @@ def build_tool_argv(
     return (*argv, *tool_args)
 
 
+def split_black_serial_args(
+    tool_args: Sequence[str],
+) -> tuple[tuple[str, ...], list[str]]:
+    """
+    Split black arguments into options and path targets.
+
+    Parameters
+    ----------
+    tool_args : collections.abc.Sequence[str]
+        Arguments passed after ``black-serial``.
+
+    Returns
+    -------
+    tuple[tuple[str, ...], list[str]]
+        Black options and path targets. When no target is supplied, the current
+        repository is used.
+    """
+
+    options: list[str] = []
+    targets: list[str] = []
+    for arg in tool_args:
+        if arg.startswith("-") and not targets:
+            options.append(arg)
+            continue
+        targets.append(arg)
+    if not targets:
+        targets.append(".")
+    return tuple(options), targets
+
+
+def expand_black_serial_targets(targets: Sequence[str]) -> list[str]:
+    """
+    Expand black path targets into deterministic tracked Python files.
+
+    Parameters
+    ----------
+    targets : collections.abc.Sequence[str]
+        File or directory targets passed to ``black-serial``.
+
+    Returns
+    -------
+    list[str]
+        Deterministically ordered Python source paths.
+    """
+
+    expanded: set[str] = set()
+    if GIT_EXE is None:
+        msg = "git executable is required for black-serial target expansion"
+        raise RuntimeError(msg)
+    for target in targets:
+        path = (REPO_ROOT / target).resolve()
+        if path.is_file():
+            expanded.add(str(path.relative_to(REPO_ROOT)))
+            continue
+        git_target = "." if target == "." else target
+        result = subprocess.run(
+            [
+                GIT_EXE,
+                "ls-files",
+                "--",
+                f"{git_target.rstrip('/')}/" if git_target != "." else ".",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for line in result.stdout.splitlines():
+            candidate = line.strip()
+            if candidate.endswith((".py", ".pyi")):
+                expanded.add(candidate)
+    return sorted(expanded)
+
+
+def run_black_serial(
+    tool_args: Sequence[str],
+    *,
+    env: Mapping[str, str],
+    python: str,
+) -> int:
+    """
+    Run black one target at a time.
+
+    Parameters
+    ----------
+    tool_args : collections.abc.Sequence[str]
+        Arguments supplied after ``black-serial``.
+    env : collections.abc.Mapping[str, str]
+        Environment for child black processes.
+    python : str
+        Python executable used to invoke black.
+
+    Returns
+    -------
+    int
+        Zero when every black invocation succeeds, otherwise the first non-zero
+        exit status.
+    """
+
+    options, targets = split_black_serial_args(tool_args)
+    for target in expand_black_serial_targets(targets):
+        completed = subprocess.run(
+            (python, "-m", "black", *options, target),
+            cwd=REPO_ROOT,
+            env=env,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return completed.returncode
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     """
     Parse command-line arguments.
@@ -311,7 +429,16 @@ def main() -> int:
     args = parse_args()
     state_root = tool_state_root(REPO_ROOT)
     (state_root / "tmp").mkdir(parents=True, exist_ok=True)
+    (state_root / "coverage").mkdir(parents=True, exist_ok=True)
     env = tool_environment(os.environ, state_root=state_root)
+    if args.tool == "pre-commit-noncode":
+        env["SKIP"] = "black,ruff,mypy"
+    if args.tool == "black-serial":
+        return run_black_serial(
+            args.tool_args,
+            env=env,
+            python=sys.executable,
+        )
     argv = build_tool_argv(
         args.tool,
         args.tool_args,

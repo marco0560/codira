@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import ast
     from collections.abc import Callable
 
     from codira.types import CacheType, ReferenceRow, SymbolRow
@@ -260,7 +259,7 @@ def build_prompt(
     This is a direct extraction of the original ``_render_agent_prompt`` logic.
     """
 
-    cache: dict[Path, tuple[str, list[str], ast.Module]] = {}
+    cache: CacheType = {}
     lines: list[str] = []
 
     lines.append("TASK")

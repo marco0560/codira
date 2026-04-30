@@ -724,6 +724,24 @@ class _RepoToolRunnerModule(Protocol):
             Complete command argument vector.
         """
 
+    def split_black_serial_args(
+        self,
+        tool_args: tuple[str, ...],
+    ) -> tuple[tuple[str, ...], list[str]]:
+        """
+        Split black arguments into options and path targets.
+
+        Parameters
+        ----------
+        tool_args : tuple[str, ...]
+            Arguments passed after ``black-serial``.
+
+        Returns
+        -------
+        tuple[tuple[str, ...], list[str]]
+            Black options and path targets.
+        """
+
 
 class _ValidationHelperModule(Protocol):
     """Protocol for the repository validation helper."""
@@ -1196,6 +1214,7 @@ def test_repo_tool_runner_uses_non_repository_tool_state(tmp_path: Path) -> None
 
     assert state_root.parent.parent == temp_root
     assert repo_root not in state_root.parents
+    assert env["COVERAGE_FILE"] == str(state_root / "coverage" / ".coverage")
     assert env["PRE_COMMIT_HOME"] == str(state_root / "pre-commit")
     assert env["MYPY_CACHE_DIR"] == str(state_root / "mypy")
     assert env["RUFF_CACHE_DIR"] == str(state_root / "ruff")
@@ -1262,6 +1281,26 @@ def test_repo_tool_runner_adds_tool_specific_cache_arguments(tmp_path: Path) -> 
     ) == ("python", "-m", "pre_commit", "run", "--all-files")
 
 
+def test_repo_tool_runner_splits_black_serial_args() -> None:
+    """
+    Keep serial black invocation deterministic for aggregate validation.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts black options are separated from path targets.
+    """
+
+    helper = _load_repo_tool_runner()
+
+    assert helper.split_black_serial_args(("--check", ".")) == (("--check",), ["."])
+    assert helper.split_black_serial_args(()) == ((), ["."])
+
+
 def test_repo_tool_runner_creates_unique_pytest_basetemp(tmp_path: Path) -> None:
     """
     Avoid reusing or pre-creating pytest temporary directories.
@@ -1311,16 +1350,46 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
         (
             "python",
             str(helper.RUN_REPO_TOOL),
-            "pre-commit",
+            "black-serial",
+            "--check",
+            ".",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
+            "ruff",
+            "check",
+            ".",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
+            "mypy",
+            ".",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
+            "pre-commit-noncode",
             "run",
             "--all-files",
         ),
         (
             "python",
             str(helper.RUN_REPO_TOOL),
+            "coverage",
+            "run",
+            "-m",
             "pytest",
             "-q",
             "tests",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
+            "coverage",
+            "report",
+            "--fail-under=70",
         ),
     )
 

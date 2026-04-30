@@ -24,6 +24,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -31,6 +32,7 @@ import pytest
 from codira_backend_sqlite import SQLiteIndexBackend
 
 import codira.registry as registry_module
+import codira.storage as storage_module
 from codira.analyzers import PythonAnalyzer
 from codira.cli import (
     IndexRebuildRequest,
@@ -2157,3 +2159,43 @@ def test_acquire_index_lock_blocks_other_processes(tmp_path: Path) -> None:
     stdout, stderr = proc.communicate(timeout=5)
     assert proc.returncode == 0, (stdout, stderr)
     assert acquired_marker.exists()
+
+
+def test_lock_file_handle_uses_windows_locking_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Route advisory locking through ``msvcrt`` on Windows.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to simulate the Windows-specific module surface.
+
+    Returns
+    -------
+    None
+        The test asserts the Windows lock and unlock calls cover the first byte
+        of the lock file without requiring a Windows host.
+    """
+
+    calls: list[tuple[int, int]] = []
+    fake_msvcrt = types.SimpleNamespace(
+        LK_LOCK=1,
+        LK_UNLCK=2,
+        locking=lambda _fd, mode, size: calls.append((mode, size)),
+    )
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+    lock_path = tmp_path / "index.lock"
+    with lock_path.open("w+", encoding="utf-8") as handle:
+        handle.write("0")
+        handle.flush()
+        storage_module._lock_file_handle(handle)
+        storage_module._unlock_file_handle(handle)
+
+    assert calls == [(1, 1), (2, 1)]

@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 DEFAULT_INDEX_BACKEND = "sqlite"
 INDEX_BACKEND_ENV_VAR = "CODIRA_INDEX_BACKEND"
+DISABLE_THIRD_PARTY_PLUGINS_ENV_VAR = "CODIRA_DISABLE_THIRD_PARTY_PLUGINS"
 ANALYZER_ENTRY_POINT_GROUP = "codira.analyzers"
 BACKEND_ENTRY_POINT_GROUP = "codira.backends"
 OPTIONAL_BACKEND_PACKAGE_BY_NAME: dict[str, str] = {
@@ -190,6 +191,83 @@ def _plugin_origin(*, provider: str, source: PluginSource) -> PluginOrigin:
     return "third_party"
 
 
+def _third_party_plugins_disabled() -> bool:
+    """
+    Return whether third-party entry-point plugins are disabled.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    bool
+        ``True`` when ``CODIRA_DISABLE_THIRD_PARTY_PLUGINS`` is set to a
+        truthy value.
+    """
+
+    value = os.getenv(DISABLE_THIRD_PARTY_PLUGINS_ENV_VAR, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _entry_point_provider(entry_point: metadata.EntryPoint) -> str:
+    """
+    Return the provider distribution name for an entry point.
+
+    Parameters
+    ----------
+    entry_point : importlib.metadata.EntryPoint
+        Entry point whose owning distribution should be reported.
+
+    Returns
+    -------
+    str
+        Distribution name, or ``"<unknown>"`` when metadata is unavailable.
+    """
+
+    return getattr(getattr(entry_point, "dist", None), "name", "") or "<unknown>"
+
+
+def _disabled_third_party_registration(
+    entry_point: metadata.EntryPoint,
+    *,
+    family: PluginFamily,
+    provider: str,
+) -> PluginRegistration:
+    """
+    Build a skipped registration for a disabled third-party plugin.
+
+    Parameters
+    ----------
+    entry_point : importlib.metadata.EntryPoint
+        Entry point intentionally left unloaded.
+    family : {"analyzer", "backend"}
+        Plugin extension family.
+    provider : str
+        Distribution name owning the entry point.
+
+    Returns
+    -------
+    PluginRegistration
+        Deterministic skipped registration record.
+    """
+
+    return PluginRegistration(
+        family=family,
+        name=entry_point.name,
+        provider=provider,
+        source="entry_point",
+        status="skipped",
+        version="unknown",
+        entry_point=entry_point.name,
+        detail=(
+            "third-party plugins are disabled by "
+            f"{DISABLE_THIRD_PARTY_PLUGINS_ENV_VAR}"
+        ),
+        origin="third_party",
+    )
+
+
 def _builtin_backend_plugins() -> list[_LoadedPlugin]:
     """
     Return built-in backend registrations.
@@ -305,7 +383,7 @@ def _load_entry_point_plugin(
         Loaded plugin and its registration record. Failed loads return
         ``None`` plus a skipped registration record.
     """
-    provider = getattr(getattr(entry_point, "dist", None), "name", "") or "<unknown>"
+    provider = _entry_point_provider(entry_point)
 
     try:
         loaded_object = entry_point.load()
@@ -495,7 +573,21 @@ def _discover_entry_point_plugins(
     loaded: list[_LoadedPlugin] = []
     registrations: list[PluginRegistration] = []
 
+    third_party_disabled = _third_party_plugins_disabled()
     for entry_point in _entry_points_for_group(group):
+        provider = _entry_point_provider(entry_point)
+        if (
+            third_party_disabled
+            and _plugin_origin(provider=provider, source="entry_point") == "third_party"
+        ):
+            registrations.append(
+                _disabled_third_party_registration(
+                    entry_point,
+                    family=family,
+                    provider=provider,
+                )
+            )
+            continue
         plugin, registration = _load_entry_point_plugin(entry_point, family=family)
         registrations.append(registration)
         if plugin is not None:

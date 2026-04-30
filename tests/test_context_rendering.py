@@ -30,6 +30,7 @@ from codira.query.context import (
     _apply_scoring_rules,
     _classify_file_role,
     _extract_candidate_score_features,
+    _load_cached_python_file,
     _path_bias,
     _snippet_from_node,
 )
@@ -121,6 +122,34 @@ def test_append_main_context_sections_separates_enriched_blocks(tmp_path: Path) 
     assert "function alpha()" in rendered
     assert "function beta()" in rendered
     assert "    Alpha docstring.\n\nfunction beta()" in rendered
+
+
+def test_load_cached_python_file_caches_syntax_error_sources(tmp_path: Path) -> None:
+    """
+    Cache unreadable-AST Python sources after a syntax error.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root used to create a syntax-error fixture.
+
+    Returns
+    -------
+    None
+        The test asserts syntax-error source text is cached with a ``None`` AST.
+    """
+
+    source_path = tmp_path / "broken.py"
+    source_path.write_text("def broken(:\n", encoding="utf-8")
+    cache: dict[Path, tuple[str, list[str], ast.Module | None]] = {}
+
+    first = _load_cached_python_file(source_path, cache)
+    source_path.write_text("def fixed():\n    return 1\n", encoding="utf-8")
+    second = _load_cached_python_file(source_path, cache)
+
+    assert first == ("def broken(:\n", ["def broken(:"], None)
+    assert second == first
+    assert cache[source_path] == first
 
 
 def test_classify_file_role_distinguishes_core_query_roles() -> None:

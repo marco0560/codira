@@ -40,8 +40,12 @@ class ValidationStep:
 
 
 VALIDATION_STEPS: tuple[ValidationStep, ...] = (
-    ValidationStep("pre-commit", "pre-commit", ("run", "--all-files")),
-    ValidationStep("pytest", "pytest", ("-q", "tests")),
+    ValidationStep("black", "black-serial", ("--check", ".")),
+    ValidationStep("ruff", "ruff", ("check", ".")),
+    ValidationStep("mypy", "mypy", (".",)),
+    ValidationStep("pre-commit-noncode", "pre-commit-noncode", ("run", "--all-files")),
+    ValidationStep("coverage", "coverage", ("run", "-m", "pytest", "-q", "tests")),
+    ValidationStep("coverage-report", "coverage", ("report", "--fail-under=70")),
 )
 
 

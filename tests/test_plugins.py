@@ -498,6 +498,65 @@ def test_active_registry_uses_loaded_entry_point_plugins(
     assert backend.name == "demo-backend"
 
 
+def test_disable_third_party_plugins_skips_untrusted_entry_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Avoid loading third-party entry points when the hardening switch is set.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry-point discovery and environment.
+
+    Returns
+    -------
+    None
+        The test asserts third-party plugins are reported as skipped without
+        executing their entry-point loader while first-party plugins still load.
+    """
+
+    _patch_entry_points(
+        monkeypatch,
+        analyzers=[
+            _FakeEntryPoint(
+                name="demo-analyzer",
+                value="demo:analyzer",
+                dist=_FakeDistribution("demo-analyzer"),
+                loaded=AssertionError("third-party loader should not execute"),
+            ),
+            _FakeEntryPoint(
+                name="python-analyzer",
+                value="codira:python",
+                dist=_FakeDistribution("codira-analyzer-python"),
+                loaded=_build_python_analyzer,
+            ),
+        ],
+        backends=[],
+    )
+    monkeypatch.setenv("CODIRA_DISABLE_THIRD_PARTY_PLUGINS", "1")
+
+    registrations = registry.plugin_registrations()
+
+    assert any(
+        record.family == "analyzer"
+        and record.provider == "demo-analyzer"
+        and record.status == "skipped"
+        and record.origin == "third_party"
+        and record.detail
+        == "third-party plugins are disabled by CODIRA_DISABLE_THIRD_PARTY_PLUGINS"
+        for record in registrations
+    )
+    assert any(
+        record.family == "analyzer"
+        and record.name == "python"
+        and record.provider == "codira-analyzer-python"
+        and record.status == "loaded"
+        and record.origin == "first_party"
+        for record in registrations
+    )
+
+
 def test_active_default_backend_comes_from_first_party_sqlite_package() -> None:
     """
     Keep the default backend runtime type owned by the first-party package.

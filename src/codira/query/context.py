@@ -1091,7 +1091,7 @@ def _snippet_from_node(
 
 def _load_cached_python_file(
     path: Path,
-    cache: dict[Path, tuple[str, list[str], ast.Module]],
+    cache: dict[Path, tuple[str, list[str], ast.Module | None]],
 ) -> tuple[str, list[str], ast.Module | None] | None:
     """
     Load and cache one Python source file used for context rendering.
@@ -1100,7 +1100,7 @@ def _load_cached_python_file(
     ----------
     path : pathlib.Path
         Absolute source path to load.
-    cache : dict[pathlib.Path, tuple[str, list[str], ast.Module]]
+    cache : dict[pathlib.Path, tuple[str, list[str], ast.Module | None]]
         Parsed-file cache shared across multiple lookups.
 
     Returns
@@ -1122,6 +1122,7 @@ def _load_cached_python_file(
     try:
         tree = ast.parse(source)
     except SyntaxError:
+        cache[path] = (source, source_lines, None)
         return (source, source_lines, None)
 
     cache[path] = (source, source_lines, tree)
@@ -1344,7 +1345,7 @@ def _symbol_context_candidate(
 def _extract_code_context(
     root: Path,
     symbol: SymbolRow,
-    cache: dict[Path, tuple[str, list[str], ast.Module]],
+    cache: dict[Path, tuple[str, list[str], ast.Module | None]],
 ) -> CodeContext:
     """
     Extract signature, docstring, and snippet data for a symbol.
@@ -1355,7 +1356,7 @@ def _extract_code_context(
         Repository root used to resolve file paths.
     symbol : codira.types.SymbolRow
         Indexed symbol row to expand.
-    cache : dict[pathlib.Path, tuple[str, list[str], ast.Module]]
+    cache : dict[pathlib.Path, tuple[str, list[str], ast.Module | None]]
         Parsed-file cache shared across multiple lookups.
 
     Returns
@@ -1843,7 +1844,7 @@ def _format_symbol(root: Path, symbol: SymbolRow, *, include_path: bool) -> str:
 def _format_enriched_symbol(
     root: Path,
     symbol: SymbolRow,
-    cache: dict[Path, tuple[str, list[str], ast.Module]],
+    cache: dict[Path, tuple[str, list[str], ast.Module | None]],
 ) -> list[str]:
     """
     Format a symbol with location, snippet, and docstring details.
@@ -1854,7 +1855,7 @@ def _format_enriched_symbol(
         Repository root used to relativize paths.
     symbol : codira.types.SymbolRow
         Symbol row to render.
-    cache : dict[pathlib.Path, tuple[str, list[str], ast.Module]]
+    cache : dict[pathlib.Path, tuple[str, list[str], ast.Module | None]]
         Parsed-file cache shared across multiple symbols.
 
     Returns
@@ -5357,7 +5358,7 @@ def _append_suggested_context_section(request: MainContextSectionsRequest) -> No
         Enriched context is appended to ``request.lines`` in place.
     """
     request.lines.append("\n=== SUGGESTED CONTEXT ===")
-    cache: dict[Path, tuple[str, list[str], ast.Module]] = {}
+    cache: dict[Path, tuple[str, list[str], ast.Module | None]] = {}
     for index, symbol in enumerate(request.top_matches[:ENRICHED_CONTEXT_LIMIT]):
         if index > 0:
             request.lines.append("")

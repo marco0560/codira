@@ -18,12 +18,14 @@ This module belongs to the **storage layer** that bridges the SQLite database wi
 from __future__ import annotations
 
 import contextlib
+import importlib
 import json
+import os
 import sqlite3
 import tempfile
 from contextvars import ContextVar
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TextIO, cast
 
 from codira.schema import DDL, SCHEMA_VERSION
 
@@ -36,6 +38,12 @@ if TYPE_CHECKING:
         LOCK_UN: int
 
         def flock(self, fd: int, operation: int, /) -> None: ...
+
+    class _MsvcrtModule(Protocol):
+        LK_LOCK: int
+        LK_UNLCK: int
+
+        def locking(self, fd: int, mode: int, nbytes: int, /) -> None: ...
 
 
 _STORAGE_ROOT_OVERRIDES: ContextVar[dict[Path, Path] | None] = ContextVar(
@@ -165,6 +173,62 @@ def override_storage_root(root: Path, storage_root: Path) -> Iterator[None]:
         _STORAGE_ROOT_OVERRIDES.reset(token)
 
 
+def _lock_file_handle(handle: TextIO) -> None:
+    """
+    Acquire an exclusive advisory lock on an open lock file.
+
+    Parameters
+    ----------
+    handle : object
+        Open text file handle exposing ``fileno`` and ``seek``.
+
+    Returns
+    -------
+    None
+        The call returns after the exclusive lock is held.
+    """
+
+    if os.name == "nt":
+        msvcrt = cast("_MsvcrtModule", importlib.import_module("msvcrt"))
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return
+
+    import fcntl as _fcntl
+
+    fcntl = cast("_FcntlModule", _fcntl)
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_file_handle(handle: TextIO) -> None:
+    """
+    Release an advisory lock on an open lock file.
+
+    Parameters
+    ----------
+    handle : object
+        Open text file handle exposing ``fileno`` and ``seek``.
+
+    Returns
+    -------
+    None
+        The lock is released in place.
+    """
+
+    if os.name == "nt":
+        msvcrt = cast("_MsvcrtModule", importlib.import_module("msvcrt"))
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl as _fcntl
+
+    fcntl = cast("_FcntlModule", _fcntl)
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 @contextlib.contextmanager
 def acquire_index_lock(root: Path) -> Iterator[None]:
     """
@@ -179,27 +243,18 @@ def acquire_index_lock(root: Path) -> Iterator[None]:
     ------
     None
         Control while the exclusive lock is held.
-
-    Raises
-    ------
-    RuntimeError
-        If the current platform does not provide ``fcntl.flock``.
     """
-    try:
-        import fcntl as _fcntl
-    except ImportError as error:  # pragma: no cover - exercised on non-POSIX
-        msg = "Index locking requires fcntl.flock on this platform."
-        raise RuntimeError(msg) from error
-    fcntl = cast("_FcntlModule", _fcntl)
-
     lock_path = get_index_lock_path(root)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        handle.seek(0)
+        handle.write("0")
+        handle.flush()
+        _lock_file_handle(handle)
         try:
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            _unlock_file_handle(handle)
 
 
 def _refresh_call_edges_schema(conn: sqlite3.Connection) -> None:
