@@ -1,3 +1,10 @@
+## [1.19.1](https://github.com/marco0560/codira/compare/v1.19.0...v1.19.1) (2026-04-30)
+
+
+### Bug Fixes
+
+* **dev:** isolate benchmark campaign indexes ([09c5c8c](https://github.com/marco0560/codira/commit/09c5c8cffdf54f6b8b025d3c7ffe8b1a869afebd))
+
 # [1.19.0](https://github.com/marco0560/codira/compare/v1.18.3...v1.19.0) (2026-04-30)
 
 
