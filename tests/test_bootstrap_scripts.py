@@ -1543,8 +1543,7 @@ def test_repo_tool_runner_captures_black_child_output(
     monkeypatch.setattr(helper.subprocess, "run", fake_run)
 
     assert (
-        helper.run_black_serial(("--check", "."), env={"X": "1"}, python="python")
-        == 0
+        helper.run_black_serial(("--check", "."), env={"X": "1"}, python="python") == 0
     )
     captured = capsys.readouterr()
 
