@@ -1,3 +1,10 @@
+# [1.19.0](https://github.com/marco0560/codira/compare/v1.18.3...v1.19.0) (2026-04-30)
+
+
+### Features
+
+* **dev:** add benchmark campaign tooling ([a71b6f7](https://github.com/marco0560/codira/commit/a71b6f79ef6b5dc5e3ee73b49162b7fc97ab2753)), closes [#23](https://github.com/marco0560/codira/issues/23)
+
 ## [1.18.3](https://github.com/marco0560/codira/compare/v1.18.2...v1.18.3) (2026-04-26)
 
 
