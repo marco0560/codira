@@ -1,3 +1,10 @@
+## [1.19.2](https://github.com/marco0560/codira/compare/v1.19.1...v1.19.2) (2026-04-30)
+
+
+### Bug Fixes
+
+* **dev:** route phase benchmarks through output dir ([004fc51](https://github.com/marco0560/codira/commit/004fc51d7c19c15c94ce93dbd25730b0ac2b081e))
+
 ## [1.19.1](https://github.com/marco0560/codira/compare/v1.19.0...v1.19.1) (2026-04-30)
 
 
