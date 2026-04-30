@@ -428,6 +428,8 @@ def build_phase_benchmark_argv(
         str(Path(__file__).with_name("benchmark_index.py")),
         str(repo.path),
         "--full",
+        "--output-dir",
+        str(index_output_dir(repo, config)),
         "--output",
         str(output),
     )
@@ -672,6 +674,11 @@ def main() -> int:
     -------
     int
         Zero when the campaign plan is generated and all executed commands pass.
+
+    Raises
+    ------
+    TypeError
+        If an internally generated command plan has an invalid shape.
     """
     args = build_parser().parse_args()
     run_id = args.run_id or utc_run_timestamp().replace(":", "").replace("-", "")

@@ -321,6 +321,13 @@ def expand_black_serial_targets(targets: Sequence[str]) -> list[str]:
     -------
     list[str]
         Deterministically ordered Python source paths.
+
+    Raises
+    ------
+    RuntimeError
+        If Git is unavailable and directory targets cannot be expanded.
+    subprocess.CalledProcessError
+        If ``git ls-files`` fails for a directory target.
     """
 
     expanded: set[str] = set()

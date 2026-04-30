@@ -2382,11 +2382,7 @@ def test_benchmark_campaign_helper_builds_dry_run_plan(tmp_path: Path) -> None:
     assert any("benchmark_index.py" in command for command in display_commands)
     assert any("hyperfine" in command for command in display_commands)
     assert any("cProfile" in command for command in display_commands)
-    assert all(
-        "--output-dir" in command
-        for command in display_commands
-        if "benchmark_index.py" not in command
-    )
+    assert all("--output-dir" in command for command in display_commands)
     assert any(
         ".artifacts/benchmarks/20260430T120000Z/indexes/small-codira" in command
         for command in display_commands

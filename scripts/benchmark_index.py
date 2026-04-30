@@ -38,6 +38,7 @@ from codira_backend_sqlite import SQLiteIndexBackend
 from codira import indexer, sqlite_backend_support
 from codira.indexer import index_repo
 from codira.semantic import embeddings as embeddings_module
+from codira.storage import init_db, override_storage_root
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,6 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Write the benchmark JSON artifact to this path.",
     )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Directory under which .codira benchmark state is stored.",
+    )
     return parser
 
 
@@ -90,6 +96,7 @@ def main() -> int:
     """
     args = build_parser().parse_args()
     root = Path(args.root).resolve()
+    output_dir = None if args.output_dir is None else Path(args.output_dir).resolve()
     timer = PhaseTimer()
     embedding_batch_sizes: list[int] = []
 
@@ -205,7 +212,13 @@ def main() -> int:
 
     total_start = perf_counter()
     try:
-        report = index_repo(root, full=args.full)
+        if output_dir is None:
+            init_db(root)
+            report = index_repo(root, full=args.full)
+        else:
+            with override_storage_root(root, output_dir):
+                init_db(root)
+                report = index_repo(root, full=args.full)
     finally:
         total_elapsed = perf_counter() - total_start
         indexer._collect_project_scan_state = original_collect_scan
@@ -222,6 +235,7 @@ def main() -> int:
     benchmark_report = {
         "metadata": benchmark_metadata(root),
         "root": str(root),
+        "output_dir": None if output_dir is None else str(output_dir),
         "full": bool(args.full),
         "timings": {
             **timer.rounded(),
