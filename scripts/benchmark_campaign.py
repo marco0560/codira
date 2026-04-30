@@ -295,10 +295,34 @@ def run_directory(config: CampaignConfig) -> Path:
     return config.artifact_root / config.run_id
 
 
+def index_output_dir(repo: RepositoryBenchmark, config: CampaignConfig) -> Path:
+    """
+    Return the isolated Codira output directory for one benchmark repository.
+
+    Parameters
+    ----------
+    repo : RepositoryBenchmark
+        Repository benchmark target.
+    config : CampaignConfig
+        Campaign configuration.
+
+    Returns
+    -------
+    pathlib.Path
+        Output directory passed to Codira commands through ``--output-dir``.
+    """
+    return (
+        run_directory(config)
+        / "indexes"
+        / f"{_safe_label(repo.category)}-{_safe_label(repo.label)}"
+    )
+
+
 def hyperfine_command_strings(
     repo: RepositoryBenchmark,
     *,
     codira: str,
+    output_dir: Path,
 ) -> tuple[str, ...]:
     """
     Return command strings measured through Hyperfine for one repository.
@@ -309,6 +333,8 @@ def hyperfine_command_strings(
         Repository benchmark target.
     codira : str
         Codira executable to benchmark.
+    output_dir : pathlib.Path
+        Codira output directory used for isolated index state.
 
     Returns
     -------
@@ -316,10 +342,22 @@ def hyperfine_command_strings(
         Shell-quoted command strings accepted by Hyperfine.
     """
     path = str(repo.path)
+    output = str(output_dir)
     return (
-        shlex.join((codira, "index", "--full", "--path", path)),
-        shlex.join((codira, "index", "--path", path)),
-        shlex.join((codira, "ctx", "--json", repo.query, "--path", path)),
+        shlex.join((codira, "index", "--full", "--path", path, "--output-dir", output)),
+        shlex.join((codira, "index", "--path", path, "--output-dir", output)),
+        shlex.join(
+            (
+                codira,
+                "ctx",
+                "--json",
+                repo.query,
+                "--path",
+                path,
+                "--output-dir",
+                output,
+            )
+        ),
     )
 
 
@@ -354,7 +392,11 @@ def build_hyperfine_argv(
         str(config.runs),
         "--export-json",
         str(output),
-        *hyperfine_command_strings(repo, codira=config.codira),
+        *hyperfine_command_strings(
+            repo,
+            codira=config.codira,
+            output_dir=index_output_dir(repo, config),
+        ),
     )
 
 
@@ -432,6 +474,7 @@ def build_profile_argvs(
     base = run_directory(config) / "profiles"
     prefix = f"{_safe_label(repo.category)}-{_safe_label(repo.label)}"
     codira_script = _resolved_codira_script(config.codira)
+    output_dir = str(index_output_dir(repo, config))
     return (
         (
             config.python,
@@ -444,6 +487,8 @@ def build_profile_argvs(
             "--full",
             "--path",
             str(repo.path),
+            "--output-dir",
+            output_dir,
         ),
         (
             config.python,
@@ -457,6 +502,8 @@ def build_profile_argvs(
             repo.query,
             "--path",
             str(repo.path),
+            "--output-dir",
+            output_dir,
         ),
     )
 
@@ -484,27 +531,33 @@ def build_pyinstrument_argvs(
         return ()
     base = run_directory(config) / "profiles"
     prefix = f"{_safe_label(repo.category)}-{_safe_label(repo.label)}"
+    codira_script = _resolved_codira_script(config.codira)
+    output_dir = str(index_output_dir(repo, config))
     return (
         (
             "pyinstrument",
             "-o",
             str(base / f"{prefix}-index-pyinstrument.html"),
-            config.codira,
+            codira_script,
             "index",
             "--full",
             "--path",
             str(repo.path),
+            "--output-dir",
+            output_dir,
         ),
         (
             "pyinstrument",
             "-o",
             str(base / f"{prefix}-ctx-pyinstrument.html"),
-            config.codira,
+            codira_script,
             "ctx",
             "--json",
             repo.query,
             "--path",
             str(repo.path),
+            "--output-dir",
+            output_dir,
         ),
     )
 

@@ -40,6 +40,16 @@ Profile artifacts are written under:
 .artifacts/benchmarks/<run-id>/profiles/
 ```
 
+Codira index state for campaign commands is isolated from each target
+repository and written under:
+
+```text
+.artifacts/benchmarks/<run-id>/indexes/<category-label>/
+```
+
+The campaign runner passes this directory through `--output-dir` for `index`
+and `ctx` commands.
+
 ## Manifest Format
 
 The campaign runner expects a JSON manifest:
