@@ -38,12 +38,31 @@ from benchmark_timing import (  # type: ignore[import-not-found]
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
 DEFAULT_ARTIFACT_ROOT = Path(".artifacts") / "benchmarks"
 DEFAULT_RUNS = 5
 DEFAULT_WARMUP = 1
 DEFAULT_QUERY = "schema migration logic"
+PATH_AWARE_SUBCOMMANDS = frozenset(
+    {"index", "cov", "sym", "symlist", "emb", "calls", "refs", "audit", "ctx"}
+)
+MANIFEST_BENCHMARK_SUBCOMMANDS = frozenset(
+    {
+        "help",
+        "index",
+        "cov",
+        "sym",
+        "symlist",
+        "emb",
+        "calls",
+        "refs",
+        "audit",
+        "ctx",
+        "plugins",
+        "caps",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +82,8 @@ class RepositoryBenchmark:
         Query used for context retrieval benchmarks.
     modes : tuple[str, ...]
         Requested run modes for the repository.
+    commands : tuple[tuple[str, ...], ...]
+        Additional Codira command vectors benchmarked through Hyperfine.
     """
 
     label: str
@@ -70,6 +91,7 @@ class RepositoryBenchmark:
     path: Path
     query: str
     modes: tuple[str, ...]
+    commands: tuple[tuple[str, ...], ...]
 
 
 @dataclass(frozen=True)
@@ -265,6 +287,7 @@ def load_manifest(path: Path) -> tuple[RepositoryBenchmark, ...]:
         if not isinstance(raw_modes, list | tuple) or not raw_modes:
             msg = f"repository entry {index} modes must be a non-empty list"
             raise ValueError(msg)
+        commands = _load_manifest_commands(row.get("commands", ()), index=index)
         loaded.append(
             RepositoryBenchmark(
                 label=label,
@@ -272,9 +295,66 @@ def load_manifest(path: Path) -> tuple[RepositoryBenchmark, ...]:
                 path=repo_path,
                 query=str(row.get("query", DEFAULT_QUERY)),
                 modes=tuple(str(mode) for mode in raw_modes),
+                commands=commands,
             )
         )
     return tuple(loaded)
+
+
+def _load_manifest_commands(
+    raw_commands: object,
+    *,
+    index: int,
+) -> tuple[tuple[str, ...], ...]:
+    """
+    Load validated manifest commands for one repository entry.
+
+    Parameters
+    ----------
+    raw_commands : object
+        Raw manifest value stored under ``commands``.
+    index : int
+        Repository entry index used in validation messages.
+
+    Returns
+    -------
+    tuple[tuple[str, ...], ...]
+        Validated command token vectors.
+
+    Raises
+    ------
+    TypeError
+        If the ``commands`` container is not a list-like value.
+    ValueError
+        If a command entry is empty, has empty tokens, or names an unsupported
+        subcommand.
+    """
+    if not isinstance(raw_commands, list | tuple):
+        msg = f"repository entry {index} commands must be a list"
+        raise TypeError(msg)
+    commands: list[tuple[str, ...]] = []
+    for command_index, raw_command in enumerate(raw_commands):
+        if not isinstance(raw_command, list | tuple) or not raw_command:
+            msg = (
+                f"repository entry {index} command {command_index} must be a "
+                "non-empty list"
+            )
+            raise ValueError(msg)
+        argv = tuple(str(part).strip() for part in raw_command)
+        if any(not part for part in argv):
+            msg = (
+                f"repository entry {index} command {command_index} contains an "
+                "empty token"
+            )
+            raise ValueError(msg)
+        if argv[0] not in MANIFEST_BENCHMARK_SUBCOMMANDS:
+            msg = (
+                f"repository entry {index} command {command_index} uses "
+                f"unsupported subcommand: {argv[0]}"
+            )
+            raise ValueError(msg)
+        commands.append(argv)
+    return tuple(commands)
 
 
 def _safe_label(value: str) -> str:
@@ -312,6 +392,67 @@ def run_directory(config: CampaignConfig) -> Path:
     return config.artifact_root / config.run_id
 
 
+def _expand_manifest_token(
+    token: str, *, repo: RepositoryBenchmark, config: CampaignConfig
+) -> str:
+    """
+    Expand known benchmark manifest placeholders in one command token.
+
+    Parameters
+    ----------
+    token : str
+        Raw manifest token.
+    repo : RepositoryBenchmark
+        Repository benchmark target.
+    config : CampaignConfig
+        Campaign configuration.
+
+    Returns
+    -------
+    str
+        Token with supported placeholders substituted.
+    """
+    expanded = token.replace("{path}", str(repo.path))
+    expanded = expanded.replace("{output_dir}", str(index_output_dir(repo, config)))
+    return expanded.replace("{query}", repo.query)
+
+
+def _manifest_command_argv(
+    command: Sequence[str],
+    *,
+    repo: RepositoryBenchmark,
+    config: CampaignConfig,
+) -> tuple[str, ...]:
+    """
+    Build one Codira argv from a manifest command entry.
+
+    Parameters
+    ----------
+    command : collections.abc.Sequence[str]
+        Manifest command tokens excluding the Codira executable.
+    repo : RepositoryBenchmark
+        Repository benchmark target.
+    config : CampaignConfig
+        Campaign configuration.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Complete Codira argv with placeholder expansion.
+    """
+    subcommand = str(command[0])
+    expanded = tuple(
+        _expand_manifest_token(str(token), repo=repo, config=config)
+        for token in command
+    )
+    argv = [config.codira, *expanded]
+    if subcommand in PATH_AWARE_SUBCOMMANDS and "--path" not in expanded:
+        argv.extend(("--path", str(repo.path)))
+    if subcommand in PATH_AWARE_SUBCOMMANDS and "--output-dir" not in expanded:
+        argv.extend(("--output-dir", str(index_output_dir(repo, config))))
+    return tuple(argv)
+
+
 def index_output_dir(repo: RepositoryBenchmark, config: CampaignConfig) -> Path:
     """
     Return the isolated Codira output directory for one benchmark repository.
@@ -340,6 +481,7 @@ def hyperfine_command_strings(
     *,
     codira: str,
     output_dir: Path,
+    config: CampaignConfig,
 ) -> tuple[str, ...]:
     """
     Return command strings measured through Hyperfine for one repository.
@@ -352,6 +494,8 @@ def hyperfine_command_strings(
         Codira executable to benchmark.
     output_dir : pathlib.Path
         Codira output directory used for isolated index state.
+    config : CampaignConfig
+        Campaign configuration used to expand optional manifest commands.
 
     Returns
     -------
@@ -360,7 +504,7 @@ def hyperfine_command_strings(
     """
     path = str(repo.path)
     output = str(output_dir)
-    return (
+    commands = [
         shlex.join((codira, "index", "--full", "--path", path, "--output-dir", output)),
         shlex.join((codira, "index", "--path", path, "--output-dir", output)),
         shlex.join(
@@ -375,7 +519,12 @@ def hyperfine_command_strings(
                 output,
             )
         ),
+    ]
+    commands.extend(
+        shlex.join(_manifest_command_argv(command, repo=repo, config=config))
+        for command in repo.commands
     )
+    return tuple(dict.fromkeys(commands))
 
 
 def build_hyperfine_argv(
@@ -413,6 +562,7 @@ def build_hyperfine_argv(
             repo,
             codira=config.codira,
             output_dir=index_output_dir(repo, config),
+            config=config,
         ),
     )
 

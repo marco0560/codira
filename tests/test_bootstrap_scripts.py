@@ -647,6 +647,8 @@ class _BenchmarkCampaignModule(Protocol):
             Repository benchmark targets.
         """
 
+    MANIFEST_BENCHMARK_SUBCOMMANDS: frozenset[str]
+
     def command_plan(
         self,
         repositories: tuple[object, ...],
@@ -2508,6 +2510,86 @@ def test_benchmark_campaign_helper_builds_dry_run_plan(tmp_path: Path) -> None:
         ".artifacts/benchmarks/20260430T120000Z/indexes/small-codira" in command
         for command in display_commands
     )
+
+
+def test_benchmark_campaign_helper_expands_manifest_commands(tmp_path: Path) -> None:
+    """
+    Keep manifest-defined Codira commands reproducible and path-aware.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for manifest and target repository fixtures.
+
+    Returns
+    -------
+    None
+        The test asserts custom commands expand placeholders, gain repository
+        path isolation where required, and deduplicate built-in default
+        commands.
+    """
+    helper = _load_benchmark_campaign_helper()
+    repo_path = tmp_path / "codira"
+    repo_path.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {
+                        "label": "codira",
+                        "category": "small",
+                        "path": str(repo_path),
+                        "query": "schema migration logic",
+                        "commands": [
+                            ["help"],
+                            ["cov", "--json"],
+                            ["index", "--full"],
+                            ["sym", "build_parser", "--json"],
+                            ["ctx", "--json", "{query}"],
+                            ["caps", "--json"],
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260501T120000Z",
+        codira="/tmp/codira/.venv/bin/codira",
+        hyperfine="hyperfine",
+        python="python",
+        runs=3,
+        warmup=1,
+        dry_run=True,
+    )
+
+    repositories = helper.load_manifest(manifest)
+    plan = helper.command_plan(repositories, config)
+    row = plan[0]
+    display_commands = cast("list[str]", row["display_commands"])
+    commands = cast("list[list[str]]", row["commands"])
+    hyperfine_commands = commands[1][7:]
+
+    assert any("codira help" in command for command in display_commands)
+    assert any(
+        "cov --json --path " in command and "--output-dir " in command
+        for command in display_commands
+    )
+    assert any(
+        "sym build_parser --json --path " in command and "--output-dir " in command
+        for command in display_commands
+    )
+    assert any(
+        "ctx --json 'schema migration logic' --path " in command
+        and "--output-dir " in command
+        for command in display_commands
+    )
+    assert any("caps --json" in command for command in display_commands)
+    assert sum("codira index --full" in command for command in hyperfine_commands) == 1
 
 
 def test_benchmark_campaign_rejects_duplicate_labels(tmp_path: Path) -> None:

@@ -80,7 +80,36 @@ categories.
 The campaign runner builds phase-timing, Hyperfine, cProfile, and optional
 Pyinstrument command plans for each configured repository. Use `--dry-run` to
 write and inspect `.artifacts/benchmarks/<run-id>/campaign-plan.json` without
-executing benchmark commands.
+executing benchmark commands. `--dry-run` still validates the manifest before
+printing the plan.
+
+The manifest supports optional repository-local `commands` entries that extend
+the Hyperfine command set beyond the default `index --full`, warm `index`, and
+`ctx --json` measurements. Each command is written as a JSON argv array
+excluding the `codira` executable itself, for example:
+
+```json
+["sym", "build_parser", "--json"]
+```
+
+Supported manifest-benchmark subcommands are:
+
+- `help`
+- `index`
+- `cov`
+- `sym`
+- `symlist`
+- `emb`
+- `calls`
+- `refs`
+- `audit`
+- `ctx`
+- `plugins`
+- `caps`
+
+Manifest command tokens may use `{path}`, `{output_dir}`, and `{query}`
+placeholders. For path-aware subcommands, the campaign runner appends
+`--path` and `--output-dir` automatically when they are omitted.
 
 Example:
 

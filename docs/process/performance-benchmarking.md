@@ -88,8 +88,42 @@ Optional fields:
 
 - `query`, defaulting to `schema migration logic`
 - `modes`, defaulting to `cold`, `warm`, and `partial_change`
+- `commands`, an optional list of Codira subcommand argv arrays benchmarked
+  through Hyperfine in addition to the default `index --full`, warm `index`,
+  and `ctx --json` commands
 
 Missing repository paths fail fast before commands are run.
+
+When `commands` is present, each entry is a JSON array of tokens excluding the
+Codira executable itself, for example:
+
+```json
+["sym", "build_parser", "--json"]
+```
+
+Supported manifest-benchmark subcommands are:
+
+- `help`
+- `index`
+- `cov`
+- `sym`
+- `symlist`
+- `emb`
+- `calls`
+- `refs`
+- `audit`
+- `ctx`
+- `plugins`
+- `caps`
+
+Manifest command tokens may use these placeholders:
+
+- `{path}` for the repository root path
+- `{output_dir}` for the isolated Codira state directory
+- `{query}` for the repository query string
+
+For path-aware subcommands, the campaign runner appends `--path` and
+`--output-dir` automatically when they are not already present.
 
 ## Campaign Command
 
