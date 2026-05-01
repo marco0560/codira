@@ -617,6 +617,7 @@ class _BenchmarkCampaignModule(Protocol):
 
     CampaignConfig: type
     RepositoryBenchmark: type
+    subprocess: object
 
     def build_parser(self) -> argparse.ArgumentParser:
         """
@@ -670,6 +671,27 @@ class _BenchmarkCampaignModule(Protocol):
             JSON-serializable command plan rows.
         """
 
+    def resolve_repositories(
+        self,
+        repositories: tuple[object, ...],
+        config: object,
+    ) -> tuple[object, ...]:
+        """
+        Resolve adaptive benchmark selections for all repositories.
+
+        Parameters
+        ----------
+        repositories : tuple[object, ...]
+            Repository benchmark targets.
+        config : object
+            Campaign configuration.
+
+        Returns
+        -------
+        tuple[object, ...]
+            Resolved repository benchmark targets.
+        """
+
     def main(self) -> int:
         """
         Run the benchmark campaign entry point.
@@ -683,6 +705,14 @@ class _BenchmarkCampaignModule(Protocol):
         int
             Process exit status.
         """
+
+
+class _ResolvedBenchmarkRepository(Protocol):
+    """Protocol for one adaptively resolved benchmark repository."""
+
+    query: str
+    commands: tuple[tuple[str, ...], ...]
+    skipped_commands: tuple[tuple[str, ...], ...]
 
 
 class _SplitRepoVerificationModule(Protocol):
@@ -2433,7 +2463,10 @@ def test_benchmark_metadata_includes_first_party_plugins() -> None:
     assert "snakeviz" in tools
 
 
-def test_benchmark_campaign_helper_builds_dry_run_plan(tmp_path: Path) -> None:
+def test_benchmark_campaign_helper_builds_dry_run_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Keep performance campaign command construction reproducible.
 
@@ -2493,6 +2526,61 @@ def test_benchmark_campaign_helper_builds_dry_run_plan(tmp_path: Path) -> None:
         dry_run=True,
     )
 
+    def fake_run(
+        command: Sequence[str],
+        *,
+        text: bool | None = None,
+        capture_output: bool | None = None,
+        check: bool | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        argv = tuple(str(part) for part in command)
+        if "index" in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "symlist" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "symbols": [
+                            {
+                                "type": "function",
+                                "name": "build_parser",
+                                "module": "codira.cli",
+                                "file": str(
+                                    (small / "src" / "codira" / "cli.py").resolve()
+                                ),
+                                "calls_out": {"total": 4},
+                                "calls_in": {"total": 2},
+                                "refs_out": {"total": 1},
+                                "refs_in": {"total": 1},
+                            }
+                        ],
+                    }
+                ),
+                "",
+            )
+        if "emb" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "results": [{"score": 0.9}],
+                    }
+                ),
+                "",
+            )
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            json.dumps({"status": "ok", "results": [{"name": "build_parser"}]}),
+            "",
+        )
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
     repositories = helper.load_manifest(manifest)
     plan = helper.command_plan(repositories, config)
     help_text = helper.build_parser().format_help()
@@ -2512,7 +2600,10 @@ def test_benchmark_campaign_helper_builds_dry_run_plan(tmp_path: Path) -> None:
     )
 
 
-def test_benchmark_campaign_helper_expands_manifest_commands(tmp_path: Path) -> None:
+def test_benchmark_campaign_helper_expands_manifest_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Keep manifest-defined Codira commands reproducible and path-aware.
 
@@ -2567,6 +2658,61 @@ def test_benchmark_campaign_helper_expands_manifest_commands(tmp_path: Path) -> 
         dry_run=True,
     )
 
+    def fake_run(
+        command: Sequence[str],
+        *,
+        text: bool | None = None,
+        capture_output: bool | None = None,
+        check: bool | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        argv = tuple(str(part) for part in command)
+        if "index" in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "symlist" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "symbols": [
+                            {
+                                "type": "function",
+                                "name": "build_parser",
+                                "module": "codira.cli",
+                                "file": str(
+                                    (repo_path / "src" / "codira" / "cli.py").resolve()
+                                ),
+                                "calls_out": {"total": 4},
+                                "calls_in": {"total": 2},
+                                "refs_out": {"total": 1},
+                                "refs_in": {"total": 1},
+                            }
+                        ],
+                    }
+                ),
+                "",
+            )
+        if "emb" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "results": [{"score": 0.9}],
+                    }
+                ),
+                "",
+            )
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            json.dumps({"status": "ok", "results": [{"name": "build_parser"}]}),
+            "",
+        )
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
     repositories = helper.load_manifest(manifest)
     plan = helper.command_plan(repositories, config)
     row = plan[0]
@@ -2590,6 +2736,284 @@ def test_benchmark_campaign_helper_expands_manifest_commands(tmp_path: Path) -> 
     )
     assert any("caps --json" in command for command in display_commands)
     assert sum("codira index --full" in command for command in hyperfine_commands) == 1
+
+
+def test_benchmark_campaign_adaptive_resolution_picks_richer_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Resolve benchmark targets toward richer repo-specific command outputs.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for manifest and target repository fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace subprocess execution.
+
+    Returns
+    -------
+    None
+        The test asserts adaptive resolution replaces weak literal targets with
+        richer symbol and query candidates and records selector provenance.
+    """
+    helper = _load_benchmark_campaign_helper()
+    repo_path = tmp_path / "codira"
+    repo_path.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {
+                        "label": "codira",
+                        "category": "small",
+                        "path": str(repo_path),
+                        "query": "schema migration logic",
+                        "commands": [
+                            ["sym", "missing_symbol", "--json"],
+                            ["refs", "missing_symbol", "--incoming", "--json"],
+                            ["emb", "{query}", "--json", "--limit", "5"],
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260502T120000Z",
+        codira="codira",
+        hyperfine="hyperfine",
+        python="python",
+        runs=3,
+        warmup=1,
+        dry_run=True,
+    )
+
+    def fake_run(
+        command: Sequence[str],
+        *,
+        text: bool | None = None,
+        capture_output: bool | None = None,
+        check: bool | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        argv = tuple(str(part) for part in command)
+        if "index" in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "symlist" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "symbols": [
+                            {
+                                "type": "function",
+                                "name": "alpha_edge",
+                                "module": "codira.alpha",
+                                "file": str(
+                                    (
+                                        repo_path / "src" / "codira" / "alpha.py"
+                                    ).resolve()
+                                ),
+                                "calls_out": {"total": 2},
+                                "calls_in": {"total": 1},
+                                "refs_out": {"total": 0},
+                                "refs_in": {"total": 0},
+                            },
+                            {
+                                "type": "function",
+                                "name": "beta_edge",
+                                "module": "codira.beta",
+                                "file": str(
+                                    (repo_path / "src" / "codira" / "beta.py").resolve()
+                                ),
+                                "calls_out": {"total": 5},
+                                "calls_in": {"total": 3},
+                                "refs_out": {"total": 2},
+                                "refs_in": {"total": 2},
+                            },
+                        ],
+                    }
+                ),
+                "",
+            )
+        if "emb" in argv and "--json" in argv:
+            query = argv[argv.index("emb") + 1]
+            if query == "beta edge":
+                payload = {
+                    "status": "ok",
+                    "results": [{"score": 0.95}, {"score": 0.91}],
+                }
+            elif query == "alpha edge":
+                payload = {"status": "ok", "results": [{"score": 0.4}]}
+            else:
+                payload = {"status": "ok", "results": []}
+            return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+        if "sym" in argv and "--json" in argv:
+            name = argv[argv.index("sym") + 1]
+            payload = (
+                {"status": "ok", "results": [{"name": name}, {"name": f"{name}.alt"}]}
+                if name == "beta_edge"
+                else {"status": "ok", "results": [{"name": name}]}
+            )
+            return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+        if "refs" in argv and "--json" in argv:
+            name = argv[argv.index("refs") + 1]
+            if name == "beta_edge":
+                payload = {
+                    "status": "ok",
+                    "results": [{"name": "one"}, {"name": "two"}],
+                }
+                return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+            payload = {"status": "no_matches", "results": []}
+            return subprocess.CompletedProcess(argv, 1, json.dumps(payload), "")
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"status": "ok"}), "")
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    repositories = helper.load_manifest(manifest)
+    resolved = helper.resolve_repositories(repositories, config)
+    plan = helper.command_plan(resolved, config)
+    resolved_repo = cast("_ResolvedBenchmarkRepository", resolved[0])
+
+    assert resolved_repo.query == "beta edge"
+    assert resolved_repo.commands == (
+        ("sym", "beta_edge", "--json"),
+        ("refs", "beta_edge", "--incoming", "--json"),
+        ("emb", "beta edge", "--json", "--limit", "5"),
+    )
+    row = plan[0]
+    assert row["requested_query"] == "schema migration logic"
+    assert row["query"] == "beta edge"
+    assert row["skipped_commands"] == []
+
+
+def test_benchmark_campaign_skips_unresolved_adaptive_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Skip adaptive commands that cannot produce meaningful output.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for manifest and target repository fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace subprocess execution.
+
+    Returns
+    -------
+    None
+        The test asserts unresolved adaptive commands are excluded from the
+        resolved Hyperfine command matrix and persisted as skipped commands.
+    """
+    helper = _load_benchmark_campaign_helper()
+    repo_path = tmp_path / "codira"
+    repo_path.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {
+                        "label": "codira",
+                        "category": "small",
+                        "path": str(repo_path),
+                        "commands": [
+                            ["refs", "missing_symbol", "--incoming", "--json"]
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260502T130000Z",
+        codira="codira",
+        hyperfine="hyperfine",
+        python="python",
+        runs=3,
+        warmup=1,
+        dry_run=True,
+    )
+
+    def fake_run(
+        command: Sequence[str],
+        *,
+        text: bool | None = None,
+        capture_output: bool | None = None,
+        check: bool | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        argv = tuple(str(part) for part in command)
+        if "index" in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "symlist" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "symbols": [
+                            {
+                                "type": "function",
+                                "name": "alpha_edge",
+                                "module": "codira.alpha",
+                                "file": str(
+                                    (
+                                        repo_path / "src" / "codira" / "alpha.py"
+                                    ).resolve()
+                                ),
+                                "calls_out": {"total": 2},
+                                "calls_in": {"total": 1},
+                                "refs_out": {"total": 0},
+                                "refs_in": {"total": 0},
+                            }
+                        ],
+                    }
+                ),
+                "",
+            )
+        if "emb" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps({"status": "ok", "results": [{"score": 0.8}]}),
+                "",
+            )
+        if "refs" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                1,
+                json.dumps({"status": "no_matches", "results": []}),
+                "",
+            )
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"status": "ok"}), "")
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    repositories = helper.load_manifest(manifest)
+    resolved = helper.resolve_repositories(repositories, config)
+    plan = helper.command_plan(resolved, config)
+    resolved_repo = cast("_ResolvedBenchmarkRepository", resolved[0])
+
+    assert resolved_repo.commands == ()
+    assert resolved_repo.skipped_commands == (
+        ("refs", "missing_symbol", "--incoming", "--json"),
+    )
+    assert plan[0]["skipped_commands"] == [
+        ["refs", "missing_symbol", "--incoming", "--json"]
+    ]
 
 
 def test_benchmark_campaign_rejects_duplicate_labels(tmp_path: Path) -> None:

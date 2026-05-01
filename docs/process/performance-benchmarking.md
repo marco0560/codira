@@ -125,6 +125,58 @@ Manifest command tokens may use these placeholders:
 For path-aware subcommands, the campaign runner appends `--path` and
 `--output-dir` automatically when they are not already present.
 
+## Adaptive Command Resolution
+
+Before building the measured command matrix for one repository, the campaign
+runs a discovery pass:
+
+1. build a temporary Codira index under `/tmp`
+2. run `codira symlist --json` against that temporary index
+3. score discovered function and method symbols by graph connectivity
+4. resolve adaptive benchmark commands toward richer repo-specific targets
+5. persist the selector provenance without persisting the temporary index
+
+Adaptive resolution currently applies to these command families:
+
+- `sym`
+- `symlist`
+- `emb`
+- `calls`
+- `refs`
+- `ctx`
+
+Resolution rules:
+
+- `sym`, `calls`, and `refs` try ranked symbol candidates and keep the highest
+  scoring command that returns JSON `status: "ok"` with non-empty results
+- `emb` and `ctx` share one resolved semantic query chosen from the manifest
+  query plus discovered symbol and module names
+- `symlist` is kept only when it returns a non-empty symbol inventory
+- commands that cannot be resolved to meaningful output are skipped for that
+  repository instead of aborting the full campaign
+
+The selector writes one JSON provenance artifact per repository under:
+
+```text
+.artifacts/benchmarks/<run-id>/selection/
+```
+
+These artifacts record:
+
+- requested query and requested commands
+- resolved query and resolved commands
+- skipped commands
+- discovery candidate scores and command trial details
+
+The main `campaign-plan.json` also records:
+
+- `requested_query`
+- `query` (resolved)
+- `requested_commands`
+- `resolved_commands`
+- `skipped_commands`
+- `selection_artifact`
+
 ## Campaign Command
 
 Inspect the planned commands without executing:

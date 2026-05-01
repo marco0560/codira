@@ -81,7 +81,8 @@ The campaign runner builds phase-timing, Hyperfine, cProfile, and optional
 Pyinstrument command plans for each configured repository. Use `--dry-run` to
 write and inspect `.artifacts/benchmarks/<run-id>/campaign-plan.json` without
 executing benchmark commands. `--dry-run` still validates the manifest before
-printing the plan.
+printing the plan. The dry run still performs the adaptive discovery pass used
+to resolve repo-specific benchmark commands.
 
 The manifest supports optional repository-local `commands` entries that extend
 the Hyperfine command set beyond the default `index --full`, warm `index`, and
@@ -110,6 +111,24 @@ Supported manifest-benchmark subcommands are:
 Manifest command tokens may use `{path}`, `{output_dir}`, and `{query}`
 placeholders. For path-aware subcommands, the campaign runner appends
 `--path` and `--output-dir` automatically when they are omitted.
+
+Before building the final Hyperfine command matrix, the campaign runs an
+adaptive discovery pass for each repository:
+
+- a temporary Codira index is built under `/tmp`
+- `symlist --json` is used to discover candidate symbols with meaningful graph
+  connectivity
+- semantic query candidates are ranked from the manifest query plus discovered
+  symbol and module names
+- adaptive commands such as `sym`, `calls`, `refs`, `emb`, `ctx`, and
+  `symlist` are resolved to repo-specific commands with more significant output
+- unresolved adaptive commands are skipped instead of aborting the whole repo
+  campaign
+
+Discovery index state is not stored under `--artifact-root`. Only selector
+provenance is persisted under
+`.artifacts/benchmarks/<run-id>/selection/*.json`, and the resolved or skipped
+commands are also recorded in `campaign-plan.json`.
 
 Example:
 
