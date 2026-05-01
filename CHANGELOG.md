@@ -1,3 +1,10 @@
+## [1.19.4](https://github.com/marco0560/codira/compare/v1.19.3...v1.19.4) (2026-05-01)
+
+
+### Bug Fixes
+
+* **dev:** harden benchmark campaign startup checks ([7b61f70](https://github.com/marco0560/codira/commit/7b61f70d9b22cdf67f2f3e37ae38f5131bf34182))
+
 ## [1.19.3](https://github.com/marco0560/codira/compare/v1.19.2...v1.19.3) (2026-04-30)
 
 
