@@ -221,8 +221,11 @@ def load_manifest(path: Path) -> tuple[RepositoryBenchmark, ...]:
     ValueError
         If the manifest shape is invalid.
     FileNotFoundError
-        If a configured repository path does not exist.
+        If the manifest file or a configured repository path does not exist.
     """
+    if not path.exists():
+        msg = f"manifest file not found: {path}"
+        raise FileNotFoundError(msg)
     payload = json.loads(path.read_text(encoding="utf-8"))
     repositories = payload.get("repositories")
     if not isinstance(repositories, list) or not repositories:
@@ -230,6 +233,8 @@ def load_manifest(path: Path) -> tuple[RepositoryBenchmark, ...]:
         raise ValueError(msg)
 
     loaded: list[RepositoryBenchmark] = []
+    labels: set[str] = set()
+    artifact_keys: set[tuple[str, str]] = set()
     for index, row in enumerate(repositories):
         if not isinstance(row, dict):
             msg = f"repository entry {index} must be an object"
@@ -240,6 +245,18 @@ def load_manifest(path: Path) -> tuple[RepositoryBenchmark, ...]:
         if not label or not category or not raw_path:
             msg = f"repository entry {index} requires label, category, and path"
             raise ValueError(msg)
+        if label in labels:
+            msg = f"repository entry {index} reuses duplicate label: {label}"
+            raise ValueError(msg)
+        labels.add(label)
+        artifact_key = (_safe_label(category), _safe_label(label))
+        if artifact_key in artifact_keys:
+            msg = (
+                f"repository entry {index} reuses duplicate artifact identity: "
+                f"{category}/{label}"
+            )
+            raise ValueError(msg)
+        artifact_keys.add(artifact_key)
         repo_path = Path(raw_path).expanduser().resolve()
         if not repo_path.exists():
             msg = f"benchmark repository path does not exist: {repo_path}"
@@ -693,7 +710,12 @@ def main() -> int:
         warmup=int(args.warmup),
         dry_run=bool(args.dry_run),
     )
-    repositories = load_manifest(config.manifest)
+    config.artifact_root.mkdir(parents=True, exist_ok=True)
+    try:
+        repositories = load_manifest(config.manifest)
+    except (FileNotFoundError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
     plan = command_plan(repositories, config)
     payload = {
         "metadata": benchmark_metadata(

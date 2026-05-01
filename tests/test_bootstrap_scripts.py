@@ -25,11 +25,11 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
+import pytest
+
 if TYPE_CHECKING:
     import argparse
     from collections.abc import Mapping, Sequence
-
-    import pytest
 
     from scripts.bootstrap_dev_environment import CommandSpec
     from scripts.install_first_party_packages import (
@@ -666,6 +666,20 @@ class _BenchmarkCampaignModule(Protocol):
         -------
         list[dict[str, object]]
             JSON-serializable command plan rows.
+        """
+
+    def main(self) -> int:
+        """
+        Run the benchmark campaign entry point.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        int
+            Process exit status.
         """
 
 
@@ -2494,6 +2508,87 @@ def test_benchmark_campaign_helper_builds_dry_run_plan(tmp_path: Path) -> None:
         ".artifacts/benchmarks/20260430T120000Z/indexes/small-codira" in command
         for command in display_commands
     )
+
+
+def test_benchmark_campaign_rejects_duplicate_labels(tmp_path: Path) -> None:
+    """
+    Keep benchmark manifest identities unique before campaign execution.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for manifest fixtures.
+
+    Returns
+    -------
+    None
+        The test asserts duplicate labels are rejected before command planning.
+    """
+    helper = _load_benchmark_campaign_helper()
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {"label": "dup", "category": "small", "path": str(first)},
+                    {"label": "dup", "category": "medium", "path": str(second)},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate label"):
+        helper.load_manifest(manifest)
+
+
+def test_benchmark_campaign_main_creates_artifact_root_and_reports_missing_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Keep campaign startup failures concise and artifact roots reproducible.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for CLI fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace process arguments.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to inspect user-facing stderr output.
+
+    Returns
+    -------
+    None
+        The test asserts missing manifests return a short error and still create
+        the configured artifact root directory.
+    """
+    helper = _load_benchmark_campaign_helper()
+    artifact_root = tmp_path / "missing-artifacts-root"
+    missing_manifest = tmp_path / "missing-benchmarks.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_campaign.py",
+            str(missing_manifest),
+            "--artifact-root",
+            str(artifact_root),
+        ],
+    )
+
+    assert helper.main() == 2
+    captured = capsys.readouterr()
+
+    assert artifact_root.is_dir()
+    assert captured.out == ""
+    assert "Error: manifest file not found:" in captured.err
 
 
 def test_split_repo_verification_uses_local_core_checkout_before_package_install() -> (
