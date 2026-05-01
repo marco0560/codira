@@ -1,3 +1,10 @@
+# [1.20.0](https://github.com/marco0560/codira/compare/v1.19.4...v1.20.0) (2026-05-01)
+
+
+### Features
+
+* **dev:** extend benchmark campaign command matrix ([a8bcab4](https://github.com/marco0560/codira/commit/a8bcab42193046652ec7ad61ae98334042ecbf77))
+
 ## [1.19.4](https://github.com/marco0560/codira/compare/v1.19.3...v1.19.4) (2026-05-01)
 
 
