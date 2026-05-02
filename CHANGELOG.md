@@ -1,3 +1,10 @@
+## [1.21.3](https://github.com/marco0560/codira/compare/v1.21.2...v1.21.3) (2026-05-02)
+
+
+### Performance Improvements
+
+* **context:** cache reference scan file views ([d5d2a59](https://github.com/marco0560/codira/commit/d5d2a592381e4036dda230ffb62bf07c38191661))
+
 ## [1.21.2](https://github.com/marco0560/codira/compare/v1.21.1...v1.21.2) (2026-05-02)
 
 
