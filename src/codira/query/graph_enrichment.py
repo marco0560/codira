@@ -44,6 +44,10 @@ if TYPE_CHECKING:
     from codira.types import IncludeEdgeRow, SymbolRow
 
 
+GRAPH_RELATION_EXPANSION_SEED_LIMIT = 4
+INCLUDE_GRAPH_EXPANSION_SEED_LIMIT = 2
+
+
 @dataclass(frozen=True)
 class IncludeGraphNeighborRequest:
     """
@@ -159,6 +163,81 @@ class ResolvedEdgeExpansionRequest:
     name_index: int
     producer: GraphRetrievalProducer
     add_related: Callable[[SymbolRow], None]
+
+
+def _select_graph_expansion_seeds(
+    request: GraphExpansionRequest,
+) -> tuple[list[SymbolRow], list[SymbolRow], list[dict[str, object]]]:
+    """
+    Select bounded seed symbols for graph expansion in ranked order.
+
+    Parameters
+    ----------
+    request : GraphExpansionRequest
+        Graph expansion request carrying ranked top matches and callbacks.
+
+    Returns
+    -------
+    tuple[
+        list[codira.types.SymbolRow],
+        list[codira.types.SymbolRow],
+        list[dict[str, object]],
+    ]
+        Include-graph seeds, call/reference relation seeds, and deterministic
+        per-seed selection diagnostics.
+    """
+    include_seeds: list[SymbolRow] = []
+    relation_seeds: list[SymbolRow] = []
+    include_seen: set[tuple[str, str]] = set()
+    relation_seen: set[tuple[str, str]] = set()
+    diagnostics: list[dict[str, object]] = []
+
+    for rank, symbol in enumerate(request.top_matches, start=1):
+        symbol_type, module_name, name, file_path, _lineno = symbol
+        key = (module_name, name)
+        include_reason = "disabled"
+        include_selected = False
+        relation_reason = "not_callable"
+        relation_selected = False
+
+        if request.include_include_graph:
+            if request.classify_file_language(file_path) != "c":
+                include_reason = "not_c_language"
+            elif key in include_seen:
+                include_reason = "duplicate_seed"
+            elif len(include_seeds) >= INCLUDE_GRAPH_EXPANSION_SEED_LIMIT:
+                include_reason = "seed_limit"
+            else:
+                include_seen.add(key)
+                include_seeds.append(symbol)
+                include_selected = True
+                include_reason = "selected"
+
+        if symbol_type in {"function", "method"}:
+            if key in relation_seen:
+                relation_reason = "duplicate_seed"
+            elif len(relation_seeds) >= GRAPH_RELATION_EXPANSION_SEED_LIMIT:
+                relation_reason = "seed_limit"
+            else:
+                relation_seen.add(key)
+                relation_seeds.append(symbol)
+                relation_selected = True
+                relation_reason = "selected"
+
+        diagnostics.append(
+            {
+                "top_match_rank": rank,
+                "module": module_name,
+                "name": name,
+                "type": symbol_type,
+                "include_graph_selected": include_selected,
+                "include_graph_reason": include_reason,
+                "relation_selected": relation_selected,
+                "relation_reason": relation_reason,
+            }
+        )
+
+    return include_seeds, relation_seeds, diagnostics
 
 
 def _expand_include_graph_neighbors(
@@ -507,7 +586,7 @@ def _expand_reference_relations(
 
 def expand_graph_related_symbols(
     request: GraphExpansionRequest,
-) -> list[dict[str, object]]:
+) -> dict[str, list[dict[str, object]]]:
     """
     Expand top matches through include, call, and callable-reference graphs.
 
@@ -518,10 +597,14 @@ def expand_graph_related_symbols(
 
     Returns
     -------
-    list[dict[str, object]]
-        Deterministic include-graph diagnostics collected during expansion.
+    dict[str, list[dict[str, object]]]
+        Deterministic expansion diagnostics collected during seed selection and
+        include-graph expansion.
     """
     include_expansion: list[dict[str, object]] = []
+    include_seeds, relation_seeds, selection_diagnostics = (
+        _select_graph_expansion_seeds(request)
+    )
 
     def add_related(symbol: SymbolRow) -> None:
         _add_related_symbol(
@@ -531,28 +614,25 @@ def expand_graph_related_symbols(
             classify_file_role=request.classify_file_role,
         )
 
-    for symbol in request.top_matches:
-        if request.include_include_graph:
-            include_related, include_entries = _expand_include_graph_neighbors(
-                IncludeGraphNeighborRequest(
-                    root=request.root,
-                    symbol=symbol,
-                    conn=request.conn,
-                    prefix=request.prefix,
-                    graph_signals=request.graph_signals,
-                    classify_file_language=request.classify_file_language,
-                    include_target_module_name=request.include_target_module_name,
-                    symbols_in_module=request.symbols_in_module,
-                )
+    for symbol in include_seeds:
+        include_related, include_entries = _expand_include_graph_neighbors(
+            IncludeGraphNeighborRequest(
+                root=request.root,
+                symbol=symbol,
+                conn=request.conn,
+                prefix=request.prefix,
+                graph_signals=request.graph_signals,
+                classify_file_language=request.classify_file_language,
+                include_target_module_name=request.include_target_module_name,
+                symbols_in_module=request.symbols_in_module,
             )
-            for related in include_related:
-                add_related(related)
-            include_expansion.extend(include_entries)
+        )
+        for related in include_related:
+            add_related(related)
+        include_expansion.extend(include_entries)
 
-        symbol_type, module_name, _name, _file_path, _lineno = symbol
-        if symbol_type not in {"function", "method"}:
-            continue
-
+    for symbol in relation_seeds:
+        _symbol_type, module_name, _name, _file_path, _lineno = symbol
         logical_name = logical_symbol_name(request.root, symbol, conn=request.conn)
         _expand_call_relations(request, symbol, logical_name, module_name, add_related)
         _expand_reference_relations(
@@ -563,4 +643,7 @@ def expand_graph_related_symbols(
             add_related,
         )
 
-    return include_expansion
+    return {
+        "graph_budget": selection_diagnostics,
+        "include_graph": include_expansion,
+    }

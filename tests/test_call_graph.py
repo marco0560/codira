@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -33,10 +33,11 @@ from codira.query.exact import (
     find_callable_refs,
     find_include_edges,
 )
+from codira.query.graph_enrichment import (
+    GraphExpansionRequest,
+    _select_graph_expansion_seeds,
+)
 from codira.storage import get_db_path, init_db
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _write_fixture(root: Path) -> None:
@@ -823,9 +824,26 @@ def test_c_include_graph_explain_reports_expansion_entries(tmp_path: Path) -> No
     )
     explain = payload["explain"]
     expansion = explain["expansion"]
+    graph_budget = expansion["graph_budget"]
     include_graph = expansion["include_graph"]
     signal_collection = explain["signal_collection"]
 
+    assert graph_budget[0] == {
+        "top_match_rank": 1,
+        "module": "native.sample",
+        "name": "public_api",
+        "type": "function",
+        "include_graph_selected": True,
+        "include_graph_reason": "selected",
+        "relation_selected": True,
+        "relation_reason": "selected",
+    }
+    assert any(
+        entry["name"] == "Node"
+        and entry["include_graph_selected"] is True
+        and entry["relation_reason"] == "not_callable"
+        for entry in graph_budget
+    )
     assert {
         "seed_module": "native.sample",
         "via_module": "native.sample",
@@ -838,6 +856,128 @@ def test_c_include_graph_explain_reports_expansion_entries(tmp_path: Path) -> No
     assert "graph" in signal_collection["families"]
     assert "graph_relations" in signal_collection["capabilities"]
     assert "query-enrichment-include-graph" in signal_collection["used_producers"]
+
+
+def test_graph_expansion_seed_selection_is_ranked_and_bounded() -> None:
+    """
+    Select deterministic graph-expansion seeds with per-kind hard limits.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts ranked seed selection for include and relation
+        expansion plus deterministic skip reasons after the budgets are
+        exhausted.
+    """
+    top_matches = [
+        ("function", "pkg.alpha", "alpha", "src/alpha.c", 10),
+        ("function", "pkg.beta", "beta", "src/beta.py", 20),
+        ("method", "pkg.gamma", "gamma", "src/gamma.c", 30),
+        ("function", "pkg.delta", "delta", "src/delta.py", 40),
+        ("function", "pkg.epsilon", "epsilon", "src/epsilon.c", 50),
+        ("class", "pkg.zeta", "Zeta", "src/zeta.c", 60),
+    ]
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        include_seeds, relation_seeds, diagnostics = _select_graph_expansion_seeds(
+            GraphExpansionRequest(
+                root=Path("/tmp/repo"),
+                top_matches=top_matches,
+                conn=conn,
+                include_include_graph=True,
+                include_references=True,
+                prefix=None,
+                expanded=[],
+                seen_symbols=set(),
+                graph_signals=None,
+                classify_file_language=lambda file_path: (
+                    "c" if file_path.endswith(".c") else "python"
+                ),
+                classify_file_role=lambda _file_path, _module_name: "implementation",
+                include_target_module_name=lambda _target_name, _kind: None,
+                symbols_in_module=lambda _root, _module_name: [],
+            )
+        )
+    finally:
+        conn.close()
+
+    assert include_seeds == [
+        ("function", "pkg.alpha", "alpha", "src/alpha.c", 10),
+        ("method", "pkg.gamma", "gamma", "src/gamma.c", 30),
+    ]
+    assert relation_seeds == [
+        ("function", "pkg.alpha", "alpha", "src/alpha.c", 10),
+        ("function", "pkg.beta", "beta", "src/beta.py", 20),
+        ("method", "pkg.gamma", "gamma", "src/gamma.c", 30),
+        ("function", "pkg.delta", "delta", "src/delta.py", 40),
+    ]
+    assert diagnostics == [
+        {
+            "top_match_rank": 1,
+            "module": "pkg.alpha",
+            "name": "alpha",
+            "type": "function",
+            "include_graph_selected": True,
+            "include_graph_reason": "selected",
+            "relation_selected": True,
+            "relation_reason": "selected",
+        },
+        {
+            "top_match_rank": 2,
+            "module": "pkg.beta",
+            "name": "beta",
+            "type": "function",
+            "include_graph_selected": False,
+            "include_graph_reason": "not_c_language",
+            "relation_selected": True,
+            "relation_reason": "selected",
+        },
+        {
+            "top_match_rank": 3,
+            "module": "pkg.gamma",
+            "name": "gamma",
+            "type": "method",
+            "include_graph_selected": True,
+            "include_graph_reason": "selected",
+            "relation_selected": True,
+            "relation_reason": "selected",
+        },
+        {
+            "top_match_rank": 4,
+            "module": "pkg.delta",
+            "name": "delta",
+            "type": "function",
+            "include_graph_selected": False,
+            "include_graph_reason": "not_c_language",
+            "relation_selected": True,
+            "relation_reason": "selected",
+        },
+        {
+            "top_match_rank": 5,
+            "module": "pkg.epsilon",
+            "name": "epsilon",
+            "type": "function",
+            "include_graph_selected": False,
+            "include_graph_reason": "seed_limit",
+            "relation_selected": False,
+            "relation_reason": "seed_limit",
+        },
+        {
+            "top_match_rank": 6,
+            "module": "pkg.zeta",
+            "name": "Zeta",
+            "type": "class",
+            "include_graph_selected": False,
+            "include_graph_reason": "seed_limit",
+            "relation_selected": False,
+            "relation_reason": "not_callable",
+        },
+    ]
 
 
 def test_context_for_help_shows_incompatibility_and_examples(

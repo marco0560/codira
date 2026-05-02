@@ -103,6 +103,7 @@ def test_context_output_matches_schema(tmp_path: Path) -> None:
     assert "selected" in diversity
     assert "deferred" in diversity
     expansion = cast("dict[str, object]", explain["expansion"])
+    assert "graph_budget" in expansion
     assert "include_graph" in expansion
 
 
@@ -155,4 +156,5 @@ def test_context_no_matches_schema(tmp_path: Path) -> None:
     assert "selected" in diversity
     assert "deferred" in diversity
     expansion = cast("dict[str, object]", explain["expansion"])
+    assert "graph_budget" in expansion
     assert "include_graph" in expansion

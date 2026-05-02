@@ -78,7 +78,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 # Current schema version
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 # Minimum accepted score
 _MIN_SCORE = 1
 # Maximum number of rows inspected by the symbol fallback scan.
@@ -4142,7 +4142,7 @@ def _add_related_symbol(
 
 def _expand_graph_related_symbols(
     request: GraphRelatedExpansionRequest,
-) -> list[dict[str, object]]:
+) -> ExpansionDiagnostics:
     """
     Expand top matches through include, call, and callable-reference graphs.
 
@@ -4154,8 +4154,9 @@ def _expand_graph_related_symbols(
 
     Returns
     -------
-    list[dict[str, object]]
-        Deterministic include-graph diagnostics collected during expansion.
+    codira.query.context.ExpansionDiagnostics
+        Deterministic seed-selection and include-graph diagnostics collected
+        during graph expansion.
     """
     return expand_graph_related_symbols(
         GraphExpansionRequest(
@@ -4347,7 +4348,7 @@ def _expand_and_collect_references(
     """
     expanded: list[SymbolRow] = []
     seen_symbols: set[SymbolRow] = set(request.top_matches)
-    include_expansion = _expand_graph_related_symbols(
+    expansion_diagnostics = _expand_graph_related_symbols(
         GraphRelatedExpansionRequest(
             root=request.root,
             top_matches=request.top_matches,
@@ -4374,8 +4375,7 @@ def _expand_and_collect_references(
         include_references=request.include_references,
         prefix=request.prefix,
     )
-    diagnostics: ExpansionDiagnostics = {"include_graph": include_expansion}
-    return expanded, unique_refs, diagnostics
+    return expanded, unique_refs, expansion_diagnostics
 
 
 def _prompt_symbol_line(root: Path, symbol: SymbolRow) -> str:
@@ -5265,7 +5265,7 @@ def _append_explain_expansion_section(
     request: ExplainSectionsRequest,
 ) -> None:
     """
-    Append the explain section for include-graph expansion diagnostics.
+    Append the explain section for graph-expansion diagnostics.
 
     Parameters
     ----------
@@ -5279,22 +5279,40 @@ def _append_explain_expansion_section(
     """
     if request.expansion is None:
         return
+    budget_entries = request.expansion.get("graph_budget")
     include_entries = request.expansion.get("include_graph")
-    if not (isinstance(include_entries, list) and include_entries):
+    has_budget_entries = isinstance(budget_entries, list) and bool(budget_entries)
+    has_include_entries = isinstance(include_entries, list) and bool(include_entries)
+    if not (has_budget_entries or has_include_entries):
         return
     request.lines.append("=== EXPLAIN: EXPANSION ===")
-    request.lines.append("include_graph:")
-    for entry in include_entries[:10]:
-        if not isinstance(entry, dict):
-            continue
-        request.lines.append(
-            "  "
-            f"seed={entry.get('seed_module')} "
-            f"via={entry.get('via_module')} "
-            f"target={entry.get('target_name')} "
-            f"direction={entry.get('direction')} "
-            f"expanded={entry.get('expanded_module')}.{entry.get('expanded_name')}"
-        )
+    if has_budget_entries:
+        budget_entries = cast("list[dict[str, object]]", budget_entries)
+        request.lines.append("graph_budget:")
+        for entry in budget_entries[:10]:
+            if not isinstance(entry, dict):
+                continue
+            request.lines.append(
+                "  "
+                f"rank={entry.get('top_match_rank')} "
+                f"symbol={entry.get('module')}.{entry.get('name')} "
+                f"include={entry.get('include_graph_reason')} "
+                f"relations={entry.get('relation_reason')}"
+            )
+    if has_include_entries:
+        include_entries = cast("list[dict[str, object]]", include_entries)
+        request.lines.append("include_graph:")
+        for entry in include_entries[:10]:
+            if not isinstance(entry, dict):
+                continue
+            request.lines.append(
+                "  "
+                f"seed={entry.get('seed_module')} "
+                f"via={entry.get('via_module')} "
+                f"target={entry.get('target_name')} "
+                f"direction={entry.get('direction')} "
+                f"expanded={entry.get('expanded_module')}.{entry.get('expanded_name')}"
+            )
     request.lines.append("")
 
 

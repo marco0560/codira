@@ -4,7 +4,7 @@
   "type": "object",
   "required": ["schema_version", "status", "top_matches"],
   "properties": {
-    "schema_version": { "type": "string", "enum": ["1.1"] },
+    "schema_version": { "type": "string", "enum": ["1.2"] },
     "status": { "type": "string", "enum": ["ok", "no_matches"] },
     "top_matches": { "type": "array", "items": { "$ref": "#/definitions/symbol" } },
     "doc_issues": { "type": "array", "items": { "$ref": "#/definitions/doc_issue" } },
@@ -398,10 +398,38 @@
       },
       "additionalProperties": false
     },
+    "graph_budget_entry": {
+      "type": "object",
+      "required": [
+        "top_match_rank",
+        "module",
+        "name",
+        "type",
+        "include_graph_selected",
+        "include_graph_reason",
+        "relation_selected",
+        "relation_reason"
+      ],
+      "properties": {
+        "top_match_rank": { "type": "integer" },
+        "module": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "include_graph_selected": { "type": "boolean" },
+        "include_graph_reason": { "type": "string" },
+        "relation_selected": { "type": "boolean" },
+        "relation_reason": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "expansion_block": {
       "type": "object",
-      "required": ["include_graph"],
+      "required": ["graph_budget", "include_graph"],
       "properties": {
+        "graph_budget": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/graph_budget_entry" }
+        },
         "include_graph": {
           "type": "array",
           "items": { "$ref": "#/definitions/expansion_entry" }
