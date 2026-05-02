@@ -1,3 +1,10 @@
+## [1.21.4](https://github.com/marco0560/codira/compare/v1.21.3...v1.21.4) (2026-05-02)
+
+
+### Performance Improvements
+
+* **query:** bound graph expansion seed fanout ([17bc237](https://github.com/marco0560/codira/commit/17bc237106e7babd10461e817d5bb7319a81fa77))
+
 ## [1.21.3](https://github.com/marco0560/codira/compare/v1.21.2...v1.21.3) (2026-05-02)
 
 
