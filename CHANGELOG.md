@@ -1,3 +1,10 @@
+## [1.21.7](https://github.com/marco0560/codira/compare/v1.21.6...v1.21.7) (2026-05-02)
+
+
+### Bug Fixes
+
+* **indexer:** clarify uncovered analyzer coverage message ([b8c01d2](https://github.com/marco0560/codira/commit/b8c01d22f90a225118cbe816582ed6715772f378))
+
 ## [1.21.6](https://github.com/marco0560/codira/compare/v1.21.5...v1.21.6) (2026-05-02)
 
 
