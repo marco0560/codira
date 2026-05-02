@@ -1,16 +1,14 @@
-# AGENTS.md — codira Repository Contract
+# AGENTS.md — Codira Repository Contract
 
 ## 0. Mission
 
-You are operating on the codira repository.
-
-Priority order:
+Operate on the `codira` repository with strict priorities:
 
 1. Correctness
-2. Test integrity (authoritative behavior)
+2. Test integrity
 3. Reproducibility
 4. Traceability
-5. Minimality of change
+5. Minimal change
 
 Fluency is irrelevant.
 
@@ -25,433 +23,320 @@ Rules:
 - Never reconstruct unseen files
 - Never approximate behavior
 
-If required information is missing:
+## 2. Global STOP Rule
 
--> STOP
--> Ask for clarification
+If any of the following occurs:
 
-## 2. Sources of Truth (SOT)
+- missing information
+- ambiguity
+- multiple valid approaches without guidance
+- inability to match exact code
 
-Priority order:
+→ STOP
+→ Ask for clarification
 
-1. Repository files (filesystem)
-2. Tests (`tests/`) -> authoritative behavior contract
-3. Project documentation (`docs/`)
+## 3. Sources of Truth (SOT)
+
+Priority:
+
+1. Repository files
+2. Tests (`tests/`)
+3. Documentation (`docs/`)
 4. User instructions
 
 Previous assistant output is NOT a source of truth.
 
-If something is not visible -> STOP.
+## 4. Execution Precedence
 
-## 3. Core Principles
+Always use the highest available level:
 
-### 3.1 Determinism
+1. Repository-provided structured tools (e.g. `codira`)
+2. Local skills (`~/.codex/skills`)
+3. Standard tools (`rg`, shell)
+4. Manual inspection
 
-All outputs must be:
+Lower levels are fallback only.
 
-- reproducible
-- verifiable
-- minimal
+## 5. Core Principles
 
-No “best effort”.
-
-### 3.2 Minimalism (LEAN)
-
-- Prefer the smallest correct solution
-- Avoid premature abstraction
-- Do not introduce frameworks or patterns unless required
-
-### 3.3 Scope Control
-
-Strictly limit changes to the requested task.
+- Deterministic: reproducible, verifiable outputs
+- Minimal: smallest correct change
+- Scoped: no unrelated modifications
 
 Forbidden unless explicitly required:
 
-- Refactoring unrelated code
-- Renaming symbols
+- refactoring unrelated code
+- renaming symbols
 - API changes
-- Stylistic churn
+- stylistic churn
 
-If a change risks unintended impact:
+## 6. Task Classification
 
--> STOP
--> Ask for clarification
+A task is non-trivial if it involves:
 
-## 4. Repository-Specific Constraints
+- multiple files
+- architectural decisions
+- ambiguity
+- potential behavioral impact
 
-These constraints define the **real behavior surface** of the system.
+## 7. Execution Workflow (MANDATORY)
 
-- CLI behavior and output format are stability contracts
-- Configuration and preflight behavior are part of the user-facing contract
-- Deterministic output is required across environments
-- Optional features must remain optional
-- Performance regressions are considered bugs
-- Changes must not silently alter user-visible behavior
-
-If a change affects any of the above:
-
--> Treat as high risk
--> Validate explicitly
-
-## 5. Execution Workflow (MANDATORY)
-
-For any non-trivial task:
+For non-trivial tasks use `deterministic-change-workflow`
 
 1. Analyze request
-2. Identify missing information
-3. Ask clarification questions if needed
-4. Propose a concrete plan
-5. WAIT for approval
-6. Execute the plan
-7. Validate (Section 8)
-8. Ensure behavioral correctness (tests)
-9. Produce commit block (if applicable)
+2. Identify gaps → STOP if needed
+3. Propose plan
+4. WAIT for approval
+5. Execute
+6. Validate
 
-Do NOT skip steps.
+Do not skip steps.
 
-When the task is non-trivial and the planning phase is ambiguous, underconstrained, or has multiple viable approaches, use `planning-refinement-gate` before producing the concrete plan. Do not proceed to detailed planning until all required operator decisions are explicitly confirmed.
+If planning is ambiguous → use `planning-refinement-gate`.
 
-## 6. Deterministic Exploration
+## 8. Codira Exploration (MANDATORY)
 
-Before modifying code:
+If the repository provides `codira`:
 
-1. Verify symbols:
+→ the `codira-workflow` skill MUST be used
 
-    ```bash
-    rg <query>
-    ```
+### Rules
 
-2. Use repository tools when available (index/context systems)
-3. Read actual source files before editing
-
-Never modify code based only on assumptions.
-
-## 7. Change Strategy
-
-- Prefer multiple small commits over large changes
-- Limit changes to one subsystem when possible
-- Decompose complex work into incremental steps
-- Avoid mixing refactor, feature, and bugfix in a single change
-
-## 8. Validation Contract
-
-All required checks MUST pass before concluding.
-
-Preferred:
-
-```bash
-python scripts/validate_repo.py
-```
-
-Repository Python tooling MUST be run through `scripts/validate_repo.py` or
-`scripts/run_repo_tool.py`. Do not set `PRE_COMMIT_HOME`, `RUFF_CACHE_DIR`,
-`TMP`, `TEMP`, `TMPDIR`, pytest `--basetemp`, or pytest cache paths to
-repository-local directories. The repository wrapper routes cache and temporary
-state outside the checkout and prevents undeletable tool-state directories from
-polluting the worktree.
-
-Fallback:
-
-```bash
-python scripts/run_repo_tool.py black --check .
-python scripts/run_repo_tool.py ruff check .
-python scripts/run_repo_tool.py mypy .
-python scripts/run_repo_tool.py pytest -q tests
-```
-
-Rules:
-
-- Fix all failures BEFORE concluding
-- Do not ignore warnings/errors
-- Do not weaken tests to pass validation
-
-## 8.1 Toolchain Execution Model
-
-All repository tooling MUST be executed through:
-
-- `scripts/validate_repo.py`
-- `scripts/run_repo_tool.py`
-
-Direct invocation of tools (ruff, mypy, pytest, black) is forbidden unless explicitly required.
-
-Rationale:
-
-- isolates environment
-- prevents cache pollution
-- ensures reproducibility
-
-## 9. Targeted Validation
-
-- Identify affected subsystems
-- Run focused tests first (fast feedback)
-- Run full test suite before commit
-
-## 10. Test Contract
-
-Tests are the authoritative behavioral specification.
-
-Requirements:
-
-- Deterministic
-- Environment-independent
-- No reliance on external systems unless explicitly allowed
-
-Forbidden:
-
-- Weakening assertions
-- Introducing flakiness
-- Bypassing failing tests
-
-If tests contradict assumptions -> tests win.
-
-## 11. Strict Patch Discipline
-
-All code changes MUST be provided as:
-
-- explicit file paths
-- exact OLD block (byte-identical)
-- exact NEW block
-
-Rules:
-
-- No summaries
-- No partial edits
-- No reconstructed context
-- No “approximate matches”
-
-If OLD block cannot be matched exactly -> STOP.
-
-## 12. Architecture Constraints
-
-Respect separation of concerns.
-
-Example pattern:
-
-| Layer      | Responsibility        |
-|------------|-------------------- --|
-| scanner    | filesystem -> symbols |
-| indexer    | symbols -> database   |
-| query      | database -> results   |
-| CLI        | user interface        |
-
-Rules:
-
-- Do not mix layers
-- Do not bypass abstractions
-- Do not duplicate existing logic
-
-## 13. Build System & Generated Artifacts
-
-- Keep build configuration and outputs in sync
-- Do not manually edit generated files
-- Modify generators and regenerate outputs instead
-- Treat build or packaging regressions as real bugs
-
-## 14. Coding Standards
-
-### Python
-
-- Type hints required
-- Avoid `Any` unless justified
-- Prefer `Path` over string paths
-
-### Docstrings
-
-Use NumPy style.
-
-Required for:
-
-- modules
-- classes
-- non-trivial functions
-
-Must include:
-
-- Parameters
-- Returns
-
-Include when applicable:
-
-- Raises
-- Notes
-- Examples
-
-Docstrings must reflect actual behavior (no drift).
-
-## 15. Error Handling
-
-- Fail fast
-- Catch only expected exceptions
-- Avoid broad `except Exception`
-
-## 16. Regression Policy
-
-The following are considered bugs:
-
-- platform-specific breakages
-- optional feature regressions
-- performance regressions
-- CLI or output contract changes
-
-## 17. Debugging Discipline
-
-- Reproduce the issue before fixing
-- Identify root cause before writing code
-- Avoid speculative fixes
-
-## 18. Hidden Complexity Rule
-
-If code appears complex or redundant:
-
-- Assume it encodes real edge cases
-- Check history/tests before simplifying
-- Do not “clean up” without proof
-
-## 19. Commit Contract
-
-If committing or proposing a commit:
-
-- Use `commit-block-generator` if available
-- Produce a **single atomic commit**
-
-Commit message MUST:
-
-- follow repository hook rules
-- match format: `type(scope): summary`
-- be CI-compliant
-
-Commit body MUST include:
-
-- root cause
-- implemented fix
-- validation performed (when applicable)
-
-Do NOT include toolchain status lines.
-
-## 20. Required Shared Skills
-
-When available locally in ~/.codex/skills, MUST be used:
-
-- `deterministic-change-workflow`
-- `numpy-docstring-enforcer`
-- `commit-block-generator`
-- `codira-workflow`
-- `planning-refinement-gate` for ambiguous or multi-option planning work
-- repository-specific workflow tools
-
-If unavailable:
-
--> state explicitly
--> apply rules manually
-
-If a required skill is referenced but not available:
-
--> STOP
--> Report missing skill
--> Do not approximate its behavior
-
-## 20.1. Codira Mandatory Exploration Rule
-
-When the repository provides the `codira` tool, it MUST be used as the primary exploration mechanism.
-
-This rule applies whenever the agent needs to:
-
-- understand repository structure
-- locate symbols or references
-- analyze call relationships
-- retrieve task-relevant context
-- decide where to read or modify code
-
-### Required behavior
-
-Before performing broad file reading, recursive browsing, or generic search:
-
-1. Activate the environment.
-2. Run:
-
-   codira index
-
-3. Use `codira` queries to narrow the search space:
-
-   - symbol lookup: codira sym ...
-   - call graph: codira calls ...
-   - references: codira refs ...
-   - semantic retrieval: codira emb ...
-   - contextual retrieval: codira ctx ...
-
-4. Only after narrowing the scope:
-   - read specific files
-   - inspect code in detail
-
-### Forbidden behavior
-
-The following are NOT allowed as first steps when `codira` is available:
-
-- reading large portions of the repository blindly
-- scanning directories without a prior indexed query
-- relying solely on text search (`rg`) for initial discovery
+- Do not manually reproduce codira behavior
+- Do not approximate its workflow
+- Do not use `rg` or broad search as a first step
 
 ### Fallback
 
-If and only if:
+Fallback to `rg` is allowed only if:
 
-- `codira index` fails, OR
+- `codira` is unavailable, OR
+- indexing fails, OR
 - results are demonstrably insufficient
-
-then fallback to:
-
-- `rg`
-- manual file inspection
 
 ### Enforcement
 
-If `codira` is available and this rule is not followed:
+If `codira` is available and not used:
 
 → STOP
 → report violation
 → restart using `codira-workflow`
 
-## 21. Anti-Patterns (Forbidden)
+## 9. Skills Usage
 
-- Guessing missing code
-- Blind filesystem scanning when structured tools exist
-- Re-implementing existing logic
-- Introducing caching without clear invalidation
-- Silent failures
-- Skipping validation
-- Modifying unrelated code
+If a required skill exists in `~/.codex/skills`:
 
-## 22. Session Stability
+→ MUST be used
 
-Continuously monitor for:
+Required skills:
+
+- deterministic-change-workflow
+- numpy-docstring-enforcer
+- commit-block-generator
+- planning-refinement-gate
+- codira-workflow
+- roadmap-snapshots
+
+If a skill is missing:
+
+- If behavior is fully specified → proceed manually
+- Otherwise → STOP and report missing capability
+
+## 10. Change Strategy
+
+- Prefer small, atomic changes
+- One subsystem at a time
+- Separate refactor / feature / fix
+
+## 11. Validation Contract
+
+All checks MUST pass.
+
+Primary:
+
+```bash
+pre-commit run --all-files
+pytest -q
+```
+
+Fallback:
+
+```bash
+black --check .
+ruff check .
+mypy .
+pytest -q
+```
+
+Rules:
+
+- fix all failures
+- do not weaken tests
+- do not ignore errors
+
+## 12. Test Contract
+
+Tests define behavior.
+
+Requirements:
+
+- deterministic
+- environment-independent
+
+Forbidden:
+
+- weakening assertions
+- introducing flakiness
+- bypassing failures
+
+If tests contradict assumptions → tests win.
+
+## 13. Strict Patch Discipline
+
+All changes MUST include:
+
+- exact file paths
+- exact OLD block (byte-identical)
+- exact NEW block
+
+Forbidden:
+
+- summaries
+- partial edits
+- approximations
+
+If OLD block cannot be matched:
+
+→ STOP
+
+## 14. Architecture Constraints
+
+Respect separation of concerns:
+
+| Layer   | Responsibility       |
+|---------|----------------------|
+| scanner | filesystem → symbols |
+| indexer | symbols → database   |
+| query   | database → results   |
+| CLI     | interface            |
+
+Rules:
+
+- do not mix layers
+- do not bypass abstractions
+- do not duplicate logic
+
+## 15. Build & Artifacts
+
+- do not edit generated files
+- modify generators instead
+- keep build outputs consistent
+
+## 16. Coding Standards
+
+### Python
+
+- type hints required
+- avoid `Any`
+- prefer `Path`
+
+### Docstrings
+
+NumPy style required:
+
+- Parameters
+- Returns
+- optional: Raises, Notes, Examples
+
+Use `numpy-docstring-enforcer`
+
+## 17. Error Handling
+
+- fail fast
+- catch only expected exceptions
+- avoid broad `except Exception`
+
+## 18. Regression Policy
+
+Bugs include:
+
+- platform breakage
+- performance regressions
+- CLI/output changes
+- optional feature regressions
+
+## 19. Debugging Discipline
+
+- reproduce first
+- identify root cause
+- avoid speculative fixes
+
+## 20. Commit Contract
+
+Use `commit-block-generator`
+
+- single atomic commit
+- format: `type(scope): summary`
+
+Body must include:
+
+- root cause
+- fix
+- validation
+
+Do NOT include toolchain status lines.
+
+## 21. Roadmap Snapshots
+
+Use `roadmap-snapshots` for:
+
+- issues.json
+- milestones.json
+
+Rules:
+
+- treat as local artifacts
+- verify schema and completeness
+- do not infer missing fields
+
+## 22. Anti-Patterns (Forbidden)
+
+- guessing code
+- blind scanning
+- duplicating logic
+- silent failures
+- skipping validation
+
+## 23. Session Stability
+
+Monitor:
 
 - context drift
 - assumption creep
-- loss of file grounding
 
 If detected:
 
--> STOP
--> Recommend RESET
+→ STOP
+→ Recommend reset
 
-## 23. Engineering Heuristics
+## 24. Heuristics
 
-- Small changes can have wide effects
-- Complex code often encodes edge cases
-- Prefer correctness over elegance
-- Validate changes beyond the immediate scope
-- When duplication spreads, extract shared logic
+- small changes can have wide effects
+- complex code encodes edge cases
+- correctness > elegance
 
-## 24. When in Doubt
+## 25. Default Interaction Mode
 
-STOP and ask for clarification.
+- minimal prose
+- command-oriented
+- no verbosity unless requested
 
-Never proceed with assumptions.
+## 26. Meta Rule
 
-## 25. Future Extensions
+Do not reference this contract in responses.
+Do not explain compliance.
+Only execute.
 
-This contract may evolve to include:
+## 27. When in Doubt
 
-- release workflows
-- audit procedures
-- indexing/retrieval policies
+STOP and ask.
