@@ -2474,6 +2474,8 @@ def test_benchmark_campaign_helper_builds_dry_run_plan(
     ----------
     tmp_path : pathlib.Path
         Temporary directory for manifest and target repositories.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch subprocess execution for deterministic planning.
 
     Returns
     -------
@@ -2611,6 +2613,8 @@ def test_benchmark_campaign_helper_expands_manifest_commands(
     ----------
     tmp_path : pathlib.Path
         Temporary directory for manifest and target repository fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch subprocess execution for deterministic planning.
 
     Returns
     -------

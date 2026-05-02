@@ -625,6 +625,115 @@ def test_plugins_cli_emits_json_registration_diagnostics(
     )
 
 
+def test_plugin_snapshot_cache_reuses_entry_point_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Reuse one resolved registry snapshot within the current process.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry-point discovery.
+
+    Returns
+    -------
+    None
+        The test asserts repeated registry reads do not rediscover entry points
+        while the cache remains valid.
+    """
+    call_counts = {
+        registry.ANALYZER_ENTRY_POINT_GROUP: 0,
+        registry.BACKEND_ENTRY_POINT_GROUP: 0,
+    }
+
+    def fake_group_loader(group: str) -> list[_FakeEntryPoint]:
+        call_counts[group] += 1
+        if group == registry.ANALYZER_ENTRY_POINT_GROUP:
+            return [
+                _FakeEntryPoint(
+                    name="demo-analyzer",
+                    value="demo:analyzer",
+                    dist=_FakeDistribution("demo-analyzer"),
+                    loaded=_DemoAnalyzer,
+                )
+            ]
+        if group == registry.BACKEND_ENTRY_POINT_GROUP:
+            return [
+                _FakeEntryPoint(
+                    name="demo-backend",
+                    value="demo:backend",
+                    dist=_FakeDistribution("demo-backend"),
+                    loaded=_DemoBackend,
+                )
+            ]
+        return []
+
+    registry.reset_plugin_registry_caches()
+    monkeypatch.setattr(registry, "_entry_points_for_group", fake_group_loader)
+
+    first = registry.plugin_registrations()
+    second = registry.plugin_registrations()
+
+    assert first == second
+    assert call_counts == {
+        registry.ANALYZER_ENTRY_POINT_GROUP: 1,
+        registry.BACKEND_ENTRY_POINT_GROUP: 1,
+    }
+
+
+def test_plugin_snapshot_cache_respects_third_party_toggle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Rebuild the registry snapshot when third-party loading policy changes.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry-point discovery and environment.
+
+    Returns
+    -------
+    None
+        The test asserts the disable-third-party toggle does not reuse a stale
+        snapshot built under different policy.
+    """
+    _patch_entry_points(
+        monkeypatch,
+        analyzers=[
+            _FakeEntryPoint(
+                name="demo-analyzer",
+                value="demo:analyzer",
+                dist=_FakeDistribution("demo-analyzer"),
+                loaded=_DemoAnalyzer,
+            ),
+            _FakeEntryPoint(
+                name="python-analyzer",
+                value="codira:python",
+                dist=_FakeDistribution("codira-analyzer-python"),
+                loaded=_build_python_analyzer,
+            ),
+        ],
+        backends=[],
+    )
+    registry.reset_plugin_registry_caches()
+
+    enabled = registry.plugin_registrations()
+
+    monkeypatch.setenv(registry.DISABLE_THIRD_PARTY_PLUGINS_ENV_VAR, "1")
+    disabled = registry.plugin_registrations()
+
+    assert any(
+        record.provider == "demo-analyzer" and record.status == "loaded"
+        for record in enabled
+    )
+    assert any(
+        record.provider == "demo-analyzer" and record.status == "skipped"
+        for record in disabled
+    )
+
+
 def test_version_cli_groups_curated_bundle_plugins(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

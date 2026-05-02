@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from importlib import metadata
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -348,7 +349,7 @@ def _entry_points_for_group(group: str) -> list[metadata.EntryPoint]:
     list[importlib.metadata.EntryPoint]
         Entry points sorted by provider and entry-point name.
     """
-    discovered = list(metadata.entry_points(group=group))
+    discovered = list(_cached_entry_points_for_group(group, metadata.entry_points))
     discovered.sort(
         key=lambda entry: (
             entry.name,
@@ -357,6 +358,32 @@ def _entry_points_for_group(group: str) -> list[metadata.EntryPoint]:
         )
     )
     return discovered
+
+
+@lru_cache(maxsize=8)
+def _cached_entry_points_for_group(
+    group: str,
+    entry_points_loader: object,
+) -> tuple[metadata.EntryPoint, ...]:
+    """
+    Cache deterministic entry-point discovery for one plugin group.
+
+    Parameters
+    ----------
+    group : str
+        Entry-point group name.
+    entry_points_loader : object
+        Cache token for ``importlib.metadata.entry_points`` so monkeypatched
+        loaders do not reuse stale cached discovery state.
+
+    Returns
+    -------
+    tuple[importlib.metadata.EntryPoint, ...]
+        Entry points as returned by ``importlib.metadata.entry_points`` before
+        deterministic sorting in the public wrapper.
+    """
+    del entry_points_loader
+    return tuple(metadata.entry_points(group=group))
 
 
 def _load_entry_point_plugin(
@@ -710,6 +737,55 @@ def _plugin_snapshot(
     ]
         Resolved plugins plus diagnostic registrations.
     """
+    resolved, registrations = _cached_plugin_snapshot(
+        family,
+        _third_party_plugins_disabled(),
+        _entry_points_for_group,
+        _builtin_analyzer_plugins,
+        _builtin_backend_plugins,
+    )
+    return list(resolved), list(registrations)
+
+
+@lru_cache(maxsize=4)
+def _cached_plugin_snapshot(
+    family: PluginFamily,
+    third_party_disabled: bool,
+    entry_points_loader: object,
+    builtin_analyzers_loader: object,
+    builtin_backends_loader: object,
+) -> tuple[tuple[_LoadedPlugin, ...], tuple[PluginRegistration, ...]]:
+    """
+    Cache the resolved plugin snapshot for one family.
+
+    Parameters
+    ----------
+    family : {"analyzer", "backend"}
+        Plugin extension family.
+    third_party_disabled : bool
+        Whether third-party entry points are disabled for this snapshot.
+    entry_points_loader : object
+        Cache token for the entry-point discovery wrapper so monkeypatched
+        discovery functions invalidate cached snapshots deterministically.
+    builtin_analyzers_loader : object
+        Cache token for built-in analyzer discovery.
+    builtin_backends_loader : object
+        Cache token for built-in backend discovery.
+
+    Returns
+    -------
+    tuple[
+        tuple[codira.registry._LoadedPlugin, ...],
+        tuple[codira.registry.PluginRegistration, ...],
+    ]
+        Immutable resolved plugins plus diagnostic registrations.
+    """
+    del (
+        third_party_disabled,
+        entry_points_loader,
+        builtin_analyzers_loader,
+        builtin_backends_loader,
+    )
     if family == "analyzer":
         builtins = _builtin_analyzer_plugins()
         externals, external_registrations = _discover_entry_point_plugins(
@@ -737,7 +813,25 @@ def _plugin_snapshot(
                 plugin.entry_point or "",
             )
         )
-    return resolved, registrations
+    return tuple(resolved), tuple(registrations)
+
+
+def reset_plugin_registry_caches() -> None:
+    """
+    Clear cached plugin discovery state.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Entry-point discovery and resolved plugin snapshots are reloaded on the
+        next registry access.
+    """
+    _cached_entry_points_for_group.cache_clear()
+    _cached_plugin_snapshot.cache_clear()
 
 
 def plugin_registrations() -> list[PluginRegistration]:
