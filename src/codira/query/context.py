@@ -245,6 +245,27 @@ class ChannelBundleRequest:
 
 
 @dataclass(frozen=True)
+class _ReferenceScanFile:
+    """
+    Cached reference-scan view for one project file.
+
+    Parameters
+    ----------
+    file_path : str
+        Absolute file path reused in emitted reference rows.
+    text : str
+        Full decoded file text used for fast whole-file miss checks.
+    searchable_lines : tuple[tuple[int, str], ...]
+        Non-import source lines as ``(lineno, text)`` pairs reused across
+        multiple symbol-name scans.
+    """
+
+    file_path: str
+    text: str
+    searchable_lines: tuple[tuple[int, str], ...]
+
+
+@dataclass(frozen=True)
 class PromptRenderRequest:
     """
     Request parameters for prompt-oriented context rendering.
@@ -1423,7 +1444,7 @@ def _find_references(
     root: Path,
     name: str,
     project_files: list[Path],
-    file_cache: dict[Path, list[str]] | None = None,
+    file_cache: dict[Path, _ReferenceScanFile] | None = None,
 ) -> list[ReferenceRow]:
     """
     Find references to a symbol name across indexed Python files.
@@ -1436,7 +1457,7 @@ def _find_references(
         Symbol name to search for.
     project_files : list[pathlib.Path]
         Indexed project files to scan.
-    file_cache : dict[pathlib.Path, list[str]] | None, optional
+    file_cache : dict[pathlib.Path, codira.query.context._ReferenceScanFile] | None, optional
         Optional in-memory file cache reused across scans.
 
     Returns
@@ -1456,34 +1477,63 @@ def _find_references(
         file_cache = {}
 
     for path in project_files:
-        if path in file_cache:
-            lines = file_cache[path]
-        else:
-            try:
-                lines = path.read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeDecodeError):
-                continue
-            file_cache[path] = lines
-        file_path = str(path)
+        cached = _load_reference_scan_file(path, file_cache)
+        if cached is None or name not in cached.text:
+            continue
 
-        for lineno, line in enumerate(lines, start=1):
-            stripped = line.strip()
-
-            # --- FILTER: skip imports ---
-            if stripped.startswith(("import ", "from ")):
-                continue
-
-            # simple containment check
+        for lineno, line in cached.searchable_lines:
             if name not in line:
                 continue
 
-            results.append((file_path, lineno))
+            results.append((cached.file_path, lineno))
 
             # hard cap (global)
             if len(results) >= 50:
                 return results
 
     return results
+
+
+def _load_reference_scan_file(
+    path: Path,
+    file_cache: dict[Path, _ReferenceScanFile],
+) -> _ReferenceScanFile | None:
+    """
+    Load and cache the reusable reference-scan view for one file.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Project file to decode for reference scanning.
+    file_cache : dict[pathlib.Path, codira.query.context._ReferenceScanFile]
+        In-memory cache reused across symbol-name scans.
+
+    Returns
+    -------
+    codira.query.context._ReferenceScanFile | None
+        Cached scan view, or ``None`` when the file cannot be decoded.
+    """
+    cached = file_cache.get(path)
+    if cached is not None:
+        return cached
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    searchable_lines = tuple(
+        (lineno, line)
+        for lineno, line in enumerate(text.splitlines(), start=1)
+        if not line.strip().startswith(("import ", "from "))
+    )
+    cached = _ReferenceScanFile(
+        file_path=str(path),
+        text=text,
+        searchable_lines=searchable_lines,
+    )
+    file_cache[path] = cached
+    return cached
 
 
 def _tokenize(text: str) -> set[str]:
@@ -4237,7 +4287,7 @@ def _collect_reference_rows(
         if path_has_prefix(path, prefix)
     ]
     top_files = {file_path for _, _, _, file_path, _ in top_matches}
-    file_cache: dict[Path, list[str]] = {}
+    file_cache: dict[Path, _ReferenceScanFile] = {}
     test_refs: list[ReferenceRow] = []
     other_refs: list[ReferenceRow] = []
 
