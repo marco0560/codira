@@ -1,3 +1,10 @@
+## [1.21.5](https://github.com/marco0560/codira/compare/v1.21.4...v1.21.5) (2026-05-02)
+
+
+### Performance Improvements
+
+* **analyzer:** short-circuit JSON analyzer admission ([6039f22](https://github.com/marco0560/codira/commit/6039f22d4f3e835b4d28e6c121696fab6241ff65))
+
 ## [1.21.4](https://github.com/marco0560/codira/compare/v1.21.3...v1.21.4) (2026-05-02)
 
 
