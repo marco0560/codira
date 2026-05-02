@@ -39,6 +39,29 @@ JsonFamily = Literal[
 ]
 JsonFamilyOrNone = JsonFamily | None
 JsonScalar = str | int | float | bool | None
+_JSON_SNIFF_BYTES = 8192
+_JSON_SCHEMA_MARKERS = (
+    '"$schema"',
+    '"properties"',
+    '"$defs"',
+    '"definitions"',
+    '"items"',
+)
+_PACKAGE_MANIFEST_MARKERS = (
+    '"name"',
+    '"version"',
+    '"scripts"',
+    '"dependencies"',
+    '"devDependencies"',
+    '"peerDependencies"',
+    '"optionalDependencies"',
+    '"bin"',
+)
+_SEMANTIC_RELEASE_MARKERS = (
+    '"plugins"',
+    '"branches"',
+    '"tagFormat"',
+)
 
 
 def _sanitize_module_segment(segment: str) -> str:
@@ -136,6 +159,27 @@ def _load_json_mapping(path: Path) -> dict[str, object]:
     return cast("dict[str, object]", payload)
 
 
+def _read_json_sniff_text(path: Path, *, limit: int = _JSON_SNIFF_BYTES) -> str:
+    """
+    Read one small decoded prefix for cheap JSON-family sniffing.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Candidate JSON file path.
+    limit : int, optional
+        Maximum number of bytes read from the file prefix.
+
+    Returns
+    -------
+    str
+        UTF-8-decoded text prefix used for cheap marker checks.
+    """
+    with path.open("rb") as handle:
+        prefix = handle.read(limit)
+    return prefix.decode("utf-8", errors="ignore")
+
+
 def _classify_json_path(path: Path) -> JsonFamilyOrNone:
     """
     Classify a JSON path through explicit repo-relative filename rules.
@@ -164,6 +208,43 @@ def _classify_json_path(path: Path) -> JsonFamilyOrNone:
     ):
         return "json_schema"
     return None
+
+
+def _sniff_json_path_candidate(path: Path) -> bool:
+    """
+    Decide whether one JSON path is worth a full parse.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Candidate JSON file path.
+
+    Returns
+    -------
+    bool
+        ``True`` when the path or a shallow text prefix suggests one supported
+        JSON family.
+    """
+    path_family = _classify_json_path(path)
+    if path_family == "npm_package_manifest":
+        return True
+    if path_family == "semantic_release_config":
+        return True
+
+    try:
+        sniff = _read_json_sniff_text(path)
+    except OSError:
+        return False
+
+    if path_family == "json_schema":
+        return any(marker in sniff for marker in _JSON_SCHEMA_MARKERS)
+
+    marker_groups = (
+        _JSON_SCHEMA_MARKERS,
+        _PACKAGE_MANIFEST_MARKERS,
+        _SEMANTIC_RELEASE_MARKERS,
+    )
+    return any(marker in sniff for group in marker_groups for marker in group)
 
 
 def _is_json_schema_document(payload: dict[str, object]) -> bool:
@@ -865,6 +946,8 @@ class JsonAnalyzer:
             ``True`` when the file belongs to a supported JSON family.
         """
         if path.suffix != ".json":
+            return False
+        if not _sniff_json_path_candidate(path):
             return False
 
         try:

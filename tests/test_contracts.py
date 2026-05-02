@@ -24,6 +24,7 @@ import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import codira_analyzer_json as json_analyzer_module
 from codira_backend_sqlite import SQLiteIndexBackend
 
 import codira.indexer as indexer_module
@@ -1802,6 +1803,105 @@ def test_json_analyzer_rejects_unclassified_json_documents(tmp_path: Path) -> No
     source.write_text('{"task": "build"}\n', encoding="utf-8")
 
     assert JsonAnalyzer().supports_path(source) is False
+
+
+def test_json_analyzer_rejects_generic_json_without_full_parse(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """
+    Skip full JSON parsing for obvious unsupported generic JSON blobs.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root for the fixture.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to guard the full-parse helper.
+
+    Returns
+    -------
+    None
+        The test asserts shallow sniffing rejects the file before a full JSON
+        parse is attempted.
+    """
+    source = tmp_path / "scripts" / "build.json"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"task": "build"}\n', encoding="utf-8")
+
+    def _unexpected_parse(path: Path) -> dict[str, object]:
+        msg = f"_load_json_mapping should not be called for {path}"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(json_analyzer_module, "_load_json_mapping", _unexpected_parse)
+
+    assert JsonAnalyzer().supports_path(source) is False
+
+
+def test_json_analyzer_rejects_schemaish_paths_without_schema_markers(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """
+    Skip full parsing for schema-like paths that lack schema markers.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root for the fixture.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to guard the full-parse helper.
+
+    Returns
+    -------
+    None
+        The test asserts schema-name heuristics still require shallow schema
+        markers before JSON parsing begins.
+    """
+    source = tmp_path / "src" / "codira" / "schema" / "build.json"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"task": "build"}\n', encoding="utf-8")
+
+    def _unexpected_parse(path: Path) -> dict[str, object]:
+        msg = f"_load_json_mapping should not be called for {path}"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(json_analyzer_module, "_load_json_mapping", _unexpected_parse)
+
+    assert JsonAnalyzer().supports_path(source) is False
+
+
+def test_json_analyzer_accepts_supported_schema_on_ambiguous_path(
+    tmp_path: Path,
+) -> None:
+    """
+    Keep payload-based fallback support for supported JSON on neutral paths.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root for the fixture.
+
+    Returns
+    -------
+    None
+        The test asserts shallow marker sniffing still permits a full parse
+        for supported schema payloads outside schema-named paths.
+    """
+    source = tmp_path / "configs" / "context.json"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps(
+            {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {"status": {"type": "string"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert JsonAnalyzer().supports_path(source) is True
 
 
 def test_json_analyzer_extracts_schema_properties_and_definitions(
