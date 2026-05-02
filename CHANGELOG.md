@@ -1,3 +1,10 @@
+## [1.21.2](https://github.com/marco0560/codira/compare/v1.21.1...v1.21.2) (2026-05-02)
+
+
+### Performance Improvements
+
+* **semantic:** cache embedding startup helpers ([8998959](https://github.com/marco0560/codira/commit/89989599edec00d49484cb1d06afca570c448ced))
+
 ## [1.21.1](https://github.com/marco0560/codira/compare/v1.21.0...v1.21.1) (2026-05-02)
 
 
