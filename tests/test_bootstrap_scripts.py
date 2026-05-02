@@ -1262,6 +1262,32 @@ def _load_benchmark_timing_helper() -> _BenchmarkTimingModule:
     return cast("_BenchmarkTimingModule", module)
 
 
+class _EmbeddingStartupBenchmarkModule(Protocol):
+    """Protocol for the standalone embedding-startup benchmark helper."""
+
+    def measure_embedding_startup(
+        self,
+        *,
+        text: str,
+        second_text: str,
+    ) -> dict[str, object]:
+        """
+        Measure same-process semantic startup and warm-query costs.
+
+        Parameters
+        ----------
+        text : str
+            Text payload used for the cold query measurement.
+        second_text : str
+            Text payload used for the warm query measurement.
+
+        Returns
+        -------
+        dict[str, object]
+            Structured timing report.
+        """
+
+
 def _load_benchmark_campaign_helper() -> _BenchmarkCampaignModule:
     """
     Load the benchmark campaign helper from its repository path.
@@ -1286,6 +1312,37 @@ def _load_benchmark_campaign_helper() -> _BenchmarkCampaignModule:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return cast("_BenchmarkCampaignModule", module)
+
+
+def _load_embedding_startup_benchmark_helper() -> _EmbeddingStartupBenchmarkModule:
+    """
+    Load the embedding-startup benchmark helper from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the embedding-startup benchmark helper script.
+    """
+    helper_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "benchmark_embedding_startup.py"
+    )
+    sys.path.insert(0, str(helper_path.parent))
+    spec = importlib.util.spec_from_file_location(
+        "benchmark_embedding_startup",
+        helper_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_EmbeddingStartupBenchmarkModule", module)
 
 
 def _load_split_repo_verification_helper() -> _SplitRepoVerificationModule:
@@ -2415,6 +2472,90 @@ def test_release_benchmark_helper_builds_hyperfine_plan() -> None:
         "/tmp/codira/.venv/bin/codira ctx --json 'plugin registry'",
         "/tmp/codira/.venv/bin/codira audit --json",
     )
+
+
+def test_embedding_startup_benchmark_helper_separates_cold_and_warm_costs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Keep semantic-startup timing splits deterministic in one process.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to control module loading and timer values.
+
+    Returns
+    -------
+    None
+        The test asserts the helper reports import, split load/encode, and
+        cold-versus-warm query timings deterministically.
+    """
+    helper = _load_embedding_startup_benchmark_helper()
+
+    class _FakeEmbeddingsModule:
+        EMBEDDING_BACKEND = "demo-backend"
+        EMBEDDING_VERSION = "9"
+        EMBEDDING_DIM = 3
+
+        def __init__(self) -> None:
+            self.reset_calls = 0
+            self.load_calls = 0
+            self.embed_calls: list[str] = []
+
+        def _load_model(self) -> object:
+            self.load_calls += 1
+            return object()
+
+        def embed_text(self, text: str) -> list[float]:
+            self.embed_calls.append(text)
+            return [1.0, 2.0, 3.0]
+
+        def reset_embedding_runtime_caches(self) -> None:
+            self.reset_calls += 1
+
+    fake_module = _FakeEmbeddingsModule()
+    ticks = iter((0.0, 1.0, 2.0, 5.0, 7.0, 11.0, 13.0, 18.0, 20.0, 27.0, 30.0, 32.0))
+
+    monkeypatch.setattr(helper, "_load_embeddings_module", lambda: fake_module)
+    monkeypatch.setattr(helper, "perf_counter", lambda: next(ticks))
+
+    payload = helper.measure_embedding_startup(
+        text="schema migration logic",
+        second_text="docstring audit rules",
+    )
+
+    assert cast("dict[str, object]", payload["backend"]) == {
+        "name": "demo-backend",
+        "version": "9",
+        "dim": 3,
+    }
+    assert cast("dict[str, object]", payload["queries"]) == {
+        "cold_text": "schema migration logic",
+        "warm_text": "docstring audit rules",
+    }
+    assert cast("dict[str, object]", payload["timings"]) == {
+        "module_import": 1.0,
+        "model_load": 3.0,
+        "first_encode_after_load": 4.0,
+        "second_encode_after_load": 5.0,
+        "cold_query": 7.0,
+        "warm_query": 2.0,
+    }
+    assert cast("dict[str, object]", payload["vectors"]) == {
+        "cold_query_dim": 3,
+        "warm_query_dim": 3,
+        "first_encode_dim": 3,
+        "second_encode_dim": 3,
+    }
+    assert fake_module.reset_calls == 2
+    assert fake_module.load_calls == 1
+    assert fake_module.embed_calls == [
+        "schema migration logic",
+        "docstring audit rules",
+        "schema migration logic",
+        "docstring audit rules",
+    ]
 
 
 def test_benchmark_metadata_includes_first_party_plugins() -> None:

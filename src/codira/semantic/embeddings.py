@@ -24,6 +24,7 @@ import struct
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
+from importlib import import_module
 from typing import TYPE_CHECKING, Protocol, cast
 
 if TYPE_CHECKING:
@@ -59,6 +60,9 @@ if TYPE_CHECKING:
             device: str,
             local_files_only: bool,
         ) -> _EmbeddingModel: ...
+
+    class _TransformersLogging(Protocol):
+        def set_verbosity_error(self) -> None: ...
 
 
 EMBEDDING_BACKEND = "sentence-transformers/all-MiniLM-L6-v2"
@@ -327,6 +331,59 @@ def _configure_torch_runtime_once() -> None:
     _configure_torch_runtime()
 
 
+@lru_cache(maxsize=1)
+def _sentence_transformer_factory() -> _SentenceTransformerFactory:
+    """
+    Return the cached sentence-transformers factory for this process.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    _SentenceTransformerFactory
+        Imported ``SentenceTransformer`` constructor cached for reuse.
+
+    Raises
+    ------
+    EmbeddingBackendError
+        Raised when the optional semantic dependency stack is unavailable.
+    """
+    try:
+        module = import_module("sentence_transformers")
+    except ImportError as exc:
+        raise _dependency_error(_DEPENDENCY_INSTALL_HINT) from exc
+    factory = getattr(module, "SentenceTransformer", None)
+    if factory is None:
+        raise _dependency_error(_DEPENDENCY_INSTALL_HINT)
+    return cast("_SentenceTransformerFactory", factory)
+
+
+@lru_cache(maxsize=1)
+def _configure_transformers_logging_once() -> None:
+    """
+    Silence transformers logging at most once per process.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The optional transformers logger is configured once and then reused.
+    """
+    try:
+        utils_module = import_module("transformers.utils")
+    except ImportError:
+        return
+    logging_module = getattr(utils_module, "logging", None)
+    if logging_module is None:
+        return
+    cast("_TransformersLogging", logging_module).set_verbosity_error()
+
+
 def _load_sentence_transformer(
     sentence_transformer: object,
     *,
@@ -380,11 +437,6 @@ def provision_embedding_model(*, quiet: bool = False) -> None:
         Raised when the semantic dependency stack is missing or the model
         artifact cannot be provisioned.
     """
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError as exc:
-        raise _dependency_error(_DEPENDENCY_INSTALL_HINT) from exc
-
     if not quiet:
         print(
             f"[codira] Provisioning local embedding model {EMBEDDING_BACKEND}...",
@@ -392,7 +444,7 @@ def provision_embedding_model(*, quiet: bool = False) -> None:
         )
 
     try:
-        _load_sentence_transformer(SentenceTransformer, offline=False)
+        _load_sentence_transformer(_sentence_transformer_factory(), offline=False)
     except (OSError, RuntimeError) as exc:
         raise _wrap_load_error(exc) from exc
 
@@ -416,26 +468,16 @@ def _load_model() -> _EmbeddingModel:
     EmbeddingBackendError
         Raised when the optional dependency or local model artifact is missing.
     """
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError as exc:
-        raise _dependency_error(_DEPENDENCY_INSTALL_HINT) from exc
-
-    try:
-        from transformers.utils import logging as transformers_logging
-    except ImportError:
-        pass
-    else:
-        transformers_logging.set_verbosity_error()  # type: ignore[no-untyped-call]
-
+    sentence_transformer = _sentence_transformer_factory()
+    _configure_transformers_logging_once()
     _configure_torch_runtime_once()
 
     try:
-        model = _load_sentence_transformer(SentenceTransformer, offline=True)
+        model = _load_sentence_transformer(sentence_transformer, offline=True)
     except OSError:
         provision_embedding_model()
         try:
-            model = _load_sentence_transformer(SentenceTransformer, offline=True)
+            model = _load_sentence_transformer(sentence_transformer, offline=True)
         except (OSError, RuntimeError) as exc:
             raise _wrap_load_error(exc) from exc
     except RuntimeError as exc:
@@ -453,6 +495,25 @@ def _load_model() -> _EmbeddingModel:
         raise EmbeddingBackendError(msg)
 
     return model
+
+
+def reset_embedding_runtime_caches() -> None:
+    """
+    Clear cached embedding startup state for the current process.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Cached model, import, and runtime setup state is discarded.
+    """
+    _sentence_transformer_factory.cache_clear()
+    _configure_transformers_logging_once.cache_clear()
+    _configure_torch_runtime_once.cache_clear()
+    _load_model.cache_clear()
 
 
 def embed_texts(texts: Sequence[str]) -> list[list[float]]:

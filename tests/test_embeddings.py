@@ -156,7 +156,7 @@ def test_embed_texts_batches_inputs_and_preserves_blank_vectors(
             return EMBEDDING_DIM
 
     fake_model = _FakeModel()
-    embeddings_module._load_model.cache_clear()
+    embeddings_module.reset_embedding_runtime_caches()
     monkeypatch.setenv("CODIRA_EMBED_BATCH_SIZE", "7")
     monkeypatch.setattr(embeddings_module, "_load_model", lambda: fake_model)
 
@@ -220,7 +220,7 @@ def test_embed_texts_uses_repo_default_batch_size(
             return EMBEDDING_DIM
 
     fake_model = _FakeModel()
-    embeddings_module._load_model.cache_clear()
+    embeddings_module.reset_embedding_runtime_caches()
     monkeypatch.delenv("CODIRA_EMBED_BATCH_SIZE", raising=False)
     monkeypatch.setattr(embeddings_module, "_load_model", lambda: fake_model)
 
@@ -799,7 +799,7 @@ def test_load_model_provisions_missing_local_artifact(
         del quiet
         provisioned = True
 
-    embeddings_module._load_model.cache_clear()
+    embeddings_module.reset_embedding_runtime_caches()
     monkeypatch.setitem(
         sys.modules,
         "sentence_transformers",
@@ -821,4 +821,91 @@ def test_load_model_provisions_missing_local_artifact(
     assert isinstance(model, _FakeModel)
     assert calls == [True, True]
     assert provisioned is True
-    embeddings_module._load_model.cache_clear()
+    embeddings_module.reset_embedding_runtime_caches()
+
+
+def test_sentence_transformer_factory_is_cached_within_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Cache the sentence-transformers factory import within one process.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to control module import behavior.
+
+    Returns
+    -------
+    None
+        The test asserts repeated factory lookups import the module once.
+    """
+
+    def fake_factory(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        return object()
+
+    calls: list[str] = []
+    fake_module = types.SimpleNamespace(SentenceTransformer=fake_factory)
+
+    def fake_import_module(name: str) -> object:
+        calls.append(name)
+        if name == "sentence_transformers":
+            return fake_module
+        msg = f"unexpected import: {name}"
+        raise AssertionError(msg)
+
+    embeddings_module.reset_embedding_runtime_caches()
+    monkeypatch.setattr(embeddings_module, "import_module", fake_import_module)
+
+    first = embeddings_module._sentence_transformer_factory()
+    second = embeddings_module._sentence_transformer_factory()
+
+    assert first is fake_factory
+    assert second is fake_factory
+    assert calls == ["sentence_transformers"]
+
+
+def test_configure_transformers_logging_runs_once_per_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Apply transformers logging suppression once per process.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to control module import behavior.
+
+    Returns
+    -------
+    None
+        The test asserts repeated logging setup calls reuse cached state.
+    """
+
+    class _FakeLogging:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def set_verbosity_error(self) -> None:
+            self.calls += 1
+
+    calls: list[str] = []
+    fake_logging = _FakeLogging()
+    fake_utils_module = types.SimpleNamespace(logging=fake_logging)
+
+    def fake_import_module(name: str) -> object:
+        calls.append(name)
+        if name == "transformers.utils":
+            return fake_utils_module
+        msg = f"unexpected import: {name}"
+        raise AssertionError(msg)
+
+    embeddings_module.reset_embedding_runtime_caches()
+    monkeypatch.setattr(embeddings_module, "import_module", fake_import_module)
+
+    embeddings_module._configure_transformers_logging_once()
+    embeddings_module._configure_transformers_logging_once()
+
+    assert fake_logging.calls == 1
+    assert calls == ["transformers.utils"]
