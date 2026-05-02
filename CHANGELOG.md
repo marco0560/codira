@@ -1,3 +1,10 @@
+## [1.21.1](https://github.com/marco0560/codira/compare/v1.21.0...v1.21.1) (2026-05-02)
+
+
+### Performance Improvements
+
+* **registry:** cache plugin discovery snapshots ([8556093](https://github.com/marco0560/codira/commit/85560939f68ed0f138209065c6d44233a469c420))
+
 # [1.21.0](https://github.com/marco0560/codira/compare/v1.20.0...v1.21.0) (2026-05-01)
 
 
