@@ -540,35 +540,36 @@ def embed_texts(texts: Sequence[str]) -> list[list[float]]:
         return []
 
     vectors: list[list[float]] = [[0.0] * EMBEDDING_DIM for _ in texts_list]
-    non_blank_positions: list[int] = []
-    non_blank_texts: list[str] = []
+    positions_by_text: dict[str, list[int]] = {}
 
     for index, text in enumerate(texts_list):
         if not text.strip():
             continue
-        non_blank_positions.append(index)
-        non_blank_texts.append(text)
+        positions_by_text.setdefault(text, []).append(index)
 
-    if not non_blank_texts:
+    if not positions_by_text:
         return vectors
 
     model = _load_model()
+    unique_texts = list(positions_by_text)
     encoded = model.encode(
-        non_blank_texts,
+        unique_texts,
         batch_size=_configured_embedding_batch_size(),
         convert_to_numpy=True,
         normalize_embeddings=True,
         show_progress_bar=False,
     )
-    if len(encoded) != len(non_blank_positions):
+    if len(encoded) != len(unique_texts):
         msg = (
             "Embedding backend returned an unexpected vector count. "
-            f"Expected {len(non_blank_positions)}, received {len(encoded)}."
+            f"Expected {len(unique_texts)}, received {len(encoded)}."
         )
         raise EmbeddingBackendError(msg)
 
-    for output_index, position in enumerate(non_blank_positions):
-        vectors[position] = [float(value) for value in encoded[output_index].tolist()]
+    for output_index, text in enumerate(unique_texts):
+        vector = [float(value) for value in encoded[output_index].tolist()]
+        for position in positions_by_text[text]:
+            vectors[position] = vector
 
     return vectors
 

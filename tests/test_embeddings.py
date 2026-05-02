@@ -175,6 +175,69 @@ def test_embed_texts_batches_inputs_and_preserves_blank_vectors(
     assert vectors[2] == [2.0] * EMBEDDING_DIM
 
 
+def test_embed_texts_deduplicates_identical_non_blank_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Encode duplicate non-blank texts once while preserving output positions.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to control the embedding model loader.
+
+    Returns
+    -------
+    None
+        The test asserts duplicate non-blank payloads share one backend encode
+        row while retaining deterministic positional vectors.
+    """
+
+    class _FakeVector:
+        def __init__(self, values: list[float]) -> None:
+            self._values = values
+
+        def tolist(self) -> list[float]:
+            return list(self._values)
+
+    class _FakeModel:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def encode(
+            self,
+            sentences: list[str],
+            *,
+            batch_size: int,
+            convert_to_numpy: bool,
+            normalize_embeddings: bool,
+            show_progress_bar: bool,
+        ) -> list[_FakeVector]:
+            del batch_size, convert_to_numpy, normalize_embeddings, show_progress_bar
+            self.calls.append(list(sentences))
+            return [
+                _FakeVector([float(index + 1)] * EMBEDDING_DIM)
+                for index, _sentence in enumerate(sentences)
+            ]
+
+        def get_sentence_embedding_dimension(self) -> int:
+            return EMBEDDING_DIM
+
+    fake_model = _FakeModel()
+    embeddings_module.reset_embedding_runtime_caches()
+    monkeypatch.setattr(embeddings_module, "_load_model", lambda: fake_model)
+
+    vectors = embed_texts(
+        ["schema migration", "schema migration", "docstring audit", "   "]
+    )
+
+    assert fake_model.calls == [["schema migration", "docstring audit"]]
+    assert vectors[0] == [1.0] * EMBEDDING_DIM
+    assert vectors[1] == [1.0] * EMBEDDING_DIM
+    assert vectors[2] == [2.0] * EMBEDDING_DIM
+    assert vectors[3] == [0.0] * EMBEDDING_DIM
+
+
 def test_embed_texts_uses_repo_default_batch_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

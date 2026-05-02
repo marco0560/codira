@@ -99,6 +99,7 @@ def main() -> int:
     output_dir = None if args.output_dir is None else Path(args.output_dir).resolve()
     timer = PhaseTimer()
     embedding_batch_sizes: list[int] = []
+    embedding_unique_batch_sizes: list[int] = []
 
     original_collect_scan = indexer._collect_project_scan_state
     original_collect_analyses = indexer._collect_indexed_file_analyses
@@ -192,6 +193,7 @@ def main() -> int:
     def benchmark_embed_texts(texts: Sequence[str]) -> list[list[float]]:
         batch = list(texts)
         embedding_batch_sizes.append(len(batch))
+        embedding_unique_batch_sizes.append(len(set(batch)))
         result = timer.timed_call(
             "embeddings",
             original_embed_texts,
@@ -244,11 +246,25 @@ def main() -> int:
         "embedding_batches": {
             "calls": len(embedding_batch_sizes),
             "total_rows": sum(embedding_batch_sizes),
+            "unique_rows": sum(embedding_unique_batch_sizes),
             "max_batch_size": max(embedding_batch_sizes, default=0),
+            "max_unique_batch_size": max(embedding_unique_batch_sizes, default=0),
             "avg_batch_size": (
                 round(sum(embedding_batch_sizes) / len(embedding_batch_sizes), 3)
                 if embedding_batch_sizes
                 else 0.0
+            ),
+            "avg_unique_batch_size": (
+                round(
+                    sum(embedding_unique_batch_sizes)
+                    / len(embedding_unique_batch_sizes),
+                    3,
+                )
+                if embedding_unique_batch_sizes
+                else 0.0
+            ),
+            "duplicate_rows": (
+                sum(embedding_batch_sizes) - sum(embedding_unique_batch_sizes)
             ),
         },
         "report": {

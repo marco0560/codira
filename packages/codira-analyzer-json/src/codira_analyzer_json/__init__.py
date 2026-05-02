@@ -889,7 +889,7 @@ class JsonAnalyzer:
     """
 
     name = "json"
-    version = "2"
+    version = "3"
     discovery_globs: tuple[str, ...] = ("*.json",)
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:

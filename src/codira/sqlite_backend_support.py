@@ -1894,15 +1894,13 @@ def _flush_embedding_rows(
         ):
             encoded_vectors[content_hash] = serialize_vector(vector)
 
+    insert_rows: list[tuple[str, int, str, str, str, int, bytes]] = []
     for row, content_hash, stored_vector in prepared_rows:
         resolved_blob = stored_vector
         if resolved_blob is None:
             resolved_blob = encoded_vectors[content_hash]
 
-        conn.execute(
-            "INSERT INTO embeddings"
-            "(object_type, object_id, backend, version, content_hash, dim, vector) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        insert_rows.append(
             (
                 row.object_type,
                 row.object_id,
@@ -1911,8 +1909,14 @@ def _flush_embedding_rows(
                 content_hash,
                 backend.dim,
                 resolved_blob,
-            ),
+            )
         )
+    conn.executemany(
+        "INSERT INTO embeddings"
+        "(object_type, object_id, backend, version, content_hash, dim, vector) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        insert_rows,
+    )
 
     return (recomputed, reused)
 
