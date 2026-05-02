@@ -1566,7 +1566,8 @@ def _render_coverage_issues(root: Path, issues: list[CoverageIssue]) -> None:
         print(
             "coverage: "
             f"{suffix} x{count} in {directory_list} "
-            f"({suffix}, no registered analyzer covers this canonical file)"
+            f"({suffix}, no registered analyzer accepts this file "
+            "type/content combination)"
         )
 
 

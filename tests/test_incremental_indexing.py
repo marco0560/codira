@@ -1056,7 +1056,7 @@ def test_index_repo_reports_uncovered_canonical_files(tmp_path: Path) -> None:
             path=str(rust_module),
             directory="src",
             suffix=".rs",
-            reason="no registered analyzer covers this canonical file",
+            reason="no registered analyzer accepts this file type/content combination",
         )
     ]
 
@@ -1206,7 +1206,7 @@ def test_index_cli_prints_coverage_issues(
     assert (
         "coverage: .json x1 in scripts "
         "(.json, "
-        "no registered analyzer covers this canonical file)"
+        "no registered analyzer accepts this file type/content combination)"
     ) in captured.out
 
 
@@ -1252,7 +1252,7 @@ def test_coverage_cli_reports_uncovered_canonical_files(
     assert (
         "coverage: .json x1 in scripts "
         "(.json, "
-        "no registered analyzer covers this canonical file)"
+        "no registered analyzer accepts this file type/content combination)"
     ) in captured.out
     assert not get_db_path(tmp_path).exists()
 
@@ -1295,7 +1295,7 @@ def test_coverage_cli_groups_text_output_by_suffix_and_directory(
     assert "Coverage issues: 2" in captured.out
     assert (
         "coverage: .json x2 in "
-        "src, tests (.json, no registered analyzer covers this canonical file)"
+        "src, tests (.json, no registered analyzer accepts this file type/content combination)"
     ) in captured.out
 
 
@@ -1390,7 +1390,7 @@ def test_coverage_cli_emits_json(
             "path": str(rust_module),
             "directory": "src",
             "suffix": ".rs",
-            "reason": "no registered analyzer covers this canonical file",
+            "reason": "no registered analyzer accepts this file type/content combination",
         }
     ]
     assert payload["analyzers"]
@@ -1500,7 +1500,7 @@ def test_index_cli_emits_json(
             "path": str(config_file),
             "directory": "scripts",
             "suffix": ".json",
-            "reason": "no registered analyzer covers this canonical file",
+            "reason": "no registered analyzer accepts this file type/content combination",
         }
     ]
     assert payload["warnings"] == []
@@ -1570,7 +1570,7 @@ def test_index_cli_emits_json_for_required_coverage_failure(
             "path": str(rust_module),
             "directory": "src",
             "suffix": ".rs",
-            "reason": "no registered analyzer covers this canonical file",
+            "reason": "no registered analyzer accepts this file type/content combination",
         }
     ]
     assert payload["warnings"] == []

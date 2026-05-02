@@ -438,7 +438,7 @@ def _audit_canonical_directory_coverage(
                 path=str(path),
                 directory=top_dir,
                 suffix=suffix,
-                reason="no registered analyzer covers this canonical file",
+                reason="no registered analyzer accepts this file type/content combination",
             )
         )
 
