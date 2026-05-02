@@ -1161,6 +1161,7 @@ def resolve_repository_benchmark(
             "--output-dir",
             str(discovery_output_dir),
         )
+        print(f"--- {repo.label.upper()} ---", flush=True)
         return_code = subprocess.run(discovery_index, check=False).returncode
         selection["discovery_index"] = {
             "command": list(discovery_index),

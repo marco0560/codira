@@ -3039,6 +3039,115 @@ def test_benchmark_campaign_adaptive_resolution_picks_richer_candidates(
     assert row["skipped_commands"] == []
 
 
+def test_benchmark_campaign_prints_repo_label_before_discovery_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Print the manifest label before the first per-repository Codira index run.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for manifest and target repository fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace subprocess execution.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture user-facing banner output.
+
+    Returns
+    -------
+    None
+        The test asserts repository discovery prints the uppercased label
+        banner before the initial index command output.
+    """
+    helper = _load_benchmark_campaign_helper()
+    repo_path = tmp_path / "fontshow"
+    repo_path.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {
+                        "label": "fontshow",
+                        "category": "small",
+                        "path": str(repo_path),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260502T150000Z",
+        codira="codira",
+        hyperfine="hyperfine",
+        python="python",
+        runs=3,
+        warmup=1,
+        dry_run=True,
+    )
+
+    def fake_run(
+        command: Sequence[str],
+        *,
+        text: bool | None = None,
+        capture_output: bool | None = None,
+        check: bool | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        argv = tuple(str(part) for part in command)
+        if "index" in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "symlist" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "symbols": [
+                            {
+                                "type": "function",
+                                "name": "show_fonts",
+                                "module": "fontshow.main",
+                                "file": str(
+                                    (
+                                        repo_path / "src" / "fontshow" / "main.py"
+                                    ).resolve()
+                                ),
+                                "calls_out": {"total": 1},
+                                "calls_in": {"total": 1},
+                                "refs_out": {"total": 0},
+                                "refs_in": {"total": 0},
+                            }
+                        ],
+                    }
+                ),
+                "",
+            )
+        if "emb" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps({"status": "ok", "results": [{"score": 0.8}]}),
+                "",
+            )
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"status": "ok"}), "")
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    repositories = helper.load_manifest(manifest)
+    helper.resolve_repositories(repositories, config)
+    captured = capsys.readouterr()
+
+    assert captured.err == ""
+    assert captured.out.startswith("--- FONTSHOW ---\n")
+
+
 def test_benchmark_campaign_skips_unresolved_adaptive_commands(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
