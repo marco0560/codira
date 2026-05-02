@@ -1,3 +1,10 @@
+## [1.21.6](https://github.com/marco0560/codira/compare/v1.21.5...v1.21.6) (2026-05-02)
+
+
+### Performance Improvements
+
+* **embeddings:** dedupe repeated embedding payloads ([e90c441](https://github.com/marco0560/codira/commit/e90c441658849e7fe6f1be88614e07bdf913dca0))
+
 ## [1.21.5](https://github.com/marco0560/codira/compare/v1.21.4...v1.21.5) (2026-05-02)
 
 
