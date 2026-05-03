@@ -55,6 +55,7 @@ if TYPE_CHECKING:
         EnumMemberRow,
         IncludeEdgeRow,
         OverloadRow,
+        ReferenceSearchRow,
         SymbolRow,
     )
 
@@ -244,6 +245,7 @@ class _MemoryState:
     imports: list[_MemoryImport] = field(default_factory=list)
     call_records: list[_MemoryRelation] = field(default_factory=list)
     callable_ref_records: list[_MemoryRelation] = field(default_factory=list)
+    reference_scan_lines: list[tuple[int, int, str]] = field(default_factory=list)
     overloads: list[_MemoryOverload] = field(default_factory=list)
     enum_members: list[_MemoryEnumMember] = field(default_factory=list)
     doc_issues: list[_MemoryDocIssue] = field(default_factory=list)
@@ -797,6 +799,12 @@ class MemoryIndexBackend:
             analyzer_version=request.file_metadata.analyzer_version,
         )
         state.file_id_by_path[path_text] = file_id
+        state.reference_scan_lines.extend(
+            (file_id, lineno, line_text)
+            for lineno, line_text in self._reference_scan_lines(
+                request.file_metadata.path
+            )
+        )
 
         embedding_payloads: list[tuple[int, str, str]] = []
         analysis = request.analysis
@@ -1372,6 +1380,48 @@ class MemoryIndexBackend:
             (backend, version, dim, counts[(backend, version, dim)])
             for backend, version, dim in sorted(counts)
         ]
+
+    def find_reference_rows(
+        self,
+        root: Path,
+        name: str,
+        *,
+        prefix: str | None = None,
+        conn: object | None = None,
+    ) -> list[ReferenceSearchRow]:
+        """
+        Return stored non-import lines containing one symbol name.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state should be queried.
+        name : str
+            Symbol name to search as a simple substring.
+        prefix : str | None, optional
+            Repo-root-relative path prefix used to restrict candidate files.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.types.ReferenceSearchRow]
+            Matching stored rows ordered by file path and line number.
+        """
+        state = self._conn_state(root, conn)
+        normalized_prefix = normalize_prefix(root, prefix)
+        rows: list[ReferenceSearchRow] = []
+        for file_id, lineno, line_text in state.reference_scan_lines:
+            file_row = state.files.get(file_id)
+            if file_row is None:
+                continue
+            if not path_has_prefix(file_row.path, normalized_prefix):
+                continue
+            if name not in line_text:
+                continue
+            rows.append((file_row.path, lineno, line_text))
+        rows.sort(key=lambda item: (item[0], item[1]))
+        return rows[:50]
 
     def embedding_candidates(
         self,
@@ -2270,6 +2320,30 @@ class MemoryIndexBackend:
             )
         return (recomputed, reused)
 
+    def _reference_scan_lines(self, path: Path) -> list[tuple[int, str]]:
+        """
+        Return deterministic non-import source lines for one stored file.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Source file whose text should be prepared for query-time scans.
+
+        Returns
+        -------
+        list[tuple[int, str]]
+            Stored rows as ``(lineno, line_text)``.
+        """
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return []
+        return [
+            (lineno, line)
+            for lineno, line in enumerate(text.splitlines(), start=1)
+            if not line.strip().startswith(("import ", "from "))
+        ]
+
     def _delete_file_artifacts(self, state: _MemoryState, file_id: int) -> None:
         """
         Delete all artifacts owned by one file id.
@@ -2301,6 +2375,9 @@ class MemoryIndexBackend:
         ]
         state.callable_ref_records = [
             record for record in state.callable_ref_records if record.file_id != file_id
+        ]
+        state.reference_scan_lines = [
+            row for row in state.reference_scan_lines if row[0] != file_id
         ]
         state.overloads = [
             overload for overload in state.overloads if overload.file_id != file_id

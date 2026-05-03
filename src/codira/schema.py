@@ -17,7 +17,7 @@ This module belongs to the **storage infrastructure layer** and anchors table de
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 DDL = [
     """
@@ -310,6 +310,19 @@ DDL = [
     """
     CREATE INDEX IF NOT EXISTS idx_callable_ref_records_owner
     ON callable_ref_records(owner_module, owner_name);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reference_scan_lines (
+        file_id INTEGER NOT NULL,
+        lineno INTEGER NOT NULL,
+        line_text TEXT NOT NULL,
+        PRIMARY KEY (file_id, lineno),
+        FOREIGN KEY(file_id) REFERENCES files(id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_reference_scan_lines_file
+    ON reference_scan_lines(file_id);
     """,
     """
     CREATE TABLE IF NOT EXISTS embeddings (

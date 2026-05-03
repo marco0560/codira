@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         EnumMemberRow,
         IncludeEdgeRow,
         OverloadRow,
+        ReferenceSearchRow,
         SymbolRow,
     )
 
@@ -895,6 +896,35 @@ class IndexBackend(Protocol):
         -------
         list[tuple[str, str, int, int]]
             Rows as ``(backend, version, dim, count)`` ordered deterministically.
+        """
+
+    def find_reference_rows(
+        self,
+        root: Path,
+        name: str,
+        *,
+        prefix: str | None = None,
+        conn: object | None = None,
+    ) -> list[ReferenceSearchRow]:
+        """
+        Return stored non-import source lines containing one symbol name.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        name : str
+            Symbol name to search as a simple substring.
+        prefix : str | None, optional
+            Repo-root-relative path prefix used to restrict candidate files.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        list[codira.types.ReferenceSearchRow]
+            Matching stored rows as ``(file_path, lineno, line_text)`` ordered
+            deterministically by file path and line number.
         """
 
     def embedding_candidates(

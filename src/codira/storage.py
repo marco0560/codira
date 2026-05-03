@@ -414,6 +414,39 @@ def _refresh_callable_ref_records_schema(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS callable_ref_records")
 
 
+def _refresh_reference_scan_lines_schema(conn: sqlite3.Connection) -> None:
+    """
+    Recreate the ``reference_scan_lines`` table when an older schema exists.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection to migrate in place.
+
+    Returns
+    -------
+    None
+        The table is replaced only when its columns do not match the current
+        schema definition.
+    """
+    columns = conn.execute("PRAGMA table_info(reference_scan_lines)").fetchall()
+    if not columns:
+        return
+
+    current = [str(row[1]) for row in columns]
+    expected = [
+        "file_id",
+        "lineno",
+        "line_text",
+    ]
+
+    if current == expected:
+        return
+
+    conn.execute("DROP INDEX IF EXISTS idx_reference_scan_lines_file")
+    conn.execute("DROP TABLE IF EXISTS reference_scan_lines")
+
+
 def _refresh_docstring_issues_schema(conn: sqlite3.Connection) -> None:
     """
     Recreate the ``docstring_issues`` table when an older schema is present.
@@ -618,6 +651,7 @@ def _refresh_files_schema(conn: sqlite3.Connection) -> None:
     conn.execute("DROP INDEX IF EXISTS idx_call_records_owner")
     conn.execute("DROP INDEX IF EXISTS idx_callable_ref_records_file")
     conn.execute("DROP INDEX IF EXISTS idx_callable_ref_records_owner")
+    conn.execute("DROP INDEX IF EXISTS idx_reference_scan_lines_file")
     conn.execute("DROP INDEX IF EXISTS idx_overloads_stable_id")
     conn.execute("DROP INDEX IF EXISTS idx_overloads_function")
     conn.execute("DROP INDEX IF EXISTS idx_functions_name")
@@ -628,6 +662,7 @@ def _refresh_files_schema(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS overloads")
     conn.execute("DROP TABLE IF EXISTS callable_ref_records")
     conn.execute("DROP TABLE IF EXISTS call_records")
+    conn.execute("DROP TABLE IF EXISTS reference_scan_lines")
     conn.execute("DROP TABLE IF EXISTS callable_refs")
     conn.execute("DROP TABLE IF EXISTS call_edges")
     conn.execute("DROP TABLE IF EXISTS imports")
@@ -862,6 +897,7 @@ def init_db(root: Path) -> None:
         _refresh_callable_refs_schema(conn)
         _refresh_call_records_schema(conn)
         _refresh_callable_ref_records_schema(conn)
+        _refresh_reference_scan_lines_schema(conn)
         _refresh_docstring_issues_schema(conn)
         _refresh_overloads_schema(conn)
         _refresh_enum_members_schema(conn)

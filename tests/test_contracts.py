@@ -77,6 +77,7 @@ from codira.scanner import (
     iter_canonical_project_files,
     iter_project_files,
 )
+from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
     EMBEDDING_BACKEND,
     EMBEDDING_DIM,
@@ -761,6 +762,36 @@ class _FakeBackend:
             Empty inventory rows for protocol validation.
         """
         del root, conn
+        return []
+
+    def find_reference_rows(
+        self,
+        root: Path,
+        name: str,
+        *,
+        prefix: str | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[tuple[str, int, str]]:
+        """
+        Return no stored reference-search rows for protocol validation.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        name : str
+            Symbol name to search.
+        prefix : str | None, optional
+            Optional file prefix restriction.
+        conn : sqlite3.Connection | None, optional
+            Optional SQLite connection.
+
+        Returns
+        -------
+        list[tuple[str, int, str]]
+            Empty stored rows for protocol validation.
+        """
+        del root, name, prefix, conn
         return []
 
     def embedding_candidates(
@@ -3956,7 +3987,11 @@ def test_sqlite_backend_persists_runtime_inventory(tmp_path: Path) -> None:
     index_repo(tmp_path)
 
     backend = SQLiteIndexBackend()
-    assert backend.load_runtime_inventory(tmp_path) == ("sqlite", "13", 1)
+    assert backend.load_runtime_inventory(tmp_path) == (
+        "sqlite",
+        str(SCHEMA_VERSION),
+        1,
+    )
     assert backend.load_analyzer_inventory(tmp_path) == [
         (
             analyzer.name,

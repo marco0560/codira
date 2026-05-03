@@ -67,6 +67,7 @@ if TYPE_CHECKING:
         EnumMemberRow,
         IncludeEdgeRow,
         OverloadRow,
+        ReferenceSearchRow,
         SymbolRow,
     )
 
@@ -1197,6 +1198,61 @@ class SQLiteIndexBackend:
             return [
                 (str(backend), str(version), int(dim), int(count))
                 for backend, version, dim, count in rows
+            ]
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def find_reference_rows(
+        self,
+        root: Path,
+        name: str,
+        *,
+        prefix: str | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[ReferenceSearchRow]:
+        """
+        Return stored non-import lines containing one symbol name.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        name : str
+            Symbol name to search as a simple substring.
+        prefix : str | None, optional
+            Repo-root-relative path prefix used to restrict candidate files.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        list[codira.types.ReferenceSearchRow]
+            Matching stored rows ordered by file path and line number.
+        """
+        owns_connection = conn is None
+        normalized_prefix = normalize_prefix(root, prefix)
+        if conn is None:
+            conn = self.open_connection(root)
+
+        try:
+            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            rows = conn.execute(
+                f"""
+                SELECT f.path, rsl.lineno, rsl.line_text
+                FROM reference_scan_lines rsl
+                JOIN files f
+                  ON rsl.file_id = f.id
+                WHERE instr(rsl.line_text, ?) > 0
+                {prefix_sql}
+                ORDER BY f.path, rsl.lineno
+                LIMIT 50
+                """,
+                (name, *prefix_params),
+            ).fetchall()
+            return [
+                (str(file_path), int(lineno), str(line_text))
+                for file_path, lineno, line_text in rows
             ]
         finally:
             if owns_connection:

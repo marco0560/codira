@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Literal, cast
 from codira.contracts import (
     split_declared_retrieval_capabilities,
 )
-from codira.prefix import normalize_prefix, path_has_prefix, prefix_clause
+from codira.prefix import normalize_prefix, prefix_clause
 from codira.prompts.default import PromptBuildRequest, build_prompt
 from codira.query.classifier import (
     QueryIntent,
@@ -60,8 +60,7 @@ from codira.query.producers import (
     selected_enrichment_producers,
 )
 from codira.query.signals import RetrievalSignal, signal_sort_key
-from codira.registry import active_index_backend, active_language_analyzers
-from codira.scanner import iter_project_files
+from codira.registry import active_index_backend
 from codira.semantic.embeddings import get_embedding_backend
 from codira.types import (
     ChannelBundle,
@@ -70,6 +69,7 @@ from codira.types import (
     CodeContext,
     IncludeEdgeRow,
     ReferenceRow,
+    ReferenceSearchRow,
     SymbolRow,
 )
 from codira.version import package_version
@@ -1441,24 +1441,18 @@ def _symbols_in_module(
 
 
 def _find_references(
-    root: Path,
     name: str,
-    project_files: list[Path],
-    file_cache: dict[Path, _ReferenceScanFile] | None = None,
+    reference_rows: list[ReferenceSearchRow],
 ) -> list[ReferenceRow]:
     """
-    Find references to a symbol name across indexed Python files.
+    Reduce stored reference-search rows to plain reference locations.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root used to relativize file paths.
     name : str
         Symbol name to search for.
-    project_files : list[pathlib.Path]
-        Indexed project files to scan.
-    file_cache : dict[pathlib.Path, codira.query.context._ReferenceScanFile] | None, optional
-        Optional in-memory file cache reused across scans.
+    reference_rows : list[codira.types.ReferenceSearchRow]
+        Stored query-time rows to filter.
 
     Returns
     -------
@@ -1467,29 +1461,18 @@ def _find_references(
 
     Notes
     -----
-    The function relies on the indexing phase to define the set of
-    project files, ensuring consistency between indexing and querying. It uses
-    simple string containment, skips import statements, and caps the total
-    number of returned hits.
+    The function preserves the current simple substring containment semantics
+    and global cap while letting the backend own stored source-line retrieval.
     """
     results: list[ReferenceRow] = []
-    if file_cache is None:
-        file_cache = {}
-
-    for path in project_files:
-        cached = _load_reference_scan_file(path, file_cache)
-        if cached is None or name not in cached.text:
+    for file_path, lineno, line_text in reference_rows:
+        if name not in line_text:
             continue
 
-        for lineno, line in cached.searchable_lines:
-            if name not in line:
-                continue
+        results.append((file_path, lineno))
 
-            results.append((cached.file_path, lineno))
-
-            # hard cap (global)
-            if len(results) >= 50:
-                return results
+        if len(results) >= 50:
+            return results
 
     return results
 
@@ -4278,27 +4261,19 @@ def _collect_reference_rows(
     if not include_references:
         return []
 
+    backend = active_index_backend()
     symbol_names = {name for _, _, name, _, _ in top_matches if name}
-    project_files = [
-        path
-        for path in iter_project_files(
-            root,
-            analyzers=active_language_analyzers(),
-        )
-        if path_has_prefix(path, prefix)
-    ]
     top_files = {file_path for _, _, _, file_path, _ in top_matches}
-    file_cache: dict[Path, _ReferenceScanFile] = {}
     test_refs: list[ReferenceRow] = []
     other_refs: list[ReferenceRow] = []
 
     for name in symbol_names:
-        for file_path, lineno in _find_references(
+        stored_rows = backend.find_reference_rows(
             root,
             name,
-            project_files,
-            file_cache=file_cache,
-        ):
+            prefix=prefix,
+        )
+        for file_path, lineno in _find_references(name, stored_rows):
             if file_path in top_files:
                 continue
             ref = (file_path, lineno)

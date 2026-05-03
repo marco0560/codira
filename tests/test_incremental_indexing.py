@@ -133,10 +133,10 @@ class _PythonAnalyzerV4:
         return PythonAnalyzer().analyze_file(path, root)
 
 
-class _SQLiteBackendV14(SQLiteIndexBackend):
+class _SQLiteBackendVNext(SQLiteIndexBackend):
     """SQLite backend stub with a bumped version for runtime tests."""
 
-    version = 14
+    version = SCHEMA_VERSION + 1
 
 
 def test_cli_reports_unexpected_index_errors_without_traceback(
@@ -555,6 +555,89 @@ def test_index_repo_reindexes_changed_files(tmp_path: Path) -> None:
     assert report.deleted == 0
     assert report.embeddings_recomputed > 0
     assert find_symbol(tmp_path, "extra")
+
+
+def test_index_repo_refreshes_stored_reference_scan_rows(tmp_path: Path) -> None:
+    """
+    Keep stored query-time reference rows aligned with file changes and deletes.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts stored non-import scan rows are replaced and removed
+        with their owning file.
+    """
+    module = tmp_path / "pkg" / "sample.py"
+    _write_module(
+        module,
+        "import helper\n" "from pkg import thing\n" "value = helper\n" "helper()\n",
+    )
+
+    init_db(tmp_path)
+    index_repo(tmp_path)
+
+    conn = sqlite3.connect(get_db_path(tmp_path))
+    try:
+        first_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM reference_scan_lines rsl
+            JOIN files f
+              ON rsl.file_id = f.id
+            WHERE f.path = ?
+            """,
+            (str(module),),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    _write_module(
+        module,
+        "import helper\n" "helper()\n",
+    )
+    index_repo(tmp_path)
+
+    conn = sqlite3.connect(get_db_path(tmp_path))
+    try:
+        second_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM reference_scan_lines rsl
+            JOIN files f
+              ON rsl.file_id = f.id
+            WHERE f.path = ?
+            """,
+            (str(module),),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    module.unlink()
+    index_repo(tmp_path)
+
+    conn = sqlite3.connect(get_db_path(tmp_path))
+    try:
+        final_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM reference_scan_lines rsl
+            JOIN files f
+              ON rsl.file_id = f.id
+            WHERE f.path = ?
+            """,
+            (str(module),),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert first_count == 2
+    assert second_count == 1
+    assert final_count == 0
 
 
 def test_index_repo_reuses_unchanged_symbol_embeddings_in_changed_file(
@@ -1931,11 +2014,11 @@ def test_ensure_index_rebuilds_when_backend_inventory_changes(
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(
         "codira.cli.active_index_backend",
-        lambda: _SQLiteBackendV14(),
+        lambda: _SQLiteBackendVNext(),
     )
     monkeypatch.setattr(
         "codira.indexer.active_index_backend",
-        lambda: _SQLiteBackendV14(),
+        lambda: _SQLiteBackendVNext(),
     )
 
     _ensure_index(tmp_path)
@@ -1943,7 +2026,11 @@ def test_ensure_index_rebuilds_when_backend_inventory_changes(
     backend = SQLiteIndexBackend()
 
     assert "Index stale (backend plugin changed)" in captured.err
-    assert backend.load_runtime_inventory(tmp_path) == ("sqlite", "14", 1)
+    assert backend.load_runtime_inventory(tmp_path) == (
+        "sqlite",
+        str(SCHEMA_VERSION + 1),
+        1,
+    )
 
 
 def test_init_db_preserves_existing_commit_metadata(tmp_path: Path) -> None:

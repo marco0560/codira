@@ -44,6 +44,7 @@ if TYPE_CHECKING:
         OverloadArtifact,
     )
     from codira.semantic.embeddings import EmbeddingBackendSpec
+    from codira.types import ReferenceSearchRow
 
 CallRecord = dict[str, str | int]
 CallRow = tuple[int, str, str, str, str, str, int, int]
@@ -351,6 +352,7 @@ def _clear_index_tables(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM callable_refs")
     conn.execute("DELETE FROM call_records")
     conn.execute("DELETE FROM callable_ref_records")
+    conn.execute("DELETE FROM reference_scan_lines")
     conn.execute("DELETE FROM overloads")
     conn.execute("DELETE FROM enum_members")
     conn.execute("DELETE FROM embeddings")
@@ -1921,6 +1923,70 @@ def _flush_embedding_rows(
     return (recomputed, reused)
 
 
+def _reference_scan_rows(path: Path) -> list[ReferenceSearchRow]:
+    """
+    Return deterministic non-import source lines for query-time reference scans.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Source file whose text should be prepared for stored reference scans.
+
+    Returns
+    -------
+    list[codira.types.ReferenceSearchRow]
+        Stored rows as ``(file_path, lineno, line_text)``.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+
+    file_path = str(path)
+    return [
+        (file_path, lineno, line)
+        for lineno, line in enumerate(text.splitlines(), start=1)
+        if not line.strip().startswith(("import ", "from "))
+    ]
+
+
+def _flush_reference_scan_rows(
+    conn: sqlite3.Connection,
+    *,
+    file_id: int,
+    path: Path,
+) -> None:
+    """
+    Persist the stored reference-search surface for one indexed file.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection.
+    file_id : int
+        Owning indexed file identifier.
+    path : pathlib.Path
+        Source file whose text should be stored for later query-time scans.
+
+    Returns
+    -------
+    None
+        Matching non-import lines are inserted in deterministic order.
+    """
+    reference_rows = _reference_scan_rows(path)
+    if not reference_rows:
+        return
+
+    conn.executemany(
+        "INSERT INTO reference_scan_lines"
+        "(file_id, lineno, line_text) VALUES (?, ?, ?)",
+        [
+            (file_id, lineno, line_text)
+            for _file_path, lineno, line_text in reference_rows
+        ],
+    )
+
+
 def _store_analysis(
     conn: sqlite3.Connection,
     file_metadata: FileMetadataSnapshot,
@@ -1993,6 +2059,11 @@ def _store_analysis(
         conn,
         module_id=module_id,
         analysis=analysis,
+    )
+    _flush_reference_scan_rows(
+        conn,
+        file_id=file_id,
+        path=file_metadata.path,
     )
     _flush_persisted_relationship_rows(
         conn,
@@ -2198,6 +2269,7 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
     conn.execute("DELETE FROM symbol_index WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM call_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM callable_ref_records WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM reference_scan_lines WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM files WHERE path = ?", (file_path,))
 
 

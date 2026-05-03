@@ -18,7 +18,6 @@ This module belongs to the **context rendering verification layer** that keeps t
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from codira.query.classifier import build_retrieval_plan, classify_query
@@ -40,7 +39,9 @@ from codira.query.context import (
 )
 
 if TYPE_CHECKING:
-    import pytest
+    from pathlib import Path
+
+    from codira.types import ReferenceSearchRow
 
 
 def test_snippet_from_node_removes_docstring_and_collapses_blank_lines() -> None:
@@ -112,77 +113,34 @@ def test_load_reference_scan_file_caches_non_import_lines(tmp_path: Path) -> Non
     )
 
 
-def test_find_references_reuses_decoded_file_cache_across_symbol_scans(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_find_references_filters_stored_reference_rows() -> None:
     """
-    Reuse decoded file contents across repeated symbol-name scans.
+    Filter stored reference-search rows with stable substring semantics.
 
     Parameters
     ----------
-    tmp_path : pathlib.Path
-        Temporary repository root used to create fixture files.
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to count file-decoding calls.
+    None
 
     Returns
     -------
     None
-        The test asserts each file is decoded once while repeated scans reuse
-        the cached scan view and preserve the reference results.
+        The test asserts matching rows are preserved deterministically.
     """
-    first = tmp_path / "alpha.py"
-    second = tmp_path / "beta.py"
-    first.write_text(
-        "import helper\n" "helper()\n" "other()\n",
-        encoding="utf-8",
-    )
-    second.write_text(
-        "value = other\n" "other()\n",
-        encoding="utf-8",
-    )
-
-    original_read_text = Path.read_text
-    read_counts: dict[Path, int] = {first: 0, second: 0}
-
-    def counting_read_text(
-        self: Path,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
-    ) -> str:
-        if self in read_counts:
-            read_counts[self] += 1
-        return original_read_text(
-            self,
-            encoding=encoding,
-            errors=errors,
-            newline=newline,
-        )
-
-    monkeypatch.setattr(Path, "read_text", counting_read_text)
-    cache: dict[Path, _ReferenceScanFile] = {}
-    helper_refs = _find_references(
-        tmp_path,
-        "helper",
-        [first, second],
-        file_cache=cache,
-    )
-    other_refs = _find_references(
-        tmp_path,
-        "other",
-        [first, second],
-        file_cache=cache,
-    )
-
-    assert helper_refs == [(str(first), 2)]
-    assert other_refs == [
-        (str(first), 3),
-        (str(second), 1),
-        (str(second), 2),
+    rows: list[ReferenceSearchRow] = [
+        ("/tmp/alpha.py", 2, "helper()"),
+        ("/tmp/alpha.py", 3, "other()"),
+        ("/tmp/beta.py", 1, "value = other"),
+        ("/tmp/beta.py", 2, "other()"),
     ]
-    assert read_counts == {first: 1, second: 1}
+    helper_refs = _find_references("helper", rows)
+    other_refs = _find_references("other", rows)
+
+    assert helper_refs == [("/tmp/alpha.py", 2)]
+    assert other_refs == [
+        ("/tmp/alpha.py", 3),
+        ("/tmp/beta.py", 1),
+        ("/tmp/beta.py", 2),
+    ]
 
 
 def test_append_main_context_sections_separates_enriched_blocks(tmp_path: Path) -> None:
