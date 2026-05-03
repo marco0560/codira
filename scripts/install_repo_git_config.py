@@ -47,6 +47,8 @@ def git_alias_entries() -> list[tuple[str, str]]:
     return [
         ("core.hooksPath", ".githooks"),
         ("commit.template", ".gitmessage"),
+        ("commit.gpgsign", "true"),
+        ("commit.verbose", "true"),
         ("pull.ff", "only"),
         ("pull.rebase", "false"),
         ("rebase.autostash", "true"),
@@ -57,23 +59,14 @@ def git_alias_entries() -> list[tuple[str, str]]:
         ("alias.lg", "log --oneline --graph --decorate -50"),
         (
             "alias.check",
-            ("!bash scripts/run_with_repo_python.sh " "scripts/validate_repo.py"),
+            "!bash scripts/run_with_repo_python.sh scripts/validate_repo.py",
         ),
-        (
-            "alias.fix",
-            (
-                "!bash scripts/run_with_repo_python.sh "
-                "scripts/run_repo_tool.py ruff check . --fix"
-            ),
-        ),
+        ("alias.fix", "!bash scripts/run_repo_tool.py ruff check . --fix"),
         (
             "alias.clean-repo",
             "!bash scripts/run_with_repo_python.sh scripts/clean_repo.py",
         ),
-        (
-            "alias.clean-repo-dry",
-            "!python scripts/clean_repo.py --dry-run",
-        ),
+        ("alias.clean-repo-dry", "!python scripts/clean_repo.py --dry-run"),
         (
             "alias.re-clean",
             "!git clean-repo && git gen-issues && git gen-miles && git txz",
@@ -103,37 +96,51 @@ def git_alias_entries() -> list[tuple[str, str]]:
         (
             "alias.gen-issues",
             (
-                "!f(){ rm -f issues.json; timeout 10s gh api graphql "
+                "!f() { rm -f issues.json &> /dev/null; timeout 10s gh api graphql "
                 '-f query=\'query {repository(owner: "marco0560", '
                 'name: "codira") {issues(first: 100, states: OPEN, '
-                "orderBy: {field: CREATED_AT, direction: ASC}) {nodes "
-                "{number, title, body, url, labels(first: 20) "
-                "{nodes {name}}, milestone {number, title}, comments "
-                "{totalCount}}}}}' > issues.json; }; f"
+                "orderBy: {field: CREATED_AT, direction: ASC}) {totalCount "
+                "pageInfo {hasNextPage endCursor} nodes {number title body url "
+                "state createdAt updatedAt author {login} assignees(first: 20) "
+                "{nodes {login}} labels(first: 20) {nodes {name}} milestone "
+                "{number title} comments {totalCount}}}}}' > issues.json; }; f"
             ),
         ),
         (
             "alias.gen-miles",
             (
-                "!f() { rm -f milestones.json; timeout 10s gh api graphql "
+                "!f() { rm -f milestones.json &> /dev/null; timeout 10s gh api graphql "
                 '-f query=\'query {repository(owner: "marco0560", '
                 'name: "codira") {milestones(first: 20, states: OPEN, '
-                "orderBy: {field: DUE_DATE, direction: ASC}) "
-                "{nodes {number, title, dueOn, progressPercentage, issues(first: 100) "
-                "{nodes {number, title, state, labels(first: 20) "
-                "{nodes {name}}}}}}}}' > milestones.json ; }; f"
+                "orderBy: {field: DUE_DATE, direction: ASC}) {totalCount pageInfo "
+                "{hasNextPage endCursor} nodes {number title description dueOn "
+                "progressPercentage issues(first: 100) {totalCount pageInfo "
+                "{hasNextPage endCursor} nodes {number title url state createdAt "
+                "updatedAt labels(first: 20) { nodes {name}}}}}}}}' > milestones.json; }; f"
             ),
         ),
         (
             "alias.txz",
             (
-                '!f(){ name="${1:-repo}"; XZ_OPT="-9e -T0" tar '
-                '--exclude=".git" --exclude="*.tar.xz" --exclude=".codira" '
-                '--exclude=".venv" --exclude="node_modules" '
-                '--exclude="__pycache__" '
-                "--transform='s,^\\.$,repo,' "
-                "--transform='s,^\\./,repo/,' "
-                '-cJf "$PWD/$name.tar.xz" .; }; f'
+                '!f(){ name="${1:-repo}"; tmp="$(mktemp -d)"; '
+                'trap \'rm -rf "$tmp"\' EXIT; mkdir -p "$tmp/repo"; '
+                'git ls-files -z | XZ_OPT="-9e -T0" tar --null -T - -cJf '
+                "\"$PWD/$name.tar.xz\" --transform='s,^,repo/,'; }; f"
+            ),
+        ),
+        (
+            "alias.gen-zip-common",
+            (
+                '!f() { name="${1:-guidelines}"; tmp="$(mktemp -d)"; '
+                'trap \'rm -rf "$tmp"\' EXIT; mkdir -p "$tmp/$name"; '
+                '[ -f "$HOME/OneDrive/Documenti/Fontshow/Comuni/chatgpt_guidelines.md" ] '
+                '&& cp -f "$HOME/OneDrive/Documenti/Fontshow/Comuni/chatgpt_guidelines.md" "$tmp/$name/"; '
+                '[ -f "$HOME/OneDrive/Documenti/Fontshow/Comuni/patch_discipline.md" ] '
+                '&& cp -f "$HOME/OneDrive/Documenti/Fontshow/Comuni/patch_discipline.md" "$tmp/$name/"; '
+                '[ -f "$HOME/OneDrive/Documenti/Fontshow/Comuni/anti-hallucination.md" ] '
+                '&& cp -f "$HOME/OneDrive/Documenti/Fontshow/Comuni/anti-hallucination.md" "$tmp/$name/"; '
+                'XZ_OPT="-9e -T0" tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 '
+                '--numeric-owner -C "$tmp" -cJf "$PWD/$name.tar.xz" "$name"; }; f'
             ),
         ),
         ("alias.release-audit", "!bash scripts/release_audit.sh"),

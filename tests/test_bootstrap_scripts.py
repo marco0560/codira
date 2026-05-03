@@ -1444,6 +1444,7 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
         "alias.docs-build",
         "alias.gen-issues",
         "alias.gen-miles",
+        "alias.gen-zip-common",
         "alias.txz",
         "alias.release-audit",
         "alias.release-check",
@@ -1461,8 +1462,7 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
         "!bash scripts/run_with_repo_python.sh -m mkdocs build --strict"
     )
     assert "rsync" not in entries["alias.txz"]
-    assert "--transform='s,^\\.$,repo,'" in entries["alias.txz"]
-    assert "--transform='s,^\\./,repo/,'" in entries["alias.txz"]
+    assert "--transform='s,^,repo/,'" in entries["alias.txz"]
     assert "alias.ctx" not in entries
     assert "user.name" not in entries
     assert "user.email" not in entries
