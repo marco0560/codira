@@ -1,3 +1,10 @@
+## [1.21.8](https://github.com/marco0560/codira/compare/v1.21.7...v1.21.8) (2026-05-03)
+
+
+### Bug Fixes
+
+* **dev:** aligned AGENTS file to repo structure ([b32cb32](https://github.com/marco0560/codira/commit/b32cb3220df6aa6ea0c0238861041e5fe823f396))
+
 ## [1.21.7](https://github.com/marco0560/codira/compare/v1.21.6...v1.21.7) (2026-05-02)
 
 
