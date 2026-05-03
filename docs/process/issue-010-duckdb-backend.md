@@ -125,7 +125,80 @@ Validation target:
 
 Status:
 
-* pending
+* complete
+
+Completed work:
+
+* audited the backend protocol in `src/codira/contracts.py`
+* audited query-facing helpers in `src/codira/query/exact.py`
+* audited semantic retrieval entry points in `src/codira/semantic/search.py`
+* audited index freshness and rebuild logic in `src/codira/cli.py`
+* cross-checked contract coverage in:
+  * `tests/test_contracts.py`
+  * `tests/test_memory_backend.py`
+* cross-checked current backend documentation in:
+  * `docs/architecture/storage-backends.md`
+  * `docs/plugins/backends.md`
+
+Minimal contract delta list:
+
+* add an explicit backend capability declaration surface to `IndexBackend`
+  covering issue `#10` requirements such as:
+  * persistence mode
+  * transaction support
+  * concurrency model
+  * storage locality
+* remove remaining SQLite-shaped public helper signatures from
+  `src/codira/query/exact.py` by changing `conn: sqlite3.Connection | None`
+  to a backend-neutral connection type
+* update `TreeQueryRequest` in `src/codira/query/exact.py` to use a
+  backend-neutral connection field
+* keep `src/codira/semantic/search.py` unchanged because it already delegates
+  through `active_index_backend()`
+
+Remaining SQLite-shaped query and activation paths:
+
+* `src/codira/query/exact.py` still imports `sqlite3` under `TYPE_CHECKING`
+  and publishes SQLite-specific connection types in its helper API and
+  request object docstrings
+* `src/codira/cli.py` still performs SQLite-specific index inspection inside
+  `_inspect_index_rebuild_request()` through:
+  * `get_db_path(root)`
+  * `sqlite3.connect(db_path)`
+  * `SELECT name FROM sqlite_master ...`
+  * `init_db(root)` for reset/rebuild
+* `src/codira/cli.py` still catches `sqlite3.Error` in index refresh flows,
+  which prevents fully backend-neutral activation behavior
+
+DuckDB implementation implications:
+
+* indexing orchestration in `src/codira/indexer.py` is already backend-neutral
+  enough to support a second production backend
+* query delegation in `src/codira/query/exact.py` is structurally correct, so
+  the main remaining work is API-neutrality and backend coverage, not
+  wholesale query redesign
+* CLI index freshness and rebuild logic must be refactored before DuckDB can
+  become a first-class active backend for operator-facing commands
+* current capability export only describes analyzers and retrieval producers;
+  backend capability declarations do not yet exist and must be introduced to
+  satisfy the issue requirements explicitly
+
+Deviations from plan:
+
+* none
+
+Validation run:
+
+* `.venv/bin/codira index --explain`
+* targeted `codira ctx` retrieval for backend/query coupling
+* targeted source inspection with `sed`
+* targeted symbol and text inspection with `rg`
+
+Remaining risks:
+
+* backend capability declaration may expand into schema or CLI output changes
+* CLI rebuild/reset semantics are currently tied to SQLite storage helpers and
+  may require a new backend-owned freshness/reset abstraction
 
 ### Phase 2
 
