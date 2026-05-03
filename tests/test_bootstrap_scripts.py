@@ -63,6 +63,7 @@ class _InstallHelperModule(Protocol):
         pathlib.Path
             Directory containing first-party package repositories.
         """
+        ...
 
     def editable_core_requirement(
         self,
@@ -85,6 +86,7 @@ class _InstallHelperModule(Protocol):
         str
             Editable requirement string for the core package.
         """
+        ...
 
     def editable_package_paths(
         self,
@@ -107,6 +109,7 @@ class _InstallHelperModule(Protocol):
         tuple[pathlib.Path, ...]
             Editable package paths in deterministic order.
         """
+        ...
 
     def bundle_package_path(
         self,
@@ -129,6 +132,7 @@ class _InstallHelperModule(Protocol):
         pathlib.Path
             Bundle package path.
         """
+        ...
 
     def non_bundle_package_paths(
         self,
@@ -151,6 +155,7 @@ class _InstallHelperModule(Protocol):
         tuple[pathlib.Path, ...]
             First-party package paths excluding the bundle package.
         """
+        ...
 
     def build_install_commands(
         self,
@@ -169,6 +174,7 @@ class _InstallHelperModule(Protocol):
         tuple[tuple[str, ...], ...]
             Editable-install command plan.
         """
+        ...
 
 
 class _PackageInventoryModule(Protocol):
@@ -190,6 +196,7 @@ class _PackageInventoryModule(Protocol):
         tuple[pathlib.Path, ...]
             Package paths in deterministic order.
         """
+        ...
 
 
 class _GitConfigInstallModule(Protocol):
@@ -208,6 +215,7 @@ class _GitConfigInstallModule(Protocol):
         list[tuple[str, str]]
             Git config key-value entries to install.
         """
+        ...
 
 
 class _BuildHelperModule(Protocol):
@@ -237,6 +245,7 @@ class _BuildHelperModule(Protocol):
         tuple[str, ...]
             Wheel-validation command arguments.
         """
+        ...
 
     def build_all_argv(
         self,
@@ -262,6 +271,7 @@ class _BuildHelperModule(Protocol):
         tuple[tuple[str, ...], ...]
             Complete wheel-validation command plan.
         """
+        ...
 
     def cleanup_build_artifacts(self, package_path: Path) -> None:
         """
@@ -277,6 +287,7 @@ class _BuildHelperModule(Protocol):
         None
             Matching package-local artifacts are removed in place.
         """
+        ...
 
 
 class _ReleaseInstallRehearsalModule(Protocol):
@@ -306,6 +317,7 @@ class _ReleaseInstallRehearsalModule(Protocol):
         tuple[str, ...]
             First-party wheel-rehearsal command arguments.
         """
+        ...
 
     def build_root_wheel_argv(
         self,
@@ -331,6 +343,7 @@ class _ReleaseInstallRehearsalModule(Protocol):
         tuple[str, ...]
             Core wheel-rehearsal command arguments.
         """
+        ...
 
     def discover_wheel_paths(self, wheel_dir: Path) -> tuple[Path, ...]:
         """
@@ -346,6 +359,7 @@ class _ReleaseInstallRehearsalModule(Protocol):
         tuple[pathlib.Path, ...]
             Built wheel paths in deterministic order.
         """
+        ...
 
     def build_install_wheels_argv(
         self,
@@ -371,6 +385,7 @@ class _ReleaseInstallRehearsalModule(Protocol):
         tuple[str, ...]
             Installed-wheel rehearsal install command arguments.
         """
+        ...
 
     def build_probe_argv(self, *, python: str) -> tuple[str, ...]:
         """
@@ -386,6 +401,7 @@ class _ReleaseInstallRehearsalModule(Protocol):
         tuple[str, ...]
             Installed-wheel discovery probe command arguments.
         """
+        ...
 
 
 class _ReleaseArtifactBuildModule(Protocol):
@@ -405,6 +421,7 @@ class _ReleaseArtifactBuildModule(Protocol):
         tuple[pathlib.Path, ...]
             Release package roots in deterministic order.
         """
+        ...
 
     def build_artifact_argv(
         self,
@@ -427,6 +444,7 @@ class _ReleaseArtifactBuildModule(Protocol):
         tuple[str, ...]
             Release artifact command arguments.
         """
+        ...
 
     def artifact_check_argv(
         self,
@@ -449,6 +467,7 @@ class _ReleaseArtifactBuildModule(Protocol):
         tuple[str, ...]
             Twine-check command arguments.
         """
+        ...
 
     def build_release_plan(
         self,
@@ -471,6 +490,7 @@ class _ReleaseArtifactBuildModule(Protocol):
         tuple[tuple[str, ...], ...]
             Ordered release-artifact command plan.
         """
+        ...
 
 
 class _BenchmarkConfigFactory(Protocol):
@@ -509,6 +529,7 @@ class _BenchmarkConfigFactory(Protocol):
         object
             Benchmark configuration accepted by the helper module.
         """
+        ...
 
 
 class _ReleaseBenchmarkModule(Protocol):
@@ -533,6 +554,7 @@ class _ReleaseBenchmarkModule(Protocol):
         tuple[str, ...]
             Command strings passed to Hyperfine.
         """
+        ...
 
     def build_hyperfine_argv(self, config: object) -> tuple[str, ...]:
         """
@@ -548,6 +570,7 @@ class _ReleaseBenchmarkModule(Protocol):
         tuple[str, ...]
             Complete Hyperfine argv.
         """
+        ...
 
     def resolve_output_path(self, root: Path, output: Path) -> Path:
         """
@@ -565,6 +588,7 @@ class _ReleaseBenchmarkModule(Protocol):
         pathlib.Path
             Absolute output path.
         """
+        ...
 
 
 class _BenchmarkTimingModule(Protocol):
@@ -585,6 +609,7 @@ class _BenchmarkTimingModule(Protocol):
         tuple[str, ...]
             First-party analyzer and backend distribution names.
         """
+        ...
 
     def benchmark_metadata(
         self,
@@ -610,6 +635,7 @@ class _BenchmarkTimingModule(Protocol):
         dict[str, object]
             JSON-serializable benchmark metadata.
         """
+        ...
 
 
 class _BenchmarkCampaignModule(Protocol):
@@ -632,6 +658,7 @@ class _BenchmarkCampaignModule(Protocol):
         object
             Configured parser object.
         """
+        ...
 
     def load_manifest(self, path: Path) -> tuple[object, ...]:
         """
@@ -647,6 +674,7 @@ class _BenchmarkCampaignModule(Protocol):
         tuple[object, ...]
             Repository benchmark targets.
         """
+        ...
 
     MANIFEST_BENCHMARK_SUBCOMMANDS: frozenset[str]
 
@@ -670,6 +698,7 @@ class _BenchmarkCampaignModule(Protocol):
         list[dict[str, object]]
             JSON-serializable command plan rows.
         """
+        ...
 
     def resolve_repositories(
         self,
@@ -691,6 +720,7 @@ class _BenchmarkCampaignModule(Protocol):
         tuple[object, ...]
             Resolved repository benchmark targets.
         """
+        ...
 
     def main(self) -> int:
         """
@@ -705,6 +735,7 @@ class _BenchmarkCampaignModule(Protocol):
         int
             Process exit status.
         """
+        ...
 
 
 class _ResolvedBenchmarkRepository(Protocol):
@@ -731,6 +762,7 @@ class _SplitRepoVerificationModule(Protocol):
         tuple[str, ...]
             Split repository names in deterministic validation order.
         """
+        ...
 
     def build_repo_validation_commands(
         self,
@@ -756,6 +788,7 @@ class _SplitRepoVerificationModule(Protocol):
         tuple[tuple[str, ...], ...]
             Validation command plan for one exported split repository.
         """
+        ...
 
 
 class _BootstrapHelperModule(Protocol):
@@ -785,6 +818,7 @@ class _BootstrapHelperModule(Protocol):
         list[scripts.bootstrap_dev_environment.CommandSpec]
             Ordered bootstrap command plan.
         """
+        ...
 
 
 class _RepoToolRunnerModule(Protocol):
@@ -810,6 +844,7 @@ class _RepoToolRunnerModule(Protocol):
         pathlib.Path
             Tool-state root outside the repository.
         """
+        ...
 
     def tool_environment(
         self,
@@ -832,6 +867,7 @@ class _RepoToolRunnerModule(Protocol):
         dict[str, str]
             Child process environment.
         """
+        ...
 
     def create_pytest_basetemp(self, state_root: Path) -> Path:
         """
@@ -847,6 +883,7 @@ class _RepoToolRunnerModule(Protocol):
         pathlib.Path
             Unique pytest base temporary directory path.
         """
+        ...
 
     def build_tool_argv(
         self,
@@ -878,6 +915,7 @@ class _RepoToolRunnerModule(Protocol):
         tuple[str, ...]
             Complete command argument vector.
         """
+        ...
 
     def split_black_serial_args(
         self,
@@ -896,6 +934,7 @@ class _RepoToolRunnerModule(Protocol):
         tuple[tuple[str, ...], list[str]]
             Black options and path targets.
         """
+        ...
 
     def run_black_serial(
         self,
@@ -921,6 +960,7 @@ class _RepoToolRunnerModule(Protocol):
         int
             Exit status from the serial Black run.
         """
+        ...
 
 
 class _ValidationHelperModule(Protocol):
@@ -946,6 +986,7 @@ class _ValidationHelperModule(Protocol):
         tuple[tuple[str, ...], ...]
             Ordered validation command vectors.
         """
+        ...
 
     def run_validation(
         self,
@@ -964,6 +1005,7 @@ class _ValidationHelperModule(Protocol):
         int
             Validation exit status.
         """
+        ...
 
 
 def _load_first_party_package_inventory() -> _PackageInventoryModule:
@@ -1286,6 +1328,7 @@ class _EmbeddingStartupBenchmarkModule(Protocol):
         dict[str, object]
             Structured timing report.
         """
+        ...
 
 
 def _load_benchmark_campaign_helper() -> _BenchmarkCampaignModule:
