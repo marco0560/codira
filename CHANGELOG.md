@@ -1,3 +1,10 @@
+# [1.22.0](https://github.com/marco0560/codira/compare/v1.21.8...v1.22.0) (2026-05-03)
+
+
+### Features
+
+* **query:** persist ctx reference scan rows ([325491f](https://github.com/marco0560/codira/commit/325491f28764588fa3886fbada641df80f55fe90))
+
 ## [1.21.8](https://github.com/marco0560/codira/compare/v1.21.7...v1.21.8) (2026-05-03)
 
 
