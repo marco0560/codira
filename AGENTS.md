@@ -57,7 +57,176 @@ Always use the highest available level:
 
 Lower levels are fallback only.
 
-## 5. Core Principles
+## 5. Repository Map (Orientation Layer)
+
+This section provides a **structural map of the Codira repository grounded in actual filesystem layout**.
+
+It is **not a substitute for `codira-workflow`**.
+Use it only to:
+
+- identify relevant modules quickly
+- select appropriate `--prefix` scope
+- understand subsystem boundaries before detailed inspection
+
+### 5.1. Top-Level Layout
+
+| Path          | Purpose                                          |
+|---------------|--------------------------------------------------|
+| `src/codira/` | Core library and CLI implementation              |
+| `packages/`   | First-party plugin packages (analyzers, backend) |
+| `tests/`      | Authoritative behavior and contract validation   |
+| `docs/`       | Documentation, architecture, ADRs                |
+| `scripts/`    | Development and process tooling                  |
+| `.github/`    | CI workflows                                     |
+| `.artifacts/` | Generated artifacts (e.g. benchmarks)            |
+
+### 5.2. Core System (`src/codira/`)
+
+The core implementation resides under `src/codira/`.
+
+#### Entry points
+
+| File         | Role                    |
+|--------------|-------------------------|
+| `cli.py`     | CLI command entry point |
+| `indexer.py` | Index orchestration     |
+
+#### Analyzers (built-in)
+
+| Path                  | Responsibility  |
+|-----------------------|-----------------|
+| `analyzers/python.py` | Python analysis |
+| `analyzers/c.py`      | C analysis      |
+| `analyzers/bash.py`   | Bash analysis   |
+| `analyzers/json.py`   | JSON analysis   |
+
+#### Query subsystem
+
+| Path                        | Responsibility       |
+|-----------------------------|----------------------|
+| `query/exact.py`            | exact symbol lookup  |
+| `query/context.py`          | context retrieval    |
+| `query/structural.py`       | structural queries   |
+| `query/graph_enrichment.py` | graph augmentation   |
+| `query/producers.py`        | result assembly      |
+| `query/classifier.py`       | query classification |
+| `query/signals.py`          | query signals        |
+
+#### Semantic / embeddings
+
+| Path                     | Responsibility       |
+|--------------------------|----------------------|
+| `semantic/embeddings.py` | embedding generation |
+| `semantic/search.py`     | semantic retrieval   |
+
+#### Core infrastructure
+
+| Path                        | Responsibility                 |
+|-----------------------------|--------------------------------|
+| `scanner.py`                | filesystem scanning            |
+| `registry.py`               | plugin discovery and selection |
+| `contracts.py`              | backend/analyzer interfaces    |
+| `models.py`                 | core data models               |
+| `types.py`                  | shared type definitions        |
+| `storage.py`                | storage abstraction layer      |
+| `sqlite_backend_support.py` | SQLite-specific support        |
+| `prefix.py`                 | prefix filtering logic         |
+| `path_resolution.py`        | path normalization             |
+| `normalization.py`          | symbol normalization           |
+| `parser_ast.py`             | AST parsing utilities          |
+| `docstring.py`              | docstring validation           |
+
+#### Schema
+
+| Path            | Responsibility     |
+|-----------------|--------------------|
+| `schema.py`     | schema handling    |
+| `schema/*.json` | schema definitions |
+
+#### Miscellaneous
+
+| Path                        | Responsibility         |
+|-----------------------------|------------------------|
+| `capabilities.py`           | capabilities reporting |
+| `utils.py`                  | shared utilities       |
+| `version.py`, `_version.py` | version metadata       |
+| `prompts/`                  | prompt templates       |
+
+### 5.3. Plugins (`packages/`)
+
+First-party plugins are distributed as separate packages.
+
+| Type      | Examples                | Responsibility             |
+|-----------|-------------------------|----------------------------|
+| Analyzers | `codira-analyzer-*`     | language-specific analysis |
+| Backend   | `codira-backend-sqlite` | persistent storage backend |
+
+Notes:
+
+- Plugins are discovered via the registry (`registry.py`)
+- They may be installed independently from the core
+
+### 5.4. Test Layer
+
+| Path     | Role                                   |
+|----------|----------------------------------------|
+| `tests/` | authoritative behavioral specification |
+
+Important:
+
+- Tests may contain **full implementations not used in production**
+- Example: in-memory backend used for contract validation
+
+Tests override assumptions.
+
+### 5.5. CLI → Module Mapping
+
+| Command   | Primary modules                                |
+|-----------|------------------------------------------------|
+| `index`   | `indexer.py`, `scanner.py`, analyzers          |
+| `sym`     | `query/exact.py`                               |
+| `calls`   | `query/graph_enrichment.py`                    |
+| `refs`    | `query/graph_enrichment.py`                    |
+| `emb`     | `semantic/embeddings.py`, `semantic/search.py` |
+| `ctx`     | `query/context.py`                             |
+| `audit`   | `docstring.py`                                 |
+| `cov`     | analyzer + indexer                             |
+| `plugins` | `registry.py`                                  |
+| `caps`    | `capabilities.py`                              |
+
+### 5.6. High-Value Entry Points
+
+For any investigation:
+
+1. CLI command (`cli.py`)
+2. Indexer (`indexer.py`)
+3. Query subsystem (`query/`)
+4. Analyzer (if language-specific)
+5. Tests
+
+Typical flow:
+
+```text
+cli → indexer → query → analyzer → tests
+```
+
+### 5.7. Orientation Constraints
+
+- `src/codira/` is the authoritative implementation root
+- `packages/` contains pluggable extensions, not core logic
+- `tests/` may contain non-production implementations
+- Always verify behavior against tests
+- Use this map only to narrow scope before using `codira`
+
+### Execution Environment
+
+- Commands are typically executed from the repository-local virtual environment (`.venv`)
+- Prefer explicit paths (e.g. `.venv/bin/codira`) over relying on PATH
+- Do not assume global tool availability
+- Plugins are discovered via entry points and may live outside the repository.
+- First-party plugins are located under `packages/`.
+
+## 6. Core Principles
 
 - Deterministic: reproducible, verifiable outputs
 - Minimal: smallest correct change
@@ -70,7 +239,7 @@ Forbidden unless explicitly required:
 - API changes
 - stylistic churn
 
-## 6. Task Classification
+## 7. Task Classification
 
 A task is non-trivial if it involves:
 
@@ -79,7 +248,7 @@ A task is non-trivial if it involves:
 - ambiguity
 - potential behavioral impact
 
-## 7. Execution Workflow (MANDATORY)
+## 8. Execution Workflow (MANDATORY)
 
 For non-trivial tasks use `deterministic-change-workflow`
 
@@ -94,11 +263,16 @@ Do not skip steps.
 
 If planning is ambiguous → use `planning-refinement-gate`.
 
-## 8. Codira Exploration (MANDATORY)
+## 9. Codira Exploration (MANDATORY)
 
-If the repository provides `codira`:
+The repository provides `codira`:
 
 → the `codira-workflow` skill MUST be used
+
+### CLI Invocation
+
+- Prefer the installed CLI executable (`.venv/bin/codira`)
+- Do not assume `python -m codira` is supported
 
 ### Rules
 
@@ -122,7 +296,7 @@ If `codira` is available and not used:
 → report violation
 → restart using `codira-workflow`
 
-## 9. Skills Usage
+## 10. Skills Usage
 
 If a required skill exists in `~/.codex/skills`:
 
@@ -147,13 +321,13 @@ When a skill fully defines a workflow:
 → the skill replaces any equivalent procedural instructions in this document
 → this document defines only constraints and enforcement
 
-## 10. Change Strategy
+## 11. Change Strategy
 
 - Prefer small, atomic changes
 - One subsystem at a time
 - Separate refactor / feature / fix
 
-## 11. Validation Contract
+## 12. Validation Contract
 
 All checks MUST pass.
 
@@ -179,7 +353,13 @@ Rules:
 - do not weaken tests
 - do not ignore errors
 
-## 12. Test Contract
+Notes:
+
+- pre-commit is the authoritative validation entry point
+- It enforces ruff, formatting, typing, and other checks
+- Do not run individual tools unless diagnosing failures
+
+## 13. Test Contract
 
 Tests define behavior.
 
@@ -196,7 +376,7 @@ Forbidden:
 
 If tests contradict assumptions → tests win.
 
-## 13. Strict Patch Discipline
+## 14. Strict Patch Discipline
 
 All changes MUST include:
 
@@ -214,7 +394,7 @@ If OLD block cannot be matched:
 
 → STOP
 
-## 14. Architecture Constraints
+## 15. Architecture Constraints
 
 Respect separation of concerns:
 
@@ -231,13 +411,13 @@ Rules:
 - do not bypass abstractions
 - do not duplicate logic
 
-## 15. Build & Artifacts
+## 16. Build & Artifacts
 
 - do not edit generated files
 - modify generators instead
 - keep build outputs consistent
 
-## 16. Coding Standards
+## 17. Coding Standards
 
 ### Python
 
@@ -255,13 +435,13 @@ NumPy style required:
 
 Use `numpy-docstring-enforcer`
 
-## 17. Error Handling
+## 18. Error Handling
 
 - fail fast
 - catch only expected exceptions
 - avoid broad `except Exception`
 
-## 18. Regression Policy
+## 19. Regression Policy
 
 Bugs include:
 
@@ -270,13 +450,13 @@ Bugs include:
 - CLI/output changes
 - optional feature regressions
 
-## 19. Debugging Discipline
+## 20. Debugging Discipline
 
 - reproduce first
 - identify root cause
 - avoid speculative fixes
 
-## 20. Commit Contract
+## 21. Commit Contract
 
 Use `commit-block-generator`
 
@@ -291,7 +471,7 @@ Body must include:
 
 Do NOT include toolchain status lines.
 
-## 21. Roadmap Snapshots
+## 22. Roadmap Snapshots
 
 Use `roadmap-snapshots` for:
 
@@ -304,7 +484,7 @@ Rules:
 - verify schema and completeness
 - do not infer missing fields
 
-## 22. Anti-Patterns (Forbidden)
+## 23. Anti-Patterns (Forbidden)
 
 - guessing code
 - blind scanning
@@ -312,7 +492,7 @@ Rules:
 - silent failures
 - skipping validation
 
-## 23. Session Stability
+## 24. Session Stability
 
 Monitor:
 
@@ -324,24 +504,24 @@ If detected:
 → STOP
 → Recommend reset
 
-## 24. Heuristics
+## 25. Heuristics
 
 - small changes can have wide effects
 - complex code encodes edge cases
 - correctness > elegance
 
-## 25. Default Interaction Mode
+## 26. Default Interaction Mode
 
 - minimal prose
 - command-oriented
 - no verbosity unless requested
 
-## 26. Meta Rule
+## 27. Meta Rule
 
 Do not reference this contract in responses.
 Do not explain compliance.
 Only execute.
 
-## 27. When in Doubt
+## 28. When in Doubt
 
 STOP and ask.
