@@ -1,3 +1,10 @@
+## [1.22.1](https://github.com/marco0560/codira/compare/v1.22.0...v1.22.1) (2026-05-03)
+
+
+### Bug Fixes
+
+* **dev:** aligned git alias generation and test to current repo config ([2c3ee94](https://github.com/marco0560/codira/commit/2c3ee9431fccd3c66de10629a317d0402aac51a1))
+
 # [1.22.0](https://github.com/marco0560/codira/compare/v1.21.8...v1.22.0) (2026-05-03)
 
 
