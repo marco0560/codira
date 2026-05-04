@@ -269,7 +269,68 @@ Implement the DuckDB backend lifecycle and persistence/query surfaces.
 
 Status:
 
-* pending
+* complete
+
+Completed work:
+
+* replaced the scaffold-only package module with a real `DuckDBIndexBackend`
+  implementation
+* implemented a DuckDB-specific connection/bootstrap layer in
+  `packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py`
+* kept the DuckDB backend aligned to the existing SQLite backend contract by
+  subclassing `SQLiteIndexBackend`
+* introduced a minimal connection adapter that:
+  * exposes `execute`, `executemany`, `commit`, and `close`
+  * provides cursor-style `fetchone`, `fetchall`, and `lastrowid` behavior
+    required by shared persistence helpers
+* implemented DuckDB-specific storage initialization:
+  * database path under `.codira/index.duckdb`
+  * sequence-backed identifier DDL for tables that require generated integer
+    primary keys
+  * schema metadata writing under `.codira/metadata.json`
+* implemented package-local overrides for:
+  * `initialize`
+  * `open_connection`
+  * `persist_analysis`
+  * `persist_runtime_inventory`
+* kept the inherited SQLite query and persistence surface for methods whose
+  behavior is driven by backend-neutral SQL and the shared helper layer
+* added package-local tests for:
+  * rewritten DuckDB schema DDL
+  * initialization metadata/bootstrap behavior
+  * missing-database initialization through `open_connection`
+
+Implementation choice:
+
+* Phase 3 uses a minimal-subclass strategy rather than forking the full SQLite
+  backend implementation
+* DuckDB-specific behavior is confined to:
+  * dependency loading
+  * connection adaptation
+  * database path and bootstrap
+  * error translation for persistence entry points
+
+Deviations from plan:
+
+* real end-to-end DuckDB execution is not yet validated in this environment
+  because the optional `duckdb` dependency is not installed locally
+* package-local tests therefore use a fake DuckDB module to validate bootstrap
+  and adapter behavior deterministically
+
+Validation run:
+
+* `python -m compileall packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py`
+* `python -m compileall packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py`
+* `.venv/bin/pytest -q packages/codira-backend-duckdb/tests`
+
+Remaining risks:
+
+* runtime compatibility with the real DuckDB Python client still needs
+  end-to-end execution validation once the dependency is installed
+* inherited SQLite query SQL may expose DuckDB-specific behavioral differences
+  only when exercised against a real database file
+* CLI index inspection remains SQLite-shaped and is still deferred to the next
+  integration phase
 
 ### Phase 4
 
