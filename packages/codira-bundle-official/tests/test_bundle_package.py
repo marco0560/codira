@@ -30,4 +30,5 @@ def test_bundle_package_declares_expected_first_party_dependencies() -> None:
         "codira-analyzer-c==1.5.5",
         "codira-analyzer-bash==1.5.0",
         "codira-backend-sqlite==1.5.3",
+        "codira-backend-duckdb==1.5.3",
     ]

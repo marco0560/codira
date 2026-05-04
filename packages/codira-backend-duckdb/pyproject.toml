@@ -3,19 +3,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codira-bundle-official"
-version = "1.5.10"
-description = "Curated first-party plugin bundle for codira"
+name = "codira-backend-duckdb"
+version = "1.5.3"
+description = "First-party DuckDB backend plugin for codira"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "codira[semantic]>=1.5.0,<2.0.0",
-    "codira-analyzer-python==1.5.2",
-    "codira-analyzer-json==1.5.1",
-    "codira-analyzer-c==1.5.5",
-    "codira-analyzer-bash==1.5.0",
-    "codira-backend-sqlite==1.5.3",
-    "codira-backend-duckdb==1.5.3",
+    "codira>=1.5.0,<2.0.0",
+    "duckdb>=1.4,<2.0",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +20,15 @@ test = [
     "pytest",
     "ruff",
 ]
+
+[project.entry-points."codira.backends"]
+duckdb = "codira_backend_duckdb:build_backend"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.black]
 line-length = 88

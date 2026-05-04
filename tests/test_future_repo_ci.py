@@ -75,6 +75,7 @@ def test_future_repo_ci_specs_cover_the_accepted_repository_set() -> None:
         "codira-analyzer-c",
         "codira-analyzer-bash",
         "codira-backend-sqlite",
+        "codira-backend-duckdb",
         "codira-bundle-official",
     ]
 
@@ -120,7 +121,7 @@ def test_package_future_repo_ci_keeps_package_local_validation_uniform() -> None
     None
         The test asserts package CI specs share the same validation commands.
     """
-    package_specs = _load_future_repo_ci_helper().future_repo_ci_specs()[1:6]
+    package_specs = _load_future_repo_ci_helper().future_repo_ci_specs()[1:7]
 
     assert all(
         spec.install == (("python", "-m", "pip", "install", "-e", ".[test]"),)

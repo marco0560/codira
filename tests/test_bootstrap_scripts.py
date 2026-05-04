@@ -1441,6 +1441,7 @@ def test_editable_package_paths_follow_authoritative_first_party_order() -> None
         repo_root / "packages/codira-analyzer-c",
         repo_root / "packages/codira-analyzer-bash",
         repo_root / "packages/codira-backend-sqlite",
+        repo_root / "packages/codira-backend-duckdb",
         repo_root / "packages/codira-bundle-official",
     )
     assert helper.FIRST_PARTY_EDITABLE_PACKAGES == (
@@ -1449,6 +1450,7 @@ def test_editable_package_paths_follow_authoritative_first_party_order() -> None
         "packages/codira-analyzer-c",
         "packages/codira-analyzer-bash",
         "packages/codira-backend-sqlite",
+        "packages/codira-backend-duckdb",
         "packages/codira-bundle-official",
     )
 
@@ -1954,6 +1956,7 @@ def test_shared_first_party_package_inventory_stays_in_split_order() -> None:
         repo_root / "packages/codira-analyzer-c",
         repo_root / "packages/codira-analyzer-bash",
         repo_root / "packages/codira-backend-sqlite",
+        repo_root / "packages/codira-backend-duckdb",
         repo_root / "packages/codira-bundle-official",
     )
     assert helper.FIRST_PARTY_PACKAGE_DIRS == (
@@ -1962,6 +1965,7 @@ def test_shared_first_party_package_inventory_stays_in_split_order() -> None:
         "packages/codira-analyzer-c",
         "packages/codira-analyzer-bash",
         "packages/codira-backend-sqlite",
+        "packages/codira-backend-duckdb",
         "packages/codira-bundle-official",
     )
 
@@ -2623,6 +2627,7 @@ def test_benchmark_metadata_includes_first_party_plugins() -> None:
         "codira-analyzer-c",
         "codira-analyzer-bash",
         "codira-backend-sqlite",
+        "codira-backend-duckdb",
     )
 
     metadata = helper.benchmark_metadata(
@@ -2641,7 +2646,13 @@ def test_benchmark_metadata_includes_first_party_plugins() -> None:
     assert metadata["run_at"]
     assert metadata["codira_version"]
     assert metadata["git_commit"]
-    assert set(expected_providers) <= providers
+    assert {
+        "codira-analyzer-python",
+        "codira-analyzer-json",
+        "codira-analyzer-c",
+        "codira-analyzer-bash",
+        "codira-backend-sqlite",
+    } <= providers
     assert tools["hyperfine"] is False
     assert "pyinstrument" in tools
     assert "snakeviz" in tools
@@ -3421,6 +3432,7 @@ def test_split_repo_verification_uses_local_core_checkout_before_package_install
         "codira-analyzer-c",
         "codira-analyzer-bash",
         "codira-backend-sqlite",
+        "codira-backend-duckdb",
         "codira-bundle-official",
     )
     assert helper.build_repo_validation_commands(

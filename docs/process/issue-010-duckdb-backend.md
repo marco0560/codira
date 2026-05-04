@@ -207,7 +207,60 @@ Scaffold the first-party DuckDB backend package and packaging metadata.
 
 Status:
 
-* pending
+* complete
+
+Completed work:
+
+* created the new first-party package scaffold:
+  * `packages/codira-backend-duckdb/pyproject.toml`
+  * `packages/codira-backend-duckdb/README.md`
+  * `packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py`
+  * `packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py`
+* fixed the package dependency policy to:
+  * `duckdb>=1.4,<2.0`
+* fixed the package version to:
+  * `1.5.3`
+* added the DuckDB backend package to the first-party package inventory in
+  `scripts/first_party_packages.py`
+* added DuckDB to the curated bundle package metadata in:
+  * `packages/codira-bundle-official/pyproject.toml`
+  * `pyproject.toml`
+* added the backend package hint:
+  * `duckdb -> codira-backend-duckdb`
+  in `src/codira/registry.py`
+* added first-party package inventory coverage for DuckDB in:
+  * `scripts/future_repo_ci.py`
+  * `scripts/future_repo_split_manifest.py`
+  * `scripts/verify_exported_split_repos.py`
+  * `scripts/benchmark_timing.py`
+* updated the directly impacted inventory and bundle tests
+
+Scaffold constraints:
+
+* the package currently exposes a registry-compatible scaffold backend only
+* `DuckDBIndexBackend` intentionally fails fast through `BackendError`
+  until lifecycle and query behavior are implemented in later phases
+* the package is discoverable and package-testable, but not yet a usable
+  production backend
+
+Deviations from plan:
+
+* package-local tests needed a source-tree import path insertion because the
+  new package is not installed editably by default in the current environment
+* benchmark metadata tests were kept aligned to installed first-party plugins,
+  while the authoritative first-party inventory now includes DuckDB
+
+Validation run:
+
+* `.venv/bin/pytest -q packages/codira-backend-duckdb/tests packages/codira-bundle-official/tests/test_bundle_package.py tests/test_future_repo_ci.py tests/test_future_repo_split_manifest.py`
+* `.venv/bin/pytest -q tests/test_bootstrap_scripts.py -k "first_party_package_inventory or editable_package_paths or benchmark_metadata_includes_first_party_plugins or split_repo_verification_uses_local_core_checkout"`
+
+Remaining risks:
+
+* the scaffold backend still lacks concrete DuckDB lifecycle, persistence, and
+  query behavior
+* first-party inventory now references DuckDB, so later phases must keep
+  package and tooling metadata synchronized as implementation details land
 
 ### Phase 3
 

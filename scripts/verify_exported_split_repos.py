@@ -33,6 +33,7 @@ PACKAGE_REPOS: tuple[str, ...] = (
     "codira-analyzer-c",
     "codira-analyzer-bash",
     "codira-backend-sqlite",
+    "codira-backend-duckdb",
 )
 BUNDLE_REPO = "codira-bundle-official"
 

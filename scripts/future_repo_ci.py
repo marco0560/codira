@@ -110,6 +110,12 @@ def future_repo_ci_specs() -> tuple[FutureRepoCISpec, ...]:
             validate=package_validate,
         ),
         FutureRepoCISpec(
+            repository="codira-backend-duckdb",
+            purpose="first-party DuckDB backend plugin",
+            install=(("python", "-m", "pip", "install", "-e", ".[test]"),),
+            validate=package_validate,
+        ),
+        FutureRepoCISpec(
             repository="codira-bundle-official",
             purpose="curated first-party bundle package",
             install=(("python", "-m", "pip", "install", "-e", ".[test]"),),

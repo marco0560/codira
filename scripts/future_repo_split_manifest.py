@@ -148,6 +148,16 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
             ),
         ),
         FutureRepoSplitManifest(
+            repository="codira-backend-duckdb",
+            owned_paths=(
+                "packages/codira-backend-duckdb/README.md",
+                "packages/codira-backend-duckdb/pyproject.toml",
+                "packages/codira-backend-duckdb/src/",
+                "packages/codira-backend-duckdb/tests/",
+            ),
+            stays_in_core=("tests/test_plugins.py",),
+        ),
+        FutureRepoSplitManifest(
             repository="codira-bundle-official",
             owned_paths=(
                 "packages/codira-bundle-official/README.md",

@@ -36,6 +36,7 @@ ANALYZER_ENTRY_POINT_GROUP = "codira.analyzers"
 BACKEND_ENTRY_POINT_GROUP = "codira.backends"
 OPTIONAL_BACKEND_PACKAGE_BY_NAME: dict[str, str] = {
     "sqlite": "codira-backend-sqlite",
+    "duckdb": "codira-backend-duckdb",
 }
 OPTIONAL_ANALYZER_PACKAGE_BY_NAME: dict[str, str] = {
     "python": "codira-analyzer-python",

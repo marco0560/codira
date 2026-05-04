@@ -21,7 +21,8 @@ bundle-official = [
   "codira-analyzer-json==1.5.1",
   "codira-analyzer-c==1.5.5",
   "codira-analyzer-bash==1.5.0",
-  "codira-backend-sqlite==1.5.2"
+  "codira-backend-sqlite==1.5.2",
+  "codira-backend-duckdb==1.5.3"
 ]
 
 dev = [
