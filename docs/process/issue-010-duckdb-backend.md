@@ -339,7 +339,54 @@ Integrate DuckDB activation and route core/query logic through the backend.
 
 Status:
 
-* pending
+* complete
+
+Completed work:
+
+* removed SQLite-only backend initialization from `src/codira/cli.py` by
+  routing both:
+  * `codira index`
+  * automatic `_ensure_index()` refreshes
+  through `active_index_backend().initialize(root)`
+* rewrote `_inspect_index_rebuild_request()` in `src/codira/cli.py` to use
+  backend-owned hooks instead of SQLite-only probes:
+  * metadata read via existing CLI metadata helpers
+  * backend connection opening through `active_index_backend()`
+  * runtime inventory via `load_runtime_inventory()`
+  * analyzer inventory via `load_analyzer_inventory()`
+  * indexed file counting via `load_existing_file_hashes()`
+  * backend connection teardown via `close_connection()`
+* removed the remaining SQLite-shaped public connection typing from
+  `src/codira/query/exact.py` by changing the exact-query helper surface and
+  `TreeQueryRequest` to use backend-neutral connection handles
+* expanded CLI error handling in `src/codira/cli.py` to include
+  `codira.contracts.BackendError` so non-SQLite backend failures surface
+  through the existing concise CLI diagnostics
+* added focused regression coverage in `tests/test_incremental_indexing.py`
+  for:
+  * `codira index` using the active backend initialization contract
+  * index freshness inspection using opaque backend connections instead of
+    SQLite-specific connection methods
+
+Deviations from plan:
+
+* the repository-local virtual environment currently imports an installed
+  `codira` package rather than the modified workspace source by default
+* Phase 4 validation therefore used an explicit `PYTHONPATH` pointing at the
+  workspace `src/` trees so the checks exercised the changed code paths
+
+Validation run:
+
+* `PYTHONPATH=src:packages/codira-backend-sqlite/src:packages/codira-backend-duckdb/src .venv/bin/python -m pytest -q tests/test_incremental_indexing.py -k "run_index_initializes_the_active_backend or inspect_index_rebuild_request_uses_backend_connection_contract or ensure_index_rebuilds_when_backend_inventory_changes or ensure_index_missing_db_writes_schema_and_commit_metadata"`
+* `PYTHONPATH=src:packages/codira-backend-sqlite/src:packages/codira-backend-duckdb/src .venv/bin/python -m pytest -q packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py`
+
+Remaining risks:
+
+* default CLI and pytest invocation in the current `.venv` still resolve the
+  installed `codira` package unless the workspace source is installed or
+  added to `PYTHONPATH`
+* full end-to-end active-backend validation with a real DuckDB dependency is
+  still deferred to later phases
 
 ### Phase 5
 

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from codira.capabilities import build_capability_contract
+from codira.contracts import BackendError
 from codira.indexer import (
     CoverageIssue,
     IndexFailure,
@@ -75,9 +76,7 @@ from codira.storage import (
     _read_metadata_file,
     _write_metadata_file,
     acquire_index_lock,
-    get_db_path,
     get_metadata_path,
-    init_db,
     override_storage_root,
 )
 from codira.version import installed_distribution_version, package_version
@@ -86,7 +85,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     import codira.indexer as indexer_types
-    from codira.contracts import BackendGraphMetric, BackendSymbolInventoryItem
+    from codira.contracts import (
+        BackendGraphMetric,
+        BackendSymbolInventoryItem,
+    )
     from codira.types import DocstringIssueRow
 
 GIT_EXE = shutil.which("git") or "git"
@@ -1214,7 +1216,7 @@ def _run_index(
             _render_required_coverage_failure(root, coverage_issues)
         return 2
 
-    init_db(root)
+    active_index_backend().initialize(root)
     report = index_repo(root, full=full)
     _write_index_head_metadata(root)
     if as_json:
@@ -2898,51 +2900,42 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
     ------
     OSError
         If the index files cannot be opened.
-    sqlite3.Error
-        If the SQLite database cannot be queried safely.
+    codira.contracts.BackendError
+        If the active backend cannot be queried safely.
     RuntimeError
         If the on-disk database is structurally invalid.
     ValueError
         If one of the backend validation checks raises a value error.
     """
-    db_path = get_db_path(root)
-    if not db_path.exists():
+    metadata = _read_index_metadata(root)
+    if not metadata:
         return IndexRebuildRequest(
             message="[codira] Index not found — building it now...",
             reset_db=False,
             stderr=False,
         )
 
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.execute("SELECT 1")
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' LIMIT 1"
+    current_commit = _get_head_commit(root)
+    indexed_commit = metadata.get("commit")
+    indexed_schema = metadata.get("schema_version")
+
+    if indexed_schema != str(SCHEMA_VERSION):
+        return IndexRebuildRequest(
+            message="[codira] Index schema changed — rebuilding...",
+            reset_db=True,
+            stderr=True,
         )
-        if cursor.fetchone() is None:
-            msg = "empty or invalid database schema"
-            raise RuntimeError(msg)
 
-        current_commit = _get_head_commit(root)
-        metadata = _read_index_metadata(root)
-        indexed_commit = metadata.get("commit")
-        indexed_schema = metadata.get("schema_version")
+    if current_commit and indexed_commit != current_commit:
+        return IndexRebuildRequest(
+            message="[codira] Index outdated (git commit changed) — rebuilding...",
+            reset_db=True,
+            stderr=True,
+        )
 
-        if indexed_schema != str(SCHEMA_VERSION):
-            return IndexRebuildRequest(
-                message="[codira] Index schema changed — rebuilding...",
-                reset_db=True,
-                stderr=True,
-            )
-
-        if current_commit and indexed_commit != current_commit:
-            return IndexRebuildRequest(
-                message="[codira] Index outdated (git commit changed) — rebuilding...",
-                reset_db=True,
-                stderr=True,
-            )
-
-        backend = active_index_backend()
+    backend = active_index_backend()
+    conn = backend.open_connection(root)
+    try:
         runtime_inventory = backend.load_runtime_inventory(root, conn=conn)
         current_runtime = (str(backend.name), str(backend.version))
         if runtime_inventory is None:
@@ -2970,9 +2963,7 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
                 stderr=True,
             )
 
-        cursor = conn.execute("SELECT COUNT(DISTINCT file_id) FROM symbol_index")
-        indexed_files = cursor.fetchone()[0]
-
+        indexed_files = len(backend.load_existing_file_hashes(root, conn=conn))
         current_files = len(
             list(iter_project_files(root, analyzers=active_language_analyzers()))
         )
@@ -2985,7 +2976,7 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
             )
         return None
     finally:
-        conn.close()
+        backend.close_connection(conn)
 
 
 def _run_locked_index_refresh(
@@ -3011,8 +3002,7 @@ def _run_locked_index_refresh(
         print(request.message, file=sys.stderr)
     else:
         print(request.message)
-    if request.reset_db:
-        init_db(root)
+    active_index_backend().initialize(root)
     index_repo(root)
     _write_index_metadata(root, _build_index_metadata(root))
     print("[codira] Index ready", file=sys.stderr)
@@ -3070,7 +3060,7 @@ def _ensure_index(root: Path) -> None:
     initial_error: Exception | None = None
     try:
         request = _inspect_index_rebuild_request(root)
-    except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
+    except (BackendError, OSError, sqlite3.Error, RuntimeError, ValueError) as error:
         request = None
         initial_error = error
 
@@ -3093,7 +3083,13 @@ def _ensure_index(root: Path) -> None:
         """
         try:
             _run_locked_index_refresh(root, refresh_request)
-        except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
+        except (
+            BackendError,
+            OSError,
+            sqlite3.Error,
+            RuntimeError,
+            ValueError,
+        ) as error:
             print("ERROR: failed to build index automatically")
             print("Run manually: codira index")
             print(f"Details: {error}")
@@ -3104,7 +3100,13 @@ def _ensure_index(root: Path) -> None:
             if initial_error is not None:
                 try:
                     request = _inspect_index_rebuild_request(root)
-                except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
+                except (
+                    BackendError,
+                    OSError,
+                    sqlite3.Error,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
                     _fail_unreadable_index(error)
 
             if request is None:
@@ -3112,7 +3114,13 @@ def _ensure_index(root: Path) -> None:
 
             try:
                 refreshed_request = _inspect_index_rebuild_request(root)
-            except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
+            except (
+                BackendError,
+                OSError,
+                sqlite3.Error,
+                RuntimeError,
+                ValueError,
+            ) as error:
                 _fail_unreadable_index(error)
 
             if refreshed_request is None:
@@ -3120,7 +3128,13 @@ def _ensure_index(root: Path) -> None:
 
             try:
                 _run_locked_index_refresh(root, refreshed_request)
-            except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
+            except (
+                BackendError,
+                OSError,
+                sqlite3.Error,
+                RuntimeError,
+                ValueError,
+            ) as error:
                 print("ERROR: failed to build index automatically")
                 print("Run manually: codira index")
                 print(f"Details: {error}")
@@ -3595,7 +3609,7 @@ def main() -> int:
     except EmbeddingBackendError as exc:
         print(f"[codira] {exc}", file=sys.stderr)
         return 2
-    except (OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+    except (BackendError, OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
         print(
             f"[codira] {type(exc).__name__}: {exc}",
             file=sys.stderr,

@@ -24,7 +24,6 @@ from codira.contracts import BackendRelationQueryRequest, BackendSymbolInventory
 from codira.registry import active_index_backend
 
 if TYPE_CHECKING:
-    import sqlite3
     from pathlib import Path
 
     from codira.types import (
@@ -38,6 +37,7 @@ if TYPE_CHECKING:
 CallEdgeRow = tuple[str, str, str | None, str | None, int]
 CallableRefRow = tuple[str, str, str | None, str | None, int]
 EmbeddingInventoryRow = tuple[str, str, int, int]
+BackendConnection = object
 
 
 @dataclass(frozen=True)
@@ -127,7 +127,7 @@ class TreeQueryRequest:
         Maximum traversal depth below the root.
     max_nodes : int
         Maximum number of rendered nodes including the root.
-    conn : sqlite3.Connection | None
+    conn : object | None
         Existing database connection to reuse.
     """
 
@@ -138,7 +138,7 @@ class TreeQueryRequest:
     prefix: str | None = None
     max_depth: int = 2
     max_nodes: int = 20
-    conn: sqlite3.Connection | None = None
+    conn: BackendConnection | None = None
 
 
 def find_symbol(
@@ -146,7 +146,7 @@ def find_symbol(
     name: str,
     *,
     prefix: str | None = None,
-    conn: sqlite3.Connection | None = None,
+    conn: BackendConnection | None = None,
 ) -> list[SymbolRow]:
     """
     Find exact symbol-name matches in the index.
@@ -159,7 +159,7 @@ def find_symbol(
         Exact symbol name to search for.
     prefix : str | None, optional
         Repo-root-relative path prefix used to restrict symbol files.
-    conn : sqlite3.Connection | None, optional
+    conn : object | None, optional
         Existing database connection to reuse. When omitted, the function
         opens and closes its own connection.
 
@@ -178,7 +178,7 @@ def symbol_inventory(
     prefix: str | None = None,
     include_tests: bool = False,
     limit: int = 1000,
-    conn: sqlite3.Connection | None = None,
+    conn: BackendConnection | None = None,
 ) -> list[BackendSymbolInventoryItem]:
     """
     Return indexed symbols with graph connectivity metrics.
@@ -193,7 +193,7 @@ def symbol_inventory(
         Whether symbols from ``tests`` modules are included.
     limit : int, optional
         Maximum number of rows to return after deterministic sorting.
-    conn : sqlite3.Connection | None, optional
+    conn : object | None, optional
         Existing database connection to reuse. When omitted, the backend
         opens and closes its own connection.
 
@@ -216,7 +216,7 @@ def docstring_issues(
     root: Path,
     *,
     prefix: str | None = None,
-    conn: sqlite3.Connection | None = None,
+    conn: BackendConnection | None = None,
 ) -> list[DocstringIssueRow]:
     """
     Return indexed docstring validation issues.
@@ -227,7 +227,7 @@ def docstring_issues(
         Repository root containing the index database.
     prefix : str | None, optional
         Repo-root-relative path prefix used to restrict issue ownership.
-    conn : sqlite3.Connection | None, optional
+    conn : object | None, optional
         Existing database connection to reuse. When omitted, the function
         opens and closes its own connection.
 
@@ -245,7 +245,7 @@ def find_symbol_overloads(
     root: Path,
     symbol: SymbolRow,
     *,
-    conn: sqlite3.Connection | None = None,
+    conn: BackendConnection | None = None,
 ) -> list[OverloadRow]:
     """
     Return overload metadata attached to one canonical callable symbol.
@@ -256,7 +256,7 @@ def find_symbol_overloads(
         Repository root containing the index database.
     symbol : codira.types.SymbolRow
         Canonical function or method symbol row.
-    conn : sqlite3.Connection | None, optional
+    conn : object | None, optional
         Existing database connection to reuse. When omitted, the function
         opens and closes its own connection.
 
@@ -273,7 +273,7 @@ def find_symbol_enum_members(
     root: Path,
     symbol: SymbolRow,
     *,
-    conn: sqlite3.Connection | None = None,
+    conn: BackendConnection | None = None,
 ) -> list[EnumMemberRow]:
     """
     Return enum-member metadata attached to one canonical enum symbol.
@@ -284,7 +284,7 @@ def find_symbol_enum_members(
         Repository root containing the index database.
     symbol : codira.types.SymbolRow
         Canonical enum symbol row.
-    conn : sqlite3.Connection | None, optional
+    conn : object | None, optional
         Existing database connection to reuse. When omitted, the function
         opens and closes its own connection.
 
@@ -684,7 +684,7 @@ def find_logical_symbols(
     logical_name: str,
     *,
     prefix: str | None = None,
-    conn: sqlite3.Connection | None = None,
+    conn: BackendConnection | None = None,
 ) -> list[SymbolRow]:
     """
     Resolve a logical callable name back to indexed symbol rows.
@@ -699,7 +699,7 @@ def find_logical_symbols(
         Logical symbol identity such as ``helper`` or ``Class.method``.
     prefix : str | None, optional
         Repo-root-relative path prefix used to restrict symbol files.
-    conn : sqlite3.Connection | None, optional
+    conn : object | None, optional
         Existing database connection to reuse. When omitted, the function
         opens and closes its own connection.
 
@@ -722,7 +722,7 @@ def logical_symbol_name(
     root: Path,
     symbol: SymbolRow,
     *,
-    conn: sqlite3.Connection | None = None,
+    conn: BackendConnection | None = None,
 ) -> str:
     """
     Return the logical graph identity for one indexed symbol row.
@@ -733,7 +733,7 @@ def logical_symbol_name(
         Repository root containing the index database.
     symbol : codira.types.SymbolRow
         Indexed symbol row whose logical identity should be resolved.
-    conn : sqlite3.Connection | None, optional
+    conn : object | None, optional
         Existing database connection to reuse. When omitted, the function
         opens and closes its own connection.
 
@@ -749,7 +749,7 @@ def logical_symbol_name(
 def embedding_inventory(
     root: Path,
     *,
-    conn: sqlite3.Connection | None = None,
+    conn: BackendConnection | None = None,
 ) -> list[EmbeddingInventoryRow]:
     """
     Return stored embedding inventory grouped by backend metadata.
@@ -758,7 +758,7 @@ def embedding_inventory(
     ----------
     root : pathlib.Path
         Repository root containing the index database.
-    conn : sqlite3.Connection | None, optional
+    conn : object | None, optional
         Existing database connection to reuse. When omitted, the function
         opens and closes its own connection.
 

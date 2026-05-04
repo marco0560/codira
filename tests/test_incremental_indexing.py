@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from codira_backend_sqlite import SQLiteIndexBackend
 
+import codira.cli as cli_module
 import codira.registry as registry_module
 import codira.storage as storage_module
 from codira.analyzers import PythonAnalyzer
@@ -137,6 +138,190 @@ class _SQLiteBackendVNext(SQLiteIndexBackend):
     """SQLite backend stub with a bumped version for runtime tests."""
 
     version = SCHEMA_VERSION + 1
+
+
+class _RecordingBackendConnection:
+    """Opaque fake backend connection used for CLI integration tests."""
+
+
+class _RecordingBackend:
+    """
+    Backend stub that records CLI integration calls without SQLite semantics.
+
+    Parameters
+    ----------
+    runtime_inventory : tuple[str, str, int] | None, optional
+        Runtime inventory returned by ``load_runtime_inventory``.
+    analyzer_inventory : list[tuple[str, str, str]] | None, optional
+        Analyzer inventory returned by ``load_analyzer_inventory``.
+    file_hashes : dict[str, str] | None, optional
+        Indexed file hashes returned by ``load_existing_file_hashes``.
+    """
+
+    name = "duckdb"
+    version = "1.5.3"
+
+    def __init__(
+        self,
+        *,
+        runtime_inventory: tuple[str, str, int] | None = ("duckdb", "1.5.3", 1),
+        analyzer_inventory: list[tuple[str, str, str]] | None = None,
+        file_hashes: dict[str, str] | None = None,
+    ) -> None:
+        self.runtime_inventory = runtime_inventory
+        self.analyzer_inventory = (
+            [] if analyzer_inventory is None else analyzer_inventory
+        )
+        self.file_hashes = {} if file_hashes is None else file_hashes
+        self.initialize_calls: list[Path] = []
+        self.opened: list[Path] = []
+        self.closed: list[_RecordingBackendConnection] = []
+
+    def initialize(self, root: Path) -> None:
+        """Record backend initialization for ``root``."""
+        self.initialize_calls.append(root)
+
+    def open_connection(self, root: Path) -> _RecordingBackendConnection:
+        """Return one opaque connection handle."""
+        self.opened.append(root)
+        return _RecordingBackendConnection()
+
+    def close_connection(self, conn: object) -> None:
+        """Record one closed connection handle."""
+        assert isinstance(conn, _RecordingBackendConnection)
+        self.closed.append(conn)
+
+    def load_runtime_inventory(
+        self,
+        root: Path,
+        *,
+        conn: object | None = None,
+    ) -> tuple[str, str, int] | None:
+        """Return the configured runtime inventory."""
+        del root, conn
+        return self.runtime_inventory
+
+    def load_analyzer_inventory(
+        self,
+        root: Path,
+        *,
+        conn: object | None = None,
+    ) -> list[tuple[str, str, str]]:
+        """Return the configured analyzer inventory."""
+        del root, conn
+        return list(self.analyzer_inventory)
+
+    def load_existing_file_hashes(
+        self,
+        root: Path,
+        *,
+        conn: object | None = None,
+    ) -> dict[str, str]:
+        """Return the configured indexed file hashes."""
+        del root, conn
+        return dict(self.file_hashes)
+
+
+def test_run_index_initializes_the_active_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Initialize the configured backend before indexing from the CLI path.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root provided by pytest.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to stub backend selection and indexing side effects.
+
+    Returns
+    -------
+    None
+        The test asserts ``codira index`` initialization uses the active
+        backend contract instead of calling SQLite storage helpers directly.
+    """
+    backend = _RecordingBackend()
+
+    monkeypatch.setattr(cli_module, "active_index_backend", lambda: backend)
+    monkeypatch.setattr(cli_module, "audit_repo_coverage", lambda root: [])
+    monkeypatch.setattr(
+        cli_module,
+        "index_repo",
+        lambda root, full=False: types.SimpleNamespace(
+            coverage_issues=[],
+            decisions=[],
+            indexed=[],
+            reused=[],
+            deleted=[],
+            failed=[],
+            embedding_recomputed=0,
+            embedding_reused=0,
+        ),
+    )
+    monkeypatch.setattr(cli_module, "_write_index_head_metadata", lambda root: None)
+    monkeypatch.setattr(cli_module, "_render_index_report", lambda root, report: None)
+
+    assert (
+        cli_module._run_index(
+            tmp_path,
+            full=False,
+            explain=False,
+            require_full_coverage=False,
+        )
+        == 0
+    )
+    assert backend.initialize_calls == [tmp_path]
+
+
+def test_inspect_index_rebuild_request_uses_backend_connection_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Inspect freshness through backend hooks without SQLite-specific connection use.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root provided by pytest.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to stub backend state and Git metadata.
+
+    Returns
+    -------
+    None
+        The test asserts freshness inspection reuses backend hooks and closes
+        the opaque connection handle.
+    """
+    module = tmp_path / "pkg" / "sample.py"
+    _write_module(
+        module,
+        'def demo():\n    """Return a constant."""\n    return 1\n',
+    )
+    backend = _RecordingBackend(
+        analyzer_inventory=[("python", PythonAnalyzer.version, '["*.py"]')],
+        file_hashes={str(module): "abc123"},
+    )
+    cli_module._write_index_metadata(
+        tmp_path,
+        {
+            "schema_version": str(SCHEMA_VERSION),
+        },
+    )
+
+    monkeypatch.setattr(cli_module, "_get_head_commit", lambda root: None)
+    monkeypatch.setattr(cli_module, "active_index_backend", lambda: backend)
+    monkeypatch.setattr(
+        cli_module,
+        "active_language_analyzers",
+        lambda: [PythonAnalyzer()],
+    )
+
+    assert cli_module._inspect_index_rebuild_request(tmp_path) is None
+    assert backend.opened == [tmp_path]
+    assert len(backend.closed) == 1
 
 
 def test_cli_reports_unexpected_index_errors_without_traceback(
