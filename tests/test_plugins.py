@@ -312,6 +312,12 @@ class _DemoBackend(SQLiteIndexBackend):
     name = "demo-backend"
 
 
+class _DemoDuckDBBackend(SQLiteIndexBackend):
+    """Small DuckDB-shaped backend stub used for registry-selection tests."""
+
+    name = "duckdb"
+
+
 def _patch_entry_points(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -575,6 +581,52 @@ def test_active_default_backend_comes_from_first_party_sqlite_package() -> None:
 
     assert isinstance(backend, SQLiteIndexBackend)
     assert backend.__class__.__module__ == "codira_backend_sqlite"
+
+
+def test_registry_can_select_first_party_duckdb_backend_entry_point(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Resolve the DuckDB backend through normal first-party entry-point discovery.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch backend discovery and environment.
+
+    Returns
+    -------
+    None
+        The test asserts the registry can activate the configured DuckDB
+        backend and reports it as a first-party plugin.
+    """
+    _patch_entry_points(
+        monkeypatch,
+        analyzers=[],
+        backends=[
+            _FakeEntryPoint(
+                name="duckdb-backend",
+                value="codira_backend_duckdb:build_backend",
+                dist=_FakeDistribution("codira-backend-duckdb"),
+                loaded=_DemoDuckDBBackend,
+            )
+        ],
+    )
+    monkeypatch.setenv(registry.INDEX_BACKEND_ENV_VAR, "duckdb")
+
+    backend = registry.active_index_backend()
+    registrations = registry.plugin_registrations()
+
+    assert isinstance(backend, IndexBackend)
+    assert backend.name == "duckdb"
+    assert any(
+        record.family == "backend"
+        and record.name == "duckdb"
+        and record.provider == "codira-backend-duckdb"
+        and record.status == "loaded"
+        and record.origin == "first_party"
+        for record in registrations
+    )
 
 
 def test_plugins_cli_emits_json_registration_diagnostics(

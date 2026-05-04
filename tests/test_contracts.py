@@ -3694,6 +3694,42 @@ def test_active_index_backend_mentions_first_party_sqlite_package_when_missing(
     assert "codira-bundle-official" in message
 
 
+def test_active_index_backend_mentions_first_party_duckdb_package_when_missing(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """
+    Mention the extracted DuckDB backend package when it is configured missing.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to remove backend entry-point discovery.
+
+    Returns
+    -------
+    None
+        The test asserts the DuckDB backend error includes the installation
+        hint for the first-party package.
+    """
+    monkeypatch.setenv(registry_module.INDEX_BACKEND_ENV_VAR, "duckdb")
+    monkeypatch.setattr(
+        registry_module,
+        "_entry_points_for_group",
+        lambda group: [],
+    )
+
+    try:
+        active_index_backend()
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        msg = "expected ValueError when no duckdb backend plugins are registered"
+        raise AssertionError(msg)
+
+    assert "codira-backend-duckdb" in message
+    assert "codira-bundle-official" in message
+
+
 def test_instantiating_language_analyzers_requires_a_non_empty_registry() -> None:
     """
     Reject empty analyzer registries with an explicit deterministic error.

@@ -395,7 +395,50 @@ Add contract parity and DuckDB-specific integration tests.
 
 Status:
 
-* pending
+* complete
+
+Completed work:
+
+* extended `packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py`
+  with backend-specific integration coverage for:
+  * runtime inventory persistence and round-trip loading
+  * analyzer inventory persistence and deterministic ordering
+  * driver-error translation from DuckDB-specific failures to
+    `codira.contracts.BackendError`
+* added registry-selection coverage in `tests/test_plugins.py` proving that:
+  * `CODIRA_INDEX_BACKEND=duckdb` resolves through the normal backend
+    entry-point path
+  * the DuckDB backend is reported as a first-party plugin registration
+* added contract-level missing-package-hint coverage in `tests/test_contracts.py`
+  proving that a configured-but-missing DuckDB backend reports:
+  * `codira-backend-duckdb`
+  * `codira-bundle-official`
+  in the operator-facing error message
+
+Deviations from plan:
+
+* the real optional `duckdb` dependency is still not installed in this
+  environment
+* Phase 5 therefore did not add a full SQLite-vs-DuckDB observable parity run
+  through the real indexer and a real DuckDB file
+* instead, this phase added the strongest executable coverage currently
+  available:
+  * backend-specific persistence/inventory tests using a deterministic fake
+    driver surface
+  * core registry and operator-facing activation tests for the DuckDB backend
+
+Validation run:
+
+* `PYTHONPATH=src:packages/codira-backend-sqlite/src:packages/codira-backend-duckdb/src .venv/bin/python -m pytest -q packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py tests/test_plugins.py tests/test_contracts.py -k "duckdb or active_default_backend_comes_from_first_party_sqlite_package"`
+* `.venv/bin/pre-commit run --all-files`
+
+Remaining risks:
+
+* real driver behavior for end-to-end indexing and query parity against
+  SQLite still needs validation once `duckdb` is installed in the active
+  environment
+* future documentation-channel scale tests are still deferred because they
+  need the real backend implementation exercised against a real database file
 
 ### Phase 6
 
