@@ -36,6 +36,7 @@ PROTECTED_PATHS = {
     Path("src/codira/_version.py"),
     Path(".codira"),
     Path(".artifacts"),
+    Path("guidelines.tar.xz"),
 }
 GIT_EXE = shutil.which("git") or "git"
 

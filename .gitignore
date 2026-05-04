@@ -10,6 +10,7 @@ venv/
 .codira/
 issues.json
 milestones.json
+guidelines.tar.xz
 
 # -------------------------------
 # Build artifacts
