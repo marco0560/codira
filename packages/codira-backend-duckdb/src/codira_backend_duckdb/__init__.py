@@ -69,26 +69,98 @@ class _DuckDBRawConnection(Protocol):
     """DuckDB connection surface used by the backend wrapper."""
 
     def execute(self, query: str, parameters: Sequence[object] | None = None) -> object:
-        """Execute one SQL statement."""
+        """
+        Execute one SQL statement.
+
+        Parameters
+        ----------
+        query : str
+            SQL statement to execute.
+        parameters : Sequence[object] | None, optional
+            Positional parameters bound to ``query``.
+
+        Returns
+        -------
+        object
+            Driver-specific execution result.
+        """
 
     def executemany(
         self,
         query: str,
         parameters: Sequence[Sequence[object]],
     ) -> object:
-        """Execute one statement against many parameter rows."""
+        """
+        Execute one statement against many parameter rows.
+
+        Parameters
+        ----------
+        query : str
+            SQL statement to execute repeatedly.
+        parameters : Sequence[Sequence[object]]
+            Parameter rows bound to ``query``.
+
+        Returns
+        -------
+        object
+            Driver-specific execution result.
+        """
 
     def fetchone(self) -> tuple[object, ...] | None:
-        """Fetch one row from the most recent result."""
+        """
+        Fetch one row from the most recent result.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple[object, ...] | None
+            Next available row, or ``None`` when the result is exhausted.
+        """
 
     def fetchall(self) -> list[tuple[object, ...]]:
-        """Fetch all rows from the most recent result."""
+        """
+        Fetch all rows from the most recent result.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        list[tuple[object, ...]]
+            Remaining result rows.
+        """
 
     def commit(self) -> None:
-        """Commit the current transaction."""
+        """
+        Commit the current transaction.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The active transaction is committed in place.
+        """
 
     def close(self) -> None:
-        """Close the active connection."""
+        """
+        Close the active connection.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The active connection is closed in place.
+        """
 
 
 class _DuckDBModule(Protocol):
@@ -97,7 +169,19 @@ class _DuckDBModule(Protocol):
     Error: type[BaseException]
 
     def connect(self, database: str) -> _DuckDBRawConnection:
-        """Open one persistent DuckDB database."""
+        """
+        Open one persistent DuckDB database.
+
+        Parameters
+        ----------
+        database : str
+            Database path passed to the DuckDB driver.
+
+        Returns
+        -------
+        _DuckDBRawConnection
+            Open raw DuckDB connection handle.
+        """
 
 
 class _DuckDBCursorWrapper:
@@ -372,6 +456,11 @@ def _duckdb_lastrowid(raw: _DuckDBRawConnection, query: str) -> int | None:
     -------
     int | None
         Inserted integer ID for sequence-backed tables, otherwise ``None``.
+
+    Raises
+    ------
+    codira.contracts.BackendError
+        Raised when DuckDB returns a non-integer sequence value.
     """
     match = _INSERT_TABLE_PATTERN.match(query)
     if match is None:
@@ -465,6 +554,11 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
         -------
         tuple[int, int]
             ``(recomputed, reused)`` embedding counts for the file.
+
+        Raises
+        ------
+        codira.contracts.BackendError
+            Raised when the DuckDB driver reports one persistence failure.
         """
         root = request.root
         error_type = _duckdb_module().Error
@@ -534,6 +628,11 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
         -------
         None
             Runtime inventory rows are replaced in place.
+
+        Raises
+        ------
+        codira.contracts.BackendError
+            Raised when the DuckDB driver reports one inventory-write failure.
         """
         root = request.root
         backend_name = request.backend_name

@@ -98,6 +98,11 @@ def _load_workspace_cli_module() -> types.ModuleType:
     -------
     types.ModuleType
         Freshly loaded workspace CLI module.
+
+    Raises
+    ------
+    AssertionError
+        Raised when the workspace CLI module cannot be loaded.
     """
     module_path = Path(__file__).resolve().parents[1] / "src" / "codira" / "cli.py"
     spec = importlib.util.spec_from_file_location(
@@ -205,16 +210,52 @@ class _RecordingBackend:
         self.closed: list[_RecordingBackendConnection] = []
 
     def initialize(self, root: Path) -> None:
-        """Record backend initialization for ``root``."""
+        """
+        Record backend initialization for one repository root.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root passed to the backend initializer.
+
+        Returns
+        -------
+        None
+            The root is appended to the recorded initialization list.
+        """
         self.initialize_calls.append(root)
 
     def open_connection(self, root: Path) -> _RecordingBackendConnection:
-        """Return one opaque connection handle."""
+        """
+        Return one opaque connection handle.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root passed to the backend connection opener.
+
+        Returns
+        -------
+        _RecordingBackendConnection
+            Fresh opaque connection handle for test assertions.
+        """
         self.opened.append(root)
         return _RecordingBackendConnection()
 
     def close_connection(self, conn: object) -> None:
-        """Record one closed connection handle."""
+        """
+        Record one closed connection handle.
+
+        Parameters
+        ----------
+        conn : object
+            Connection object supplied by the CLI integration path.
+
+        Returns
+        -------
+        None
+            The validated connection handle is appended to the closed list.
+        """
         assert isinstance(conn, _RecordingBackendConnection)
         self.closed.append(conn)
 
@@ -224,7 +265,21 @@ class _RecordingBackend:
         *,
         conn: object | None = None,
     ) -> tuple[str, str, int] | None:
-        """Return the configured runtime inventory."""
+        """
+        Return the configured runtime inventory.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the lookup.
+        conn : object | None, optional
+            Opaque backend connection handle reused by the caller.
+
+        Returns
+        -------
+        tuple[str, str, int] | None
+            Recorded runtime inventory, or ``None`` when unavailable.
+        """
         del root, conn
         return self.runtime_inventory
 
@@ -234,7 +289,21 @@ class _RecordingBackend:
         *,
         conn: object | None = None,
     ) -> list[tuple[str, str, str]]:
-        """Return the configured analyzer inventory."""
+        """
+        Return the configured analyzer inventory.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the lookup.
+        conn : object | None, optional
+            Opaque backend connection handle reused by the caller.
+
+        Returns
+        -------
+        list[tuple[str, str, str]]
+            Recorded analyzer inventory rows.
+        """
         del root, conn
         return list(self.analyzer_inventory)
 
@@ -244,7 +313,21 @@ class _RecordingBackend:
         *,
         conn: object | None = None,
     ) -> dict[str, str]:
-        """Return the configured indexed file hashes."""
+        """
+        Return the configured indexed file hashes.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the lookup.
+        conn : object | None, optional
+            Opaque backend connection handle reused by the caller.
+
+        Returns
+        -------
+        dict[str, str]
+            Recorded file-hash mapping for the backend snapshot.
+        """
         del root, conn
         return dict(self.file_hashes)
 

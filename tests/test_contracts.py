@@ -105,6 +105,11 @@ def _load_workspace_registry_module() -> ModuleType:
     -------
     types.ModuleType
         Freshly loaded workspace registry module.
+
+    Raises
+    ------
+    AssertionError
+        Raised when the workspace registry module cannot be loaded.
     """
     module_path = Path(__file__).resolve().parents[1] / "src" / "codira" / "registry.py"
     spec = importlib.util.spec_from_file_location(
