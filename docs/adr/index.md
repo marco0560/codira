@@ -21,6 +21,7 @@ The repository currently tracks these architecture decision records:
 - [ADR-017 — Python Runtime Support Policy](ADR-017-python-runtime-support-policy.md)
 - [ADR-018 — CI Platform Coverage Policy](ADR-018-ci-platform-coverage-policy.md)
 - [ADR-019 — Index Freshness and Automatic Rebuild Policy](ADR-019-index-freshness-automatic-rebuild-policy.md)
+- [ADR-020 — Backend-isolated repository test policy](ADR-020-backend-isolated-repository-test-policy.md)
 
 `ADR-004` is the active migration record for the current architecture branch
 and should be read together with the documents under `docs/architecture/`.

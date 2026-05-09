@@ -63,6 +63,68 @@ _TABLE_ID_SEQUENCE: dict[str, str] = {
 _SEQUENCE_REWRITE_PREFIXES: tuple[str, ...] = tuple(
     f"CREATE TABLE IF NOT EXISTS {table} (" for table in _SEQUENCED_TABLES
 )
+_CALL_EDGES_TABLE_PREFIX = "CREATE TABLE IF NOT EXISTS call_edges ("
+_CALLABLE_REFS_TABLE_PREFIX = "CREATE TABLE IF NOT EXISTS callable_refs ("
+_DUCKDB_CALL_EDGES_DDL = """
+    CREATE TABLE IF NOT EXISTS call_edges (
+        caller_file_id INTEGER NOT NULL,
+        caller_module TEXT NOT NULL,
+        caller_name TEXT NOT NULL,
+        callee_module TEXT,
+        callee_name TEXT,
+        resolved INTEGER NOT NULL,
+        FOREIGN KEY(caller_file_id) REFERENCES files(id)
+    );
+"""
+_DUCKDB_CALLABLE_REFS_DDL = """
+    CREATE TABLE IF NOT EXISTS callable_refs (
+        owner_file_id INTEGER NOT NULL,
+        owner_module TEXT NOT NULL,
+        owner_name TEXT NOT NULL,
+        target_module TEXT,
+        target_name TEXT,
+        resolved INTEGER NOT NULL,
+        FOREIGN KEY(owner_file_id) REFERENCES files(id)
+    );
+"""
+_NULLABLE_EDGE_TABLE_REWRITES: dict[
+    str, tuple[str, tuple[str, ...], tuple[str, ...]]
+] = {
+    "call_edges": (
+        _DUCKDB_CALL_EDGES_DDL,
+        (
+            "caller_file_id",
+            "caller_module",
+            "caller_name",
+            "callee_module",
+            "callee_name",
+            "resolved",
+        ),
+        (
+            "idx_call_edges_identity",
+            "idx_call_edges_caller",
+            "idx_call_edges_callee",
+            "idx_call_edges_resolved",
+        ),
+    ),
+    "callable_refs": (
+        _DUCKDB_CALLABLE_REFS_DDL,
+        (
+            "owner_file_id",
+            "owner_module",
+            "owner_name",
+            "target_module",
+            "target_name",
+            "resolved",
+        ),
+        (
+            "idx_callable_refs_identity",
+            "idx_callable_refs_owner",
+            "idx_callable_refs_target",
+            "idx_callable_refs_resolved",
+        ),
+    ),
+}
 
 
 class _DuckDBRawConnection(Protocol):
@@ -227,6 +289,81 @@ class _DuckDBCursorWrapper:
         return self._raw.fetchall()
 
 
+class _DuckDBCursorCompatibilityAdapter:
+    """Cursor-style adapter for query paths that call ``conn.cursor()``."""
+
+    def __init__(self, raw: _DuckDBRawConnection) -> None:
+        self._raw = raw
+
+    def execute(
+        self,
+        query: str,
+        parameters: Sequence[object] | None = None,
+    ) -> _DuckDBCursorCompatibilityAdapter:
+        """
+        Execute one query while preserving SQLite-compatible missing-table errors.
+
+        Parameters
+        ----------
+        query : str
+            SQL statement to execute.
+        parameters : collections.abc.Sequence[object] | None, optional
+            Positional parameters for the statement.
+
+        Returns
+        -------
+        _DuckDBCursorCompatibilityAdapter
+            The current cursor adapter so callers can fetch from it directly.
+
+        Raises
+        ------
+        sqlite3.OperationalError
+            If DuckDB reports that the optional ``docstrings`` table does not
+            exist.
+        """
+        try:
+            if parameters is None:
+                self._raw.execute(query)
+            else:
+                self._raw.execute(query, parameters)
+        except _duckdb_module().Error as exc:
+            message = str(exc)
+            if "Table with name docstrings does not exist" in message:
+                raise sqlite3.OperationalError(message) from exc
+            raise
+        return self
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        """
+        Return the next row from the active cursor result.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple[object, ...] | None
+            Next result row or ``None`` when exhausted.
+        """
+        return self._raw.fetchone()
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        """
+        Return every remaining row from the active cursor result.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        list[tuple[object, ...]]
+            Remaining result rows.
+        """
+        return self._raw.fetchall()
+
+
 class DuckDBConnection:
     """Connection adapter exposing the subset used by codira helpers."""
 
@@ -285,6 +422,22 @@ class DuckDBConnection:
         """
         self._raw.executemany(query, parameters)
         return _DuckDBCursorWrapper(self._raw)
+
+    def cursor(self) -> _DuckDBCursorCompatibilityAdapter:
+        """
+        Return a DB-API-like cursor adapter for compatibility call sites.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        _DuckDBCursorCompatibilityAdapter
+            Cursor adapter that exposes the execute and fetch methods expected
+            by query paths that explicitly request ``conn.cursor()``.
+        """
+        return _DuckDBCursorCompatibilityAdapter(self._raw)
 
     def commit(self) -> None:
         """
@@ -377,6 +530,12 @@ def _rewrite_duckdb_ddl(statement: str) -> str:
     str
         DuckDB-compatible statement.
     """
+    if _CALL_EDGES_TABLE_PREFIX in statement:
+        return _DUCKDB_CALL_EDGES_DDL
+
+    if _CALLABLE_REFS_TABLE_PREFIX in statement:
+        return _DUCKDB_CALLABLE_REFS_DDL
+
     for table, prefix in zip(
         _SEQUENCED_TABLES, _SEQUENCE_REWRITE_PREFIXES, strict=True
     ):
@@ -408,6 +567,122 @@ def _duckdb_schema_ddl() -> tuple[str, ...]:
     )
     table_statements = tuple(_rewrite_duckdb_ddl(statement) for statement in DDL)
     return (*sequence_statements, *table_statements)
+
+
+def _table_info_notnull_by_name(
+    raw: _DuckDBRawConnection,
+    table_name: str,
+) -> dict[str, bool]:
+    """
+    Return per-column ``NOT NULL`` flags for one DuckDB table.
+
+    Parameters
+    ----------
+    raw : _DuckDBRawConnection
+        Active raw DuckDB connection.
+    table_name : str
+        Table whose column metadata should be inspected.
+
+    Returns
+    -------
+    dict[str, bool]
+        Mapping of column names to their ``NOT NULL`` flags.
+    """
+    raw.execute(f"PRAGMA table_info('{table_name}')")
+    rows = raw.fetchall()
+    notnull_by_name: dict[str, bool] = {}
+    for row in rows:
+        column_name = str(row[1])
+        notnull_value = row[3]
+        assert isinstance(notnull_value, (int, str, bytes, bytearray))
+        notnull_by_name[column_name] = bool(int(notnull_value))
+    return notnull_by_name
+
+
+def _repair_nullable_edge_table(
+    raw: _DuckDBRawConnection,
+    *,
+    table_name: str,
+    create_statement: str,
+    column_names: tuple[str, ...],
+    index_names: tuple[str, ...],
+) -> None:
+    """
+    Rebuild one edge table so unresolved targets remain nullable in DuckDB.
+
+    Parameters
+    ----------
+    raw : _DuckDBRawConnection
+        Active raw DuckDB connection.
+    table_name : str
+        Edge table requiring nullable-target repair.
+    create_statement : str
+        DuckDB-compatible ``CREATE TABLE`` statement for the repaired table.
+    column_names : tuple[str, ...]
+        Ordered columns copied into the replacement table.
+    index_names : tuple[str, ...]
+        Index names to drop and recreate around the rebuild.
+
+    Returns
+    -------
+    None
+        The existing table is replaced in place when repair is needed.
+    """
+    legacy_table_name = f"{table_name}_legacy_nullable_fix"
+    column_list = ", ".join(column_names)
+    for index_name in index_names:
+        raw.execute(f"DROP INDEX IF EXISTS {index_name}")
+    raw.execute(f"ALTER TABLE {table_name} RENAME TO {legacy_table_name}")
+    raw.execute(create_statement)
+    raw.execute(
+        f"INSERT INTO {table_name} ({column_list}) "
+        f"SELECT {column_list} FROM {legacy_table_name}"
+    )
+    raw.execute(f"DROP TABLE {legacy_table_name}")
+    for statement in _duckdb_schema_ddl():
+        if any(index_name in statement for index_name in index_names):
+            raw.execute(statement)
+
+
+def _repair_nullable_edge_tables(raw: _DuckDBRawConnection) -> None:
+    """
+    Repair legacy DuckDB edge tables that encoded nullable targets as primary keys.
+
+    Parameters
+    ----------
+    raw : _DuckDBRawConnection
+        Active raw DuckDB connection.
+
+    Returns
+    -------
+    None
+        Legacy edge tables are rebuilt in place when their nullable target
+        columns are incorrectly marked ``NOT NULL``.
+    """
+    for table_name, (
+        create_statement,
+        column_names,
+        index_names,
+    ) in _NULLABLE_EDGE_TABLE_REWRITES.items():
+        notnull_by_name = _table_info_notnull_by_name(raw, table_name)
+        if not notnull_by_name:
+            continue
+        nullable_columns = (
+            ("callee_module", "callee_name")
+            if table_name == "call_edges"
+            else ("target_module", "target_name")
+        )
+        if any(
+            notnull_by_name.get(column_name, False) for column_name in nullable_columns
+        ):
+            _repair_nullable_edge_table(
+                raw,
+                table_name=table_name,
+                create_statement=create_statement,
+                column_names=column_names,
+                index_names=index_names,
+            )
+    raw.commit()
 
 
 def _write_schema_metadata(root: Path) -> None:
@@ -534,6 +809,7 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
         if not _duckdb_db_path(root).exists():
             self.initialize(root)
         raw = _duckdb_module().connect(str(_duckdb_db_path(root)))
+        _repair_nullable_edge_tables(raw)
         return cast("sqlite3.Connection", DuckDBConnection(raw))
 
     def persist_analysis(

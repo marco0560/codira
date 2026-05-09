@@ -20,34 +20,53 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import sqlite3
+    from collections.abc import Callable
     from pathlib import Path
 
-import sqlite3
+from typing import cast
+
+import pytest
 
 from codira.indexer import index_repo
+from codira.query.context import ContextRequest, context_for
 from codira.query.exact import docstring_issues, find_symbol
-from codira.storage import get_db_path, init_db
+from codira.registry import active_index_backend
+from codira.storage import init_db
 
 
-def test_index_and_queries(tmp_path: Path) -> None:
+@pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
+def test_index_and_queries(
+    tmp_path: Path,
+    set_index_backend: Callable[[str | None], None],
+    backend_name: str,
+) -> None:
     """
-    Index a temporary package and verify basic query behavior.
+    Index a temporary package and verify basic query behavior across backends.
 
     Parameters
     ----------
     tmp_path : pathlib.Path
         Temporary directory provided by pytest.
+    set_index_backend : collections.abc.Callable[[str | None], None]
+        Helper used to select the backend under test.
+    backend_name : str
+        Backend name exercised by the current parametrized test case.
 
     Returns
     -------
     None
-        The test asserts basic indexing and exact-query behavior.
+        The test asserts basic indexing and exact-query behavior for the
+        selected backend.
 
     Notes
     -----
     The indexed source intentionally omits some callable docstrings so the
-    audit query can verify that missing-docstring issues are recorded.
+    audit query can verify that missing-docstring issues are recorded, and it
+    includes one unresolved call so derived graph rebuilds exercise nullable
+    edge targets.
     """
+    set_index_backend(backend_name)
     pkg = tmp_path / "pkg"
     pkg.mkdir()
 
@@ -61,6 +80,7 @@ def test_index_and_queries(tmp_path: Path) -> None:
         "\n"
         "def public_func(x):\n"
         '    """Do work."""\n'
+        "    missing_runtime_hook(x)\n"
         "    return x\n",
         encoding="utf-8",
     )
@@ -68,7 +88,8 @@ def test_index_and_queries(tmp_path: Path) -> None:
     init_db(tmp_path)
     index_repo(tmp_path)
 
-    conn = sqlite3.connect(get_db_path(tmp_path))
+    backend = active_index_backend()
+    conn = cast("sqlite3.Connection", backend.open_connection(tmp_path))
     try:
         function_count = conn.execute("SELECT COUNT(*) FROM functions").fetchone()[0]
         class_count = conn.execute("SELECT COUNT(*) FROM classes").fetchone()[0]
@@ -86,3 +107,45 @@ def test_index_and_queries(tmp_path: Path) -> None:
     assert any(
         message == "Method Demo.method: Missing docstring" for message in messages
     )
+
+
+@pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
+def test_context_query_works_across_backends(
+    tmp_path: Path,
+    set_index_backend: Callable[[str | None], None],
+    backend_name: str,
+) -> None:
+    """
+    Run one context query through each supported backend.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    set_index_backend : collections.abc.Callable[[str | None], None]
+        Helper used to select the backend under test.
+    backend_name : str
+        Backend name exercised by the current parametrized test case.
+
+    Returns
+    -------
+    None
+        The test asserts context rendering succeeds for both SQLite and
+        DuckDB-backed indexes.
+    """
+    set_index_backend(backend_name)
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "sample.py").write_text(
+        '"""Module doc."""\n\ndef public_func(x):\n    """Do work."""\n    return x\n',
+        encoding="utf-8",
+    )
+
+    init_db(tmp_path)
+    index_repo(tmp_path)
+
+    output = context_for(
+        ContextRequest(root=tmp_path, query="public_func", as_json=True)
+    )
+
+    assert "public_func" in output

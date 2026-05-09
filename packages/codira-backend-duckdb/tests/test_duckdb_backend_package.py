@@ -18,6 +18,7 @@ from codira.contracts import (
     BackendRuntimeInventoryRequest,
 )
 from codira.models import AnalysisResult, FileMetadataSnapshot, ModuleArtifact
+from codira.schema import DDL
 from codira_backend_duckdb import (
     DuckDBIndexBackend,
     _duckdb_db_path,
@@ -374,6 +375,38 @@ def test_duckdb_schema_ddl_declares_sequences_and_defaults() -> None:
     assert any("DEFAULT nextval('symbol_index_id_seq')" in stmt for stmt in statements)
 
 
+def test_duckdb_schema_ddl_keeps_unresolved_edge_targets_nullable() -> None:
+    """
+    Keep unresolved graph edge targets nullable in DuckDB schema rewrites.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB-specific edge tables avoid composite primary
+        keys that would force nullable target columns to become ``NOT NULL``.
+    """
+    statements = _duckdb_schema_ddl()
+    call_edges_statement = next(
+        stmt for stmt in statements if "CREATE TABLE IF NOT EXISTS call_edges" in stmt
+    )
+    callable_refs_statement = next(
+        stmt
+        for stmt in statements
+        if "CREATE TABLE IF NOT EXISTS callable_refs" in stmt
+    )
+
+    assert "PRIMARY KEY" not in call_edges_statement
+    assert "callee_module TEXT" in call_edges_statement
+    assert "callee_name TEXT" in call_edges_statement
+    assert "PRIMARY KEY" not in callable_refs_statement
+    assert "target_module TEXT" in callable_refs_statement
+    assert "target_name TEXT" in callable_refs_statement
+
+
 def test_duckdb_backend_initialize_bootstraps_schema_and_metadata(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -581,6 +614,85 @@ def test_duckdb_backend_persist_analysis_translates_driver_errors(
         )
 
     assert connection.closed is True
+
+
+def test_duckdb_backend_open_connection_repairs_legacy_nullable_edge_schema(
+    tmp_path: Path,
+) -> None:
+    """
+    Repair legacy DuckDB edge tables created with composite primary keys.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts reopening a legacy DuckDB database restores nullable
+        unresolved edge target columns.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    raw = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            raw.execute(statement)
+        for index_name in (
+            "idx_call_edges_identity",
+            "idx_call_edges_caller",
+            "idx_call_edges_callee",
+            "idx_call_edges_resolved",
+            "idx_callable_refs_identity",
+            "idx_callable_refs_owner",
+            "idx_callable_refs_target",
+            "idx_callable_refs_resolved",
+        ):
+            raw.execute(f"DROP INDEX IF EXISTS {index_name}")
+        raw.execute("DROP TABLE call_edges")
+        raw.execute("DROP TABLE callable_refs")
+        for statement in DDL:
+            if (
+                "CREATE TABLE IF NOT EXISTS call_edges" in statement
+                or "CREATE UNIQUE INDEX IF NOT EXISTS idx_call_edges_identity"
+                in statement
+                or "CREATE INDEX IF NOT EXISTS idx_call_edges_caller" in statement
+                or "CREATE INDEX IF NOT EXISTS idx_call_edges_callee" in statement
+                or "CREATE INDEX IF NOT EXISTS idx_call_edges_resolved" in statement
+                or "CREATE TABLE IF NOT EXISTS callable_refs" in statement
+                or "CREATE UNIQUE INDEX IF NOT EXISTS idx_callable_refs_identity"
+                in statement
+                or "CREATE INDEX IF NOT EXISTS idx_callable_refs_owner" in statement
+                or "CREATE INDEX IF NOT EXISTS idx_callable_refs_target" in statement
+                or "CREATE INDEX IF NOT EXISTS idx_callable_refs_resolved" in statement
+            ):
+                raw.execute(statement)
+        raw.commit()
+    finally:
+        raw.close()
+
+    connection = DuckDBIndexBackend().open_connection(tmp_path)
+    connection.close()
+
+    repaired = duckdb.connect(str(db_path))
+    try:
+        repaired.execute("PRAGMA table_info('call_edges')")
+        call_edges_info = {
+            str(row[1]): bool(int(row[3])) for row in repaired.fetchall()
+        }
+        repaired.execute("PRAGMA table_info('callable_refs')")
+        callable_refs_info = {
+            str(row[1]): bool(int(row[3])) for row in repaired.fetchall()
+        }
+    finally:
+        repaired.close()
+
+    assert call_edges_info["callee_module"] is False
+    assert call_edges_info["callee_name"] is False
+    assert callable_refs_info["target_module"] is False
+    assert callable_refs_info["target_name"] is False
 
 
 def test_duckdb_backend_persist_analysis_with_shared_connection_uses_real_driver(
