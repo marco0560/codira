@@ -1,3 +1,10 @@
+## [1.23.3](https://github.com/marco0560/codira/compare/v1.23.2...v1.23.3) (2026-05-09)
+
+
+### Bug Fixes
+
+* **dev:** make repo tooling backend-aware and uv-native ([0c3090a](https://github.com/marco0560/codira/commit/0c3090ac6601348c36d24642f55ee3faf46d8a93))
+
 ## [1.23.2](https://github.com/marco0560/codira/compare/v1.23.1...v1.23.2) (2026-05-09)
 
 
