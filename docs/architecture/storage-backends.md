@@ -1,32 +1,35 @@
 # Storage Backends
 
-The current repository has one concrete backend: SQLite.
+The current repository has two concrete first-party backends:
+
+- SQLite
+- DuckDB
 
 ## Current Backend Responsibilities
 
-SQLite currently owns:
+Backends currently own:
 
-- schema creation and refresh in `src/codira/storage.py`
-- indexing-side persistence orchestration through `SQLiteIndexBackend` in
-  `src/codira/indexer.py`
-- exact-query execution in `src/codira/query/exact.py`
-- embedding inventory reads in `src/codira/query/exact.py`
-- embedding vector retrieval for semantic search in
-  `src/codira/semantic/search.py`
+- schema creation and refresh for their concrete storage file
+- indexing-side persistence orchestration behind the `IndexBackend` contract
+- exact-query execution exposed through backend methods
+- embedding inventory reads and candidate retrieval exposed through backend
+  methods
 - repository-local storage paths under `.codira/`
 - persisted runtime plugin inventory and per-file analyzer ownership metadata
 
 ## Current Constraints
 
-The codebase still assumes SQLite-specific details in multiple layers:
+The accepted backend model is still constrained:
 
-- `SQLiteIndexBackend` still persists directly to SQLite-oriented tables
-- exact-query helpers open raw SQLite connections
-- semantic search reads stored embedding blobs from SQLite rows
+- one active backend per repository instance
+- backend-neutral orchestration above the concrete storage implementation
+- deterministic query and indexing semantics preserved across backends
+- no multi-backend live switching inside one repository state directory
 
-Phase 4 reduces the indexing-side coupling by routing `index_repo()` through a
-concrete backend object and by persisting normalized `AnalysisResult`
-artifacts, but query paths remain SQLite-specific until Phase 7.
+DuckDB is intentionally file-local, not a shared remote service backend.
+Its role is to provide a second production-grade backend with stronger local
+analytical behavior for larger indexes, including future documentation-heavy
+channels.
 
 ## Phase-8 Selection Rules
 
@@ -47,7 +50,18 @@ is:
 - backend-neutral contracts above the concrete storage implementation
 - preserved deterministic query and indexing semantics
 
-Phase 20 extends the SQLite backend's persisted state with:
+Current first-party backend roles:
+
+- `sqlite`
+  - default backend
+  - smallest operational surface
+  - file-local repository storage under `.codira/index.db`
+- `duckdb`
+  - optional backend selected through `CODIRA_INDEX_BACKEND=duckdb`
+  - file-local repository storage under `.codira/index.duckdb`
+  - better fit for larger local analytical or document-heavy indexes
+
+Phase 20 extends backend persisted state with:
 
 - analyzer ownership columns on `files` rows
 - one-row runtime inventory for backend name, backend version, and coverage
@@ -60,6 +74,9 @@ Phase 21 makes SQLite use that metadata for deterministic rebuild policy:
 - per-file analyzer ownership participates in incremental reuse decisions
 - backend runtime inventory mismatches trigger automatic rebuilds
 - analyzer inventory mismatches trigger automatic rebuilds
+
+DuckDB follows the same rebuild policy through the same runtime and analyzer
+inventory contract.
 
 ## Contributor Contract Validation Backend
 

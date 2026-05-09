@@ -22,7 +22,7 @@ demo = "codira_demo_backend:build_backend"
 Select it:
 
 ```bash
-export CODIRA_INDEX_BACKEND=demo-backend
+export CODIRA_INDEX_BACKEND=demo
 codira index
 ```
 
@@ -37,3 +37,34 @@ Pragmatic recommendation:
 
 - start by wrapping or adapting existing storage behavior
 - only then introduce a fully independent persistence implementation
+
+## First-Party Backends
+
+Current first-party backends:
+
+- `sqlite`
+- `duckdb`
+
+Activation is environment-based:
+
+```bash
+export CODIRA_INDEX_BACKEND=duckdb
+codira index
+```
+
+The default remains `sqlite` when `CODIRA_INDEX_BACKEND` is unset.
+
+Operator notes:
+
+- one backend is active for one repository instance
+- backend packages are installed through `pip`
+- unsupported backend names fail fast with an installation hint when a
+  first-party backend package exists
+
+DuckDB guidance:
+
+- install `codira-backend-duckdb` through `pip`
+- use DuckDB when you want a local file-backed backend that scales better for
+  larger analytical or document-heavy repository indexes
+- prefer it over a service database when the repository remains a local
+  single-operator or single-workspace workflow

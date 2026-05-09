@@ -503,4 +503,44 @@ codira.
 
 Status:
 
-* pending
+* complete
+
+Completed work:
+
+* updated `packages/codira-backend-duckdb/README.md` to document:
+  * `pip` installation
+  * repository-local editable install
+  * activation through `CODIRA_INDEX_BACKEND=duckdb`
+  * verification commands
+  * operator fit and non-goals
+* updated `docs/plugins/backends.md` to document:
+  * the current first-party backend set
+  * environment-based backend activation
+  * default-backend behavior
+  * DuckDB-specific usage guidance
+* updated `docs/plugins/getting-started.md` to make backend activation explicit
+  and to include a first-party DuckDB example
+* updated `docs/architecture/storage-backends.md` to reflect:
+  * SQLite and DuckDB as the current first-party backend set
+  * one-backend-per-repository operation
+  * DuckDB’s role as the local analytical/document-heavy backend option
+  * shared rebuild-policy metadata across the supported backends
+
+Deviations from plan:
+
+* none
+
+Validation run:
+
+* manual documentation review for consistency against:
+  * `src/codira/registry.py`
+  * `packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py`
+  * the approved issue decision set recorded in this ledger
+* `.venv/bin/pre-commit run --all-files`
+
+Remaining risks:
+
+* documentation now reflects the implemented backend activation path, but real
+  end-to-end DuckDB operational guidance may still need expansion once the
+  optional `duckdb` dependency is exercised routinely in the active
+  development environment

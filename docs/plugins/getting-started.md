@@ -45,6 +45,21 @@ codira plugins
 codira cov
 ```
 
+Backend plugins also need explicit activation:
+
+```bash
+export CODIRA_INDEX_BACKEND=your-backend-name
+codira index
+```
+
+For the first-party DuckDB backend:
+
+```bash
+pip install codira-backend-duckdb
+export CODIRA_INDEX_BACKEND=duckdb
+codira index
+```
+
 If discovery fails, `codira plugins` shows whether the plugin was:
 
 - loaded
