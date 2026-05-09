@@ -1,3 +1,10 @@
+## [1.23.4](https://github.com/marco0560/codira/compare/v1.23.3...v1.23.4) (2026-05-09)
+
+
+### Bug Fixes
+
+* **backend:** replace DuckDB savepoints with shared transactions ([2193b60](https://github.com/marco0560/codira/commit/2193b60b3db2e9213c1dfd7886b8176ea07ae7e7)), closes [#10](https://github.com/marco0560/codira/issues/10)
+
 ## [1.23.3](https://github.com/marco0560/codira/compare/v1.23.2...v1.23.3) (2026-05-09)
 
 
