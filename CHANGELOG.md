@@ -1,3 +1,10 @@
+## [1.23.1](https://github.com/marco0560/codira/compare/v1.23.0...v1.23.1) (2026-05-09)
+
+
+### Bug Fixes
+
+* **dev:** protected from clean-repo deletion the benchmarks directory ([911ccf5](https://github.com/marco0560/codira/commit/911ccf560f14038e5ab3df03c367cb1761d7237d))
+
 # [1.23.0](https://github.com/marco0560/codira/compare/v1.22.1...v1.23.0) (2026-05-09)
 
 
