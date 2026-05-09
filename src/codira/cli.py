@@ -589,7 +589,7 @@ def build_parser() -> argparse.ArgumentParser:
         command_parser.add_argument(
             "--path",
             help=(
-                "Repository target directory to read " f"(env: {CODIRA_TARGET_DIR_ENV})"
+                f"Repository target directory to read (env: {CODIRA_TARGET_DIR_ENV})"
             ),
         )
         command_parser.add_argument(
@@ -2857,7 +2857,6 @@ def _resolve_prefix_argument(
         return normalize_prefix(root, prefix)
     except ValueError as exc:
         parser.error(str(exc))
-        return None
 
 
 def _build_index_metadata(root: Path) -> dict[str, str]:

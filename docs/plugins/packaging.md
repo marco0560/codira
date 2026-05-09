@@ -20,7 +20,7 @@ Typical local workflow:
 
 ```bash
 source .venv/bin/activate
-python ../codira/scripts/install_first_party_packages.py \
+uv run python ../codira/scripts/install_first_party_packages.py \
   --python "$VIRTUAL_ENV/bin/python" \
   --include-core
 pip install -e /path/to/codira-demo-analyzer
@@ -45,7 +45,7 @@ The authoritative repository-local editable install set for those packages is
 defined by:
 
 ```bash
-python scripts/install_first_party_packages.py
+uv run python scripts/install_first_party_packages.py
 ```
 
 The accepted published umbrella install name for the curated official set is

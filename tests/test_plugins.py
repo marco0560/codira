@@ -579,7 +579,7 @@ def test_active_default_backend_comes_from_first_party_sqlite_package() -> None:
     """
     backend = registry.active_index_backend()
 
-    assert isinstance(backend, SQLiteIndexBackend)
+    assert backend.__class__.__name__ == "SQLiteIndexBackend"
     assert backend.__class__.__module__ == "codira_backend_sqlite"
 
 

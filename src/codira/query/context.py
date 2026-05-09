@@ -5206,8 +5206,6 @@ def _append_explain_merge_sections(
         if isinstance(selected_entries, list) and selected_entries:
             request.lines.append("selected:")
             for entry in selected_entries[: len(request.top_matches)]:
-                if not isinstance(entry, dict):
-                    continue
                 label = (
                     f"{entry.get('module')}.{entry.get('name')}:{entry.get('lineno')}"
                 )
@@ -5222,8 +5220,6 @@ def _append_explain_merge_sections(
         if isinstance(deferred_entries, list) and deferred_entries:
             request.lines.append("deferred:")
             for entry in deferred_entries[:5]:
-                if not isinstance(entry, dict):
-                    continue
                 label = (
                     f"{entry.get('module')}.{entry.get('name')}:{entry.get('lineno')}"
                 )
@@ -5265,8 +5261,6 @@ def _append_explain_expansion_section(
         budget_entries = cast("list[dict[str, object]]", budget_entries)
         request.lines.append("graph_budget:")
         for entry in budget_entries[:10]:
-            if not isinstance(entry, dict):
-                continue
             request.lines.append(
                 "  "
                 f"rank={entry.get('top_match_rank')} "
@@ -5278,8 +5272,6 @@ def _append_explain_expansion_section(
         include_entries = cast("list[dict[str, object]]", include_entries)
         request.lines.append("include_graph:")
         for entry in include_entries[:10]:
-            if not isinstance(entry, dict):
-                continue
             request.lines.append(
                 "  "
                 f"seed={entry.get('seed_module')} "

@@ -18,8 +18,7 @@ runtime version access from generated source artifacts.
 """
 
 from importlib import import_module
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as metadata_version
+from importlib.metadata import PackageNotFoundError, version as metadata_version
 
 
 def installed_distribution_version(distribution_name: str) -> str | None:

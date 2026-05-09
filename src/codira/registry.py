@@ -263,8 +263,7 @@ def _disabled_third_party_registration(
         version="unknown",
         entry_point=entry_point.name,
         detail=(
-            "third-party plugins are disabled by "
-            f"{DISABLE_THIRD_PARTY_PLUGINS_ENV_VAR}"
+            f"third-party plugins are disabled by {DISABLE_THIRD_PARTY_PLUGINS_ENV_VAR}"
         ),
         origin="third_party",
     )
@@ -286,9 +285,9 @@ def _builtin_backend_plugins() -> list[_LoadedPlugin]:
     return []
 
 
-def _registered_language_analyzer_factories() -> (
-    tuple[Callable[[], LanguageAnalyzer], ...]
-):
+def _registered_language_analyzer_factories() -> tuple[
+    Callable[[], LanguageAnalyzer], ...
+]:
     """
     Return the registered language analyzer factories in routing order.
 

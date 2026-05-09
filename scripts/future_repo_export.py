@@ -30,13 +30,13 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from scripts.future_repo_split_manifest import FutureRepoSplitManifest
     from scripts.future_repo_split_manifest import (
+        FutureRepoSplitManifest,
         future_repo_split_manifests as _future_repo_split_manifests,
     )
 else:
-    from future_repo_split_manifest import FutureRepoSplitManifest
     from future_repo_split_manifest import (
+        FutureRepoSplitManifest,
         future_repo_split_manifests as _future_repo_split_manifests,
     )
 
@@ -191,7 +191,7 @@ def _target_relative_path(repository: str, source_relative: str) -> PurePosixPat
     package_prefix = f"packages/{repository}/"
     if not source_relative.startswith(package_prefix):
         message = (
-            f"Owned path {source_relative!r} does not live under " f"{package_prefix!r}"
+            f"Owned path {source_relative!r} does not live under {package_prefix!r}"
         )
         raise ValueError(message)
     suffix = source_relative.removeprefix(package_prefix).rstrip("/")

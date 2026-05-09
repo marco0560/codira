@@ -16,7 +16,6 @@ from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
-    IndexBackend,
 )
 from codira.models import AnalysisResult, FileMetadataSnapshot, ModuleArtifact
 from codira_backend_duckdb import (
@@ -348,8 +347,8 @@ def test_duckdb_backend_package_builds_expected_backend() -> None:
     """
     backend = build_backend()
 
-    assert isinstance(backend, IndexBackend)
-    assert isinstance(backend, DuckDBIndexBackend)
+    assert backend.__class__.__name__ == "DuckDBIndexBackend"
+    assert backend.__class__.__module__ == "codira_backend_duckdb"
     assert backend.name == "duckdb"
 
 

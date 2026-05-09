@@ -2,9 +2,9 @@
 
 ## `scripts/bootstrap_dev_environment.py`
 
-Create `.venv`, install development and documentation dependencies, install
-repo-local Git configuration, install the extracted first-party analyzer and
-backend packages, and optionally run the validation surface.
+Synchronize the uv-managed `.venv`, install repo-local Git configuration,
+install the extracted first-party analyzer and backend packages, and
+optionally run the validation surface.
 
 ## `scripts/install_first_party_packages.py`
 

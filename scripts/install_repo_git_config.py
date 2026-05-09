@@ -59,39 +59,39 @@ def git_alias_entries() -> list[tuple[str, str]]:
         ("alias.lg", "log --oneline --graph --decorate -50"),
         (
             "alias.check",
-            "!bash scripts/run_with_repo_python.sh scripts/validate_repo.py",
+            "!uv run python scripts/validate_repo.py",
         ),
-        ("alias.fix", "!bash scripts/run_repo_tool.py ruff check . --fix"),
+        (
+            "alias.fix",
+            (
+                "!uv run python scripts/run_repo_tool.py ruff check . --fix "
+                "&& uv run python scripts/run_repo_tool.py ruff format ."
+            ),
+        ),
         (
             "alias.clean-repo",
-            "!bash scripts/run_with_repo_python.sh scripts/clean_repo.py",
+            "!uv run python scripts/clean_repo.py",
         ),
-        ("alias.clean-repo-dry", "!python scripts/clean_repo.py --dry-run"),
+        ("alias.clean-repo-dry", "!uv run python scripts/clean_repo.py --dry-run"),
         (
             "alias.re-clean",
             "!git clean-repo && git gen-issues && git gen-miles && git txz",
         ),
         (
             "alias.bootstrap",
-            (
-                "!bash scripts/run_with_repo_python.sh "
-                "scripts/bootstrap_dev_environment.py"
-            ),
+            "!uv run python scripts/bootstrap_dev_environment.py",
         ),
         (
             "alias.new-decision",
-            "!bash scripts/run_with_repo_python.sh scripts/new_decision.py",
+            "!uv run python scripts/new_decision.py",
         ),
         (
             "alias.install-repo-config",
-            (
-                "!bash scripts/run_with_repo_python.sh "
-                "scripts/install_repo_git_config.py"
-            ),
+            "!uv run python scripts/install_repo_git_config.py",
         ),
         (
             "alias.docs-build",
-            "!bash scripts/run_with_repo_python.sh -m mkdocs build --strict",
+            "!uv run mkdocs build --strict",
         ),
         (
             "alias.gen-issues",

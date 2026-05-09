@@ -114,16 +114,16 @@ The editable install keeps the `codira` CLI available in the target
 repository's virtual environment while still using the live source tree from
 this repository.
 
-Developer automation is Poetry-based for dependency resolution and lockfile
-maintenance, while local validation and CI execute the installed tools directly
-from `.venv` and the editable first-party package set.
+Developer automation is uv-based for dependency resolution and lockfile
+maintenance. Local validation and CI execute against the uv-managed `.venv`
+and the editable first-party package set.
 
 Install optional analyzer packages only when needed. For repository-local
 development inside this repo, the bootstrap flow installs the official
 first-party packages automatically through:
 
 ```bash
-python scripts/install_first_party_packages.py \
+uv run python scripts/install_first_party_packages.py \
   --include-core \
   --core-extra dev \
   --core-extra docs \
@@ -134,7 +134,7 @@ For an editable install into another repository with the current source tree:
 
 ```bash
 source .venv/bin/activate
-python ../codira/scripts/install_first_party_packages.py \
+uv run python ../codira/scripts/install_first_party_packages.py \
   --python "$VIRTUAL_ENV/bin/python" \
   --include-core \
   --core-extra semantic

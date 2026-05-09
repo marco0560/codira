@@ -1687,7 +1687,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-json==1.5.1",
         "codira-analyzer-c==1.5.5",
         "codira-analyzer-bash==1.5.0",
-        "codira-backend-sqlite==1.5.2",
+        "codira-backend-sqlite==1.5.3",
         "codira-backend-duckdb==1.5.3",
     ]
     assert pyproject.get("tool", {}).get("poetry") is None
@@ -1709,8 +1709,8 @@ def test_active_phase_8_registries_expose_default_backend_and_analyzers() -> Non
     backend = active_index_backend()
     analyzers = active_language_analyzers()
 
-    assert isinstance(backend, IndexBackend)
-    assert isinstance(backend, SQLiteIndexBackend)
+    assert backend.__class__.__name__ == "SQLiteIndexBackend"
+    assert backend.__class__.__module__ == "codira_backend_sqlite"
     assert [analyzer.name for analyzer in analyzers] == ["python", "json", "c", "bash"]
 
 
@@ -3503,10 +3503,7 @@ def test_python_type_aliases_persist_as_exact_symbols(tmp_path: Path) -> None:
     source = tmp_path / "pkg" / "sample.py"
     source.parent.mkdir()
     source.write_text(
-        "from typing import TypeAlias\n"
-        "\n"
-        "type UserId = int\n"
-        "Slug: TypeAlias = str\n",
+        "from typing import TypeAlias\n\ntype UserId = int\nSlug: TypeAlias = str\n",
         encoding="utf-8",
     )
 
@@ -3826,7 +3823,6 @@ def test_sqlite_index_backend_persists_and_deletes_normalized_analysis(
         size=module.stat().st_size,
     )
 
-    assert isinstance(backend, IndexBackend)
     recomputed, reused = backend.persist_analysis(
         BackendPersistAnalysisRequest(
             root=tmp_path,

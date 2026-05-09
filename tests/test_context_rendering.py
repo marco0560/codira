@@ -96,7 +96,7 @@ def test_load_reference_scan_file_caches_non_import_lines(tmp_path: Path) -> Non
     """
     source = tmp_path / "sample.py"
     source.write_text(
-        "import helper\n" "from pkg import thing\n" "value = helper\n" "helper()\n",
+        "import helper\nfrom pkg import thing\nvalue = helper\nhelper()\n",
         encoding="utf-8",
     )
     cache: dict[Path, _ReferenceScanFile] = {}
@@ -161,11 +161,11 @@ def test_append_main_context_sections_separates_enriched_blocks(tmp_path: Path) 
     second = tmp_path / "beta.py"
 
     first.write_text(
-        "def alpha():\n" '    """Alpha docstring."""\n' "    return 1\n",
+        'def alpha():\n    """Alpha docstring."""\n    return 1\n',
         encoding="utf-8",
     )
     second.write_text(
-        "def beta():\n" '    """Beta docstring."""\n' "    return 2\n",
+        'def beta():\n    """Beta docstring."""\n    return 2\n',
         encoding="utf-8",
     )
 

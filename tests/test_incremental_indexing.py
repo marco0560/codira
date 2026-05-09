@@ -789,7 +789,7 @@ def test_index_repo_refreshes_stored_reference_scan_rows(tmp_path: Path) -> None
     module = tmp_path / "pkg" / "sample.py"
     _write_module(
         module,
-        "import helper\n" "from pkg import thing\n" "value = helper\n" "helper()\n",
+        "import helper\nfrom pkg import thing\nvalue = helper\nhelper()\n",
     )
 
     init_db(tmp_path)
@@ -812,7 +812,7 @@ def test_index_repo_refreshes_stored_reference_scan_rows(tmp_path: Path) -> None
 
     _write_module(
         module,
-        "import helper\n" "helper()\n",
+        "import helper\nhelper()\n",
     )
     index_repo(tmp_path)
 

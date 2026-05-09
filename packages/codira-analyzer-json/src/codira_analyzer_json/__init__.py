@@ -533,7 +533,7 @@ def _extract_schema_property_declarations(
                     DeclarationArtifact(
                         name=dotted_path,
                         stable_id=(
-                            "json:schema_property:" f"{path.as_posix()}:{dotted_path}"
+                            f"json:schema_property:{path.as_posix()}:{dotted_path}"
                         ),
                         kind="json_schema_property",
                         lineno=1,
@@ -591,7 +591,7 @@ def _extract_schema_definition_declarations(
                 DeclarationArtifact(
                     name=str(definition_name),
                     stable_id=(
-                        "json:schema_definition:" f"{path.as_posix()}:{definition_name}"
+                        f"json:schema_definition:{path.as_posix()}:{definition_name}"
                     ),
                     kind="json_schema_definition",
                     lineno=1,

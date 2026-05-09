@@ -96,15 +96,37 @@ def test_core_future_repo_ci_keeps_integration_validation_explicit() -> None:
     core_spec = _load_future_repo_ci_helper().future_repo_ci_specs()[0]
 
     assert core_spec.install == (
-        ("python", "-m", "pip", "install", "--upgrade", "pip"),
-        ("python", "-m", "pip", "install", "-e", ".[dev,docs,semantic]"),
+        (
+            "uv",
+            "sync",
+            "--frozen",
+            "--extra",
+            "dev",
+            "--extra",
+            "docs",
+            "--extra",
+            "semantic",
+        ),
+        (
+            "uv",
+            "run",
+            "python",
+            "scripts/install_first_party_packages.py",
+            "--include-core",
+            "--core-extra",
+            "dev",
+            "--core-extra",
+            "docs",
+            "--core-extra",
+            "semantic",
+        ),
     )
     assert core_spec.validate == (
-        ("python", "-m", "pre_commit", "run", "--all-files"),
-        ("python", "-m", "black", "--check", "src", "scripts", "tests"),
-        ("python", "-m", "ruff", "check", "src", "scripts", "tests"),
-        ("python", "-m", "mypy", "src", "scripts", "tests"),
-        ("python", "-m", "pytest", "-q"),
+        ("uv", "run", "pre_commit", "run", "--all-files"),
+        ("uv", "run", "ruff", "check", "src", "scripts", "tests"),
+        ("uv", "run", "ruff", "format", "--check", "src", "scripts", "tests"),
+        ("uv", "run", "mypy", "src", "scripts", "tests"),
+        ("uv", "run", "pytest", "-q"),
     )
 
 
@@ -124,16 +146,16 @@ def test_package_future_repo_ci_keeps_package_local_validation_uniform() -> None
     package_specs = _load_future_repo_ci_helper().future_repo_ci_specs()[1:7]
 
     assert all(
-        spec.install == (("python", "-m", "pip", "install", "-e", ".[test]"),)
+        spec.install == (("uv", "sync", "--frozen", "--extra", "test"),)
         for spec in package_specs
     )
     assert all(
         spec.validate
         == (
-            ("python", "-m", "black", "--check", "src", "tests"),
-            ("python", "-m", "ruff", "check", "src", "tests"),
-            ("python", "-m", "mypy", "src", "tests"),
-            ("python", "-m", "pytest", "-q", "tests"),
+            ("uv", "run", "ruff", "check", "src", "tests"),
+            ("uv", "run", "ruff", "format", "--check", "src", "tests"),
+            ("uv", "run", "mypy", "src", "tests"),
+            ("uv", "run", "pytest", "-q", "tests"),
         )
         for spec in package_specs
     )
@@ -154,10 +176,10 @@ def test_bundle_future_repo_ci_stays_test_only() -> None:
     """
     bundle_spec = _load_future_repo_ci_helper().future_repo_ci_specs()[-1]
 
-    assert bundle_spec.install == (("python", "-m", "pip", "install", "-e", ".[test]"),)
+    assert bundle_spec.install == (("uv", "sync", "--frozen", "--extra", "test"),)
     assert bundle_spec.validate == (
-        ("python", "-m", "black", "--check", "tests"),
-        ("python", "-m", "ruff", "check", "tests"),
-        ("python", "-m", "mypy", "tests"),
-        ("python", "-m", "pytest", "-q", "tests"),
+        ("uv", "run", "ruff", "check", "tests"),
+        ("uv", "run", "ruff", "format", "--check", "tests"),
+        ("uv", "run", "mypy", "tests"),
+        ("uv", "run", "pytest", "-q", "tests"),
     )

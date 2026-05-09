@@ -601,11 +601,7 @@ def test_c_embedding_candidates_include_header_source_pairing(tmp_path: Path) ->
         encoding="utf-8",
     )
     (native / "sample.c").write_text(
-        '#include "native/sample.h"\n'
-        "\n"
-        "int public_api(void) {\n"
-        "    return 1;\n"
-        "}\n",
+        '#include "native/sample.h"\n\nint public_api(void) {\n    return 1;\n}\n',
         encoding="utf-8",
     )
 
@@ -780,10 +776,7 @@ def test_embeddings_cli_prints_backend_and_matches(
     assert main() == 0
     captured = capsys.readouterr()
     assert (
-        "backend:"
-        f" {EMBEDDING_BACKEND}"
-        f" version={EMBEDDING_VERSION}"
-        f" dim={EMBEDDING_DIM}"
+        f"backend: {EMBEDDING_BACKEND} version={EMBEDDING_VERSION} dim={EMBEDDING_DIM}"
     ) in captured.out
     assert "pkg.sample.validate_schema_rules" in captured.out
 

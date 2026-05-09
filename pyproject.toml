@@ -21,12 +21,11 @@ bundle-official = [
   "codira-analyzer-json==1.5.1",
   "codira-analyzer-c==1.5.5",
   "codira-analyzer-bash==1.5.0",
-  "codira-backend-sqlite==1.5.2",
+  "codira-backend-sqlite==1.5.3",
   "codira-backend-duckdb==1.5.3"
 ]
 
 dev = [
-  "black",
   "mypy",
   "ruff",
   "pre-commit",
@@ -36,8 +35,9 @@ dev = [
   "snakeviz",
   "packaging",
   "build",
-  "setuptools>=61",
-  "setuptools_scm[toml]>=8"
+  "setuptools>=68",
+  "setuptools-scm>=8",
+  "wheel",
 ]
 
 docs = [
@@ -48,7 +48,7 @@ docs = [
 ]
 
 [build-system]
-requires = ["setuptools>=61", "setuptools_scm[toml]>=8"]
+requires = ["setuptools>=68", "wheel", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
@@ -68,88 +68,24 @@ codira = ["py.typed", "schema/*.json"]
 [project.scripts]
 codira = "codira.cli:main"
 
-[tool.black]
-line-length = 88
-target-version = ["py313"]
-extend-exclude = """(?x)(
-    ^/\\.mypy_cache(?:/|$)
-  | ^/\\.mypy_cache_run(?:/|$)
-  | ^/\\.mypy_cache_verify(?:/|$)
-  | ^/\\.pre-commit-cache(?:/|$)
-  | ^/\\.pytest_cache(?:/|$)
-  | ^/\\.pytest_cache_local(?:/|$)
-  | ^/\\.pytest_tmp(?:/|$)
-  | ^/\\.pytest_diag[^/]*(?:/|$)
-  | ^/\\.pt_[^/]+(?:/|$)
-  | ^/\\.ruff_cache(?:/|$)
-  | ^/\\.tmp-pytest(?:/|$)
-  | ^/\\.tmp_pytest_run(?:/|$)
-  | ^/pytest-cache-files-[^/]+(?:/|$)
-)"""
+[tool.uv.sources]
+codira-analyzer-python = { path = "packages/codira-analyzer-python", editable = true }
+codira-analyzer-json = { path = "packages/codira-analyzer-json", editable = true }
+codira-analyzer-c = { path = "packages/codira-analyzer-c", editable = true }
+codira-analyzer-bash = { path = "packages/codira-analyzer-bash", editable = true }
+codira-backend-sqlite = { path = "packages/codira-backend-sqlite", editable = true }
+codira-backend-duckdb = { path = "packages/codira-backend-duckdb", editable = true }
+codira-bundle-official = { path = "packages/codira-bundle-official", editable = true }
+
+# ============================================================
+# Ruff
+# ============================================================
 
 [tool.ruff]
 line-length = 88
 target-version = "py313"
+
 extend-exclude = [
-  ".mypy_cache",
-  ".mypy_cache_run",
-  ".mypy_cache_verify",
-  ".pre-commit-cache",
-  ".pytest_cache",
-  ".pytest_cache_local",
-  ".pytest_tmp",
-  ".pytest_diag*",
-  ".pt_*",
-  ".ruff_cache",
-  ".ruff_cache_run",
-  ".tmp-pytest",
-  ".tmp_pytest_run",
-  "pytest-cache-files-*",
-]
-
-#[tool.ruff.lint]
-#select = [
-#    "E",   # pycodestyle
-#    "F",   # pyflakes
-#    "I",   # isort
-#]
-#ignore = []
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-line-ending = "lf"
-
-[tool.mypy]
-python_version = "3.13"
-strict = true
-exclude = """(?x)(
-    ^build/
-  | ^dist/
-  | ^src/codira\\.egg-info/
-  | ^packages/[^/]+/build/
-  | ^packages/[^/]+/dist/
-  | ^packages/[^/]+/src/[^/]+\\.egg-info/
-  | ^\\.mypy_cache(?:/|$)
-  | ^\\.mypy_cache_run(?:/|$)
-  | ^\\.pre-commit-cache(?:/|$)
-  | ^\\.pytest_cache(?:/|$)
-  | ^\\.pytest_cache_local(?:/|$)
-  | ^\\.pytest_tmp(?:/|$)
-  | ^\\.pytest_diag[^/]*(?:/|$)
-  | ^\\.pt_[^/]+(?:/|$)
-  | ^\\.ruff_cache(?:/|$)
-  | ^\\.tmp-pytest(?:/|$)
-  | ^\\.tmp_pytest_run(?:/|$)
-  | ^pytest-cache-files-[^/]+(?:/|$)
-)"""
-
-[[tool.mypy.overrides]]
-module = ["tree_sitter", "tree_sitter_c", "tree_sitter_bash", "sentence_transformers"]
-ignore_missing_imports = true
-
-[tool.pytest.ini_options]
-norecursedirs = [
   ".git",
   ".mypy_cache",
   ".mypy_cache_run",
@@ -171,180 +107,185 @@ norecursedirs = [
   "pytest-cache-files-*",
 ]
 
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
 [tool.ruff.lint]
-# Baseline: real bugs + imports
-# Phase 1 — Exception semantics
-# Phase 2 — Import/type boundary
-# Phase 3 — pathlib migration
-# Phase 4 — Bug-risk & correctness
-# Phase 5 — Return & logging correctness
-# ------------------------------------------------------------
-# Phase 6 — Robustness hardening (low-noise / high-value)
-#
-# Adds:
-#   PLR  → risky constructs (not complexity limits)
-#   RSE  → raise misuse (exception correctness)
-#   SIM  → logic simplification traps (can reveal hidden bugs)
-#   ICN  → import alias / shadowing correctness
-#   TCH  → typing boundary correctness helpers
-#
-# Goal:
-#   Catch remaining real defects without enabling high-noise families
-#   (docstrings, typing completeness, complexity, perf, style).
-# ------------------------------------------------------------
-# Phase 7 — Engineering strictness (maturity phase, still low-noise)
-#
-# Adds:
-#   S602, S607, S610, S701 → core subprocess / execution hygiene
-#   C901, PLR0912          → light complexity detection
-#   ERA                    → commented-out / dead code detection
-#
-# Goal:
-#   Improve maintainability and execution safety without opening
-#   style, typing, or documentation flood.
-# ------------------------------------------------------------
-
 select = [
-    "E",    # pycodestyle errors
-    "F",    # pyflakes
-    "I",    # import order / correctness
-    "UP",   # pyupgrade
+  "E",
+  "F",
+  "I",
+  "UP",
 
-    # ------------------------------------------------------------
-    # Phase 1 — Exception semantics
-    # ------------------------------------------------------------
-    "BLE",
-    "TRY",
-    "EM",
-    "S110",
-    "S112",
+  "BLE",
+  "TRY",
+  "EM",
+  "S110",
+  "S112",
 
-    # ------------------------------------------------------------
-    # Phase 2 — Import/type boundary
-    # ------------------------------------------------------------
-    "TC",
+  "TC",
 
-    # ------------------------------------------------------------
-    # Phase 3 — pathlib migration
-    # ------------------------------------------------------------
-    "PTH",
+  "PTH",
 
-    # ------------------------------------------------------------
-    # Phase 4 — Bug-risk & correctness
-    # ------------------------------------------------------------
-    "B",      # flake8-bugbear (high-value correctness rules)
+  "B",
 
-    # ------------------------------------------------------------
-    # Phase 5 — Return & logging correctness
-    # ------------------------------------------------------------
-    "RET",    # return correctness
-    "LOG",    # logging misuse
+  "RET",
+  "LOG",
 
-    # ------------------------------------------------------------
-    # Phase 6 — Robustness hardening
-    # ------------------------------------------------------------
-    "PLR",    # pylint refactor (risky constructs only; complexity still ignored)
-    "RSE",    # raise misuse / exception correctness
-    "SIM",    # simplification rules revealing hidden logic issues
-    "ICN",    # import alias / shadowing correctness
-    "TCH",    # typing boundary correctness helpers
-    "PIE",    # potential import cycles (can reveal hidden import issues)
+  "PLR",
+  "RSE",
+  "SIM",
+  "ICN",
+  "TCH",
+  "PIE",
 
-    # ------------------------------------------------------------
-    # Phase 7 — Engineering strictness (NEW)
-    # ------------------------------------------------------------
-    "S602",   # subprocess with shell=True
-    "S607",   # partial path execution
-    "S610",   # subprocess execution hygiene
-    "S701",   # template autoescape (harmless if unused)
-    "C901",   # function complexity
-    "PLR0912",# too many branches
-    "ERA",    # commented-out code / dead code
-    "TD",     # type comment detection (encourage migration to inline typing)
+  "S602",
+  "S607",
+  "S610",
+  "S701",
+
+  "C901",
+  "PLR0912",
+
+  "ERA",
+  "TD",
 ]
 
 ignore = [
-    # ------------------------------------------------------------
-    # Documentation / style
-    # ------------------------------------------------------------
-    "D",
+  "D",
 
-    # ------------------------------------------------------------
-    # Typing strictness (future phase)
-    # ------------------------------------------------------------
-    "ANN",
-    "FBT",
+  "ANN",
+  "FBT",
 
-    # ------------------------------------------------------------
-    # Security — partially enforced
-    # (S101 and S108 disabled in tests via per-file-ignores)
-    # ------------------------------------------------------------
-    "S603",
-    "S324",
+  "S603",
+  "S324",
 
-    # ------------------------------------------------------------
-    # Complexity — postponed (except C901 + PLR0912 enabled in Phase 7)
-    # ------------------------------------------------------------
-    "PLR0911",
-    "PLR0915",
+  "PLR0911",
+  "PLR0915",
 
-    # ------------------------------------------------------------
-    # Magic values / design
-    # ------------------------------------------------------------
-    "PLR2004",
+  "PLR2004",
 
-    # ------------------------------------------------------------
-    # Formatting (handled elsewhere)
-    # ------------------------------------------------------------
-    "COM812",
-    "E501",
+  "COM812",
+  "E501",
 
-    # ------------------------------------------------------------
-    # Hygiene / TODO
-    # ------------------------------------------------------------
-    "FIX002",
+  "FIX002",
 
-    # ------------------------------------------------------------
-    # Performance / micro-refactors — still optional
-    # ------------------------------------------------------------
-    "FURB",
-    "PERF",
+  "FURB",
+  "PERF",
 
-    # ------------------------------------------------------------
-    # Bugbear rules intentionally ignored
-    # ------------------------------------------------------------
-    "B008",   # function calls in default args (used intentionally sometimes)
-    "B905",   # zip() strict — too noisy for now
+  "B008",
+  "B905",
 ]
 
 fixable = [
-    "I",      # import sorting
-    "UP",     # pyupgrade
-    "B007",   # unused loop variable → _var
-    "B009",   # getattr(const) → attribute
+  "I",
+  "UP",
+  "B007",
+  "B009",
 ]
 
 unfixable = [
-    "E501",   # never auto-wrap long lines (TeX/regex risk)
+  "E501",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
-    "S101",  # asserts allowed in tests
-    "S108",  # temp files allowed
-    "S607",  # CLI tests intentionally invoke entrypoints via PATH (portable & venv-safe)
-    "ARG",   # test functions often have unused arguments for fixtures or parameterization
-    "PLR",   # test functions often have more branches than normal code (e.g. subtests, parameterization)
+  "S101",
+  "S108",
+  "S607",
+  "ARG",
+  "PLR",
 ]
+
 "tests/test_charset_decoding.py" = [
-    "B017", # So only truly generic-failure tests allow broad Exception
+  "B017",
 ]
+
 "tests/helpers.py" = [
-    "PLR0913", # test helper requires multiple independent knobs
+  "PLR0913",
 ]
+
 "src/codira/registry.py" = [
-    "BLE001", # third-party plugin loading must degrade gracefully on arbitrary plugin failures
+  "BLE001",
 ]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15
+
+[tool.ruff.lint.pylint]
+max-branches = 18
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.isort]
+known-first-party = ["codira"]
+combine-as-imports = true
+
+# ============================================================
+# mypy
+# ============================================================
+
+[tool.mypy]
+python_version = "3.13"
+
+strict = true
+
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unreachable = true
+
+show_error_codes = true
+
+exclude = """(?x)(
+    ^build/
+  | ^dist/
+  | ^src/codira\\.egg-info/
+  | ^packages/[^/]+/build/
+  | ^packages/[^/]+/dist/
+  | ^packages/[^/]+/src/[^/]+\\.egg-info/
+  | ^\\.mypy_cache(?:/|$)
+  | ^\\.mypy_cache_run(?:/|$)
+  | ^\\.mypy_cache_verify(?:/|$)
+  | ^\\.pre-commit-cache(?:/|$)
+  | ^\\.pytest_cache(?:/|$)
+  | ^\\.pytest_cache_local(?:/|$)
+  | ^\\.pytest_tmp(?:/|$)
+  | ^\\.pytest_diag[^/]*(?:/|$)
+  | ^\\.pt_[^/]+(?:/|$)
+  | ^\\.ruff_cache(?:/|$)
+  | ^\\.tmp-pytest(?:/|$)
+  | ^\\.tmp_pytest_run(?:/|$)
+  | ^pytest-cache-files-[^/]+(?:/|$)
+)"""
+
+[[tool.mypy.overrides]]
+module = [
+  "tree_sitter",
+  "tree_sitter_c",
+  "tree_sitter_bash",
+]
+ignore_missing_imports = true
+
+# ============================================================
+# pytest
+# ============================================================
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+norecursedirs = [
+  ".git",
+  ".mypy_cache",
+  ".pre-commit-cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".venv",
+  "build",
+  "dist",
+  "node_modules",
+]

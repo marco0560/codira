@@ -1,28 +1,105 @@
 {
-    "editor.formatOnSave": true,
+    // ============================================================
+    // Files
+    // ============================================================
+
     "files.eol": "\n",
     "files.insertFinalNewline": true,
     "files.trimTrailingWhitespace": true,
 
+    // ============================================================
+    // Editor
+    // ============================================================
+
+    "editor.formatOnSave": true,
     "editor.detectIndentation": false,
     "editor.renderWhitespace": "boundary",
 
+    // ============================================================
+    // Git
+    // ============================================================
+
     "git.useEditorAsCommitInput": true,
 
-    "python.analysis.typeCheckingMode": "basic",
+    // ============================================================
+    // Python analysis
+    // ============================================================
 
-    // ----------------------------
-    // Ruff — native language server ONLY
-    // ----------------------------
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.autoImportCompletions": true,
+
+    // ============================================================
+    // Ruff (single source of truth)
+    // ============================================================
+
     "ruff.enable": true,
+    "ruff.nativeServer": "on",
     "ruff.configuration": "pyproject.toml",
     "ruff.organizeImports": true,
+    "ruff.format.enable": true,
+
+    // ============================================================
+    // Disable competing Python tooling
+    // ============================================================
+
+    "python.linting.enabled": false,
+    "python.formatting.provider": "none",
+
+    // ============================================================
+    // Python formatting behavior
+    // ============================================================
 
     "[python]": {
         "editor.defaultFormatter": "charliermarsh.ruff",
         "editor.codeActionsOnSave": {
-            "source.fixAll": "explicit",
-            "source.organizeImports": "explicit"
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
         }
     },
+
+    // ============================================================
+    // Markdown formatting behavior
+    // ============================================================
+
+    "[markdown]": {
+        "files.trimTrailingWhitespace": false
+    },
+
+    // ============================================================
+    // Terminal
+    // ============================================================
+
+    "terminal.integrated.defaultProfile.linux": "bash",
+
+    // ============================================================
+    // UI / commit message cosmetics
+    // ============================================================
+
+    "editor.tokenColorCustomizations": {
+        "textMateRules": [
+            {
+                "scope": "keyword.other.git-commit",
+                "settings": {
+                    "foreground": "#C586C0",
+                    "fontStyle": "bold"
+                }
+            },
+            {
+                "name": "Conventional Commit Type",
+                "scope": "meta.scope.git-commit",
+                "settings": {
+                    "foreground": "#4EC9B0",
+                    "fontStyle": "bold"
+                }
+            },
+            {
+                "name": "Breaking Change Bang",
+                "scope": "punctuation.definition.bold.git-commit",
+                "settings": {
+                    "foreground": "#F44747",
+                    "fontStyle": "bold"
+                }
+            }
+        ]
+    }
 }

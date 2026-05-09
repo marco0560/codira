@@ -10,7 +10,7 @@ modules, or workflows that are not present in the repo.
 Run the standard local validation loop before concluding a change:
 
 ```bash
-python scripts/validate_repo.py
+uv run python scripts/validate_repo.py
 ```
 
 Run Python-facing tools through `scripts/validate_repo.py` or
@@ -21,10 +21,10 @@ temporary directories at repository-local paths.
 CI and the pre-push hook also run broader repository checks such as
 `mypy .`, which includes the first-party packages under `packages/`.
 
-The repository uses Poetry for dependency resolution and lockfile maintenance.
-The validation commands themselves run from `.venv` against the editable core
-and first-party package set, so local checks match the installed-package layout
-used by CI.
+The repository uses uv for dependency resolution and lockfile maintenance.
+The validation commands themselves run from the uv-managed `.venv` against the
+editable core and first-party package set, so local checks match the
+installed-package layout used by CI.
 
 ## Bootstrap
 

@@ -3,11 +3,11 @@
 ## Monorepo Staging
 
 1. Ensure the working tree is clean.
-2. Run `python scripts/run_repo_tool.py black --check src scripts tests packages`.
-3. Run `python scripts/run_repo_tool.py ruff check src scripts tests packages`.
-4. Run `python scripts/run_repo_tool.py mypy src scripts tests packages`.
-5. Run `python scripts/run_repo_tool.py pytest -q`.
-6. Run `python scripts/benchmark_release.py`.
+2. Run `uv run python scripts/run_repo_tool.py ruff check src scripts tests packages`.
+3. Run `uv run python scripts/run_repo_tool.py ruff format --check src scripts tests packages`.
+4. Run `uv run python scripts/run_repo_tool.py mypy src scripts tests packages`.
+5. Run `uv run python scripts/run_repo_tool.py pytest -q`.
+6. Run `uv run python scripts/benchmark_release.py`.
 7. Review `.artifacts/benchmarks/release-hyperfine.json` for unexpected
    regressions.
 8. Run `git release-audit`.

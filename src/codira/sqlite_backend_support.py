@@ -26,8 +26,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from codira.docstring import DocstringValidationRequest, validate_docstring
-from codira.semantic.embeddings import embed_texts as embed_texts
-from codira.semantic.embeddings import serialize_vector
+from codira.semantic.embeddings import embed_texts as embed_texts, serialize_vector
 
 if TYPE_CHECKING:
     import sqlite3
@@ -1978,8 +1977,7 @@ def _flush_reference_scan_rows(
         return
 
     conn.executemany(
-        "INSERT INTO reference_scan_lines"
-        "(file_id, lineno, line_text) VALUES (?, ?, ?)",
+        "INSERT INTO reference_scan_lines(file_id, lineno, line_text) VALUES (?, ?, ?)",
         [
             (file_id, lineno, line_text)
             for _file_path, lineno, line_text in reference_rows

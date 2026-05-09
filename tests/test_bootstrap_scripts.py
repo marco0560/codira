@@ -1498,14 +1498,13 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
     }
 
     assert {key for key in entries if key.startswith("alias.")} == expected_aliases
-    assert entries["alias.check"].endswith(
-        "scripts/run_with_repo_python.sh scripts/validate_repo.py"
-    )
+    assert entries["alias.check"] == "!uv run python scripts/validate_repo.py"
     assert "source .venv/bin/activate" not in entries["alias.check"]
-    assert entries["alias.fix"].endswith("scripts/run_repo_tool.py ruff check . --fix")
-    assert entries["alias.docs-build"] == (
-        "!bash scripts/run_with_repo_python.sh -m mkdocs build --strict"
+    assert entries["alias.fix"] == (
+        "!uv run python scripts/run_repo_tool.py ruff check . --fix "
+        "&& uv run python scripts/run_repo_tool.py ruff format ."
     )
+    assert entries["alias.docs-build"] == "!uv run mkdocs build --strict"
     assert "rsync" not in entries["alias.txz"]
     assert "--transform='s,^,repo/,'" in entries["alias.txz"]
     assert "alias.ctx" not in entries
@@ -1758,17 +1757,16 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
         (
             "python",
             str(helper.RUN_REPO_TOOL),
-            "black",
-            "--check",
-            "src",
-            "scripts",
-            "tests",
+            "ruff",
+            "check",
+            ".",
         ),
         (
             "python",
             str(helper.RUN_REPO_TOOL),
             "ruff",
-            "check",
+            "format",
+            "--check",
             ".",
         ),
         (
@@ -3592,6 +3590,25 @@ def test_build_bootstrap_commands_reuses_shared_first_party_install_command() ->
         skip_validation=True,
     )
 
+    assert commands[0].argv == (
+        "uv",
+        "sync",
+        "--frozen",
+        "--extra",
+        "dev",
+        "--extra",
+        "docs",
+        "--extra",
+        "semantic",
+    )
+    assert commands[1].argv == (
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pip",
+        "check",
+    )
     install_command = next(
         command
         for command in commands
@@ -3600,7 +3617,9 @@ def test_build_bootstrap_commands_reuses_shared_first_party_install_command() ->
     )
 
     assert install_command.argv == (
-        str(repo_root / ".venv" / "bin" / "python"),
+        "uv",
+        "run",
+        "python",
         "scripts/install_first_party_packages.py",
         "--include-core",
         "--core-extra",
@@ -3637,11 +3656,12 @@ def test_build_bootstrap_validation_commands_use_standard_validation_wrapper() -
         for command in commands
         if command.description == "Run standard validation"
     }
-    python_bin = str(repo_root / ".venv" / "bin" / "python")
 
     assert validation_commands == {
         "Run standard validation": (
-            python_bin,
+            "uv",
+            "run",
+            "python",
             "scripts/validate_repo.py",
         ),
     }
@@ -3689,8 +3709,10 @@ def test_ci_workflow_retries_dependency_installation() -> None:
     ).read_text(encoding="utf-8")
 
     assert "retry() {\n            for attempt in 1 2 3; do" in workflow
-    assert 'retry pip install -e ".[dev,docs,semantic]"' in workflow
     assert (
-        "retry python scripts/install_first_party_packages.py --include-core "
+        "retry uv sync --frozen --extra dev --extra docs --extra semantic" in workflow
+    )
+    assert (
+        "retry uv run python scripts/install_first_party_packages.py --include-core "
         "--core-extra dev --core-extra docs --core-extra semantic"
     ) in workflow

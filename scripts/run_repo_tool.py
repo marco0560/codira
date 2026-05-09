@@ -487,7 +487,7 @@ def main() -> int:
     (state_root / "coverage").mkdir(parents=True, exist_ok=True)
     env = tool_environment(os.environ, state_root=state_root)
     if args.tool == "pre-commit-noncode":
-        env["SKIP"] = "black,ruff,mypy"
+        env["SKIP"] = "ruff,ruff-format,mypy"
     if args.tool == "black-serial":
         return run_black_serial(
             args.tool_args,

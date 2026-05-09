@@ -128,8 +128,6 @@ def _type_alias_entry(
         a deterministic alias name.
     """
     if isinstance(node, ast.TypeAlias):
-        if not isinstance(node.name, ast.Name):
-            return None
         return {
             "name": node.name.id,
             "kind": "type_alias",

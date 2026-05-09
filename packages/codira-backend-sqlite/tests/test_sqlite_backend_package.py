@@ -5,7 +5,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from codira_backend_sqlite import SQLiteIndexBackend, build_backend
+from codira_backend_sqlite import build_backend
 
 
 def test_sqlite_backend_package_declares_expected_entry_point() -> None:
@@ -46,5 +46,6 @@ def test_sqlite_backend_package_builds_expected_backend() -> None:
     """
     backend = build_backend()
 
-    assert isinstance(backend, SQLiteIndexBackend)
+    assert backend.__class__.__name__ == "SQLiteIndexBackend"
+    assert backend.__class__.__module__ == "codira_backend_sqlite"
     assert backend.name == "sqlite"

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -47,6 +48,33 @@ class CommandSpec:
     description: str
     argv: tuple[str, ...]
     cwd: Path
+
+
+def resolve_executable(name: str) -> str:
+    """
+    Resolve an executable name through ``PATH``.
+
+    Parameters
+    ----------
+    name : str
+        Executable name to resolve.
+
+    Returns
+    -------
+    str
+        Absolute executable path.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the executable is not available on ``PATH``.
+    """
+
+    resolved = shutil.which(name)
+    if resolved is None:
+        msg = f"Required executable not found in PATH: {name}"
+        raise RuntimeError(msg)
+    return resolved
 
 
 def venv_python(repo_root: Path) -> Path:
@@ -96,43 +124,40 @@ def build_bootstrap_commands(
         Ordered bootstrap command specifications.
     """
 
-    python_bin = venv_python(repo_root)
     commands = [
         CommandSpec(
-            "Create virtual environment",
-            (python, "-m", "venv", str(repo_root / DEFAULT_VENV_DIR)),
-            repo_root,
-        ),
-        CommandSpec(
-            "Upgrade installer tooling",
+            "Synchronize uv-managed development environment",
             (
-                str(python_bin),
-                "-m",
-                "pip",
-                "install",
-                "--upgrade",
-                "pip",
-                "setuptools",
-                "wheel",
+                "uv",
+                "sync",
+                "--frozen",
+                "--extra",
+                "dev",
+                "--extra",
+                "docs",
+                "--extra",
+                "semantic",
             ),
             repo_root,
         ),
         CommandSpec(
-            "Install editable core, development, documentation, and semantic dependencies",
+            "Verify installed package requirements",
             (
-                str(python_bin),
+                "uv",
+                "run",
+                "python",
                 "-m",
                 "pip",
-                "install",
-                "-e",
-                ".[dev,docs,semantic]",
+                "check",
             ),
             repo_root,
         ),
         CommandSpec(
             "Install extracted first-party analyzer and backend packages",
             (
-                str(python_bin),
+                "uv",
+                "run",
+                "python",
                 "scripts/install_first_party_packages.py",
                 "--include-core",
                 "--core-extra",
@@ -145,13 +170,8 @@ def build_bootstrap_commands(
             repo_root,
         ),
         CommandSpec(
-            "Provision the local embedding model artifact",
-            (str(python_bin), "scripts/provision_embedding_model.py"),
-            repo_root,
-        ),
-        CommandSpec(
             "Install repo-local Git aliases and configuration",
-            (str(python_bin), "scripts/install_repo_git_config.py"),
+            ("uv", "run", "python", "scripts/install_repo_git_config.py"),
             repo_root,
         ),
     ]
@@ -161,7 +181,7 @@ def build_bootstrap_commands(
             [
                 CommandSpec(
                     "Run standard validation",
-                    (str(python_bin), "scripts/validate_repo.py"),
+                    ("uv", "run", "python", "scripts/validate_repo.py"),
                     repo_root,
                 ),
             ]
@@ -227,6 +247,7 @@ def main() -> int:
     """
 
     args = parse_args()
+    resolve_executable("uv")
     commands = build_bootstrap_commands(
         repo_root=REPO_ROOT,
         python=args.python,

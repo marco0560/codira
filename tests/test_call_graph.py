@@ -677,19 +677,11 @@ def test_c_include_edges_are_queryable_and_expand_context(tmp_path: Path) -> Non
         encoding="utf-8",
     )
     (native / "sample.c").write_text(
-        '#include "native/sample.h"\n'
-        "\n"
-        "int public_api(void) {\n"
-        "    return 1;\n"
-        "}\n",
+        '#include "native/sample.h"\n\nint public_api(void) {\n    return 1;\n}\n',
         encoding="utf-8",
     )
     (native / "consumer.c").write_text(
-        '#include "native/sample.h"\n'
-        "\n"
-        "int consume_node(void) {\n"
-        "    return 1;\n"
-        "}\n",
+        '#include "native/sample.h"\n\nint consume_node(void) {\n    return 1;\n}\n',
         encoding="utf-8",
     )
 
@@ -752,15 +744,11 @@ def test_c_include_graph_expands_transitively(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (native / "mid.h").write_text(
-        '#include "native/base.h"\n' "\n" "struct MidNode { int value; };\n",
+        '#include "native/base.h"\n\nstruct MidNode { int value; };\n',
         encoding="utf-8",
     )
     (native / "sample.c").write_text(
-        '#include "native/mid.h"\n'
-        "\n"
-        "int public_api(void) {\n"
-        "    return 1;\n"
-        "}\n",
+        '#include "native/mid.h"\n\nint public_api(void) {\n    return 1;\n}\n',
         encoding="utf-8",
     )
 
@@ -801,11 +789,7 @@ def test_c_include_graph_explain_reports_expansion_entries(tmp_path: Path) -> No
         encoding="utf-8",
     )
     (native / "sample.c").write_text(
-        '#include "native/sample.h"\n'
-        "\n"
-        "int public_api(void) {\n"
-        "    return 1;\n"
-        "}\n",
+        '#include "native/sample.h"\n\nint public_api(void) {\n    return 1;\n}\n',
         encoding="utf-8",
     )
 

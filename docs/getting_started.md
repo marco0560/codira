@@ -39,24 +39,22 @@ python3 scripts/bootstrap_dev_environment.py
 ```
 
 The bootstrap script installs the core package, the extracted first-party
-analyzer/backend packages, and the local embedding dependencies. It also
-provisions the local model artifact used by the real embedding backend, so
-`codira index` can build persisted embeddings without ad hoc first-run
-downloads inside this repository.
+analyzer/backend packages, and the local embedding dependencies through the
+uv-managed repository environment.
 
 The repository-local first-party package set is owned by:
 
 ```bash
-python scripts/install_first_party_packages.py \
+uv run python scripts/install_first_party_packages.py \
   --include-core \
   --core-extra dev \
   --core-extra docs \
   --core-extra semantic
 ```
 
-Developer automation is Poetry-based for dependency resolution and lockfile
-maintenance, while the actual checks run the installed tools directly from
-`.venv` and the editable first-party package set.
+Developer automation is uv-based for dependency resolution and lockfile
+maintenance, while the actual checks run from the uv-managed `.venv` against
+the editable first-party package set.
 
 ## Install into another repository
 
@@ -67,7 +65,7 @@ Example:
 
 ```bash
 source .venv/bin/activate
-python ../codira/scripts/install_first_party_packages.py \
+uv run python ../codira/scripts/install_first_party_packages.py \
   --python "$VIRTUAL_ENV/bin/python" \
   --include-core \
   --core-extra semantic
@@ -94,7 +92,7 @@ You can still prefetch the model explicitly:
 
 ```bash
 source .venv/bin/activate
-python ../codira/scripts/provision_embedding_model.py
+uv run python ../codira/scripts/provision_embedding_model.py
 ```
 
 ## First commands
@@ -133,7 +131,7 @@ codira refs _retrieve_script_candidates --incoming --tree --dot
 The repository expects contributors to run:
 
 ```bash
-python scripts/validate_repo.py
+uv run python scripts/validate_repo.py
 ```
 
 Run Python-facing tools through `scripts/validate_repo.py` or
