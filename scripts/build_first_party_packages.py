@@ -4,7 +4,7 @@
 Responsibilities
 ----------------
 - Define the deterministic wheel-build rehearsal for every first-party package directory.
-- Print or execute the exact `python -m pip wheel` commands for the current checkout.
+- Print or execute the exact `uv build` commands for the current checkout.
 - Give the migration branch one local split-readiness gate before repositories are split.
 
 Design principles
@@ -68,7 +68,7 @@ def build_build_argv(
     Parameters
     ----------
     python : str
-        Python interpreter used to run `build`.
+        Python interpreter used to run `uv build`.
     package_path : pathlib.Path
         First-party package directory to validate.
     wheel_dir : pathlib.Path
@@ -80,14 +80,14 @@ def build_build_argv(
         Deterministic command arguments for the wheel build step.
     """
     return (
+        "uv",
+        "build",
+        "--python",
         python,
-        "-m",
-        "pip",
-        "wheel",
-        "--no-build-isolation",
-        "--no-deps",
-        "--wheel-dir",
+        "--wheel",
+        "--out-dir",
         _path_text(wheel_dir),
+        "--no-build-isolation",
         _path_text(package_path),
     )
 
@@ -164,7 +164,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--python",
         default=sys.executable,
-        help="Python interpreter used to run `python -m pip wheel`.",
+        help="Python interpreter used to run `uv build`.",
     )
     parser.add_argument(
         "--wheel-dir",

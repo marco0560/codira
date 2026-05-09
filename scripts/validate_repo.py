@@ -45,7 +45,15 @@ VALIDATION_STEPS: tuple[ValidationStep, ...] = (
     ValidationStep("mypy", "mypy", (".",)),
     ValidationStep("pre-commit-noncode", "pre-commit-noncode", ("run", "--all-files")),
     ValidationStep("coverage", "coverage", ("run", "-m", "pytest", "-q", "tests")),
-    ValidationStep("coverage-report", "coverage", ("report", "--fail-under=70")),
+    ValidationStep(
+        "coverage-report",
+        "coverage",
+        (
+            "report",
+            "--omit=*/_remote_module_non_scriptable",
+            "--fail-under=70",
+        ),
+    ),
 )
 
 

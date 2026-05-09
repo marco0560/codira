@@ -109,14 +109,14 @@ def build_root_wheel_argv(
         Deterministic command arguments for the core wheel build step.
     """
     return (
+        "uv",
+        "build",
+        "--python",
         python,
-        "-m",
-        "pip",
-        "wheel",
-        "--no-build-isolation",
-        "--no-deps",
-        "--wheel-dir",
+        "--wheel",
+        "--out-dir",
         _path_text(wheel_dir),
+        "--no-build-isolation",
         _path_text(repo_root),
     )
 
@@ -150,7 +150,7 @@ def build_install_wheels_argv(
     Parameters
     ----------
     python : str
-        Python interpreter used to run pip.
+        Python interpreter targeted by ``uv pip``.
     install_dir : pathlib.Path
         Target directory receiving the installed wheel contents.
     wheel_paths : tuple[pathlib.Path, ...]
@@ -162,10 +162,11 @@ def build_install_wheels_argv(
         Deterministic command arguments for the wheel install step.
     """
     return (
-        python,
-        "-m",
+        "uv",
         "pip",
         "install",
+        "--python",
+        python,
         "--no-deps",
         "--target",
         _path_text(install_dir),

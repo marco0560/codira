@@ -142,14 +142,7 @@ def build_bootstrap_commands(
         ),
         CommandSpec(
             "Verify installed package requirements",
-            (
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "pip",
-                "check",
-            ),
+            ("uv", "pip", "check"),
             repo_root,
         ),
         CommandSpec(

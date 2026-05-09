@@ -98,12 +98,12 @@ def build_repo_validation_commands(
         Validation commands in deterministic order.
     """
     install_commands: list[tuple[str, ...]] = [
-        (python, "-m", "pip", "install", "--upgrade", "pip"),
         (
-            python,
-            "-m",
+            "uv",
             "pip",
             "install",
+            "--python",
+            python,
             "-e",
             f"{_path_text(core_repo_root)}[semantic]",
         ),
@@ -112,20 +112,22 @@ def build_repo_validation_commands(
         for repo_name in PACKAGE_REPOS:
             install_commands.append(
                 (
-                    python,
-                    "-m",
+                    "uv",
                     "pip",
                     "install",
+                    "--python",
+                    python,
                     "-e",
                     _path_text(exported_repo_root.parent / repo_name),
                 )
             )
     install_commands.append(
         (
-            python,
-            "-m",
+            "uv",
             "pip",
             "install",
+            "--python",
+            python,
             "-e",
             f"{_path_text(exported_repo_root)}[test]",
         )

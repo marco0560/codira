@@ -64,7 +64,7 @@ class InstallCommandRequest:
     Parameters
     ----------
     python : str
-        Python interpreter used to run `pip`.
+        Python interpreter targeted by ``uv pip``.
     repo_root : pathlib.Path
         Repository root containing the package directories.
     include_core : bool
@@ -220,7 +220,7 @@ def build_install_commands(
     request: InstallCommandRequest,
 ) -> tuple[tuple[str, ...], ...]:
     """
-    Build the exact pip command plan for first-party packages.
+    Build the exact uv-native install command plan for first-party packages.
 
     Parameters
     ----------
@@ -230,9 +230,15 @@ def build_install_commands(
     Returns
     -------
     tuple[tuple[str, ...], ...]
-        Deterministic pip commands for the source-tree package set.
+        Deterministic uv commands for the source-tree package set.
     """
-    editable_install_argv: list[str] = [request.python, "-m", "pip", "install"]
+    editable_install_argv: list[str] = [
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        request.python,
+    ]
     if request.include_core:
         editable_install_argv.extend(
             (
@@ -252,10 +258,11 @@ def build_install_commands(
     if request.include_bundle:
         commands.append(
             (
-                request.python,
-                "-m",
+                "uv",
                 "pip",
                 "uninstall",
+                "--python",
+                request.python,
                 "-y",
                 "codira-bundle-official",
             )
@@ -264,10 +271,11 @@ def build_install_commands(
     if request.include_bundle:
         commands.append(
             (
-                request.python,
-                "-m",
+                "uv",
                 "pip",
                 "install",
+                "--python",
+                request.python,
                 "--no-deps",
                 "-e",
                 _path_text(
@@ -301,7 +309,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--python",
         default=sys.executable,
-        help="Python interpreter used to run `pip install`.",
+        help="Python interpreter targeted by `uv pip install`.",
     )
     parser.add_argument(
         "--include-core",

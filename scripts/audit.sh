@@ -30,7 +30,7 @@ Audit script for codira project.
 Modes:
 (default)        Light scan:
 - Semgrep with public rules (deterministic, fast)
-- pip-audit on the installed project environment
+- uv dependency audit from the locked project environment
 
 --deep           Deep scan:
 - Semgrep full scan (auto / cloud rules)
@@ -89,19 +89,13 @@ fi
 echo
 
 # -------------------------------
-# pip-audit
+# uv audit
 # -------------------------------
 
-echo -e "${BLUE}[*] Dependency audit (pip-audit)${RESET}"
-
-REQS=$(mktemp)
-.venv/bin/python -m pip freeze > "$REQS"
-
-if ! uvx pip-audit -r "$REQS"; then
-    echo -e "${RED}[!] Vulnerable dependencies found${RESET}"
+echo -e "${BLUE}[*] Dependency audit (uv audit)${RESET}"
+if ! uv audit --frozen; then
+        echo -e "${RED}[!] Vulnerable dependencies found${RESET}"
 fi
-
-rm -f "$REQS"
 
 echo
 echo -e "${GREEN}[✓] Audit completed (${MODE})${RESET}"
