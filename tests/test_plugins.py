@@ -931,13 +931,12 @@ def test_core_can_discover_installed_first_party_packages_from_built_wheels(
         )
         subprocess.run(
             [
+                "uv",
+                "build",
+                "--python",
                 sys.executable,
-                "-m",
-                "pip",
-                "wheel",
-                "--no-build-isolation",
-                "--no-deps",
-                "--wheel-dir",
+                "--wheel",
+                "--out-dir",
                 str(wheel_dir),
                 str(repo_root),
             ],
@@ -954,10 +953,11 @@ def test_core_can_discover_installed_first_party_packages_from_built_wheels(
 
     subprocess.run(
         [
-            sys.executable,
-            "-m",
+            "uv",
             "pip",
             "install",
+            "--python",
+            sys.executable,
             "--no-deps",
             "--target",
             str(install_dir),
