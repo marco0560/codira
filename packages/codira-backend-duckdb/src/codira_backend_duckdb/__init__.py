@@ -585,7 +585,11 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
                     ),
                 )
             else:
-                conn.execute("SAVEPOINT persist_analysis")
+                # DuckDB does not support SQLite-style savepoints, so isolate
+                # each file write in its own transaction on the shared
+                # connection instead.
+                conn.commit()
+                conn.execute("BEGIN TRANSACTION")
                 try:
                     written = _store_analysis(
                         cast("sqlite3.Connection", conn),
@@ -598,10 +602,9 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
                         ),
                     )
                 except (OSError, error_type, RuntimeError, ValueError):
-                    conn.execute("ROLLBACK TO SAVEPOINT persist_analysis")
-                    conn.execute("RELEASE SAVEPOINT persist_analysis")
+                    conn.execute("ROLLBACK")
                     raise
-                conn.execute("RELEASE SAVEPOINT persist_analysis")
+                conn.execute("COMMIT")
             if owns_connection:
                 conn.commit()
             return written

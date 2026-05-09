@@ -581,3 +581,69 @@ def test_duckdb_backend_persist_analysis_translates_driver_errors(
         )
 
     assert connection.closed is True
+
+
+def test_duckdb_backend_persist_analysis_with_shared_connection_uses_real_driver(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Persist one file through a shared DuckDB connection without savepoints.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace embedding generation with deterministic test
+        doubles.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts shared-connection persistence succeeds against the
+        real DuckDB driver and stores the indexed file row.
+    """
+    pytest.importorskip("duckdb")
+    backend = DuckDBIndexBackend()
+    connection = backend.open_connection(tmp_path)
+    monkeypatch.setattr(
+        "codira.sqlite_backend_support.embed_texts",
+        lambda texts: [[0.0] * 384 for _text in texts],
+    )
+
+    recomputed, reused = backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=FileMetadataSnapshot(
+                path=tmp_path / "pkg" / "sample.py",
+                sha256="duckdb-shared-connection",
+                mtime=1.0,
+                size=1,
+            ),
+            analysis=AnalysisResult(
+                source_path=tmp_path / "pkg" / "sample.py",
+                module=ModuleArtifact(
+                    name="pkg.sample",
+                    stable_id="python:module:pkg.sample",
+                    docstring=None,
+                    has_docstring=0,
+                ),
+                classes=(),
+                functions=(),
+                declarations=(),
+                imports=(),
+            ),
+            embedding_backend=None,
+            conn=connection,
+        )
+    )
+
+    stored_row = connection.execute(
+        "SELECT path FROM files WHERE path = ?",
+        (str(tmp_path / "pkg" / "sample.py"),),
+    ).fetchone()
+
+    assert (recomputed, reused) == (1, 0)
+    assert stored_row == (str(tmp_path / "pkg" / "sample.py"),)
+    connection.close()
