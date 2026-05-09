@@ -1,3 +1,10 @@
+## [1.23.6](https://github.com/marco0560/codira/compare/v1.23.5...v1.23.6) (2026-05-09)
+
+
+### Bug Fixes
+
+* **tests:** fixed test for ci environment not providing pip ([90e4428](https://github.com/marco0560/codira/commit/90e4428fa754543361bb1bf47739d84c05bc22e2))
+
 ## [1.23.5](https://github.com/marco0560/codira/compare/v1.23.4...v1.23.5) (2026-05-09)
 
 
