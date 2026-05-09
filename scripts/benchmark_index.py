@@ -27,16 +27,26 @@ from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
+    from typing import Protocol
+
+    class _BenchmarkRebuildCapable(Protocol):
+        def rebuild_derived_indexes(
+            self,
+            root: Path,
+            *,
+            conn: object | None = None,
+        ) -> None: ...
+
 
 from benchmark_timing import (  # type: ignore[import-not-found]
     PhaseTimer,
     benchmark_metadata,
     write_json_artifact,
 )
-from codira_backend_sqlite import SQLiteIndexBackend
 
 from codira import indexer, sqlite_backend_support
 from codira.indexer import index_repo
+from codira.registry import active_index_backend
 from codira.semantic import embeddings as embeddings_module
 from codira.storage import init_db, override_storage_root
 
@@ -81,6 +91,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def active_backend_class() -> type[_BenchmarkRebuildCapable]:
+    """
+    Return the active backend class for benchmark instrumentation.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    type[_BenchmarkRebuildCapable]
+        Concrete backend class selected for the current process.
+    """
+    return cast("type[_BenchmarkRebuildCapable]", type(active_index_backend()))
+
+
 def main() -> int:
     """
     Run the benchmark and print one JSON report.
@@ -114,7 +140,8 @@ def main() -> int:
         indexer.file_metadata,  # type: ignore[attr-defined]
     )
     original_flush_rows = sqlite_backend_support._flush_embedding_rows
-    original_rebuild_indexes = SQLiteIndexBackend.rebuild_derived_indexes
+    backend_class = active_backend_class()
+    original_rebuild_indexes = backend_class.rebuild_derived_indexes
     original_embed_texts = embeddings_module.embed_texts
     original_sqlite_support_embed_texts = cast(
         "Callable[[Sequence[str]], list[list[float]]]",
@@ -177,7 +204,7 @@ def main() -> int:
         )
 
     def benchmark_rebuild_indexes(
-        self: SQLiteIndexBackend,
+        self: object,
         root: Path,
         *,
         conn: object | None = None,
@@ -208,7 +235,7 @@ def main() -> int:
     indexer.iter_project_files = benchmark_iter_project_files  # type: ignore[attr-defined, assignment]
     indexer.file_metadata = benchmark_file_metadata  # type: ignore[attr-defined, assignment]
     sqlite_backend_support._flush_embedding_rows = benchmark_flush_rows  # type: ignore[assignment]
-    SQLiteIndexBackend.rebuild_derived_indexes = benchmark_rebuild_indexes  # type: ignore[method-assign]
+    backend_class.rebuild_derived_indexes = benchmark_rebuild_indexes  # type: ignore[method-assign]
     embeddings_module.embed_texts = benchmark_embed_texts
     sqlite_backend_support.embed_texts = benchmark_embed_texts
 
@@ -230,7 +257,7 @@ def main() -> int:
         indexer.iter_project_files = original_iter_project_files  # type: ignore[attr-defined, assignment]
         indexer.file_metadata = original_file_metadata  # type: ignore[attr-defined, assignment]
         sqlite_backend_support._flush_embedding_rows = original_flush_rows
-        SQLiteIndexBackend.rebuild_derived_indexes = original_rebuild_indexes  # type: ignore[method-assign]
+        backend_class.rebuild_derived_indexes = original_rebuild_indexes  # type: ignore[method-assign]
         embeddings_module.embed_texts = original_embed_texts
         sqlite_backend_support.embed_texts = original_sqlite_support_embed_texts  # type: ignore[assignment]
 

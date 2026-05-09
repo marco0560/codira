@@ -1331,6 +1331,25 @@ class _EmbeddingStartupBenchmarkModule(Protocol):
         ...
 
 
+class _BenchmarkIndexModule(Protocol):
+    """Protocol for the standalone index phase benchmark helper."""
+
+    def active_backend_class(self) -> type[object]:
+        """
+        Return the active backend class selected for the benchmark run.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        type[object]
+            Concrete backend class selected for the current process.
+        """
+        ...
+
+
 def _load_benchmark_campaign_helper() -> _BenchmarkCampaignModule:
     """
     Load the benchmark campaign helper from its repository path.
@@ -1386,6 +1405,30 @@ def _load_embedding_startup_benchmark_helper() -> _EmbeddingStartupBenchmarkModu
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return cast("_EmbeddingStartupBenchmarkModule", module)
+
+
+def _load_benchmark_index_helper() -> _BenchmarkIndexModule:
+    """
+    Load the index phase benchmark helper from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the index phase benchmark helper script.
+    """
+    helper_path = Path(__file__).resolve().parents[1] / "scripts" / "benchmark_index.py"
+    sys.path.insert(0, str(helper_path.parent))
+    spec = importlib.util.spec_from_file_location("benchmark_index", helper_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_BenchmarkIndexModule", module)
 
 
 def _load_split_repo_verification_helper() -> _SplitRepoVerificationModule:
@@ -2556,6 +2599,39 @@ def test_release_benchmark_helper_builds_hyperfine_plan() -> None:
         "/tmp/codira/.venv/bin/codira ctx --json 'plugin registry'",
         "/tmp/codira/.venv/bin/codira audit --json",
     )
+
+
+def test_benchmark_index_helper_uses_the_active_backend_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Resolve phase benchmark instrumentation against the configured backend class.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to override backend selection deterministically.
+
+    Returns
+    -------
+    None
+        The test asserts the benchmark helper does not hard-code the SQLite
+        backend class when selecting the rebuild hook target.
+    """
+    helper = _load_benchmark_index_helper()
+
+    class _FakeDuckBackend:
+        def rebuild_derived_indexes(
+            self,
+            root: Path,
+            *,
+            conn: object | None = None,
+        ) -> None:
+            del root, conn
+
+    monkeypatch.setattr(helper, "active_index_backend", lambda: _FakeDuckBackend())
+
+    assert helper.active_backend_class() is _FakeDuckBackend
 
 
 def test_embedding_startup_benchmark_helper_separates_cold_and_warm_costs(
