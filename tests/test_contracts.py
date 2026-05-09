@@ -17,9 +17,11 @@ This module belongs to the **contract verification layer** and enforces the ADR-
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sqlite3
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -86,7 +88,36 @@ from codira.semantic.embeddings import (
 from codira.storage import get_db_path
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
     from pytest import CaptureFixture, MonkeyPatch
+
+
+def _load_workspace_registry_module() -> ModuleType:
+    """
+    Load the workspace `src/codira/registry.py` module under a unique name.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    types.ModuleType
+        Freshly loaded workspace registry module.
+    """
+    module_path = Path(__file__).resolve().parents[1] / "src" / "codira" / "registry.py"
+    spec = importlib.util.spec_from_file_location(
+        f"workspace_codira_registry_{id(module_path)}",
+        module_path,
+    )
+    if spec is None or spec.loader is None:
+        msg = f"failed to load workspace codira registry module from {module_path}"
+        raise AssertionError(msg)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class _FakeAnalyzer:
@@ -3711,15 +3742,16 @@ def test_active_index_backend_mentions_first_party_duckdb_package_when_missing(
         The test asserts the DuckDB backend error includes the installation
         hint for the first-party package.
     """
-    monkeypatch.setenv(registry_module.INDEX_BACKEND_ENV_VAR, "duckdb")
+    workspace_registry = _load_workspace_registry_module()
+    monkeypatch.setenv(workspace_registry.INDEX_BACKEND_ENV_VAR, "duckdb")
     monkeypatch.setattr(
-        registry_module,
+        workspace_registry,
         "_entry_points_for_group",
         lambda group: [],
     )
 
     try:
-        active_index_backend()
+        workspace_registry.active_index_backend()
     except ValueError as exc:
         message = str(exc)
     else:

@@ -18,6 +18,7 @@ This module belongs to the **indexing verification layer** that guards increment
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import json
 import os
 import sqlite3
@@ -31,7 +32,6 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from codira_backend_sqlite import SQLiteIndexBackend
 
-import codira.cli as cli_module
 import codira.registry as registry_module
 import codira.storage as storage_module
 from codira.analyzers import PythonAnalyzer
@@ -84,6 +84,33 @@ def _write_module(path: Path, source: str) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(source, encoding="utf-8")
+
+
+def _load_workspace_cli_module() -> types.ModuleType:
+    """
+    Load the workspace `src/codira/cli.py` module under a unique name.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    types.ModuleType
+        Freshly loaded workspace CLI module.
+    """
+    module_path = Path(__file__).resolve().parents[1] / "src" / "codira" / "cli.py"
+    spec = importlib.util.spec_from_file_location(
+        f"workspace_codira_cli_{time.monotonic_ns()}",
+        module_path,
+    )
+    if spec is None or spec.loader is None:
+        msg = f"failed to load workspace codira cli module from {module_path}"
+        raise AssertionError(msg)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class _PythonAnalyzerV4:
@@ -243,6 +270,7 @@ def test_run_index_initializes_the_active_backend(
         backend contract instead of calling SQLite storage helpers directly.
     """
     backend = _RecordingBackend()
+    cli_module = _load_workspace_cli_module()
 
     monkeypatch.setattr(cli_module, "active_index_backend", lambda: backend)
     monkeypatch.setattr(cli_module, "audit_repo_coverage", lambda root: [])
@@ -296,6 +324,7 @@ def test_inspect_index_rebuild_request_uses_backend_connection_contract(
         the opaque connection handle.
     """
     module = tmp_path / "pkg" / "sample.py"
+    cli_module = _load_workspace_cli_module()
     _write_module(
         module,
         'def demo():\n    """Return a constant."""\n    return 1\n',

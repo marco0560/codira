@@ -1880,6 +1880,7 @@ def test_install_helper_can_target_exported_split_repositories() -> None:
         package_root / "codira-analyzer-c",
         package_root / "codira-analyzer-bash",
         package_root / "codira-backend-sqlite",
+        package_root / "codira-backend-duckdb",
         package_root / "codira-bundle-official",
     )
     assert helper.bundle_package_path(
@@ -1920,6 +1921,8 @@ def test_install_helper_can_target_exported_split_repositories() -> None:
             "/tmp/codira-split-repos/codira-analyzer-bash",
             "-e",
             "/tmp/codira-split-repos/codira-backend-sqlite",
+            "-e",
+            "/tmp/codira-split-repos/codira-backend-duckdb",
         ),
         (
             "/tmp/codira/.venv/bin/python",
@@ -1996,6 +1999,7 @@ def test_build_install_argv_installs_each_first_party_package_editably() -> None
         repo_root / "packages/codira-analyzer-c",
         repo_root / "packages/codira-analyzer-bash",
         repo_root / "packages/codira-backend-sqlite",
+        repo_root / "packages/codira-backend-duckdb",
     )
     assert helper.build_install_commands(
         helper.InstallCommandRequest(
@@ -2018,6 +2022,8 @@ def test_build_install_argv_installs_each_first_party_package_editably() -> None
             "/tmp/codira/packages/codira-analyzer-bash",
             "-e",
             "/tmp/codira/packages/codira-backend-sqlite",
+            "-e",
+            "/tmp/codira/packages/codira-backend-duckdb",
         ),
     )
 
@@ -2072,6 +2078,8 @@ def test_install_helper_can_include_core_repo_with_requested_extras() -> None:
             "/tmp/codira/packages/codira-analyzer-bash",
             "-e",
             "/tmp/codira/packages/codira-backend-sqlite",
+            "-e",
+            "/tmp/codira/packages/codira-backend-duckdb",
         ),
     )
 
@@ -2123,6 +2131,8 @@ def test_install_helper_can_opt_into_bundle_package() -> None:
             "/tmp/codira/packages/codira-analyzer-bash",
             "-e",
             "/tmp/codira/packages/codira-backend-sqlite",
+            "-e",
+            "/tmp/codira/packages/codira-backend-duckdb",
         ),
         (
             "/tmp/codira/.venv/bin/python",
@@ -2213,6 +2223,17 @@ def test_build_helper_rehearses_each_first_party_package_boundary() -> None:
             "--wheel-dir",
             "/tmp/codira/.artifacts/wheels",
             "/tmp/codira/packages/codira-backend-sqlite",
+        ),
+        (
+            "/tmp/codira/.venv/bin/python",
+            "-m",
+            "pip",
+            "wheel",
+            "--no-build-isolation",
+            "--no-deps",
+            "--wheel-dir",
+            "/tmp/codira/.artifacts/wheels",
+            "/tmp/codira/packages/codira-backend-duckdb",
         ),
         (
             "/tmp/codira/.venv/bin/python",
@@ -2398,6 +2419,7 @@ def test_release_artifact_helper_covers_core_and_all_first_party_packages() -> N
         repo_root / "packages/codira-analyzer-c",
         repo_root / "packages/codira-analyzer-bash",
         repo_root / "packages/codira-backend-sqlite",
+        repo_root / "packages/codira-backend-duckdb",
         repo_root / "packages/codira-bundle-official",
     )
 
@@ -2454,13 +2476,20 @@ def test_release_artifact_helper_builds_build_and_twine_commands() -> None:
             "/tmp/codira/packages/codira-analyzer-python",
         ),
     )
-    assert release_plan[-2:] == (
+    assert release_plan[-3:] == (
         (
             "python",
             "-m",
             "twine",
             "check",
             "/tmp/codira/packages/codira-backend-sqlite/dist/*",
+        ),
+        (
+            "python",
+            "-m",
+            "twine",
+            "check",
+            "/tmp/codira/packages/codira-backend-duckdb/dist/*",
         ),
         (
             "python",
@@ -3480,7 +3509,7 @@ def test_split_repo_verification_installs_local_first_party_packages_for_bundle(
         core_repo_root=core_root,
     )
 
-    assert commands[:8] == (
+    assert commands[:9] == (
         ("python", "-m", "pip", "install", "--upgrade", "pip"),
         ("python", "-m", "pip", "install", "-e", "/tmp/codira[semantic]"),
         (
@@ -3522,6 +3551,14 @@ def test_split_repo_verification_installs_local_first_party_packages_for_bundle(
             "install",
             "-e",
             "/tmp/newrepos/split/codira-backend-sqlite",
+        ),
+        (
+            "python",
+            "-m",
+            "pip",
+            "install",
+            "-e",
+            "/tmp/newrepos/split/codira-backend-duckdb",
         ),
         (
             "python",

@@ -447,7 +447,53 @@ Run repository validation and fix regressions until green.
 
 Status:
 
-* pending
+* complete
+
+Completed work:
+
+* ran the repository validation surface on the branch:
+  * `.venv/bin/pre-commit run --all-files`
+  * `.venv/bin/pytest -q`
+* fixed stale bootstrap/release expectation tests in
+  `tests/test_bootstrap_scripts.py` so they now reflect DuckDB as part of the
+  first-party package inventory and split-repo/release command plans
+* stabilized the Phase 4 incremental-indexing tests in
+  `tests/test_incremental_indexing.py` by loading the workspace `src/codira/cli.py`
+  module explicitly during the affected assertions, avoiding false negatives
+  from the installed package shadowing the working tree in the current `.venv`
+* stabilized the DuckDB missing-package-hint test in `tests/test_contracts.py`
+  by loading the workspace `src/codira/registry.py` module explicitly for the
+  affected assertion
+* resolved final lint/type issues introduced by the test helpers so the full
+  `pre-commit` surface passes again
+
+Deviations from plan:
+
+* Phase 6 did not require production code changes
+* the only stabilization needed after Phases 4 and 5 was in validation/tests:
+  * expectation updates for the expanded first-party package set
+  * explicit workspace-module loading in tests that must exercise branch-local
+    code while the active virtual environment still prefers an installed
+    `codira` package
+
+Validation run:
+
+* `.venv/bin/pre-commit run --all-files`
+* `.venv/bin/pytest -q`
+
+Final validation state:
+
+* `pre-commit`: passed
+* `pytest -q`: passed (`332 passed`)
+
+Remaining risks:
+
+* the current virtual environment still prefers an installed `codira` package
+  for ordinary imports; tests that must target branch-local source need the
+  explicit workspace-module loading approach used here unless the editable
+  install is refreshed
+* real DuckDB-driver end-to-end parity against SQLite is still pending the
+  actual `duckdb` dependency in the active environment
 
 ### Phase 7
 
