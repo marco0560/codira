@@ -1,3 +1,10 @@
+## [1.23.5](https://github.com/marco0560/codira/compare/v1.23.4...v1.23.5) (2026-05-09)
+
+
+### Bug Fixes
+
+* **backend:** restore DuckDB parity with SQLite index behavior ([a46a9db](https://github.com/marco0560/codira/commit/a46a9db9a428c39fe9f01db67618375c592d07a9)), closes [#10](https://github.com/marco0560/codira/issues/10)
+
 ## [1.23.4](https://github.com/marco0560/codira/compare/v1.23.3...v1.23.4) (2026-05-09)
 
 
