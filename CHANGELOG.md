@@ -1,3 +1,10 @@
+## [1.23.2](https://github.com/marco0560/codira/compare/v1.23.1...v1.23.2) (2026-05-09)
+
+
+### Bug Fixes
+
+* **ci:** make repo validation uv-native ([306849e](https://github.com/marco0560/codira/commit/306849e7bce83f4ed614b07dd51772487a9cd540))
+
 ## [1.23.1](https://github.com/marco0560/codira/compare/v1.23.0...v1.23.1) (2026-05-09)
 
 
