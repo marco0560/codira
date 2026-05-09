@@ -1,3 +1,12 @@
+# [1.23.0](https://github.com/marco0560/codira/compare/v1.22.1...v1.23.0) (2026-05-09)
+
+
+### Features
+
+* **backend:** implement duckdb backend lifecycle ([835d2d6](https://github.com/marco0560/codira/commit/835d2d6f4065a059bed1b7b7e6cbf9d1eb4724de))
+* **backend:** integrate duckdb activation path ([0efb1f8](https://github.com/marco0560/codira/commit/0efb1f8638bf9bbb5eecf45abbf2847f3f2066f0))
+* **backend:** scaffold duckdb backend package ([d18b0bc](https://github.com/marco0560/codira/commit/d18b0bcee62f1bfc01d43dccecb7a6d7b91e0c0a))
+
 ## [1.22.1](https://github.com/marco0560/codira/compare/v1.22.0...v1.22.1) (2026-05-03)
 
 
