@@ -1,0 +1,17 @@
+rules:
+  - id: codira.det.no-random-without-explicit-seed
+    message: >
+      Deterministic workflows must avoid implicit random behavior.
+    severity: WARNING
+    languages:
+      - python
+    paths:
+      include:
+        - /src/**/*.py
+        - /packages/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: random.random(...)
+          - pattern: random.randint(...)
+          - pattern: random.choice(...)
+          - pattern: random.shuffle(...)

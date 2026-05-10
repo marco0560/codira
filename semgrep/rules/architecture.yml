@@ -1,0 +1,40 @@
+rules:
+  - id: codira.arch.no-storage-import-in-analyzers
+    message: >
+      Analyzer packages must not import codira storage internals.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-analyzer-*/src/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: import codira.storage
+
+  - id: codira.arch.no-backend-import-in-analyzers
+    message: >
+      Analyzer packages must remain backend-agnostic.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-analyzer-*/src/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: import codira_backend_sqlite
+          - pattern: import codira_backend_duckdb
+
+  - id: codira.arch.no-sqlite3-in-analyzers
+    message: >
+      Analyzer packages must not depend on sqlite3 directly.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-analyzer-*/src/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: import sqlite3

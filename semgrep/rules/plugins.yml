@@ -1,0 +1,27 @@
+rules:
+  - id: codira.plugins.no-bare-except
+    message: >
+      Bare except clauses in plugins are forbidden.
+    severity: WARNING
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-analyzer-*/src/**/*.py
+        - /packages/codira-backend-*/src/**/*.py
+    pattern: |
+      except:
+          ...
+
+  - id: codira.plugins.no-core-storage-import
+    message: >
+      Plugins must not import codira storage internals directly.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-analyzer-*/src/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: import codira.storage
