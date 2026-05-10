@@ -1834,6 +1834,8 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
             "semgrep/rules",
             "--metrics=off",
             "--disable-version-check",
+            "--exclude",
+            "fixtures",
             ".",
         ),
         (
@@ -1851,6 +1853,7 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
             str(helper.RUN_REPO_TOOL),
             "coverage",
             "report",
+            "--sort=cover",
             "--omit=*/_remote_module_non_scriptable",
             "--fail-under=70",
         ),

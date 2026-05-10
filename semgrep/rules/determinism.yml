@@ -9,6 +9,9 @@ rules:
       include:
         - /src/**/*.py
         - /packages/**/*.py
+        - /fixtures/src/**/*.py
+    exclude:
+      - /tests/**/*.py
     patterns:
       - pattern-either:
           - pattern: random.random(...)

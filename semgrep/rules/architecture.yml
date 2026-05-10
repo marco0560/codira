@@ -8,6 +8,7 @@ rules:
     paths:
       include:
         - /packages/codira-analyzer-*/src/**/*.py
+        - /fixtures/packages/codira-analyzer-*/src/**/*.py
     patterns:
       - pattern-either:
           - pattern: import codira.storage
@@ -21,6 +22,7 @@ rules:
     paths:
       include:
         - /packages/codira-analyzer-*/src/**/*.py
+        - /fixtures/packages/codira-analyzer-*/src/**/*.py
     patterns:
       - pattern-either:
           - pattern: import codira_backend_sqlite
@@ -35,6 +37,8 @@ rules:
     paths:
       include:
         - /packages/codira-analyzer-*/src/**/*.py
+        - /fixtures/packages/codira-analyzer-*/src/**/*.py
+      exclude:
+        - /tests/**/*.py
     patterns:
-      - pattern-either:
-          - pattern: import sqlite3
+      - pattern: import sqlite3
