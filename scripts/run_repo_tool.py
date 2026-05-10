@@ -46,6 +46,7 @@ SUPPORTED_TOOLS = {
     "pre-commit-noncode": "pre_commit",
     "pytest": "pytest",
     "ruff": "ruff",
+    "semgrep": "semgrep",
 }
 
 
@@ -252,7 +253,7 @@ def build_tool_argv(
     if module is None:
         raise UnsupportedToolError(tool, tuple(sorted(SUPPORTED_TOOLS)))
 
-    argv = (python, "-m", module)
+    argv = ("semgrep",) if tool == "semgrep" else (python, "-m", module)
     if tool == "pytest":
         selected_basetemp = (
             create_pytest_basetemp(state_root)

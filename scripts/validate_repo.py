@@ -44,6 +44,18 @@ VALIDATION_STEPS: tuple[ValidationStep, ...] = (
     ValidationStep("ruff-format", "ruff", ("format", "--check", ".")),
     ValidationStep("mypy", "mypy", (".",)),
     ValidationStep("pre-commit-noncode", "pre-commit-noncode", ("run", "--all-files")),
+    ValidationStep(
+        "semgrep",
+        "semgrep",
+        (
+            "scan",
+            "--config",
+            "semgrep/rules",
+            "--metrics=off",
+            "--disable-version-check",
+            ".",
+        ),
+    ),
     ValidationStep("coverage", "coverage", ("run", "-m", "pytest", "-q", "tests")),
     ValidationStep(
         "coverage-report",
