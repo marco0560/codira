@@ -3,10 +3,17 @@
 This directory contains Codira-owned Semgrep configuration for architecture,
 plugin contract, and deterministic design guardrails.
 
-Phase 1 only establishes repository-local Semgrep tooling integration.
-
-Rules are introduced incrementally in later phases to avoid noisy CI failures
+Semgrep rules are introduced incrementally to avoid noisy CI failures
 and to keep architectural exceptions explicit.
+
+Current rule categories:
+
+- architecture
+- plugins
+- determinism
+
+The initial rule set intentionally targets only low-noise,
+high-confidence architectural violations.
 
 ## Local invocation
 
