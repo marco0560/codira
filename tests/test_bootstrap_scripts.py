@@ -1828,6 +1828,17 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
         (
             "python",
             str(helper.RUN_REPO_TOOL),
+            "semgrep",
+            "scan",
+            "--config",
+            "semgrep/rules",
+            "--metrics=off",
+            "--disable-version-check",
+            ".",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
             "coverage",
             "run",
             "-m",

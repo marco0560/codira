@@ -3,48 +3,45 @@ name = "codira"
 dynamic = ["version"]
 description = "Local repository indexing and retrieval tool"
 readme = "README.md"
-authors = [{name = "Marco Coppola"}]
+authors = [{ name = "Marco Coppola" }]
 license = "MIT"
 requires-python = ">=3.13"
-dependencies = [
-    "jsonschema>=4.0",
-]
+dependencies = ["jsonschema>=4.0"]
 
 [project.optional-dependencies]
-semantic = [
-  "sentence-transformers>=5.4,<6.0"
-]
+semantic = ["sentence-transformers>=5.4,<6.0"]
 
 bundle-official = [
-  "sentence-transformers>=5.4,<6.0",
-  "codira-analyzer-python==1.5.2",
-  "codira-analyzer-json==1.5.1",
-  "codira-analyzer-c==1.5.5",
-  "codira-analyzer-bash==1.5.0",
-  "codira-backend-sqlite==1.5.3",
-  "codira-backend-duckdb==1.5.3"
+    "sentence-transformers>=5.4,<6.0",
+    "codira-analyzer-python==1.5.2",
+    "codira-analyzer-json==1.5.1",
+    "codira-analyzer-c==1.5.5",
+    "codira-analyzer-bash==1.5.0",
+    "codira-backend-sqlite==1.5.3",
+    "codira-backend-duckdb==1.5.3",
 ]
 
 dev = [
-  "mypy",
-  "ruff",
-  "pre-commit",
-  "pytest",
-  "pytest-cov",
-  "pyinstrument",
-  "snakeviz",
-  "packaging",
-  "build",
-  "setuptools>=68",
-  "setuptools-scm>=8",
-  "wheel",
+    "mypy",
+    "ruff",
+    "semgrep",
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+    "pyinstrument",
+    "snakeviz",
+    "packaging",
+    "build",
+    "setuptools>=68",
+    "setuptools-scm>=8",
+    "wheel",
 ]
 
 docs = [
-  "mkdocs>=1.6,<2.0",
-  "mkdocs-material>=9.7,<10.0",
-  "mkdocs-awesome-pages-plugin>=2.10,<3.0",
-  "mkdocstrings[python]>=1.0,<2.0"
+    "mkdocs>=1.6,<2.0",
+    "mkdocs-material>=9.7,<10.0",
+    "mkdocs-awesome-pages-plugin>=2.10,<3.0",
+    "mkdocstrings[python]>=1.0,<2.0",
 ]
 
 [build-system]
@@ -52,7 +49,7 @@ requires = ["setuptools>=68", "wheel", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -86,25 +83,25 @@ line-length = 88
 target-version = "py313"
 
 extend-exclude = [
-  ".git",
-  ".mypy_cache",
-  ".mypy_cache_run",
-  ".mypy_cache_verify",
-  ".pre-commit-cache",
-  ".pytest_cache",
-  ".pytest_cache_local",
-  ".pytest_tmp",
-  ".pytest_diag*",
-  ".pt_*",
-  ".ruff_cache",
-  ".ruff_cache_run",
-  ".tmp-pytest",
-  ".tmp_pytest_run",
-  ".venv",
-  "build",
-  "dist",
-  "node_modules",
-  "pytest-cache-files-*",
+    ".git",
+    ".mypy_cache",
+    ".mypy_cache_run",
+    ".mypy_cache_verify",
+    ".pre-commit-cache",
+    ".pytest_cache",
+    ".pytest_cache_local",
+    ".pytest_tmp",
+    ".pytest_diag*",
+    ".pt_*",
+    ".ruff_cache",
+    ".ruff_cache_run",
+    ".tmp-pytest",
+    ".tmp_pytest_run",
+    ".venv",
+    "build",
+    "dist",
+    "node_modules",
+    "pytest-cache-files-*",
 ]
 
 [tool.ruff.format]
@@ -114,102 +111,83 @@ line-ending = "lf"
 
 [tool.ruff.lint]
 select = [
-  "E",
-  "F",
-  "I",
-  "UP",
+    "E",
+    "F",
+    "I",
+    "UP",
 
-  "BLE",
-  "TRY",
-  "EM",
-  "S110",
-  "S112",
+    "BLE",
+    "TRY",
+    "EM",
+    "S110",
+    "S112",
 
-  "TC",
+    "TC",
 
-  "PTH",
+    "PTH",
 
-  "B",
+    "B",
 
-  "RET",
-  "LOG",
+    "RET",
+    "LOG",
 
-  "PLR",
-  "RSE",
-  "SIM",
-  "ICN",
-  "TCH",
-  "PIE",
+    "PLR",
+    "RSE",
+    "SIM",
+    "ICN",
+    "TCH",
+    "PIE",
 
-  "S602",
-  "S607",
-  "S610",
-  "S701",
+    "S602",
+    "S607",
+    "S610",
+    "S701",
 
-  "C901",
-  "PLR0912",
+    "C901",
+    "PLR0912",
 
-  "ERA",
-  "TD",
+    "ERA",
+    "TD",
 ]
 
 ignore = [
-  "D",
+    "D",
 
-  "ANN",
-  "FBT",
+    "ANN",
+    "FBT",
 
-  "S603",
-  "S324",
+    "S603",
+    "S324",
 
-  "PLR0911",
-  "PLR0915",
+    "PLR0911",
+    "PLR0915",
 
-  "PLR2004",
+    "PLR2004",
 
-  "COM812",
-  "E501",
+    "COM812",
+    "E501",
 
-  "FIX002",
+    "FIX002",
 
-  "FURB",
-  "PERF",
+    "FURB",
+    "PERF",
 
-  "B008",
-  "B905",
+    "B008",
+    "B905",
 ]
 
-fixable = [
-  "I",
-  "UP",
-  "B007",
-  "B009",
-]
+fixable = ["I", "UP", "B007", "B009"]
 
-unfixable = [
-  "E501",
-]
+unfixable = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = [
-  "S101",
-  "S108",
-  "S607",
-  "ARG",
-  "PLR",
-]
+"tests/**/*.py" = ["S101", "S108", "S607", "ARG", "PLR"]
 
-"tests/test_charset_decoding.py" = [
-  "B017",
-]
+"tests/test_charset_decoding.py" = ["B017"]
 
-"tests/helpers.py" = [
-  "PLR0913",
-]
+"tests/helpers.py" = ["PLR0913"]
 
-"src/codira/registry.py" = [
-  "BLE001",
-]
+"src/codira/registry.py" = ["BLE001"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15
@@ -264,11 +242,7 @@ exclude = """(?x)(
 )"""
 
 [[tool.mypy.overrides]]
-module = [
-  "tree_sitter",
-  "tree_sitter_c",
-  "tree_sitter_bash",
-]
+module = ["tree_sitter", "tree_sitter_c", "tree_sitter_bash"]
 ignore_missing_imports = true
 
 # ============================================================
@@ -279,13 +253,13 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 
 norecursedirs = [
-  ".git",
-  ".mypy_cache",
-  ".pre-commit-cache",
-  ".pytest_cache",
-  ".ruff_cache",
-  ".venv",
-  "build",
-  "dist",
-  "node_modules",
+    ".git",
+    ".mypy_cache",
+    ".pre-commit-cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "build",
+    "dist",
+    "node_modules",
 ]
