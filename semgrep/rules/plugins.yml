@@ -9,7 +9,12 @@ rules:
       include:
         - /packages/codira-analyzer-*/src/**/*.py
         - /packages/codira-backend-*/src/**/*.py
+        - /fixtures/packages/codira-analyzer-*/src/**/*.py
+      exclude:
+        - /tests/**/*.py
     pattern: |
+      try:
+          ...
       except:
           ...
 
@@ -22,6 +27,7 @@ rules:
     paths:
       include:
         - /packages/codira-analyzer-*/src/**/*.py
+        - /fixtures/packages/codira-analyzer-*/src/**/*.py
     patterns:
       - pattern-either:
           - pattern: import codira.storage

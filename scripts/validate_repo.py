@@ -53,6 +53,8 @@ VALIDATION_STEPS: tuple[ValidationStep, ...] = (
             "semgrep/rules",
             "--metrics=off",
             "--disable-version-check",
+            "--exclude",
+            "fixtures",
             ".",
         ),
     ),
@@ -62,6 +64,7 @@ VALIDATION_STEPS: tuple[ValidationStep, ...] = (
         "coverage",
         (
             "report",
+            "--sort=cover",
             "--omit=*/_remote_module_non_scriptable",
             "--fail-under=70",
         ),
