@@ -169,12 +169,16 @@ def tool_environment(
     """
 
     tmp_root = state_root / "tmp"
+    semgrep_root = state_root / "semgrep"
     env = dict(base_env)
     env["CODIRA_TOOL_STATE_ROOT"] = str(state_root)
     env["COVERAGE_FILE"] = str(state_root / "coverage" / ".coverage")
     env["MYPY_CACHE_DIR"] = str(state_root / "mypy")
     env["PRE_COMMIT_HOME"] = str(state_root / "pre-commit")
     env["RUFF_CACHE_DIR"] = str(state_root / "ruff")
+    env["SEMGREP_LOG_FILE"] = str(semgrep_root / "semgrep.log")
+    env["SEMGREP_SETTINGS_FILE"] = str(semgrep_root / "settings.yml")
+    env["SEMGREP_VERSION_CACHE_PATH"] = str(semgrep_root / "version-cache")
     env["TEMP"] = str(tmp_root)
     env["TMP"] = str(tmp_root)
     env["TMPDIR"] = str(tmp_root)
@@ -350,6 +354,7 @@ def main() -> int:
     state_root = tool_state_root(REPO_ROOT)
     (state_root / "tmp").mkdir(parents=True, exist_ok=True)
     (state_root / "coverage").mkdir(parents=True, exist_ok=True)
+    (state_root / "semgrep").mkdir(parents=True, exist_ok=True)
     env = tool_environment(os.environ, state_root=state_root)
     if args.tool == "pre-commit-noncode":
         env["SKIP"] = "ruff,ruff-format,mypy"

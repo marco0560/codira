@@ -1593,6 +1593,11 @@ def test_repo_tool_runner_uses_non_repository_tool_state(tmp_path: Path) -> None
     assert env["PRE_COMMIT_HOME"] == str(state_root / "pre-commit")
     assert env["MYPY_CACHE_DIR"] == str(state_root / "mypy")
     assert env["RUFF_CACHE_DIR"] == str(state_root / "ruff")
+    assert env["SEMGREP_LOG_FILE"] == str(state_root / "semgrep" / "semgrep.log")
+    assert env["SEMGREP_SETTINGS_FILE"] == str(state_root / "semgrep" / "settings.yml")
+    assert env["SEMGREP_VERSION_CACHE_PATH"] == str(
+        state_root / "semgrep" / "version-cache"
+    )
     assert env["TMP"] == str(state_root / "tmp")
     assert env["TEMP"] == str(state_root / "tmp")
     assert env["TMPDIR"] == str(state_root / "tmp")
