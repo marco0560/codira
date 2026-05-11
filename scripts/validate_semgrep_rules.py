@@ -1,23 +1,37 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+RUN_REPO_TOOL = REPO_ROOT / "scripts" / "run_repo_tool.py"
 
 FIXTURES = (
     (
         "architecture",
         "fixtures/packages",
         (
+            "codira.arch.no-storage-import-in-analyzers",
+            "codira.arch.no-registry-import-in-analyzers",
             "codira.arch.no-sqlite3-in-analyzers",
             "codira.arch.no-backend-import-in-analyzers",
+            "codira.arch.require-analyzer-capability-declaration",
+            "codira.plugins.no-core-storage-import",
+        ),
+    ),
+    (
+        "architecture-core",
+        "fixtures/src",
+        (
+            "codira.arch.no-sqlite3-outside-allowed-layers",
+            "codira.arch.no-backend-package-import-outside-allowed-layers",
         ),
     ),
     (
         "plugins",
         "fixtures/packages",
-        ("codira.plugins.no-bare-except",),
+        ("codira.plugins.no-broad-except-exception",),
     ),
     (
         "determinism",
@@ -33,6 +47,8 @@ def run_fixture(
     rule_ids: tuple[str, ...],
 ) -> int:
     command = (
+        sys.executable,
+        str(RUN_REPO_TOOL),
         "semgrep",
         "scan",
         "--config",

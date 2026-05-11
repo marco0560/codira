@@ -1,7 +1,7 @@
 rules:
-  - id: codira.plugins.no-bare-except
+  - id: codira.plugins.no-broad-except-exception
     message: >
-      Bare except clauses in plugins are forbidden.
+      Plugin packages must not catch Exception broadly.
     severity: WARNING
     languages:
       - python
@@ -15,7 +15,7 @@ rules:
     pattern: |
       try:
           ...
-      except:
+      except Exception:
           ...
 
   - id: codira.plugins.no-core-storage-import
@@ -31,3 +31,4 @@ rules:
     patterns:
       - pattern-either:
           - pattern: import codira.storage
+          - pattern: from codira.storage import $IMPORT

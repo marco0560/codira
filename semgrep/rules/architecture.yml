@@ -108,6 +108,7 @@ rules:
         - /src/**/*.py
         - /packages/**/*.py
         - /examples/plugins/**/*.py
+        - /fixtures/src/**/*.py
       exclude:
         - /src/codira/cli.py
         - /src/codira/query/context.py
@@ -136,6 +137,7 @@ rules:
         - /src/**/*.py
         - /packages/**/*.py
         - /examples/plugins/**/*.py
+        - /fixtures/src/**/*.py
       exclude:
         - /src/codira/indexer.py
         - /packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py
