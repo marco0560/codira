@@ -23,22 +23,15 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
+from codira.repository_scope import is_repository_scope_excluded
+
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
     from pathlib import Path
 
     from codira.contracts import LanguageAnalyzer
 
-EXCLUDED_DIRS = {
-    ".codira",
-    ".venv",
-    ".git",
-    "__pycache__",
-    ".mypy_cache",
-    ".pytest_cache",
-    "build",
-    "dist",
-}
+
 CANONICAL_SOURCE_DIRS: tuple[str, ...] = ("src", "tests", "scripts")
 GIT_EXE = shutil.which("git") or "git"
 
@@ -157,7 +150,7 @@ def _is_excluded(path: Path, root: Path, patterns: list[str]) -> bool:
         ``True`` when the path belongs to an excluded directory or matches
         an ignore pattern.
     """
-    if any(part in EXCLUDED_DIRS for part in path.parts):
+    if is_repository_scope_excluded(path, root):
         return True
 
     return bool(_match_gitignore(path, root, patterns))
@@ -251,7 +244,8 @@ def iter_project_files(
         supported_files = [
             path
             for path in sorted(files)
-            if any(analyzer.supports_path(path) for analyzer in analyzers)
+            if not is_repository_scope_excluded(path, root)
+            and any(analyzer.supports_path(path) for analyzer in analyzers)
         ]
         return iter(supported_files)
 
@@ -358,7 +352,13 @@ def iter_canonical_project_files(root: Path) -> Iterator[Path]:
         files = [
             root / line.strip() for line in result.stdout.splitlines() if line.strip()
         ]
-        return iter(sorted(path for path in files if path.is_file()))
+        return iter(
+            sorted(
+                path
+                for path in files
+                if path.is_file() and not is_repository_scope_excluded(path, root)
+            )
+        )
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         if isinstance(exc, subprocess.CalledProcessError):
             stderr = (exc.stderr or "").lower()

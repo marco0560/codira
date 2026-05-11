@@ -1672,10 +1672,10 @@ def test_coverage_cli_groups_text_output_by_suffix_and_directory(
 
     assert main() == 1
     captured = capsys.readouterr()
-    assert "Coverage issues: 2" in captured.out
+    assert "Coverage issues: 1" in captured.out
     assert (
-        "coverage: .json x2 in "
-        "src, tests (.json, no registered analyzer accepts this file type/content combination)"
+        "coverage: .json x1 in "
+        "src (.json, no registered analyzer accepts this file type/content combination)"
     ) in captured.out
 
 

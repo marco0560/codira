@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, cast
 from codira.contracts import BackendGraphMetric, BackendSymbolInventoryItem
 from codira.docstring import DocstringValidationRequest, validate_docstring
 from codira.prefix import normalize_prefix, path_has_prefix
+from codira.repository_scope import path_has_excluded_tree_name
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -389,7 +390,10 @@ def _should_audit_docstrings(source_path: Path) -> bool:
     bool
         ``True`` for files whose artifacts should be audited.
     """
-    return source_path.suffix not in {".sh", ".bash"}
+    return source_path.suffix not in {
+        ".sh",
+        ".bash",
+    } and not path_has_excluded_tree_name(source_path)
 
 
 def _should_require_raises_section(source_path: Path, function_name: str) -> bool:

@@ -1656,101 +1656,6 @@ def test_repo_tool_runner_adds_tool_specific_cache_arguments(tmp_path: Path) -> 
     ) == ("python", "-m", "pre_commit", "run", "--all-files")
 
 
-def test_repo_tool_runner_splits_black_serial_args() -> None:
-    """
-    Keep serial black invocation deterministic for aggregate validation.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts black options are separated from path targets.
-    """
-
-    helper = _load_repo_tool_runner()
-
-    assert helper.split_black_serial_args(("--check", ".")) == (("--check",), ["."])
-    assert helper.split_black_serial_args(()) == ((), ["."])
-
-
-def test_repo_tool_runner_captures_black_child_output(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """
-    Keep Black child output isolated from the caller terminal.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to replace target expansion and subprocess execution.
-    capsys : pytest.CaptureFixture[str]
-        Fixture used to inspect replayed wrapper output.
-
-    Returns
-    -------
-    None
-        The test asserts Black runs with captured streams and the wrapper
-        replays those streams after the child exits.
-    """
-
-    helper = _load_repo_tool_runner()
-    calls: list[dict[str, object]] = []
-
-    def fake_expand(targets: Sequence[str]) -> list[str]:
-        return ["scripts/validate_repo.py"]
-
-    def fake_run(
-        argv: tuple[str, ...],
-        *,
-        cwd: Path,
-        env: Mapping[str, str],
-        capture_output: bool,
-        text: bool,
-        check: bool,
-    ) -> subprocess.CompletedProcess[str]:
-        calls.append(
-            {
-                "argv": argv,
-                "cwd": cwd,
-                "env": dict(env),
-                "capture_output": capture_output,
-                "text": text,
-                "check": check,
-            }
-        )
-        return subprocess.CompletedProcess(
-            argv,
-            0,
-            stdout="black stdout\n",
-            stderr="black stderr\n",
-        )
-
-    monkeypatch.setattr(helper, "expand_black_serial_targets", fake_expand)
-    monkeypatch.setattr(helper.subprocess, "run", fake_run)
-
-    assert (
-        helper.run_black_serial(("--check", "."), env={"X": "1"}, python="python") == 0
-    )
-    captured = capsys.readouterr()
-
-    assert captured.out == "black stdout\n"
-    assert captured.err == "black stderr\n"
-    assert calls == [
-        {
-            "argv": ("python", "-m", "black", "--check", "scripts/validate_repo.py"),
-            "cwd": Path(__file__).resolve().parents[1],
-            "env": {"X": "1"},
-            "capture_output": True,
-            "text": True,
-            "check": False,
-        }
-    ]
-
-
 def test_repo_tool_runner_creates_unique_pytest_basetemp(tmp_path: Path) -> None:
     """
     Avoid reusing or pre-creating pytest temporary directories.
@@ -1852,10 +1757,16 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
             "python",
             str(helper.RUN_REPO_TOOL),
             "coverage",
-            "report",
-            "--sort=cover",
+            "json",
+            "-o",
+            ".coverage-report.json",
             "--omit=*/_remote_module_non_scriptable",
-            "--fail-under=70",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
+            "python",
+            "scripts/coverage_summary.py",
         ),
     )
 
