@@ -15,6 +15,10 @@ Current rule categories:
 The initial rule set intentionally targets only low-noise,
 high-confidence architectural violations.
 
+Allowlisted architectural debt is recorded in:
+
+- `docs/process/semgrep-architecture-guardrails.md`
+
 ## Local invocation
 
 ```sh

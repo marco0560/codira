@@ -12,6 +12,22 @@ rules:
     patterns:
       - pattern-either:
           - pattern: import codira.storage
+          - pattern: from codira.storage import $IMPORT
+
+  - id: codira.arch.no-registry-import-in-analyzers
+    message: >
+      Analyzer packages must not import codira registry internals.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-analyzer-*/src/**/*.py
+        - /fixtures/packages/codira-analyzer-*/src/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: import codira.registry
+          - pattern: from codira.registry import $IMPORT
 
   - id: codira.arch.no-backend-import-in-analyzers
     message: >
@@ -26,7 +42,9 @@ rules:
     patterns:
       - pattern-either:
           - pattern: import codira_backend_sqlite
+          - pattern: from codira_backend_sqlite import $IMPORT
           - pattern: import codira_backend_duckdb
+          - pattern: from codira_backend_duckdb import $IMPORT
 
   - id: codira.arch.no-sqlite3-in-analyzers
     message: >
@@ -41,4 +59,91 @@ rules:
       exclude:
         - /tests/**/*.py
     patterns:
-      - pattern: import sqlite3
+      - pattern-either:
+          - pattern: import sqlite3
+          - pattern: from sqlite3 import $IMPORT
+
+  - id: codira.arch.require-analyzer-capability-declaration
+    message: >
+      First-party analyzer modules must expose analyzer_capability_declaration.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-analyzer-*/src/**/*.py
+        - /fixtures/packages/codira-analyzer-*/src/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: |
+              class $CLASS:
+                ...
+          - pattern: |
+              class $CLASS(...):
+                ...
+      - metavariable-regex:
+          metavariable: $CLASS
+          regex: ^[A-Za-z_][A-Za-z0-9_]*Analyzer$
+      - pattern-not-inside: |
+          class $CLASS:
+            ...
+            def analyzer_capability_declaration(...):
+              ...
+      - pattern-not-inside: |
+          class $CLASS(...):
+            ...
+            def analyzer_capability_declaration(...):
+              ...
+
+  - id: codira.arch.no-sqlite3-outside-allowed-layers
+    message: >
+      sqlite3 imports outside documented allowlists are architectural debt.
+      Update docs/process/semgrep-architecture-guardrails.md before extending
+      the allowlist.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /src/**/*.py
+        - /packages/**/*.py
+        - /examples/plugins/**/*.py
+      exclude:
+        - /src/codira/cli.py
+        - /src/codira/query/context.py
+        - /src/codira/query/graph_enrichment.py
+        - /src/codira/query/producers.py
+        - /src/codira/storage.py
+        - /src/codira/sqlite_backend_support.py
+        - /packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py
+        - /packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py
+        - /packages/**/tests/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: import sqlite3
+          - pattern: from sqlite3 import $IMPORT
+
+  - id: codira.arch.no-backend-package-import-outside-allowed-layers
+    message: >
+      Backend package imports outside documented allowlists are architectural
+      debt. Update docs/process/semgrep-architecture-guardrails.md before
+      extending the allowlist.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /src/**/*.py
+        - /packages/**/*.py
+        - /examples/plugins/**/*.py
+      exclude:
+        - /src/codira/indexer.py
+        - /packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py
+        - /examples/plugins/codira_demo_backend/src/codira_demo_backend/__init__.py
+        - /packages/**/tests/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: import codira_backend_sqlite
+          - pattern: from codira_backend_sqlite import $IMPORT
+          - pattern: import codira_backend_duckdb
+          - pattern: from codira_backend_duckdb import $IMPORT
