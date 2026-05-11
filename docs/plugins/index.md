@@ -33,4 +33,5 @@ Start here:
 - [Analyzer plugins](analyzers.md)
 - [Backend plugins](backends.md)
 - [Packaging and install](packaging.md)
+- [Semgrep guidance](semgrep.md)
 - [Tutorial](tutorial.md)
