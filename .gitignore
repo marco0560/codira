@@ -8,15 +8,16 @@ venv/
 # Repoindex internal DB
 # -------------------------------
 .codira/
-issues.json
-milestones.json
-guidelines.tar.xz
 
 # -------------------------------
 # Build artifacts
 # -------------------------------
 .artifacts/
 benchmarks/
+issues.json
+milestones.json
+guidelines.tar.xz
+.coverage-report.json
 
 # -------------------------------
 # Python cache

@@ -60,14 +60,19 @@ VALIDATION_STEPS: tuple[ValidationStep, ...] = (
     ),
     ValidationStep("coverage", "coverage", ("run", "-m", "pytest", "-q", "tests")),
     ValidationStep(
-        "coverage-report",
+        "coverage-json",
         "coverage",
         (
-            "report",
-            "--sort=cover",
+            "json",
+            "-o",
+            ".coverage-report.json",
             "--omit=*/_remote_module_non_scriptable",
-            "--fail-under=70",
         ),
+    ),
+    ValidationStep(
+        "coverage-summary",
+        "python",
+        ("scripts/coverage_summary.py",),
     ),
 )
 
@@ -124,9 +129,34 @@ def run_validation(
         commands if commands is not None else build_validation_commands()
     )
     for command in selected_commands:
-        completed = subprocess.run(command, cwd=REPO_ROOT, check=False)
+        capture_output = (
+            len(command) >= 5 and command[2] == "coverage" and command[3] == "report"
+        )
+
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=capture_output,
+            text=capture_output,
+        )
+
+        if capture_output:
+            output = completed.stdout.strip()
+
+            if "--format=total" in command:
+                print(f"TOTAL COVERAGE: {output}%")
+            else:
+                lines = output.splitlines()
+
+                if len(lines) > 2:
+                    print("\nWorst coverage files:")
+                    for line in lines[2:7]:
+                        print(line)
+
         if completed.returncode != 0:
             return completed.returncode
+
     return 0
 
 
