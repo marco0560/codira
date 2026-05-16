@@ -1,3 +1,10 @@
+## [1.23.7](https://github.com/marco0560/codira/compare/v1.23.6...v1.23.7) (2026-05-16)
+
+
+### Bug Fixes
+
+* **contracts:** harden analyzer and backend typing invariants ([331f352](https://github.com/marco0560/codira/commit/331f3524d233549aa70bf0a189cd1ce3948d2c73))
+
 ## [1.23.6](https://github.com/marco0560/codira/compare/v1.23.5...v1.23.6) (2026-05-09)
 
 
