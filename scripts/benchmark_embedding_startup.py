@@ -67,6 +67,7 @@ class _EmbeddingsModule(Protocol):
         list[float]
             Dense embedding vector.
         """
+        ...
 
     def reset_embedding_runtime_caches(self) -> None:
         """

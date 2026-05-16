@@ -23,8 +23,9 @@ import importlib
 import json
 import re
 import sqlite3
-from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
+
+from codira_backend_sqlite import SQLiteIndexBackend
 
 from codira.contracts import (
     BackendError,
@@ -35,10 +36,10 @@ from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import get_embedding_backend
 from codira.sqlite_backend_support import _store_analysis
 from codira.storage import get_codira_dir, get_metadata_path
-from codira_backend_sqlite import SQLiteIndexBackend
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
     from codira.contracts import IndexBackend
     from codira.sqlite_backend_support import StoredEmbeddingRow
@@ -195,6 +196,7 @@ class _DuckDBRawConnection(Protocol):
         list[tuple[object, ...]]
             Remaining result rows.
         """
+        ...
 
     def commit(self) -> None:
         """
@@ -209,6 +211,7 @@ class _DuckDBRawConnection(Protocol):
         None
             The active transaction is committed in place.
         """
+        ...
 
     def close(self) -> None:
         """
@@ -223,6 +226,7 @@ class _DuckDBRawConnection(Protocol):
         None
             The active connection is closed in place.
         """
+        ...
 
 
 class _DuckDBModule(Protocol):
@@ -244,6 +248,7 @@ class _DuckDBModule(Protocol):
         _DuckDBRawConnection
             Open raw DuckDB connection handle.
         """
+        ...
 
 
 class _DuckDBCursorWrapper:
@@ -880,13 +885,15 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
                 except (OSError, error_type, RuntimeError, ValueError):
                     conn.execute("ROLLBACK")
                     raise
-                conn.execute("COMMIT")
-            if owns_connection:
-                conn.commit()
-            return written
+                else:
+                    conn.execute("COMMIT")
         except error_type as exc:
             msg = str(exc)
             raise BackendError(msg) from exc
+        else:
+            if owns_connection:
+                conn.commit()
+            return written
         finally:
             if owns_connection:
                 conn.close()

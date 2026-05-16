@@ -27,6 +27,7 @@ class _FutureRepoCIModule(Protocol):
         tuple[scripts.future_repo_ci.FutureRepoCISpec, ...]
             Future repository CI specifications in deterministic order.
         """
+        ...
 
 
 def _load_future_repo_ci_helper() -> _FutureRepoCIModule:

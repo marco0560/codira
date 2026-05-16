@@ -41,9 +41,9 @@ from codira.semantic.embeddings import (
     get_embedding_backend,
 )
 from codira.sqlite_backend_support import (
+    _clear_index_tables,
     _count_reused_embeddings,
     _current_embedding_state_matches,
-    _clear_index_tables,
     _delete_indexed_file_data,
     _dot_similarity,
     _load_existing_file_hashes,
@@ -402,32 +402,28 @@ class SQLiteIndexBackend:
                         "call_edges",
                         "caller_module",
                         "caller_name",
-                        module_name,
-                        symbol_name,
+                        (module_name, symbol_name),
                     ),
                     calls_in=self._symbol_metric(
                         conn,
                         "call_edges",
                         "callee_module",
                         "callee_name",
-                        module_name,
-                        symbol_name,
+                        (module_name, symbol_name),
                     ),
                     refs_out=self._symbol_metric(
                         conn,
                         "callable_refs",
                         "owner_module",
                         "owner_name",
-                        module_name,
-                        symbol_name,
+                        (module_name, symbol_name),
                     ),
                     refs_in=self._symbol_metric(
                         conn,
                         "callable_refs",
                         "target_module",
                         "target_name",
-                        module_name,
-                        symbol_name,
+                        (module_name, symbol_name),
                     ),
                 )
                 for symbol_type, module_name, symbol_name, file_path, lineno in limited_symbols
@@ -442,8 +438,7 @@ class SQLiteIndexBackend:
         table: str,
         module_column: str,
         name_column: str,
-        module_name: str,
-        symbol_name: str,
+        symbol_identity: tuple[str, str],
     ) -> BackendGraphMetric:
         """
         Count graph edges for one symbol identity.
@@ -458,16 +453,15 @@ class SQLiteIndexBackend:
             Column storing the selected relation endpoint module.
         name_column : str
             Column storing the selected relation endpoint name.
-        module_name : str
-            Module component of the symbol identity.
-        symbol_name : str
-            Name component of the symbol identity.
+        symbol_identity : tuple[str, str]
+            Module and name components of the symbol identity.
 
         Returns
         -------
         codira.contracts.BackendGraphMetric
             Total and unresolved counts for the selected relation direction.
         """
+        module_name, symbol_name = symbol_identity
         row = conn.execute(
             f"""
             SELECT COUNT(*), COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
@@ -1723,13 +1717,15 @@ class SQLiteIndexBackend:
                     conn.execute("ROLLBACK TO SAVEPOINT persist_analysis")
                     conn.execute("RELEASE SAVEPOINT persist_analysis")
                     raise
-                conn.execute("RELEASE SAVEPOINT persist_analysis")
-            if owns_connection:
-                conn.commit()
-            return written
+                else:
+                    conn.execute("RELEASE SAVEPOINT persist_analysis")
         except sqlite3.Error as exc:
             msg = str(exc)
             raise BackendError(msg) from exc
+        else:
+            if owns_connection:
+                conn.commit()
+            return written
         finally:
             if owns_connection:
                 conn.close()

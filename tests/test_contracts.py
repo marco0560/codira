@@ -49,6 +49,7 @@ from codira.contracts import (
 )
 from codira.indexer import (
     _collect_indexed_file_analyses,
+    _duplicate_analysis_stable_ids,
     _select_language_analyzer,
     index_repo,
 )
@@ -1548,6 +1549,146 @@ def test_analysis_result_from_parsed_disambiguates_property_accessors(
         "python:method:pkg.sample:Demo.value",
         "python:method:pkg.sample:Demo.value:setter",
     )
+
+
+def test_python_analyzer_reads_pep_263_encoded_sources(tmp_path: Path) -> None:
+    """
+    Decode Python sources according to declared encoding cookies.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts analyzer-local decoding accepts non-UTF-8 Python
+        sources and preserves bounded declaration extraction.
+    """
+    package = tmp_path / "pkg"
+    package.mkdir()
+
+    latin1_module = package / "latin1_sample.py"
+    latin1_module.write_bytes('# coding: latin-1\nTITLE = "café"\n'.encode("latin-1"))
+
+    koi8r_module = package / "koi8r_sample.py"
+    koi8r_module.write_bytes('# coding: koi8-r\nMESSAGE = "привет"\n'.encode("koi8-r"))
+
+    latin1_result = PythonAnalyzer().analyze_file(latin1_module, tmp_path)
+    koi8r_result = PythonAnalyzer().analyze_file(koi8r_module, tmp_path)
+
+    assert [
+        (declaration.name, declaration.signature)
+        for declaration in latin1_result.declarations
+    ] == [  # noqa: E501
+        ("TITLE", 'TITLE = "café"'),
+    ]
+    assert [
+        (declaration.name, declaration.signature)
+        for declaration in koi8r_result.declarations
+    ] == [  # noqa: E501
+        ("MESSAGE", 'MESSAGE = "привет"'),
+    ]
+
+
+def test_python_analyzer_disambiguates_duplicate_stable_id_shapes(
+    tmp_path: Path,
+) -> None:
+    """
+    Rewrite colliding Python stable IDs across observed CPython shapes.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts duplicate functions, classes, methods, and constants
+        are made unique before index-time validation.
+    """
+    module = tmp_path / "pkg" / "sample.py"
+    module.parent.mkdir()
+    module.write_text(
+        "def _():\n"
+        "    return 1\n"
+        "\n"
+        "def _():\n"
+        "    return 2\n"
+        "\n"
+        "def clone():\n"
+        "    return 1\n"
+        "\n"
+        "def clone():\n"
+        "    return 2\n"
+        "\n"
+        "class Loader:\n"
+        "    def run(self):\n"
+        "        return 1\n"
+        "\n"
+        "class Loader:\n"
+        "    def run(self):\n"
+        "        return 2\n"
+        "\n"
+        "class Demo:\n"
+        "    def value(self):\n"
+        "        return 1\n"
+        "\n"
+        "    def value(self):\n"
+        "        return 2\n"
+        "\n"
+        "ALIAS = 1\n"
+        "ALIAS = 2\n",
+        encoding="utf-8",
+    )
+
+    result = PythonAnalyzer().analyze_file(module, tmp_path)
+
+    duplicate_functions = [
+        function.stable_id
+        for function in result.functions
+        if function.name in {"_", "clone"}
+    ]
+    duplicate_classes = [
+        class_artifact.stable_id
+        for class_artifact in result.classes
+        if class_artifact.name == "Loader"
+    ]
+    duplicate_methods = [
+        method.stable_id
+        for class_artifact in result.classes
+        for method in class_artifact.methods
+        if (class_artifact.name, method.name) in {("Loader", "run"), ("Demo", "value")}
+    ]
+    duplicate_declarations = [
+        declaration.stable_id
+        for declaration in result.declarations
+        if declaration.name == "ALIAS"
+    ]
+
+    assert _duplicate_analysis_stable_ids(result) == []
+    assert duplicate_functions == [
+        "python:function:pkg.sample:_:1",
+        "python:function:pkg.sample:_:2",
+        "python:function:pkg.sample:clone:1",
+        "python:function:pkg.sample:clone:2",
+    ]
+    assert duplicate_classes == [
+        "python:class:pkg.sample:Loader:1",
+        "python:class:pkg.sample:Loader:2",
+    ]
+    assert duplicate_methods == [
+        "python:method:pkg.sample:Loader.run:1",
+        "python:method:pkg.sample:Loader.run:2",
+        "python:method:pkg.sample:Demo.value:1",
+        "python:method:pkg.sample:Demo.value:2",
+    ]
+    assert duplicate_declarations == [
+        "python:constant:pkg.sample:ALIAS:1",
+        "python:constant:pkg.sample:ALIAS:2",
+    ]
 
 
 def test_parse_file_excludes_nested_helper_control_flow_from_outer_metadata(

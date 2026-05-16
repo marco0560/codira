@@ -1145,6 +1145,82 @@ def _const_declaration_artifacts(
     return tuple(artifacts)
 
 
+def _record_declaration(
+    declarations_by_stable_id: dict[str, DeclarationArtifact],
+    declaration: DeclarationArtifact | None,
+) -> None:
+    """
+    Store one declaration artifact when it exists.
+
+    Parameters
+    ----------
+    declarations_by_stable_id : dict[str, codira.models.DeclarationArtifact]
+        Accumulator keyed by stable ID.
+    declaration : codira.models.DeclarationArtifact | None
+        Declaration artifact to record.
+
+    Returns
+    -------
+    None
+        The declaration map is updated in place when a declaration exists.
+    """
+    if declaration is not None:
+        declarations_by_stable_id[declaration.stable_id] = declaration
+
+
+def _record_nested_type_declarations(
+    child: Node,
+    source: bytes,
+    *,
+    attached_comments: dict[int, str],
+    declarations_by_stable_id: dict[str, DeclarationArtifact],
+    owner_id: str,
+) -> None:
+    """
+    Record nested declarations found inside one C type-definition node.
+
+    Parameters
+    ----------
+    child : tree_sitter.Node
+        Type-definition node to inspect.
+    source : bytes
+        Full source buffer.
+    attached_comments : dict[int, str]
+        Comment blocks keyed by source byte offset.
+    declarations_by_stable_id : dict[str, codira.models.DeclarationArtifact]
+        Accumulator keyed by stable ID.
+    owner_id : str
+        File-scoped owner identity preserving the source suffix.
+
+    Returns
+    -------
+    None
+        Matching nested declarations are added in place.
+    """
+    child_comment = attached_comments.get(child.start_byte)
+    for named_child in child.named_children:
+        if named_child.type == "struct_specifier":
+            kind: DeclarationKind = "struct"
+        elif named_child.type == "union_specifier":
+            kind = "union"
+        elif named_child.type == "enum_specifier":
+            kind = "enum"
+        else:
+            continue
+        declaration = _declaration_artifact(
+            named_child,
+            source,
+            docstring=_resolve_declaration_docstring(
+                attached_comments,
+                named_child,
+                inherited_comment=child_comment,
+            ),
+            kind=kind,
+            owner_id=owner_id,
+        )
+        _record_declaration(declarations_by_stable_id, declaration)
+
+
 def _extract_declarations(
     root: Node,
     source: bytes,
@@ -1180,8 +1256,7 @@ def _extract_declarations(
                 kind="macro",
                 owner_id=owner_id,
             )
-            if declaration is not None:
-                declarations_by_stable_id[declaration.stable_id] = declaration
+            _record_declaration(declarations_by_stable_id, declaration)
             continue
 
         if child.type == "declaration":
@@ -1192,7 +1267,7 @@ def _extract_declarations(
                 owner_id=owner_id,
             )
             for declaration in declarations:
-                declarations_by_stable_id[declaration.stable_id] = declaration
+                _record_declaration(declarations_by_stable_id, declaration)
             continue
 
         if child.type == "struct_specifier":
@@ -1203,8 +1278,7 @@ def _extract_declarations(
                 kind="struct",
                 owner_id=owner_id,
             )
-            if declaration is not None:
-                declarations_by_stable_id[declaration.stable_id] = declaration
+            _record_declaration(declarations_by_stable_id, declaration)
             continue
 
         if child.type == "union_specifier":
@@ -1215,8 +1289,7 @@ def _extract_declarations(
                 kind="union",
                 owner_id=owner_id,
             )
-            if declaration is not None:
-                declarations_by_stable_id[declaration.stable_id] = declaration
+            _record_declaration(declarations_by_stable_id, declaration)
             continue
 
         if child.type == "enum_specifier":
@@ -1227,67 +1300,25 @@ def _extract_declarations(
                 kind="enum",
                 owner_id=owner_id,
             )
-            if declaration is not None:
-                declarations_by_stable_id[declaration.stable_id] = declaration
+            _record_declaration(declarations_by_stable_id, declaration)
             continue
 
-        if child.type != "type_definition":
-            continue
-
-        child_comment = attached_comments.get(child.start_byte)
-        for named_child in child.named_children:
-            if named_child.type == "struct_specifier":
-                declaration = _declaration_artifact(
-                    named_child,
-                    source,
-                    docstring=_resolve_declaration_docstring(
-                        attached_comments,
-                        named_child,
-                        inherited_comment=child_comment,
-                    ),
-                    kind="struct",
-                    owner_id=owner_id,
-                )
-                if declaration is not None:
-                    declarations_by_stable_id[declaration.stable_id] = declaration
-            elif named_child.type == "union_specifier":
-                declaration = _declaration_artifact(
-                    named_child,
-                    source,
-                    docstring=_resolve_declaration_docstring(
-                        attached_comments,
-                        named_child,
-                        inherited_comment=child_comment,
-                    ),
-                    kind="union",
-                    owner_id=owner_id,
-                )
-                if declaration is not None:
-                    declarations_by_stable_id[declaration.stable_id] = declaration
-            elif named_child.type == "enum_specifier":
-                declaration = _declaration_artifact(
-                    named_child,
-                    source,
-                    docstring=_resolve_declaration_docstring(
-                        attached_comments,
-                        named_child,
-                        inherited_comment=child_comment,
-                    ),
-                    kind="enum",
-                    owner_id=owner_id,
-                )
-                if declaration is not None:
-                    declarations_by_stable_id[declaration.stable_id] = declaration
-
-        declaration = _declaration_artifact(
-            child,
-            source,
-            docstring=_resolve_declaration_docstring(attached_comments, child),
-            kind="typedef",
-            owner_id=owner_id,
-        )
-        if declaration is not None:
-            declarations_by_stable_id[declaration.stable_id] = declaration
+        if child.type == "type_definition":
+            _record_nested_type_declarations(
+                child,
+                source,
+                attached_comments=attached_comments,
+                declarations_by_stable_id=declarations_by_stable_id,
+                owner_id=owner_id,
+            )
+            declaration = _declaration_artifact(
+                child,
+                source,
+                docstring=_resolve_declaration_docstring(attached_comments, child),
+                kind="typedef",
+                owner_id=owner_id,
+            )
+            _record_declaration(declarations_by_stable_id, declaration)
 
     return tuple(
         sorted(

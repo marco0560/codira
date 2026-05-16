@@ -991,7 +991,7 @@ def _snippet_from_lines(
     return [line.rstrip() for line in source_lines[start:end]]
 
 
-def _normalize_snippet_lines(lines: list[str], limit: int) -> list[str]:
+def _normalize_snippet_lines(lines: Sequence[str], limit: int) -> list[str]:
     """
     Normalize snippet lines for readable deterministic display.
 
@@ -1032,7 +1032,7 @@ def _normalize_snippet_lines(lines: list[str], limit: int) -> list[str]:
 
 def _snippet_from_node(
     node: ast.AST,
-    source_lines: list[str],
+    source_lines: Sequence[str],
     limit: int = SNIPPET_LINE_LIMIT,
 ) -> list[str]:
     """
@@ -1042,7 +1042,7 @@ def _snippet_from_node(
     ----------
     node : ast.AST
         AST node whose source snippet should be extracted.
-    source_lines : list[str]
+    source_lines : collections.abc.Sequence[str]
         Source file split into lines.
     limit : int, optional
         Maximum number of snippet lines to retain.

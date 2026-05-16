@@ -22,6 +22,7 @@ Invariants:
 - analyzers own language-specific parsing only
 - analyzers do not own backend initialization or persistence
 - emitted artifact ordering must be deterministic
+- emitted stable IDs must be unique within one returned `AnalysisResult`
 - emitted embedding-bearing artifacts now carry durable analyzer-owned symbol
   identities used for cross-run reuse
 - first-party analyzers declare their canonical ontology coverage through
@@ -94,6 +95,7 @@ Invariants:
 
 - one `AnalysisResult` represents one source file
 - module, class, function, import, call, and reference ordering is stable
+- stable IDs are unique across all artifacts within one `AnalysisResult`
 - module, class, function, and declaration artifacts now expose durable stable
   identities independent of database row ids
 - integer flags stay compatible with the existing SQLite schema while the

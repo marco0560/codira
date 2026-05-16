@@ -963,23 +963,24 @@ def _extract_callable_refs(node: ast.AST) -> list[dict[str, str | int]]:
     return refs
 
 
-def parse_file(path: Path, root: Path) -> dict[str, Any]:
+def parse_source(path: Path, root: Path, source: str) -> dict[str, Any]:
     """
-    Parse a Python file into indexable metadata.
+    Parse Python source text into indexable metadata.
 
     Parameters
     ----------
     path : pathlib.Path
-        Python source file to parse.
+        Logical Python source path associated with ``source``.
     root : pathlib.Path
         Repository root used for module name derivation.
+    source : str
+        Decoded Python source text to parse.
 
     Returns
     -------
-    dict[str, Any]
+    dict[str, typing.Any]
         Parsed module, class, function, and import metadata ready for indexing.
     """
-    source = path.read_text(encoding="utf-8")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", SyntaxWarning)
         tree = ast.parse(source, filename=str(path))
@@ -1090,3 +1091,23 @@ def parse_file(path: Path, root: Path) -> dict[str, Any]:
             continue
 
     return result
+
+
+def parse_file(path: Path, root: Path) -> dict[str, Any]:
+    """
+    Parse a Python file into indexable metadata.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Python source file to parse.
+    root : pathlib.Path
+        Repository root used for module name derivation.
+
+    Returns
+    -------
+    dict[str, Any]
+        Parsed module, class, function, and import metadata ready for indexing.
+    """
+    source = path.read_text(encoding="utf-8")
+    return parse_source(path, root, source)

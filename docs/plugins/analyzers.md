@@ -70,6 +70,9 @@ Rules:
 - scanner discovery confirms ownership through `supports_path(path)` before a
   file enters the indexing set, so broad globs are allowed only when
   `supports_path()` deterministically rejects unsupported files
+- analyzers must emit stable IDs that are unique within one returned
+  `AnalysisResult`; if a language can produce same-name collisions in one file,
+  the analyzer must disambiguate them deterministically before returning
 - uncovered tracked files under `src/`, `tests/`, and `scripts/` will be
   surfaced by the index coverage audit when no analyzer claims them
 - `codira cov` is the operator-facing way to verify whether your

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import sys
 import tomllib
-from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -303,6 +302,60 @@ class _InventoryConnection:
         self.closed = True
 
 
+class _FakeAnalyzer:
+    """Small analyzer stub satisfying the LanguageAnalyzer protocol."""
+
+    name: str
+    version: str
+    discovery_globs: tuple[str, ...]
+
+    def __init__(
+        self,
+        name: str,
+        version: str,
+        discovery_globs: tuple[str, ...],
+    ) -> None:
+        self.name = name
+        self.version = version
+        self.discovery_globs = discovery_globs
+
+    def supports_path(self, path: Path) -> bool:
+        """
+        Report that the stub never claims source files.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Candidate file.
+
+        Returns
+        -------
+        bool
+            Always ``False`` for this stub.
+        """
+        del path
+        return False
+
+    def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
+        """
+        Reject analysis requests from the stub.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Source file to analyze.
+        root : pathlib.Path
+            Repository root.
+
+        Returns
+        -------
+        codira.models.AnalysisResult
+            Never returned.
+        """
+        del path, root
+        raise NotImplementedError
+
+
 class _DuckDBDriverError(RuntimeError):
     """Dedicated fake DuckDB driver error type used for translation tests."""
 
@@ -507,7 +560,7 @@ def test_duckdb_backend_persist_runtime_inventory_round_trips_inventory(
 
     monkeypatch.setattr(
         "codira_backend_duckdb._duckdb_module",
-        lambda: SimpleNamespace(Error=_DuckDBDriverError),
+        lambda: type("DuckDBModuleStub", (), {"Error": _DuckDBDriverError})(),
     )
     monkeypatch.setattr(
         DuckDBIndexBackend,
@@ -522,16 +575,8 @@ def test_duckdb_backend_persist_runtime_inventory_round_trips_inventory(
             backend_version="1.5.3",
             coverage_complete=True,
             analyzers=(
-                SimpleNamespace(
-                    name="python",
-                    version="1",
-                    discovery_globs=("*.py",),
-                ),
-                SimpleNamespace(
-                    name="bash",
-                    version="2",
-                    discovery_globs=("*.sh",),
-                ),
+                _FakeAnalyzer("python", "1", ("*.py",)),
+                _FakeAnalyzer("bash", "2", ("*.sh",)),
             ),
         )
     )
@@ -568,7 +613,7 @@ def test_duckdb_backend_persist_analysis_translates_driver_errors(
 
     monkeypatch.setattr(
         "codira_backend_duckdb._duckdb_module",
-        lambda: SimpleNamespace(Error=_DuckDBDriverError),
+        lambda: type("DuckDBModuleStub", (), {"Error": _DuckDBDriverError})(),
     )
     monkeypatch.setattr(
         DuckDBIndexBackend,
@@ -582,7 +627,8 @@ def test_duckdb_backend_persist_analysis_translates_driver_errors(
 
     def _raise_driver_error(*args: object, **kwargs: object) -> tuple[int, int]:
         del args, kwargs
-        raise _DuckDBDriverError("duckdb write failed")
+        msg = "duckdb write failed"
+        raise _DuckDBDriverError(msg)
 
     monkeypatch.setattr("codira_backend_duckdb._store_analysis", _raise_driver_error)
 

@@ -37,6 +37,7 @@ class _FutureRepoExportModule(Protocol):
         tuple[_FutureRepoExportEntry, ...]
             Export plan entries for the requested repository.
         """
+        ...
 
     def materialize_future_repo(
         self,
@@ -61,6 +62,7 @@ class _FutureRepoExportModule(Protocol):
         pathlib.Path
             Path to the materialized future repository.
         """
+        ...
 
     def _ignore_generated_export_artifacts(
         self,
@@ -82,6 +84,7 @@ class _FutureRepoExportModule(Protocol):
         set[str]
             Names that should be ignored.
         """
+        ...
 
 
 def _load_future_repo_export_helper() -> _FutureRepoExportModule:

@@ -27,6 +27,7 @@ class _FutureRepoSplitManifestModule(Protocol):
         tuple[scripts.future_repo_split_manifest.FutureRepoSplitManifest, ...]
             Future repository split manifests in deterministic order.
         """
+        ...
 
 
 def _load_future_repo_split_manifest_helper() -> _FutureRepoSplitManifestModule:

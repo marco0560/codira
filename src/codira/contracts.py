@@ -113,7 +113,8 @@ class LanguageAnalyzer(Protocol):
     Contract for file analyzers participating in one indexing run.
 
     Implementations are responsible only for language-specific analysis and
-    normalized artifact production. They must not own storage policy.
+    normalized artifact production. They must not own storage policy. Stable
+    IDs emitted inside one returned ``AnalysisResult`` must be unique.
     """
 
     name: str
@@ -134,6 +135,7 @@ class LanguageAnalyzer(Protocol):
         bool
             ``True`` when the analyzer accepts the file.
         """
+        ...
 
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
         """
@@ -149,8 +151,10 @@ class LanguageAnalyzer(Protocol):
         Returns
         -------
         codira.models.AnalysisResult
-            Normalized artifacts for the file.
+            Normalized artifacts for the file. Stable IDs within the returned
+            analysis must already be internally unique.
         """
+        ...
 
 
 RetrievalCapabilityName = Literal[
@@ -240,6 +244,7 @@ class CapabilityDeclaringAnalyzer(Protocol):
         AnalyzerCapabilityDeclaration
             Deterministic ontology declaration for this analyzer.
         """
+        ...
 
 
 @dataclass(frozen=True)
@@ -411,6 +416,7 @@ class RetrievalProducer(Protocol):
         codira.contracts.RetrievalProducerInfo
             Producer identity and capability-version metadata.
         """
+        ...
 
     def retrieval_capabilities(self) -> tuple[str, ...]:
         """
@@ -425,6 +431,7 @@ class RetrievalProducer(Protocol):
         tuple[str, ...]
             Declared capability names in deterministic order.
         """
+        ...
 
 
 def split_declared_retrieval_capabilities(
@@ -533,6 +540,7 @@ class IndexBackend(Protocol):
         list[tuple[str, str, str]]
             Stored analyzer rows as ``(name, version, discovery_globs_json)``.
         """
+        ...
 
     def initialize(self, root: Path) -> None:
         """
@@ -548,6 +556,7 @@ class IndexBackend(Protocol):
         None
             Backend state is created or refreshed in place.
         """
+        ...
 
     def load_existing_file_hashes(
         self,
@@ -570,6 +579,7 @@ class IndexBackend(Protocol):
         dict[str, str]
             Indexed file hashes keyed by absolute file path.
         """
+        ...
 
     def load_existing_file_ownership(
         self,
@@ -592,6 +602,7 @@ class IndexBackend(Protocol):
         dict[str, tuple[str, str]]
             Indexed analyzer ownership keyed by absolute file path.
         """
+        ...
 
     def delete_paths(
         self,
@@ -617,6 +628,7 @@ class IndexBackend(Protocol):
         None
             Matching persisted artifacts are removed in place.
         """
+        ...
 
     def clear_index(self, root: Path, *, conn: object | None = None) -> None:
         """
@@ -634,6 +646,7 @@ class IndexBackend(Protocol):
         None
             Indexed artifacts are removed in place.
         """
+        ...
 
     def purge_skipped_docstring_issues(
         self,
@@ -656,6 +669,7 @@ class IndexBackend(Protocol):
         None
             Matching diagnostics are removed in place.
         """
+        ...
 
     def load_previous_embeddings_by_path(
         self,
@@ -684,6 +698,7 @@ class IndexBackend(Protocol):
         dict[str, dict[str, object]]
             Previous semantic artifacts grouped by absolute file path.
         """
+        ...
 
     def persist_analysis(
         self,
@@ -703,6 +718,7 @@ class IndexBackend(Protocol):
         tuple[int, int]
             ``(recomputed, reused)`` semantic-artifact counts for the file.
         """
+        ...
 
     def count_reusable_embeddings(
         self,
@@ -728,6 +744,7 @@ class IndexBackend(Protocol):
         int
             Number of reusable semantic artifacts retained by the backend.
         """
+        ...
 
     def rebuild_derived_indexes(
         self,
@@ -750,6 +767,7 @@ class IndexBackend(Protocol):
         None
             Derived backend indexes are refreshed in place.
         """
+        ...
 
     def persist_runtime_inventory(
         self,
@@ -768,6 +786,7 @@ class IndexBackend(Protocol):
         None
             Runtime inventory rows are replaced in place.
         """
+        ...
 
     def commit(self, root: Path, *, conn: object) -> None:
         """
@@ -785,6 +804,7 @@ class IndexBackend(Protocol):
         None
             Pending backend writes are committed.
         """
+        ...
 
     def close_connection(self, conn: object) -> None:
         """
@@ -800,6 +820,7 @@ class IndexBackend(Protocol):
         None
             The backend handle is closed or released.
         """
+        ...
 
     def find_include_edges(
         self,
@@ -819,6 +840,7 @@ class IndexBackend(Protocol):
             Matching include-edge rows ordered deterministically as
             ``(owner_module, target_name, kind, lineno)`` tuples.
         """
+        ...
 
     def find_logical_symbols(
         self,
@@ -850,6 +872,7 @@ class IndexBackend(Protocol):
         list[codira.types.SymbolRow]
             Matching indexed symbol rows ordered deterministically.
         """
+        ...
 
     def logical_symbol_name(
         self,
@@ -875,6 +898,7 @@ class IndexBackend(Protocol):
         str
             Logical symbol identity used by graph edges.
         """
+        ...
 
     def embedding_inventory(
         self,
@@ -897,6 +921,7 @@ class IndexBackend(Protocol):
         list[tuple[str, str, int, int]]
             Rows as ``(backend, version, dim, count)`` ordered deterministically.
         """
+        ...
 
     def find_reference_rows(
         self,
@@ -926,6 +951,7 @@ class IndexBackend(Protocol):
             Matching stored rows as ``(file_path, lineno, line_text)`` ordered
             deterministically by file path and line number.
         """
+        ...
 
     def embedding_candidates(
         self,
@@ -944,6 +970,7 @@ class IndexBackend(Protocol):
         codira.types.ChannelResults
             Ranked symbol candidates ordered deterministically.
         """
+        ...
 
     def prune_orphaned_embeddings(
         self,
@@ -991,6 +1018,7 @@ class IndexBackend(Protocol):
         bool
             ``True`` when the persisted embedding metadata matches.
         """
+        ...
 
     def list_symbols_in_module(
         self,
@@ -1022,6 +1050,7 @@ class IndexBackend(Protocol):
         list[codira.types.SymbolRow]
             Indexed symbols belonging to the requested module.
         """
+        ...
 
     def find_symbol(
         self,
@@ -1050,6 +1079,7 @@ class IndexBackend(Protocol):
         list[codira.types.SymbolRow]
             Matching symbol rows ordered deterministically.
         """
+        ...
 
     def symbol_inventory(
         self,
@@ -1081,6 +1111,7 @@ class IndexBackend(Protocol):
         list[codira.contracts.BackendSymbolInventoryItem]
             Symbol inventory rows ordered deterministically.
         """
+        ...
 
     def find_symbol_overloads(
         self,
@@ -1106,6 +1137,7 @@ class IndexBackend(Protocol):
         list[codira.types.OverloadRow]
             Ordered overload metadata rows for the symbol.
         """
+        ...
 
     def find_symbol_enum_members(
         self,
@@ -1131,6 +1163,7 @@ class IndexBackend(Protocol):
         list[codira.types.EnumMemberRow]
             Ordered enum-member metadata rows for the symbol.
         """
+        ...
 
     def docstring_issues(
         self,
@@ -1156,6 +1189,7 @@ class IndexBackend(Protocol):
         list[codira.types.DocstringIssueRow]
             Indexed docstring issue rows ordered deterministically.
         """
+        ...
 
     def find_call_edges(
         self,
@@ -1174,6 +1208,7 @@ class IndexBackend(Protocol):
         list[tuple[str, str, str | None, str | None, int]]
             Matching call-edge rows ordered deterministically.
         """
+        ...
 
     def find_callable_refs(
         self,
@@ -1192,3 +1227,4 @@ class IndexBackend(Protocol):
         list[tuple[str, str, str | None, str | None, int]]
             Matching callable-reference rows ordered deterministically.
         """
+        ...
