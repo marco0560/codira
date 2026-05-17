@@ -21,6 +21,7 @@ SQLite-compatible query surface used by the production DuckDB backend.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 import sqlite3
 from typing import TYPE_CHECKING, Protocol, cast
@@ -87,7 +88,7 @@ class _BackendCompatibleCursor(Protocol):
     def execute(
         self,
         statement: str,
-        parameters: tuple[object, ...] | list[object] = (),
+        parameters: Sequence[object] | None = None,
     ) -> _BackendCompatibleCursor: ...
 
     def fetchone(self) -> tuple[BackendQueryValue, ...] | None: ...
@@ -95,19 +96,19 @@ class _BackendCompatibleCursor(Protocol):
     def fetchall(self) -> list[tuple[BackendQueryValue, ...]]: ...
 
 
-class _BackendCompatibleConnection(Protocol):
+class _BackendCompatibleConnectionAdapter(Protocol):
     """Connection surface shared by SQLite and the DuckDB compatibility adapter."""
 
     def execute(
         self,
         statement: str,
-        parameters: tuple[object, ...] | list[object] = (),
+        parameters: Sequence[object] | None = None,
     ) -> _BackendCompatibleCursor: ...
 
     def executemany(
         self,
         statement: str,
-        parameters: list[tuple[object, ...]] | tuple[tuple[object, ...], ...],
+        parameters: Sequence[Sequence[object]],
     ) -> _BackendCompatibleCursor: ...
 
     def cursor(self) -> _BackendCompatibleCursor: ...
@@ -115,6 +116,9 @@ class _BackendCompatibleConnection(Protocol):
     def commit(self) -> None: ...
 
     def close(self) -> None: ...
+
+
+_BackendCompatibleConnection = sqlite3.Connection | _BackendCompatibleConnectionAdapter
 
 
 def _backend_int(value: BackendQueryValue) -> int:
@@ -249,7 +253,10 @@ class DuckDBSQLiteCompatibleBackend:
         """
         if not get_db_path(root).exists():
             self.initialize(root)
-        return sqlite3.connect(get_db_path(root))
+        return cast(
+            "_BackendCompatibleConnection",
+            sqlite3.connect(get_db_path(root)),
+        )
 
     def list_symbols_in_module(
         self,
