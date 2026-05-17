@@ -216,6 +216,38 @@ def create_pytest_basetemp(state_root: Path) -> Path:
             return candidate
 
 
+def resolve_python_sibling_executable(name: str, *, python: str) -> str:
+    """
+    Resolve a console-script executable next to the selected Python interpreter.
+
+    Parameters
+    ----------
+    name : str
+        Console-script executable name to resolve.
+    python : str
+        Python interpreter whose environment should own the executable.
+
+    Returns
+    -------
+    str
+        Resolved executable path, preferring the interpreter sibling and
+        falling back to ``PATH`` lookup or the raw name.
+    """
+
+    python_path = Path(python)
+    sibling_candidates = (
+        python_path.with_name(name),
+        python_path.with_name(f"{name}.exe"),
+    )
+    for candidate in sibling_candidates:
+        if candidate.is_file():
+            return str(candidate)
+    resolved = shutil.which(name)
+    if resolved is not None:
+        return resolved
+    return name
+
+
 def build_tool_argv(
     tool: str,
     tool_args: Sequence[str],
@@ -260,7 +292,7 @@ def build_tool_argv(
     argv: tuple[str, ...]
 
     if tool == "semgrep":
-        argv = ("semgrep",)
+        argv = (resolve_python_sibling_executable("semgrep", python=python),)
     elif tool == "python":
         argv = (python,)
     else:

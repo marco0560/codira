@@ -1661,6 +1661,44 @@ def test_repo_tool_runner_adds_tool_specific_cache_arguments(tmp_path: Path) -> 
     ) == ("python", "-m", "pre_commit", "run", "--all-files")
 
 
+def test_repo_tool_runner_resolves_semgrep_next_to_python(tmp_path: Path) -> None:
+    """
+    Resolve Semgrep from the active interpreter environment before ``PATH``.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for deterministic executable paths.
+
+    Returns
+    -------
+    None
+        The test asserts Semgrep resolves from the same environment as the
+        selected Python interpreter.
+    """
+    helper = _load_repo_tool_runner()
+    state_root = tmp_path / "state"
+    python_dir = tmp_path / "venv" / "bin"
+    python_dir.mkdir(parents=True)
+    python_path = python_dir / "python"
+    python_path.write_text("", encoding="utf-8")
+    semgrep_path = python_dir / "semgrep"
+    semgrep_path.write_text("", encoding="utf-8")
+
+    assert helper.build_tool_argv(
+        "semgrep",
+        ("scan", "--config", "semgrep/rules", "."),
+        state_root=state_root,
+        python=str(python_path),
+    ) == (
+        str(semgrep_path),
+        "scan",
+        "--config",
+        "semgrep/rules",
+        ".",
+    )
+
+
 def test_repo_tool_runner_creates_unique_pytest_basetemp(tmp_path: Path) -> None:
     """
     Avoid reusing or pre-creating pytest temporary directories.
