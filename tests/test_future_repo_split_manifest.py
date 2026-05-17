@@ -195,6 +195,5 @@ def test_package_manifests_keep_package_paths_and_compatibility_surfaces_explici
     assert any(
         manifest.repository == "codira-backend-sqlite"
         and "src/codira/indexer.py" in manifest.stays_in_core
-        and "src/codira/sqlite_backend_support.py" in manifest.stays_in_core
         for manifest in manifests
     )

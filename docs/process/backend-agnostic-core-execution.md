@@ -38,8 +38,6 @@ own concrete storage, persistence, and query implementation details.
   connection protocols
 - `packages/codira-backend-sqlite/.../sqlite_support.py` owns the SQLite
   helper implementation
-- `src/codira/sqlite_backend_support.py` is now an import-only compatibility
-  shim
 - DuckDB persistence now uses package-local `duckdb_support.py`
 - DuckDB no longer imports `codira_backend_sqlite` at runtime
 - Semgrep guardrails were updated to match the new package-local ownership
@@ -47,8 +45,6 @@ own concrete storage, persistence, and query implementation details.
 
 ## Remaining Transitional Surfaces
 
-- `src/codira/indexer.py` still imports the compatibility shim for the
-  historical `_flush_embedding_rows` surface
 - `src/codira/query/context.py` still catches a legacy `sqlite3` exception for
   optional docstring-table lookup
 - DuckDB still carries `sqlite_compatible_backend.py` as a package-local

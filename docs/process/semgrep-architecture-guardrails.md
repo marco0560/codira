@@ -110,16 +110,6 @@ compatibility export through lazy import.
 Removal condition:
 Remove this allowlist entry when the compatibility export is retired.
 
-#### `src/codira/sqlite_backend_support.py`
-
-Rationale:
-This module is now a temporary compatibility shim that re-exports the
-package-owned SQLite helper implementation from the historical core import
-path.
-
-Removal condition:
-Remove this allowlist entry when the compatibility shim is deleted.
-
 #### `packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py`
 
 Rationale:

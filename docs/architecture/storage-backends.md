@@ -19,7 +19,6 @@ Backends currently own:
 
 Current package-local ownership notes:
 
-- `src/codira/sqlite_backend_support.py` is now a compatibility shim only
 - `packages/codira-backend-sqlite/.../sqlite_support.py` owns the SQLite
   helper implementation
 - `packages/codira-backend-duckdb/.../duckdb_support.py` owns the DuckDB
@@ -105,7 +104,6 @@ The branch-local backend-agnostic refactor has established these boundaries:
 
 The remaining transitional surfaces are explicit:
 
-- `src/codira/sqlite_backend_support.py` remains as a compatibility shim
 - DuckDB still uses a package-local SQLite-compatible query layer rather than
   a fully native DuckDB query implementation
 

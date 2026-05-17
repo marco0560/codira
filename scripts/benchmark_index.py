@@ -43,8 +43,9 @@ from benchmark_timing import (  # type: ignore[import-not-found]
     benchmark_metadata,
     write_json_artifact,
 )
+from codira_backend_sqlite import sqlite_support
 
-from codira import indexer, sqlite_backend_support
+from codira import indexer
 from codira.indexer import index_repo
 from codira.registry import active_index_backend
 from codira.semantic import embeddings as embeddings_module
@@ -139,13 +140,13 @@ def main() -> int:
         "Callable[..., object]",
         indexer.file_metadata,  # type: ignore[attr-defined]
     )
-    original_flush_rows = sqlite_backend_support._flush_embedding_rows
+    original_flush_rows = sqlite_support._flush_embedding_rows
     backend_class = active_backend_class()
     original_rebuild_indexes = backend_class.rebuild_derived_indexes
     original_embed_texts = embeddings_module.embed_texts
     original_sqlite_support_embed_texts = cast(
         "Callable[[Sequence[str]], list[list[float]]]",
-        sqlite_backend_support.embed_texts,
+        sqlite_support.embed_texts,
     )
 
     def benchmark_collect_scan(*args: object, **kwargs: object) -> object:
@@ -234,10 +235,10 @@ def main() -> int:
     indexer._select_language_analyzer = benchmark_select_analyzer  # type: ignore[assignment]
     indexer.iter_project_files = benchmark_iter_project_files  # type: ignore[attr-defined, assignment]
     indexer.file_metadata = benchmark_file_metadata  # type: ignore[attr-defined, assignment]
-    sqlite_backend_support._flush_embedding_rows = benchmark_flush_rows  # type: ignore[assignment]
+    sqlite_support._flush_embedding_rows = benchmark_flush_rows  # type: ignore[assignment]
     backend_class.rebuild_derived_indexes = benchmark_rebuild_indexes  # type: ignore[method-assign]
     embeddings_module.embed_texts = benchmark_embed_texts
-    sqlite_backend_support.embed_texts = benchmark_embed_texts
+    sqlite_support.embed_texts = benchmark_embed_texts
 
     total_start = perf_counter()
     try:
@@ -256,10 +257,10 @@ def main() -> int:
         indexer._select_language_analyzer = original_select_analyzer
         indexer.iter_project_files = original_iter_project_files  # type: ignore[attr-defined, assignment]
         indexer.file_metadata = original_file_metadata  # type: ignore[attr-defined, assignment]
-        sqlite_backend_support._flush_embedding_rows = original_flush_rows
+        sqlite_support._flush_embedding_rows = original_flush_rows
         backend_class.rebuild_derived_indexes = original_rebuild_indexes  # type: ignore[method-assign]
         embeddings_module.embed_texts = original_embed_texts
-        sqlite_backend_support.embed_texts = original_sqlite_support_embed_texts  # type: ignore[assignment]
+        sqlite_support.embed_texts = original_sqlite_support_embed_texts  # type: ignore[assignment]
 
     benchmark_report = {
         "metadata": benchmark_metadata(root),

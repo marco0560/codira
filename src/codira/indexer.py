@@ -815,13 +815,19 @@ def _collect_project_scan_state(
     ProjectScanState
         Deterministic scan state for the current working tree.
     """
-    analyzers_by_path = {
-        str(path): _select_language_analyzer(path, analyzers)
-        for path in sorted(iter_project_files(root, analyzers=analyzers))
-    }
-    metadata_by_path = {
-        path: file_metadata(Path(path)) for path in sorted(analyzers_by_path)
-    }
+    analyzers_by_path: dict[str, LanguageAnalyzer] = {}
+    metadata_by_path: dict[str, dict[str, object]] = {}
+
+    for path in sorted(iter_project_files(root, analyzers=analyzers)):
+        path_str = str(path)
+        try:
+            metadata_by_path[path_str] = file_metadata(path)
+        except FileNotFoundError:
+            # Git-backed discovery can briefly enumerate a tracked path that
+            # has already been removed from the working tree but not staged yet.
+            continue
+        analyzers_by_path[path_str] = _select_language_analyzer(path, analyzers)
+
     return ProjectScanState(
         analyzers_by_path=analyzers_by_path,
         metadata_by_path=metadata_by_path,

@@ -1092,6 +1092,52 @@ def test_index_repo_removes_deleted_files(tmp_path: Path) -> None:
     assert find_symbol(tmp_path, "keep")
 
 
+def test_index_repo_removes_unstaged_deleted_tracked_files(tmp_path: Path) -> None:
+    """
+    Remove tracked files that disappeared from the working tree before staging.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts Git-backed discovery tolerates unstaged deletions and
+        still removes the missing file from the index.
+    """
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    keep_module = tmp_path / "pkg" / "keep.py"
+    drop_module = tmp_path / "pkg" / "drop.py"
+    _write_module(
+        keep_module,
+        'def keep():\n    """Stay indexed."""\n    return 1\n',
+    )
+    _write_module(
+        drop_module,
+        'def drop_me():\n    """Disappear from the index."""\n    return 1\n',
+    )
+    subprocess.run(
+        ["git", "add", "pkg/keep.py", "pkg/drop.py"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
+    init_db(tmp_path)
+    index_repo(tmp_path)
+
+    drop_module.unlink()
+    report = index_repo(tmp_path)
+
+    assert report.indexed == 0
+    assert report.reused == 1
+    assert report.deleted == 1
+    assert find_symbol(tmp_path, "drop_me") == []
+    assert find_symbol(tmp_path, "keep")
+
+
 def test_index_repo_recomputes_embeddings_when_backend_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

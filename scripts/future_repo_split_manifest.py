@@ -143,7 +143,6 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
             ),
             stays_in_core=(
                 "src/codira/indexer.py",
-                "src/codira/sqlite_backend_support.py",
                 "tests/test_plugins.py",
             ),
         ),
