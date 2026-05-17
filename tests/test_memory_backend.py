@@ -319,7 +319,10 @@ def _index_with_backend(
         The repository is indexed through ``backend``.
     """
     monkeypatch.setattr(indexer_module, "active_index_backend", lambda: backend)
-    monkeypatch.setattr("codira.sqlite_backend_support.embed_texts", _fake_embed_texts)
+    monkeypatch.setattr(
+        "codira_backend_sqlite.sqlite_support.embed_texts",
+        _fake_embed_texts,
+    )
     report = index_repo(root)
     assert report.failed == 0
     assert report.indexed == 3
@@ -535,7 +538,10 @@ def test_memory_backend_matches_sqlite_for_overload_metadata(
     sqlite_module = sqlite_root / "pkg" / "sample.py"
     memory_module = memory_root / "pkg" / "sample.py"
 
-    monkeypatch.setattr("codira.sqlite_backend_support.embed_texts", _fake_embed_texts)
+    monkeypatch.setattr(
+        "codira_backend_sqlite.sqlite_support.embed_texts",
+        _fake_embed_texts,
+    )
     sqlite_backend.initialize(sqlite_root)
     sqlite_backend.persist_analysis(
         BackendPersistAnalysisRequest(

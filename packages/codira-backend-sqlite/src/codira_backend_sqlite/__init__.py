@@ -41,7 +41,7 @@ from codira.semantic.embeddings import (
     embed_text,
     get_embedding_backend,
 )
-from codira.sqlite_backend_support import (
+from codira_backend_sqlite.sqlite_support import (
     _clear_index_tables,
     _count_reused_embeddings,
     _current_embedding_state_matches,

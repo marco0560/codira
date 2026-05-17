@@ -35,7 +35,7 @@ from codira.contracts import (
 )
 from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import get_embedding_backend
-from codira.sqlite_backend_support import _store_analysis
+from codira_backend_sqlite.sqlite_support import _store_analysis
 from codira.storage import get_codira_dir, get_metadata_path
 
 if TYPE_CHECKING:

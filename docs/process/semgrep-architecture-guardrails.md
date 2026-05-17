@@ -65,32 +65,12 @@ active backend contract.
 #### `src/codira/query/context.py`
 
 Rationale:
-Context assembly still exposes `sqlite3.Connection` in graph-retrieval request
-typing.
+Context assembly still catches `sqlite3.OperationalError` around the legacy
+optional `docstrings` table lookup path.
 
 Removal condition:
-Remove this allowlist entry when context graph queries use a backend-neutral
-connection contract.
-
-#### `src/codira/query/graph_enrichment.py`
-
-Rationale:
-Graph-enrichment request dataclasses still expose `sqlite3.Connection` for
-exact graph lookup reuse.
-
-Removal condition:
-Remove this allowlist entry when graph enrichment uses a backend-neutral
-connection contract.
-
-#### `src/codira/query/producers.py`
-
-Rationale:
-Shared retrieval producer contracts still publish `sqlite3.Connection` in
-TYPE_CHECKING-only callable signatures.
-
-Removal condition:
-Remove this allowlist entry when producer contracts stop referring to
-SQLite-specific connection types.
+Remove this allowlist entry when optional docstring lookup no longer depends on
+SQLite driver exceptions in core query assembly.
 
 #### `packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py`
 
@@ -110,15 +90,14 @@ Removal condition:
 Remove this allowlist entry when DuckDB no longer depends on SQLite driver
 types or compatibility helpers.
 
-#### `src/codira/sqlite_backend_support.py`
+#### `packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_support.py`
 
 Rationale:
-This module is the shared SQLite persistence helper layer used during the
-backend packaging migration.
+This module is now the package-owned SQLite persistence helper layer and
+imports `sqlite3` as part of the supported production backend.
 
 Removal condition:
-Remove this allowlist entry when SQLite support helpers move fully behind the
-backend package boundary.
+No removal planned while SQLite remains a supported backend.
 
 ### `codira.arch.no-backend-package-import-outside-allowed-layers`
 
@@ -130,6 +109,26 @@ compatibility export through lazy import.
 
 Removal condition:
 Remove this allowlist entry when the compatibility export is retired.
+
+#### `src/codira/sqlite_backend_support.py`
+
+Rationale:
+This module is now a temporary compatibility shim that re-exports the
+package-owned SQLite helper implementation from the historical core import
+path.
+
+Removal condition:
+Remove this allowlist entry when the compatibility shim is deleted.
+
+#### `packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py`
+
+Rationale:
+The SQLite backend package now imports its helper implementation from the
+package-local `sqlite_support` module.
+
+Removal condition:
+Remove this allowlist entry when the backend module no longer needs a separate
+package-local helper module.
 
 #### `packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py`
 

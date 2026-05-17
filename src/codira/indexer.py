@@ -121,7 +121,9 @@ def _flush_embedding_rows(
         ``(recomputed, reused)`` embedding counts for the file.
     """
 
-    from codira.sqlite_backend_support import _flush_embedding_rows as _sqlite_flush
+    from codira_backend_sqlite.sqlite_support import (
+        _flush_embedding_rows as _sqlite_flush,
+    )
 
     return _sqlite_flush(
         cast("Any", conn),
