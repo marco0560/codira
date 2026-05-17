@@ -21,14 +21,12 @@ import ast
 import contextlib
 import json
 import re
-import sqlite3
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 from codira.contracts import (
     BackendQueryConnection,
-    BackendQueryRow,
     split_declared_retrieval_capabilities,
 )
 from codira.prefix import normalize_prefix, prefix_clause
@@ -3522,8 +3520,8 @@ def _retrieve_semantic_candidates(
     Notes
     -----
     The channel is deterministic and independent from the symbol channel. It
-    scores token overlap against symbol names, module names, and optional
-    docstring text when that auxiliary table exists.
+    scores token overlap against symbol names and module names without
+    consulting legacy auxiliary compatibility tables.
     """
 
     del root
@@ -3561,19 +3559,6 @@ def _retrieve_semantic_candidates(
         symbol_type, module_name, name, _file_path, _lineno = symbol
 
         text_parts = [module_name.lower(), name.lower()]
-
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT docstring FROM docstrings WHERE module=? AND name=?",
-                (module_name, name),
-            )
-            doc_row = cast("BackendQueryRow | None", cursor.fetchone())
-            if doc_row and doc_row[0]:
-                text_parts.append(str(doc_row[0]).lower())
-        except sqlite3.OperationalError:
-            # docstrings table may not exist depending on index version
-            pass
 
         semantic_score = 0.0
 

@@ -310,7 +310,7 @@ class _DuckDBCursorCompatibilityAdapter:
         parameters: Sequence[object] | None = None,
     ) -> _DuckDBCursorCompatibilityAdapter:
         """
-        Execute one query while preserving SQLite-compatible missing-table errors.
+        Execute one query through the compatibility cursor adapter.
 
         Parameters
         ----------
@@ -323,23 +323,11 @@ class _DuckDBCursorCompatibilityAdapter:
         -------
         _DuckDBCursorCompatibilityAdapter
             The current cursor adapter so callers can fetch from it directly.
-
-        Raises
-        ------
-        sqlite3.OperationalError
-            If DuckDB reports that the optional ``docstrings`` table does not
-            exist.
         """
-        try:
-            if parameters is None:
-                self._raw.execute(query)
-            else:
-                self._raw.execute(query, parameters)
-        except _duckdb_module().Error as exc:
-            message = str(exc)
-            if "Table with name docstrings does not exist" in message:
-                raise sqlite3.OperationalError(message) from exc
-            raise
+        if parameters is None:
+            self._raw.execute(query)
+        else:
+            self._raw.execute(query, parameters)
         return self
 
     def fetchone(self) -> tuple[object, ...] | None:
