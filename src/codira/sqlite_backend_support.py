@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from codira.docstring import DocstringValidationRequest, validate_docstring
+from codira.repository_scope import path_has_excluded_tree_name
 from codira.semantic.embeddings import embed_texts as embed_texts, serialize_vector
 
 if TYPE_CHECKING:
@@ -1247,7 +1248,10 @@ def _should_audit_docstrings(source_path: Path) -> bool:
     docstring contract. Treating Bash artifacts like Python callables produces
     deterministic but semantically invalid audit noise, so they are excluded.
     """
-    return source_path.suffix not in {".sh", ".bash"}
+    return source_path.suffix not in {
+        ".sh",
+        ".bash",
+    } and not path_has_excluded_tree_name(source_path)
 
 
 def _should_require_raises_section(source_path: Path, function_name: str) -> bool:

@@ -1,0 +1,34 @@
+rules:
+  - id: codira.plugins.no-broad-except-exception
+    message: >
+      Plugin packages must not catch Exception broadly.
+    severity: WARNING
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-analyzer-*/src/**/*.py
+        - /packages/codira-backend-*/src/**/*.py
+        - /fixtures/packages/codira-analyzer-*/src/**/*.py
+      exclude:
+        - /tests/**/*.py
+    pattern: |
+      try:
+          ...
+      except Exception:
+          ...
+
+  - id: codira.plugins.no-core-storage-import
+    message: >
+      Plugins must not import codira storage internals directly.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-analyzer-*/src/**/*.py
+        - /fixtures/packages/codira-analyzer-*/src/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: import codira.storage
+          - pattern: from codira.storage import $IMPORT

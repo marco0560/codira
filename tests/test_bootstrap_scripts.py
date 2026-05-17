@@ -1593,6 +1593,11 @@ def test_repo_tool_runner_uses_non_repository_tool_state(tmp_path: Path) -> None
     assert env["PRE_COMMIT_HOME"] == str(state_root / "pre-commit")
     assert env["MYPY_CACHE_DIR"] == str(state_root / "mypy")
     assert env["RUFF_CACHE_DIR"] == str(state_root / "ruff")
+    assert env["SEMGREP_LOG_FILE"] == str(state_root / "semgrep" / "semgrep.log")
+    assert env["SEMGREP_SETTINGS_FILE"] == str(state_root / "semgrep" / "settings.yml")
+    assert env["SEMGREP_VERSION_CACHE_PATH"] == str(
+        state_root / "semgrep" / "version-cache"
+    )
     assert env["TMP"] == str(state_root / "tmp")
     assert env["TEMP"] == str(state_root / "tmp")
     assert env["TMPDIR"] == str(state_root / "tmp")
@@ -1656,99 +1661,42 @@ def test_repo_tool_runner_adds_tool_specific_cache_arguments(tmp_path: Path) -> 
     ) == ("python", "-m", "pre_commit", "run", "--all-files")
 
 
-def test_repo_tool_runner_splits_black_serial_args() -> None:
+def test_repo_tool_runner_resolves_semgrep_next_to_python(tmp_path: Path) -> None:
     """
-    Keep serial black invocation deterministic for aggregate validation.
+    Resolve Semgrep from the active interpreter environment before ``PATH``.
 
     Parameters
     ----------
-    None
+    tmp_path : pathlib.Path
+        Temporary workspace used for deterministic executable paths.
 
     Returns
     -------
     None
-        The test asserts black options are separated from path targets.
+        The test asserts Semgrep resolves from the same environment as the
+        selected Python interpreter.
     """
-
     helper = _load_repo_tool_runner()
+    state_root = tmp_path / "state"
+    python_dir = tmp_path / "venv" / "bin"
+    python_dir.mkdir(parents=True)
+    python_path = python_dir / "python"
+    python_path.write_text("", encoding="utf-8")
+    semgrep_path = python_dir / "semgrep"
+    semgrep_path.write_text("", encoding="utf-8")
 
-    assert helper.split_black_serial_args(("--check", ".")) == (("--check",), ["."])
-    assert helper.split_black_serial_args(()) == ((), ["."])
-
-
-def test_repo_tool_runner_captures_black_child_output(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """
-    Keep Black child output isolated from the caller terminal.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to replace target expansion and subprocess execution.
-    capsys : pytest.CaptureFixture[str]
-        Fixture used to inspect replayed wrapper output.
-
-    Returns
-    -------
-    None
-        The test asserts Black runs with captured streams and the wrapper
-        replays those streams after the child exits.
-    """
-
-    helper = _load_repo_tool_runner()
-    calls: list[dict[str, object]] = []
-
-    def fake_expand(targets: Sequence[str]) -> list[str]:
-        return ["scripts/validate_repo.py"]
-
-    def fake_run(
-        argv: tuple[str, ...],
-        *,
-        cwd: Path,
-        env: Mapping[str, str],
-        capture_output: bool,
-        text: bool,
-        check: bool,
-    ) -> subprocess.CompletedProcess[str]:
-        calls.append(
-            {
-                "argv": argv,
-                "cwd": cwd,
-                "env": dict(env),
-                "capture_output": capture_output,
-                "text": text,
-                "check": check,
-            }
-        )
-        return subprocess.CompletedProcess(
-            argv,
-            0,
-            stdout="black stdout\n",
-            stderr="black stderr\n",
-        )
-
-    monkeypatch.setattr(helper, "expand_black_serial_targets", fake_expand)
-    monkeypatch.setattr(helper.subprocess, "run", fake_run)
-
-    assert (
-        helper.run_black_serial(("--check", "."), env={"X": "1"}, python="python") == 0
+    assert helper.build_tool_argv(
+        "semgrep",
+        ("scan", "--config", "semgrep/rules", "."),
+        state_root=state_root,
+        python=str(python_path),
+    ) == (
+        str(semgrep_path),
+        "scan",
+        "--config",
+        "semgrep/rules",
+        ".",
     )
-    captured = capsys.readouterr()
-
-    assert captured.out == "black stdout\n"
-    assert captured.err == "black stderr\n"
-    assert calls == [
-        {
-            "argv": ("python", "-m", "black", "--check", "scripts/validate_repo.py"),
-            "cwd": Path(__file__).resolve().parents[1],
-            "env": {"X": "1"},
-            "capture_output": True,
-            "text": True,
-            "check": False,
-        }
-    ]
 
 
 def test_repo_tool_runner_creates_unique_pytest_basetemp(tmp_path: Path) -> None:
@@ -1828,6 +1776,19 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
         (
             "python",
             str(helper.RUN_REPO_TOOL),
+            "semgrep",
+            "scan",
+            "--config",
+            "semgrep/rules",
+            "--metrics=off",
+            "--disable-version-check",
+            "--exclude",
+            "fixtures",
+            ".",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
             "coverage",
             "run",
             "-m",
@@ -1839,9 +1800,16 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
             "python",
             str(helper.RUN_REPO_TOOL),
             "coverage",
-            "report",
+            "json",
+            "-o",
+            ".coverage-report.json",
             "--omit=*/_remote_module_non_scriptable",
-            "--fail-under=70",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
+            "python",
+            "scripts/coverage_summary.py",
         ),
     )
 
