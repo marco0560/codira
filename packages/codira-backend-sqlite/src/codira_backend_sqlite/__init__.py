@@ -31,6 +31,7 @@ from codira.contracts import (
     BackendRelationQueryRequest,
     BackendRuntimeInventoryRequest,
     BackendSymbolInventoryItem,
+    StoredEmbeddingRow,
 )
 from codira.prefix import normalize_prefix, prefix_clause
 from codira.schema import SCHEMA_VERSION
@@ -60,7 +61,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from codira.contracts import IndexBackend
-    from codira.sqlite_backend_support import StoredEmbeddingRow
     from codira.types import (
         ChannelResults,
         DocstringIssueRow,
@@ -1598,7 +1598,7 @@ class SQLiteIndexBackend:
 
         Returns
         -------
-        dict[str, dict[str, codira.sqlite_backend_support.StoredEmbeddingRow]]
+        dict[str, dict[str, codira.contracts.StoredEmbeddingRow]]
             Stored embeddings grouped by absolute file path.
         """
         owns_connection = conn is None

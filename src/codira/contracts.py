@@ -53,6 +53,52 @@ class BackendError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class PendingEmbeddingRow:
+    """
+    Pending symbol embedding payload collected during persistence.
+
+    Parameters
+    ----------
+    object_type : str
+        Persisted embedding owner kind.
+    object_id : int
+        Persisted embedding owner identifier.
+    stable_id : str
+        Durable analyzer-owned symbol identity.
+    text : str
+        Exact semantic payload that will be hashed and embedded.
+    """
+
+    object_type: str
+    object_id: int
+    stable_id: str
+    text: str
+
+
+@dataclass(frozen=True)
+class StoredEmbeddingRow:
+    """
+    Persisted embedding row captured before file-owned rows are replaced.
+
+    Parameters
+    ----------
+    stable_id : str
+        Durable analyzer-owned symbol identity.
+    content_hash : str
+        Hash of the exact semantic payload embedded previously.
+    dim : int
+        Stored embedding dimensionality.
+    vector : bytes
+        Serialized float32 vector payload.
+    """
+
+    stable_id: str
+    content_hash: str
+    dim: int
+    vector: bytes
+
+
+@dataclass(frozen=True)
 class BackendGraphMetric:
     """
     Count one direction of graph connectivity for a symbol.

@@ -31,6 +31,7 @@ from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
+    StoredEmbeddingRow,
 )
 from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import get_embedding_backend
@@ -42,7 +43,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from codira.contracts import IndexBackend
-    from codira.sqlite_backend_support import StoredEmbeddingRow
 
 PACKAGE_VERSION = "1.5.3"
 _INSERT_TABLE_PATTERN = re.compile(r"^\s*INSERT\s+INTO\s+([a-z_]+)", re.IGNORECASE)
