@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 import codira_analyzer_json as json_analyzer_module
 from codira_backend_sqlite import SQLiteIndexBackend
+from codira_backend_sqlite.sqlite_storage import get_db_path
 
 import codira.indexer as indexer_module
 import codira.registry as registry_module
@@ -86,7 +87,6 @@ from codira.semantic.embeddings import (
     EMBEDDING_DIM,
     EMBEDDING_VERSION,
 )
-from codira.storage import get_db_path
 
 if TYPE_CHECKING:
     from types import ModuleType

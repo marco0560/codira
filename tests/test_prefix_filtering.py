@@ -21,6 +21,7 @@ import sys
 from typing import TYPE_CHECKING
 
 import pytest
+from codira_backend_sqlite.sqlite_storage import init_db
 
 from codira.cli import main
 from codira.indexer import index_repo
@@ -34,7 +35,6 @@ from codira.query.exact import (
     find_symbol,
 )
 from codira.semantic.search import EmbeddingCandidatesRequest, embedding_candidates
-from codira.storage import init_db
 
 if TYPE_CHECKING:
     from pathlib import Path

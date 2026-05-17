@@ -21,6 +21,8 @@ import sys
 import types
 from typing import TYPE_CHECKING
 
+from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
+
 from codira.cli import main
 from codira.indexer import (
     PendingEmbeddingRow,
@@ -40,7 +42,6 @@ from codira.semantic.embeddings import (
     embed_texts,
 )
 from codira.semantic.search import EmbeddingCandidatesRequest, embedding_candidates
-from codira.storage import get_db_path, init_db
 
 if TYPE_CHECKING:
     from pathlib import Path

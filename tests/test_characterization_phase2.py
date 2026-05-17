@@ -19,10 +19,11 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from codira_backend_sqlite.sqlite_storage import init_db
+
 from codira.indexer import index_repo
 from codira.query.context import ContextRequest, context_for
 from codira.query.exact import find_symbol
-from codira.storage import init_db
 
 if TYPE_CHECKING:
     from pathlib import Path

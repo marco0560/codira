@@ -53,7 +53,7 @@ from codira import indexer
 from codira.indexer import index_repo
 from codira.registry import active_index_backend
 from codira.semantic import embeddings as embeddings_module
-from codira.storage import init_db, override_storage_root
+from codira.storage import override_storage_root
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -283,11 +283,11 @@ def main() -> int:
     total_start = perf_counter()
     try:
         if output_dir is None:
-            init_db(root)
+            active_index_backend().initialize(root)
             report = index_repo(root, full=args.full)
         else:
             with override_storage_root(root, output_dir):
-                init_db(root)
+                active_index_backend().initialize(root)
                 report = index_repo(root, full=args.full)
     finally:
         total_elapsed = perf_counter() - total_start

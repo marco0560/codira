@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from codira_backend_sqlite import SQLiteIndexBackend
+from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
 
 import codira.registry as registry_module
 import codira.storage as storage_module
@@ -60,7 +61,7 @@ from codira.semantic.embeddings import (
     EMBEDDING_DIM,
     EmbeddingBackendSpec,
 )
-from codira.storage import acquire_index_lock, get_db_path, init_db
+from codira.storage import acquire_index_lock
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

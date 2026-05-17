@@ -23,10 +23,11 @@ import json
 import sys
 from typing import TYPE_CHECKING
 
+from codira_backend_sqlite.sqlite_storage import init_db
+
 from codira.cli import main
 from codira.indexer import index_repo
 from codira.query.exact import symbol_inventory
-from codira.storage import init_db
 
 if TYPE_CHECKING:
     from pathlib import Path
