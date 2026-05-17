@@ -33,9 +33,12 @@ from codira.contracts import (
     BackendRuntimeInventoryRequest,
     StoredEmbeddingRow,
 )
+from codira_backend_duckdb.duckdb_support import (
+    _DuckDBPersistenceConnection,
+    _store_analysis,
+)
 from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import get_embedding_backend
-from codira_backend_sqlite.sqlite_support import _store_analysis
 from codira.storage import get_codira_dir, get_metadata_path
 
 if TYPE_CHECKING:
@@ -856,7 +859,7 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
         try:
             if owns_connection:
                 written = _store_analysis(
-                    cast("sqlite3.Connection", conn),
+                    cast("_DuckDBPersistenceConnection", conn),
                     request.file_metadata,
                     request.analysis,
                     backend=active_backend,
@@ -873,7 +876,7 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
                 conn.execute("BEGIN TRANSACTION")
                 try:
                     written = _store_analysis(
-                        cast("sqlite3.Connection", conn),
+                        cast("_DuckDBPersistenceConnection", conn),
                         request.file_metadata,
                         request.analysis,
                         backend=active_backend,
