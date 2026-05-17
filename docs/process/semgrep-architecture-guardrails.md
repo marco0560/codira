@@ -60,15 +60,16 @@ Removal condition:
 Remove this allowlist entry when DuckDB no longer needs compatibility access
 to the SQLite bootstrap/path surface.
 
-#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py`
+#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/repo_storage.py`
 
 Rationale:
-The production DuckDB backend still imports generic repository-storage helpers
-for `.codira` directory and metadata ownership.
+This package-local seam centralizes the production DuckDB backend's remaining
+generic repository-storage imports for `.codira` directory and metadata
+ownership.
 
 Removal condition:
-Remove this allowlist entry when those generic storage-path/metadata helpers
-move behind a backend-neutral package-local seam.
+Remove this allowlist entry when those storage-path/metadata helpers no longer
+delegate to core storage helpers.
 
 ### `codira.arch.no-sqlite3-outside-allowed-layers`
 
