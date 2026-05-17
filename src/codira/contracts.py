@@ -17,11 +17,12 @@ This module belongs to the **contract definition layer** that governs pluggable 
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Mapping
     from pathlib import Path
 
     from codira.models import AnalysisResult, FileMetadataSnapshot
@@ -513,6 +514,134 @@ def split_declared_retrieval_capabilities(
             unknown.append(normalized)
 
     return tuple(known), tuple(unknown)
+
+
+BackendQueryValue = str | bytes | bytearray | int | float | None
+BackendQueryRow = Sequence[BackendQueryValue]
+
+
+@runtime_checkable
+class BackendQueryCursor(Protocol):
+    """
+    Minimal cursor surface required by backend-agnostic query helpers.
+
+    The contract intentionally captures only the operations used by the core
+    query layer so backend plugins remain free to wrap native driver objects.
+    """
+
+    def execute(
+        self,
+        statement: str,
+        parameters: Sequence[object] = (),
+    ) -> BackendQueryCursor:
+        """
+        Execute one backend-native query statement.
+
+        Parameters
+        ----------
+        statement : str
+            Backend-native statement text.
+        parameters : collections.abc.Sequence[object], optional
+            Bound positional parameters for the statement.
+
+        Returns
+        -------
+        BackendQueryCursor
+            Cursor-like object positioned on the executed statement result.
+        """
+        ...
+
+    def fetchone(self) -> object | None:
+        """
+        Return the next available row from the current result set.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        BackendQueryRow | None
+            Next result row, or ``None`` when no rows remain.
+        """
+        ...
+
+    def fetchall(self) -> list[BackendQueryRow]:
+        """
+        Return all remaining rows from the current result set.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        list[codira.contracts.BackendQueryRow]
+            Materialized remaining result rows.
+        """
+        ...
+
+
+@runtime_checkable
+class BackendQueryConnection(Protocol):
+    """
+    Minimal connection surface required by backend-agnostic query helpers.
+
+    The protocol keeps core query modules decoupled from concrete driver types
+    while preserving deterministic method-level typing for read-only access.
+    """
+
+    def execute(
+        self,
+        statement: str,
+        parameters: Sequence[object] = (),
+    ) -> BackendQueryCursor:
+        """
+        Execute one backend-native query statement directly on the connection.
+
+        Parameters
+        ----------
+        statement : str
+            Backend-native statement text.
+        parameters : collections.abc.Sequence[object], optional
+            Bound positional parameters for the statement.
+
+        Returns
+        -------
+        BackendQueryCursor
+            Cursor-like object positioned on the executed statement result.
+        """
+        ...
+
+    def cursor(self) -> BackendQueryCursor:
+        """
+        Create a cursor-like object for backend-native query execution.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        BackendQueryCursor
+            Cursor-like object for subsequent query execution.
+        """
+        ...
+
+    def close(self) -> object:
+        """
+        Close the backend-native connection handle.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        object
+            Backend-defined close result.
+        """
+        ...
 
 
 @runtime_checkable

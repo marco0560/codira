@@ -21,10 +21,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    import sqlite3
     from collections.abc import Callable, Sequence
     from pathlib import Path
 
+    from codira.contracts import BackendQueryConnection
     from codira.query.classifier import QueryIntent
     from codira.types import ChannelName, ChannelResults, SymbolRow
 
@@ -85,7 +85,7 @@ class QueryChannelSpec:
     name : codira.types.ChannelName
         Stable channel name used by planning and explain output.
     retrieve : collections.abc.Callable[
-        [pathlib.Path, str, sqlite3.Connection, QueryIntent, str | None],
+        [pathlib.Path, str, object, QueryIntent, str | None],
         codira.types.ChannelResults,
     ]
         Retrieval function implementing the channel.
@@ -95,7 +95,7 @@ class QueryChannelSpec:
 
     name: ChannelName
     retrieve: Callable[
-        [Path, str, sqlite3.Connection, QueryIntent, str | None],
+        [Path, str, BackendQueryConnection, QueryIntent, str | None],
         ChannelResults,
     ]
     producer: QueryProducerSpec
@@ -118,7 +118,7 @@ class EmbeddingRetrievalRequest:
         Minimum similarity threshold for emitted results.
     prefix : str | None
         Repo-root-relative path prefix used to restrict matched symbol files.
-    conn : sqlite3.Connection | None
+    conn : object | None
         Existing database connection to reuse.
     """
 
@@ -127,7 +127,7 @@ class EmbeddingRetrievalRequest:
     limit: int
     min_score: float
     prefix: str | None = None
-    conn: sqlite3.Connection | None = None
+    conn: BackendQueryConnection | None = None
 
 
 class EmbeddingRetrievalProducer(QueryProducerSpec):
