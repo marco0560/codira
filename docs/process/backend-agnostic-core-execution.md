@@ -54,8 +54,6 @@ own concrete storage, persistence, and query implementation details.
 
 ## Remaining Transitional Surfaces
 
-- `src/codira/query/context.py` still catches a legacy `sqlite3` exception for
-  optional docstring-table lookup
 - DuckDB still carries `sqlite_compatible_backend.py` as a package-local
   compatibility layer for query and maintenance semantics
 - Semgrep allowlists still explicitly document these transitional surfaces

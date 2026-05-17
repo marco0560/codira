@@ -93,16 +93,6 @@ Removal condition:
 Remove this allowlist entry when CLI rebuild inspection delegates fully to the
 active backend contract.
 
-#### `src/codira/query/context.py`
-
-Rationale:
-Context assembly still catches `sqlite3.OperationalError` around the legacy
-optional `docstrings` table lookup path.
-
-Removal condition:
-Remove this allowlist entry when optional docstring lookup no longer depends on
-SQLite driver exceptions in core query assembly.
-
 #### `packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py`
 
 Rationale:
