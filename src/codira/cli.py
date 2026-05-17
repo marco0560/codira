@@ -66,6 +66,7 @@ from codira.query.exact import (
 from codira.registry import (
     active_index_backend,
     active_language_analyzers,
+    configured_index_backend_name,
     plugin_registrations,
 )
 from codira.scanner import iter_project_files
@@ -495,6 +496,26 @@ def _loaded_plugin_registrations() -> list[tuple[str, str, str, str]]:
     )
 
 
+def _plugin_is_active_backend(family: str, name: str) -> bool:
+    """
+    Return whether one plugin row is the configured active backend.
+
+    Parameters
+    ----------
+    family : str
+        Plugin family name.
+    name : str
+        Plugin display name.
+
+    Returns
+    -------
+    bool
+        ``True`` when the row represents the currently configured backend.
+    """
+
+    return family == "backend" and name == configured_index_backend_name()
+
+
 def _render_version_report() -> str:
     """
     Return the multi-line CLI version report.
@@ -526,16 +547,25 @@ def _render_version_report() -> str:
     if bundle_version is not None:
         lines.append(f"bundle-official {bundle_version}")
         for _origin, family, name, version in first_party_plugins:
-            lines.append(f"  {family} {name} {version}")
+            active_suffix = (
+                " [active]" if _plugin_is_active_backend(family, name) else ""
+            )
+            lines.append(f"  {family} {name} {version}{active_suffix}")
     elif first_party_plugins:
         lines.append("first-party plugins:")
         for _origin, family, name, version in first_party_plugins:
-            lines.append(f"  {family} {name} {version}")
+            active_suffix = (
+                " [active]" if _plugin_is_active_backend(family, name) else ""
+            )
+            lines.append(f"  {family} {name} {version}{active_suffix}")
 
     if third_party_plugins:
         lines.append("third-party plugins:")
         for _origin, family, name, version in third_party_plugins:
-            lines.append(f"  {family} {name} {version}")
+            active_suffix = (
+                " [active]" if _plugin_is_active_backend(family, name) else ""
+            )
+            lines.append(f"  {family} {name} {version}{active_suffix}")
 
     return "\n".join(lines)
 
@@ -3171,6 +3201,10 @@ def _run_plugins(*, as_json: bool = False) -> int:
                     {
                         "family": registration.family,
                         "name": registration.name,
+                        "active": _plugin_is_active_backend(
+                            registration.family,
+                            registration.name,
+                        ),
                         "provider": registration.provider,
                         "origin": registration.origin,
                         "source": registration.source,
@@ -3186,9 +3220,12 @@ def _run_plugins(*, as_json: bool = False) -> int:
         return 0
 
     for registration in registrations:
+        status_tokens: list[str] = [registration.status]
+        if _plugin_is_active_backend(registration.family, registration.name):
+            status_tokens.insert(0, "active")
         line = (
             f"{registration.family}: {registration.name} "
-            f"[{registration.status}] "
+            f"[{', '.join(status_tokens)}] "
             f"provider={registration.provider} "
             f"origin={registration.origin} "
             f"source={registration.source} "

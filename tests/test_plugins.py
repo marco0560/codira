@@ -660,6 +660,7 @@ def test_plugins_cli_emits_json_registration_diagnostics(
         ],
         backends=[],
     )
+    monkeypatch.setattr("codira.cli.configured_index_backend_name", lambda: "sqlite")
     monkeypatch.setattr(sys, "argv", ["codira", "plugins", "--json"])
 
     assert main() == 0
@@ -670,11 +671,101 @@ def test_plugins_cli_emits_json_registration_diagnostics(
     assert any(
         row["family"] == "analyzer"
         and row["name"] == "demo"
+        and row["active"] is False
         and row["provider"] == "demo-analyzer"
         and row["origin"] == "third_party"
         and row["status"] == "loaded"
         for row in payload["results"]
     )
+
+
+def test_plugins_cli_marks_only_the_configured_backend_active(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Distinguish the configured active backend from other loaded backends.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry-point discovery and CLI settings.
+    capsys : pytest.CaptureFixture[str]
+        Pytest fixture used to capture CLI output.
+
+    Returns
+    -------
+    None
+        The test asserts plugin listings mark only the configured backend as
+        active in both plain text and JSON output.
+    """
+    _patch_entry_points(
+        monkeypatch,
+        analyzers=[],
+        backends=[
+            _FakeEntryPoint(
+                name="sqlite",
+                value="codira_backend_sqlite:build_backend",
+                dist=_FakeDistribution("codira-backend-sqlite"),
+                loaded=type(
+                    "_DemoSQLiteBackend",
+                    (SQLiteIndexBackend,),
+                    {"name": "sqlite"},
+                ),
+            ),
+            _FakeEntryPoint(
+                name="duckdb",
+                value="codira_backend_duckdb:build_backend",
+                dist=_FakeDistribution("codira-backend-duckdb"),
+                loaded=_DemoDuckDBBackend,
+            ),
+        ],
+    )
+    monkeypatch.setattr("codira.cli.configured_index_backend_name", lambda: "sqlite")
+
+    monkeypatch.setattr(sys, "argv", ["codira", "plugins"])
+    assert main() == 0
+    assert capsys.readouterr().out.splitlines() == [
+        (
+            "backend: sqlite [active, loaded] "
+            "provider=codira-backend-sqlite origin=first_party "
+            "source=entry_point version=14 entry_point=sqlite"
+        ),
+        (
+            "backend: duckdb [loaded] "
+            "provider=codira-backend-duckdb origin=first_party "
+            "source=entry_point version=14 entry_point=duckdb"
+        ),
+    ]
+
+    monkeypatch.setattr(sys, "argv", ["codira", "plugins", "--json"])
+    assert main() == 0
+    assert json.loads(capsys.readouterr().out)["results"] == [
+        {
+            "family": "backend",
+            "name": "sqlite",
+            "active": True,
+            "provider": "codira-backend-sqlite",
+            "origin": "first_party",
+            "source": "entry_point",
+            "status": "loaded",
+            "version": "14",
+            "entry_point": "sqlite",
+            "detail": None,
+        },
+        {
+            "family": "backend",
+            "name": "duckdb",
+            "active": False,
+            "provider": "codira-backend-duckdb",
+            "origin": "first_party",
+            "source": "entry_point",
+            "status": "loaded",
+            "version": "14",
+            "entry_point": "duckdb",
+            "detail": None,
+        },
+    ]
 
 
 def test_plugin_snapshot_cache_reuses_entry_point_discovery(
@@ -834,6 +925,7 @@ def test_version_cli_groups_curated_bundle_plugins(
             ),
         ],
     )
+    monkeypatch.setattr("codira.cli.configured_index_backend_name", lambda: "sqlite")
     monkeypatch.setattr(sys, "argv", ["codira", "-V"])
 
     assert main() == 0
@@ -841,7 +933,7 @@ def test_version_cli_groups_curated_bundle_plugins(
         "codira 9.9.9",
         "bundle-official 0.9.0",
         "  analyzer python 0.1.0",
-        "  backend sqlite 0.1.0",
+        "  backend sqlite 0.1.0 [active]",
     ]
 
 
