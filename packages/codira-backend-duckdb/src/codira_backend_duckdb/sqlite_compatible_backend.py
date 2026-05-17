@@ -23,12 +23,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from codira.contracts import (
     BackendEmbeddingCandidatesRequest,
     BackendError,
     BackendGraphMetric,
+    BackendQueryValue,
     BackendPersistAnalysisRequest,
     BackendRelationQueryRequest,
     BackendRuntimeInventoryRequest,
@@ -80,6 +81,54 @@ EmbeddingInventoryRow = tuple[str, str, int, int]
 __all__ = ["DuckDBSQLiteCompatibleBackend"]
 
 
+class _BackendCompatibleCursor(Protocol):
+    """Cursor surface shared by SQLite and the DuckDB compatibility adapter."""
+
+    def execute(
+        self,
+        statement: str,
+        parameters: tuple[object, ...] | list[object] = (),
+    ) -> _BackendCompatibleCursor: ...
+
+    def fetchone(self) -> tuple[BackendQueryValue, ...] | None: ...
+
+    def fetchall(self) -> list[tuple[BackendQueryValue, ...]]: ...
+
+
+class _BackendCompatibleConnection(Protocol):
+    """Connection surface shared by SQLite and the DuckDB compatibility adapter."""
+
+    def execute(
+        self,
+        statement: str,
+        parameters: tuple[object, ...] | list[object] = (),
+    ) -> _BackendCompatibleCursor: ...
+
+    def executemany(
+        self,
+        statement: str,
+        parameters: list[tuple[object, ...]] | tuple[tuple[object, ...], ...],
+    ) -> _BackendCompatibleCursor: ...
+
+    def cursor(self) -> _BackendCompatibleCursor: ...
+
+    def commit(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
+def _backend_int(value: BackendQueryValue) -> int:
+    """Coerce one backend-compatible scalar into an integer."""
+
+    return int(cast("str | bytes | bytearray | int | float", value))
+
+
+def _backend_bytes(value: BackendQueryValue) -> bytes:
+    """Coerce one backend-compatible scalar into raw bytes."""
+
+    return bytes(cast("bytes | bytearray", value))
+
+
 class DuckDBSQLiteCompatibleBackend:
     """
     SQLite-compatible backend surface localized for DuckDB reuse.
@@ -96,7 +145,7 @@ class DuckDBSQLiteCompatibleBackend:
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> tuple[str, str, int] | None:
         """
         Return persisted backend and coverage metadata for the last index run.
@@ -105,8 +154,8 @@ class DuckDBSQLiteCompatibleBackend:
         ----------
         root : pathlib.Path
             Repository root whose index should be queried.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -125,7 +174,7 @@ class DuckDBSQLiteCompatibleBackend:
                 """).fetchone()
             if row is None:
                 return None
-            return (str(row[0]), str(row[1]), int(row[2]))
+            return (str(row[0]), str(row[1]), _backend_int(row[2]))
         finally:
             if owns_connection:
                 conn.close()
@@ -134,7 +183,7 @@ class DuckDBSQLiteCompatibleBackend:
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> list[tuple[str, str, str]]:
         """
         Return persisted analyzer inventory for the last index run.
@@ -143,8 +192,8 @@ class DuckDBSQLiteCompatibleBackend:
         ----------
         root : pathlib.Path
             Repository root whose index should be queried.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -170,7 +219,7 @@ class DuckDBSQLiteCompatibleBackend:
 
     def initialize(self, root: Path) -> None:
         """
-        Prepare the repository-local SQLite database.
+        Prepare the repository-local compatibility database.
 
         Parameters
         ----------
@@ -180,13 +229,13 @@ class DuckDBSQLiteCompatibleBackend:
         Returns
         -------
         None
-            The SQLite schema is created or refreshed in place.
+            The compatibility schema is created or refreshed in place.
         """
         init_db(root)
 
-    def open_connection(self, root: Path) -> sqlite3.Connection:
+    def open_connection(self, root: Path) -> _BackendCompatibleConnection:
         """
-        Open a SQLite connection for one repository index.
+        Open a backend-compatible connection for one repository index.
 
         Parameters
         ----------
@@ -195,8 +244,8 @@ class DuckDBSQLiteCompatibleBackend:
 
         Returns
         -------
-        sqlite3.Connection
-            Open SQLite connection.
+        _BackendCompatibleConnection
+            Open backend-compatible connection.
         """
         if not get_db_path(root).exists():
             self.initialize(root)
@@ -209,7 +258,7 @@ class DuckDBSQLiteCompatibleBackend:
         *,
         prefix: str | None = None,
         limit: int = 20,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> list[SymbolRow]:
         """
         Return indexed symbols belonging to one module.
@@ -224,8 +273,8 @@ class DuckDBSQLiteCompatibleBackend:
             Repo-root-relative path prefix used to restrict symbol files.
         limit : int, optional
             Maximum number of symbol rows to return.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -251,7 +300,7 @@ class DuckDBSQLiteCompatibleBackend:
                 (module, *prefix_params, limit),
             ).fetchall()
             return [
-                (str(t), str(m), str(n), str(f), int(lineno))
+                (str(t), str(m), str(n), str(f), _backend_int(lineno))
                 for t, m, n, f, lineno in rows
             ]
         finally:
@@ -264,7 +313,7 @@ class DuckDBSQLiteCompatibleBackend:
         name: str,
         *,
         prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> list[SymbolRow]:
         """
         Find exact symbol-name matches in the index.
@@ -277,8 +326,8 @@ class DuckDBSQLiteCompatibleBackend:
             Exact symbol name to search for.
         prefix : str | None, optional
             Repo-root-relative path prefix used to restrict symbol files.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -304,7 +353,7 @@ class DuckDBSQLiteCompatibleBackend:
                 (name, *prefix_params),
             ).fetchall()
             return [
-                (str(t), str(m), str(n), str(f), int(lineno))
+                (str(t), str(m), str(n), str(f), _backend_int(lineno))
                 for t, m, n, f, lineno in rows
             ]
         finally:
@@ -318,7 +367,7 @@ class DuckDBSQLiteCompatibleBackend:
         prefix: str | None = None,
         include_tests: bool = False,
         limit: int = 1000,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> list[BackendSymbolInventoryItem]:
         """
         Return indexed symbols with graph connectivity metrics.
@@ -333,8 +382,8 @@ class DuckDBSQLiteCompatibleBackend:
             Whether symbols from ``tests`` modules are included.
         limit : int, optional
             Maximum number of rows to return after deterministic sorting.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -387,7 +436,7 @@ class DuckDBSQLiteCompatibleBackend:
                         identity[0],
                         identity[1],
                         str(file_path),
-                        int(lineno),
+                        _backend_int(lineno),
                     )
                 )
 
@@ -436,7 +485,7 @@ class DuckDBSQLiteCompatibleBackend:
 
     def _symbol_metric(
         self,
-        conn: sqlite3.Connection,
+        conn: _BackendCompatibleConnection,
         table: str,
         module_column: str,
         name_column: str,
@@ -447,7 +496,7 @@ class DuckDBSQLiteCompatibleBackend:
 
         Parameters
         ----------
-        conn : sqlite3.Connection
+        conn : _BackendCompatibleConnection
             Open backend connection.
         table : {"call_edges", "callable_refs"}
             Graph table to aggregate.
@@ -475,14 +524,16 @@ class DuckDBSQLiteCompatibleBackend:
         ).fetchone()
         if row is None:
             return BackendGraphMetric(total=0, unresolved=0)
-        return BackendGraphMetric(total=int(row[0]), unresolved=int(row[1]))
+        return BackendGraphMetric(
+            total=_backend_int(row[0]), unresolved=_backend_int(row[1])
+        )
 
     def find_symbol_overloads(
         self,
         root: Path,
         symbol: SymbolRow,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> list[OverloadRow]:
         """
         Return overload metadata attached to one canonical callable symbol.
@@ -493,8 +544,8 @@ class DuckDBSQLiteCompatibleBackend:
             Repository root whose index should be queried.
         symbol : codira.types.SymbolRow
             Canonical function or method symbol row.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -545,10 +596,10 @@ class DuckDBSQLiteCompatibleBackend:
                 (
                     str(stable_id),
                     str(parent_stable_id),
-                    int(ordinal),
+                    _backend_int(ordinal),
                     str(signature),
-                    int(overload_lineno),
-                    None if end_lineno is None else int(end_lineno),
+                    _backend_int(overload_lineno),
+                    None if end_lineno is None else _backend_int(end_lineno),
                     None if docstring is None else str(docstring),
                 )
                 for (
@@ -570,7 +621,7 @@ class DuckDBSQLiteCompatibleBackend:
         root: Path,
         symbol: SymbolRow,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> list[EnumMemberRow]:
         """
         Return enum-member metadata attached to one canonical enum symbol.
@@ -581,8 +632,8 @@ class DuckDBSQLiteCompatibleBackend:
             Repository root whose index should be queried.
         symbol : codira.types.SymbolRow
             Canonical enum symbol row.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -628,10 +679,10 @@ class DuckDBSQLiteCompatibleBackend:
                 (
                     str(stable_id),
                     str(parent_stable_id),
-                    int(ordinal),
+                    _backend_int(ordinal),
                     str(member_name),
                     str(signature),
-                    int(member_lineno),
+                    _backend_int(member_lineno),
                 )
                 for (
                     stable_id,
@@ -651,7 +702,7 @@ class DuckDBSQLiteCompatibleBackend:
         root: Path,
         *,
         prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> list[DocstringIssueRow]:
         """
         Return indexed docstring validation issues.
@@ -662,8 +713,8 @@ class DuckDBSQLiteCompatibleBackend:
             Repository root whose index should be queried.
         prefix : str | None, optional
             Repo-root-relative path prefix used to restrict issue ownership.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -760,8 +811,8 @@ class DuckDBSQLiteCompatibleBackend:
                     str(module_name),
                     str(symbol_name),
                     str(file_path),
-                    int(lineno),
-                    None if end_lineno is None else int(end_lineno),
+                    _backend_int(lineno),
+                    None if end_lineno is None else _backend_int(end_lineno),
                 )
                 for (
                     issue_type,
@@ -801,7 +852,7 @@ class DuckDBSQLiteCompatibleBackend:
         module = request.module
         incoming = request.incoming
         prefix = request.prefix
-        conn = cast("sqlite3.Connection | None", request.conn)
+        conn = cast("_BackendCompatibleConnection | None", request.conn)
         owns_connection = conn is None
         normalized_prefix = normalize_prefix(root, prefix)
         if conn is None:
@@ -847,7 +898,7 @@ class DuckDBSQLiteCompatibleBackend:
                     str(caller_name),
                     None if callee_module is None else str(callee_module),
                     None if callee_name is None else str(callee_name),
-                    int(resolved),
+                    _backend_int(resolved),
                 )
                 for (
                     caller_module,
@@ -883,7 +934,7 @@ class DuckDBSQLiteCompatibleBackend:
         module = request.module
         incoming = request.incoming
         prefix = request.prefix
-        conn = cast("sqlite3.Connection | None", request.conn)
+        conn = cast("_BackendCompatibleConnection | None", request.conn)
         owns_connection = conn is None
         normalized_prefix = normalize_prefix(root, prefix)
         if conn is None:
@@ -929,7 +980,7 @@ class DuckDBSQLiteCompatibleBackend:
                     str(owner_name),
                     None if target_module is None else str(target_module),
                     None if target_name is None else str(target_name),
-                    int(resolved),
+                    _backend_int(resolved),
                 )
                 for (
                     owner_module,
@@ -966,7 +1017,7 @@ class DuckDBSQLiteCompatibleBackend:
         module = request.module
         incoming = request.incoming
         prefix = request.prefix
-        conn = cast("sqlite3.Connection | None", request.conn)
+        conn = cast("_BackendCompatibleConnection | None", request.conn)
         owns_connection = conn is None
         normalized_prefix = normalize_prefix(root, prefix)
         if conn is None:
@@ -1010,7 +1061,7 @@ class DuckDBSQLiteCompatibleBackend:
         try:
             rows = conn.execute(query, tuple(params)).fetchall()
             return [
-                (str(owner_module), str(target_name), str(kind), int(lineno))
+                (str(owner_module), str(target_name), str(kind), _backend_int(lineno))
                 for owner_module, target_name, kind, lineno in rows
             ]
         finally:
@@ -1024,7 +1075,7 @@ class DuckDBSQLiteCompatibleBackend:
         logical_name: str,
         *,
         prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> list[SymbolRow]:
         """
         Resolve a logical callable name back to indexed symbol rows.
@@ -1039,8 +1090,8 @@ class DuckDBSQLiteCompatibleBackend:
             Logical symbol identity such as ``helper`` or ``Class.method``.
         prefix : str | None, optional
             Repo-root-relative path prefix used to restrict symbol files.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1099,7 +1150,7 @@ class DuckDBSQLiteCompatibleBackend:
                 ).fetchall()
 
             return [
-                (str(t), str(m), str(n), str(f), int(lineno))
+                (str(t), str(m), str(n), str(f), _backend_int(lineno))
                 for t, m, n, f, lineno in rows
             ]
         finally:
@@ -1111,7 +1162,7 @@ class DuckDBSQLiteCompatibleBackend:
         root: Path,
         symbol: SymbolRow,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> str:
         """
         Return the logical graph identity for one indexed symbol row.
@@ -1122,8 +1173,8 @@ class DuckDBSQLiteCompatibleBackend:
             Repository root whose index should be queried.
         symbol : codira.types.SymbolRow
             Indexed symbol row whose logical identity should be resolved.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1164,7 +1215,7 @@ class DuckDBSQLiteCompatibleBackend:
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> list[EmbeddingInventoryRow]:
         """
         Return stored embedding inventory grouped by backend metadata.
@@ -1173,8 +1224,8 @@ class DuckDBSQLiteCompatibleBackend:
         ----------
         root : pathlib.Path
             Repository root whose index should be queried.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1192,7 +1243,7 @@ class DuckDBSQLiteCompatibleBackend:
                 ORDER BY backend, version, dim
                 """).fetchall()
             return [
-                (str(backend), str(version), int(dim), int(count))
+                (str(backend), str(version), _backend_int(dim), _backend_int(count))
                 for backend, version, dim, count in rows
             ]
         finally:
@@ -1205,7 +1256,7 @@ class DuckDBSQLiteCompatibleBackend:
         name: str,
         *,
         prefix: str | None = None,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> list[ReferenceSearchRow]:
         """
         Return stored non-import lines containing one symbol name.
@@ -1218,8 +1269,8 @@ class DuckDBSQLiteCompatibleBackend:
             Symbol name to search as a simple substring.
         prefix : str | None, optional
             Repo-root-relative path prefix used to restrict candidate files.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1247,7 +1298,7 @@ class DuckDBSQLiteCompatibleBackend:
                 (name, *prefix_params),
             ).fetchall()
             return [
-                (str(file_path), int(lineno), str(line_text))
+                (str(file_path), _backend_int(lineno), str(line_text))
                 for file_path, lineno, line_text in rows
             ]
         finally:
@@ -1277,7 +1328,7 @@ class DuckDBSQLiteCompatibleBackend:
         limit = request.limit
         min_score = request.min_score
         prefix = request.prefix
-        conn = cast("sqlite3.Connection | None", request.conn)
+        conn = cast("_BackendCompatibleConnection | None", request.conn)
         owns_connection = conn is None
         normalized_prefix = normalize_prefix(root, prefix)
         if conn is None:
@@ -1322,11 +1373,11 @@ class DuckDBSQLiteCompatibleBackend:
                     str(row[1]),
                     str(row[2]),
                     str(row[3]),
-                    int(row[4]),
+                    _backend_int(row[4]),
                 )
                 version = str(row[5])
-                dim = int(row[6])
-                blob = bytes(row[7])
+                dim = _backend_int(row[6])
+                blob = _backend_bytes(row[7])
                 if version != backend.version or dim != backend.dim:
                     continue
 
@@ -1355,7 +1406,7 @@ class DuckDBSQLiteCompatibleBackend:
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> None:
         """
         Remove embedding rows whose owning symbol no longer exists.
@@ -1364,8 +1415,8 @@ class DuckDBSQLiteCompatibleBackend:
         ----------
         root : pathlib.Path
             Repository root whose index should be cleaned.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1387,7 +1438,7 @@ class DuckDBSQLiteCompatibleBackend:
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> dict[str, str]:
         """
         Load indexed file hashes used for incremental reuse decisions.
@@ -1396,8 +1447,8 @@ class DuckDBSQLiteCompatibleBackend:
         ----------
         root : pathlib.Path
             Repository root whose index should be queried.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1419,7 +1470,7 @@ class DuckDBSQLiteCompatibleBackend:
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> dict[str, tuple[str, str]]:
         """
         Load analyzer ownership for indexed files.
@@ -1428,8 +1479,8 @@ class DuckDBSQLiteCompatibleBackend:
         ----------
         root : pathlib.Path
             Repository root whose index should be queried.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1452,7 +1503,7 @@ class DuckDBSQLiteCompatibleBackend:
         root: Path,
         *,
         embedding_backend: EmbeddingBackendSpec,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> bool:
         """
         Check whether persisted embeddings match the active embedding backend.
@@ -1463,8 +1514,8 @@ class DuckDBSQLiteCompatibleBackend:
             Repository root whose index should be queried.
         embedding_backend : EmbeddingBackendSpec
             Active embedding backend metadata.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1488,7 +1539,7 @@ class DuckDBSQLiteCompatibleBackend:
         root: Path,
         *,
         paths: list[str],
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> None:
         """
         Remove persisted rows owned by the supplied file paths.
@@ -1499,8 +1550,8 @@ class DuckDBSQLiteCompatibleBackend:
             Repository root whose index should be updated.
         paths : list[str]
             Absolute file paths to remove.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1526,7 +1577,7 @@ class DuckDBSQLiteCompatibleBackend:
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> None:
         """
         Remove all indexed artifacts from SQLite storage.
@@ -1535,8 +1586,8 @@ class DuckDBSQLiteCompatibleBackend:
         ----------
         root : pathlib.Path
             Repository root whose index should be cleared.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1558,7 +1609,7 @@ class DuckDBSQLiteCompatibleBackend:
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> None:
         """
         Remove legacy docstring issues for files excluded from audit policy.
@@ -1567,8 +1618,8 @@ class DuckDBSQLiteCompatibleBackend:
         ----------
         root : pathlib.Path
             Repository root whose index should be cleaned.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1592,7 +1643,7 @@ class DuckDBSQLiteCompatibleBackend:
         *,
         paths: list[str],
         embedding_backend: EmbeddingBackendSpec,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> dict[str, dict[str, StoredEmbeddingRow]]:
         """
         Load reusable stored symbol embeddings for paths being replaced.
@@ -1605,8 +1656,8 @@ class DuckDBSQLiteCompatibleBackend:
             Absolute file paths selected for replacement.
         embedding_backend : EmbeddingBackendSpec
             Active embedding backend metadata.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1631,7 +1682,7 @@ class DuckDBSQLiteCompatibleBackend:
         root: Path,
         *,
         paths: list[str],
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> int:
         """
         Count semantic artifacts reused for unchanged paths.
@@ -1642,8 +1693,8 @@ class DuckDBSQLiteCompatibleBackend:
             Repository root whose index should be queried.
         paths : list[str]
             Absolute file paths considered reusable.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1694,7 +1745,7 @@ class DuckDBSQLiteCompatibleBackend:
             If validated persistence inputs are semantically inconsistent.
         """
         root = request.root
-        conn = cast("sqlite3.Connection | None", request.conn)
+        conn = cast("_BackendCompatibleConnection | None", request.conn)
         owns_connection = conn is None
         if conn is None:
             conn = self.open_connection(root)
@@ -1749,7 +1800,7 @@ class DuckDBSQLiteCompatibleBackend:
         self,
         root: Path,
         *,
-        conn: sqlite3.Connection | None = None,
+        conn: _BackendCompatibleConnection | None = None,
     ) -> None:
         """
         Rebuild derived graph tables after raw persistence.
@@ -1758,8 +1809,8 @@ class DuckDBSQLiteCompatibleBackend:
         ----------
         root : pathlib.Path
             Repository root whose index should be finalized.
-        conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
 
         Returns
         -------
@@ -1804,7 +1855,7 @@ class DuckDBSQLiteCompatibleBackend:
         backend_version = request.backend_version
         coverage_complete = request.coverage_complete
         analyzers = request.analyzers
-        conn = cast("sqlite3.Connection | None", request.conn)
+        conn = cast("_BackendCompatibleConnection | None", request.conn)
         owns_connection = conn is None
         if conn is None:
             conn = self.open_connection(root)
@@ -1844,7 +1895,7 @@ class DuckDBSQLiteCompatibleBackend:
             if owns_connection:
                 conn.close()
 
-    def commit(self, root: Path, *, conn: sqlite3.Connection) -> None:
+    def commit(self, root: Path, *, conn: _BackendCompatibleConnection) -> None:
         """
         Commit pending writes on an open SQLite connection.
 
@@ -1852,8 +1903,8 @@ class DuckDBSQLiteCompatibleBackend:
         ----------
         root : pathlib.Path
             Repository root associated with the connection.
-        conn : sqlite3.Connection
-            Open SQLite connection.
+        conn : _BackendCompatibleConnection
+            Open backend-compatible connection.
 
         Returns
         -------
@@ -1863,14 +1914,14 @@ class DuckDBSQLiteCompatibleBackend:
         del root
         conn.commit()
 
-    def close_connection(self, conn: sqlite3.Connection) -> None:
+    def close_connection(self, conn: _BackendCompatibleConnection) -> None:
         """
         Close an open SQLite connection.
 
         Parameters
         ----------
-        conn : sqlite3.Connection
-            Open SQLite connection.
+        conn : _BackendCompatibleConnection
+            Open backend-compatible connection.
 
         Returns
         -------
