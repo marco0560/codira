@@ -38,6 +38,13 @@ Pragmatic recommendation:
 - start by wrapping or adapting existing storage behavior
 - only then introduce a fully independent persistence implementation
 
+Package-boundary rule:
+
+- backend-specific helper modules belong inside the backend package
+- core compatibility shims, when temporarily required, must remain import-only
+- cross-backend runtime imports are migration debt and should be localized or
+  removed as soon as parity allows
+
 ## First-Party Backends
 
 Current first-party backends:
@@ -68,3 +75,10 @@ DuckDB guidance:
   larger analytical or document-heavy repository indexes
 - prefer it over a service database when the repository remains a local
   single-operator or single-workspace workflow
+
+Current implementation note:
+
+- DuckDB now owns its persistence helper implementation locally
+- DuckDB no longer imports the SQLite backend package at runtime
+- a temporary DuckDB-local SQLite-compatible query layer remains while the
+  fully native query surface is still being migrated

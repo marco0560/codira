@@ -17,6 +17,17 @@ Backends currently own:
 - repository-local storage paths under `.codira/`
 - persisted runtime plugin inventory and per-file analyzer ownership metadata
 
+Current package-local ownership notes:
+
+- `src/codira/sqlite_backend_support.py` is now a compatibility shim only
+- `packages/codira-backend-sqlite/.../sqlite_support.py` owns the SQLite
+  helper implementation
+- `packages/codira-backend-duckdb/.../duckdb_support.py` owns the DuckDB
+  persistence helper implementation
+- `packages/codira-backend-duckdb/.../sqlite_compatible_backend.py` is a
+  temporary DuckDB-local compatibility layer for the inherited query and
+  maintenance surface
+
 ## Current Constraints
 
 The accepted backend model is still constrained:
@@ -30,6 +41,10 @@ DuckDB is intentionally file-local, not a shared remote service backend.
 Its role is to provide a second production-grade backend with stronger local
 analytical behavior for larger indexes, including future documentation-heavy
 channels.
+
+The current DuckDB backend is no longer coupled to the SQLite backend package
+at runtime, but it still carries a localized SQLite-compatible query layer
+inside the DuckDB package while parity-preserving migration continues.
 
 ## Phase-8 Selection Rules
 
@@ -77,6 +92,22 @@ Phase 21 makes SQLite use that metadata for deterministic rebuild policy:
 
 DuckDB follows the same rebuild policy through the same runtime and analyzer
 inventory contract.
+
+## Current Boundary Status
+
+The branch-local backend-agnostic refactor has established these boundaries:
+
+- core query modules now type backend connections through backend-neutral
+  query protocols rather than `sqlite3.Connection`
+- SQLite helper ownership has moved behind the SQLite backend package boundary
+- DuckDB persistence no longer routes through the SQLite helper module
+- DuckDB no longer imports `codira_backend_sqlite` at runtime
+
+The remaining transitional surfaces are explicit:
+
+- `src/codira/sqlite_backend_support.py` remains as a compatibility shim
+- DuckDB still uses a package-local SQLite-compatible query layer rather than
+  a fully native DuckDB query implementation
 
 ## Contributor Contract Validation Backend
 
