@@ -766,7 +766,7 @@ def test_duckdb_backend_persist_analysis_with_shared_connection_uses_real_driver
     backend = DuckDBIndexBackend()
     connection = backend.open_connection(tmp_path)
     monkeypatch.setattr(
-        "codira_backend_sqlite.sqlite_support.embed_texts",
+        "codira_backend_duckdb.duckdb_support.embed_texts",
         lambda texts: [[0.0] * 384 for _text in texts],
     )
 

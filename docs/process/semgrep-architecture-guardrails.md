@@ -133,12 +133,24 @@ package-local helper module.
 #### `packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py`
 
 Rationale:
-The DuckDB backend currently subclasses the SQLite backend to preserve
-behavioral parity with the existing storage contract.
+The DuckDB backend still owns package-local bootstrapping, compatibility
+wrappers, and package-local helper imports while the standalone migration is
+in progress.
 
 Removal condition:
-Remove this allowlist entry when DuckDB no longer inherits from
-`SQLiteIndexBackend`.
+Remove this allowlist entry when the production backend no longer needs local
+helper-module imports that match the backend-package guardrail.
+
+#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/sqlite_compatible_backend.py`
+
+Rationale:
+This temporary DuckDB-local compatibility module preserves SQLite-shaped query
+and maintenance semantics without importing the SQLite backend package at
+runtime.
+
+Removal condition:
+Remove this allowlist entry when DuckDB no longer needs the localized
+SQLite-compatible surface.
 
 #### `examples/plugins/codira_demo_backend/src/codira_demo_backend/__init__.py`
 

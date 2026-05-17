@@ -114,6 +114,7 @@ rules:
         - /src/codira/query/context.py
         - /src/codira/storage.py
         - /packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py
+        - /packages/codira-backend-duckdb/src/codira_backend_duckdb/sqlite_compatible_backend.py
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_support.py
         - /packages/**/tests/**/*.py
@@ -140,6 +141,7 @@ rules:
         - /src/codira/indexer.py
         - /src/codira/sqlite_backend_support.py
         - /packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py
+        - /packages/codira-backend-duckdb/src/codira_backend_duckdb/sqlite_compatible_backend.py
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py
         - /examples/plugins/codira_demo_backend/src/codira_demo_backend/__init__.py
         - /packages/**/tests/**/*.py

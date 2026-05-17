@@ -25,8 +25,6 @@ import re
 import sqlite3
 from typing import TYPE_CHECKING, Protocol, cast
 
-from codira_backend_sqlite import SQLiteIndexBackend
-
 from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
@@ -36,6 +34,9 @@ from codira.contracts import (
 from codira_backend_duckdb.duckdb_support import (
     _DuckDBPersistenceConnection,
     _store_analysis,
+)
+from codira_backend_duckdb.sqlite_compatible_backend import (
+    DuckDBSQLiteCompatibleBackend,
 )
 from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import get_embedding_backend
@@ -763,7 +764,7 @@ def _duckdb_lastrowid(raw: _DuckDBRawConnection, query: str) -> int | None:
     raise BackendError(msg)
 
 
-class DuckDBIndexBackend(SQLiteIndexBackend):
+class DuckDBIndexBackend(DuckDBSQLiteCompatibleBackend):
     """
     Concrete DuckDB backend exposed from the package boundary.
 
