@@ -1,3 +1,10 @@
+## [1.24.1](https://github.com/marco0560/codira/compare/v1.24.0...v1.24.1) (2026-05-17)
+
+
+### Bug Fixes
+
+* **cli:** mark the active backend in plugin reports ([9e52022](https://github.com/marco0560/codira/commit/9e52022994ec557d8418b35d55bea2126d5cf33a))
+
 # [1.24.0](https://github.com/marco0560/codira/compare/v1.23.7...v1.24.0) (2026-05-17)
 
 
