@@ -1,3 +1,22 @@
+# [1.24.0](https://github.com/marco0560/codira/compare/v1.23.7...v1.24.0) (2026-05-17)
+
+
+### Bug Fixes
+
+* **dev:** resolve semgrep from repo interpreter env ([0a0118f](https://github.com/marco0560/codira/commit/0a0118fa2945d9034b6ccb95ed198adbc5094cc2))
+* **tests:** keep wheel discovery build offline-safe ([24a684b](https://github.com/marco0560/codira/commit/24a684bf58198a0c039a66136f54b48ba95c6a02))
+
+
+### Features
+
+* **config:** add allowlisted semgrep architecture guardrails ([f3ff8cd](https://github.com/marco0560/codira/commit/f3ff8cd01746382e1565de514da9862166f433ae))
+* **config:** complete phase 3 semgrep policy integration ([91b0c3c](https://github.com/marco0560/codira/commit/91b0c3c9aae61c8373dcbdc761f90880fc3ad03f))
+* **config:** integrate semgrep into repository validation ([c162061](https://github.com/marco0560/codira/commit/c162061b3beaa3b951bb9b269260a2a13a32a2fe)), closes [#13](https://github.com/marco0560/codira/issues/13)
+* **config:** introduce initial semgrep architecture rules ([40c332a](https://github.com/marco0560/codira/commit/40c332ad228f6881e38c76869ea7a8c5aaff0ad4)), closes [#13](https://github.com/marco0560/codira/issues/13)
+* **config:** route semgrep state through repo tool runner ([877748d](https://github.com/marco0560/codira/commit/877748da9334d40d561ef3a9e80750369de471e8))
+* **config:** simplify repo tool runner and coverage reporting ([54b98c5](https://github.com/marco0560/codira/commit/54b98c51989c1fb24317e68be6e11194f9d36b79)), closes [#13](https://github.com/marco0560/codira/issues/13)
+* **dev:** integrate semgrep guardrails ([bc71818](https://github.com/marco0560/codira/commit/bc71818f317106a65dc06d4b56c8df25fba4343e)), closes [#13](https://github.com/marco0560/codira/issues/13)
+
 ## [1.23.7](https://github.com/marco0560/codira/compare/v1.23.6...v1.23.7) (2026-05-16)
 
 
