@@ -60,7 +60,7 @@ from codira_backend_duckdb.duckdb_support import (
     _rebuild_graph_indexes,
     _store_analysis,
 )
-from codira.storage import get_db_path, init_db
+from codira_backend_duckdb.sqlite_storage_compat import get_db_path, init_db
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -55,7 +55,7 @@ from codira_backend_sqlite.sqlite_support import (
     _rebuild_graph_indexes,
     _store_analysis,
 )
-from codira.storage import get_db_path, init_db
+from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
 
 if TYPE_CHECKING:
     from pathlib import Path
