@@ -30,6 +30,7 @@ import pytest
 if TYPE_CHECKING:
     import argparse
     from collections.abc import Mapping, Sequence
+    from types import ModuleType
 
     from scripts.bootstrap_dev_environment import CommandSpec
     from scripts.install_first_party_packages import (
@@ -1349,6 +1350,21 @@ class _BenchmarkIndexModule(Protocol):
         """
         ...
 
+    def active_backend_support_module(self) -> ModuleType:
+        """
+        Return the support module selected for benchmark instrumentation.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        types.ModuleType
+            Imported backend-owned helper module for the current backend.
+        """
+        ...
+
 
 def _load_benchmark_campaign_helper() -> _BenchmarkCampaignModule:
     """
@@ -2600,6 +2616,38 @@ def test_benchmark_index_helper_uses_the_active_backend_class(
     monkeypatch.setattr(helper, "active_index_backend", lambda: _FakeDuckBackend())
 
     assert helper.active_backend_class() is _FakeDuckBackend
+
+
+def test_benchmark_index_helper_uses_the_active_backend_support_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Resolve benchmark helper patching against the active backend support module.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to override backend selection deterministically.
+
+    Returns
+    -------
+    None
+        The test asserts the benchmark helper selects the package-local support
+        module for both first-party backends instead of hard-coding SQLite.
+    """
+    helper = _load_benchmark_index_helper()
+
+    class _FakeBackend:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    monkeypatch.setattr(helper, "active_index_backend", lambda: _FakeBackend("sqlite"))
+    sqlite_support = helper.active_backend_support_module()
+    assert sqlite_support.__name__ == "codira_backend_sqlite.sqlite_support"
+
+    monkeypatch.setattr(helper, "active_index_backend", lambda: _FakeBackend("duckdb"))
+    duckdb_support = helper.active_backend_support_module()
+    assert duckdb_support.__name__ == "codira_backend_duckdb.duckdb_support"
 
 
 def test_embedding_startup_benchmark_helper_separates_cold_and_warm_costs(

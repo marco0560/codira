@@ -20,6 +20,7 @@ operator-facing indexing diagnostics.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 from pathlib import Path
 from time import perf_counter
@@ -37,13 +38,16 @@ if TYPE_CHECKING:
             conn: object | None = None,
         ) -> None: ...
 
+    class _BenchmarkBackendSupportModule(Protocol):
+        _flush_embedding_rows: Callable[..., object]
+        embed_texts: Callable[[Sequence[str]], list[list[float]]]
+
 
 from benchmark_timing import (  # type: ignore[import-not-found]
     PhaseTimer,
     benchmark_metadata,
     write_json_artifact,
 )
-from codira_backend_sqlite import sqlite_support
 
 from codira import indexer
 from codira.indexer import index_repo
@@ -108,6 +112,44 @@ def active_backend_class() -> type[_BenchmarkRebuildCapable]:
     return cast("type[_BenchmarkRebuildCapable]", type(active_index_backend()))
 
 
+def active_backend_support_module() -> _BenchmarkBackendSupportModule:
+    """
+    Return the package-local support module for the active backend.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    _BenchmarkBackendSupportModule
+        Imported backend-owned helper module used for embedding flush
+        instrumentation during benchmark runs.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the configured backend does not expose a supported helper
+        module mapping for the benchmark helper.
+    """
+    backend_name = active_index_backend().name
+    support_module_by_backend = {
+        "sqlite": "codira_backend_sqlite.sqlite_support",
+        "duckdb": "codira_backend_duckdb.duckdb_support",
+    }
+    module_name = support_module_by_backend.get(backend_name)
+    if module_name is None:
+        msg = (
+            "benchmark_index.py does not know how to instrument backend "
+            f"{backend_name!r}"
+        )
+        raise RuntimeError(msg)
+    return cast(
+        "_BenchmarkBackendSupportModule",
+        importlib.import_module(module_name),
+    )
+
+
 def main() -> int:
     """
     Run the benchmark and print one JSON report.
@@ -140,14 +182,12 @@ def main() -> int:
         "Callable[..., object]",
         indexer.file_metadata,  # type: ignore[attr-defined]
     )
-    original_flush_rows = sqlite_support._flush_embedding_rows
     backend_class = active_backend_class()
+    backend_support = active_backend_support_module()
+    original_flush_rows = backend_support._flush_embedding_rows
     original_rebuild_indexes = backend_class.rebuild_derived_indexes
     original_embed_texts = embeddings_module.embed_texts
-    original_sqlite_support_embed_texts = cast(
-        "Callable[[Sequence[str]], list[list[float]]]",
-        sqlite_support.embed_texts,
-    )
+    original_backend_support_embed_texts = backend_support.embed_texts
 
     def benchmark_collect_scan(*args: object, **kwargs: object) -> object:
         return timer.timed_call(
@@ -235,10 +275,10 @@ def main() -> int:
     indexer._select_language_analyzer = benchmark_select_analyzer  # type: ignore[assignment]
     indexer.iter_project_files = benchmark_iter_project_files  # type: ignore[attr-defined, assignment]
     indexer.file_metadata = benchmark_file_metadata  # type: ignore[attr-defined, assignment]
-    sqlite_support._flush_embedding_rows = benchmark_flush_rows  # type: ignore[assignment]
+    backend_support._flush_embedding_rows = benchmark_flush_rows
     backend_class.rebuild_derived_indexes = benchmark_rebuild_indexes  # type: ignore[method-assign]
     embeddings_module.embed_texts = benchmark_embed_texts
-    sqlite_support.embed_texts = benchmark_embed_texts
+    backend_support.embed_texts = benchmark_embed_texts
 
     total_start = perf_counter()
     try:
@@ -257,10 +297,10 @@ def main() -> int:
         indexer._select_language_analyzer = original_select_analyzer
         indexer.iter_project_files = original_iter_project_files  # type: ignore[attr-defined, assignment]
         indexer.file_metadata = original_file_metadata  # type: ignore[attr-defined, assignment]
-        sqlite_support._flush_embedding_rows = original_flush_rows
+        backend_support._flush_embedding_rows = original_flush_rows
         backend_class.rebuild_derived_indexes = original_rebuild_indexes  # type: ignore[method-assign]
         embeddings_module.embed_texts = original_embed_texts
-        sqlite_support.embed_texts = original_sqlite_support_embed_texts  # type: ignore[assignment]
+        backend_support.embed_texts = original_backend_support_embed_texts
 
     benchmark_report = {
         "metadata": benchmark_metadata(root),
