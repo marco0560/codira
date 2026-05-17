@@ -21,8 +21,12 @@ Current package-local ownership notes:
 
 - `packages/codira-backend-sqlite/.../sqlite_support.py` owns the SQLite
   helper implementation
+- `packages/codira-backend-sqlite/.../sqlite_storage.py` owns the SQLite
+  package-local bootstrap and path entrypoints used by the production backend
 - `packages/codira-backend-duckdb/.../duckdb_support.py` owns the DuckDB
   persistence helper implementation
+- `packages/codira-backend-duckdb/.../sqlite_storage_compat.py` owns the
+  DuckDB-local compatibility seam for SQLite bootstrap/path calls
 - `packages/codira-backend-duckdb/.../sqlite_compatible_backend.py` is a
   temporary DuckDB-local compatibility layer for the inherited query and
   maintenance surface
@@ -99,8 +103,12 @@ The branch-local backend-agnostic refactor has established these boundaries:
 - core query modules now type backend connections through backend-neutral
   query protocols rather than `sqlite3.Connection`
 - SQLite helper ownership has moved behind the SQLite backend package boundary
+- SQLite bootstrap and database-path entrypoints are now package-local backend
+  seams rather than direct backend imports of `codira.storage`
 - DuckDB persistence no longer routes through the SQLite helper module
 - DuckDB no longer imports `codira_backend_sqlite` at runtime
+- benchmark and SQLite-oriented test scaffolding now route setup through the
+  SQLite backend package seam rather than calling core SQLite bootstrap
 
 The remaining transitional surfaces are explicit:
 

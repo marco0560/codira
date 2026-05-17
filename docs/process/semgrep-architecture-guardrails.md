@@ -24,21 +24,51 @@ It exists to:
 
 ### Enforced with allowlist
 
+- `codira.plugins.no-core-storage-import`
 - `codira.arch.no-sqlite3-outside-allowed-layers`
 - `codira.arch.no-backend-package-import-outside-allowed-layers`
 
 ### Documented future rules
 
-- forbid `codira.storage` imports outside backend implementations and the
-  current CLI metadata surface
 - forbid `codira.registry` imports outside the current core query/indexing
   entry points
 
-These broader rules are not enforced yet because the current core
-implementation still owns transitional responsibilities that would produce
-noisy findings.
+This broader rule is not enforced yet because the current core implementation
+still owns transitional responsibilities that would produce noisy findings.
 
 ## Allowlisted Exceptions
+
+### `codira.plugins.no-core-storage-import`
+
+#### `packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_storage.py`
+
+Rationale:
+This package-local seam centralizes SQLite bootstrap/path imports so the
+production backend no longer imports `codira.storage` directly.
+
+Removal condition:
+Remove this allowlist entry when SQLite bootstrap/path ownership no longer
+delegates to core storage helpers.
+
+#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/sqlite_storage_compat.py`
+
+Rationale:
+This package-local seam centralizes the localized DuckDB compatibility layer's
+remaining SQLite bootstrap/path imports.
+
+Removal condition:
+Remove this allowlist entry when DuckDB no longer needs compatibility access
+to the SQLite bootstrap/path surface.
+
+#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py`
+
+Rationale:
+The production DuckDB backend still imports generic repository-storage helpers
+for `.codira` directory and metadata ownership.
+
+Removal condition:
+Remove this allowlist entry when those generic storage-path/metadata helpers
+move behind a backend-neutral package-local seam.
 
 ### `codira.arch.no-sqlite3-outside-allowed-layers`
 

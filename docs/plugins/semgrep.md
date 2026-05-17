@@ -29,6 +29,8 @@ such as:
 - forbid direct `sqlite3` imports in analyzer packages
 - forbid analyzer imports of backend packages
 - forbid analyzer imports of `codira.storage`
+- forbid backend-package imports of `codira.storage` except through explicit
+  package-local seam modules
 - require analyzer classes to expose `analyzer_capability_declaration`
 - forbid broad `except Exception` in plugin implementation code
 
@@ -41,8 +43,9 @@ When you copy these ideas into a plugin repository, update:
 
 ## Codira-Specific Allowlists
 
-Two current Codira rules intentionally carry internal allowlists:
+Three current Codira rules intentionally carry internal allowlists:
 
+- `codira.plugins.no-core-storage-import`
 - `codira.arch.no-sqlite3-outside-allowed-layers`
 - `codira.arch.no-backend-package-import-outside-allowed-layers`
 

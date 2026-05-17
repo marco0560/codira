@@ -13,7 +13,8 @@ The implementation is intentionally repository-local:
 
 - the CLI operates relative to the current repository root
 - index data lives under `.codira/`
-- exact and semantic query paths read the same SQLite database
+- exact and semantic query paths read the same active backend index selected
+  through the registry
 
 ## Current Module Shape
 
@@ -23,11 +24,11 @@ The current branch centers on these modules:
 - `src/codira/scanner.py` for Git-backed file discovery with filesystem
   fallback
 - `src/codira/registry.py` for backend selection and analyzer activation
-- `src/codira/indexer.py` for incremental orchestration and SQLite backend
-  persistence/query implementation
+- `src/codira/indexer.py` for incremental orchestration and backend dispatch
 - `src/codira/analyzers/python.py` and `src/codira/analyzers/c.py` for
   language-specific analysis
-- `src/codira/storage.py` for SQLite initialization and schema refresh
+- `src/codira/storage.py` for generic repository-local storage paths, metadata,
+  and lock helpers
 - `src/codira/query/exact.py` for exact lookup helpers
 - `src/codira/query/producers.py` for shared retrieval producer metadata
 - `src/codira/query/context.py` and `src/codira/semantic/search.py` for

@@ -38,10 +38,17 @@ own concrete storage, persistence, and query implementation details.
   connection protocols
 - `packages/codira-backend-sqlite/.../sqlite_support.py` owns the SQLite
   helper implementation
+- `packages/codira-backend-sqlite/.../sqlite_storage.py` now owns the
+  package-local SQLite bootstrap/path seam used by runtime and SQLite-oriented
+  test scaffolding
 - DuckDB persistence now uses package-local `duckdb_support.py`
+- `packages/codira-backend-duckdb/.../sqlite_storage_compat.py` now owns the
+  localized compatibility seam for SQLite bootstrap/path access
 - DuckDB no longer imports `codira_backend_sqlite` at runtime
 - Semgrep guardrails were updated to match the new package-local ownership
   boundaries
+- backend/plugin Semgrep rules now fail direct `codira.storage` imports
+  outside the documented package-local seam modules
 
 ## Remaining Transitional Surfaces
 
