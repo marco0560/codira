@@ -351,6 +351,11 @@ class _FakeAnalyzer:
         -------
         codira.models.AnalysisResult
             Never returned.
+
+        Raises
+        ------
+        NotImplementedError
+            Raised because the stub never performs real analysis work.
         """
         del path, root
         raise NotImplementedError
@@ -766,7 +771,7 @@ def test_duckdb_backend_persist_analysis_with_shared_connection_uses_real_driver
     backend = DuckDBIndexBackend()
     connection = backend.open_connection(tmp_path)
     monkeypatch.setattr(
-        "codira.sqlite_backend_support.embed_texts",
+        "codira_backend_duckdb.duckdb_support.embed_texts",
         lambda texts: [[0.0] * 384 for _text in texts],
     )
 

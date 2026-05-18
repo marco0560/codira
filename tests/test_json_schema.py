@@ -20,11 +20,11 @@ import json
 from pathlib import Path
 from typing import cast
 
+from codira_backend_sqlite.sqlite_storage import init_db
 from jsonschema import validate  # type: ignore[import-untyped]
 
 from codira.indexer import index_repo
 from codira.query.context import ContextRequest, context_for
-from codira.storage import init_db
 
 
 def _load_schema(root: Path) -> dict[str, object]:

@@ -22,27 +22,31 @@ from __future__ import annotations
 import importlib
 import json
 import re
-import sqlite3
 from typing import TYPE_CHECKING, Protocol, cast
-
-from codira_backend_sqlite import SQLiteIndexBackend
 
 from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
+    StoredEmbeddingRow,
+)
+from .duckdb_support import (
+    _DuckDBPersistenceConnection,
+    _store_analysis,
+)
+from .repo_storage import get_codira_dir, get_metadata_path
+from .duckdb_query_backend import (
+    _BackendCompatibleConnectionAdapter,
+    DuckDBQueryBackend,
 )
 from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import get_embedding_backend
-from codira.sqlite_backend_support import _store_analysis
-from codira.storage import get_codira_dir, get_metadata_path
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
     from codira.contracts import IndexBackend
-    from codira.sqlite_backend_support import StoredEmbeddingRow
 
 PACKAGE_VERSION = "1.5.3"
 _INSERT_TABLE_PATTERN = re.compile(r"^\s*INSERT\s+INTO\s+([a-z_]+)", re.IGNORECASE)
@@ -306,7 +310,7 @@ class _DuckDBCursorCompatibilityAdapter:
         parameters: Sequence[object] | None = None,
     ) -> _DuckDBCursorCompatibilityAdapter:
         """
-        Execute one query while preserving SQLite-compatible missing-table errors.
+        Execute one query through the compatibility cursor adapter.
 
         Parameters
         ----------
@@ -319,23 +323,11 @@ class _DuckDBCursorCompatibilityAdapter:
         -------
         _DuckDBCursorCompatibilityAdapter
             The current cursor adapter so callers can fetch from it directly.
-
-        Raises
-        ------
-        sqlite3.OperationalError
-            If DuckDB reports that the optional ``docstrings`` table does not
-            exist.
         """
-        try:
-            if parameters is None:
-                self._raw.execute(query)
-            else:
-                self._raw.execute(query, parameters)
-        except _duckdb_module().Error as exc:
-            message = str(exc)
-            if "Table with name docstrings does not exist" in message:
-                raise sqlite3.OperationalError(message) from exc
-            raise
+        if parameters is None:
+            self._raw.execute(query)
+        else:
+            self._raw.execute(query, parameters)
         return self
 
     def fetchone(self) -> tuple[object, ...] | None:
@@ -760,7 +752,7 @@ def _duckdb_lastrowid(raw: _DuckDBRawConnection, query: str) -> int | None:
     raise BackendError(msg)
 
 
-class DuckDBIndexBackend(SQLiteIndexBackend):
+class DuckDBIndexBackend(DuckDBQueryBackend):
     """
     Concrete DuckDB backend exposed from the package boundary.
 
@@ -797,7 +789,7 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
             raw.close()
         _write_schema_metadata(root)
 
-    def open_connection(self, root: Path) -> sqlite3.Connection:
+    def open_connection(self, root: Path) -> _BackendCompatibleConnectionAdapter:
         """
         Open a DuckDB connection for one repository index.
 
@@ -808,14 +800,14 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
 
         Returns
         -------
-        sqlite3.Connection
+        _BackendCompatibleConnectionAdapter
             Open DuckDB connection adapter.
         """
         if not _duckdb_db_path(root).exists():
             self.initialize(root)
         raw = _duckdb_module().connect(str(_duckdb_db_path(root)))
         _repair_nullable_edge_tables(raw)
-        return cast("sqlite3.Connection", DuckDBConnection(raw))
+        return cast("_BackendCompatibleConnectionAdapter", DuckDBConnection(raw))
 
     def persist_analysis(
         self,
@@ -843,10 +835,10 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
         """
         root = request.root
         error_type = _duckdb_module().Error
-        conn = cast("DuckDBConnection | None", request.conn)
+        conn = cast("_BackendCompatibleConnectionAdapter | None", request.conn)
         owns_connection = conn is None
         if conn is None:
-            conn = cast("DuckDBConnection", self.open_connection(root))
+            conn = self.open_connection(root)
         assert conn is not None
         active_backend = (
             get_embedding_backend()
@@ -856,7 +848,7 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
         try:
             if owns_connection:
                 written = _store_analysis(
-                    cast("sqlite3.Connection", conn),
+                    cast("_DuckDBPersistenceConnection", conn),
                     request.file_metadata,
                     request.analysis,
                     backend=active_backend,
@@ -873,7 +865,7 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
                 conn.execute("BEGIN TRANSACTION")
                 try:
                     written = _store_analysis(
-                        cast("sqlite3.Connection", conn),
+                        cast("_DuckDBPersistenceConnection", conn),
                         request.file_metadata,
                         request.analysis,
                         backend=active_backend,
@@ -926,10 +918,10 @@ class DuckDBIndexBackend(SQLiteIndexBackend):
         coverage_complete = request.coverage_complete
         analyzers = request.analyzers
         error_type = _duckdb_module().Error
-        conn = cast("DuckDBConnection | None", request.conn)
+        conn = cast("_BackendCompatibleConnectionAdapter | None", request.conn)
         owns_connection = conn is None
         if conn is None:
-            conn = cast("DuckDBConnection", self.open_connection(root))
+            conn = self.open_connection(root)
         assert conn is not None
         try:
             conn.execute("DELETE FROM index_runtime")

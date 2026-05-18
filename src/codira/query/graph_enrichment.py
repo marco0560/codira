@@ -37,9 +37,9 @@ from codira.query.producers import (
 )
 
 if TYPE_CHECKING:
-    import sqlite3
     from collections.abc import Callable
 
+    from codira.contracts import BackendQueryConnection
     from codira.query.signals import RetrievalSignal
     from codira.types import IncludeEdgeRow, SymbolRow
 
@@ -59,7 +59,7 @@ class IncludeGraphNeighborRequest:
         Repository root containing the index database.
     symbol : codira.types.SymbolRow
         Seed symbol whose owning module should be expanded.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection reused for exact graph lookups.
     prefix : str | None
         Absolute normalized prefix used to restrict owner files and symbols.
@@ -75,7 +75,7 @@ class IncludeGraphNeighborRequest:
 
     root: Path
     symbol: SymbolRow
-    conn: sqlite3.Connection
+    conn: BackendQueryConnection
     prefix: str | None
     graph_signals: list[RetrievalSignal] | None
     classify_file_language: Callable[[str], str]
@@ -94,7 +94,7 @@ class GraphExpansionRequest:
         Repository root containing the index database.
     top_matches : list[codira.types.SymbolRow]
         Primary ranked symbols for the query.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection reused for exact graph lookups.
     include_include_graph : bool
         Whether include-graph expansion is enabled.
@@ -120,7 +120,7 @@ class GraphExpansionRequest:
 
     root: Path
     top_matches: list[SymbolRow]
-    conn: sqlite3.Connection
+    conn: BackendQueryConnection
     include_include_graph: bool
     include_references: bool
     prefix: str | None

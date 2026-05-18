@@ -24,21 +24,42 @@ It exists to:
 
 ### Enforced with allowlist
 
+- `codira.plugins.no-core-storage-import`
 - `codira.arch.no-sqlite3-outside-allowed-layers`
 - `codira.arch.no-backend-package-import-outside-allowed-layers`
 
 ### Documented future rules
 
-- forbid `codira.storage` imports outside backend implementations and the
-  current CLI metadata surface
 - forbid `codira.registry` imports outside the current core query/indexing
   entry points
 
-These broader rules are not enforced yet because the current core
-implementation still owns transitional responsibilities that would produce
-noisy findings.
+This broader rule is not enforced yet because the current core implementation
+still owns transitional responsibilities that would produce noisy findings.
 
 ## Allowlisted Exceptions
+
+### `codira.plugins.no-core-storage-import`
+
+#### `packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_storage.py`
+
+Rationale:
+This package-local seam centralizes SQLite bootstrap/path imports so the
+production backend no longer imports `codira.storage` directly.
+
+Removal condition:
+Remove this allowlist entry when SQLite bootstrap/path ownership no longer
+delegates to core storage helpers.
+
+#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/repo_storage.py`
+
+Rationale:
+This package-local seam centralizes the production DuckDB backend's remaining
+generic repository-storage imports for `.codira` directory and metadata
+ownership.
+
+Removal condition:
+Remove this allowlist entry when those storage-path/metadata helpers no longer
+delegate to core storage helpers.
 
 ### `codira.arch.no-sqlite3-outside-allowed-layers`
 
@@ -62,36 +83,6 @@ Removal condition:
 Remove this allowlist entry when CLI rebuild inspection delegates fully to the
 active backend contract.
 
-#### `src/codira/query/context.py`
-
-Rationale:
-Context assembly still exposes `sqlite3.Connection` in graph-retrieval request
-typing.
-
-Removal condition:
-Remove this allowlist entry when context graph queries use a backend-neutral
-connection contract.
-
-#### `src/codira/query/graph_enrichment.py`
-
-Rationale:
-Graph-enrichment request dataclasses still expose `sqlite3.Connection` for
-exact graph lookup reuse.
-
-Removal condition:
-Remove this allowlist entry when graph enrichment uses a backend-neutral
-connection contract.
-
-#### `src/codira/query/producers.py`
-
-Rationale:
-Shared retrieval producer contracts still publish `sqlite3.Connection` in
-TYPE_CHECKING-only callable signatures.
-
-Removal condition:
-Remove this allowlist entry when producer contracts stop referring to
-SQLite-specific connection types.
-
 #### `packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py`
 
 Rationale:
@@ -100,25 +91,14 @@ This is the production SQLite backend implementation.
 Removal condition:
 No removal planned while SQLite remains a supported backend.
 
-#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py`
+#### `packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_support.py`
 
 Rationale:
-The DuckDB backend still reuses SQLite-shaped compatibility helpers and error
-handling during the current parity phase.
+This module is now the package-owned SQLite persistence helper layer and
+imports `sqlite3` as part of the supported production backend.
 
 Removal condition:
-Remove this allowlist entry when DuckDB no longer depends on SQLite driver
-types or compatibility helpers.
-
-#### `src/codira/sqlite_backend_support.py`
-
-Rationale:
-This module is the shared SQLite persistence helper layer used during the
-backend packaging migration.
-
-Removal condition:
-Remove this allowlist entry when SQLite support helpers move fully behind the
-backend package boundary.
+No removal planned while SQLite remains a supported backend.
 
 ### `codira.arch.no-backend-package-import-outside-allowed-layers`
 
@@ -131,15 +111,15 @@ compatibility export through lazy import.
 Removal condition:
 Remove this allowlist entry when the compatibility export is retired.
 
-#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py`
+#### `packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py`
 
 Rationale:
-The DuckDB backend currently subclasses the SQLite backend to preserve
-behavioral parity with the existing storage contract.
+The SQLite backend package now imports its helper implementation from the
+package-local `sqlite_support` module.
 
 Removal condition:
-Remove this allowlist entry when DuckDB no longer inherits from
-`SQLiteIndexBackend`.
+Remove this allowlist entry when the backend module no longer needs a separate
+package-local helper module.
 
 #### `examples/plugins/codira_demo_backend/src/codira_demo_backend/__init__.py`
 

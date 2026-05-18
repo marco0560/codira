@@ -21,6 +21,8 @@ import sys
 import types
 from typing import TYPE_CHECKING
 
+from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
+
 from codira.cli import main
 from codira.indexer import (
     PendingEmbeddingRow,
@@ -40,7 +42,6 @@ from codira.semantic.embeddings import (
     embed_texts,
 )
 from codira.semantic.search import EmbeddingCandidatesRequest, embedding_candidates
-from codira.storage import get_db_path, init_db
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -366,7 +367,10 @@ def test_flush_embedding_rows_batches_and_reuses_identical_payloads(
         calls.append(list(texts))
         return [[float(index + 1)] * EMBEDDING_DIM for index, _text in enumerate(texts)]
 
-    monkeypatch.setattr("codira.sqlite_backend_support.embed_texts", fake_embed_texts)
+    monkeypatch.setattr(
+        "codira_backend_sqlite.sqlite_support.embed_texts",
+        fake_embed_texts,
+    )
     backend = embeddings_module.get_embedding_backend()
     rows = [
         PendingEmbeddingRow("symbol", 1, "stable-a", "shared payload"),

@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
 
 from codira.cli import build_parser, main
 from codira.indexer import index_repo
@@ -37,7 +38,6 @@ from codira.query.graph_enrichment import (
     GraphExpansionRequest,
     _select_graph_expansion_seeds,
 )
-from codira.storage import get_db_path, init_db
 
 
 def _write_fixture(root: Path) -> None:

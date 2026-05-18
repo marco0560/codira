@@ -41,9 +41,9 @@ def _isolate_index_backend_environment(
     monkeypatch : pytest.MonkeyPatch
         Fixture used to isolate process-local environment changes.
 
-    Returns
-    -------
-    collections.abc.Iterator[None]
+    Yields
+    ------
+    None
         Fixture lifetime surrounding one test execution.
     """
     monkeypatch.delenv(registry.INDEX_BACKEND_ENV_VAR, raising=False)

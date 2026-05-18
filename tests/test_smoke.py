@@ -32,7 +32,6 @@ from codira.indexer import index_repo
 from codira.query.context import ContextRequest, context_for
 from codira.query.exact import docstring_issues, find_symbol
 from codira.registry import active_index_backend
-from codira.storage import init_db
 
 
 @pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
@@ -85,7 +84,7 @@ def test_index_and_queries(
         encoding="utf-8",
     )
 
-    init_db(tmp_path)
+    active_index_backend().initialize(tmp_path)
     index_repo(tmp_path)
 
     backend = active_index_backend()
@@ -141,7 +140,7 @@ def test_context_query_works_across_backends(
         encoding="utf-8",
     )
 
-    init_db(tmp_path)
+    active_index_backend().initialize(tmp_path)
     index_repo(tmp_path)
 
     output = context_for(

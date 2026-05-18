@@ -21,12 +21,14 @@ import warnings
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
+    PendingEmbeddingRow,
+    StoredEmbeddingRow,
 )
 from codira.models import (
     AnalysisResult,
@@ -47,16 +49,12 @@ from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
     get_embedding_backend,
 )
-from codira.sqlite_backend_support import (
-    PendingEmbeddingRow,
-    StoredEmbeddingRow,
-    _flush_embedding_rows,
-)
 
 if TYPE_CHECKING:
     from codira_backend_sqlite import SQLiteIndexBackend as SQLiteIndexBackend
 
     from codira.contracts import IndexBackend, LanguageAnalyzer
+    from codira.semantic.embeddings import EmbeddingBackendSpec
 
 ParsedFile = tuple[Path, FileMetadataSnapshot, AnalysisResult]
 _IGNORED_COVERAGE_SUFFIXES = frozenset({"<no-suffix>", ".md", ".txt", ".typed"})
@@ -65,7 +63,6 @@ __all__ = [
     "PendingEmbeddingRow",
     "StoredEmbeddingRow",
     "SQLiteIndexBackend",
-    "_flush_embedding_rows",
     "index_repo",
 ]
 
@@ -93,12 +90,47 @@ def __getattr__(name: str) -> object:
         from codira_backend_sqlite import SQLiteIndexBackend
 
         return SQLiteIndexBackend
-    if name == "_flush_embedding_rows":
-        from codira.sqlite_backend_support import _flush_embedding_rows
-
-        return _flush_embedding_rows
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)
+
+
+def _flush_embedding_rows(
+    conn: object,
+    *,
+    embedding_rows: list[PendingEmbeddingRow],
+    backend: EmbeddingBackendSpec,
+    previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
+) -> tuple[int, int]:
+    """
+    Persist pending embedding payloads through the historical indexer export.
+
+    Parameters
+    ----------
+    conn : object
+        Open backend connection handle reused by the compatibility helper.
+    embedding_rows : list[codira.contracts.PendingEmbeddingRow]
+        Pending embedding payloads collected during persistence.
+    backend : codira.semantic.embeddings.EmbeddingBackendSpec
+        Active embedding backend metadata.
+    previous_embeddings : dict[str, codira.contracts.StoredEmbeddingRow] | None, optional
+        Previously stored embedding rows eligible for reuse.
+
+    Returns
+    -------
+    tuple[int, int]
+        ``(recomputed, reused)`` embedding counts for the file.
+    """
+
+    from codira_backend_sqlite.sqlite_support import (
+        _flush_embedding_rows as _sqlite_flush,
+    )
+
+    return _sqlite_flush(
+        cast("Any", conn),
+        embedding_rows=embedding_rows,
+        backend=backend,
+        previous_embeddings=previous_embeddings,
+    )
 
 
 @dataclass(frozen=True)
@@ -783,13 +815,19 @@ def _collect_project_scan_state(
     ProjectScanState
         Deterministic scan state for the current working tree.
     """
-    analyzers_by_path = {
-        str(path): _select_language_analyzer(path, analyzers)
-        for path in sorted(iter_project_files(root, analyzers=analyzers))
-    }
-    metadata_by_path = {
-        path: file_metadata(Path(path)) for path in sorted(analyzers_by_path)
-    }
+    analyzers_by_path: dict[str, LanguageAnalyzer] = {}
+    metadata_by_path: dict[str, dict[str, object]] = {}
+
+    for path in sorted(iter_project_files(root, analyzers=analyzers)):
+        path_str = str(path)
+        try:
+            metadata_by_path[path_str] = file_metadata(path)
+        except FileNotFoundError:
+            # Git-backed discovery can briefly enumerate a tracked path that
+            # has already been removed from the working tree but not staged yet.
+            continue
+        analyzers_by_path[path_str] = _select_language_analyzer(path, analyzers)
+
     return ProjectScanState(
         analyzers_by_path=analyzers_by_path,
         metadata_by_path=metadata_by_path,

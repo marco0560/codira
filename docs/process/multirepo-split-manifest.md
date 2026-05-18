@@ -105,7 +105,6 @@ Owned paths:
 Core paths that still matter operationally after the split:
 
 * `src/codira/indexer.py`
-* `src/codira/sqlite_backend_support.py`
 * `tests/test_plugins.py`
 
 ## Bundle Repository

@@ -95,7 +95,7 @@ Persist overload child metadata without redefining current callable storage.
 Primary files:
 
 * `src/codira/storage.py`
-* `src/codira/sqlite_backend_support.py`
+* `packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_support.py`
 * schema or migration helpers
 * storage tests
 

@@ -21,12 +21,12 @@ import ast
 import contextlib
 import json
 import re
-import sqlite3
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 from codira.contracts import (
+    BackendQueryConnection,
     split_declared_retrieval_capabilities,
 )
 from codira.prefix import normalize_prefix, prefix_clause
@@ -197,7 +197,7 @@ class GraphRetrievalRequest:
         Repository root containing the index database.
     top_matches : list[codira.types.SymbolRow]
         Current retrieval winners used as bounded graph-expansion seeds.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection reused for exact graph lookups.
     include_include_graph : bool
         Whether include-graph evidence is enabled by the retrieval plan.
@@ -209,7 +209,7 @@ class GraphRetrievalRequest:
 
     root: Path
     top_matches: list[SymbolRow]
-    conn: sqlite3.Connection
+    conn: BackendQueryConnection
     include_include_graph: bool
     include_references: bool
     prefix: str | None
@@ -226,7 +226,7 @@ class ChannelBundleRequest:
         Repository root containing indexed files.
     query : str
         User query string.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection.
     intent : codira.query.classifier.QueryIntent
         Structured query classification.
@@ -238,7 +238,7 @@ class ChannelBundleRequest:
 
     root: Path
     query: str
-    conn: sqlite3.Connection
+    conn: BackendQueryConnection
     intent: QueryIntent
     plan: RetrievalPlan
     prefix: str | None
@@ -573,7 +573,7 @@ class ExpansionCollectionRequest:
         Repository root used for file discovery and path normalization.
     top_matches : list[codira.types.SymbolRow]
         Primary ranked symbols for the query.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection reused for graph lookups and symbol expansion.
     include_include_graph : bool
         Whether include-graph expansion is enabled by the retrieval plan.
@@ -590,7 +590,7 @@ class ExpansionCollectionRequest:
 
     root: Path
     top_matches: list[SymbolRow]
-    conn: sqlite3.Connection
+    conn: BackendQueryConnection
     include_include_graph: bool
     include_references: bool
     prefix: str | None = None
@@ -608,7 +608,7 @@ class GraphRelatedExpansionRequest:
         Repository root containing the index database.
     top_matches : list[codira.types.SymbolRow]
         Primary ranked symbols for the query.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection reused for exact graph lookups.
     include_include_graph : bool
         Whether include-graph expansion is enabled.
@@ -627,7 +627,7 @@ class GraphRelatedExpansionRequest:
 
     root: Path
     top_matches: list[SymbolRow]
-    conn: sqlite3.Connection
+    conn: BackendQueryConnection
     include_include_graph: bool
     include_references: bool
     prefix: str | None
@@ -1706,6 +1706,23 @@ def _extract_target_symbol(query_tokens: list[str]) -> str | None:
     return None
 
 
+def _backend_row_int(value: object) -> int:
+    """
+    Coerce one backend query row value into a deterministic line number.
+
+    Parameters
+    ----------
+    value : object
+        Backend-native row value for an integer column.
+
+    Returns
+    -------
+    int
+        Integer line number extracted from the backend row value.
+    """
+    return int(cast("str | bytes | bytearray | int", value))
+
+
 def _normalized_strong_query_tokens(query_tokens: list[str]) -> list[str]:
     """
     Expand strong query tokens into a normalized gating token list.
@@ -1937,7 +1954,7 @@ def _format_enriched_symbol(
 def _retrieve_symbol_candidates(
     root: Path,
     query: str,
-    conn: sqlite3.Connection,
+    conn: BackendQueryConnection,
     intent: QueryIntent,
     prefix: str | None,
 ) -> ChannelResults:
@@ -1950,7 +1967,7 @@ def _retrieve_symbol_candidates(
         Root directory of the indexed repository.
     query : str
         User query string.
-    conn : sqlite3.Connection
+    conn : object
         Active database connection.
     intent : QueryIntent
         Structured classification of the query.
@@ -2004,7 +2021,7 @@ def _retrieve_symbol_candidates(
                 str(row[1]),
                 str(row[2]),
                 str(row[3]),
-                int(row[4]),
+                _backend_row_int(row[4]),
             )
             candidate_map[candidate] = None
 
@@ -2028,7 +2045,8 @@ def _retrieve_symbol_candidates(
             (*prefix_params, SYMBOL_FALLBACK_SCAN_LIMIT),
         ).fetchall()
         all_candidates = [
-            (str(t), str(m), str(n), str(f), int(lin)) for t, m, n, f, lin in rows
+            (str(t), str(m), str(n), str(f), _backend_row_int(lin))
+            for t, m, n, f, lin in rows
         ]
 
     target_symbol = _extract_target_symbol(query_tokens)
@@ -2071,7 +2089,7 @@ def _retrieve_symbol_candidates(
 def _retrieve_test_candidates(
     root: Path,
     query: str,
-    conn: sqlite3.Connection,
+    conn: BackendQueryConnection,
     intent: QueryIntent,
     prefix: str | None,
 ) -> ChannelResults:
@@ -2084,7 +2102,7 @@ def _retrieve_test_candidates(
         Repository root containing indexed files.
     query : str
         User query string.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection.
     intent : codira.query.classifier.QueryIntent
         Structured query classification.
@@ -2103,7 +2121,7 @@ def _retrieve_test_candidates(
 def _retrieve_script_candidates(
     root: Path,
     query: str,
-    conn: sqlite3.Connection,
+    conn: BackendQueryConnection,
     intent: QueryIntent,
     prefix: str | None,
 ) -> ChannelResults:
@@ -2116,7 +2134,7 @@ def _retrieve_script_candidates(
         Repository root containing indexed files.
     query : str
         User query string.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection.
     intent : codira.query.classifier.QueryIntent
         Structured query classification.
@@ -3152,7 +3170,7 @@ def _collect_overload_retrieval_signals(
     root: Path,
     query: str,
     intent: QueryIntent,
-    conn: sqlite3.Connection,
+    conn: BackendQueryConnection,
     candidate_signals: list[RetrievalSignal],
 ) -> list[RetrievalSignal]:
     """
@@ -3166,7 +3184,7 @@ def _collect_overload_retrieval_signals(
         Raw user query text.
     intent : codira.query.classifier.QueryIntent
         Deterministic query classification for the same query.
-    conn : sqlite3.Connection
+    conn : object
         Open backend connection used for overload lookups.
     candidate_signals : list[codira.query.signals.RetrievalSignal]
         Current normalized retrieval signals whose exact-symbol-backed
@@ -3431,7 +3449,7 @@ def _get_channel_functions(
     tuple[
         ChannelName,
         Callable[
-            [Path, str, sqlite3.Connection, QueryIntent, str | None],
+            [Path, str, BackendQueryConnection, QueryIntent, str | None],
             ChannelResults,
         ],
     ]
@@ -3453,7 +3471,7 @@ def _get_channel_functions(
                 [
                     pathlib.Path,
                     str,
-                    sqlite3.Connection,
+                    object,
                     codira.query.classifier.QueryIntent,
                     str | None,
                 ],
@@ -3472,7 +3490,7 @@ def _get_channel_functions(
 def _retrieve_semantic_candidates(
     root: Path,
     query: str,
-    conn: sqlite3.Connection,
+    conn: BackendQueryConnection,
     intent: QueryIntent,
     prefix: str | None,
 ) -> ChannelResults:
@@ -3486,7 +3504,7 @@ def _retrieve_semantic_candidates(
         does not need it directly.
     query : str
         User query string.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection.
     intent : codira.query.classifier.QueryIntent
         Structured query classification. The current implementation does not
@@ -3502,8 +3520,8 @@ def _retrieve_semantic_candidates(
     Notes
     -----
     The channel is deterministic and independent from the symbol channel. It
-    scores token overlap against symbol names, module names, and optional
-    docstring text when that auxiliary table exists.
+    scores token overlap against symbol names and module names without
+    consulting legacy auxiliary compatibility tables.
     """
 
     del root
@@ -3535,25 +3553,12 @@ def _retrieve_semantic_candidates(
             str(row[1]),
             str(row[2]),
             str(row[3]),
-            int(row[4]),
+            _backend_row_int(row[4]),
         )
 
         symbol_type, module_name, name, _file_path, _lineno = symbol
 
         text_parts = [module_name.lower(), name.lower()]
-
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT docstring FROM docstrings WHERE module=? AND name=?",
-                (module_name, name),
-            )
-            doc_row = cursor.fetchone()
-            if doc_row and doc_row[0]:
-                text_parts.append(str(doc_row[0]).lower())
-        except sqlite3.OperationalError:
-            # docstrings table may not exist depending on index version
-            pass
 
         semantic_score = 0.0
 
@@ -3585,7 +3590,7 @@ def _retrieve_semantic_candidates(
 def _retrieve_embedding_candidates(
     root: Path,
     query: str,
-    conn: sqlite3.Connection,
+    conn: BackendQueryConnection,
     intent: QueryIntent,
     prefix: str | None,
 ) -> ChannelResults:
@@ -3598,7 +3603,7 @@ def _retrieve_embedding_candidates(
         Repository root containing the index database.
     query : str
         User query string.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection.
     intent : codira.query.classifier.QueryIntent
         Structured query classification used to apply role-aware ranking bias.
@@ -3734,7 +3739,7 @@ def _is_issue_query(query: str) -> bool:
 def _issue_driven_symbols(
     root: Path,
     query: str,
-    conn: sqlite3.Connection,
+    conn: BackendQueryConnection,
     *,
     prefix: str | None = None,
 ) -> list[SymbolRow]:
@@ -3747,7 +3752,7 @@ def _issue_driven_symbols(
         Repository root containing the index database.
     query : str
         User query string.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection.
     prefix : str | None, optional
         Absolute normalized prefix used to restrict issue ownership and symbol
@@ -3826,7 +3831,7 @@ def _collect_doc_issues_and_related(
     root: Path,
     query: str,
     top_matches: list[SymbolRow],
-    conn: sqlite3.Connection,
+    conn: BackendQueryConnection,
     *,
     prefix: str | None = None,
 ) -> tuple[list[tuple[str, str]], list[SymbolRow]]:
@@ -3841,7 +3846,7 @@ def _collect_doc_issues_and_related(
         Original user query.
     top_matches : list[codira.types.SymbolRow]
         Primary ranked symbols for the query.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection.
     prefix : str | None, optional
         Absolute normalized prefix used to restrict issue ownership and symbol
@@ -3956,7 +3961,7 @@ def _dedupe_and_cap_references(
 def _expand_include_graph_neighbors(
     root: Path,
     symbol: SymbolRow,
-    conn: sqlite3.Connection,
+    conn: BackendQueryConnection,
     *,
     prefix: str | None,
     graph_signals: list[RetrievalSignal] | None = None,
@@ -3970,7 +3975,7 @@ def _expand_include_graph_neighbors(
         Repository root containing the index database.
     symbol : codira.types.SymbolRow
         Seed symbol whose owning module should be expanded.
-    conn : sqlite3.Connection
+    conn : object
         Open database connection reused for exact graph lookups.
     prefix : str | None
         Absolute normalized prefix used to restrict owner files and symbols.
@@ -5501,7 +5506,7 @@ def _append_main_context_sections(
 
 def _initial_context_state(
     request: ContextRequest,
-    conn: sqlite3.Connection,
+    conn: BackendQueryConnection,
 ) -> ContextExecutionState:
     """
     Build the initial retrieval state from channel execution.
@@ -5510,7 +5515,7 @@ def _initial_context_state(
     ----------
     request : ContextRequest
         End-to-end context retrieval request.
-    conn : sqlite3.Connection
+    conn : object
         Open backend connection used for query execution.
 
     Returns
@@ -5609,7 +5614,7 @@ def _initial_context_state(
 def _append_issue_driven_matches(
     request: ContextRequest,
     state: ContextExecutionState,
-    conn: sqlite3.Connection,
+    conn: BackendQueryConnection,
 ) -> None:
     """
     Append issue-driven symbols to the current top-match list.
@@ -5620,7 +5625,7 @@ def _append_issue_driven_matches(
         End-to-end context retrieval request.
     state : ContextExecutionState
         Mutable retrieval state.
-    conn : sqlite3.Connection
+    conn : object
         Open backend connection used for query execution.
 
     Returns
@@ -5714,7 +5719,7 @@ def _empty_context_result(
 
 def _apply_graph_signal_rerank(
     state: ContextExecutionState,
-    conn: sqlite3.Connection,
+    conn: BackendQueryConnection,
     root: Path,
 ) -> None:
     """
@@ -5724,7 +5729,7 @@ def _apply_graph_signal_rerank(
     ----------
     state : ContextExecutionState
         Mutable retrieval state.
-    conn : sqlite3.Connection
+    conn : object
         Open backend connection used for graph lookups.
     root : pathlib.Path
         Repository root containing the index.
@@ -5870,7 +5875,7 @@ def context_for(
         If the repository index cannot be opened or queried.
     """
     conn = cast(
-        "sqlite3.Connection",
+        "BackendQueryConnection",
         active_index_backend().open_connection(request.root),
     )
     try:

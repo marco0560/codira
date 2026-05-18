@@ -17,11 +17,12 @@ This module belongs to the **contract definition layer** that governs pluggable 
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Mapping
     from pathlib import Path
 
     from codira.models import AnalysisResult, FileMetadataSnapshot
@@ -50,6 +51,52 @@ class BackendError(RuntimeError):
     None
         Instances carry the backend failure message through ``RuntimeError``.
     """
+
+
+@dataclass(frozen=True)
+class PendingEmbeddingRow:
+    """
+    Pending symbol embedding payload collected during persistence.
+
+    Parameters
+    ----------
+    object_type : str
+        Persisted embedding owner kind.
+    object_id : int
+        Persisted embedding owner identifier.
+    stable_id : str
+        Durable analyzer-owned symbol identity.
+    text : str
+        Exact semantic payload that will be hashed and embedded.
+    """
+
+    object_type: str
+    object_id: int
+    stable_id: str
+    text: str
+
+
+@dataclass(frozen=True)
+class StoredEmbeddingRow:
+    """
+    Persisted embedding row captured before file-owned rows are replaced.
+
+    Parameters
+    ----------
+    stable_id : str
+        Durable analyzer-owned symbol identity.
+    content_hash : str
+        Hash of the exact semantic payload embedded previously.
+    dim : int
+        Stored embedding dimensionality.
+    vector : bytes
+        Serialized float32 vector payload.
+    """
+
+    stable_id: str
+    content_hash: str
+    dim: int
+    vector: bytes
 
 
 @dataclass(frozen=True)
@@ -467,6 +514,134 @@ def split_declared_retrieval_capabilities(
             unknown.append(normalized)
 
     return tuple(known), tuple(unknown)
+
+
+BackendQueryValue = str | bytes | bytearray | int | float | None
+BackendQueryRow = Sequence[BackendQueryValue]
+
+
+@runtime_checkable
+class BackendQueryCursor(Protocol):
+    """
+    Minimal cursor surface required by backend-agnostic query helpers.
+
+    The contract intentionally captures only the operations used by the core
+    query layer so backend plugins remain free to wrap native driver objects.
+    """
+
+    def execute(
+        self,
+        statement: str,
+        parameters: Sequence[object] = (),
+    ) -> BackendQueryCursor:
+        """
+        Execute one backend-native query statement.
+
+        Parameters
+        ----------
+        statement : str
+            Backend-native statement text.
+        parameters : collections.abc.Sequence[object], optional
+            Bound positional parameters for the statement.
+
+        Returns
+        -------
+        BackendQueryCursor
+            Cursor-like object positioned on the executed statement result.
+        """
+        ...
+
+    def fetchone(self) -> object | None:
+        """
+        Return the next available row from the current result set.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        BackendQueryRow | None
+            Next result row, or ``None`` when no rows remain.
+        """
+        ...
+
+    def fetchall(self) -> list[BackendQueryRow]:
+        """
+        Return all remaining rows from the current result set.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        list[codira.contracts.BackendQueryRow]
+            Materialized remaining result rows.
+        """
+        ...
+
+
+@runtime_checkable
+class BackendQueryConnection(Protocol):
+    """
+    Minimal connection surface required by backend-agnostic query helpers.
+
+    The protocol keeps core query modules decoupled from concrete driver types
+    while preserving deterministic method-level typing for read-only access.
+    """
+
+    def execute(
+        self,
+        statement: str,
+        parameters: Sequence[object] = (),
+    ) -> BackendQueryCursor:
+        """
+        Execute one backend-native query statement directly on the connection.
+
+        Parameters
+        ----------
+        statement : str
+            Backend-native statement text.
+        parameters : collections.abc.Sequence[object], optional
+            Bound positional parameters for the statement.
+
+        Returns
+        -------
+        BackendQueryCursor
+            Cursor-like object positioned on the executed statement result.
+        """
+        ...
+
+    def cursor(self) -> BackendQueryCursor:
+        """
+        Create a cursor-like object for backend-native query execution.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        BackendQueryCursor
+            Cursor-like object for subsequent query execution.
+        """
+        ...
+
+    def close(self) -> object:
+        """
+        Close the backend-native connection handle.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        object
+            Backend-defined close result.
+        """
+        ...
 
 
 @runtime_checkable

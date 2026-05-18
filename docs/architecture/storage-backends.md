@@ -17,6 +17,20 @@ Backends currently own:
 - repository-local storage paths under `.codira/`
 - persisted runtime plugin inventory and per-file analyzer ownership metadata
 
+Current package-local ownership notes:
+
+- `packages/codira-backend-sqlite/.../sqlite_support.py` owns the SQLite
+  helper implementation
+- `packages/codira-backend-sqlite/.../sqlite_storage.py` owns the SQLite
+  package-local bootstrap and path entrypoints used by the production backend
+- `packages/codira-backend-duckdb/.../duckdb_support.py` owns the DuckDB
+  persistence helper implementation
+- `packages/codira-backend-duckdb/.../repo_storage.py` owns the DuckDB-local
+  seam for generic `.codira` directory and metadata path access
+- `packages/codira-backend-duckdb/.../duckdb_query_backend.py` owns the
+  DuckDB-local query and maintenance implementation used by the production
+  backend
+
 ## Current Constraints
 
 The accepted backend model is still constrained:
@@ -30,6 +44,10 @@ DuckDB is intentionally file-local, not a shared remote service backend.
 Its role is to provide a second production-grade backend with stronger local
 analytical behavior for larger indexes, including future documentation-heavy
 channels.
+
+The current DuckDB backend is no longer coupled to SQLite runtime types or the
+SQLite backend package. Its query and maintenance implementation is fully
+owned inside the DuckDB package boundary.
 
 ## Phase-8 Selection Rules
 
@@ -77,6 +95,23 @@ Phase 21 makes SQLite use that metadata for deterministic rebuild policy:
 
 DuckDB follows the same rebuild policy through the same runtime and analyzer
 inventory contract.
+
+## Current Boundary Status
+
+The branch-local backend-agnostic refactor has established these boundaries:
+
+- core query modules now type backend connections through backend-neutral
+  query protocols rather than `sqlite3.Connection`
+- SQLite helper ownership has moved behind the SQLite backend package boundary
+- SQLite bootstrap and database-path entrypoints are now package-local backend
+  seams rather than direct backend imports of `codira.storage`
+- DuckDB persistence no longer routes through the SQLite helper module
+- DuckDB no longer imports `codira_backend_sqlite` at runtime
+- benchmark and SQLite-oriented test scaffolding now route setup through the
+  SQLite backend package seam rather than calling core SQLite bootstrap
+
+The DuckDB package-local query and maintenance implementation is now the
+supported production surface rather than a migration-only compatibility layer.
 
 ## Contributor Contract Validation Backend
 

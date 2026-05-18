@@ -1,36 +1,37 @@
-"""SQLite backend support helpers shared during the packaging migration.
+"""DuckDB backend-owned persistence helpers for the first-party plugin.
 
 Responsibilities
 ----------------
-- Hold SQLite-specific persistence helpers that do not belong to the index-planning flow.
-- Provide reusable embedding-row models for SQLite backend persistence.
-- Isolate low-level SQLite mutation helpers so the concrete backend can move behind a package boundary incrementally.
+- Hold DuckDB-owned persistence helpers that do not belong to the index-planning flow.
+- Provide reusable embedding-row models for DuckDB backend persistence.
+- Keep low-level DuckDB mutation helpers package-owned behind the plugin boundary.
 
 Design principles
 -----------------
-Support helpers stay deterministic and narrowly scoped to SQLite persistence so
-the indexing layer can depend on one stable utility module during the Phase 2
-package extraction.
+Support helpers stay deterministic and narrowly scoped to DuckDB persistence so
+the backend plugin can own its storage implementation without routing writes
+through SQLite-owned helper modules.
 
 Architectural role
 ------------------
-This module belongs to the **SQLite backend support layer** used by core
-indexing orchestration and the first-party SQLite backend package.
+This module belongs to the **DuckDB backend plugin layer** and owns the
+package-local helper implementation used by the first-party DuckDB backend.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
+from codira.contracts import PendingEmbeddingRow, StoredEmbeddingRow
 from codira.docstring import DocstringValidationRequest, validate_docstring
 from codira.repository_scope import path_has_excluded_tree_name
 from codira.semantic.embeddings import embed_texts as embed_texts, serialize_vector
 
 if TYPE_CHECKING:
-    import sqlite3
     from pathlib import Path
 
     from codira.contracts import LanguageAnalyzer
@@ -51,50 +52,120 @@ CallRow = tuple[int, str, str, str, str, str, int, int]
 RefRow = tuple[int, str, str, str, str, str, str, int, int]
 
 
-@dataclass(frozen=True)
-class PendingEmbeddingRow:
+class _DuckDBCursorLike(Protocol):
+    """Cursor surface required by the DuckDB persistence helpers."""
+
+    lastrowid: int | None
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        """
+        Return the next available row from the active DuckDB result set.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple[object, ...] | None
+            Next available row, or ``None`` when the result is exhausted.
+        """
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        """
+        Return every remaining row from the active DuckDB result set.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        list[tuple[object, ...]]
+            Remaining rows from the active DuckDB result set.
+        """
+
+
+class _DuckDBPersistenceConnection(Protocol):
+    """Connection surface required by the DuckDB persistence helpers."""
+
+    def execute(
+        self,
+        query: str,
+        parameters: Sequence[object] | None = None,
+    ) -> _DuckDBCursorLike:
+        """
+        Execute one DuckDB statement and expose its cursor-like result.
+
+        Parameters
+        ----------
+        query : str
+            SQL statement to execute.
+        parameters : collections.abc.Sequence[object] | None, optional
+            Positional parameters bound to ``query``.
+
+        Returns
+        -------
+        _DuckDBCursorLike
+            Cursor-like result for the executed statement.
+        """
+
+    def executemany(
+        self,
+        query: str,
+        parameters: Sequence[Sequence[object]],
+    ) -> object:
+        """
+        Execute one DuckDB statement against multiple parameter rows.
+
+        Parameters
+        ----------
+        query : str
+            SQL statement to execute repeatedly.
+        parameters : collections.abc.Sequence[collections.abc.Sequence[object]]
+            Parameter rows bound to ``query``.
+
+        Returns
+        -------
+        object
+            Driver-specific result for the most recent execution.
+        """
+
+
+def _duckdb_int(value: object) -> int:
     """
-    Pending symbol embedding payload collected during persistence.
+    Coerce one DuckDB row value into an integer.
 
     Parameters
     ----------
-    object_type : str
-        Persisted embedding owner kind.
-    object_id : int
-        Persisted embedding owner identifier.
-    stable_id : str
-        Durable analyzer-owned symbol identity.
-    text : str
-        Exact semantic payload that will be hashed and embedded.
+    value : object
+        Scalar value returned from one DuckDB row.
+
+    Returns
+    -------
+    int
+        Integer form of ``value``.
     """
 
-    object_type: str
-    object_id: int
-    stable_id: str
-    text: str
+    return int(cast("str | bytes | bytearray | int", value))
 
 
-@dataclass(frozen=True)
-class StoredEmbeddingRow:
+def _duckdb_bytes(value: object) -> bytes:
     """
-    Persisted embedding row captured before file-owned rows are replaced.
+    Coerce one DuckDB row value into raw bytes.
 
     Parameters
     ----------
-    stable_id : str
-        Durable analyzer-owned symbol identity.
-    content_hash : str
-        Hash of the exact semantic payload embedded previously.
-    dim : int
-        Stored embedding dimensionality.
-    vector : bytes
-        Serialized float32 vector payload.
+    value : object
+        Scalar value returned from one DuckDB row.
+
+    Returns
+    -------
+    bytes
+        Raw byte representation of ``value``.
     """
 
-    stable_id: str
-    content_hash: str
-    dim: int
-    vector: bytes
+    return bytes(cast("bytes | bytearray", value))
 
 
 @dataclass(frozen=True)
@@ -273,7 +344,7 @@ class ArtifactPersistenceRequest:
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     file_id : int
         Integer identifier of the owner file.
@@ -293,7 +364,7 @@ class ArtifactPersistenceRequest:
         Pending callable-reference rows collected for the file.
     """
 
-    conn: sqlite3.Connection
+    conn: _DuckDBPersistenceConnection
     file_id: int
     module_id: int
     module_name: str
@@ -311,7 +382,7 @@ class EnumMemberPersistenceRequest:
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     file_id : int
         Inserted file row identifier that owns the enum declaration.
@@ -325,7 +396,7 @@ class EnumMemberPersistenceRequest:
         Ordered enum-member declarations attached to the enum.
     """
 
-    conn: sqlite3.Connection
+    conn: _DuckDBPersistenceConnection
     file_id: int
     module_name: str
     symbol_name: str
@@ -333,13 +404,13 @@ class EnumMemberPersistenceRequest:
     enum_members: tuple[EnumMemberArtifact, ...]
 
 
-def _clear_index_tables(conn: sqlite3.Connection) -> None:
+def _clear_index_tables(conn: _DuckDBPersistenceConnection) -> None:
     """
     Remove all indexed rows from the database tables.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection to clear in place.
 
     Returns
@@ -364,13 +435,13 @@ def _clear_index_tables(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM files")
 
 
-def _purge_skipped_docstring_issues(conn: sqlite3.Connection) -> None:
+def _purge_skipped_docstring_issues(conn: _DuckDBPersistenceConnection) -> None:
     """
     Remove persisted docstring issues for files excluded from audit policy.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection to clean in place.
 
     Returns
@@ -742,13 +813,13 @@ def _python_embedding_context(
     return tuple(context)
 
 
-def _load_module_functions(conn: sqlite3.Connection) -> dict[str, set[str]]:
+def _load_module_functions(conn: _DuckDBPersistenceConnection) -> dict[str, set[str]]:
     """
     Load known top-level functions from indexed structural tables.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
 
     Returns
@@ -770,13 +841,15 @@ def _load_module_functions(conn: sqlite3.Connection) -> dict[str, set[str]]:
     return module_functions
 
 
-def _load_class_methods(conn: sqlite3.Connection) -> dict[tuple[str, str], set[str]]:
+def _load_class_methods(
+    conn: _DuckDBPersistenceConnection,
+) -> dict[tuple[str, str], set[str]]:
     """
     Load known methods from indexed structural tables.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
 
     Returns
@@ -800,13 +873,15 @@ def _load_class_methods(conn: sqlite3.Connection) -> dict[tuple[str, str], set[s
     return class_methods
 
 
-def _load_import_aliases(conn: sqlite3.Connection) -> dict[str, dict[str, str]]:
+def _load_import_aliases(
+    conn: _DuckDBPersistenceConnection,
+) -> dict[str, dict[str, str]]:
     """
     Load import alias maps for indexed modules.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
 
     Returns
@@ -857,13 +932,13 @@ def _caller_class_from_owner(owner_name: str) -> str | None:
     return class_name
 
 
-def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
+def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
     """
     Rebuild derived call and callable-reference edges from stored raw records.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
 
     Returns
@@ -934,7 +1009,7 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
         )
         edges.add(
             (
-                int(file_id),
+                _duckdb_int(file_id),
                 caller_module,
                 caller_name,
                 callee_module,
@@ -988,7 +1063,7 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
         )
         refs.add(
             (
-                int(file_id),
+                _duckdb_int(file_id),
                 caller_module,
                 caller_name,
                 target_module,
@@ -1041,7 +1116,7 @@ def _record_tuple(
     record: CallSite,
 ) -> tuple[int, str, str, str, str, str, int, int]:
     """
-    Normalize one raw call-style record for SQLite persistence.
+    Normalize one raw call-style record for DuckDB persistence.
 
     Parameters
     ----------
@@ -1057,7 +1132,7 @@ def _record_tuple(
     Returns
     -------
     tuple[int, str, str, str, str, str, int, int]
-        Normalized SQLite row values.
+        Normalized DuckDB row values.
     """
     return (
         file_id,
@@ -1078,7 +1153,7 @@ def _reference_tuple(
     record: CallableReference,
 ) -> tuple[int, str, str, str, str, str, str, int, int]:
     """
-    Normalize one callable-reference record for SQLite persistence.
+    Normalize one callable-reference record for DuckDB persistence.
 
     Parameters
     ----------
@@ -1094,7 +1169,7 @@ def _reference_tuple(
     Returns
     -------
     tuple[int, str, str, str, str, str, str, int, int]
-        Normalized SQLite row values.
+        Normalized DuckDB row values.
     """
     return (
         file_id,
@@ -1110,7 +1185,7 @@ def _reference_tuple(
 
 
 def _insert_symbol_index_row(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     request: SymbolIndexInsertRequest,
 ) -> int:
     """
@@ -1118,7 +1193,7 @@ def _insert_symbol_index_row(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     request : SymbolIndexInsertRequest
         Symbol-index row insert request.
@@ -1184,7 +1259,7 @@ def _append_embedding_row(
 
 
 def _persist_docstring_issues(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     request: DocstringIssueRequest,
 ) -> None:
     """
@@ -1192,7 +1267,7 @@ def _persist_docstring_issues(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     request : DocstringIssueRequest
         Docstring issue persistence request.
@@ -1284,7 +1359,7 @@ def _should_require_raises_section(source_path: Path, function_name: str) -> boo
 
 
 def _persist_module_artifacts(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     *,
     file_id: int,
     analysis: AnalysisResult,
@@ -1295,7 +1370,7 @@ def _persist_module_artifacts(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     file_id : int
         Integer identifier of the owner file.
@@ -1620,7 +1695,7 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
 
 
 def _persist_overload_artifacts(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     *,
     function_id: int,
     overloads: tuple[OverloadArtifact, ...],
@@ -1630,7 +1705,7 @@ def _persist_overload_artifacts(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     function_id : int
         Inserted function row identifier that owns the overloads.
@@ -1755,7 +1830,7 @@ def _persist_declaration_artifacts(request: ArtifactPersistenceRequest) -> None:
 
 
 def _persist_import_artifacts(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     *,
     module_id: int,
     analysis: AnalysisResult,
@@ -1765,7 +1840,7 @@ def _persist_import_artifacts(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     module_id : int
         Inserted module row identifier.
@@ -1792,17 +1867,17 @@ def _persist_import_artifacts(
 
 
 def _flush_persisted_relationship_rows(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     *,
     call_rows: list[tuple[int, str, str, str, str, str, int, int]],
     ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]],
 ) -> None:
     """
-    Flush pending call and callable-reference rows to SQLite.
+    Flush pending call and callable-reference rows to DuckDB.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     call_rows : list[tuple[int, str, str, str, str, str, int, int]]
         Pending normalized call rows.
@@ -1834,7 +1909,7 @@ def _flush_persisted_relationship_rows(
 
 
 def _flush_embedding_rows(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     *,
     embedding_rows: list[PendingEmbeddingRow],
     backend: EmbeddingBackendSpec,
@@ -1845,7 +1920,7 @@ def _flush_embedding_rows(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     embedding_rows : list[codira.indexer.PendingEmbeddingRow]
         Pending embedding payloads keyed by object type and identifier.
@@ -1954,7 +2029,7 @@ def _reference_scan_rows(path: Path) -> list[ReferenceSearchRow]:
 
 
 def _flush_reference_scan_rows(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     *,
     file_id: int,
     path: Path,
@@ -1964,7 +2039,7 @@ def _flush_reference_scan_rows(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     file_id : int
         Owning indexed file identifier.
@@ -1990,7 +2065,7 @@ def _flush_reference_scan_rows(
 
 
 def _store_analysis(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     file_metadata: FileMetadataSnapshot,
     analysis: AnalysisResult,
     *,
@@ -2002,7 +2077,7 @@ def _store_analysis(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     file_metadata : codira.models.FileMetadataSnapshot
         Stable file metadata for the analyzed file.
@@ -2081,7 +2156,7 @@ def _store_analysis(
 
 
 def _persist_runtime_inventory(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     *,
     backend_name: str,
     backend_version: str,
@@ -2093,7 +2168,7 @@ def _persist_runtime_inventory(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     backend_name : str
         Active backend name.
@@ -2173,13 +2248,15 @@ def _placeholders(values: list[int]) -> str:
     return ",".join("?" for _ in values)
 
 
-def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
+def _delete_indexed_file_data(
+    conn: _DuckDBPersistenceConnection, file_path: str
+) -> None:
     """
     Remove all indexed data owned by one file.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     file_path : str
         Absolute file path whose indexed rows should be removed.
@@ -2196,10 +2273,10 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
     if file_row is None:
         return
 
-    file_id = int(file_row[0])
+    file_id = _duckdb_int(file_row[0])
 
     module_ids = [
-        int(row[0])
+        _duckdb_int(row[0])
         for row in conn.execute(
             """
             SELECT id
@@ -2210,7 +2287,7 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
         ).fetchall()
     ]
     symbol_ids = [
-        int(row[0])
+        _duckdb_int(row[0])
         for row in conn.execute(
             "SELECT id FROM symbol_index WHERE file_id = ?",
             (file_id,),
@@ -2276,7 +2353,7 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
 
 
 def _load_previous_symbol_embeddings(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     file_path: str,
     *,
     backend: EmbeddingBackendSpec,
@@ -2286,7 +2363,7 @@ def _load_previous_symbol_embeddings(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     file_path : str
         Absolute file path whose stored symbol embeddings should be loaded.
@@ -2322,15 +2399,15 @@ def _load_previous_symbol_embeddings(
         str(stable_id): StoredEmbeddingRow(
             stable_id=str(stable_id),
             content_hash=str(content_hash),
-            dim=int(dim),
-            vector=bytes(vector),
+            dim=_duckdb_int(dim),
+            vector=_duckdb_bytes(vector),
         )
         for stable_id, content_hash, dim, vector in rows
     }
 
 
 def _current_embedding_state_matches(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     backend: EmbeddingBackendSpec,
 ) -> bool:
     """
@@ -2338,7 +2415,7 @@ def _current_embedding_state_matches(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     backend : EmbeddingBackendSpec
         Active embedding backend metadata.
@@ -2356,13 +2433,13 @@ def _current_embedding_state_matches(
     return rows == [(backend.name, backend.version)]
 
 
-def _prune_orphaned_embeddings(conn: sqlite3.Connection) -> None:
+def _prune_orphaned_embeddings(conn: _DuckDBPersistenceConnection) -> None:
     """
     Remove embedding rows whose indexed symbol owner no longer exists.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
 
     Returns
@@ -2377,13 +2454,13 @@ def _prune_orphaned_embeddings(conn: sqlite3.Connection) -> None:
         """)
 
 
-def _load_existing_file_hashes(conn: sqlite3.Connection) -> dict[str, str]:
+def _load_existing_file_hashes(conn: _DuckDBPersistenceConnection) -> dict[str, str]:
     """
     Load indexed file hashes keyed by path.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
 
     Returns
@@ -2396,7 +2473,7 @@ def _load_existing_file_hashes(conn: sqlite3.Connection) -> dict[str, str]:
 
 
 def _load_previous_embeddings_by_path(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     paths: list[str],
     *,
     backend: EmbeddingBackendSpec,
@@ -2406,7 +2483,7 @@ def _load_previous_embeddings_by_path(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     paths : list[str]
         Absolute file paths that may be replaced during the current run.
@@ -2426,14 +2503,14 @@ def _load_previous_embeddings_by_path(
 
 
 def _load_existing_file_ownership(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
 ) -> dict[str, tuple[str, str]]:
     """
     Load persisted analyzer ownership keyed by path.
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
 
     Returns
@@ -2453,7 +2530,7 @@ def _load_existing_file_ownership(
 
 
 def _count_reused_embeddings(
-    conn: sqlite3.Connection,
+    conn: _DuckDBPersistenceConnection,
     reused_paths: list[str],
 ) -> int:
     """
@@ -2461,7 +2538,7 @@ def _count_reused_embeddings(
 
     Parameters
     ----------
-    conn : sqlite3.Connection
+    conn : _DuckDBPersistenceConnection
         Open database connection.
     reused_paths : list[str]
         Absolute file paths reused without reparsing.
@@ -2489,4 +2566,4 @@ def _count_reused_embeddings(
         tuple(reused_paths),
     ).fetchone()
     assert row is not None
-    return int(row[0])
+    return _duckdb_int(row[0])
