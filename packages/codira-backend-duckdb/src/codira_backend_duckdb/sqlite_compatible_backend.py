@@ -60,7 +60,6 @@ from codira_backend_duckdb.duckdb_support import (
     _rebuild_graph_indexes,
     _store_analysis,
 )
-from codira_backend_duckdb.sqlite_storage_compat import get_db_path, init_db
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -223,7 +222,7 @@ class DuckDBSQLiteCompatibleBackend:
 
     def initialize(self, root: Path) -> None:
         """
-        Prepare the repository-local compatibility database.
+        Prepare backend-owned persistent state for one repository root.
 
         Parameters
         ----------
@@ -233,9 +232,11 @@ class DuckDBSQLiteCompatibleBackend:
         Returns
         -------
         None
-            The compatibility schema is created or refreshed in place.
+            Concrete subclasses provide the storage bootstrap behavior.
         """
-        init_db(root)
+        del root
+        msg = "DuckDBSQLiteCompatibleBackend requires a concrete initialize override."
+        raise NotImplementedError(msg)
 
     def open_connection(self, root: Path) -> _BackendCompatibleConnection:
         """
@@ -249,14 +250,14 @@ class DuckDBSQLiteCompatibleBackend:
         Returns
         -------
         _BackendCompatibleConnection
-            Open backend-compatible connection.
+            Concrete subclasses provide the backend-compatible connection.
         """
-        if not get_db_path(root).exists():
-            self.initialize(root)
-        return cast(
-            "_BackendCompatibleConnection",
-            sqlite3.connect(get_db_path(root)),
+        del root
+        msg = (
+            "DuckDBSQLiteCompatibleBackend requires a concrete open_connection "
+            "override."
         )
+        raise NotImplementedError(msg)
 
     def list_symbols_in_module(
         self,

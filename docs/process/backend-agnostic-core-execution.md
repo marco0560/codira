@@ -44,8 +44,6 @@ own concrete storage, persistence, and query implementation details.
 - DuckDB persistence now uses package-local `duckdb_support.py`
 - `packages/codira-backend-duckdb/.../repo_storage.py` now owns the localized
   seam for generic `.codira` directory and metadata path access
-- `packages/codira-backend-duckdb/.../sqlite_storage_compat.py` now owns the
-  localized compatibility seam for SQLite bootstrap/path access
 - DuckDB no longer imports `codira_backend_sqlite` at runtime
 - Semgrep guardrails were updated to match the new package-local ownership
   boundaries
@@ -55,7 +53,7 @@ own concrete storage, persistence, and query implementation details.
 ## Remaining Transitional Surfaces
 
 - DuckDB still carries `sqlite_compatible_backend.py` as a package-local
-  compatibility layer for query and maintenance semantics
+  compatibility mixin for query and maintenance semantics
 - Semgrep allowlists still explicitly document these transitional surfaces
 
 ## Validation Target
