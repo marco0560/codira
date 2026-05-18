@@ -351,6 +351,11 @@ class _FakeAnalyzer:
         -------
         codira.models.AnalysisResult
             Never returned.
+
+        Raises
+        ------
+        NotImplementedError
+            Raised because the stub never performs real analysis work.
         """
         del path, root
         raise NotImplementedError

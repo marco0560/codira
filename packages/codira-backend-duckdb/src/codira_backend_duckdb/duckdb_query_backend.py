@@ -87,11 +87,50 @@ class _BackendCompatibleCursor(Protocol):
         self,
         statement: str,
         parameters: Sequence[object] | None = None,
-    ) -> _BackendCompatibleCursor: ...
+    ) -> _BackendCompatibleCursor:
+        """
+        Execute one statement and keep the cursor positioned on its result.
 
-    def fetchone(self) -> tuple[BackendQueryValue, ...] | None: ...
+        Parameters
+        ----------
+        statement : str
+            SQL statement to execute.
+        parameters : collections.abc.Sequence[object] | None, optional
+            Positional parameters bound to ``statement``.
 
-    def fetchall(self) -> list[tuple[BackendQueryValue, ...]]: ...
+        Returns
+        -------
+        _BackendCompatibleCursor
+            The active cursor positioned on the statement result.
+        """
+
+    def fetchone(self) -> tuple[BackendQueryValue, ...] | None:
+        """
+        Return the next available row from the active result set.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple[codira.contracts.BackendQueryValue, ...] | None
+            Next available row, or ``None`` when the result is exhausted.
+        """
+
+    def fetchall(self) -> list[tuple[BackendQueryValue, ...]]:
+        """
+        Return every remaining row from the active result set.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        list[tuple[codira.contracts.BackendQueryValue, ...]]
+            Remaining rows from the active result set.
+        """
 
 
 class _BackendCompatibleConnectionAdapter(Protocol):
@@ -101,19 +140,85 @@ class _BackendCompatibleConnectionAdapter(Protocol):
         self,
         statement: str,
         parameters: Sequence[object] | None = None,
-    ) -> _BackendCompatibleCursor: ...
+    ) -> _BackendCompatibleCursor:
+        """
+        Execute one statement on the active backend connection.
+
+        Parameters
+        ----------
+        statement : str
+            SQL statement to execute.
+        parameters : collections.abc.Sequence[object] | None, optional
+            Positional parameters bound to ``statement``.
+
+        Returns
+        -------
+        _BackendCompatibleCursor
+            Cursor-like result wrapper for the executed statement.
+        """
 
     def executemany(
         self,
         statement: str,
         parameters: Sequence[Sequence[object]],
-    ) -> _BackendCompatibleCursor: ...
+    ) -> _BackendCompatibleCursor:
+        """
+        Execute one statement against multiple parameter rows.
 
-    def cursor(self) -> _BackendCompatibleCursor: ...
+        Parameters
+        ----------
+        statement : str
+            SQL statement to execute repeatedly.
+        parameters : collections.abc.Sequence[collections.abc.Sequence[object]]
+            Parameter rows bound to ``statement``.
 
-    def commit(self) -> None: ...
+        Returns
+        -------
+        _BackendCompatibleCursor
+            Cursor-like result wrapper for the most recent execution.
+        """
 
-    def close(self) -> None: ...
+    def cursor(self) -> _BackendCompatibleCursor:
+        """
+        Return a cursor-like object bound to the active connection.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        _BackendCompatibleCursor
+            Cursor-like object bound to the active backend connection.
+        """
+
+    def commit(self) -> None:
+        """
+        Commit pending writes on the active connection.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Pending writes are committed in place.
+        """
+
+    def close(self) -> None:
+        """
+        Close the active backend connection.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The active backend connection is closed.
+        """
 
 
 class _DuckDBModuleWithError(Protocol):
@@ -126,19 +231,54 @@ _BackendCompatibleConnection = _BackendCompatibleConnectionAdapter
 
 
 def _backend_int(value: BackendQueryValue) -> int:
-    """Coerce one backend-compatible scalar into an integer."""
+    """
+    Coerce one backend-compatible scalar into an integer.
+
+    Parameters
+    ----------
+    value : BackendQueryValue
+        Scalar value returned from one backend query row.
+
+    Returns
+    -------
+    int
+        Integer form of ``value``.
+    """
 
     return int(cast("str | bytes | bytearray | int | float", value))
 
 
 def _backend_bytes(value: BackendQueryValue) -> bytes:
-    """Coerce one backend-compatible scalar into raw bytes."""
+    """
+    Coerce one backend-compatible scalar into raw bytes.
+
+    Parameters
+    ----------
+    value : BackendQueryValue
+        Scalar value returned from one backend query row.
+
+    Returns
+    -------
+    bytes
+        Raw byte representation of ``value``.
+    """
 
     return bytes(cast("bytes | bytearray", value))
 
 
 def _duckdb_error_type() -> type[BaseException]:
-    """Return the active DuckDB driver error base class."""
+    """
+    Return the active DuckDB driver error base class.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    type[BaseException]
+        Base exception type exported by the active DuckDB driver module.
+    """
 
     module = importlib.import_module("duckdb")
     return cast("_DuckDBModuleWithError", module).Error
@@ -245,6 +385,12 @@ class DuckDBQueryBackend:
         -------
         None
             Concrete subclasses provide the storage bootstrap behavior.
+
+        Raises
+        ------
+        NotImplementedError
+            Raised when one concrete backend does not override the bootstrap
+            hook.
         """
         del root
         msg = "DuckDBQueryBackend requires a concrete initialize override."
@@ -263,6 +409,12 @@ class DuckDBQueryBackend:
         -------
         _BackendCompatibleConnection
             Concrete subclasses provide the backend-compatible connection.
+
+        Raises
+        ------
+        NotImplementedError
+            Raised when one concrete backend does not override the connection
+            bootstrap hook.
         """
         del root
         msg = "DuckDBQueryBackend requires a concrete open_connection override."

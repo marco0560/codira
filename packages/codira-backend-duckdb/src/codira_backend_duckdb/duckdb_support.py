@@ -57,9 +57,33 @@ class _DuckDBCursorLike(Protocol):
 
     lastrowid: int | None
 
-    def fetchone(self) -> tuple[object, ...] | None: ...
+    def fetchone(self) -> tuple[object, ...] | None:
+        """
+        Return the next available row from the active DuckDB result set.
 
-    def fetchall(self) -> list[tuple[object, ...]]: ...
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple[object, ...] | None
+            Next available row, or ``None`` when the result is exhausted.
+        """
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        """
+        Return every remaining row from the active DuckDB result set.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        list[tuple[object, ...]]
+            Remaining rows from the active DuckDB result set.
+        """
 
 
 class _DuckDBPersistenceConnection(Protocol):
@@ -69,23 +93,77 @@ class _DuckDBPersistenceConnection(Protocol):
         self,
         query: str,
         parameters: Sequence[object] | None = None,
-    ) -> _DuckDBCursorLike: ...
+    ) -> _DuckDBCursorLike:
+        """
+        Execute one DuckDB statement and expose its cursor-like result.
+
+        Parameters
+        ----------
+        query : str
+            SQL statement to execute.
+        parameters : collections.abc.Sequence[object] | None, optional
+            Positional parameters bound to ``query``.
+
+        Returns
+        -------
+        _DuckDBCursorLike
+            Cursor-like result for the executed statement.
+        """
 
     def executemany(
         self,
         query: str,
         parameters: Sequence[Sequence[object]],
-    ) -> object: ...
+    ) -> object:
+        """
+        Execute one DuckDB statement against multiple parameter rows.
+
+        Parameters
+        ----------
+        query : str
+            SQL statement to execute repeatedly.
+        parameters : collections.abc.Sequence[collections.abc.Sequence[object]]
+            Parameter rows bound to ``query``.
+
+        Returns
+        -------
+        object
+            Driver-specific result for the most recent execution.
+        """
 
 
 def _duckdb_int(value: object) -> int:
-    """Coerce one DuckDB row value into an integer."""
+    """
+    Coerce one DuckDB row value into an integer.
+
+    Parameters
+    ----------
+    value : object
+        Scalar value returned from one DuckDB row.
+
+    Returns
+    -------
+    int
+        Integer form of ``value``.
+    """
 
     return int(cast("str | bytes | bytearray | int", value))
 
 
 def _duckdb_bytes(value: object) -> bytes:
-    """Coerce one DuckDB row value into raw bytes."""
+    """
+    Coerce one DuckDB row value into raw bytes.
+
+    Parameters
+    ----------
+    value : object
+        Scalar value returned from one DuckDB row.
+
+    Returns
+    -------
+    bytes
+        Raw byte representation of ``value``.
+    """
 
     return bytes(cast("bytes | bytearray", value))
 

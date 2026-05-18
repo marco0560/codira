@@ -1,3 +1,23 @@
+"""Validate repository-owned Semgrep fixture expectations.
+
+Responsibilities
+----------------
+- Run Semgrep against fixture targets that intentionally violate repository
+  rules.
+- Confirm each expected rule identifier is emitted for the matching fixture
+  surface.
+
+Design principles
+-----------------
+Validation stays lightweight and deterministic by running repository-owned
+Semgrep rules through the existing wrapper script.
+
+Architectural role
+------------------
+This module belongs to the **development tooling layer** and protects the
+repository's Semgrep rule contract.
+"""
+
 from __future__ import annotations
 
 import subprocess
@@ -46,6 +66,23 @@ def run_fixture(
     target: str,
     rule_ids: tuple[str, ...],
 ) -> int:
+    """
+    Run one Semgrep fixture scan and verify the expected rules fire.
+
+    Parameters
+    ----------
+    name : str
+        Short fixture label printed in validation output.
+    target : str
+        Repository-relative fixture path passed to Semgrep.
+    rule_ids : tuple[str, ...]
+        Rule identifiers that must appear in the scan output.
+
+    Returns
+    -------
+    int
+        ``0`` when every expected rule appears, otherwise ``1``.
+    """
     command = (
         sys.executable,
         str(RUN_REPO_TOOL),
@@ -79,6 +116,18 @@ def run_fixture(
 
 
 def main() -> int:
+    """
+    Validate every repository-owned Semgrep fixture group.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    int
+        Process exit status for the fixture validation run.
+    """
     failures = 0
 
     for name, target, rule_ids in FIXTURES:
