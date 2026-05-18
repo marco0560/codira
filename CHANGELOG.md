@@ -1,3 +1,10 @@
+## [1.24.2](https://github.com/marco0560/codira/compare/v1.24.1...v1.24.2) (2026-05-18)
+
+
+### Bug Fixes
+
+* **dev:** eliminated null-byte artifact that failed github action ([2ce1c7f](https://github.com/marco0560/codira/commit/2ce1c7f5ec976c971265fb763c1c525194c11b92))
+
 ## [1.24.1](https://github.com/marco0560/codira/compare/v1.24.0...v1.24.1) (2026-05-17)
 
 
