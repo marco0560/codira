@@ -27,9 +27,9 @@ Current package-local ownership notes:
   persistence helper implementation
 - `packages/codira-backend-duckdb/.../repo_storage.py` owns the DuckDB-local
   seam for generic `.codira` directory and metadata path access
-- `packages/codira-backend-duckdb/.../duckdb_query_backend.py` is a temporary
-  DuckDB-local query/maintenance mixin while the standalone rewrite
-  continues
+- `packages/codira-backend-duckdb/.../duckdb_query_backend.py` owns the
+  DuckDB-local query and maintenance implementation used by the production
+  backend
 
 ## Current Constraints
 
@@ -46,9 +46,8 @@ analytical behavior for larger indexes, including future documentation-heavy
 channels.
 
 The current DuckDB backend is no longer coupled to SQLite runtime types or the
-SQLite backend package, but it still carries a localized DuckDB query and
-maintenance mixin inside the package while parity-preserving migration
-continues.
+SQLite backend package. Its query and maintenance implementation is fully
+owned inside the DuckDB package boundary.
 
 ## Phase-8 Selection Rules
 
@@ -111,10 +110,8 @@ The branch-local backend-agnostic refactor has established these boundaries:
 - benchmark and SQLite-oriented test scaffolding now route setup through the
   SQLite backend package seam rather than calling core SQLite bootstrap
 
-The remaining transitional surfaces are explicit:
-
-- DuckDB still uses a package-local query/maintenance mixin rather than a
-  fully native standalone DuckDB query implementation
+The DuckDB package-local query and maintenance implementation is now the
+supported production surface rather than a migration-only compatibility layer.
 
 ## Contributor Contract Validation Backend
 

@@ -80,5 +80,5 @@ Current implementation note:
 
 - DuckDB now owns its persistence helper implementation locally
 - DuckDB no longer imports the SQLite backend package at runtime
-- a temporary DuckDB-local SQLite-compatible query layer remains while the
-  fully native query surface is still being migrated
+- DuckDB owns its query and maintenance implementation locally inside the
+  backend package

@@ -121,27 +121,6 @@ Removal condition:
 Remove this allowlist entry when the backend module no longer needs a separate
 package-local helper module.
 
-#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py`
-
-Rationale:
-The DuckDB backend still owns package-local bootstrapping, compatibility
-wrappers, and package-local helper imports while the standalone migration is
-in progress.
-
-Removal condition:
-Remove this allowlist entry when the production backend no longer needs local
-helper-module imports that match the backend-package guardrail.
-
-#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/duckdb_query_backend.py`
-
-Rationale:
-This temporary DuckDB-local query/maintenance mixin preserves the current
-behavioral surface without importing the SQLite backend package at runtime.
-
-Removal condition:
-Remove this allowlist entry when DuckDB no longer needs the localized
-transitional mixin surface.
-
 #### `examples/plugins/codira_demo_backend/src/codira_demo_backend/__init__.py`
 
 Rationale:

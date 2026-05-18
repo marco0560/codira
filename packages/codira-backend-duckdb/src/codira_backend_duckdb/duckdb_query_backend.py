@@ -1,22 +1,21 @@
-"""DuckDB query and maintenance helpers localized inside the DuckDB package.
+"""DuckDB query and maintenance helpers for the production DuckDB backend.
 
 Responsibilities
 ----------------
-- Keep the DuckDB package self-contained while it preserves DuckDB-local
-  query and maintenance semantics.
-- Provide the inherited query, inventory, and maintenance surface used by the
-  production DuckDB backend.
-- Avoid runtime imports from historical compatibility module names.
+- Keep the production DuckDB backend self-contained at the package boundary.
+- Provide the query, inventory, and maintenance surface used by the
+  production backend implementation.
+- Keep backend-local query logic out of codira-core.
 
 Design principles
 -----------------
-The helper stays local to the DuckDB package so the backend can preserve
-behavioral parity while cross-plugin runtime inheritance is removed.
+The helper stays local to the DuckDB package so backend-specific query logic
+remains package-owned and codira-core stays backend agnostic.
 
 Architectural role
 ------------------
 This module belongs to the **DuckDB backend plugin layer** and provides the
-DuckDB query/maintenance mixin used by the production DuckDB backend.
+production query/maintenance helper surface used by the DuckDB backend.
 """
 
 from __future__ import annotations
@@ -45,7 +44,7 @@ from codira.semantic.embeddings import (
     embed_text,
     get_embedding_backend,
 )
-from codira_backend_duckdb.duckdb_support import (
+from .duckdb_support import (
     _DuckDBPersistenceConnection,
     _clear_index_tables,
     _count_reused_embeddings,
@@ -78,7 +77,7 @@ CallEdgeRow = tuple[str, str, str | None, str | None, int]
 CallableRefRow = tuple[str, str, str | None, str | None, int]
 EmbeddingInventoryRow = tuple[str, str, int, int]
 
-__all__ = ["DuckDBQueryBackendMixin"]
+__all__ = ["DuckDBQueryBackend"]
 
 
 class _BackendCompatibleCursor(Protocol):
@@ -145,16 +144,16 @@ def _duckdb_error_type() -> type[BaseException]:
     return cast("_DuckDBModuleWithError", module).Error
 
 
-class DuckDBQueryBackendMixin:
+class DuckDBQueryBackend:
     """
-    DuckDB-local query and maintenance surface for backend reuse.
+    DuckDB-local query and maintenance surface for the production backend.
 
-    This mixin keeps the existing query and maintenance semantics stable while
+    This helper keeps the query and maintenance semantics package-owned while
     the production DuckDB backend owns connection bootstrap and persistence
     behavior separately.
     """
 
-    name = "duckdb-query-mixin"
+    name = "duckdb-query-backend"
     version = SCHEMA_VERSION
 
     def load_runtime_inventory(
@@ -248,7 +247,7 @@ class DuckDBQueryBackendMixin:
             Concrete subclasses provide the storage bootstrap behavior.
         """
         del root
-        msg = "DuckDBQueryBackendMixin requires a concrete initialize override."
+        msg = "DuckDBQueryBackend requires a concrete initialize override."
         raise NotImplementedError(msg)
 
     def open_connection(self, root: Path) -> _BackendCompatibleConnection:
@@ -266,7 +265,7 @@ class DuckDBQueryBackendMixin:
             Concrete subclasses provide the backend-compatible connection.
         """
         del root
-        msg = "DuckDBQueryBackendMixin requires a concrete open_connection override."
+        msg = "DuckDBQueryBackend requires a concrete open_connection override."
         raise NotImplementedError(msg)
 
     def list_symbols_in_module(
