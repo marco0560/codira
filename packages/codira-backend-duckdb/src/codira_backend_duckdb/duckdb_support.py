@@ -1038,7 +1038,7 @@ def _record_tuple(
     record: CallSite,
 ) -> tuple[int, str, str, str, str, str, int, int]:
     """
-    Normalize one raw call-style record for SQLite persistence.
+    Normalize one raw call-style record for DuckDB persistence.
 
     Parameters
     ----------
@@ -1054,7 +1054,7 @@ def _record_tuple(
     Returns
     -------
     tuple[int, str, str, str, str, str, int, int]
-        Normalized SQLite row values.
+        Normalized DuckDB row values.
     """
     return (
         file_id,
@@ -1075,7 +1075,7 @@ def _reference_tuple(
     record: CallableReference,
 ) -> tuple[int, str, str, str, str, str, str, int, int]:
     """
-    Normalize one callable-reference record for SQLite persistence.
+    Normalize one callable-reference record for DuckDB persistence.
 
     Parameters
     ----------
@@ -1091,7 +1091,7 @@ def _reference_tuple(
     Returns
     -------
     tuple[int, str, str, str, str, str, str, int, int]
-        Normalized SQLite row values.
+        Normalized DuckDB row values.
     """
     return (
         file_id,
@@ -1795,7 +1795,7 @@ def _flush_persisted_relationship_rows(
     ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]],
 ) -> None:
     """
-    Flush pending call and callable-reference rows to SQLite.
+    Flush pending call and callable-reference rows to DuckDB.
 
     Parameters
     ----------
