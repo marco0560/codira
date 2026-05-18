@@ -45,9 +45,10 @@ Its role is to provide a second production-grade backend with stronger local
 analytical behavior for larger indexes, including future documentation-heavy
 channels.
 
-The current DuckDB backend is no longer coupled to the SQLite backend package
-at runtime, but it still carries a localized SQLite-compatible query layer
-inside the DuckDB package while parity-preserving migration continues.
+The current DuckDB backend is no longer coupled to SQLite runtime types or the
+SQLite backend package, but it still carries a localized DuckDB query and
+maintenance mixin inside the package while parity-preserving migration
+continues.
 
 ## Phase-8 Selection Rules
 
@@ -112,8 +113,8 @@ The branch-local backend-agnostic refactor has established these boundaries:
 
 The remaining transitional surfaces are explicit:
 
-- DuckDB still uses a package-local SQLite-compatible query layer rather than
-  a fully native DuckDB query implementation
+- DuckDB still uses a package-local query/maintenance mixin rather than a
+  fully native standalone DuckDB query implementation
 
 ## Contributor Contract Validation Backend
 

@@ -91,16 +91,6 @@ This is the production SQLite backend implementation.
 Removal condition:
 No removal planned while SQLite remains a supported backend.
 
-#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py`
-
-Rationale:
-The DuckDB backend still reuses SQLite-shaped compatibility helpers and error
-handling during the current parity phase.
-
-Removal condition:
-Remove this allowlist entry when DuckDB no longer depends on SQLite driver
-types or compatibility helpers.
-
 #### `packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_support.py`
 
 Rationale:

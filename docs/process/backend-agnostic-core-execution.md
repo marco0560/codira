@@ -54,7 +54,8 @@ own concrete storage, persistence, and query implementation details.
 
 - DuckDB still carries `duckdb_query_backend.py` as a package-local
   transitional query/maintenance mixin
-- Semgrep allowlists still explicitly document these transitional surfaces
+- Semgrep allowlists still explicitly document the remaining backend-package
+  transitional surfaces
 
 ## Validation Target
 
