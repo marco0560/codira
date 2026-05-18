@@ -22,8 +22,8 @@ DuckDB query/maintenance mixin used by the production DuckDB backend.
 from __future__ import annotations
 
 from collections.abc import Sequence
+import importlib
 import json
-import sqlite3
 from typing import TYPE_CHECKING, Protocol, cast
 
 from codira.contracts import (
@@ -82,7 +82,7 @@ __all__ = ["DuckDBQueryBackendMixin"]
 
 
 class _BackendCompatibleCursor(Protocol):
-    """Cursor surface shared by SQLite and the DuckDB compatibility adapter."""
+    """Cursor surface shared by backend-compatible connection adapters."""
 
     def execute(
         self,
@@ -96,7 +96,7 @@ class _BackendCompatibleCursor(Protocol):
 
 
 class _BackendCompatibleConnectionAdapter(Protocol):
-    """Connection surface shared by SQLite and the DuckDB compatibility adapter."""
+    """Connection surface shared by backend-compatible connection adapters."""
 
     def execute(
         self,
@@ -117,7 +117,13 @@ class _BackendCompatibleConnectionAdapter(Protocol):
     def close(self) -> None: ...
 
 
-_BackendCompatibleConnection = sqlite3.Connection | _BackendCompatibleConnectionAdapter
+class _DuckDBModuleWithError(Protocol):
+    """Minimal DuckDB module surface needed for error translation."""
+
+    Error: type[BaseException]
+
+
+_BackendCompatibleConnection = _BackendCompatibleConnectionAdapter
 
 
 def _backend_int(value: BackendQueryValue) -> int:
@@ -130,6 +136,13 @@ def _backend_bytes(value: BackendQueryValue) -> bytes:
     """Coerce one backend-compatible scalar into raw bytes."""
 
     return bytes(cast("bytes | bytearray", value))
+
+
+def _duckdb_error_type() -> type[BaseException]:
+    """Return the active DuckDB driver error base class."""
+
+    module = importlib.import_module("duckdb")
+    return cast("_DuckDBModuleWithError", module).Error
 
 
 class DuckDBQueryBackendMixin:
@@ -1585,7 +1598,7 @@ class DuckDBQueryBackendMixin:
         conn: _BackendCompatibleConnection | None = None,
     ) -> None:
         """
-        Remove all indexed artifacts from SQLite storage.
+        Remove all indexed artifacts from DuckDB storage.
 
         Parameters
         ----------
@@ -1741,8 +1754,8 @@ class DuckDBQueryBackendMixin:
         ------
         OSError
             If file-backed persistence fails while storing analyzed artifacts.
-        sqlite3.Error
-            If SQLite rejects the persistence operation or transaction
+        codira.contracts.BackendError
+            If DuckDB rejects the persistence operation or transaction
             boundaries.
         RuntimeError
             If embedding persistence cannot complete for the analyzed file.
@@ -1759,6 +1772,7 @@ class DuckDBQueryBackendMixin:
             if request.embedding_backend is None
             else request.embedding_backend
         )
+        duckdb_error = _duckdb_error_type()
         try:
             if owns_connection:
                 written = _store_analysis(
@@ -1784,13 +1798,13 @@ class DuckDBQueryBackendMixin:
                             request.previous_embeddings,
                         ),
                     )
-                except (OSError, sqlite3.Error, RuntimeError, ValueError):
+                except (OSError, duckdb_error, RuntimeError, ValueError):
                     conn.execute("ROLLBACK TO SAVEPOINT persist_analysis")
                     conn.execute("RELEASE SAVEPOINT persist_analysis")
                     raise
                 else:
                     conn.execute("RELEASE SAVEPOINT persist_analysis")
-        except sqlite3.Error as exc:
+        except duckdb_error as exc:
             msg = str(exc)
             raise BackendError(msg) from exc
         else:
@@ -1820,7 +1834,7 @@ class DuckDBQueryBackendMixin:
         Returns
         -------
         None
-            Derived SQLite tables are refreshed in place.
+            Derived DuckDB tables are refreshed in place.
         """
         owns_connection = conn is None
         if conn is None:
@@ -1853,7 +1867,7 @@ class DuckDBQueryBackendMixin:
         Raises
         ------
         BackendError
-            If SQLite rejects the inventory update.
+            If DuckDB rejects the inventory update.
         """
         root = request.root
         backend_name = request.backend_name
@@ -1864,6 +1878,7 @@ class DuckDBQueryBackendMixin:
         owns_connection = conn is None
         if conn is None:
             conn = self.open_connection(root)
+        duckdb_error = _duckdb_error_type()
         try:
             conn.execute("DELETE FROM index_runtime")
             conn.execute("DELETE FROM index_analyzers")
@@ -1893,7 +1908,7 @@ class DuckDBQueryBackendMixin:
                 )
             if owns_connection:
                 conn.commit()
-        except sqlite3.Error as exc:
+        except duckdb_error as exc:
             msg = str(exc)
             raise BackendError(msg) from exc
         finally:
@@ -1902,7 +1917,7 @@ class DuckDBQueryBackendMixin:
 
     def commit(self, root: Path, *, conn: _BackendCompatibleConnection) -> None:
         """
-        Commit pending writes on an open SQLite connection.
+        Commit pending writes on an open backend connection.
 
         Parameters
         ----------
@@ -1921,7 +1936,7 @@ class DuckDBQueryBackendMixin:
 
     def close_connection(self, conn: _BackendCompatibleConnection) -> None:
         """
-        Close an open SQLite connection.
+        Close an open backend connection.
 
         Parameters
         ----------

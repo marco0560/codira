@@ -22,7 +22,6 @@ from __future__ import annotations
 import importlib
 import json
 import re
-import sqlite3
 from typing import TYPE_CHECKING, Protocol, cast
 
 from codira.contracts import (
@@ -37,6 +36,7 @@ from codira_backend_duckdb.duckdb_support import (
 )
 from codira_backend_duckdb.repo_storage import get_codira_dir, get_metadata_path
 from codira_backend_duckdb.duckdb_query_backend import (
+    _BackendCompatibleConnectionAdapter,
     DuckDBQueryBackendMixin,
 )
 from codira.schema import DDL, SCHEMA_VERSION
@@ -789,7 +789,7 @@ class DuckDBIndexBackend(DuckDBQueryBackendMixin):
             raw.close()
         _write_schema_metadata(root)
 
-    def open_connection(self, root: Path) -> sqlite3.Connection:
+    def open_connection(self, root: Path) -> _BackendCompatibleConnectionAdapter:
         """
         Open a DuckDB connection for one repository index.
 
@@ -800,14 +800,14 @@ class DuckDBIndexBackend(DuckDBQueryBackendMixin):
 
         Returns
         -------
-        sqlite3.Connection
+        _BackendCompatibleConnectionAdapter
             Open DuckDB connection adapter.
         """
         if not _duckdb_db_path(root).exists():
             self.initialize(root)
         raw = _duckdb_module().connect(str(_duckdb_db_path(root)))
         _repair_nullable_edge_tables(raw)
-        return cast("sqlite3.Connection", DuckDBConnection(raw))
+        return cast("_BackendCompatibleConnectionAdapter", DuckDBConnection(raw))
 
     def persist_analysis(
         self,
@@ -835,10 +835,10 @@ class DuckDBIndexBackend(DuckDBQueryBackendMixin):
         """
         root = request.root
         error_type = _duckdb_module().Error
-        conn = cast("DuckDBConnection | None", request.conn)
+        conn = cast("_BackendCompatibleConnectionAdapter | None", request.conn)
         owns_connection = conn is None
         if conn is None:
-            conn = cast("DuckDBConnection", self.open_connection(root))
+            conn = self.open_connection(root)
         assert conn is not None
         active_backend = (
             get_embedding_backend()
@@ -918,10 +918,10 @@ class DuckDBIndexBackend(DuckDBQueryBackendMixin):
         coverage_complete = request.coverage_complete
         analyzers = request.analyzers
         error_type = _duckdb_module().Error
-        conn = cast("DuckDBConnection | None", request.conn)
+        conn = cast("_BackendCompatibleConnectionAdapter | None", request.conn)
         owns_connection = conn is None
         if conn is None:
-            conn = cast("DuckDBConnection", self.open_connection(root))
+            conn = self.open_connection(root)
         assert conn is not None
         try:
             conn.execute("DELETE FROM index_runtime")
