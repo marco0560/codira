@@ -1566,6 +1566,8 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
     assert entries["alias.docs-build"] == "!uv run mkdocs build --strict"
     assert "rsync" not in entries["alias.txz"]
     assert "--transform='s,^,repo/,'" in entries["alias.txz"]
+    assert "\x00" not in entries["alias.txz"]
+    assert 'printf "%s\\0" issues.json milestones.json' in entries["alias.txz"]
     assert "alias.ctx" not in entries
     assert "user.name" not in entries
     assert "user.email" not in entries

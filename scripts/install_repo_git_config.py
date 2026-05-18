@@ -124,7 +124,7 @@ def git_alias_entries() -> list[tuple[str, str]]:
             (
                 '!f() { name="${1:-repo}"; tmp="$(mktemp -d)"; '
                 'trap \'rm -rf "$tmp"\' EXIT; mkdir -p "$tmp/repo"; '
-                '{ git ls-files -z; printf "%s\0" issues.json milestones.json; } '
+                '{ git ls-files -z; printf "%s\\0" issues.json milestones.json; } '
                 '| XZ_OPT="-9e -T0" tar --null -T - -cJf '
                 "\"$PWD/$name.tar.xz\" --transform='s,^,repo/,'; }; f"
             ),
