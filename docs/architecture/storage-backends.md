@@ -27,9 +27,9 @@ Current package-local ownership notes:
   persistence helper implementation
 - `packages/codira-backend-duckdb/.../repo_storage.py` owns the DuckDB-local
   seam for generic `.codira` directory and metadata path access
-- `packages/codira-backend-duckdb/.../sqlite_compatible_backend.py` is a
-  temporary DuckDB-local compatibility mixin for the inherited query and
-  maintenance surface
+- `packages/codira-backend-duckdb/.../duckdb_query_backend.py` is a temporary
+  DuckDB-local query/maintenance mixin while the standalone rewrite
+  continues
 
 ## Current Constraints
 

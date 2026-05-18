@@ -142,16 +142,15 @@ Removal condition:
 Remove this allowlist entry when the production backend no longer needs local
 helper-module imports that match the backend-package guardrail.
 
-#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/sqlite_compatible_backend.py`
+#### `packages/codira-backend-duckdb/src/codira_backend_duckdb/duckdb_query_backend.py`
 
 Rationale:
-This temporary DuckDB-local compatibility module preserves SQLite-shaped query
-and maintenance semantics without importing the SQLite backend package at
-runtime.
+This temporary DuckDB-local query/maintenance mixin preserves the current
+behavioral surface without importing the SQLite backend package at runtime.
 
 Removal condition:
 Remove this allowlist entry when DuckDB no longer needs the localized
-SQLite-compatible surface.
+transitional mixin surface.
 
 #### `examples/plugins/codira_demo_backend/src/codira_demo_backend/__init__.py`
 

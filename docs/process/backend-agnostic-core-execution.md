@@ -52,8 +52,8 @@ own concrete storage, persistence, and query implementation details.
 
 ## Remaining Transitional Surfaces
 
-- DuckDB still carries `sqlite_compatible_backend.py` as a package-local
-  compatibility mixin for query and maintenance semantics
+- DuckDB still carries `duckdb_query_backend.py` as a package-local
+  transitional query/maintenance mixin
 - Semgrep allowlists still explicitly document these transitional surfaces
 
 ## Validation Target

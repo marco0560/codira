@@ -36,8 +36,8 @@ from codira_backend_duckdb.duckdb_support import (
     _store_analysis,
 )
 from codira_backend_duckdb.repo_storage import get_codira_dir, get_metadata_path
-from codira_backend_duckdb.sqlite_compatible_backend import (
-    DuckDBSQLiteCompatibleBackend,
+from codira_backend_duckdb.duckdb_query_backend import (
+    DuckDBQueryBackendMixin,
 )
 from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import get_embedding_backend
@@ -752,7 +752,7 @@ def _duckdb_lastrowid(raw: _DuckDBRawConnection, query: str) -> int | None:
     raise BackendError(msg)
 
 
-class DuckDBIndexBackend(DuckDBSQLiteCompatibleBackend):
+class DuckDBIndexBackend(DuckDBQueryBackendMixin):
     """
     Concrete DuckDB backend exposed from the package boundary.
 
