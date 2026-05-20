@@ -42,12 +42,14 @@ OPTIONAL_ANALYZER_PACKAGE_BY_NAME: dict[str, str] = {
     "python": "codira-analyzer-python",
     "json": "codira-analyzer-json",
     "c": "codira-analyzer-c",
+    "cpp": "codira-analyzer-cpp",
     "bash": "codira-analyzer-bash",
 }
 PREFERRED_ANALYZER_ORDER: dict[str, int] = {
     "python": 0,
     "json": 5,
     "c": 10,
+    "cpp": 15,
     "bash": 20,
 }
 REQUIRED_BACKEND_METHODS: tuple[str, ...] = (
@@ -906,6 +908,18 @@ def missing_language_analyzer_hint(path: Path) -> str | None:
             "C-family indexing support is optional. "
             f"Install `{package_name}` to enable `*.c` and `*.h` files, or use "
             "`codira[bundle-official]` when the curated bundle is available."
+        )
+
+    if (
+        suffix in {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".ipp"}
+        and "cpp" not in analyzer_names
+    ):
+        package_name = OPTIONAL_ANALYZER_PACKAGE_BY_NAME["cpp"]
+        return (
+            "C++ indexing support is optional. "
+            f"Install `{package_name}` to enable standard C++ source and header "
+            "files, or use `codira[bundle-official]` when the curated bundle is "
+            "available."
         )
 
     if suffix in {".sh", ".bash"} and "bash" not in analyzer_names:

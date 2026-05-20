@@ -52,6 +52,7 @@ Phase 1 extracts the current optional analyzers into dedicated first-party
 packages under `packages/`:
 
 * `packages/codira-analyzer-c/`
+* `packages/codira-analyzer-cpp/`
 * `packages/codira-analyzer-bash/`
 
 Those packages own their implementation modules and expose analyzers through the

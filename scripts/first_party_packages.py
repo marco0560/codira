@@ -29,6 +29,7 @@ FIRST_PARTY_PACKAGE_DIRS: tuple[str, ...] = (
     "packages/codira-analyzer-python",
     "packages/codira-analyzer-json",
     "packages/codira-analyzer-c",
+    "packages/codira-analyzer-cpp",
     "packages/codira-analyzer-bash",
     "packages/codira-backend-sqlite",
     "packages/codira-backend-duckdb",

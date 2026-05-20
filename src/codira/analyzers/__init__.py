@@ -34,6 +34,15 @@ else:
     __all__.append("CAnalyzer")
 
 try:
+    cpp_module = importlib.import_module("codira.analyzers.cpp")
+except ModuleNotFoundError as exc:
+    if exc.name not in {"codira_analyzer_cpp", "tree_sitter_cpp"}:
+        raise
+else:
+    CppAnalyzer = cpp_module.CppAnalyzer
+    __all__.append("CppAnalyzer")
+
+try:
     bash_module = importlib.import_module("codira.analyzers.bash")
 except ModuleNotFoundError as exc:
     if exc.name not in {"codira_analyzer_bash", "tree_sitter_bash"}:

@@ -40,6 +40,7 @@ Adopt the following first-party package set for Phase 2:
 * `codira-analyzer-json` owns the JSON analyzer implementation
 * `codira-backend-sqlite` owns the default SQLite backend implementation
 * `codira-analyzer-c` remains the C analyzer distribution from Phase 1
+* `codira-analyzer-cpp` owns the C++ analyzer distribution
 * `codira-analyzer-bash` remains the Bash analyzer distribution from Phase 1
 * `codira-bundle-official` remains the curated first-party meta-package
 

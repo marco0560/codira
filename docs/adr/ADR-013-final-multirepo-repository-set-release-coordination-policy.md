@@ -19,6 +19,7 @@
 * `codira-analyzer-python`
 * `codira-analyzer-json`
 * `codira-analyzer-c`
+* `codira-analyzer-cpp`
 * `codira-analyzer-bash`
 * `codira-backend-sqlite`
 * `codira-bundle-official`
@@ -49,6 +50,8 @@ Adopt the following final repository set for the post-split topology:
   First-party JSON analyzer repository.
 * `codira-analyzer-c`
   First-party C analyzer repository.
+* `codira-analyzer-cpp`
+  First-party C++ analyzer repository.
 * `codira-analyzer-bash`
   First-party Bash analyzer repository.
 * `codira-backend-sqlite`

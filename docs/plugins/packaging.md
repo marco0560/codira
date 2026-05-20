@@ -37,6 +37,7 @@ Repository-owned first-party distributions now live under:
 - `packages/codira-analyzer-python`
 - `packages/codira-analyzer-json`
 - `packages/codira-analyzer-c`
+- `packages/codira-analyzer-cpp`
 - `packages/codira-analyzer-bash`
 - `packages/codira-backend-sqlite`
 - `packages/codira-bundle-official`
