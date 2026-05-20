@@ -1,3 +1,11 @@
+# [1.25.0](https://github.com/marco0560/codira/compare/v1.24.2...v1.25.0) (2026-05-20)
+
+
+### Features
+
+* **analyzer:** add first-party c++ analyzer ([195b8ee](https://github.com/marco0560/codira/commit/195b8eeca19fd1962f356657173807ab29aba737))
+* **analyzer:** merge c++ analyzer branch ([adc67a7](https://github.com/marco0560/codira/commit/adc67a7261dab050d45cca296be1ee0659588337))
+
 ## [1.24.2](https://github.com/marco0560/codira/compare/v1.24.1...v1.24.2) (2026-05-18)
 
 
