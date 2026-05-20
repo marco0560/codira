@@ -258,6 +258,22 @@ def _build_c_analyzer() -> LanguageAnalyzer:
     return _build_optional_first_party_analyzer("c")
 
 
+def _build_cpp_analyzer() -> LanguageAnalyzer:
+    """
+    Build one fake first-party C++ analyzer.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    codira.contracts.LanguageAnalyzer
+        Deterministic C++ analyzer stub for registry tests.
+    """
+    return _build_optional_first_party_analyzer("cpp")
+
+
 def _build_bash_analyzer() -> LanguageAnalyzer:
     """
     Build one fake first-party Bash analyzer.
@@ -1090,7 +1106,7 @@ def test_core_can_discover_installed_first_party_packages_from_built_wheels(
 
     assert Path(payload["codira_file"]).is_relative_to(install_dir)
     assert payload["backend_module"] == "codira_backend_sqlite"
-    assert payload["analyzers"] == ["python", "json", "c", "bash"]
+    assert payload["analyzers"] == ["python", "json", "c", "cpp", "bash"]
 
 
 def test_registry_orders_first_party_analyzers_across_sources(
@@ -1107,7 +1123,7 @@ def test_registry_orders_first_party_analyzers_across_sources(
     Returns
     -------
     None
-        The test asserts Python, JSON, C, and Bash load as first-party
+        The test asserts Python, JSON, C, C++, and Bash load as first-party
         entry-point plugins in the final routing order.
     """
     _patch_entry_points(
@@ -1132,6 +1148,12 @@ def test_registry_orders_first_party_analyzers_across_sources(
                 loaded=_build_c_analyzer,
             ),
             _FakeEntryPoint(
+                name="cpp",
+                value="codira_analyzer_cpp:build_analyzer",
+                dist=_FakeDistribution("codira-analyzer-cpp"),
+                loaded=_build_cpp_analyzer,
+            ),
+            _FakeEntryPoint(
                 name="bash",
                 value="codira_analyzer_bash:build_analyzer",
                 dist=_FakeDistribution("codira-analyzer-bash"),
@@ -1146,7 +1168,7 @@ def test_registry_orders_first_party_analyzers_across_sources(
     ]
     registrations = registry.plugin_registrations()
 
-    assert analyzer_names == ["python", "json", "c", "bash"]
+    assert analyzer_names == ["python", "json", "c", "cpp", "bash"]
     assert any(
         record.family == "analyzer"
         and record.name == "python"
@@ -1169,6 +1191,15 @@ def test_registry_orders_first_party_analyzers_across_sources(
         record.family == "analyzer"
         and record.name == "c"
         and record.provider == "codira-analyzer-c"
+        and record.source == "entry_point"
+        and record.origin == "first_party"
+        and record.status == "loaded"
+        for record in registrations
+    )
+    assert any(
+        record.family == "analyzer"
+        and record.name == "cpp"
+        and record.provider == "codira-analyzer-cpp"
         and record.source == "entry_point"
         and record.origin == "first_party"
         and record.status == "loaded"
@@ -1219,6 +1250,11 @@ def test_compatibility_shims_do_not_fall_back_to_checkout_local_package_sources(
             "src/codira/analyzers/c.py",
             "codira_analyzer_c",
             "codira-analyzer-c",
+        ),
+        (
+            "src/codira/analyzers/cpp.py",
+            "codira_analyzer_cpp",
+            "codira-analyzer-cpp",
         ),
         (
             "src/codira/analyzers/bash.py",

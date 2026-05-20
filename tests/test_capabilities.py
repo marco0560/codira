@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 import jsonschema  # type: ignore[import-untyped]
 import pytest
 from codira_analyzer_c import CAnalyzer
+from codira_analyzer_cpp import CppAnalyzer
 from codira_analyzer_python import PythonAnalyzer
 
 from codira.capabilities import build_capability_contract
@@ -102,6 +103,46 @@ def test_c_analyzer_declares_explicit_ontology_mapping() -> None:
         "union": "type",
         "enum": "type",
         "typedef": "type",
+        "include_local": "import",
+        "include_system": "import",
+    }
+
+
+def test_cpp_analyzer_declares_explicit_ontology_mapping() -> None:
+    """
+    Keep the C++ analyzer aligned to the declaration-ontology contract.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the C++ analyzer maps native artifacts explicitly.
+    """
+    declaration = CppAnalyzer().analyzer_capability_declaration()
+
+    assert declaration.analyzer_name == "cpp"
+    assert declaration.supports == (
+        "module",
+        "type",
+        "callable",
+        "import",
+        "constant",
+        "namespace",
+    )
+    assert declaration.does_not_support == ("variable",)
+    assert declaration.mappings == {
+        "module": "module",
+        "class": "type",
+        "struct": "type",
+        "union": "type",
+        "enum": "type",
+        "type_alias": "type",
+        "function": "callable",
+        "method": "callable",
+        "namespace": "namespace",
         "include_local": "import",
         "include_system": "import",
     }

@@ -27,12 +27,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import codira_analyzer_json as json_analyzer_module
+from codira_analyzer_cpp import CppAnalyzer
 from codira_backend_sqlite import SQLiteIndexBackend
 from codira_backend_sqlite.sqlite_storage import get_db_path
 
 import codira.indexer as indexer_module
 import codira.registry as registry_module
-from codira.analyzers import BashAnalyzer, CAnalyzer, JsonAnalyzer, PythonAnalyzer
+from codira.analyzers import (
+    BashAnalyzer,
+    CAnalyzer,
+    CppAnalyzer as ShimCppAnalyzer,
+    JsonAnalyzer,
+    PythonAnalyzer,
+)
 from codira.analyzers.c import _disambiguate_function_stable_ids
 from codira.cli import _run_symbol
 from codira.contracts import (
@@ -1757,10 +1764,27 @@ def test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_che
     """
     assert isinstance(PythonAnalyzer(), LanguageAnalyzer)
     assert isinstance(CAnalyzer(), LanguageAnalyzer)
+    assert isinstance(CppAnalyzer(), LanguageAnalyzer)
     assert isinstance(_FakeAnalyzer(), LanguageAnalyzer)
     assert isinstance(_FakeBackend(), IndexBackend)
     assert isinstance(_FakeRetrievalProducer(), RetrievalProducer)
     assert isinstance(EMBEDDING_RETRIEVAL_PRODUCER, RetrievalProducer)
+
+
+def test_cpp_analyzer_shim_reexports_package_analyzer() -> None:
+    """
+    Keep the historical C++ analyzer import wired to the package analyzer.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the compatibility shim re-exports the package class.
+    """
+    assert ShimCppAnalyzer is CppAnalyzer
     assert isinstance(CALL_GRAPH_RETRIEVAL_PRODUCER, RetrievalProducer)
     assert isinstance(REFERENCE_RETRIEVAL_PRODUCER, RetrievalProducer)
     assert isinstance(INCLUDE_GRAPH_RETRIEVAL_PRODUCER, RetrievalProducer)
@@ -1832,6 +1856,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-python==1.5.2",
         "codira-analyzer-json==1.5.1",
         "codira-analyzer-c==1.5.5",
+        "codira-analyzer-cpp==1.5.0",
         "codira-analyzer-bash==1.5.0",
         "codira-backend-sqlite==1.5.3",
         "codira-backend-duckdb==1.5.3",
@@ -1857,7 +1882,13 @@ def test_active_phase_8_registries_expose_default_backend_and_analyzers() -> Non
 
     assert backend.__class__.__name__ == "SQLiteIndexBackend"
     assert backend.__class__.__module__ == "codira_backend_sqlite"
-    assert [analyzer.name for analyzer in analyzers] == ["python", "json", "c", "bash"]
+    assert [analyzer.name for analyzer in analyzers] == [
+        "python",
+        "json",
+        "c",
+        "cpp",
+        "bash",
+    ]
 
 
 def test_indexer_sqlite_backend_symbol_reexports_package_backend() -> None:
@@ -2331,6 +2362,48 @@ def test_select_language_analyzer_reports_optional_extra_hint(
     assert missing_language_analyzer_hint(Path("native/sample.c")) is not None
 
 
+def test_select_language_analyzer_reports_cpp_package_hint(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """
+    Report the package install hint when a C++ file has no available analyzer.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry-point discovery.
+
+    Returns
+    -------
+    None
+        The test asserts the failure message includes the C++ package hint.
+
+    Notes
+    -----
+    The test captures the ``ValueError`` internally, so it does not expose a
+    ``Raises`` contract to callers.
+    """
+    monkeypatch.setattr(
+        registry_module,
+        "_entry_points_for_group",
+        lambda group: [],
+    )
+
+    analyzers: list[LanguageAnalyzer] = []
+
+    try:
+        _select_language_analyzer(Path("native/sample.cpp"), analyzers)
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        msg = "expected ValueError for missing optional C++ analyzer"
+        raise AssertionError(msg)
+
+    assert "No language analyzer registered for path: native/sample.cpp" in message
+    assert "codira-analyzer-cpp" in message
+    assert missing_language_analyzer_hint(Path("native/sample.cpp")) is not None
+
+
 def test_select_language_analyzer_reports_python_package_hint(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -2464,6 +2537,166 @@ def test_c_analyzer_normalizes_functions_and_includes(tmp_path: Path) -> None:
     assert result.functions[0].is_public == 0
     assert result.functions[1].parameters == ()
     assert result.functions[1].is_public == 1
+
+
+def test_cpp_analyzer_normalizes_namespaces_classes_and_aliases(
+    tmp_path: Path,
+) -> None:
+    """
+    Normalize core C++ declarations into deterministic artifacts.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts deterministic namespace, class, alias, enum, import,
+        and free-function extraction.
+    """
+    source = tmp_path / "pkg" / "api.cpp"
+    source.parent.mkdir()
+    source.write_text(
+        "// Module summary.\n"
+        "#include <vector>\n"
+        '#include "pkg/api.hpp"\n'
+        "\n"
+        "// Namespace summary.\n"
+        "namespace outer::inner {\n"
+        "\n"
+        "// API class.\n"
+        "class Widget {\n"
+        "public:\n"
+        "    // Operates on input.\n"
+        "    int run(int value) const;\n"
+        "};\n"
+        "\n"
+        "// Type alias.\n"
+        "using Value = long;\n"
+        "\n"
+        "// Available modes.\n"
+        "enum Mode { Fast, Slow };\n"
+        "\n"
+        "// Free helper.\n"
+        "int helper(double input);\n"
+        "\n"
+        "}  // namespace outer::inner\n",
+        encoding="utf-8",
+    )
+
+    result = CppAnalyzer().analyze_file(source, tmp_path)
+
+    assert result.module.name == "pkg.api"
+    assert result.module.stable_id == "cpp:module:pkg/api.cpp"
+    assert result.module.docstring == "Module summary."
+    assert tuple(import_row.name for import_row in result.imports) == (
+        "vector",
+        "pkg/api.hpp",
+    )
+    assert tuple(import_row.kind for import_row in result.imports) == (
+        "include_system",
+        "include_local",
+    )
+    assert [
+        (declaration.kind, declaration.name, declaration.lineno)
+        for declaration in result.declarations
+    ] == [
+        ("namespace", "outer::inner", 6),
+        ("type_alias", "outer::inner::Value", 16),
+        ("enum", "outer::inner::Mode", 19),
+    ]
+    assert result.declarations[0].docstring == "Namespace summary."
+    assert result.declarations[1].docstring == "Type alias."
+    assert result.declarations[2].docstring == "Available modes."
+    assert result.declarations[2].enum_members == (
+        EnumMemberArtifact(
+            stable_id="cpp:enum_member:pkg/api.cpp:outer::inner::Mode:1",
+            parent_stable_id="cpp:enum:pkg/api.cpp:outer::inner::Mode",
+            ordinal=1,
+            name="Fast",
+            signature="Fast",
+            lineno=19,
+        ),
+        EnumMemberArtifact(
+            stable_id="cpp:enum_member:pkg/api.cpp:outer::inner::Mode:2",
+            parent_stable_id="cpp:enum:pkg/api.cpp:outer::inner::Mode",
+            ordinal=2,
+            name="Slow",
+            signature="Slow",
+            lineno=19,
+        ),
+    )
+    assert len(result.classes) == 1
+    assert result.classes[0].name == "outer::inner::Widget"
+    assert result.classes[0].stable_id == "cpp:class:pkg/api.cpp:outer::inner::Widget"
+    assert result.classes[0].docstring == "API class."
+    assert [
+        (method.name, method.parameters, method.docstring)
+        for method in result.classes[0].methods
+    ] == [
+        ("run", ("value",), "Operates on input."),
+    ]
+    assert [
+        (function.name, function.parameters, function.docstring)
+        for function in result.functions
+    ] == [
+        ("outer::inner::helper", ("input",), "Free helper."),
+    ]
+
+
+def test_cpp_analyzer_prefers_method_definitions_over_duplicate_declarations(
+    tmp_path: Path,
+) -> None:
+    """
+    Keep one canonical method artifact when declaration and definition coexist.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts method declarations collapse onto the richer
+        definition artifact.
+    """
+    source = tmp_path / "pkg" / "widget.cpp"
+    source.parent.mkdir()
+    source.write_text(
+        "namespace outer {\n"
+        "class Widget {\n"
+        "public:\n"
+        "    int run(int value) const;\n"
+        "};\n"
+        "\n"
+        "int helper(int value) {\n"
+        "    return value;\n"
+        "}\n"
+        "}  // namespace outer\n"
+        "\n"
+        "int outer::Widget::run(int value) const {\n"
+        "    return helper(value);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = CppAnalyzer().analyze_file(source, tmp_path)
+
+    assert len(result.classes) == 1
+    assert [
+        (method.name, method.parameters) for method in result.classes[0].methods
+    ] == [
+        ("run", ("value",)),
+    ]
+    method = result.classes[0].methods[0]
+    assert method.end_lineno == 14
+    assert method.returns_value == 1
+    assert [(call.target, call.kind, call.lineno) for call in method.calls] == [
+        ("helper", "name", 13),
+    ]
 
 
 def test_c_analyzer_extracts_top_level_declarations(tmp_path: Path) -> None:

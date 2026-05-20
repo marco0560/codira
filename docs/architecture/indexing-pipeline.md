@@ -45,6 +45,7 @@ The current analyzer registry is package-driven:
 - `PythonAnalyzer` for `*.py` from `codira-analyzer-python`
 - `JSONAnalyzer` for supported JSON families from `codira-analyzer-json`
 - `CAnalyzer` for `*.c` and `*.h` from `codira-analyzer-c`
+- `CppAnalyzer` for standard C++ source and header suffixes from `codira-analyzer-cpp`
 - `BashAnalyzer` for Bash scripts from `codira-analyzer-bash`
 
 The important Phase 18 boundary is now in place: file discovery follows

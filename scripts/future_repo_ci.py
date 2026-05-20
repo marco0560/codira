@@ -120,6 +120,12 @@ def future_repo_ci_specs() -> tuple[FutureRepoCISpec, ...]:
             validate=package_validate,
         ),
         FutureRepoCISpec(
+            repository="codira-analyzer-cpp",
+            purpose="first-party C++ analyzer plugin",
+            install=(("uv", "sync", "--frozen", "--extra", "test"),),
+            validate=package_validate,
+        ),
+        FutureRepoCISpec(
             repository="codira-analyzer-bash",
             purpose="first-party Bash analyzer plugin",
             install=(("uv", "sync", "--frozen", "--extra", "test"),),

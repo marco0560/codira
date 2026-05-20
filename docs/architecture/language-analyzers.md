@@ -9,6 +9,7 @@ packages:
   `package.json`, and `.releaserc.json`
 - C for the first non-Python proof required by `ADR-004`, installed through
   the extracted `codira-analyzer-c` first-party package
+- C++ through the extracted `codira-analyzer-cpp` first-party package
 - Bash through the extracted `codira-analyzer-bash` first-party package
 
 ## Current Analyzer Responsibilities
@@ -28,9 +29,11 @@ compatibility modules:
 - `src/codira/analyzers/python.py`
 - `src/codira/analyzers/json.py`
 - `src/codira/analyzers/c.py`
+- `src/codira/analyzers/cpp.py`
 - `packages/codira-analyzer-python/`
 - `packages/codira-analyzer-json/`
 - `packages/codira-analyzer-c/`
+- `packages/codira-analyzer-cpp/`
 - `packages/codira-analyzer-bash/`
 - `src/codira/indexer.py` for analyzer routing only
 
@@ -164,6 +167,7 @@ analyzer-specific dependencies.
 - the Python analyzer loads when `codira-analyzer-python` is installed
 - the JSON analyzer loads when `codira-analyzer-json` is installed
 - the C analyzer loads when `codira-analyzer-c` is installed
+- the C++ analyzer loads when `codira-analyzer-cpp` is installed
 - the Bash analyzer loads when `codira-analyzer-bash` is installed
 - the supported package form for C-family indexing is `codira-analyzer-c`
 - third-party analyzers must declare their own discovery globs so indexing can

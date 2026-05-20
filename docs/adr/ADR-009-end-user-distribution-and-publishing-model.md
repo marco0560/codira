@@ -17,6 +17,7 @@ The current repository contains four relevant distributions:
 
 * `codira`
 * `codira-analyzer-c`
+* `codira-analyzer-cpp`
 * `codira-analyzer-bash`
 * `codira-bundle-official`
 
@@ -59,6 +60,7 @@ Its responsibility is to depend on:
 
 * `codira`
 * `codira-analyzer-c`
+* `codira-analyzer-cpp`
 * `codira-analyzer-bash`
 * the semantic embedding stack required by the curated official bundle
 
@@ -83,6 +85,7 @@ as PyPI:
 
 * `codira`
 * `codira-analyzer-c`
+* `codira-analyzer-cpp`
 * `codira-analyzer-bash`
 * `codira-bundle-official`
 
@@ -103,6 +106,7 @@ While the analyzers and bundle remain in the monorepo:
 
 * `codira` continues to use SCM-managed versioning
 * `codira-analyzer-c` keeps a manually managed version
+* `codira-analyzer-cpp` keeps a manually managed version
 * `codira-analyzer-bash` keeps a manually managed version
 * `codira-bundle-official` keeps a manually managed version
 
