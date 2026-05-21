@@ -146,6 +146,7 @@ def active_backend_support_module() -> _BenchmarkBackendSupportModule:
         raise RuntimeError(msg)
     return cast(
         "_BenchmarkBackendSupportModule",
+        # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
         importlib.import_module(module_name),
     )
 

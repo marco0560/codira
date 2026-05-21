@@ -53,6 +53,7 @@ PREFERRED_ANALYZER_ORDER: dict[str, int] = {
     "bash": 20,
 }
 REQUIRED_BACKEND_METHODS: tuple[str, ...] = (
+    "begin_index_session",
     "open_connection",
     "initialize",
     "load_existing_file_hashes",

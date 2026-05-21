@@ -33,6 +33,7 @@ import pytest
 from codira_backend_sqlite import SQLiteIndexBackend
 from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
 
+import codira.indexer as indexer_module
 import codira.registry as registry_module
 import codira.storage as storage_module
 from codira.analyzers import PythonAnalyzer
@@ -43,7 +44,12 @@ from codira.cli import (
     _write_index_metadata,
     main,
 )
-from codira.contracts import BackendPersistAnalysisRequest
+from codira.contracts import (
+    BackendPersistAnalysisRequest,
+    BackendRuntimeInventoryRequest,
+    IndexWriteSession,
+    StoredEmbeddingRow,
+)
 from codira.indexer import audit_repo_coverage, index_repo
 from codira.models import (
     AnalysisResult,
@@ -173,8 +179,302 @@ class _SQLiteBackendVNext(SQLiteIndexBackend):
     version = SCHEMA_VERSION + 1
 
 
+class _TrackingSQLiteBackend(SQLiteIndexBackend):
+    """SQLite backend wrapper that records write-session starts."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.begin_index_session_calls = 0
+
+    def begin_index_session(self, root: Path) -> IndexWriteSession:
+        """
+        Record one write-session start before delegating to SQLite.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state may be mutated.
+
+        Returns
+        -------
+        object
+            Concrete SQLite write session created by the parent backend.
+        """
+        self.begin_index_session_calls += 1
+        return super().begin_index_session(root)
+
+
 class _RecordingBackendConnection:
     """Opaque fake backend connection used for CLI integration tests."""
+
+
+class _RecordingIndexWriteSession:
+    """
+    Recording write session used by CLI integration tests.
+
+    Parameters
+    ----------
+    backend : _RecordingBackend
+        Backend that owns the session.
+    root : pathlib.Path
+        Repository root associated with the session.
+    """
+
+    def __init__(self, backend: _RecordingBackend, root: Path) -> None:
+        self._backend = backend
+        self._root = root
+        self._conn = backend.open_connection(root)
+
+    def purge_skipped_docstring_issues(self) -> None:
+        """
+        Perform no-op cleanup for skipped docstring diagnostics.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The recording session performs no additional work beyond delegation.
+        """
+        self._backend.purge_skipped_docstring_issues(self._root, conn=self._conn)
+
+    def prune_orphaned_embeddings(self) -> None:
+        """
+        Perform no-op cleanup for orphaned embeddings.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The recording session performs no additional work beyond delegation.
+        """
+        self._backend.prune_orphaned_embeddings(self._root, conn=self._conn)
+
+    def load_existing_file_hashes(self) -> dict[str, str]:
+        """
+        Return the configured indexed file hashes.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, str]
+            Indexed file hashes keyed by absolute path.
+        """
+        return self._backend.load_existing_file_hashes(self._root, conn=self._conn)
+
+    def load_existing_file_ownership(self) -> dict[str, tuple[str, str]]:
+        """
+        Return the configured analyzer ownership mapping.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, tuple[str, str]]
+            Analyzer name and version keyed by absolute path.
+        """
+        return self._backend.load_existing_file_ownership(self._root, conn=self._conn)
+
+    def current_embedding_state_matches(self, embedding_backend: object) -> bool:
+        """
+        Report whether the recording embedding state matches the active backend.
+
+        Parameters
+        ----------
+        embedding_backend : object
+            Opaque embedding-backend descriptor supplied by the caller.
+
+        Returns
+        -------
+        bool
+            ``True`` when the recording backend reports a matching state.
+        """
+        return self._backend.current_embedding_state_matches(
+            self._root,
+            embedding_backend=embedding_backend,
+            conn=self._conn,
+        )
+
+    def load_previous_embeddings_by_path(
+        self,
+        *,
+        paths: list[str],
+        embedding_backend: object,
+    ) -> dict[str, dict[str, StoredEmbeddingRow]]:
+        """
+        Return reusable embeddings for the requested replacement paths.
+
+        Parameters
+        ----------
+        paths : list[str]
+            Absolute file paths selected for replacement.
+        embedding_backend : object
+            Opaque embedding-backend descriptor supplied by the caller.
+
+        Returns
+        -------
+        dict[str, dict[str, StoredEmbeddingRow]]
+            Reusable embeddings grouped by absolute path.
+        """
+        return self._backend.load_previous_embeddings_by_path(
+            self._root,
+            paths=paths,
+            embedding_backend=embedding_backend,
+            conn=self._conn,
+        )
+
+    def count_reusable_embeddings(self, *, paths: list[str]) -> int:
+        """
+        Count embeddings preserved for unchanged files.
+
+        Parameters
+        ----------
+        paths : list[str]
+            Absolute file paths reused without reparsing.
+
+        Returns
+        -------
+        int
+            Number of reusable embedding rows.
+        """
+        return self._backend.count_reusable_embeddings(
+            self._root,
+            paths=paths,
+            conn=self._conn,
+        )
+
+    def prepare(
+        self,
+        *,
+        full: bool,
+        indexed_paths: list[str],
+        deleted_paths: list[str],
+    ) -> None:
+        """
+        Perform no-op storage preparation for recording tests.
+
+        Parameters
+        ----------
+        full : bool
+            Whether the current run is a full rebuild.
+        indexed_paths : list[str]
+            Absolute file paths selected for reindexing.
+        deleted_paths : list[str]
+            Absolute file paths removed from the repository.
+
+        Returns
+        -------
+        None
+            The recording session does not mutate storage during preparation.
+        """
+        del full, indexed_paths, deleted_paths
+
+    def persist_analysis(
+        self,
+        request: BackendPersistAnalysisRequest,
+    ) -> tuple[int, int]:
+        """
+        Record no analyzed-file persistence work.
+
+        Parameters
+        ----------
+        request : BackendPersistAnalysisRequest
+            Persistence request supplied by the caller.
+
+        Returns
+        -------
+        tuple[int, int]
+            ``(0, 0)`` for the recording backend.
+        """
+        return self._backend.persist_analysis(request)
+
+    def rebuild_derived_indexes(self) -> None:
+        """
+        Perform no-op derived-index rebuilding.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The recording session performs no additional work beyond delegation.
+        """
+        self._backend.rebuild_derived_indexes(self._root, conn=self._conn)
+
+    def persist_runtime_inventory(
+        self,
+        request: BackendRuntimeInventoryRequest,
+    ) -> None:
+        """
+        Record runtime inventory for the test backend.
+
+        Parameters
+        ----------
+        request : BackendRuntimeInventoryRequest
+            Runtime inventory request supplied by the caller.
+
+        Returns
+        -------
+        None
+            The recording session forwards the inventory request to the backend.
+        """
+        self._backend.persist_runtime_inventory(request)
+
+    def commit(self) -> None:
+        """
+        Perform no-op commit handling for recording tests.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The recording session delegates to the backend commit hook.
+        """
+        self._backend.commit(self._root, conn=self._conn)
+
+    def abort(self) -> None:
+        """
+        Perform no-op abort handling for recording tests.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The recording session does not perform rollback work.
+        """
+
+    def close(self) -> None:
+        """
+        Close the recorded backend connection.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The recorded connection is closed once per session.
+        """
+        self._backend.close_connection(self._conn)
 
 
 class _RecordingBackend:
@@ -209,6 +509,22 @@ class _RecordingBackend:
         self.initialize_calls: list[Path] = []
         self.opened: list[Path] = []
         self.closed: list[_RecordingBackendConnection] = []
+
+    def begin_index_session(self, root: Path) -> _RecordingIndexWriteSession:
+        """
+        Return one recording write session.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state may be mutated.
+
+        Returns
+        -------
+        _RecordingIndexWriteSession
+            Recording write session for test assertions.
+        """
+        return _RecordingIndexWriteSession(self, root)
 
     def initialize(self, root: Path) -> None:
         """
@@ -331,6 +647,244 @@ class _RecordingBackend:
         """
         del root, conn
         return dict(self.file_hashes)
+
+    def load_existing_file_ownership(
+        self,
+        root: Path,
+        *,
+        conn: object | None = None,
+    ) -> dict[str, tuple[str, str]]:
+        """
+        Return no persisted analyzer ownership.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the lookup.
+        conn : object | None, optional
+            Opaque backend connection handle reused by the caller.
+
+        Returns
+        -------
+        dict[str, tuple[str, str]]
+            Empty analyzer-ownership mapping for the stub backend.
+        """
+        del root, conn
+        return {}
+
+    def current_embedding_state_matches(
+        self,
+        root: Path,
+        *,
+        embedding_backend: object,
+        conn: object | None = None,
+    ) -> bool:
+        """
+        Report a matching embedding backend state.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the lookup.
+        embedding_backend : object
+            Opaque embedding-backend descriptor supplied by the caller.
+        conn : object | None, optional
+            Opaque backend connection handle reused by the caller.
+
+        Returns
+        -------
+        bool
+            Always ``True`` for the recording stub.
+        """
+        del root, embedding_backend, conn
+        return True
+
+    def load_previous_embeddings_by_path(
+        self,
+        root: Path,
+        *,
+        paths: list[str],
+        embedding_backend: object,
+        conn: object | None = None,
+    ) -> dict[str, dict[str, StoredEmbeddingRow]]:
+        """
+        Return no reusable embeddings for the supplied paths.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the lookup.
+        paths : list[str]
+            Indexed file paths selected for replacement.
+        embedding_backend : object
+            Opaque embedding-backend descriptor supplied by the caller.
+        conn : object | None, optional
+            Opaque backend connection handle reused by the caller.
+
+        Returns
+        -------
+        dict[str, dict[str, StoredEmbeddingRow]]
+            Empty reusable-embedding mapping for the stub backend.
+        """
+        del root, paths, embedding_backend, conn
+        return {}
+
+    def count_reusable_embeddings(
+        self,
+        root: Path,
+        *,
+        paths: list[str],
+        conn: object | None = None,
+    ) -> int:
+        """
+        Return zero reusable embeddings.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the lookup.
+        paths : list[str]
+            Indexed file paths considered reusable.
+        conn : object | None, optional
+            Opaque backend connection handle reused by the caller.
+
+        Returns
+        -------
+        int
+            Always ``0`` for the recording stub.
+        """
+        del root, paths, conn
+        return 0
+
+    def purge_skipped_docstring_issues(
+        self,
+        root: Path,
+        *,
+        conn: object | None = None,
+    ) -> None:
+        """
+        Perform no-op skipped-docstring cleanup.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the cleanup.
+        conn : object | None, optional
+            Opaque backend connection handle reused by the caller.
+
+        Returns
+        -------
+        None
+            The recording backend performs no mutation.
+        """
+        del root, conn
+
+    def prune_orphaned_embeddings(
+        self,
+        root: Path,
+        *,
+        conn: object | None = None,
+    ) -> None:
+        """
+        Perform no-op orphaned-embedding cleanup.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the cleanup.
+        conn : object | None, optional
+            Opaque backend connection handle reused by the caller.
+
+        Returns
+        -------
+        None
+            The recording backend performs no mutation.
+        """
+        del root, conn
+
+    def persist_analysis(
+        self,
+        request: BackendPersistAnalysisRequest,
+    ) -> tuple[int, int]:
+        """
+        Record no analyzed-file persistence work.
+
+        Parameters
+        ----------
+        request : BackendPersistAnalysisRequest
+            Persistence request supplied by the caller.
+
+        Returns
+        -------
+        tuple[int, int]
+            Always ``(0, 0)`` for the recording stub.
+        """
+        del request
+        return (0, 0)
+
+    def rebuild_derived_indexes(
+        self,
+        root: Path,
+        *,
+        conn: object | None = None,
+    ) -> None:
+        """
+        Perform no-op derived-index rebuilding.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the rebuild.
+        conn : object | None, optional
+            Opaque backend connection handle reused by the caller.
+
+        Returns
+        -------
+        None
+            The recording backend performs no mutation.
+        """
+        del root, conn
+
+    def persist_runtime_inventory(
+        self,
+        request: BackendRuntimeInventoryRequest,
+    ) -> None:
+        """
+        Record runtime inventory without mutating storage.
+
+        Parameters
+        ----------
+        request : BackendRuntimeInventoryRequest
+            Runtime inventory request supplied by the caller.
+
+        Returns
+        -------
+        None
+            The in-memory inventory tuple is updated in place.
+        """
+        self.runtime_inventory = (
+            str(request.backend_name),
+            str(request.backend_version),
+            int(request.coverage_complete),
+        )
+
+    def commit(self, root: Path, *, conn: object) -> None:
+        """
+        Perform no-op commit handling.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the commit.
+        conn : object
+            Opaque backend connection handle reused by the caller.
+
+        Returns
+        -------
+        None
+            The recording backend performs no mutation.
+        """
+        del root, conn
 
 
 def test_run_index_initializes_the_active_backend(
@@ -602,6 +1156,50 @@ def test_index_repo_reuses_unchanged_files(tmp_path: Path) -> None:
     assert second.deleted == 0
     assert second.embeddings_recomputed == 0
     assert second.embeddings_reused == first.embeddings_recomputed
+
+
+def test_index_repo_skips_write_session_for_unchanged_repository(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Avoid opening a write session when the repository index is already warm.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch backend selection for the indexer.
+
+    Returns
+    -------
+    None
+        The test asserts unchanged repositories reuse metadata through the
+        read path without entering writer setup.
+    """
+    module = tmp_path / "pkg" / "sample.py"
+    _write_module(
+        module,
+        '"""Module doc."""\n'
+        "\n"
+        "def demo():\n"
+        '    """Return a constant."""\n'
+        "    return 1\n",
+    )
+    backend = _TrackingSQLiteBackend()
+    monkeypatch.setattr(indexer_module, "active_index_backend", lambda: backend)
+
+    first = index_repo(tmp_path)
+    assert first.indexed == 1
+    assert backend.begin_index_session_calls == 1
+
+    backend.begin_index_session_calls = 0
+    second = index_repo(tmp_path)
+
+    assert second.indexed == 0
+    assert second.reused == 1
+    assert backend.begin_index_session_calls == 0
 
 
 def test_index_repo_accepts_pep_263_encoded_python_sources(tmp_path: Path) -> None:

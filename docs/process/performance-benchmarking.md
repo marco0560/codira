@@ -197,6 +197,19 @@ Use a stable run identifier when comparing artifacts:
 python scripts/benchmark_campaign.py benchmarks.json --run-id 20260430-baseline
 ```
 
+For issue `#30`, record paired short-manifest runs for both first-party
+backends before broad campaigns:
+
+```bash
+CODIRA_INDEX_BACKEND=sqlite python scripts/benchmark_campaign.py \
+  benchmarks/short_benchmark.local.json --run-id issue-30-short-sqlite
+CODIRA_INDEX_BACKEND=duckdb python scripts/benchmark_campaign.py \
+  benchmarks/short_benchmark.local.json --run-id issue-30-short-duckdb
+```
+
+Capture the resulting artifact paths in the branch execution ledger before
+running broader manifests.
+
 ## Plugin Requirements
 
 Benchmark metadata depends on each analyzer and backend exposing stable plugin
@@ -217,6 +230,7 @@ The first-party plugin set included in benchmark metadata tests is:
 - `codira-analyzer-c`
 - `codira-analyzer-bash`
 - `codira-backend-sqlite`
+- `codira-backend-duckdb`
 
 New first-party analyzer or backend packages must update the shared benchmark
 plugin provider list and its tests.

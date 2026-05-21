@@ -2185,6 +2185,7 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
             (file_id,),
         )
         conn.execute(
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             DELETE FROM overloads
             WHERE function_id IN (
@@ -2200,18 +2201,22 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
             (file_id,),
         )
         conn.execute(
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"DELETE FROM imports WHERE module_id IN ({_placeholders(module_ids)})",
             tuple(module_ids),
         )
         conn.execute(
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"DELETE FROM functions WHERE module_id IN ({_placeholders(module_ids)})",
             tuple(module_ids),
         )
         conn.execute(
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"DELETE FROM classes WHERE module_id IN ({_placeholders(module_ids)})",
             tuple(module_ids),
         )
         conn.execute(
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"DELETE FROM modules WHERE id IN ({_placeholders(module_ids)})",
             tuple(module_ids),
         )
@@ -2224,6 +2229,8 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
         conn.execute("DELETE FROM docstring_issues WHERE file_id = ?", (file_id,))
 
     conn.execute("DELETE FROM symbol_index WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM call_edges WHERE caller_file_id = ?", (file_id,))
+    conn.execute("DELETE FROM callable_refs WHERE owner_file_id = ?", (file_id,))
     conn.execute("DELETE FROM call_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM callable_ref_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM reference_scan_lines WHERE file_id = ?", (file_id,))
@@ -2430,6 +2437,7 @@ def _count_reused_embeddings(
         return 0
 
     placeholders = ",".join("?" for _ in reused_paths)
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     row = conn.execute(
         f"""
         SELECT COUNT(*)

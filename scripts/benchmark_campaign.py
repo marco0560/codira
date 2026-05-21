@@ -1740,6 +1740,23 @@ def _run_command(command: tuple[str, ...]) -> int:
     return subprocess.run(command, check=False).returncode
 
 
+def _print_repo_step_timestamp(label: str) -> None:
+    """
+    Print the completion timestamp for one benchmark repository step.
+
+    Parameters
+    ----------
+    label : str
+        Repository label associated with the completed campaign step.
+
+    Returns
+    -------
+    None
+        The timestamp is written to stdout for interactive campaign tracking.
+    """
+    print(f"{label}: {utc_run_timestamp()}", flush=True)
+
+
 def main() -> int:
     """
     Run or dry-run one benchmark campaign.
@@ -1803,13 +1820,16 @@ def main() -> int:
         if not isinstance(commands, list):
             msg = "campaign command rows must contain a command list"
             raise TypeError(msg)
+        label = str(row["label"])
         for command in commands:
             if not isinstance(command, list):
                 msg = "campaign command entries must be argument lists"
                 raise TypeError(msg)
             return_code = _run_command(tuple(str(part) for part in command))
             if return_code != 0:
+                _print_repo_step_timestamp(label)
                 return return_code
+        _print_repo_step_timestamp(label)
 
     profile_summaries = {
         str(profile): summarize_profile(profile)

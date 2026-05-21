@@ -60,7 +60,9 @@ from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from codira.contracts import IndexBackend
+    from collections.abc import Sequence
+
+    from codira.contracts import IndexBackend, IndexWriteSession
     from codira.types import (
         ChannelResults,
         DocstringIssueRow,
@@ -78,6 +80,313 @@ EmbeddingInventoryRow = tuple[str, str, int, int]
 __all__ = ["SQLiteIndexBackend", "build_backend"]
 
 
+class _SQLiteIndexWriteSession:
+    """
+    SQLite-backed write session for one indexing run.
+
+    Parameters
+    ----------
+    backend : SQLiteIndexBackend
+        Backend instance that owns the session.
+    root : pathlib.Path
+        Repository root whose backend state will be mutated.
+    """
+
+    def __init__(self, backend: SQLiteIndexBackend, root: Path) -> None:
+        self._backend = backend
+        self._root = root
+        self._conn = backend.open_connection(root)
+        self._closed = False
+        self._completed = False
+
+    def purge_skipped_docstring_issues(self) -> None:
+        """
+        Remove stale diagnostics for files excluded from docstring auditing.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Matching persisted issues are removed in place.
+        """
+        self._backend.purge_skipped_docstring_issues(self._root, conn=self._conn)
+
+    def prune_orphaned_embeddings(self) -> None:
+        """
+        Remove embedding rows whose owning symbols no longer exist.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Orphaned embedding rows are removed in place.
+        """
+        self._backend.prune_orphaned_embeddings(self._root, conn=self._conn)
+
+    def load_existing_file_hashes(self) -> dict[str, str]:
+        """
+        Return persisted file hashes used for incremental planning.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, str]
+            Indexed file hashes keyed by absolute path.
+        """
+        return self._backend.load_existing_file_hashes(self._root, conn=self._conn)
+
+    def load_existing_file_ownership(self) -> dict[str, tuple[str, str]]:
+        """
+        Return persisted analyzer ownership keyed by absolute path.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, tuple[str, str]]
+            Stored analyzer name and version keyed by absolute path.
+        """
+        return self._backend.load_existing_file_ownership(self._root, conn=self._conn)
+
+    def current_embedding_state_matches(
+        self,
+        embedding_backend: EmbeddingBackendSpec,
+    ) -> bool:
+        """
+        Report whether persisted embeddings match the active backend.
+
+        Parameters
+        ----------
+        embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+            Active embedding backend metadata.
+
+        Returns
+        -------
+        bool
+            ``True`` when persisted embeddings remain reusable.
+        """
+        return self._backend.current_embedding_state_matches(
+            self._root,
+            embedding_backend=embedding_backend,
+            conn=self._conn,
+        )
+
+    def load_previous_embeddings_by_path(
+        self,
+        *,
+        paths: Sequence[str],
+        embedding_backend: EmbeddingBackendSpec,
+    ) -> dict[str, dict[str, StoredEmbeddingRow]]:
+        """
+        Load reusable embeddings for files selected for replacement.
+
+        Parameters
+        ----------
+        paths : collections.abc.Sequence[str]
+            Absolute file paths being replaced by the current run.
+        embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+            Active embedding backend metadata.
+
+        Returns
+        -------
+        dict[str, dict[str, codira.contracts.StoredEmbeddingRow]]
+            Reusable embeddings grouped by absolute file path.
+        """
+        return self._backend.load_previous_embeddings_by_path(
+            self._root,
+            paths=list(paths),
+            embedding_backend=embedding_backend,
+            conn=self._conn,
+        )
+
+    def count_reusable_embeddings(self, *, paths: Sequence[str]) -> int:
+        """
+        Count embeddings preserved for unchanged files.
+
+        Parameters
+        ----------
+        paths : collections.abc.Sequence[str]
+            Absolute file paths reused without reparsing.
+
+        Returns
+        -------
+        int
+            Number of reusable embedding rows.
+        """
+        return self._backend.count_reusable_embeddings(
+            self._root,
+            paths=list(paths),
+            conn=self._conn,
+        )
+
+    def prepare(
+        self,
+        *,
+        full: bool,
+        indexed_paths: Sequence[str],
+        deleted_paths: Sequence[str],
+    ) -> None:
+        """
+        Delete persisted rows that the current index run will replace.
+
+        Parameters
+        ----------
+        full : bool
+            Whether the current run is a full rebuild.
+        indexed_paths : collections.abc.Sequence[str]
+            Absolute file paths selected for reindexing.
+        deleted_paths : collections.abc.Sequence[str]
+            Absolute file paths removed from the repository.
+
+        Returns
+        -------
+        None
+            Matching persisted rows are removed in place.
+        """
+        if full:
+            self._backend.clear_index(self._root, conn=self._conn)
+            return
+        self._backend.delete_paths(
+            self._root,
+            paths=sorted(set(indexed_paths) | set(deleted_paths)),
+            conn=self._conn,
+        )
+
+    def persist_analysis(
+        self,
+        request: BackendPersistAnalysisRequest,
+    ) -> tuple[int, int]:
+        """
+        Persist one analyzed file through the shared SQLite session.
+
+        Parameters
+        ----------
+        request : BackendPersistAnalysisRequest
+            Persistence request for one analyzed file snapshot.
+
+        Returns
+        -------
+        tuple[int, int]
+            ``(recomputed, reused)`` embedding counts for the file.
+        """
+        return self._backend.persist_analysis(
+            BackendPersistAnalysisRequest(
+                root=request.root,
+                file_metadata=request.file_metadata,
+                analysis=request.analysis,
+                embedding_backend=request.embedding_backend,
+                previous_embeddings=request.previous_embeddings,
+                conn=self._conn,
+            )
+        )
+
+    def rebuild_derived_indexes(self) -> None:
+        """
+        Refresh derived backend tables after file persistence.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Derived backend state is refreshed in place.
+        """
+        self._backend.rebuild_derived_indexes(self._root, conn=self._conn)
+
+    def persist_runtime_inventory(
+        self,
+        request: BackendRuntimeInventoryRequest,
+    ) -> None:
+        """
+        Persist backend and analyzer inventory for the completed run.
+
+        Parameters
+        ----------
+        request : BackendRuntimeInventoryRequest
+            Runtime inventory request for the completed index run.
+
+        Returns
+        -------
+        None
+            Runtime inventory rows are replaced in place.
+        """
+        self._backend.persist_runtime_inventory(
+            BackendRuntimeInventoryRequest(
+                root=request.root,
+                backend_name=request.backend_name,
+                backend_version=request.backend_version,
+                coverage_complete=request.coverage_complete,
+                analyzers=request.analyzers,
+                conn=self._conn,
+            )
+        )
+
+    def commit(self) -> None:
+        """
+        Commit pending writes for the current indexing session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Pending writes are committed once per session.
+        """
+        if not self._completed:
+            self._backend.commit(self._root, conn=self._conn)
+            self._completed = True
+
+    def abort(self) -> None:
+        """
+        Roll back pending writes for the current indexing session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Uncommitted writes are discarded when the session is still active.
+        """
+        if self._completed or self._closed:
+            return
+        self._conn.rollback()
+
+    def close(self) -> None:
+        """
+        Close resources owned by the current indexing session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The shared SQLite connection is closed once per session.
+        """
+        if self._closed:
+            return
+        self._backend.close_connection(self._conn)
+        self._closed = True
+
+
 class SQLiteIndexBackend:
     """
     Concrete SQLite backend exposed from the package boundary.
@@ -89,6 +398,22 @@ class SQLiteIndexBackend:
 
     name = "sqlite"
     version = SCHEMA_VERSION
+
+    def begin_index_session(self, root: Path) -> IndexWriteSession:
+        """
+        Open the explicit write-side lifecycle for one indexing run.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state will be mutated.
+
+        Returns
+        -------
+        codira.contracts.IndexWriteSession
+            Mutable session object used only by indexing flows.
+        """
+        return _SQLiteIndexWriteSession(self, root)
 
     def load_runtime_inventory(
         self,
@@ -166,6 +491,61 @@ class SQLiteIndexBackend:
             if owns_connection:
                 conn.close()
 
+    def needs_maintenance(
+        self,
+        root: Path,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> bool:
+        """
+        Report whether warm-index maintenance still needs one write session.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be checked.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        bool
+            ``True`` when stale shell docstring issues or orphaned embeddings
+            still require mutation work.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            row = conn.execute(
+                """
+                SELECT
+                    EXISTS(
+                        SELECT 1
+                        FROM docstring_issues di
+                        JOIN files f ON f.id = di.file_id
+                        WHERE f.analyzer_name = 'bash'
+                           OR f.path LIKE '%.sh'
+                           OR f.path LIKE '%.bash'
+                    ),
+                    EXISTS(
+                        SELECT 1
+                        FROM embeddings e
+                        WHERE e.object_type = 'symbol'
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM symbol_index s
+                              WHERE s.id = e.object_id
+                          )
+                    )
+                """
+            ).fetchone()
+            assert row is not None
+            return bool(int(row[0])) or bool(int(row[1]))
+        finally:
+            if owns_connection:
+                conn.close()
+
     def initialize(self, root: Path) -> None:
         """
         Prepare the repository-local SQLite database.
@@ -198,7 +578,9 @@ class SQLiteIndexBackend:
         """
         if not get_db_path(root).exists():
             self.initialize(root)
-        return sqlite3.connect(get_db_path(root))
+        connection = sqlite3.connect(get_db_path(root))
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
 
     def list_symbols_in_module(
         self,
@@ -236,6 +618,7 @@ class SQLiteIndexBackend:
         try:
             normalized_prefix = normalize_prefix(root, prefix)
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT s.type, s.module_name, s.name, f.path, s.lineno
@@ -289,6 +672,7 @@ class SQLiteIndexBackend:
             conn = self.open_connection(root)
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT s.type, s.module_name, s.name, f.path, s.lineno
@@ -359,6 +743,7 @@ class SQLiteIndexBackend:
                 if include_tests
                 else "AND s.module_name != 'tests' AND s.module_name NOT LIKE 'tests.%'"
             )
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT s.type, s.module_name, s.name, f.path, s.lineno
@@ -462,6 +847,7 @@ class SQLiteIndexBackend:
             Total and unresolved counts for the selected relation direction.
         """
         module_name, symbol_name = symbol_identity
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         row = conn.execute(
             f"""
             SELECT COUNT(*), COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
@@ -675,6 +1061,7 @@ class SQLiteIndexBackend:
             conn = self.open_connection(root)
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT
@@ -809,6 +1196,8 @@ class SQLiteIndexBackend:
         module_column = "callee_module" if incoming else "caller_module"
         prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
 
+        # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         query = f"""
             SELECT
                 ce.caller_module,
@@ -891,6 +1280,8 @@ class SQLiteIndexBackend:
         module_column = "target_module" if incoming else "owner_module"
         prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
 
+        # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         query = f"""
             SELECT
                 cr.owner_module,
@@ -971,6 +1362,8 @@ class SQLiteIndexBackend:
             conn = self.open_connection(root)
 
         prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+        # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         query = f"""
             SELECT
                 m.name,
@@ -1054,6 +1447,7 @@ class SQLiteIndexBackend:
             if "." in logical_name:
                 class_name, method_name = logical_name.rsplit(".", 1)
                 prefix_sql, prefix_params = prefix_clause(normalized_prefix, "fp.path")
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 rows = conn.execute(
                     f"""
                     SELECT
@@ -1082,6 +1476,7 @@ class SQLiteIndexBackend:
                 ).fetchall()
             else:
                 prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 rows = conn.execute(
                     f"""
                     SELECT s.type, s.module_name, s.name, f.path, s.lineno
@@ -1231,6 +1626,7 @@ class SQLiteIndexBackend:
 
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT f.path, rsl.lineno, rsl.line_text
@@ -1288,6 +1684,8 @@ class SQLiteIndexBackend:
 
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT

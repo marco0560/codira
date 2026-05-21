@@ -32,6 +32,7 @@ from codira.contracts import (
 )
 from .duckdb_support import (
     _DuckDBPersistenceConnection,
+    _delete_indexed_file_data,
     _store_analysis,
 )
 from .repo_storage import get_codira_dir, get_metadata_path
@@ -40,16 +41,17 @@ from .duckdb_query_backend import (
     DuckDBQueryBackend,
 )
 from codira.schema import DDL, SCHEMA_VERSION
-from codira.semantic.embeddings import get_embedding_backend
+from codira.semantic.embeddings import EmbeddingBackendSpec, get_embedding_backend
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-    from codira.contracts import IndexBackend
+    from codira.contracts import IndexBackend, IndexWriteSession
 
 PACKAGE_VERSION = "1.5.3"
 _INSERT_TABLE_PATTERN = re.compile(r"^\s*INSERT\s+INTO\s+([a-z_]+)", re.IGNORECASE)
+_SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _SEQUENCED_TABLES: tuple[str, ...] = (
     "files",
     "modules",
@@ -130,6 +132,360 @@ _NULLABLE_EDGE_TABLE_REWRITES: dict[
         ),
     ),
 }
+
+
+class _DuckDBIndexWriteSession:
+    """
+    DuckDB-backed write session for one indexing run.
+
+    Parameters
+    ----------
+    backend : DuckDBIndexBackend
+        Backend instance that owns the session.
+    root : pathlib.Path
+        Repository root whose backend state will be mutated.
+    """
+
+    def __init__(self, backend: DuckDBIndexBackend, root: Path) -> None:
+        self._backend = backend
+        self._root = root
+        if not _duckdb_db_path(root).exists():
+            backend.initialize(root)
+        self._conn = backend.open_connection(root)
+        _repair_nullable_edge_tables(cast("DuckDBConnection", self._conn)._raw)
+        self._conn.execute("BEGIN TRANSACTION")
+        self._transaction_open = True
+        self._closed = False
+        self._completed = False
+
+    def purge_skipped_docstring_issues(self) -> None:
+        """
+        Remove stale diagnostics for files excluded from docstring auditing.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Matching persisted issues are removed in place.
+        """
+        self._backend.purge_skipped_docstring_issues(self._root, conn=self._conn)
+
+    def prune_orphaned_embeddings(self) -> None:
+        """
+        Remove embedding rows whose owning symbols no longer exist.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Orphaned embedding rows are removed in place.
+        """
+        self._backend.prune_orphaned_embeddings(self._root, conn=self._conn)
+
+    def load_existing_file_hashes(self) -> dict[str, str]:
+        """
+        Return persisted file hashes used for incremental planning.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, str]
+            Indexed file hashes keyed by absolute path.
+        """
+        return self._backend.load_existing_file_hashes(self._root, conn=self._conn)
+
+    def load_existing_file_ownership(self) -> dict[str, tuple[str, str]]:
+        """
+        Return persisted analyzer ownership keyed by absolute path.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, tuple[str, str]]
+            Stored analyzer name and version keyed by absolute path.
+        """
+        return self._backend.load_existing_file_ownership(self._root, conn=self._conn)
+
+    def current_embedding_state_matches(
+        self,
+        embedding_backend: EmbeddingBackendSpec,
+    ) -> bool:
+        """
+        Report whether persisted embeddings match the active backend.
+
+        Parameters
+        ----------
+        embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+            Active embedding backend metadata.
+
+        Returns
+        -------
+        bool
+            ``True`` when persisted embeddings remain reusable.
+        """
+        return self._backend.current_embedding_state_matches(
+            self._root,
+            embedding_backend=embedding_backend,
+            conn=self._conn,
+        )
+
+    def load_previous_embeddings_by_path(
+        self,
+        *,
+        paths: Sequence[str],
+        embedding_backend: EmbeddingBackendSpec,
+    ) -> dict[str, dict[str, StoredEmbeddingRow]]:
+        """
+        Load reusable embeddings for files selected for replacement.
+
+        Parameters
+        ----------
+        paths : collections.abc.Sequence[str]
+            Absolute file paths being replaced by the current run.
+        embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+            Active embedding backend metadata.
+
+        Returns
+        -------
+        dict[str, dict[str, codira.contracts.StoredEmbeddingRow]]
+            Reusable embeddings grouped by absolute file path.
+        """
+        return self._backend.load_previous_embeddings_by_path(
+            self._root,
+            paths=list(paths),
+            embedding_backend=embedding_backend,
+            conn=self._conn,
+        )
+
+    def count_reusable_embeddings(self, *, paths: Sequence[str]) -> int:
+        """
+        Count embeddings preserved for unchanged files.
+
+        Parameters
+        ----------
+        paths : collections.abc.Sequence[str]
+            Absolute file paths reused without reparsing.
+
+        Returns
+        -------
+        int
+            Number of reusable embedding rows.
+        """
+        return self._backend.count_reusable_embeddings(
+            self._root,
+            paths=list(paths),
+            conn=self._conn,
+        )
+
+    def prepare(
+        self,
+        *,
+        full: bool,
+        indexed_paths: Sequence[str],
+        deleted_paths: Sequence[str],
+    ) -> None:
+        """
+        Delete persisted rows that the current index run will replace.
+
+        Parameters
+        ----------
+        full : bool
+            Whether the current run is a full rebuild.
+        indexed_paths : collections.abc.Sequence[str]
+            Absolute file paths selected for reindexing.
+        deleted_paths : collections.abc.Sequence[str]
+            Absolute file paths removed from the repository.
+
+        Returns
+        -------
+        None
+            Matching persisted rows are removed in place.
+        """
+        if full:
+            # DuckDB can reject the full-table delete sequence behind
+            # ``clear_index`` when it runs inside one explicit transaction on a
+            # populated database. Clear first in autocommit mode, then reopen
+            # the run-scoped transaction for the remaining persistence work.
+            if self._transaction_open:
+                self._conn.execute("ROLLBACK")
+                self._transaction_open = False
+            self._backend.clear_index(self._root, conn=self._conn)
+            self._conn.execute("BEGIN TRANSACTION")
+            self._transaction_open = True
+            return
+        self._backend.delete_paths(
+            self._root,
+            paths=sorted(set(indexed_paths) | set(deleted_paths)),
+            conn=self._conn,
+        )
+
+    def persist_analysis(
+        self,
+        request: BackendPersistAnalysisRequest,
+    ) -> tuple[int, int]:
+        """
+        Persist one analyzed file through the shared DuckDB session.
+
+        Parameters
+        ----------
+        request : BackendPersistAnalysisRequest
+            Persistence request for one analyzed file snapshot.
+
+        Returns
+        -------
+        tuple[int, int]
+            ``(recomputed, reused)`` embedding counts for the file.
+
+        Raises
+        ------
+        BackendError
+            If DuckDB rejects persistence for the analyzed file.
+        OSError
+            If file-backed persistence fails while storing analyzed artifacts.
+        RuntimeError
+            If embedding persistence cannot complete for the analyzed file.
+        ValueError
+            If validated persistence inputs are semantically inconsistent.
+        """
+        active_backend = (
+            get_embedding_backend()
+            if request.embedding_backend is None
+            else request.embedding_backend
+        )
+        duckdb_error = _duckdb_module().Error
+        try:
+            return _store_analysis(
+                cast("_DuckDBPersistenceConnection", self._conn),
+                request.file_metadata,
+                request.analysis,
+                backend=active_backend,
+                previous_embeddings=cast(
+                    "dict[str, StoredEmbeddingRow] | None",
+                    request.previous_embeddings,
+                ),
+            )
+        except duckdb_error as exc:
+            _delete_indexed_file_data(
+                cast("_DuckDBPersistenceConnection", self._conn),
+                str(request.file_metadata.path),
+            )
+            msg = str(exc)
+            raise BackendError(msg) from exc
+        except (OSError, RuntimeError, ValueError):
+            _delete_indexed_file_data(
+                cast("_DuckDBPersistenceConnection", self._conn),
+                str(request.file_metadata.path),
+            )
+            raise
+
+    def rebuild_derived_indexes(self) -> None:
+        """
+        Refresh derived backend tables after file persistence.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Derived backend state is refreshed in place.
+        """
+        self._backend.rebuild_derived_indexes(self._root, conn=self._conn)
+
+    def persist_runtime_inventory(
+        self,
+        request: BackendRuntimeInventoryRequest,
+    ) -> None:
+        """
+        Persist backend and analyzer inventory for the completed run.
+
+        Parameters
+        ----------
+        request : BackendRuntimeInventoryRequest
+            Runtime inventory request for the completed index run.
+
+        Returns
+        -------
+        None
+            Runtime inventory rows are replaced in place.
+        """
+        self._backend.persist_runtime_inventory(
+            BackendRuntimeInventoryRequest(
+                root=request.root,
+                backend_name=request.backend_name,
+                backend_version=request.backend_version,
+                coverage_complete=request.coverage_complete,
+                analyzers=request.analyzers,
+                conn=self._conn,
+            )
+        )
+
+    def commit(self) -> None:
+        """
+        Commit pending writes for the current indexing session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Pending writes are committed once per session.
+        """
+        if not self._completed and self._transaction_open:
+            self._backend.commit(self._root, conn=self._conn)
+            self._transaction_open = False
+            self._completed = True
+
+    def abort(self) -> None:
+        """
+        Roll back pending writes for the current indexing session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Uncommitted writes are discarded when the session is still active.
+        """
+        if self._completed or self._closed or not self._transaction_open:
+            return
+        self._conn.execute("ROLLBACK")
+        self._transaction_open = False
+
+    def close(self) -> None:
+        """
+        Close resources owned by the current indexing session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The shared DuckDB connection is closed once per session.
+        """
+        if self._closed:
+            return
+        self._backend.close_connection(self._conn)
+        self._closed = True
 
 
 class _DuckDBRawConnection(Protocol):
@@ -496,6 +852,34 @@ def _duckdb_module() -> _DuckDBModule:
     return cast("_DuckDBModule", module)
 
 
+def _validated_sql_identifier(identifier: str, *, kind: str) -> str:
+    """
+    Validate one internal DuckDB identifier before SQL interpolation.
+
+    Parameters
+    ----------
+    identifier : str
+        Internal identifier name that will be interpolated into SQL text.
+    kind : str
+        Human-readable identifier class used in error messages.
+
+    Returns
+    -------
+    str
+        The validated identifier.
+
+    Raises
+    ------
+    ValueError
+        Raised when ``identifier`` contains characters outside the internal
+        identifier allowlist.
+    """
+    if not _SAFE_SQL_IDENTIFIER_PATTERN.fullmatch(identifier):
+        msg = f"Unsafe DuckDB {kind} identifier: {identifier!r}"
+        raise ValueError(msg)
+    return identifier
+
+
 def _duckdb_db_path(root: Path) -> Path:
     """
     Return the DuckDB database path for one repository.
@@ -585,7 +969,12 @@ def _table_info_notnull_by_name(
     dict[str, bool]
         Mapping of column names to their ``NOT NULL`` flags.
     """
-    raw.execute(f"PRAGMA table_info('{table_name}')")
+    safe_table_name = _validated_sql_identifier(table_name, kind="table")
+    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+    raw.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+        f"PRAGMA table_info('{safe_table_name}')"
+    )
     rows = raw.fetchall()
     notnull_by_name: dict[str, bool] = {}
     for row in rows:
@@ -625,17 +1014,36 @@ def _repair_nullable_edge_table(
     None
         The existing table is replaced in place when repair is needed.
     """
-    legacy_table_name = f"{table_name}_legacy_nullable_fix"
+    safe_table_name = _validated_sql_identifier(table_name, kind="table")
+    legacy_table_name = _validated_sql_identifier(
+        f"{safe_table_name}_legacy_nullable_fix",
+        kind="table",
+    )
     column_list = ", ".join(column_names)
     for index_name in index_names:
-        raw.execute(f"DROP INDEX IF EXISTS {index_name}")
-    raw.execute(f"ALTER TABLE {table_name} RENAME TO {legacy_table_name}")
+        safe_index_name = _validated_sql_identifier(index_name, kind="index")
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        raw.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+            f"DROP INDEX IF EXISTS {safe_index_name}"
+        )
+    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+    raw.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+        f"ALTER TABLE {safe_table_name} RENAME TO {legacy_table_name}"
+    )
     raw.execute(create_statement)
+    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     raw.execute(
-        f"INSERT INTO {table_name} ({column_list}) "
+        f"INSERT INTO {safe_table_name} ({column_list}) "
         f"SELECT {column_list} FROM {legacy_table_name}"
     )
-    raw.execute(f"DROP TABLE {legacy_table_name}")
+    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+    raw.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+        f"DROP TABLE {legacy_table_name}"
+    )
     for statement in _duckdb_schema_ddl():
         if any(index_name in statement for index_name in index_names):
             raw.execute(statement)
@@ -741,7 +1149,12 @@ def _duckdb_lastrowid(raw: _DuckDBRawConnection, query: str) -> int | None:
     sequence_name = _TABLE_ID_SEQUENCE.get(table_name)
     if sequence_name is None:
         return None
-    raw.execute(f"SELECT currval('{sequence_name}')")
+    safe_sequence_name = _validated_sql_identifier(sequence_name, kind="sequence")
+    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+    raw.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+        f"SELECT currval('{safe_sequence_name}')"
+    )
     row = raw.fetchone()
     if row is None:
         return None
@@ -762,6 +1175,22 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
 
     name = "duckdb"
     version = SCHEMA_VERSION
+
+    def begin_index_session(self, root: Path) -> IndexWriteSession:
+        """
+        Open the explicit write-side lifecycle for one indexing run.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state will be mutated.
+
+        Returns
+        -------
+        codira.contracts.IndexWriteSession
+            Mutable session object used only by indexing flows.
+        """
+        return _DuckDBIndexWriteSession(self, root)
 
     def initialize(self, root: Path) -> None:
         """
@@ -806,7 +1235,6 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         if not _duckdb_db_path(root).exists():
             self.initialize(root)
         raw = _duckdb_module().connect(str(_duckdb_db_path(root)))
-        _repair_nullable_edge_tables(raw)
         return cast("_BackendCompatibleConnectionAdapter", DuckDBConnection(raw))
 
     def persist_analysis(

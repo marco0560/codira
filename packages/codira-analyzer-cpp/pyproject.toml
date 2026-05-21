@@ -28,6 +28,9 @@ cpp = "codira_analyzer_cpp:build_analyzer"
 [tool.setuptools]
 package-dir = {"" = "src"}
 
+[tool.setuptools.package-data]
+codira_analyzer_cpp = ["py.typed"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

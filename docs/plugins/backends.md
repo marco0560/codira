@@ -82,3 +82,34 @@ Current implementation note:
 - DuckDB no longer imports the SQLite backend package at runtime
 - DuckDB owns its query and maintenance implementation locally inside the
   backend package
+
+## Read And Write Responsibilities
+
+Backend plugins now have two distinct responsibilities:
+
+- `IndexBackend` for read-heavy operations
+- `IndexWriteSession` for mutation-heavy indexing work
+
+Backends should keep these read-side operations cheap:
+
+- runtime inventory reads
+- analyzer inventory reads
+- file-hash and analyzer-ownership reads
+- embedding-compatibility checks
+- normal query commands such as `ctx`, `sym`, `calls`, `symlist`, and `audit`
+- warm-index maintenance detection
+
+Backends should keep mutation-side work behind `begin_index_session(root)`:
+
+- stale-maintenance cleanup
+- full or incremental storage preparation
+- analyzed-file persistence
+- derived-index rebuilds
+- runtime inventory writes
+- commit, abort, and close
+
+DuckDB-specific guidance:
+
+- ordinary `open_connection()` calls must stay read-oriented
+- schema repair or migration work must not run during normal query opens
+- writer setup belongs in the write session, not in the query path

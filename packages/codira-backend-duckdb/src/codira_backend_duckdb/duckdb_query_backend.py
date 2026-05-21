@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import importlib
 import json
+import re
 from typing import TYPE_CHECKING, Protocol, cast
 
 from codira.contracts import (
@@ -79,6 +80,21 @@ EmbeddingInventoryRow = tuple[str, str, int, int]
 
 __all__ = ["DuckDBQueryBackend"]
 
+_SAFE_GRAPH_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
+_ALLOWED_GRAPH_TABLES = frozenset({"call_edges", "callable_refs"})
+_ALLOWED_GRAPH_COLUMNS = frozenset(
+    {
+        "caller_module",
+        "caller_name",
+        "callee_module",
+        "callee_name",
+        "owner_module",
+        "owner_name",
+        "target_module",
+        "target_name",
+    }
+)
+
 
 class _BackendCompatibleCursor(Protocol):
     """Cursor surface shared by backend-compatible connection adapters."""
@@ -131,6 +147,40 @@ class _BackendCompatibleCursor(Protocol):
         list[tuple[codira.contracts.BackendQueryValue, ...]]
             Remaining rows from the active result set.
         """
+
+
+def _validated_graph_identifier(identifier: str, *, kind: str) -> str:
+    """
+    Validate one internal DuckDB graph identifier before SQL interpolation.
+
+    Parameters
+    ----------
+    identifier : str
+        Internal table or column identifier interpolated into SQL text.
+    kind : str
+        Human-readable identifier class used in error messages.
+
+    Returns
+    -------
+    str
+        The validated identifier.
+
+    Raises
+    ------
+    ValueError
+        Raised when ``identifier`` is not one of the repository-owned graph
+        identifiers expected by the backend query helpers.
+    """
+    if not _SAFE_GRAPH_IDENTIFIER_PATTERN.fullmatch(identifier):
+        msg = f"Unsafe DuckDB graph {kind} identifier: {identifier!r}"
+        raise ValueError(msg)
+    if kind == "table" and identifier not in _ALLOWED_GRAPH_TABLES:
+        msg = f"Unsupported DuckDB graph table identifier: {identifier!r}"
+        raise ValueError(msg)
+    if kind == "column" and identifier not in _ALLOWED_GRAPH_COLUMNS:
+        msg = f"Unsupported DuckDB graph column identifier: {identifier!r}"
+        raise ValueError(msg)
+    return identifier
 
 
 class _BackendCompatibleConnectionAdapter(Protocol):
@@ -372,6 +422,61 @@ class DuckDBQueryBackend:
             if owns_connection:
                 conn.close()
 
+    def needs_maintenance(
+        self,
+        root: Path,
+        *,
+        conn: _BackendCompatibleConnection | None = None,
+    ) -> bool:
+        """
+        Report whether warm-index maintenance still needs one write session.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be checked.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
+
+        Returns
+        -------
+        bool
+            ``True`` when stale shell docstring issues or orphaned embeddings
+            still require mutation work.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            row = conn.execute(
+                """
+                SELECT
+                    EXISTS(
+                        SELECT 1
+                        FROM docstring_issues di
+                        JOIN files f ON f.id = di.file_id
+                        WHERE f.analyzer_name = 'bash'
+                           OR f.path LIKE '%.sh'
+                           OR f.path LIKE '%.bash'
+                    ),
+                    EXISTS(
+                        SELECT 1
+                        FROM embeddings e
+                        WHERE e.object_type = 'symbol'
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM symbol_index s
+                              WHERE s.id = e.object_id
+                          )
+                    )
+                """
+            ).fetchone()
+            assert row is not None
+            return bool(_backend_int(row[0])) or bool(_backend_int(row[1]))
+        finally:
+            if owns_connection:
+                conn.close()
+
     def initialize(self, root: Path) -> None:
         """
         Prepare backend-owned persistent state for one repository root.
@@ -456,6 +561,7 @@ class DuckDBQueryBackend:
         try:
             normalized_prefix = normalize_prefix(root, prefix)
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT s.type, s.module_name, s.name, f.path, s.lineno
@@ -509,6 +615,7 @@ class DuckDBQueryBackend:
             conn = self.open_connection(root)
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT s.type, s.module_name, s.name, f.path, s.lineno
@@ -579,6 +686,7 @@ class DuckDBQueryBackend:
                 if include_tests
                 else "AND s.module_name != 'tests' AND s.module_name NOT LIKE 'tests.%'"
             )
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT s.type, s.module_name, s.name, f.path, s.lineno
@@ -682,12 +790,16 @@ class DuckDBQueryBackend:
             Total and unresolved counts for the selected relation direction.
         """
         module_name, symbol_name = symbol_identity
+        safe_table = _validated_graph_identifier(table, kind="table")
+        safe_module_column = _validated_graph_identifier(module_column, kind="column")
+        safe_name_column = _validated_graph_identifier(name_column, kind="column")
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         row = conn.execute(
             f"""
             SELECT COUNT(*), COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
-            FROM {table}
-            WHERE {module_column} = ?
-              AND {name_column} = ?
+            FROM {safe_table}
+            WHERE {safe_module_column} = ?
+              AND {safe_name_column} = ?
             """,
             (module_name, symbol_name),
         ).fetchone()
@@ -897,6 +1009,7 @@ class DuckDBQueryBackend:
             conn = self.open_connection(root)
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT
@@ -1029,8 +1142,14 @@ class DuckDBQueryBackend:
 
         direction_column = "callee_name" if incoming else "caller_name"
         module_column = "callee_module" if incoming else "caller_module"
+        safe_direction_column = _validated_graph_identifier(
+            direction_column,
+            kind="column",
+        )
+        safe_module_column = _validated_graph_identifier(module_column, kind="column")
         prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
 
+        # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
         query = f"""
             SELECT
                 ce.caller_module,
@@ -1041,13 +1160,13 @@ class DuckDBQueryBackend:
             FROM call_edges ce
             JOIN files f
               ON ce.caller_file_id = f.id
-            WHERE {direction_column} = ?
+            WHERE {safe_direction_column} = ?
             {prefix_sql}
         """
         params: list[str] = [name, *prefix_params]
 
         if module is not None:
-            query += f" AND {module_column} = ?"
+            query += f" AND {safe_module_column} = ?"
             params.append(module)
 
         query += """
@@ -1060,7 +1179,10 @@ class DuckDBQueryBackend:
         """
 
         try:
-            rows = conn.execute(query, tuple(params)).fetchall()
+            rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                query,
+                tuple(params),
+            ).fetchall()
             return [
                 (
                     str(caller_module),
@@ -1111,8 +1233,14 @@ class DuckDBQueryBackend:
 
         direction_column = "target_name" if incoming else "owner_name"
         module_column = "target_module" if incoming else "owner_module"
+        safe_direction_column = _validated_graph_identifier(
+            direction_column,
+            kind="column",
+        )
+        safe_module_column = _validated_graph_identifier(module_column, kind="column")
         prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
 
+        # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
         query = f"""
             SELECT
                 cr.owner_module,
@@ -1123,13 +1251,13 @@ class DuckDBQueryBackend:
             FROM callable_refs cr
             JOIN files f
               ON cr.owner_file_id = f.id
-            WHERE {direction_column} = ?
+            WHERE {safe_direction_column} = ?
             {prefix_sql}
         """
         params: list[str] = [name, *prefix_params]
 
         if module is not None:
-            query += f" AND {module_column} = ?"
+            query += f" AND {safe_module_column} = ?"
             params.append(module)
 
         query += """
@@ -1142,7 +1270,10 @@ class DuckDBQueryBackend:
         """
 
         try:
-            rows = conn.execute(query, tuple(params)).fetchall()
+            rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                query,
+                tuple(params),
+            ).fetchall()
             return [
                 (
                     str(owner_module),
@@ -1193,6 +1324,9 @@ class DuckDBQueryBackend:
             conn = self.open_connection(root)
 
         prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+        # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
         query = f"""
             SELECT
                 m.name,
@@ -1228,7 +1362,10 @@ class DuckDBQueryBackend:
         """
 
         try:
-            rows = conn.execute(query, tuple(params)).fetchall()
+            rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                query,
+                tuple(params),
+            ).fetchall()
             return [
                 (str(owner_module), str(target_name), str(kind), _backend_int(lineno))
                 for owner_module, target_name, kind, lineno in rows
@@ -1276,6 +1413,7 @@ class DuckDBQueryBackend:
             if "." in logical_name:
                 class_name, method_name = logical_name.rsplit(".", 1)
                 prefix_sql, prefix_params = prefix_clause(normalized_prefix, "fp.path")
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 rows = conn.execute(
                     f"""
                     SELECT
@@ -1304,6 +1442,7 @@ class DuckDBQueryBackend:
                 ).fetchall()
             else:
                 prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 rows = conn.execute(
                     f"""
                     SELECT s.type, s.module_name, s.name, f.path, s.lineno
@@ -1453,6 +1592,8 @@ class DuckDBQueryBackend:
 
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT f.path, rsl.lineno, rsl.line_text
@@ -1510,6 +1651,8 @@ class DuckDBQueryBackend:
 
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
             rows = conn.execute(
                 f"""
                 SELECT

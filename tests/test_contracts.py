@@ -182,6 +182,22 @@ class _FakeBackend:
     name = "fake-backend"
     version = "1"
 
+    def begin_index_session(self, root: Path) -> _FakeIndexWriteSession:
+        """
+        Return a no-op write session for protocol validation.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+
+        Returns
+        -------
+        _FakeIndexWriteSession
+            No-op write session.
+        """
+        return _FakeIndexWriteSession(self, root)
+
     def open_connection(self, root: Path) -> sqlite3.Connection:
         """
         Open an in-memory SQLite connection for protocol validation.
@@ -964,6 +980,267 @@ class _FakeBackend:
         """
         del root, embedding_backend, conn
         return True
+
+
+class _FakeIndexWriteSession:
+    """
+    No-op write session used to validate the protocol surface.
+
+    Parameters
+    ----------
+    backend : _FakeBackend
+        Fake backend that owns the session.
+    root : pathlib.Path
+        Repository root.
+    """
+
+    def __init__(self, backend: _FakeBackend, root: Path) -> None:
+        self._backend = backend
+        self._root = root
+
+    def purge_skipped_docstring_issues(self) -> None:
+        """
+        Perform no-op cleanup for skipped docstring diagnostics.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The fake session performs no additional work beyond delegation.
+        """
+        self._backend.purge_skipped_docstring_issues(self._root)
+
+    def prune_orphaned_embeddings(self) -> None:
+        """
+        Perform no-op cleanup for orphaned embeddings.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The fake session performs no additional work beyond delegation.
+        """
+        self._backend.prune_orphaned_embeddings(self._root)
+
+    def load_existing_file_hashes(self) -> dict[str, str]:
+        """
+        Return the configured indexed file hashes.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, str]
+            Indexed file hashes keyed by absolute path.
+        """
+        return self._backend.load_existing_file_hashes(self._root)
+
+    def load_existing_file_ownership(self) -> dict[str, tuple[str, str]]:
+        """
+        Return the configured analyzer ownership mapping.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, tuple[str, str]]
+            Analyzer name and version keyed by absolute path.
+        """
+        return self._backend.load_existing_file_ownership(self._root)
+
+    def current_embedding_state_matches(self, embedding_backend: object) -> bool:
+        """
+        Report whether the fake embedding state matches the active backend.
+
+        Parameters
+        ----------
+        embedding_backend : object
+            Opaque embedding-backend descriptor supplied by the caller.
+
+        Returns
+        -------
+        bool
+            ``True`` when the fake backend reports a matching state.
+        """
+        return self._backend.current_embedding_state_matches(
+            self._root,
+            embedding_backend=embedding_backend,
+        )
+
+    def load_previous_embeddings_by_path(
+        self,
+        *,
+        paths: list[str],
+        embedding_backend: object,
+    ) -> dict[str, dict[str, object]]:
+        """
+        Return reusable embeddings for the requested replacement paths.
+
+        Parameters
+        ----------
+        paths : list[str]
+            Absolute file paths selected for replacement.
+        embedding_backend : object
+            Opaque embedding-backend descriptor supplied by the caller.
+
+        Returns
+        -------
+        dict[str, dict[str, object]]
+            Reusable embeddings grouped by absolute path.
+        """
+        return self._backend.load_previous_embeddings_by_path(
+            self._root,
+            paths=paths,
+            embedding_backend=embedding_backend,
+        )
+
+    def count_reusable_embeddings(self, *, paths: list[str]) -> int:
+        """
+        Count embeddings preserved for unchanged files.
+
+        Parameters
+        ----------
+        paths : list[str]
+            Absolute file paths reused without reparsing.
+
+        Returns
+        -------
+        int
+            Number of reusable embedding rows.
+        """
+        return self._backend.count_reusable_embeddings(self._root, paths=paths)
+
+    def prepare(
+        self,
+        *,
+        full: bool,
+        indexed_paths: list[str],
+        deleted_paths: list[str],
+    ) -> None:
+        """
+        Perform no-op storage preparation for protocol validation.
+
+        Parameters
+        ----------
+        full : bool
+            Whether the current run is a full rebuild.
+        indexed_paths : list[str]
+            Absolute file paths selected for reindexing.
+        deleted_paths : list[str]
+            Absolute file paths removed from the repository.
+
+        Returns
+        -------
+        None
+            The fake session does not mutate storage during preparation.
+        """
+        del full, indexed_paths, deleted_paths
+
+    def persist_analysis(
+        self,
+        request: BackendPersistAnalysisRequest,
+    ) -> tuple[int, int]:
+        """
+        Record no analyzed-file persistence work.
+
+        Parameters
+        ----------
+        request : BackendPersistAnalysisRequest
+            Persistence request supplied by the caller.
+
+        Returns
+        -------
+        tuple[int, int]
+            ``(0, 0)`` for the fake protocol-validation backend.
+        """
+        return self._backend.persist_analysis(request)
+
+    def rebuild_derived_indexes(self) -> None:
+        """
+        Perform no-op derived-index rebuilding.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The fake session performs no additional work beyond delegation.
+        """
+        self._backend.rebuild_derived_indexes(self._root)
+
+    def persist_runtime_inventory(
+        self,
+        request: BackendRuntimeInventoryRequest,
+    ) -> None:
+        """
+        Perform no-op runtime inventory persistence.
+
+        Parameters
+        ----------
+        request : BackendRuntimeInventoryRequest
+            Runtime inventory request supplied by the caller.
+
+        Returns
+        -------
+        None
+            The fake session performs no additional work beyond delegation.
+        """
+        self._backend.persist_runtime_inventory(request)
+
+    def commit(self) -> None:
+        """
+        Perform no-op commit handling for protocol validation.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The fake session delegates to the backend commit hook.
+        """
+        self._backend.commit(self._root, conn=object())
+
+    def abort(self) -> None:
+        """
+        Perform no-op abort handling for protocol validation.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The fake session does not perform rollback work.
+        """
+
+    def close(self) -> None:
+        """
+        Perform no-op close handling for protocol validation.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The fake session does not own external resources.
+        """
 
 
 class _FakeRetrievalProducer:

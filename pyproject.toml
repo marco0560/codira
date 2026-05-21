@@ -244,7 +244,7 @@ exclude = """(?x)(
 )"""
 
 [[tool.mypy.overrides]]
-module = ["tree_sitter", "tree_sitter_c", "tree_sitter_bash"]
+module = ["tree_sitter", "tree_sitter_c", "tree_sitter_cpp"]
 ignore_missing_imports = true
 
 # ============================================================

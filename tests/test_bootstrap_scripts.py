@@ -967,12 +967,83 @@ class _RepoToolRunnerModule(Protocol):
 class _ValidationHelperModule(Protocol):
     """Protocol for the repository validation helper."""
 
+    REPO_ROOT: Path
     RUN_REPO_TOOL: Path
+    COMPLETE_SEMGREP_ARTIFACT_ROOT: Path
+    subprocess: ModuleType
+
+    def build_parser(self) -> argparse.ArgumentParser:
+        """
+        Build the validator command-line parser.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        argparse.ArgumentParser
+            Parser for validator command-line options.
+        """
+        ...
+
+    def build_validation_steps(
+        self,
+        *,
+        include_semgrep_complete: bool = False,
+    ) -> tuple[object, ...]:
+        """
+        Build the ordered validation steps for one invocation.
+
+        Parameters
+        ----------
+        include_semgrep_complete : bool, optional
+            Whether to append the broader Semgrep registry scan.
+
+        Returns
+        -------
+        tuple[object, ...]
+            Ordered validator step objects.
+        """
+        ...
+
+    def complete_semgrep_output_path(self, *, now: object | None = None) -> Path:
+        """
+        Build the timestamped complete-Semgrep artifact path.
+
+        Parameters
+        ----------
+        now : object | None, optional
+            Explicit timestamp override used by tests.
+
+        Returns
+        -------
+        pathlib.Path
+            Timestamped JSON artifact path under the analysis artifact root.
+        """
+        ...
+
+    def relative_report_path(self, path: Path) -> str:
+        """
+        Return the repository-relative label for one report path.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Saved report path.
+
+        Returns
+        -------
+        str
+            Repository-relative label when possible.
+        """
+        ...
 
     def build_validation_commands(
         self,
         *,
         python: str = sys.executable,
+        include_semgrep_complete: bool = False,
     ) -> tuple[tuple[str, ...], ...]:
         """
         Build validation command vectors.
@@ -981,6 +1052,8 @@ class _ValidationHelperModule(Protocol):
         ----------
         python : str, optional
             Python executable used to invoke the tool runner.
+        include_semgrep_complete : bool, optional
+            Whether to append the broader Semgrep registry scan.
 
         Returns
         -------
@@ -1005,6 +1078,41 @@ class _ValidationHelperModule(Protocol):
         -------
         int
             Validation exit status.
+        """
+        ...
+
+    def render_validation_commands(
+        self,
+        commands: tuple[tuple[str, ...], ...],
+    ) -> str:
+        """
+        Render validation commands for dry-run output.
+
+        Parameters
+        ----------
+        commands : tuple[tuple[str, ...], ...]
+            Command vectors that would be executed.
+
+        Returns
+        -------
+        str
+            Shell-quoted dry-run output.
+        """
+        ...
+
+    def main(self, argv: Sequence[str] | None = None) -> int:
+        """
+        Run the validator entry point with explicit arguments.
+
+        Parameters
+        ----------
+        argv : collections.abc.Sequence[str] | None, optional
+            Explicit command-line arguments.
+
+        Returns
+        -------
+        int
+            Process exit status.
         """
         ...
 
@@ -1834,6 +1942,40 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
     )
 
 
+def test_validation_helper_can_append_complete_semgrep_scan() -> None:
+    """
+    Keep the optional remote-rule Semgrep pass deterministic and additive.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the extra Semgrep command is appended only when
+        requested.
+    """
+    helper = _load_validation_helper()
+    report_path = helper.complete_semgrep_output_path()
+
+    assert helper.build_validation_commands(
+        python="python",
+        include_semgrep_complete=True,
+    )[-1] == (
+        "python",
+        str(helper.RUN_REPO_TOOL),
+        "semgrep",
+        "scan",
+        "--json",
+        "--output",
+        str(report_path),
+        "--exclude",
+        "fixtures",
+        ".",
+    )
+
+
 def test_validation_helper_returns_first_failing_exit_status() -> None:
     """
     Stop validation at the first failing delegated command.
@@ -1853,6 +1995,210 @@ def test_validation_helper_returns_first_failing_exit_status() -> None:
     skipped_command = (sys.executable, "-c", "raise SystemExit(0)")
 
     assert helper.run_validation((failing_command, skipped_command)) == 7
+
+
+def test_validation_helper_help_mentions_new_flags() -> None:
+    """
+    Document the validator's opt-in execution modes in the CLI help text.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the parser advertises the new command-line flags.
+    """
+    helper = _load_validation_helper()
+    help_text = helper.build_parser().format_help()
+
+    assert "--dry-run" in help_text
+    assert "--semgrep-complete" in help_text
+
+
+def test_validation_helper_dry_run_prints_without_executing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Keep dry-run mode side-effect free while showing delegated commands.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Patch helper subprocess execution.
+    capsys : pytest.CaptureFixture[str]
+        Capture dry-run output.
+
+    Returns
+    -------
+    None
+        The test asserts dry-run mode prints commands and skips subprocess
+        execution.
+    """
+    helper = _load_validation_helper()
+
+    def fail_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        msg = "subprocess.run must not execute during --dry-run"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(helper.subprocess, "run", fail_run)
+
+    assert helper.main(["--dry-run", "--semgrep-complete"]) == 0
+    output = capsys.readouterr().out
+
+    assert "semgrep/rules" in output
+    assert "semgrep scan --json --output" in output
+    assert str(helper.COMPLETE_SEMGREP_ARTIFACT_ROOT) in output
+
+
+def test_validation_helper_complete_semgrep_output_path_is_timestamped() -> None:
+    """
+    Keep complete-Semgrep artifacts under the gitignored analysis subtree.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the helper emits the required timestamped artifact
+        path shape.
+    """
+    helper = _load_validation_helper()
+    report_path = helper.complete_semgrep_output_path()
+
+    assert report_path.parent == helper.COMPLETE_SEMGREP_ARTIFACT_ROOT
+    assert report_path.name.startswith("semgrep-complete-")
+    assert report_path.name.endswith(".json")
+
+
+def test_validation_helper_complete_semgrep_creates_parent_and_reports_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Persist the optional complete Semgrep scan under the gitignored artifacts root.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Patch helper state and subprocess execution.
+    tmp_path : pathlib.Path
+        Temporary directory used for the fake Semgrep artifact path.
+    capsys : pytest.CaptureFixture[str]
+        Capture validator output.
+
+    Returns
+    -------
+    None
+        The test asserts the output directory is created and the saved-report
+        path is printed after a successful complete Semgrep run.
+    """
+    helper = _load_validation_helper()
+    report_root = tmp_path / ".artifacts" / "analysis" / "semgrep"
+    report_path = report_root / "semgrep-complete-20260521T120000Z.json"
+    monkeypatch.setattr(helper, "COMPLETE_SEMGREP_ARTIFACT_ROOT", report_root)
+    monkeypatch.setattr(
+        helper,
+        "complete_semgrep_output_path",
+        lambda *, now=None: report_path,
+    )
+    commands = helper.build_validation_commands(
+        python="python",
+        include_semgrep_complete=True,
+    )
+    seen_commands: list[tuple[str, ...]] = []
+
+    def fake_run(
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, check, capture_output, text
+        seen_commands.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    assert helper.run_validation(commands) == 0
+    output = capsys.readouterr().out
+
+    assert report_path.parent.is_dir()
+    assert (
+        f"Saved Semgrep report: {helper.relative_report_path(report_path)}"
+    ) in output
+    assert any("--output" in command for command in seen_commands)
+
+
+def test_validation_helper_complete_semgrep_failure_reports_repo_relative_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Report the saved complete-Semgrep artifact using a repo-relative label.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Patch helper state and subprocess execution.
+    tmp_path : pathlib.Path
+        Temporary directory used for the fake repository root.
+    capsys : pytest.CaptureFixture[str]
+        Capture validator output.
+
+    Returns
+    -------
+    None
+        The test asserts failure messaging uses the repository-relative artifact
+        path instead of an absolute path.
+    """
+    helper = _load_validation_helper()
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    report_root = repo_root / ".artifacts" / "analysis" / "semgrep"
+    report_path = report_root / "semgrep-complete-20260521T120000Z.json"
+    monkeypatch.setattr(helper, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(helper, "COMPLETE_SEMGREP_ARTIFACT_ROOT", report_root)
+    monkeypatch.setattr(
+        helper,
+        "complete_semgrep_output_path",
+        lambda *, now=None: report_path,
+    )
+    commands = helper.build_validation_commands(
+        python="python",
+        include_semgrep_complete=True,
+    )
+
+    def fake_run(
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, check, capture_output, text
+        if "--output" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    assert helper.run_validation(commands) == 1
+    output = capsys.readouterr().out
+
+    assert (
+        "Complete Semgrep report requires examination: "
+        ".artifacts/analysis/semgrep/semgrep-complete-20260521T120000Z.json"
+    ) in output
 
 
 def test_git_hooks_route_validation_through_repo_tool_runner() -> None:
@@ -3562,6 +3908,85 @@ def test_benchmark_campaign_main_creates_artifact_root_and_reports_missing_manif
     assert artifact_root.is_dir()
     assert captured.out == ""
     assert "Error: manifest file not found:" in captured.err
+
+
+def test_benchmark_campaign_main_prints_timestamp_after_each_repo_step(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Print a timestamp after each repository command group completes.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for manifest fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace process arguments and command execution.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to inspect terminal output.
+
+    Returns
+    -------
+    None
+        The test asserts one timestamp line is emitted per repository step.
+    """
+    helper = _load_benchmark_campaign_helper()
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {"label": "first", "category": "small", "path": str(first)},
+                    {"label": "second", "category": "medium", "path": str(second)},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifact_root = tmp_path / ".artifacts" / "benchmarks"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_campaign.py",
+            str(manifest),
+            "--artifact-root",
+            str(artifact_root),
+        ],
+    )
+    monkeypatch.setattr(helper, "utc_run_timestamp", lambda: "2026-05-20T10:15:30Z")
+
+    def fake_resolve_repositories(
+        repositories: Sequence[object],
+        config: object,
+    ) -> Sequence[object]:
+        return repositories
+
+    def fake_command_plan(
+        repositories: Sequence[object],
+        config: object,
+    ) -> list[dict[str, object]]:
+        return [
+            {"label": "first", "commands": [["true"]]},
+            {"label": "second", "commands": [["true"]]},
+        ]
+
+    monkeypatch.setattr(helper, "resolve_repositories", fake_resolve_repositories)
+    monkeypatch.setattr(helper, "command_plan", fake_command_plan)
+    monkeypatch.setattr(helper, "_run_command", lambda command: 0)
+
+    assert helper.main() == 0
+    captured = capsys.readouterr()
+
+    assert captured.err == ""
+    assert "first: 2026-05-20T10:15:30Z\n" in captured.out
+    assert "second: 2026-05-20T10:15:30Z\n" in captured.out
 
 
 def test_split_repo_verification_uses_local_core_checkout_before_package_install() -> (
