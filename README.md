@@ -18,10 +18,10 @@ agent, the same task can often be handled with fewer tokens because the agent
 receives a small, relevant context pack instead of rediscovering the repository
 from scratch.
 
-`codira` builds a SQLite index inside the target repository and supports exact
-symbol lookup, docstring auditing, deterministic local semantic embeddings,
-static call and callable-reference inspection, plugin discovery, and
-deterministic context generation for natural-language queries.
+`codira` builds a repository-local index through the active storage backend and
+supports exact symbol lookup, docstring auditing, deterministic local semantic
+embeddings, static call and callable-reference inspection, plugin discovery,
+and deterministic context generation for natural-language queries.
 
 The current release indexes mixed-language repositories through registered
 language analyzers:
@@ -29,15 +29,18 @@ language analyzers:
 - Python via the first-party `codira-analyzer-python` plugin
 - JSON via the first-party `codira-analyzer-json` plugin for JSON Schema,
   `package.json`, and `.releaserc.json`
-- C-family `*.c` and `*.h` files via the first-party
+- C `*.c` and `*.h` files via the first-party
   `codira-analyzer-c` plugin backed by `tree-sitter-c`
+- C++ source and header files via the first-party `codira-analyzer-cpp`
+  plugin backed by `tree-sitter-cpp`
 - Bash scripts via the first-party `codira-analyzer-bash` plugin backed by
   `tree-sitter-bash`
 - SQLite persistence via the first-party `codira-backend-sqlite` backend
   plugin
+- DuckDB persistence via the first-party `codira-backend-duckdb` backend
+  plugin
 
-Storage and query persistence remain SQLite-backed through the active backend
-registry.
+Storage and query persistence are provided through the active backend registry.
 
 ## Why It Helps Agent Workflows
 
@@ -76,7 +79,8 @@ uses the small badge as the MkDocs favicon.
 
 ## Install
 
-For the official runtime with the first-party analyzers and SQLite backend:
+For the official runtime with the first-party analyzers and default SQLite
+backend:
 
 ```bash
 pip install codira-bundle-official
@@ -158,7 +162,7 @@ The current architecture after completed `ADR-004` migration work is:
   `codira-backend-sqlite`
 - multiple language analyzers in one indexing run
 - deterministic mixed-language indexing for tracked Python, supported JSON,
-  Bash, and C-family files
+  C, C++, and Bash files
 - query-time retrieval planning with deterministic intent families for
   behavior, test, configuration, API-surface, and architecture/navigation
   queries
@@ -671,7 +675,7 @@ contract uses a lightweight shared envelope:
 ```json
 {
   "schema_version": "1.0",
-  "command": "symbol",
+  "command": "sym",
   "status": "ok",
   "query": {
     "name": "build_parser",

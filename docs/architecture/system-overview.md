@@ -18,15 +18,15 @@ The implementation is intentionally repository-local:
 
 ## Current Module Shape
 
-The current branch centers on these modules:
+The current implementation centers on these modules:
 
 - `src/codira/cli.py` for command parsing and output formatting
 - `src/codira/scanner.py` for Git-backed file discovery with filesystem
   fallback
 - `src/codira/registry.py` for backend selection and analyzer activation
 - `src/codira/indexer.py` for incremental orchestration and backend dispatch
-- `src/codira/analyzers/python.py` and `src/codira/analyzers/c.py` for
-  language-specific analysis
+- `src/codira/analyzers/` compatibility modules for first-party analyzer
+  imports
 - `src/codira/storage.py` for generic repository-local storage paths, metadata,
   and lock helpers
 - `src/codira/query/exact.py` for exact lookup helpers
@@ -36,7 +36,7 @@ The current branch centers on these modules:
 
 ## ADR-004 Boundary
 
-`ADR-004` now defines the architecture that this branch implements:
+`ADR-004` defines the architecture implemented by the current codebase:
 
 - one active index backend per repository instance
 - multiple language analyzers in one indexing run

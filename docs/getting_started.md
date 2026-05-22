@@ -10,8 +10,8 @@ source .venv/bin/activate
 pip install codira-bundle-official
 ```
 
-That installs `codira`, the first-party Python, JSON, C, and Bash analyzers,
-and the first-party SQLite backend.
+That installs `codira`, the first-party Python, JSON, C, C++, and Bash
+analyzers, and the first-party SQLite and DuckDB backends.
 
 The package is published on PyPI. If you only need to use `codira`, prefer this
 published install path over an editable checkout from a development branch.

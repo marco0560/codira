@@ -39,7 +39,7 @@ Those modules define the accepted vocabulary for:
 
 ## Phase-8 Registries and Configuration
 
-Phase 8 introduces explicit registry helpers in `src/codira/registry.py`.
+Phase 8 introduced explicit registry helpers in `src/codira/registry.py`.
 
 Current defaults and selection rules are:
 
@@ -58,9 +58,10 @@ The current packaging boundary is also now explicit:
 - core `codira` dependencies cover shared CLI, registry, query, indexing, and
   contract infrastructure
 - analyzer-specific dependencies live in separate plugin distributions
-- the current Python, JSON, C, and Bash analyzers are extracted into
+- the current Python, JSON, C, C++, and Bash analyzers are extracted into
   first-party packages rather than remaining built-ins in the core install
 - the default SQLite backend is provided by `codira-backend-sqlite`
+- the optional DuckDB backend is provided by `codira-backend-duckdb`
 - third-party plugins live in separate distributions and are discovered from
   `codira.analyzers` and `codira.backends` entry-point groups
 
@@ -72,6 +73,7 @@ implementation. The current package set extends that proof:
 - `PythonAnalyzer` handles `*.py`
 - `JSONAnalyzer` handles supported JSON document families
 - `CAnalyzer` handles `*.c` and `*.h`
+- `CppAnalyzer` handles standard C++ source and header suffixes
 - `BashAnalyzer` handles Bash scripts
 - all active analyzers can participate in the same indexing run
 

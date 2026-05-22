@@ -16,7 +16,7 @@ Exact commands such as `sym`, `calls`, `refs`, and `audit`:
 3. execute deterministic backend-backed retrieval against indexed artifacts
 4. emit stable human or JSON output
 
-Phase 7 moves these exact lookup surfaces behind backend methods instead of
+Phase 7 moved these exact lookup surfaces behind backend methods instead of
 having `query/exact.py` own raw SQLite connection setup and SQL execution.
 
 ## Context Retrieval Flow
@@ -73,7 +73,7 @@ The query core consumes those descriptors generically. It does not require
 built-in analyzers to implement retrieval capabilities directly, and it must
 not depend on analyzer internals to rank evidence.
 
-Phase 7 also moves the embedding channel behind backend methods. The semantic
+Phase 7 also moved the embedding channel behind backend methods. The semantic
 wrapper in `src/codira/semantic/search.py` now delegates to the active
 backend instead of owning direct SQL access to the embedding tables.
 

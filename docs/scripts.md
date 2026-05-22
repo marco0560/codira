@@ -35,6 +35,9 @@ temporary directories under the repository.
 
 Run the standard local validation sequence through `scripts/run_repo_tool.py`.
 This is the preferred one-command validation entry point for local changes.
+Use `--dry-run` to print the delegated commands without executing them. Use
+`--semgrep-complete` to append a broad Semgrep registry scan and save its JSON
+report under `.artifacts/analysis/semgrep/`.
 
 ## `scripts/check_commit_messages.py`
 

@@ -28,7 +28,7 @@ codira index
 
 Rules:
 
-- backend names must be unique across built-ins and external plugins
+- backend names must be unique across registered plugins
 - duplicate names are rejected deterministically
 - unsupported backend names fail fast before indexing or query work
 - backend plugins must not perform language parsing
