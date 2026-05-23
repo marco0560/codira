@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import tomllib
 from pathlib import Path
 
 from codira.schema import DDL
 from codira_backend_sqlite import SQLiteIndexBackend, build_backend
+
+
+_UNRESOLVED_CALL_RECORDS = (
+    ("name", "", "PyLong_FromLong", 1, 4),
+    ("name", "", "PyUnicode_AsUTF8AndSize", 2, 4),
+    ("name", "", "system", 3, 4),
+)
 
 
 def test_sqlite_backend_package_declares_expected_entry_point() -> None:
@@ -98,7 +106,7 @@ def test_sqlite_backend_full_prepare_clears_populated_database_in_session(
         enforcement enabled and removes previously indexed rows.
     """
     backend = SQLiteIndexBackend()
-    db_path = tmp_path / ".codira" / "index.sqlite"
+    db_path = tmp_path / ".codira" / "index.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
     try:
@@ -176,6 +184,88 @@ def test_sqlite_backend_full_prepare_clears_populated_database_in_session(
         reopened.close()
 
 
+def test_sqlite_backend_rebuild_keeps_distinct_unresolved_call_edges(
+    tmp_path: Path,
+) -> None:
+    """
+    Preserve distinct unresolved call targets owned by one SQLite caller.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts graph rebuilds keep unresolved raw target identity in
+        the derived edge tables.
+    """
+    backend = SQLiteIndexBackend()
+    db_path = tmp_path / ".codira" / "index.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    module_path = tmp_path / "pkg" / "sample.py"
+    connection = sqlite3.connect(db_path)
+    try:
+        for statement in DDL:
+            connection.execute(statement)
+        connection.execute(
+            """
+            INSERT INTO files(
+                id,
+                path,
+                hash,
+                mtime,
+                size,
+                analyzer_name,
+                analyzer_version
+            ) VALUES (1, ?, 'seed-hash', 1.0, 1, 'python', '1.0')
+            """,
+            (str(module_path),),
+        )
+        for kind, base, target, lineno, col_offset in _UNRESOLVED_CALL_RECORDS:
+            connection.execute(
+                """
+                INSERT INTO call_records(
+                    file_id,
+                    owner_module,
+                    owner_name,
+                    kind,
+                    base,
+                    target,
+                    lineno,
+                    col_offset
+                ) VALUES (1, 'pkg.sample', 'caller', ?, ?, ?, ?, ?)
+                """,
+                (kind, base, target, lineno, col_offset),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+    backend.rebuild_derived_indexes(tmp_path)
+
+    reopened = sqlite3.connect(db_path)
+    try:
+        rows = reopened.execute("""
+            SELECT callee_module, callee_name, unresolved_identity, resolved
+            FROM call_edges
+            ORDER BY unresolved_identity
+            """).fetchall()
+    finally:
+        reopened.close()
+
+    assert rows == [
+        (
+            None,
+            None,
+            json.dumps((kind, base, target), separators=(",", ":")),
+            0,
+        )
+        for kind, base, target, _lineno, _col_offset in _UNRESOLVED_CALL_RECORDS
+    ]
+
+
 def test_sqlite_backend_delete_paths_removes_file_owned_edge_rows(
     tmp_path: Path,
 ) -> None:
@@ -194,7 +284,7 @@ def test_sqlite_backend_delete_paths_removes_file_owned_edge_rows(
         edge rows that reference the file primary key.
     """
     backend = SQLiteIndexBackend()
-    db_path = tmp_path / ".codira" / "index.sqlite"
+    db_path = tmp_path / ".codira" / "index.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     module_path = tmp_path / "pkg" / "sample.py"
     connection = sqlite3.connect(db_path)

@@ -34,6 +34,9 @@ INDEX_BACKEND_ENV_VAR = "CODIRA_INDEX_BACKEND"
 DISABLE_THIRD_PARTY_PLUGINS_ENV_VAR = "CODIRA_DISABLE_THIRD_PARTY_PLUGINS"
 ANALYZER_ENTRY_POINT_GROUP = "codira.analyzers"
 BACKEND_ENTRY_POINT_GROUP = "codira.backends"
+# These package hints are registry metadata only. SQLite remains the
+# compatibility default by backend name, while schema and connection ownership
+# live in the first-party backend package.
 OPTIONAL_BACKEND_PACKAGE_BY_NAME: dict[str, str] = {
     "sqlite": "codira-backend-sqlite",
     "duckdb": "codira-backend-duckdb",
@@ -946,6 +949,11 @@ def configured_index_backend_name() -> str:
     -------
     str
         Configured backend name, defaulting to ``"sqlite"``.
+
+    Notes
+    -----
+    The default is a backend selection policy for compatibility. It does not
+    make core own SQLite schema, connection, or query behavior.
     """
     configured_name = os.getenv(INDEX_BACKEND_ENV_VAR, DEFAULT_INDEX_BACKEND).strip()
     if configured_name:

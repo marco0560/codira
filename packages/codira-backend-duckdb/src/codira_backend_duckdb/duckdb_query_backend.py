@@ -51,7 +51,6 @@ from .duckdb_support import (
     _count_reused_embeddings,
     _current_embedding_state_matches,
     _delete_indexed_file_data,
-    _dot_similarity,
     _load_existing_file_hashes,
     _load_existing_file_ownership,
     _load_previous_embeddings_by_path,
@@ -298,6 +297,23 @@ def _backend_int(value: BackendQueryValue) -> int:
     return int(cast("str | bytes | bytearray | int | float", value))
 
 
+def _backend_float(value: BackendQueryValue) -> float:
+    """
+    Coerce one backend-compatible scalar into a float.
+
+    Parameters
+    ----------
+    value : BackendQueryValue
+        Scalar value returned from one backend query row.
+
+    Returns
+    -------
+    float
+        Floating-point form of ``value``.
+    """
+    return float(cast("str | bytes | bytearray | int | float", value))
+
+
 def _backend_bytes(value: BackendQueryValue) -> bytes:
     """
     Coerce one backend-compatible scalar into raw bytes.
@@ -314,6 +330,25 @@ def _backend_bytes(value: BackendQueryValue) -> bytes:
     """
 
     return bytes(cast("bytes | bytearray", value))
+
+
+def _dot_similarity(left: list[float], right: list[float]) -> float:
+    """
+    Compute a dot-product similarity between normalized vectors.
+
+    Parameters
+    ----------
+    left : list[float]
+        Left embedding vector.
+    right : list[float]
+        Right embedding vector.
+
+    Returns
+    -------
+    float
+        Dot-product similarity.
+    """
+    return sum(a * b for a, b in zip(left, right, strict=True))
 
 
 def _duckdb_error_type() -> type[BaseException]:
@@ -689,72 +724,141 @@ class DuckDBQueryBackend:
             # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
-                SELECT s.type, s.module_name, s.name, f.path, s.lineno
-                FROM symbol_index s
-                JOIN files f
-                  ON s.file_id = f.id
-                WHERE 1 = 1
-                {prefix_sql}
-                {test_sql}
-                ORDER BY s.module_name, s.name, s.type, f.path, s.lineno
-                """,
-                tuple(prefix_params),
-            ).fetchall()
-            symbols: list[tuple[str, str, str, str, int]] = []
-            seen_identities: set[tuple[str, str]] = set()
-            for symbol_type, module_name, symbol_name, file_path, lineno in rows:
-                identity = (str(module_name), str(symbol_name))
-                if identity in seen_identities:
-                    continue
-                seen_identities.add(identity)
-                symbols.append(
-                    (
-                        str(symbol_type),
-                        identity[0],
-                        identity[1],
-                        str(file_path),
-                        _backend_int(lineno),
-                    )
+                WITH ranked_symbols AS (
+                    SELECT
+                        s.type,
+                        s.module_name,
+                        s.name,
+                        f.path,
+                        s.lineno,
+                        row_number() OVER (
+                            PARTITION BY s.module_name, s.name
+                            ORDER BY s.module_name, s.name, s.type, f.path, s.lineno
+                        ) AS symbol_rank
+                    FROM symbol_index s
+                    JOIN files f
+                      ON s.file_id = f.id
+                    WHERE 1 = 1
+                    {prefix_sql}
+                    {test_sql}
+                ),
+                limited_symbols AS (
+                    SELECT type, module_name, name, path, lineno
+                    FROM ranked_symbols
+                    WHERE symbol_rank = 1
+                    ORDER BY module_name, name, type, path, lineno
+                    LIMIT ?
+                ),
+                call_out AS (
+                    SELECT
+                        caller_module AS module_name,
+                        caller_name AS name,
+                        COUNT(*) AS total,
+                        COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
+                            AS unresolved
+                    FROM call_edges
+                    GROUP BY caller_module, caller_name
+                ),
+                call_in AS (
+                    SELECT
+                        callee_module AS module_name,
+                        callee_name AS name,
+                        COUNT(*) AS total,
+                        COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
+                            AS unresolved
+                    FROM call_edges
+                    GROUP BY callee_module, callee_name
+                ),
+                refs_out AS (
+                    SELECT
+                        owner_module AS module_name,
+                        owner_name AS name,
+                        COUNT(*) AS total,
+                        COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
+                            AS unresolved
+                    FROM callable_refs
+                    GROUP BY owner_module, owner_name
+                ),
+                refs_in AS (
+                    SELECT
+                        target_module AS module_name,
+                        target_name AS name,
+                        COUNT(*) AS total,
+                        COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
+                            AS unresolved
+                    FROM callable_refs
+                    GROUP BY target_module, target_name
                 )
-
-            limited_symbols = symbols[:limit]
+                SELECT
+                    ls.type,
+                    ls.module_name,
+                    ls.name,
+                    ls.path,
+                    ls.lineno,
+                    COALESCE(call_out.total, 0),
+                    COALESCE(call_out.unresolved, 0),
+                    COALESCE(call_in.total, 0),
+                    COALESCE(call_in.unresolved, 0),
+                    COALESCE(refs_out.total, 0),
+                    COALESCE(refs_out.unresolved, 0),
+                    COALESCE(refs_in.total, 0),
+                    COALESCE(refs_in.unresolved, 0)
+                FROM limited_symbols ls
+                LEFT JOIN call_out
+                  ON call_out.module_name = ls.module_name
+                 AND call_out.name = ls.name
+                LEFT JOIN call_in
+                  ON call_in.module_name = ls.module_name
+                 AND call_in.name = ls.name
+                LEFT JOIN refs_out
+                  ON refs_out.module_name = ls.module_name
+                 AND refs_out.name = ls.name
+                LEFT JOIN refs_in
+                  ON refs_in.module_name = ls.module_name
+                 AND refs_in.name = ls.name
+                ORDER BY ls.module_name, ls.name, ls.type, ls.path, ls.lineno
+                """,
+                (*prefix_params, limit),
+            ).fetchall()
             return [
                 BackendSymbolInventoryItem(
-                    symbol_type=symbol_type,
-                    module=module_name,
-                    name=symbol_name,
-                    file=file_path,
-                    lineno=lineno,
-                    calls_out=self._symbol_metric(
-                        conn,
-                        "call_edges",
-                        "caller_module",
-                        "caller_name",
-                        (module_name, symbol_name),
+                    symbol_type=str(symbol_type),
+                    module=str(module_name),
+                    name=str(symbol_name),
+                    file=str(file_path),
+                    lineno=_backend_int(lineno),
+                    calls_out=BackendGraphMetric(
+                        total=_backend_int(calls_out_total),
+                        unresolved=_backend_int(calls_out_unresolved),
                     ),
-                    calls_in=self._symbol_metric(
-                        conn,
-                        "call_edges",
-                        "callee_module",
-                        "callee_name",
-                        (module_name, symbol_name),
+                    calls_in=BackendGraphMetric(
+                        total=_backend_int(calls_in_total),
+                        unresolved=_backend_int(calls_in_unresolved),
                     ),
-                    refs_out=self._symbol_metric(
-                        conn,
-                        "callable_refs",
-                        "owner_module",
-                        "owner_name",
-                        (module_name, symbol_name),
+                    refs_out=BackendGraphMetric(
+                        total=_backend_int(refs_out_total),
+                        unresolved=_backend_int(refs_out_unresolved),
                     ),
-                    refs_in=self._symbol_metric(
-                        conn,
-                        "callable_refs",
-                        "target_module",
-                        "target_name",
-                        (module_name, symbol_name),
+                    refs_in=BackendGraphMetric(
+                        total=_backend_int(refs_in_total),
+                        unresolved=_backend_int(refs_in_unresolved),
                     ),
                 )
-                for symbol_type, module_name, symbol_name, file_path, lineno in limited_symbols
+                for (
+                    symbol_type,
+                    module_name,
+                    symbol_name,
+                    file_path,
+                    lineno,
+                    calls_out_total,
+                    calls_out_unresolved,
+                    calls_in_total,
+                    calls_in_unresolved,
+                    refs_out_total,
+                    refs_out_unresolved,
+                    refs_in_total,
+                    refs_in_unresolved,
+                ) in rows
             ]
         finally:
             if owns_connection:
@@ -1651,65 +1755,60 @@ class DuckDBQueryBackend:
 
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
-            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-            # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
             rows = conn.execute(
                 f"""
                 SELECT
+                    e.vector,
                     s.type,
                     s.module_name,
                     s.name,
                     f.path,
-                    s.lineno,
-                    e.version,
-                    e.dim,
-                    e.vector
+                    s.lineno
                 FROM embeddings e
                 JOIN symbol_index s
                   ON e.object_type = 'symbol'
                  AND e.object_id = s.id
                 JOIN files f
                   ON s.file_id = f.id
-                WHERE e.backend = ? AND e.version = ?
+                WHERE e.backend = ?
+                  AND e.version = ?
+                  AND e.dim = ?
                 {prefix_sql}
                 ORDER BY s.module_name, s.name, f.path, s.lineno, s.type
                 """,
-                (backend.name, backend.version, *prefix_params),
+                (
+                    backend.name,
+                    backend.version,
+                    backend.dim,
+                    *prefix_params,
+                ),
             ).fetchall()
 
-            results: ChannelResults = []
-
-            for row in rows:
-                symbol: SymbolRow = (
-                    str(row[0]),
-                    str(row[1]),
-                    str(row[2]),
-                    str(row[3]),
-                    _backend_int(row[4]),
+            scored_rows = [
+                (
+                    _dot_similarity(
+                        deserialize_vector(_backend_bytes(vector), dim=backend.dim),
+                        query_vector,
+                    ),
+                    str(symbol_type),
+                    str(module_name),
+                    str(symbol_name),
+                    str(file_path),
+                    _backend_int(lineno),
                 )
-                version = str(row[5])
-                dim = _backend_int(row[6])
-                blob = _backend_bytes(row[7])
-                if version != backend.version or dim != backend.dim:
-                    continue
-
-                score = _dot_similarity(query_vector, deserialize_vector(blob, dim=dim))
-                if score < min_score:
-                    continue
-
-                results.append((score, symbol))
-
-            results.sort(
-                key=lambda item: (
-                    -item[0],
-                    item[1][1],
-                    item[1][2],
-                    item[1][3],
-                    item[1][4],
-                    item[1][0],
+                for vector, symbol_type, module_name, symbol_name, file_path, lineno in rows
+            ]
+            ranked_rows = sorted(
+                (row for row in scored_rows if row[0] >= min_score),
+                key=lambda row: (-row[0], row[2], row[3], row[4], row[5], row[1]),
+            )[:limit]
+            return [
+                (
+                    score,
+                    (symbol_type, module_name, symbol_name, file_path, lineno),
                 )
-            )
-            return results[:limit]
+                for score, symbol_type, module_name, symbol_name, file_path, lineno in ranked_rows
+            ]
         finally:
             if owns_connection:
                 conn.close()

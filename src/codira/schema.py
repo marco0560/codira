@@ -17,7 +17,7 @@ This module belongs to the **storage infrastructure layer** and anchors table de
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 16
 
 DDL = [
     """
@@ -158,13 +158,15 @@ DDL = [
         caller_name TEXT NOT NULL,
         callee_module TEXT,
         callee_name TEXT,
+        unresolved_identity TEXT NOT NULL DEFAULT '',
         resolved INTEGER NOT NULL,
         PRIMARY KEY (
             caller_file_id,
             caller_module,
             caller_name,
             callee_module,
-            callee_name
+            callee_name,
+            unresolved_identity
         ),
         FOREIGN KEY(caller_file_id) REFERENCES files(id)
     );
@@ -176,7 +178,8 @@ DDL = [
         caller_module,
         caller_name,
         COALESCE(callee_module, ''),
-        COALESCE(callee_name, '')
+        COALESCE(callee_name, ''),
+        unresolved_identity
     );
     """,
     """
@@ -198,13 +201,15 @@ DDL = [
         owner_name TEXT NOT NULL,
         target_module TEXT,
         target_name TEXT,
+        unresolved_identity TEXT NOT NULL DEFAULT '',
         resolved INTEGER NOT NULL,
         PRIMARY KEY (
             owner_file_id,
             owner_module,
             owner_name,
             target_module,
-            target_name
+            target_name,
+            unresolved_identity
         ),
         FOREIGN KEY(owner_file_id) REFERENCES files(id)
     );
@@ -216,7 +221,8 @@ DDL = [
         owner_module,
         owner_name,
         COALESCE(target_module, ''),
-        COALESCE(target_name, '')
+        COALESCE(target_name, ''),
+        unresolved_identity
     );
     """,
     """

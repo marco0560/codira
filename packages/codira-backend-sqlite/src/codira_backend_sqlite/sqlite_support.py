@@ -538,6 +538,36 @@ def _resolve_call_record(
     return (None, None, 0)
 
 
+def _unresolved_identity(record: CallRecord, *, resolved: int) -> str:
+    """
+    Return the stable unresolved-target identity for one derived edge.
+
+    Parameters
+    ----------
+    record : CallRecord
+        Raw call-style record that produced the derived relation.
+    resolved : int
+        Stored relation resolution flag.
+
+    Returns
+    -------
+    str
+        Empty string for resolved relations, otherwise a deterministic raw
+        target identity that distinguishes different unresolved callees owned
+        by the same caller.
+    """
+    if resolved:
+        return ""
+    return json.dumps(
+        (
+            str(record.get("kind", "")),
+            str(record.get("base", "")),
+            str(record.get("target", "")),
+        ),
+        separators=(",", ":"),
+    )
+
+
 def _embedding_text(request: EmbeddingTextRequest) -> str:
     """
     Build the deterministic text payload embedded for one symbol.
@@ -833,8 +863,8 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM call_edges")
     conn.execute("DELETE FROM callable_refs")
 
-    edges: set[tuple[int, str, str, str | None, str | None, int]] = set()
-    refs: set[tuple[int, str, str, str | None, str | None, int]] = set()
+    edges: set[tuple[int, str, str, str | None, str | None, str, int]] = set()
+    refs: set[tuple[int, str, str, str | None, str | None, str, int]] = set()
 
     call_rows = conn.execute("""
         SELECT
@@ -894,6 +924,7 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
                 caller_name,
                 callee_module,
                 callee_name,
+                _unresolved_identity(record, resolved=resolved),
                 resolved,
             )
         )
@@ -948,6 +979,7 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
                 caller_name,
                 target_module,
                 target_name,
+                _unresolved_identity(record, resolved=resolved),
                 resolved,
             )
         )
@@ -961,12 +993,13 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
             item[3] or "",
             item[4] or "",
             item[5],
+            item[6],
         ),
     ):
         conn.execute(
             "INSERT OR IGNORE INTO call_edges"
             "(caller_file_id, caller_module, caller_name, callee_module, "
-            "callee_name, resolved) VALUES (?, ?, ?, ?, ?, ?)",
+            "callee_name, unresolved_identity, resolved) VALUES (?, ?, ?, ?, ?, ?, ?)",
             edge,
         )
 
@@ -979,12 +1012,13 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
             item[3] or "",
             item[4] or "",
             item[5],
+            item[6],
         ),
     ):
         conn.execute(
             "INSERT OR IGNORE INTO callable_refs"
             "(owner_file_id, owner_module, owner_name, target_module, "
-            "target_name, resolved) VALUES (?, ?, ?, ?, ?, ?)",
+            "target_name, unresolved_identity, resolved) VALUES (?, ?, ?, ?, ?, ?, ?)",
             ref_row,
         )
 

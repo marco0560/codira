@@ -21,9 +21,12 @@ package-local helper implementation used by the first-party DuckDB backend.
 from __future__ import annotations
 
 from collections.abc import Sequence
+import csv
 import hashlib
 import json
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
 from codira.contracts import PendingEmbeddingRow, StoredEmbeddingRow
@@ -32,8 +35,6 @@ from codira.repository_scope import path_has_excluded_tree_name
 from codira.semantic.embeddings import embed_texts as embed_texts, serialize_vector
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from codira.contracts import LanguageAnalyzer
     from codira.models import (
         AnalysisResult,
@@ -50,6 +51,65 @@ if TYPE_CHECKING:
 CallRecord = dict[str, str | int]
 CallRow = tuple[int, str, str, str, str, str, int, int]
 RefRow = tuple[int, str, str, str, str, str, str, int, int]
+
+_DERIVED_GRAPH_INDEX_DROP_DDL = (
+    "DROP INDEX IF EXISTS idx_call_edges_identity",
+    "DROP INDEX IF EXISTS idx_call_edges_caller",
+    "DROP INDEX IF EXISTS idx_call_edges_callee",
+    "DROP INDEX IF EXISTS idx_call_edges_resolved",
+    "DROP INDEX IF EXISTS idx_callable_refs_identity",
+    "DROP INDEX IF EXISTS idx_callable_refs_owner",
+    "DROP INDEX IF EXISTS idx_callable_refs_target",
+    "DROP INDEX IF EXISTS idx_callable_refs_resolved",
+)
+_DERIVED_GRAPH_INDEX_DDL = (
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_call_edges_identity
+    ON call_edges(
+        caller_file_id,
+        caller_module,
+        caller_name,
+        COALESCE(callee_module, ''),
+        COALESCE(callee_name, ''),
+        unresolved_identity
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_call_edges_caller
+    ON call_edges(caller_file_id, caller_module, caller_name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_call_edges_callee
+    ON call_edges(callee_module, callee_name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_call_edges_resolved
+    ON call_edges(resolved);
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_callable_refs_identity
+    ON callable_refs(
+        owner_file_id,
+        owner_module,
+        owner_name,
+        COALESCE(target_module, ''),
+        COALESCE(target_name, ''),
+        unresolved_identity
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_callable_refs_owner
+    ON callable_refs(owner_file_id, owner_module, owner_name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_callable_refs_target
+    ON callable_refs(target_module, target_name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_callable_refs_resolved
+    ON callable_refs(resolved);
+    """,
+)
 
 
 class _DuckDBCursorLike(Protocol):
@@ -654,6 +714,36 @@ def _resolve_call_record(
     return (None, None, 0)
 
 
+def _unresolved_identity(record: CallRecord, *, resolved: int) -> str:
+    """
+    Return the stable unresolved-target identity for one derived edge.
+
+    Parameters
+    ----------
+    record : CallRecord
+        Raw call-style record that produced the derived relation.
+    resolved : int
+        Stored relation resolution flag.
+
+    Returns
+    -------
+    str
+        Empty string for resolved relations, otherwise a deterministic raw
+        target identity that distinguishes different unresolved callees owned
+        by the same caller.
+    """
+    if resolved:
+        return ""
+    return json.dumps(
+        (
+            str(record.get("kind", "")),
+            str(record.get("base", "")),
+            str(record.get("target", "")),
+        ),
+        separators=(",", ":"),
+    )
+
+
 def _embedding_text(request: EmbeddingTextRequest) -> str:
     """
     Build the deterministic text payload embedded for one symbol.
@@ -950,11 +1040,33 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
     class_methods = _load_class_methods(conn)
     import_aliases_by_module = _load_import_aliases(conn)
 
-    conn.execute("DELETE FROM call_edges")
-    conn.execute("DELETE FROM callable_refs")
+    conn.execute("DROP TABLE IF EXISTS temp_call_edges_rebuild")
+    conn.execute("DROP TABLE IF EXISTS temp_callable_refs_rebuild")
+    conn.execute("""
+        CREATE TEMP TABLE temp_call_edges_rebuild (
+            caller_file_id INTEGER NOT NULL,
+            caller_module TEXT NOT NULL,
+            caller_name TEXT NOT NULL,
+            callee_module TEXT,
+            callee_name TEXT,
+            unresolved_identity TEXT NOT NULL,
+            resolved INTEGER NOT NULL
+        )
+        """)
+    conn.execute("""
+        CREATE TEMP TABLE temp_callable_refs_rebuild (
+            owner_file_id INTEGER NOT NULL,
+            owner_module TEXT NOT NULL,
+            owner_name TEXT NOT NULL,
+            target_module TEXT,
+            target_name TEXT,
+            unresolved_identity TEXT NOT NULL,
+            resolved INTEGER NOT NULL
+        )
+        """)
 
-    edges: set[tuple[int, str, str, str | None, str | None, int]] = set()
-    refs: set[tuple[int, str, str, str | None, str | None, int]] = set()
+    edges: set[tuple[int, str, str, str | None, str | None, str, int]] = set()
+    refs: set[tuple[int, str, str, str | None, str | None, str, int]] = set()
 
     call_rows = conn.execute("""
         SELECT
@@ -1014,6 +1126,7 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                 caller_name,
                 callee_module,
                 callee_name,
+                _unresolved_identity(record, resolved=resolved),
                 resolved,
             )
         )
@@ -1068,11 +1181,12 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                 caller_name,
                 target_module,
                 target_name,
+                _unresolved_identity(record, resolved=resolved),
                 resolved,
             )
         )
 
-    for edge in sorted(
+    sorted_edges = sorted(
         edges,
         key=lambda item: (
             item[0],
@@ -1081,16 +1195,18 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             item[3] or "",
             item[4] or "",
             item[5],
+            item[6],
         ),
-    ):
-        conn.execute(
-            "INSERT OR IGNORE INTO call_edges"
+    )
+    if sorted_edges:
+        conn.executemany(
+            "INSERT INTO temp_call_edges_rebuild"
             "(caller_file_id, caller_module, caller_name, callee_module, "
-            "callee_name, resolved) VALUES (?, ?, ?, ?, ?, ?)",
-            edge,
+            "callee_name, unresolved_identity, resolved) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            sorted_edges,
         )
 
-    for ref_row in sorted(
+    sorted_refs = sorted(
         refs,
         key=lambda item: (
             item[0],
@@ -1099,14 +1215,65 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             item[3] or "",
             item[4] or "",
             item[5],
+            item[6],
         ),
-    ):
-        conn.execute(
-            "INSERT OR IGNORE INTO callable_refs"
+    )
+    if sorted_refs:
+        conn.executemany(
+            "INSERT INTO temp_callable_refs_rebuild"
             "(owner_file_id, owner_module, owner_name, target_module, "
-            "target_name, resolved) VALUES (?, ?, ?, ?, ?, ?)",
-            ref_row,
+            "target_name, unresolved_identity, resolved) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            sorted_refs,
         )
+
+    for statement in _DERIVED_GRAPH_INDEX_DROP_DDL:
+        conn.execute(statement)
+    conn.execute("DELETE FROM call_edges")
+    conn.execute("DELETE FROM callable_refs")
+    conn.execute("""
+        INSERT INTO call_edges(
+            caller_file_id,
+            caller_module,
+            caller_name,
+            callee_module,
+            callee_name,
+            unresolved_identity,
+            resolved
+        )
+        SELECT
+            caller_file_id,
+            caller_module,
+            caller_name,
+            callee_module,
+            callee_name,
+            unresolved_identity,
+            resolved
+        FROM temp_call_edges_rebuild
+        """)
+    conn.execute("""
+        INSERT INTO callable_refs(
+            owner_file_id,
+            owner_module,
+            owner_name,
+            target_module,
+            target_name,
+            unresolved_identity,
+            resolved
+        )
+        SELECT
+            owner_file_id,
+            owner_module,
+            owner_name,
+            target_module,
+            target_name,
+            unresolved_identity,
+            resolved
+        FROM temp_callable_refs_rebuild
+        """)
+    for statement in _DERIVED_GRAPH_INDEX_DDL:
+        conn.execute(statement)
+    conn.execute("DROP TABLE temp_call_edges_rebuild")
+    conn.execute("DROP TABLE temp_callable_refs_rebuild")
 
 
 def _record_tuple(
@@ -1203,10 +1370,10 @@ def _insert_symbol_index_row(
     int
         Inserted symbol row identifier.
     """
-    cur = conn.execute(
+    row = conn.execute(
         "INSERT INTO symbol_index"
         "(name, stable_id, type, module_name, file_id, lineno) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
         (
             request.name,
             request.stable_id,
@@ -1215,9 +1382,9 @@ def _insert_symbol_index_row(
             request.file_id,
             request.lineno,
         ),
-    )
-    assert cur.lastrowid is not None
-    return int(cur.lastrowid)
+    ).fetchone()
+    assert row is not None
+    return _duckdb_int(row[0])
 
 
 def _append_embedding_row(
@@ -1277,29 +1444,33 @@ def _persist_docstring_issues(
     None
         Matching docstring issues are inserted in place.
     """
-    for issue_type, message in validate_docstring(
-        DocstringValidationRequest(
-            doc=request.docstring,
-            is_public=request.is_public,
-            parameters=request.parameters or [],
-            require_callable_sections=request.require_callable_sections,
-            yields_value=request.yields_value,
-            returns_value=request.returns_value,
-            raises_exception=request.raises_exception,
+    issue_rows = [
+        (
+            request.file_id,
+            request.function_id,
+            request.class_id,
+            request.module_id,
+            issue_type,
+            f"{request.label}: {message}",
         )
-    ):
-        conn.execute(
+        for issue_type, message in validate_docstring(
+            DocstringValidationRequest(
+                doc=request.docstring,
+                is_public=request.is_public,
+                parameters=request.parameters or [],
+                require_callable_sections=request.require_callable_sections,
+                yields_value=request.yields_value,
+                returns_value=request.returns_value,
+                raises_exception=request.raises_exception,
+            )
+        )
+    ]
+    if issue_rows:
+        conn.executemany(
             "INSERT INTO docstring_issues"
             "(file_id, function_id, class_id, module_id, issue_type, message) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                request.file_id,
-                request.function_id,
-                request.class_id,
-                request.module_id,
-                issue_type,
-                f"{request.label}: {message}",
-            ),
+            issue_rows,
         )
 
 
@@ -1388,18 +1559,19 @@ def _persist_module_artifacts(
     module = analysis.module
     module_name = module.name
     c_embedding_context = _c_embedding_context(analysis)
-    cur = conn.execute(
+    row = conn.execute(
         "INSERT INTO modules"
-        "(file_id, name, docstring, has_docstring) VALUES (?, ?, ?, ?)",
+        "(file_id, name, docstring, has_docstring) "
+        "VALUES (?, ?, ?, ?) RETURNING id",
         (
             file_id,
             module_name,
             module.docstring,
             module.has_docstring,
         ),
-    )
-    assert cur.lastrowid is not None
-    module_id = int(cur.lastrowid)
+    ).fetchone()
+    assert row is not None
+    module_id = _duckdb_int(row[0])
     symbol_row_id = _insert_symbol_index_row(
         conn,
         SymbolIndexInsertRequest(
@@ -1461,10 +1633,10 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
     ref_rows = request.ref_rows
 
     for cls in analysis.classes:
-        cur = conn.execute(
+        row = conn.execute(
             "INSERT INTO classes"
             "(module_id, name, lineno, end_lineno, docstring, has_docstring) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
             (
                 module_id,
                 cls.name,
@@ -1473,9 +1645,9 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
                 cls.docstring,
                 cls.has_docstring,
             ),
-        )
-        assert cur.lastrowid is not None
-        class_id = int(cur.lastrowid)
+        ).fetchone()
+        assert row is not None
+        class_id = _duckdb_int(row[0])
         symbol_row_id = _insert_symbol_index_row(
             conn,
             SymbolIndexInsertRequest(
@@ -1518,11 +1690,11 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
                 method,
                 class_name=cls.name,
             )
-            cur = conn.execute(
+            row = conn.execute(
                 "INSERT INTO functions"
                 "(module_id, class_id, name, lineno, end_lineno, signature, "
                 "docstring, has_docstring, is_method, is_public) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
                 (
                     module_id,
                     class_id,
@@ -1535,9 +1707,9 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
                     method.is_method,
                     method.is_public,
                 ),
-            )
-            assert cur.lastrowid is not None
-            function_id = int(cur.lastrowid)
+            ).fetchone()
+            assert row is not None
+            function_id = _duckdb_int(row[0])
             symbol_row_id = _insert_symbol_index_row(
                 conn,
                 SymbolIndexInsertRequest(
@@ -1622,11 +1794,11 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
 
     for fn in analysis.functions:
         python_embedding_context = _python_embedding_context(analysis, fn)
-        cur = conn.execute(
+        row = conn.execute(
             "INSERT INTO functions"
             "(module_id, class_id, name, lineno, end_lineno, signature, "
             "docstring, has_docstring, is_method, is_public) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
             (
                 module_id,
                 None,
@@ -1639,9 +1811,9 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
                 fn.is_method,
                 fn.is_public,
             ),
-        )
-        assert cur.lastrowid is not None
-        function_id = int(cur.lastrowid)
+        ).fetchone()
+        assert row is not None
+        function_id = _duckdb_int(row[0])
         symbol_row_id = _insert_symbol_index_row(
             conn,
             SymbolIndexInsertRequest(
@@ -1717,22 +1889,26 @@ def _persist_overload_artifacts(
     None
         Overload rows are inserted in place.
     """
-    for overload in overloads:
-        conn.execute(
+    overload_rows = [
+        (
+            function_id,
+            overload.stable_id,
+            overload.parent_stable_id,
+            overload.ordinal,
+            overload.signature,
+            overload.docstring,
+            overload.lineno,
+            overload.end_lineno,
+        )
+        for overload in overloads
+    ]
+    if overload_rows:
+        conn.executemany(
             "INSERT INTO overloads"
             "(function_id, stable_id, parent_stable_id, ordinal, signature, "
             "docstring, lineno, end_lineno) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                function_id,
-                overload.stable_id,
-                overload.parent_stable_id,
-                overload.ordinal,
-                overload.signature,
-                overload.docstring,
-                overload.lineno,
-                overload.end_lineno,
-            ),
+            overload_rows,
         )
 
 
@@ -1750,24 +1926,28 @@ def _persist_enum_member_artifacts(request: EnumMemberPersistenceRequest) -> Non
     None
         Enum-member rows are inserted in place.
     """
-    for enum_member in request.enum_members:
-        request.conn.execute(
+    enum_member_rows = [
+        (
+            request.file_id,
+            request.module_name,
+            request.symbol_name,
+            request.symbol_lineno,
+            enum_member.stable_id,
+            enum_member.parent_stable_id,
+            enum_member.ordinal,
+            enum_member.name,
+            enum_member.signature,
+            enum_member.lineno,
+        )
+        for enum_member in request.enum_members
+    ]
+    if enum_member_rows:
+        request.conn.executemany(
             "INSERT INTO enum_members"
             "(file_id, module_name, symbol_name, symbol_lineno, stable_id, "
             "parent_stable_id, ordinal, name, signature, lineno) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                request.file_id,
-                request.module_name,
-                request.symbol_name,
-                request.symbol_lineno,
-                enum_member.stable_id,
-                enum_member.parent_stable_id,
-                enum_member.ordinal,
-                enum_member.name,
-                enum_member.signature,
-                enum_member.lineno,
-            ),
+            enum_member_rows,
         )
 
 
@@ -1852,17 +2032,15 @@ def _persist_import_artifacts(
     None
         Import rows are inserted in place.
     """
-    for imp in analysis.imports:
-        conn.execute(
+    import_rows = [
+        (module_id, imp.name, imp.alias, imp.kind, imp.lineno)
+        for imp in analysis.imports
+    ]
+    if import_rows:
+        conn.executemany(
             "INSERT INTO imports(module_id, name, alias, kind, lineno) "
             "VALUES (?, ?, ?, ?, ?)",
-            (
-                module_id,
-                imp.name,
-                imp.alias,
-                imp.kind,
-                imp.lineno,
-            ),
+            import_rows,
         )
 
 
@@ -1889,23 +2067,183 @@ def _flush_persisted_relationship_rows(
     None
         Relationship rows are inserted in deterministic order.
     """
-    for row in sorted(set(call_rows)):
-        conn.execute(
+    deduplicated_call_rows = sorted(set(call_rows))
+    if deduplicated_call_rows:
+        _flush_call_record_rows(conn, deduplicated_call_rows)
+
+    deduplicated_ref_rows = sorted(set(ref_rows))
+    if deduplicated_ref_rows:
+        _flush_callable_ref_record_rows(conn, deduplicated_ref_rows)
+
+
+def _temporary_csv_path_for_rows(
+    rows: Sequence[Sequence[object]],
+) -> Path:
+    """
+    Write rows to a temporary CSV file for DuckDB bulk import.
+
+    Parameters
+    ----------
+    rows : collections.abc.Sequence[collections.abc.Sequence[object]]
+        Row values to serialize.
+
+    Returns
+    -------
+    pathlib.Path
+        Temporary CSV path owned by the caller.
+    """
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        newline="",
+        prefix="codira-duckdb-bulk-",
+        suffix=".csv",
+        delete=False,
+    ) as handle:
+        csv_path = Path(handle.name)
+        writer = csv.writer(handle)
+        writer.writerows(rows)
+    return csv_path
+
+
+def _flush_call_record_rows(
+    conn: _DuckDBPersistenceConnection,
+    rows: list[tuple[int, str, str, str, str, str, int, int]],
+) -> None:
+    """
+    Flush raw call records to DuckDB.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    rows : list[tuple[int, str, str, str, str, str, int, int]]
+        Normalized call rows.
+
+    Returns
+    -------
+    None
+        Call records are inserted in place.
+    """
+    if len(rows) < 100:
+        conn.executemany(
             "INSERT INTO call_records"
             "(file_id, owner_module, owner_name, kind, base, target, "
             "lineno, col_offset) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            row,
+            rows,
         )
+        return
 
-    for ref_row in sorted(set(ref_rows)):
+    csv_path = _temporary_csv_path_for_rows(rows)
+    try:
         conn.execute(
+            """
+            INSERT INTO call_records(
+                file_id,
+                owner_module,
+                owner_name,
+                kind,
+                base,
+                target,
+                lineno,
+                col_offset
+            )
+            SELECT *
+            FROM read_csv(
+                ?,
+                header=false,
+                nullstr='__CODIRA_NULL_SENTINEL__',
+                columns={
+                    'file_id': 'INTEGER',
+                    'owner_module': 'VARCHAR',
+                    'owner_name': 'VARCHAR',
+                    'kind': 'VARCHAR',
+                    'base': 'VARCHAR',
+                    'target': 'VARCHAR',
+                    'lineno': 'INTEGER',
+                    'col_offset': 'INTEGER'
+                }
+            )
+            """,
+            (str(csv_path),),
+        )
+    finally:
+        try:
+            csv_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _flush_callable_ref_record_rows(
+    conn: _DuckDBPersistenceConnection,
+    rows: list[tuple[int, str, str, str, str, str, str, int, int]],
+) -> None:
+    """
+    Flush raw callable-reference records to DuckDB.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    rows : list[tuple[int, str, str, str, str, str, str, int, int]]
+        Normalized callable-reference rows.
+
+    Returns
+    -------
+    None
+        Callable-reference records are inserted in place.
+    """
+    if len(rows) < 100:
+        conn.executemany(
             "INSERT INTO callable_ref_records"
             "(file_id, owner_module, owner_name, kind, ref_kind, base, "
             "target, lineno, col_offset) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ref_row,
+            rows,
         )
+        return
+
+    csv_path = _temporary_csv_path_for_rows(rows)
+    try:
+        conn.execute(
+            """
+            INSERT INTO callable_ref_records(
+                file_id,
+                owner_module,
+                owner_name,
+                kind,
+                ref_kind,
+                base,
+                target,
+                lineno,
+                col_offset
+            )
+            SELECT *
+            FROM read_csv(
+                ?,
+                header=false,
+                nullstr='__CODIRA_NULL_SENTINEL__',
+                columns={
+                    'file_id': 'INTEGER',
+                    'owner_module': 'VARCHAR',
+                    'owner_name': 'VARCHAR',
+                    'kind': 'VARCHAR',
+                    'ref_kind': 'VARCHAR',
+                    'base': 'VARCHAR',
+                    'target': 'VARCHAR',
+                    'lineno': 'INTEGER',
+                    'col_offset': 'INTEGER'
+                }
+            )
+            """,
+            (str(csv_path),),
+        )
+    finally:
+        try:
+            csv_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _flush_embedding_rows(
@@ -2033,6 +2371,7 @@ def _flush_reference_scan_rows(
     *,
     file_id: int,
     path: Path,
+    pending_rows: list[tuple[int, int, str]] | None = None,
 ) -> None:
     """
     Persist the stored reference-search surface for one indexed file.
@@ -2045,6 +2384,9 @@ def _flush_reference_scan_rows(
         Owning indexed file identifier.
     path : pathlib.Path
         Source file whose text should be stored for later query-time scans.
+    pending_rows : list[tuple[int, int, str]] | None, optional
+        Session-level reference row buffer. When supplied, rows are appended to
+        the buffer and flushed by the caller in one backend batch.
 
     Returns
     -------
@@ -2055,13 +2397,69 @@ def _flush_reference_scan_rows(
     if not reference_rows:
         return
 
-    conn.executemany(
-        "INSERT INTO reference_scan_lines(file_id, lineno, line_text) VALUES (?, ?, ?)",
-        [
-            (file_id, lineno, line_text)
-            for _file_path, lineno, line_text in reference_rows
-        ],
-    )
+    rows = [
+        (file_id, lineno, line_text) for _file_path, lineno, line_text in reference_rows
+    ]
+    if pending_rows is not None:
+        pending_rows.extend(rows)
+        return
+
+    _flush_pending_reference_scan_rows(conn, rows)
+
+
+def _flush_pending_reference_scan_rows(
+    conn: _DuckDBPersistenceConnection,
+    rows: list[tuple[int, int, str]],
+) -> None:
+    """
+    Flush pending reference-search rows to DuckDB in one batch.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    rows : list[tuple[int, int, str]]
+        Stored reference rows as ``(file_id, lineno, line_text)``.
+
+    Returns
+    -------
+    None
+        Pending reference rows are inserted in place.
+    """
+    if not rows:
+        return
+    if len(rows) < 100:
+        conn.executemany(
+            "INSERT INTO reference_scan_lines(file_id, lineno, line_text) "
+            "VALUES (?, ?, ?)",
+            rows,
+        )
+        return
+
+    csv_path = _temporary_csv_path_for_rows(rows)
+    try:
+        conn.execute(
+            """
+            INSERT INTO reference_scan_lines(file_id, lineno, line_text)
+            SELECT *
+            FROM read_csv(
+                ?,
+                header=false,
+                nullstr='__CODIRA_NULL_SENTINEL__',
+                columns={
+                    'file_id': 'INTEGER',
+                    'lineno': 'INTEGER',
+                    'line_text': 'VARCHAR'
+                }
+            )
+            """,
+            (str(csv_path),),
+        )
+    finally:
+        try:
+            csv_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _store_analysis(
@@ -2071,6 +2469,7 @@ def _store_analysis(
     *,
     backend: EmbeddingBackendSpec,
     previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
+    pending_reference_scan_rows: list[tuple[int, int, str]] | None = None,
 ) -> tuple[int, int]:
     """
     Persist one parsed file snapshot into the index.
@@ -2087,6 +2486,8 @@ def _store_analysis(
         Active embedding backend metadata.
     previous_embeddings : dict[str, codira.indexer.StoredEmbeddingRow] | None, optional
         Stored symbol embeddings captured before replacing file-owned rows.
+    pending_reference_scan_rows : list[tuple[int, int, str]] | None, optional
+        Session-level buffer used to batch reference-search rows across files.
 
     Returns
     -------
@@ -2097,10 +2498,10 @@ def _store_analysis(
     call_rows: list[tuple[int, str, str, str, str, str, int, int]] = []
     ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]] = []
 
-    cur = conn.execute(
+    row = conn.execute(
         "INSERT INTO files"
         "(path, hash, mtime, size, analyzer_name, analyzer_version) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
         (
             str(file_metadata.path),
             file_metadata.sha256,
@@ -2109,9 +2510,9 @@ def _store_analysis(
             file_metadata.analyzer_name,
             file_metadata.analyzer_version,
         ),
-    )
-    assert cur.lastrowid is not None
-    file_id = int(cur.lastrowid)
+    ).fetchone()
+    assert row is not None
+    file_id = _duckdb_int(row[0])
     module_name, module_id, c_embedding_context = _persist_module_artifacts(
         conn,
         file_id=file_id,
@@ -2141,6 +2542,7 @@ def _store_analysis(
         conn,
         file_id=file_id,
         path=file_metadata.path,
+        pending_rows=pending_reference_scan_rows,
     )
     _flush_persisted_relationship_rows(
         conn,
@@ -2198,17 +2600,21 @@ def _persist_runtime_inventory(
         (1, backend_name, backend_version, int(coverage_complete)),
     )
 
-    for analyzer in sorted(analyzers, key=lambda item: str(item.name)):
-        conn.execute(
+    analyzer_rows = [
+        (
+            str(analyzer.name),
+            str(analyzer.version),
+            json.dumps(tuple(analyzer.discovery_globs)),
+        )
+        for analyzer in sorted(analyzers, key=lambda item: str(item.name))
+    ]
+    if analyzer_rows:
+        conn.executemany(
             """
             INSERT INTO index_analyzers(name, version, discovery_globs)
             VALUES (?, ?, ?)
             """,
-            (
-                str(analyzer.name),
-                str(analyzer.version),
-                json.dumps(tuple(analyzer.discovery_globs)),
-            ),
+            analyzer_rows,
         )
 
 
@@ -2231,14 +2637,14 @@ def _dot_similarity(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right, strict=True))
 
 
-def _placeholders(values: list[int]) -> str:
+def _placeholders(values: Sequence[object]) -> str:
     """
     Build a positional placeholder string for SQL ``IN`` clauses.
 
     Parameters
     ----------
-    values : list[int]
-        Integer values that will populate the clause.
+    values : collections.abc.Sequence[object]
+        Values that will populate the clause.
 
     Returns
     -------
@@ -2295,6 +2701,39 @@ def _delete_indexed_file_data(
     ]
 
     if module_ids:
+        class_ids = [
+            _duckdb_int(row[0])
+            for row in conn.execute(
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                f"""
+                SELECT id
+                FROM classes
+                WHERE module_id IN ({_placeholders(module_ids)})
+                """,
+                tuple(module_ids),
+            ).fetchall()
+        ]
+        function_ids = [
+            _duckdb_int(row[0])
+            for row in conn.execute(
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                (
+                    f"""
+                    SELECT id
+                    FROM functions
+                    WHERE module_id IN ({_placeholders(module_ids)})
+                    """
+                    if not class_ids
+                    else f"""
+                    SELECT id
+                    FROM functions
+                    WHERE module_id IN ({_placeholders(module_ids)})
+                       OR class_id IN ({_placeholders(class_ids)})
+                    """
+                ),
+                tuple(module_ids) if not class_ids else (*module_ids, *class_ids),
+            ).fetchall()
+        ]
         if symbol_ids:
             conn.execute(
                 f"DELETE FROM embeddings WHERE object_type = 'symbol' "
@@ -2306,18 +2745,12 @@ def _delete_indexed_file_data(
             "DELETE FROM docstring_issues WHERE file_id = ?",
             (file_id,),
         )
-        conn.execute(
-            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-            f"""
-            DELETE FROM overloads
-            WHERE function_id IN (
-                SELECT id
-                FROM functions
-                WHERE module_id IN ({_placeholders(module_ids)})
+        if function_ids:
+            conn.execute(
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                f"DELETE FROM overloads WHERE function_id IN ({_placeholders(function_ids)})",
+                tuple(function_ids),
             )
-            """,
-            tuple(module_ids),
-        )
         conn.execute(
             "DELETE FROM enum_members WHERE file_id = ?",
             (file_id,),
@@ -2327,11 +2760,18 @@ def _delete_indexed_file_data(
             f"DELETE FROM imports WHERE module_id IN ({_placeholders(module_ids)})",
             tuple(module_ids),
         )
-        conn.execute(
-            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-            f"DELETE FROM functions WHERE module_id IN ({_placeholders(module_ids)})",
-            tuple(module_ids),
-        )
+        if class_ids:
+            conn.execute(
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                f"UPDATE functions SET class_id = NULL WHERE class_id IN ({_placeholders(class_ids)})",
+                tuple(class_ids),
+            )
+        if function_ids:
+            conn.execute(
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                f"DELETE FROM functions WHERE id IN ({_placeholders(function_ids)})",
+                tuple(function_ids),
+            )
         conn.execute(
             # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"DELETE FROM classes WHERE module_id IN ({_placeholders(module_ids)})",
@@ -2503,10 +2943,40 @@ def _load_previous_embeddings_by_path(
         Stored embeddings grouped by absolute file path and stable symbol
         identity.
     """
-    return {
-        path: _load_previous_symbol_embeddings(conn, path, backend=backend)
-        for path in paths
-    }
+    result: dict[str, dict[str, StoredEmbeddingRow]] = {path: {} for path in paths}
+    if not paths:
+        return result
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            f.path,
+            s.stable_id,
+            e.content_hash,
+            e.dim,
+            e.vector
+        FROM embeddings e
+        JOIN symbol_index s
+          ON e.object_type = 'symbol'
+         AND e.object_id = s.id
+        JOIN files f
+          ON s.file_id = f.id
+        WHERE f.path IN ({_placeholders(paths)})
+          AND e.backend = ?
+          AND e.version = ?
+        ORDER BY f.path, s.stable_id
+        """,
+        (*paths, backend.name, backend.version),
+    ).fetchall()
+    for file_path, stable_id, content_hash, dim, vector in rows:
+        path_key = str(file_path)
+        result.setdefault(path_key, {})[str(stable_id)] = StoredEmbeddingRow(
+            stable_id=str(stable_id),
+            content_hash=str(content_hash),
+            dim=_duckdb_int(dim),
+            vector=_duckdb_bytes(vector),
+        )
+    return result
 
 
 def _load_existing_file_ownership(

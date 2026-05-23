@@ -33,6 +33,7 @@ from codira.contracts import (
 from .duckdb_support import (
     _DuckDBPersistenceConnection,
     _delete_indexed_file_data,
+    _flush_pending_reference_scan_rows,
     _store_analysis,
 )
 from .repo_storage import get_codira_dir, get_metadata_path
@@ -50,8 +51,11 @@ if TYPE_CHECKING:
     from codira.contracts import IndexBackend, IndexWriteSession
 
 PACKAGE_VERSION = "1.5.3"
-_INSERT_TABLE_PATTERN = re.compile(r"^\s*INSERT\s+INTO\s+([a-z_]+)", re.IGNORECASE)
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
+_INDEX_NAME_PATTERN = re.compile(
+    r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
+    re.IGNORECASE,
+)
 _SEQUENCED_TABLES: tuple[str, ...] = (
     "files",
     "modules",
@@ -72,6 +76,7 @@ _SEQUENCE_REWRITE_PREFIXES: tuple[str, ...] = tuple(
 )
 _CALL_EDGES_TABLE_PREFIX = "CREATE TABLE IF NOT EXISTS call_edges ("
 _CALLABLE_REFS_TABLE_PREFIX = "CREATE TABLE IF NOT EXISTS callable_refs ("
+_EMBEDDINGS_TABLE_PREFIX = "CREATE TABLE IF NOT EXISTS embeddings ("
 _DUCKDB_CALL_EDGES_DDL = """
     CREATE TABLE IF NOT EXISTS call_edges (
         caller_file_id INTEGER NOT NULL,
@@ -79,6 +84,7 @@ _DUCKDB_CALL_EDGES_DDL = """
         caller_name TEXT NOT NULL,
         callee_module TEXT,
         callee_name TEXT,
+        unresolved_identity TEXT NOT NULL DEFAULT '',
         resolved INTEGER NOT NULL,
         FOREIGN KEY(caller_file_id) REFERENCES files(id)
     );
@@ -90,8 +96,22 @@ _DUCKDB_CALLABLE_REFS_DDL = """
         owner_name TEXT NOT NULL,
         target_module TEXT,
         target_name TEXT,
+        unresolved_identity TEXT NOT NULL DEFAULT '',
         resolved INTEGER NOT NULL,
         FOREIGN KEY(owner_file_id) REFERENCES files(id)
+    );
+"""
+_DUCKDB_EMBEDDINGS_DDL = """
+    CREATE TABLE IF NOT EXISTS embeddings (
+        id INTEGER PRIMARY KEY DEFAULT nextval('embeddings_id_seq'),
+        object_type TEXT NOT NULL,
+        object_id INTEGER NOT NULL,
+        backend TEXT NOT NULL,
+        version TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        dim INTEGER NOT NULL,
+        vector BLOB NOT NULL,
+        vector_values DOUBLE[]
     );
 """
 _NULLABLE_EDGE_TABLE_REWRITES: dict[
@@ -105,6 +125,7 @@ _NULLABLE_EDGE_TABLE_REWRITES: dict[
             "caller_name",
             "callee_module",
             "callee_name",
+            "unresolved_identity",
             "resolved",
         ),
         (
@@ -122,6 +143,7 @@ _NULLABLE_EDGE_TABLE_REWRITES: dict[
             "owner_name",
             "target_module",
             "target_name",
+            "unresolved_identity",
             "resolved",
         ),
         (
@@ -152,11 +174,14 @@ class _DuckDBIndexWriteSession:
         if not _duckdb_db_path(root).exists():
             backend.initialize(root)
         self._conn = backend.open_connection(root)
-        _repair_nullable_edge_tables(cast("DuckDBConnection", self._conn)._raw)
+        raw = cast("DuckDBConnection", self._conn)._raw
+        _repair_nullable_edge_tables(raw)
         self._conn.execute("BEGIN TRANSACTION")
         self._transaction_open = True
         self._closed = False
         self._completed = False
+        self._deferred_schema_indexes = False
+        self._pending_reference_scan_rows: list[tuple[int, int, str]] = []
 
     def purge_skipped_docstring_issues(self) -> None:
         """
@@ -314,16 +339,22 @@ class _DuckDBIndexWriteSession:
             Matching persisted rows are removed in place.
         """
         if full:
-            # DuckDB can reject the full-table delete sequence behind
-            # ``clear_index`` when it runs inside one explicit transaction on a
-            # populated database. Clear first in autocommit mode, then reopen
-            # the run-scoped transaction for the remaining persistence work.
             if self._transaction_open:
                 self._conn.execute("ROLLBACK")
                 self._transaction_open = False
-            self._backend.clear_index(self._root, conn=self._conn)
+            self._conn.close()
+            db_path = _duckdb_db_path(self._root)
+            for path in (db_path, db_path.with_name(f"{db_path.name}.wal")):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+            self._backend.initialize(self._root)
+            self._conn = self._backend.open_connection(self._root)
             self._conn.execute("BEGIN TRANSACTION")
             self._transaction_open = True
+            _drop_duckdb_schema_indexes(self._conn)
+            self._deferred_schema_indexes = True
             return
         self._backend.delete_paths(
             self._root,
@@ -375,6 +406,7 @@ class _DuckDBIndexWriteSession:
                     "dict[str, StoredEmbeddingRow] | None",
                     request.previous_embeddings,
                 ),
+                pending_reference_scan_rows=self._pending_reference_scan_rows,
             )
         except duckdb_error as exc:
             _delete_indexed_file_data(
@@ -447,8 +479,19 @@ class _DuckDBIndexWriteSession:
             Pending writes are committed once per session.
         """
         if not self._completed and self._transaction_open:
-            self._backend.commit(self._root, conn=self._conn)
-            self._transaction_open = False
+            _flush_pending_reference_scan_rows(
+                cast("_DuckDBPersistenceConnection", self._conn),
+                self._pending_reference_scan_rows,
+            )
+            self._pending_reference_scan_rows = []
+            if self._deferred_schema_indexes:
+                self._backend.commit(self._root, conn=self._conn)
+                self._transaction_open = False
+                _create_duckdb_schema_indexes(self._conn)
+                self._deferred_schema_indexes = False
+            else:
+                self._backend.commit(self._root, conn=self._conn)
+                self._transaction_open = False
             self._completed = True
 
     def abort(self) -> None:
@@ -748,10 +791,7 @@ class DuckDBConnection:
             self._raw.execute(query)
         else:
             self._raw.execute(query, parameters)
-        return _DuckDBCursorWrapper(
-            self._raw,
-            lastrowid=_duckdb_lastrowid(self._raw, query),
-        )
+        return _DuckDBCursorWrapper(self._raw)
 
     def executemany(
         self,
@@ -912,21 +952,59 @@ def _rewrite_duckdb_ddl(statement: str) -> str:
         DuckDB-compatible statement.
     """
     if _CALL_EDGES_TABLE_PREFIX in statement:
-        return _DUCKDB_CALL_EDGES_DDL
+        return _strip_foreign_key_constraints(_DUCKDB_CALL_EDGES_DDL)
 
     if _CALLABLE_REFS_TABLE_PREFIX in statement:
-        return _DUCKDB_CALLABLE_REFS_DDL
+        return _strip_foreign_key_constraints(_DUCKDB_CALLABLE_REFS_DDL)
+
+    if _EMBEDDINGS_TABLE_PREFIX in statement:
+        return _strip_foreign_key_constraints(_DUCKDB_EMBEDDINGS_DDL)
 
     for table, prefix in zip(
         _SEQUENCED_TABLES, _SEQUENCE_REWRITE_PREFIXES, strict=True
     ):
         if prefix in statement:
-            return statement.replace(
-                "id INTEGER PRIMARY KEY,",
-                f"id INTEGER PRIMARY KEY DEFAULT nextval('{_TABLE_ID_SEQUENCE[table]}'),",
-                1,
+            return _strip_foreign_key_constraints(
+                statement.replace(
+                    "id INTEGER PRIMARY KEY,",
+                    f"id INTEGER PRIMARY KEY DEFAULT nextval('{_TABLE_ID_SEQUENCE[table]}'),",
+                    1,
+                )
             )
-    return statement
+    return _strip_foreign_key_constraints(statement)
+
+
+def _strip_foreign_key_constraints(statement: str) -> str:
+    """
+    Remove foreign-key constraints from DuckDB physical table DDL.
+
+    Parameters
+    ----------
+    statement : str
+        DuckDB table or index DDL statement.
+
+    Returns
+    -------
+    str
+        Statement without table-level foreign-key constraints.
+
+    Notes
+    -----
+    DuckDB enforces foreign keys with delete/update limitations that conflict
+    with codira's replace-file indexing workflow. The backend maintains
+    relationship consistency explicitly during persistence and deletes.
+    """
+    lines = statement.splitlines()
+    filtered = [line for line in lines if not line.strip().startswith("FOREIGN KEY(")]
+    if len(filtered) == len(lines):
+        return statement
+    for index in range(len(filtered) - 1, -1, -1):
+        stripped = filtered[index].strip()
+        if not stripped or stripped == ");":
+            continue
+        filtered[index] = filtered[index].rstrip().removesuffix(",")
+        break
+    return "\n".join(filtered)
 
 
 def _duckdb_schema_ddl() -> tuple[str, ...]:
@@ -948,6 +1026,83 @@ def _duckdb_schema_ddl() -> tuple[str, ...]:
     )
     table_statements = tuple(_rewrite_duckdb_ddl(statement) for statement in DDL)
     return (*sequence_statements, *table_statements)
+
+
+def _duckdb_schema_index_ddl() -> tuple[str, ...]:
+    """
+    Return DuckDB schema index creation statements.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    tuple[str, ...]
+        Index DDL statements from the rewritten DuckDB schema.
+    """
+    return tuple(
+        statement for statement in _duckdb_schema_ddl() if " INDEX " in statement
+    )
+
+
+def _duckdb_schema_index_names() -> tuple[str, ...]:
+    """
+    Return DuckDB schema index names declared by the backend schema.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    tuple[str, ...]
+        Validated index names parsed from schema index DDL statements.
+    """
+    index_names: list[str] = []
+    for statement in _duckdb_schema_index_ddl():
+        match = _INDEX_NAME_PATTERN.search(statement)
+        if match is None:
+            continue
+        index_names.append(_validated_sql_identifier(match.group(1), kind="index"))
+    return tuple(index_names)
+
+
+def _drop_duckdb_schema_indexes(conn: _BackendCompatibleConnectionAdapter) -> None:
+    """
+    Drop schema indexes before a DuckDB full-rebuild bulk ingest.
+
+    Parameters
+    ----------
+    conn : _BackendCompatibleConnectionAdapter
+        Open backend-compatible DuckDB connection.
+
+    Returns
+    -------
+    None
+        Existing schema indexes are dropped in place.
+    """
+    for index_name in _duckdb_schema_index_names():
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+        conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+
+
+def _create_duckdb_schema_indexes(conn: _BackendCompatibleConnectionAdapter) -> None:
+    """
+    Create schema indexes after a DuckDB full-rebuild bulk ingest.
+
+    Parameters
+    ----------
+    conn : _BackendCompatibleConnectionAdapter
+        Open backend-compatible DuckDB connection.
+
+    Returns
+    -------
+    None
+        Schema indexes are created in place.
+    """
+    for statement in _duckdb_schema_index_ddl():
+        conn.execute(statement)
 
 
 def _table_info_notnull_by_name(
@@ -1013,13 +1168,30 @@ def _repair_nullable_edge_table(
     -------
     None
         The existing table is replaced in place when repair is needed.
+
+    Raises
+    ------
+    RuntimeError
+        If the legacy table is missing columns other than the supported
+        unresolved-target identity migration column.
     """
     safe_table_name = _validated_sql_identifier(table_name, kind="table")
     legacy_table_name = _validated_sql_identifier(
         f"{safe_table_name}_legacy_nullable_fix",
         kind="table",
     )
+    current_columns = set(_table_info_notnull_by_name(raw, table_name))
+    missing_columns = set(column_names) - current_columns
+    unsupported_missing_columns = missing_columns - {"unresolved_identity"}
+    if unsupported_missing_columns:
+        columns = ", ".join(sorted(unsupported_missing_columns))
+        msg = f"Cannot repair DuckDB {table_name} with missing columns: {columns}"
+        raise RuntimeError(msg)
     column_list = ", ".join(column_names)
+    select_list = ", ".join(
+        column_name if column_name in current_columns else f"'' AS {column_name}"
+        for column_name in column_names
+    )
     for index_name in index_names:
         safe_index_name = _validated_sql_identifier(index_name, kind="index")
         # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
@@ -1037,7 +1209,7 @@ def _repair_nullable_edge_table(
     # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     raw.execute(
         f"INSERT INTO {safe_table_name} ({column_list}) "
-        f"SELECT {column_list} FROM {legacy_table_name}"
+        f"SELECT {select_list} FROM {legacy_table_name}"
     )
     # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
     # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
@@ -1072,14 +1244,16 @@ def _repair_nullable_edge_tables(raw: _DuckDBRawConnection) -> None:
         notnull_by_name = _table_info_notnull_by_name(raw, table_name)
         if not notnull_by_name:
             continue
+        current_columns = tuple(notnull_by_name)
         nullable_columns = (
             ("callee_module", "callee_name")
             if table_name == "call_edges"
             else ("target_module", "target_name")
         )
-        if any(
+        needs_repair = current_columns != column_names or any(
             notnull_by_name.get(column_name, False) for column_name in nullable_columns
-        ):
+        )
+        if needs_repair:
             _repair_nullable_edge_table(
                 raw,
                 table_name=table_name,
@@ -1119,50 +1293,6 @@ def _write_schema_metadata(root: Path) -> None:
         json.dumps(metadata, indent=2) + "\n",
         encoding="utf-8",
     )
-
-
-def _duckdb_lastrowid(raw: _DuckDBRawConnection, query: str) -> int | None:
-    """
-    Resolve one sequence-backed inserted ID for helper compatibility.
-
-    Parameters
-    ----------
-    raw : _DuckDBRawConnection
-        Active raw DuckDB connection.
-    query : str
-        SQL statement that was just executed.
-
-    Returns
-    -------
-    int | None
-        Inserted integer ID for sequence-backed tables, otherwise ``None``.
-
-    Raises
-    ------
-    codira.contracts.BackendError
-        Raised when DuckDB returns a non-integer sequence value.
-    """
-    match = _INSERT_TABLE_PATTERN.match(query)
-    if match is None:
-        return None
-    table_name = match.group(1).lower()
-    sequence_name = _TABLE_ID_SEQUENCE.get(table_name)
-    if sequence_name is None:
-        return None
-    safe_sequence_name = _validated_sql_identifier(sequence_name, kind="sequence")
-    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-    raw.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-        f"SELECT currval('{safe_sequence_name}')"
-    )
-    row = raw.fetchone()
-    if row is None:
-        return None
-    value = row[0]
-    if isinstance(value, (int, str, bytes, bytearray)):
-        return int(value)
-    msg = "DuckDB sequence returned a non-integer identifier."
-    raise BackendError(msg)
 
 
 class DuckDBIndexBackend(DuckDBQueryBackend):
@@ -1211,8 +1341,14 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         module = _duckdb_module()
         raw = module.connect(str(db_path))
         try:
-            for statement in _duckdb_schema_ddl():
-                raw.execute(statement)
+            schema_statements = _duckdb_schema_ddl()
+            for statement in schema_statements:
+                if " INDEX " not in statement:
+                    raw.execute(statement)
+            _repair_nullable_edge_tables(raw)
+            for statement in schema_statements:
+                if " INDEX " in statement:
+                    raw.execute(statement)
             raw.commit()
         finally:
             raw.close()

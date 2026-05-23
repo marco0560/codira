@@ -22,7 +22,6 @@ import ast
 import contextlib
 import json
 import shutil
-import sqlite3
 import subprocess
 import sys
 from collections import OrderedDict
@@ -3089,7 +3088,7 @@ def _ensure_index(root: Path) -> None:
     initial_error: Exception | None = None
     try:
         request = _inspect_index_rebuild_request(root)
-    except (BackendError, OSError, sqlite3.Error, RuntimeError, ValueError) as error:
+    except (BackendError, OSError, RuntimeError, ValueError) as error:
         request = None
         initial_error = error
 
@@ -3115,7 +3114,6 @@ def _ensure_index(root: Path) -> None:
         except (
             BackendError,
             OSError,
-            sqlite3.Error,
             RuntimeError,
             ValueError,
         ) as error:
@@ -3132,7 +3130,6 @@ def _ensure_index(root: Path) -> None:
                 except (
                     BackendError,
                     OSError,
-                    sqlite3.Error,
                     RuntimeError,
                     ValueError,
                 ) as error:
@@ -3146,7 +3143,6 @@ def _ensure_index(root: Path) -> None:
             except (
                 BackendError,
                 OSError,
-                sqlite3.Error,
                 RuntimeError,
                 ValueError,
             ) as error:
@@ -3160,7 +3156,6 @@ def _ensure_index(root: Path) -> None:
             except (
                 BackendError,
                 OSError,
-                sqlite3.Error,
                 RuntimeError,
                 ValueError,
             ) as error:
@@ -3645,7 +3640,7 @@ def main() -> int:
     except EmbeddingBackendError as exc:
         print(f"[codira] {exc}", file=sys.stderr)
         return 2
-    except (BackendError, OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+    except (BackendError, OSError, RuntimeError, ValueError) as exc:
         print(
             f"[codira] {type(exc).__name__}: {exc}",
             file=sys.stderr,

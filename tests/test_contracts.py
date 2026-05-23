@@ -2168,9 +2168,9 @@ def test_active_phase_8_registries_expose_default_backend_and_analyzers() -> Non
     ]
 
 
-def test_indexer_sqlite_backend_symbol_reexports_package_backend() -> None:
+def test_indexer_keeps_sqlite_backend_symbols_out_of_core() -> None:
     """
-    Keep the historical indexer backend symbol as a package-backed re-export.
+    Keep SQLite backend symbols owned by the backend package.
 
     Parameters
     ----------
@@ -2179,9 +2179,10 @@ def test_indexer_sqlite_backend_symbol_reexports_package_backend() -> None:
     Returns
     -------
     None
-        The test asserts core no longer owns a separate SQLite backend class.
+        The test asserts core exposes no SQLite backend compatibility export.
     """
-    assert indexer_module.SQLiteIndexBackend is SQLiteIndexBackend
+    assert "SQLiteIndexBackend" not in indexer_module.__all__
+    assert not hasattr(indexer_module, "SQLiteIndexBackend")
 
 
 def test_registered_index_backends_keep_core_scope_narrow() -> None:

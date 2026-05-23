@@ -559,8 +559,17 @@ class SQLiteIndexBackend:
         -------
         None
             The SQLite schema is created or refreshed in place.
+
+        Raises
+        ------
+        codira.contracts.BackendError
+            If SQLite cannot create or refresh the schema.
         """
-        init_db(root)
+        try:
+            init_db(root)
+        except sqlite3.Error as exc:
+            msg = str(exc)
+            raise BackendError(msg) from exc
 
     def open_connection(self, root: Path) -> sqlite3.Connection:
         """
@@ -575,12 +584,21 @@ class SQLiteIndexBackend:
         -------
         sqlite3.Connection
             Open SQLite connection.
+
+        Raises
+        ------
+        codira.contracts.BackendError
+            If SQLite cannot open or initialize the repository index.
         """
         if not get_db_path(root).exists():
             self.initialize(root)
-        connection = sqlite3.connect(get_db_path(root))
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        try:
+            connection = sqlite3.connect(get_db_path(root))
+            connection.execute("PRAGMA foreign_keys = ON")
+            return connection
+        except sqlite3.Error as exc:
+            msg = str(exc)
+            raise BackendError(msg) from exc
 
     def list_symbols_in_module(
         self,
@@ -2068,7 +2086,7 @@ class SQLiteIndexBackend:
         ------
         OSError
             If file-backed persistence fails while storing analyzed artifacts.
-        sqlite3.Error
+        codira.contracts.BackendError
             If SQLite rejects the persistence operation or transaction
             boundaries.
         RuntimeError
@@ -2242,9 +2260,18 @@ class SQLiteIndexBackend:
         -------
         None
             Pending writes are committed.
+
+        Raises
+        ------
+        codira.contracts.BackendError
+            If SQLite rejects the pending transaction.
         """
         del root
-        conn.commit()
+        try:
+            conn.commit()
+        except sqlite3.Error as exc:
+            msg = str(exc)
+            raise BackendError(msg) from exc
 
     def close_connection(self, conn: sqlite3.Connection) -> None:
         """
@@ -2259,8 +2286,17 @@ class SQLiteIndexBackend:
         -------
         None
             The connection is closed.
+
+        Raises
+        ------
+        codira.contracts.BackendError
+            If SQLite rejects the close operation.
         """
-        conn.close()
+        try:
+            conn.close()
+        except sqlite3.Error as exc:
+            msg = str(exc)
+            raise BackendError(msg) from exc
 
 
 def build_backend() -> IndexBackend:

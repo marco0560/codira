@@ -5871,8 +5871,8 @@ def context_for(
 
     Raises
     ------
-    sqlite3.Error
-        If the repository index cannot be opened or queried.
+    codira.contracts.BackendError
+        If the active backend cannot open or query the repository index.
     """
     conn = cast(
         "BackendQueryConnection",

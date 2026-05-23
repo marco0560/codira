@@ -22,12 +22,13 @@ import warnings
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
+    IndexBackend,
     PendingEmbeddingRow,
     StoredEmbeddingRow,
 )
@@ -52,10 +53,7 @@ from codira.semantic.embeddings import (
 )
 
 if TYPE_CHECKING:
-    from codira_backend_sqlite import SQLiteIndexBackend as SQLiteIndexBackend
-
     from codira.contracts import IndexWriteSession, LanguageAnalyzer
-    from codira.semantic.embeddings import EmbeddingBackendSpec
 
 ParsedFile = tuple[Path, FileMetadataSnapshot, AnalysisResult]
 _IGNORED_COVERAGE_SUFFIXES = frozenset({"<no-suffix>", ".md", ".txt", ".typed"})
@@ -63,75 +61,8 @@ _BINARY_SNIFF_BYTES = 8192
 __all__ = [
     "PendingEmbeddingRow",
     "StoredEmbeddingRow",
-    "SQLiteIndexBackend",
     "index_repo",
 ]
-
-
-def __getattr__(name: str) -> object:
-    """
-    Resolve historical module exports lazily during the backend packaging split.
-
-    Parameters
-    ----------
-    name : str
-        Module attribute requested from ``codira.indexer``.
-
-    Returns
-    -------
-    object
-        Lazily imported compatibility export.
-
-    Raises
-    ------
-    AttributeError
-        If ``name`` is not a supported compatibility export.
-    """
-    if name == "SQLiteIndexBackend":
-        from codira_backend_sqlite import SQLiteIndexBackend
-
-        return SQLiteIndexBackend
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
-
-
-def _flush_embedding_rows(
-    conn: object,
-    *,
-    embedding_rows: list[PendingEmbeddingRow],
-    backend: EmbeddingBackendSpec,
-    previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
-) -> tuple[int, int]:
-    """
-    Persist pending embedding payloads through the historical indexer export.
-
-    Parameters
-    ----------
-    conn : object
-        Open backend connection handle reused by the compatibility helper.
-    embedding_rows : list[codira.contracts.PendingEmbeddingRow]
-        Pending embedding payloads collected during persistence.
-    backend : codira.semantic.embeddings.EmbeddingBackendSpec
-        Active embedding backend metadata.
-    previous_embeddings : dict[str, codira.contracts.StoredEmbeddingRow] | None, optional
-        Previously stored embedding rows eligible for reuse.
-
-    Returns
-    -------
-    tuple[int, int]
-        ``(recomputed, reused)`` embedding counts for the file.
-    """
-
-    from codira_backend_sqlite.sqlite_support import (
-        _flush_embedding_rows as _sqlite_flush,
-    )
-
-    return _sqlite_flush(
-        cast("Any", conn),
-        embedding_rows=embedding_rows,
-        backend=backend,
-        previous_embeddings=previous_embeddings,
-    )
 
 
 @dataclass(frozen=True)
@@ -865,7 +796,7 @@ def _collect_project_scan_state(
 def _load_existing_index_state(
     root: Path,
     *,
-    backend: Any,
+    backend: IndexBackend,
     embedding_backend: EmbeddingBackendSpec,
 ) -> ExistingIndexState:
     """

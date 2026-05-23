@@ -110,10 +110,8 @@ rules:
         - /examples/plugins/**/*.py
         - /fixtures/src/**/*.py
       exclude:
-        - /src/codira/cli.py
-        - /src/codira/query/context.py
-        - /src/codira/storage.py
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py
+        - /packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_storage.py
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_support.py
         - /packages/**/tests/**/*.py
     patterns:
@@ -136,7 +134,6 @@ rules:
         - /examples/plugins/**/*.py
         - /fixtures/src/**/*.py
       exclude:
-        - /src/codira/indexer.py
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py
         - /examples/plugins/codira_demo_backend/src/codira_demo_backend/__init__.py
         - /packages/**/tests/**/*.py
