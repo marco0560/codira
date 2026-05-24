@@ -1028,6 +1028,57 @@ def test_cli_reports_unexpected_index_errors_without_traceback(
     assert captured.out == ""
 
 
+def test_cli_reports_missing_path_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Collapse invalid ``--path`` resolution into concise parser stderr.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory used to construct a missing target path.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to control CLI arguments.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture CLI output.
+
+    Returns
+    -------
+    None
+        The test asserts a missing target path reports an argparse error
+        without exposing a traceback.
+    """
+    missing_path = tmp_path / "missing-repo"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "codira",
+            "calls",
+            "main",
+            "--module",
+            "codira.cli",
+            "--tree",
+            "--dot",
+            "--path",
+            str(missing_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 2
+    assert str(missing_path) in captured.err
+    assert "Target directory cannot be resolved:" in captured.err
+    assert "Traceback" not in captured.err
+    assert captured.out == ""
+
+
 def test_index_cli_fails_gracefully_when_no_language_analyzers_are_registered(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
