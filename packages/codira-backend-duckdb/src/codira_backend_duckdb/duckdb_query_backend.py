@@ -1755,6 +1755,51 @@ class DuckDBQueryBackend:
 
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            scored_rows = conn.execute(
+                f"""
+                WITH scored_embeddings AS (
+                    SELECT
+                        list_dot_product(e.vector_values, ?) AS score,
+                        s.type,
+                        s.module_name,
+                        s.name,
+                        f.path,
+                        s.lineno
+                    FROM embeddings e
+                    JOIN symbol_index s
+                      ON e.object_type = 'symbol'
+                     AND e.object_id = s.id
+                    JOIN files f
+                      ON s.file_id = f.id
+                    WHERE e.backend = ?
+                      AND e.version = ?
+                      AND e.dim = ?
+                      AND e.vector_values IS NOT NULL
+                    {prefix_sql}
+                )
+                SELECT
+                    score,
+                    type,
+                    module_name,
+                    name,
+                    path,
+                    lineno
+                FROM scored_embeddings
+                WHERE score >= ?
+                ORDER BY score DESC, module_name, name, path, lineno, type
+                LIMIT ?
+                """,
+                (
+                    query_vector,
+                    backend.name,
+                    backend.version,
+                    backend.dim,
+                    *prefix_params,
+                    min_score,
+                    limit,
+                ),
+            ).fetchall()
+
             rows = conn.execute(
                 f"""
                 SELECT
@@ -1773,6 +1818,7 @@ class DuckDBQueryBackend:
                 WHERE e.backend = ?
                   AND e.version = ?
                   AND e.dim = ?
+                  AND e.vector_values IS NULL
                 {prefix_sql}
                 ORDER BY s.module_name, s.name, f.path, s.lineno, s.type
                 """,
@@ -1784,7 +1830,7 @@ class DuckDBQueryBackend:
                 ),
             ).fetchall()
 
-            scored_rows = [
+            legacy_scored_rows = [
                 (
                     _dot_similarity(
                         deserialize_vector(_backend_bytes(vector), dim=backend.dim),
@@ -1798,8 +1844,22 @@ class DuckDBQueryBackend:
                 )
                 for vector, symbol_type, module_name, symbol_name, file_path, lineno in rows
             ]
+            all_scored_rows = [
+                (
+                    _backend_float(score),
+                    str(symbol_type),
+                    str(module_name),
+                    str(symbol_name),
+                    str(file_path),
+                    _backend_int(lineno),
+                )
+                for score, symbol_type, module_name, symbol_name, file_path, lineno in scored_rows
+            ]
+            all_scored_rows.extend(
+                row for row in legacy_scored_rows if row[0] >= min_score
+            )
             ranked_rows = sorted(
-                (row for row in scored_rows if row[0] >= min_score),
+                all_scored_rows,
                 key=lambda row: (-row[0], row[2], row[3], row[4], row[5], row[1]),
             )[:limit]
             return [

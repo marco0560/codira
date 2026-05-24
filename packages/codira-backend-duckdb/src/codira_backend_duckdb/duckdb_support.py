@@ -32,7 +32,11 @@ from typing import TYPE_CHECKING, Protocol, cast
 from codira.contracts import PendingEmbeddingRow, StoredEmbeddingRow
 from codira.docstring import DocstringValidationRequest, validate_docstring
 from codira.repository_scope import path_has_excluded_tree_name
-from codira.semantic.embeddings import embed_texts as embed_texts, serialize_vector
+from codira.semantic.embeddings import (
+    deserialize_vector,
+    embed_texts as embed_texts,
+    serialize_vector,
+)
 
 if TYPE_CHECKING:
     from codira.contracts import LanguageAnalyzer
@@ -2323,7 +2327,7 @@ def _flush_embedding_rows(
             texts_to_encode.setdefault(content_hash, row.text)
             recomputed += 1
 
-    encoded_vectors: dict[str, bytes] = {}
+    encoded_vectors: dict[str, tuple[bytes, list[float]]] = {}
     if texts_to_encode:
         ordered_content_hashes = list(texts_to_encode)
         encoded_rows = embed_texts(
@@ -2334,13 +2338,16 @@ def _flush_embedding_rows(
             encoded_rows,
             strict=True,
         ):
-            encoded_vectors[content_hash] = serialize_vector(vector)
+            encoded_vectors[content_hash] = (serialize_vector(vector), vector)
 
-    insert_rows: list[tuple[str, int, str, str, str, int, bytes]] = []
+    insert_rows: list[tuple[str, int, str, str, str, int, bytes, list[float]]] = []
     for row, content_hash, stored_vector in prepared_rows:
         resolved_blob = stored_vector
+        vector_values: list[float]
         if resolved_blob is None:
-            resolved_blob = encoded_vectors[content_hash]
+            resolved_blob, vector_values = encoded_vectors[content_hash]
+        else:
+            vector_values = deserialize_vector(resolved_blob, dim=backend.dim)
 
         insert_rows.append(
             (
@@ -2351,12 +2358,13 @@ def _flush_embedding_rows(
                 content_hash,
                 backend.dim,
                 resolved_blob,
+                vector_values,
             )
         )
     conn.executemany(
         "INSERT INTO embeddings"
-        "(object_type, object_id, backend, version, content_hash, dim, vector) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "(object_type, object_id, backend, version, content_hash, dim, vector, vector_values) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         insert_rows,
     )
 

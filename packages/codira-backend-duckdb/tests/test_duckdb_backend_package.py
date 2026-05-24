@@ -6,12 +6,14 @@ import json
 import sys
 import tomllib
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from codira.contracts import (
+    BackendEmbeddingCandidatesRequest,
     BackendError,
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
@@ -1402,5 +1404,115 @@ def test_duckdb_backend_persist_analysis_with_shared_connection_uses_real_driver
 
     assert (recomputed, reused) == (1, 0)
     assert stored_row == (str(tmp_path / "pkg" / "sample.py"),)
-    assert stored_embedding == (None,)
+    assert stored_embedding is not None
+    stored_vector_values = cast("object", stored_embedding[0])
+    assert stored_vector_values == [0.0] * 384
     connection.close()
+
+
+def test_duckdb_embedding_candidates_use_stored_vector_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Score DuckDB embedding candidates through stored list vectors.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace embedding generation and reject blob fallback.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB can rank candidates without deserializing
+        stored embedding blobs in Python.
+    """
+    pytest.importorskip("duckdb")
+    backend = DuckDBIndexBackend()
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_support.embed_texts",
+        lambda texts: [[1.0] + [0.0] * 383 for _text in texts],
+    )
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_query_backend.embed_text",
+        lambda text: [1.0] + [0.0] * 383,
+    )
+
+    backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=FileMetadataSnapshot(
+                path=tmp_path / "pkg" / "sample.py",
+                sha256="duckdb-vector-values",
+                mtime=1.0,
+                size=1,
+            ),
+            analysis=AnalysisResult(
+                source_path=tmp_path / "pkg" / "sample.py",
+                module=ModuleArtifact(
+                    name="pkg.sample",
+                    stable_id="python:module:pkg.sample",
+                    docstring=None,
+                    has_docstring=0,
+                ),
+                classes=(),
+                functions=(),
+                declarations=(),
+                imports=(),
+            ),
+        )
+    )
+
+    def reject_blob_deserialization(blob: bytes, *, dim: int) -> list[float]:
+        """
+        Reject the legacy Python blob-scoring path.
+
+        Parameters
+        ----------
+        blob : bytes
+            Stored embedding blob supplied by a legacy fallback path.
+        dim : int
+            Expected embedding dimensionality.
+
+        Returns
+        -------
+        list[float]
+            This helper never returns.
+
+        Raises
+        ------
+        AssertionError
+            Always raised when the legacy fallback is used.
+        """
+        del blob, dim
+        raise AssertionError("legacy embedding blob fallback was used")
+
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_query_backend.deserialize_vector",
+        reject_blob_deserialization,
+    )
+
+    results = backend.embedding_candidates(
+        BackendEmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="sample",
+            limit=5,
+            min_score=0.0,
+        )
+    )
+
+    assert results == [
+        (
+            1.0,
+            (
+                "module",
+                "pkg.sample",
+                "pkg.sample",
+                str(tmp_path / "pkg" / "sample.py"),
+                1,
+            ),
+        )
+    ]
