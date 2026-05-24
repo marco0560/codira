@@ -187,6 +187,7 @@ class _TrackingSQLiteBackend(SQLiteIndexBackend):
         self.begin_index_session_calls = 0
         self.open_connection_calls = 0
         self.close_connection_calls = 0
+        self.rebuild_derived_indexes_calls = 0
 
     def begin_index_session(self, root: Path) -> IndexWriteSession:
         """
@@ -238,6 +239,30 @@ class _TrackingSQLiteBackend(SQLiteIndexBackend):
         """
         self.close_connection_calls += 1
         super().close_connection(conn)
+
+    def rebuild_derived_indexes(
+        self,
+        root: Path,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        """
+        Record one derived-index rebuild before delegating to SQLite.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose derived indexes should be rebuilt.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        None
+            Derived indexes are rebuilt by the parent backend.
+        """
+        self.rebuild_derived_indexes_calls += 1
+        super().rebuild_derived_indexes(root, conn=conn)
 
 
 class _RecordingBackendConnection:
@@ -2021,6 +2046,49 @@ def test_index_repo_skips_python_files_with_syntax_errors(tmp_path: Path) -> Non
         conn.close()
 
     assert indexed_paths == [str(valid_module)]
+
+
+def test_index_repo_skips_rebuild_for_new_failed_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Avoid rebuilding graph indexes when only new files fail analysis.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch backend selection for the indexer.
+
+    Returns
+    -------
+    None
+        The test asserts a syntax-invalid new file is reported without
+        rebuilding derived graph indexes when no stored graph rows changed.
+    """
+    valid_module = tmp_path / "pkg" / "valid.py"
+    legacy_module = tmp_path / "pkg" / "legacy.py"
+    _write_module(
+        valid_module,
+        'def demo():\n    """Return a constant."""\n    return 1\n',
+    )
+
+    backend = _TrackingSQLiteBackend()
+    monkeypatch.setattr(indexer_module, "active_index_backend", lambda: backend)
+    first = index_repo(tmp_path)
+    assert first.indexed == 1
+    assert backend.rebuild_derived_indexes_calls == 1
+
+    _write_module(legacy_module, 'print "hi"\n')
+    backend.rebuild_derived_indexes_calls = 0
+    second = index_repo(tmp_path)
+
+    assert second.indexed == 0
+    assert second.failed == 1
+    assert second.failures[0].path == str(legacy_module)
+    assert backend.rebuild_derived_indexes_calls == 0
 
 
 def test_index_cli_reports_failures_without_aborting(

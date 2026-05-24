@@ -946,6 +946,39 @@ def _prepare_index_storage(
     )
 
 
+def _index_run_mutated_graph_inputs(
+    *,
+    full: bool,
+    plan: IndexPlan,
+    existing_state: ExistingIndexState,
+    persisted_files: list[ParsedFile],
+) -> bool:
+    """
+    Return whether the completed run changed graph-derived source rows.
+
+    Parameters
+    ----------
+    full : bool
+        Whether the current run cleared all indexed storage.
+    plan : IndexPlan
+        Deterministic indexing plan for the current run.
+    existing_state : ExistingIndexState
+        Persisted state observed before the current run.
+    persisted_files : list[ParsedFile]
+        Successfully persisted parsed-file rows.
+
+    Returns
+    -------
+    bool
+        ``True`` when derived graph indexes may need rebuilding.
+    """
+    if full or plan.deleted_paths or persisted_files:
+        return True
+
+    existing_paths = set(existing_state.paths)
+    return any(path in existing_paths for path in plan.indexed_paths)
+
+
 def _finalize_index_report(request: FinalizeIndexReportRequest) -> IndexReport:
     """
     Build the deterministic report returned from one index run.
@@ -1142,7 +1175,13 @@ def index_repo(
         failures.extend(persistence_failures)
         embeddings_reused = unchanged_embeddings_reused + changed_file_embeddings_reused
 
-        session.rebuild_derived_indexes()
+        if _index_run_mutated_graph_inputs(
+            full=full,
+            plan=plan,
+            existing_state=existing_state,
+            persisted_files=persisted_files,
+        ):
+            session.rebuild_derived_indexes()
         session.persist_runtime_inventory(
             BackendRuntimeInventoryRequest(
                 root=root,
