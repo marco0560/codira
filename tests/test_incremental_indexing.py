@@ -185,6 +185,8 @@ class _TrackingSQLiteBackend(SQLiteIndexBackend):
     def __init__(self) -> None:
         super().__init__()
         self.begin_index_session_calls = 0
+        self.open_connection_calls = 0
+        self.close_connection_calls = 0
 
     def begin_index_session(self, root: Path) -> IndexWriteSession:
         """
@@ -202,6 +204,40 @@ class _TrackingSQLiteBackend(SQLiteIndexBackend):
         """
         self.begin_index_session_calls += 1
         return super().begin_index_session(root)
+
+    def open_connection(self, root: Path) -> sqlite3.Connection:
+        """
+        Record one backend connection open before delegating to SQLite.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state should be queried or mutated.
+
+        Returns
+        -------
+        sqlite3.Connection
+            Concrete SQLite connection created by the parent backend.
+        """
+        self.open_connection_calls += 1
+        return super().open_connection(root)
+
+    def close_connection(self, conn: sqlite3.Connection) -> None:
+        """
+        Record one backend connection close before delegating to SQLite.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Backend-owned connection handle to close.
+
+        Returns
+        -------
+        None
+            The connection is closed by the parent backend.
+        """
+        self.close_connection_calls += 1
+        super().close_connection(conn)
 
 
 class _RecordingBackendConnection:
@@ -1246,11 +1282,15 @@ def test_index_repo_skips_write_session_for_unchanged_repository(
     assert backend.begin_index_session_calls == 1
 
     backend.begin_index_session_calls = 0
+    backend.open_connection_calls = 0
+    backend.close_connection_calls = 0
     second = index_repo(tmp_path)
 
     assert second.indexed == 0
     assert second.reused == 1
     assert backend.begin_index_session_calls == 0
+    assert backend.open_connection_calls == 1
+    assert backend.close_connection_calls == 1
 
 
 def test_index_repo_accepts_pep_263_encoded_python_sources(tmp_path: Path) -> None:

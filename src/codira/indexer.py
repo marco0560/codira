@@ -798,6 +798,7 @@ def _load_existing_index_state(
     *,
     backend: IndexBackend,
     embedding_backend: EmbeddingBackendSpec,
+    conn: object | None = None,
 ) -> ExistingIndexState:
     """
     Load the persisted state needed for incremental index planning.
@@ -810,20 +811,23 @@ def _load_existing_index_state(
         Active backend exposing the incremental-planning read surface.
     embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
         Active embedding backend metadata.
+    conn : object | None, optional
+        Existing backend connection to reuse for read-side planning.
 
     Returns
     -------
     ExistingIndexState
         Deterministic persisted state used for reuse decisions.
     """
-    file_hashes = backend.load_existing_file_hashes(root)
+    file_hashes = backend.load_existing_file_hashes(root, conn=conn)
     return ExistingIndexState(
         file_hashes=file_hashes,
-        file_ownership=backend.load_existing_file_ownership(root),
+        file_ownership=backend.load_existing_file_ownership(root, conn=conn),
         paths=sorted(file_hashes),
         embedding_backend_matches=backend.current_embedding_state_matches(
             root,
             embedding_backend=embedding_backend,
+            conn=conn,
         ),
     )
 
@@ -1035,30 +1039,49 @@ def index_repo(
     backend = get_embedding_backend()
     coverage_issues = _audit_canonical_directory_coverage(root, analyzers=analyzers)
     current_state = _collect_project_scan_state(root, analyzers=analyzers)
-    existing_state = _load_existing_index_state(
-        root,
-        backend=index_backend,
-        embedding_backend=backend,
-    )
-    plan = _plan_index_run(
-        full=full,
-        current_state=current_state,
-        existing_state=existing_state,
-    )
-    current_runtime_inventory = (
-        str(index_backend.name),
-        str(index_backend.version),
-        int(not coverage_issues),
-    )
-    runtime_inventory_matches = (
-        index_backend.load_runtime_inventory(root) == current_runtime_inventory
-    )
-    analyzer_inventory_matches = index_backend.load_analyzer_inventory(
-        root
-    ) == _current_analyzer_inventory_rows(analyzers)
-    backend_needs_maintenance = bool(
-        getattr(index_backend, "needs_maintenance", lambda _root: True)(root)
-    )
+    planning_conn = index_backend.open_connection(root)
+    try:
+        existing_state = _load_existing_index_state(
+            root,
+            backend=index_backend,
+            embedding_backend=backend,
+            conn=planning_conn,
+        )
+        plan = _plan_index_run(
+            full=full,
+            current_state=current_state,
+            existing_state=existing_state,
+        )
+        current_runtime_inventory = (
+            str(index_backend.name),
+            str(index_backend.version),
+            int(not coverage_issues),
+        )
+        runtime_inventory_matches = (
+            index_backend.load_runtime_inventory(root, conn=planning_conn)
+            == current_runtime_inventory
+        )
+        analyzer_inventory_matches = index_backend.load_analyzer_inventory(
+            root,
+            conn=planning_conn,
+        ) == _current_analyzer_inventory_rows(analyzers)
+        needs_maintenance = getattr(
+            index_backend,
+            "needs_maintenance",
+            lambda _root, *, conn=None: True,
+        )
+        backend_needs_maintenance = bool(needs_maintenance(root, conn=planning_conn))
+        unchanged_embeddings_reused = (
+            0
+            if full
+            else index_backend.count_reusable_embeddings(
+                root,
+                paths=plan.reused_paths,
+                conn=planning_conn,
+            )
+        )
+    finally:
+        index_backend.close_connection(planning_conn)
     if (
         not plan.indexed_paths
         and not plan.deleted_paths
@@ -1074,10 +1097,7 @@ def index_repo(
                 warnings=[],
                 coverage_issues=coverage_issues,
                 embeddings_recomputed=0,
-                embeddings_reused=index_backend.count_reusable_embeddings(
-                    root,
-                    paths=plan.reused_paths,
-                ),
+                embeddings_reused=unchanged_embeddings_reused,
             )
         )
 
@@ -1097,14 +1117,6 @@ def index_repo(
             full=full,
             plan=plan,
             session=session,
-        )
-
-        unchanged_embeddings_reused = (
-            0
-            if full
-            else session.count_reusable_embeddings(
-                paths=plan.reused_paths,
-            )
         )
 
         parsed_files, failures, collected_warnings = _collect_indexed_file_analyses(
