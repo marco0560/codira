@@ -1233,10 +1233,28 @@ def test_duckdb_backend_rebuild_replaces_existing_resolved_edges(
             SELECT caller_module, caller_name, callee_module, callee_name, resolved
             FROM call_edges
             """).fetchall()
+        index_names = {
+            str(row[0])
+            for row in reopened.execute("""
+                SELECT index_name
+                FROM duckdb_indexes()
+                WHERE table_name IN ('call_edges', 'callable_refs')
+                """).fetchall()
+        }
     finally:
         reopened.close()
 
     assert rows == [("pkg.sample", "caller", "pkg.sample", "target", 1)]
+    assert {
+        "idx_call_edges_identity",
+        "idx_call_edges_caller",
+        "idx_call_edges_callee",
+        "idx_call_edges_resolved",
+        "idx_callable_refs_identity",
+        "idx_callable_refs_owner",
+        "idx_callable_refs_target",
+        "idx_callable_refs_resolved",
+    } <= index_names
 
 
 def test_duckdb_backend_delete_paths_removes_file_owned_edge_rows(

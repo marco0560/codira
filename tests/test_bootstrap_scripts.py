@@ -723,6 +723,24 @@ class _BenchmarkCampaignModule(Protocol):
         """
         ...
 
+    def _run_command(self, command: tuple[str, ...], *, output_log: Path) -> int:
+        """
+        Execute one benchmark campaign command.
+
+        Parameters
+        ----------
+        command : tuple[str, ...]
+            Command vector to execute.
+        output_log : pathlib.Path
+            File that receives combined command output.
+
+        Returns
+        -------
+        int
+            Process exit status.
+        """
+        ...
+
     def main(self) -> int:
         """
         Run the benchmark campaign entry point.
@@ -3422,9 +3440,19 @@ def test_benchmark_campaign_helper_expands_manifest_commands(
     row = plan[0]
     display_commands = cast("list[str]", row["display_commands"])
     commands = cast("list[list[str]]", row["commands"])
-    hyperfine_commands = commands[1][7:]
+    hyperfine_commands = commands[1][8:]
 
     assert any("codira help" in command for command in display_commands)
+    assert "--show-output" in commands[1]
+    assert row["output_logs"] == [
+        str(
+            config.artifact_root
+            / "20260501T120000Z"
+            / "logs"
+            / f"small-codira-command-{index}.log"
+        )
+        for index in range(1, len(commands) + 1)
+    ]
     assert any(
         "cov --json --path " in command and "--output-dir " in command
         for command in display_commands
@@ -3972,14 +4000,28 @@ def test_benchmark_campaign_main_prints_timestamp_after_each_repo_step(
         repositories: Sequence[object],
         config: object,
     ) -> list[dict[str, object]]:
+        del repositories, config
         return [
-            {"label": "first", "commands": [["true"]]},
-            {"label": "second", "commands": [["true"]]},
+            {
+                "label": "first",
+                "commands": [["true"]],
+                "output_logs": [str(artifact_root / "run" / "logs" / "first.log")],
+            },
+            {
+                "label": "second",
+                "commands": [["true"]],
+                "output_logs": [str(artifact_root / "run" / "logs" / "second.log")],
+            },
         ]
 
     monkeypatch.setattr(helper, "resolve_repositories", fake_resolve_repositories)
     monkeypatch.setattr(helper, "command_plan", fake_command_plan)
-    monkeypatch.setattr(helper, "_run_command", lambda command: 0)
+
+    def fake_run_command(command: tuple[str, ...], *, output_log: Path) -> int:
+        del command, output_log
+        return 0
+
+    monkeypatch.setattr(helper, "_run_command", fake_run_command)
 
     assert helper.main() == 0
     captured = capsys.readouterr()
@@ -3987,6 +4029,40 @@ def test_benchmark_campaign_main_prints_timestamp_after_each_repo_step(
     assert captured.err == ""
     assert "first: 2026-05-20T10:15:30Z\n" in captured.out
     assert "second: 2026-05-20T10:15:30Z\n" in captured.out
+
+
+def test_benchmark_campaign_run_command_writes_combined_output_log(
+    tmp_path: Path,
+) -> None:
+    """
+    Persist stdout and stderr from one benchmark campaign command.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for the output log.
+
+    Returns
+    -------
+    None
+        The test asserts command output is captured in a durable log file.
+    """
+    helper = _load_benchmark_campaign_helper()
+    output_log = tmp_path / "logs" / "command.log"
+
+    return_code = helper._run_command(
+        (
+            sys.executable,
+            "-c",
+            "import sys; print('out', flush=True); print('err', file=sys.stderr)",
+        ),
+        output_log=output_log,
+    )
+
+    assert return_code == 0
+    lines = output_log.read_text(encoding="utf-8").splitlines()
+    assert lines[0].startswith(f"$ {sys.executable} -c ")
+    assert lines[-2:] == ["out", "err"]
 
 
 def test_split_repo_verification_uses_local_core_checkout_before_package_install() -> (

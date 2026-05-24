@@ -62,6 +62,28 @@ _DERIVED_GRAPH_INDEX_DROP_DDL = (
     "DROP INDEX IF EXISTS idx_callable_refs_target",
     "DROP INDEX IF EXISTS idx_callable_refs_resolved",
 )
+_CALL_EDGES_REBUILD_TABLE_DDL = """
+    CREATE TABLE call_edges (
+        caller_file_id INTEGER NOT NULL,
+        caller_module TEXT NOT NULL,
+        caller_name TEXT NOT NULL,
+        callee_module TEXT,
+        callee_name TEXT,
+        unresolved_identity TEXT NOT NULL DEFAULT '',
+        resolved INTEGER NOT NULL
+    );
+"""
+_CALLABLE_REFS_REBUILD_TABLE_DDL = """
+    CREATE TABLE callable_refs (
+        owner_file_id INTEGER NOT NULL,
+        owner_module TEXT NOT NULL,
+        owner_name TEXT NOT NULL,
+        target_module TEXT,
+        target_name TEXT,
+        unresolved_identity TEXT NOT NULL DEFAULT '',
+        resolved INTEGER NOT NULL
+    );
+"""
 _DERIVED_GRAPH_INDEX_DDL = (
     """
     CREATE UNIQUE INDEX IF NOT EXISTS idx_call_edges_identity
@@ -1228,8 +1250,10 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
 
     for statement in _DERIVED_GRAPH_INDEX_DROP_DDL:
         conn.execute(statement)
-    conn.execute("DELETE FROM call_edges")
-    conn.execute("DELETE FROM callable_refs")
+    conn.execute("DROP TABLE call_edges")
+    conn.execute("DROP TABLE callable_refs")
+    conn.execute(_CALL_EDGES_REBUILD_TABLE_DDL)
+    conn.execute(_CALLABLE_REFS_REBUILD_TABLE_DDL)
     conn.execute("""
         INSERT INTO call_edges(
             caller_file_id,
