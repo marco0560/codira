@@ -34,6 +34,7 @@ from .duckdb_support import (
     _DuckDBPersistenceConnection,
     _delete_indexed_file_data,
     _flush_pending_reference_scan_rows,
+    _flush_pending_relationship_rows,
     _store_analysis,
 )
 from .repo_storage import get_codira_dir, get_metadata_path
@@ -182,6 +183,12 @@ class _DuckDBIndexWriteSession:
         self._completed = False
         self._deferred_schema_indexes = False
         self._pending_reference_scan_rows: list[tuple[int, int, str]] = []
+        self._pending_call_rows: list[
+            tuple[int, str, str, str, str, str, int, int]
+        ] = []
+        self._pending_ref_rows: list[
+            tuple[int, str, str, str, str, str, str, int, int]
+        ] = []
 
     def purge_skipped_docstring_issues(self) -> None:
         """
@@ -407,6 +414,8 @@ class _DuckDBIndexWriteSession:
                     request.previous_embeddings,
                 ),
                 pending_reference_scan_rows=self._pending_reference_scan_rows,
+                pending_call_rows=self._pending_call_rows,
+                pending_ref_rows=self._pending_ref_rows,
             )
         except duckdb_error as exc:
             _delete_indexed_file_data(
@@ -435,6 +444,13 @@ class _DuckDBIndexWriteSession:
         None
             Derived backend state is refreshed in place.
         """
+        _flush_pending_relationship_rows(
+            cast("_DuckDBPersistenceConnection", self._conn),
+            pending_call_rows=self._pending_call_rows,
+            pending_ref_rows=self._pending_ref_rows,
+        )
+        self._pending_call_rows = []
+        self._pending_ref_rows = []
         self._backend.rebuild_derived_indexes(self._root, conn=self._conn)
 
     def persist_runtime_inventory(

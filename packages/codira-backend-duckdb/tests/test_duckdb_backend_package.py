@@ -18,7 +18,13 @@ from codira.contracts import (
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
 )
-from codira.models import AnalysisResult, FileMetadataSnapshot, ModuleArtifact
+from codira.models import (
+    AnalysisResult,
+    CallSite,
+    FileMetadataSnapshot,
+    FunctionArtifact,
+    ModuleArtifact,
+)
 from codira.schema import DDL
 from codira_backend_duckdb import (
     DuckDBIndexBackend,
@@ -827,6 +833,99 @@ def test_duckdb_backend_bulk_reference_rows_preserve_empty_lines(
 
     assert stored == ("",)
     assert total == (120,)
+
+
+def test_duckdb_write_session_flushes_relationship_rows_before_rebuild(
+    tmp_path: Path,
+) -> None:
+    """
+    Flush session-level relationship rows before derived graph rebuild.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts write-session batching still persists call records
+        before derived call edges are rebuilt.
+    """
+    pytest.importorskip("duckdb")
+    backend = DuckDBIndexBackend()
+    session = backend.begin_index_session(tmp_path)
+    source = tmp_path / "pkg" / "sample.py"
+    source.parent.mkdir()
+    source.write_text("def demo():\n    helper()\n", encoding="utf-8")
+
+    try:
+        session.persist_analysis(
+            BackendPersistAnalysisRequest(
+                root=tmp_path,
+                file_metadata=FileMetadataSnapshot(
+                    path=source,
+                    sha256="duckdb-relationship-batch",
+                    mtime=1.0,
+                    size=source.stat().st_size,
+                ),
+                analysis=AnalysisResult(
+                    source_path=source,
+                    module=ModuleArtifact(
+                        name="pkg.sample",
+                        stable_id="python:module:pkg.sample",
+                        docstring=None,
+                        has_docstring=0,
+                    ),
+                    classes=(),
+                    functions=(
+                        FunctionArtifact(
+                            name="demo",
+                            stable_id="python:function:pkg.sample:demo",
+                            lineno=1,
+                            end_lineno=2,
+                            signature="def demo()",
+                            docstring=None,
+                            has_docstring=0,
+                            is_method=0,
+                            is_public=1,
+                            parameters=(),
+                            returns_value=0,
+                            yields_value=0,
+                            raises=0,
+                            has_asserts=0,
+                            decorators=(),
+                            calls=(
+                                CallSite(
+                                    kind="name",
+                                    target="helper",
+                                    lineno=2,
+                                    col_offset=4,
+                                ),
+                            ),
+                            callable_refs=(),
+                        ),
+                    ),
+                    declarations=(),
+                    imports=(),
+                ),
+            )
+        )
+        session.rebuild_derived_indexes()
+        session.commit()
+    finally:
+        session.close()
+
+    connection = backend.open_connection(tmp_path)
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM call_records").fetchone() == (
+            1,
+        )
+        assert connection.execute(
+            "SELECT caller_module, caller_name, unresolved_identity FROM call_edges"
+        ).fetchone() == ("pkg.sample", "demo", '["name","","helper"]')
+    finally:
+        connection.close()
 
 
 def test_duckdb_backend_initialize_repairs_legacy_edge_identity_schema(

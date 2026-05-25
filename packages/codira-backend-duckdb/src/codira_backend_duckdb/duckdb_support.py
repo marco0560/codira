@@ -2077,6 +2077,10 @@ def _flush_persisted_relationship_rows(
     *,
     call_rows: list[tuple[int, str, str, str, str, str, int, int]],
     ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]],
+    pending_call_rows: list[tuple[int, str, str, str, str, str, int, int]]
+    | None = None,
+    pending_ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]]
+    | None = None,
 ) -> None:
     """
     Flush pending call and callable-reference rows to DuckDB.
@@ -2089,6 +2093,12 @@ def _flush_persisted_relationship_rows(
         Pending normalized call rows.
     ref_rows : list[tuple[int, str, str, str, str, str, str, int, int]]
         Pending normalized callable-reference rows.
+    pending_call_rows : list[tuple[int, str, str, str, str, str, int, int]] | None, optional
+        Session-level call-record buffer. When supplied, rows are appended for
+        one later backend batch.
+    pending_ref_rows : list[tuple[int, str, str, str, str, str, str, int, int]] | None, optional
+        Session-level callable-reference buffer. When supplied, rows are
+        appended for one later backend batch.
 
     Returns
     -------
@@ -2097,11 +2107,46 @@ def _flush_persisted_relationship_rows(
     """
     deduplicated_call_rows = sorted(set(call_rows))
     if deduplicated_call_rows:
-        _flush_call_record_rows(conn, deduplicated_call_rows)
+        if pending_call_rows is None:
+            _flush_call_record_rows(conn, deduplicated_call_rows)
+        else:
+            pending_call_rows.extend(deduplicated_call_rows)
 
     deduplicated_ref_rows = sorted(set(ref_rows))
     if deduplicated_ref_rows:
-        _flush_callable_ref_record_rows(conn, deduplicated_ref_rows)
+        if pending_ref_rows is None:
+            _flush_callable_ref_record_rows(conn, deduplicated_ref_rows)
+        else:
+            pending_ref_rows.extend(deduplicated_ref_rows)
+
+
+def _flush_pending_relationship_rows(
+    conn: _DuckDBPersistenceConnection,
+    *,
+    pending_call_rows: list[tuple[int, str, str, str, str, str, int, int]],
+    pending_ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]],
+) -> None:
+    """
+    Flush session-level relationship rows to DuckDB.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    pending_call_rows : list[tuple[int, str, str, str, str, str, int, int]]
+        Session-level normalized call rows.
+    pending_ref_rows : list[tuple[int, str, str, str, str, str, str, int, int]]
+        Session-level normalized callable-reference rows.
+
+    Returns
+    -------
+    None
+        Pending relationship rows are inserted in deterministic order.
+    """
+    if pending_call_rows:
+        _flush_call_record_rows(conn, sorted(set(pending_call_rows)))
+    if pending_ref_rows:
+        _flush_callable_ref_record_rows(conn, sorted(set(pending_ref_rows)))
 
 
 def _temporary_csv_path_for_rows(
@@ -2502,6 +2547,10 @@ def _store_analysis(
     backend: EmbeddingBackendSpec,
     previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
     pending_reference_scan_rows: list[tuple[int, int, str]] | None = None,
+    pending_call_rows: list[tuple[int, str, str, str, str, str, int, int]]
+    | None = None,
+    pending_ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]]
+    | None = None,
 ) -> tuple[int, int]:
     """
     Persist one parsed file snapshot into the index.
@@ -2520,6 +2569,11 @@ def _store_analysis(
         Stored symbol embeddings captured before replacing file-owned rows.
     pending_reference_scan_rows : list[tuple[int, int, str]] | None, optional
         Session-level buffer used to batch reference-search rows across files.
+    pending_call_rows : list[tuple[int, str, str, str, str, str, int, int]] | None, optional
+        Session-level buffer used to batch call records across files.
+    pending_ref_rows : list[tuple[int, str, str, str, str, str, str, int, int]] | None, optional
+        Session-level buffer used to batch callable-reference records across
+        files.
 
     Returns
     -------
@@ -2580,6 +2634,8 @@ def _store_analysis(
         conn,
         call_rows=call_rows,
         ref_rows=ref_rows,
+        pending_call_rows=pending_call_rows,
+        pending_ref_rows=pending_ref_rows,
     )
     return _flush_embedding_rows(
         conn,
