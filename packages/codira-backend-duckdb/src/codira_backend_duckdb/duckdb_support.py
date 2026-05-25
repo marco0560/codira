@@ -2325,6 +2325,8 @@ def _flush_embedding_rows(
     embedding_rows: list[PendingEmbeddingRow],
     backend: EmbeddingBackendSpec,
     previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
+    pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]]
+    | None = None,
 ) -> tuple[int, int]:
     """
     Persist pending embedding payloads for one analyzed file.
@@ -2340,6 +2342,9 @@ def _flush_embedding_rows(
     previous_embeddings : dict[str, codira.indexer.StoredEmbeddingRow] | None, optional
         Stored symbol embeddings keyed by stable identity before the owner file
         was replaced.
+    pending_embedding_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]] | None, optional
+        Session-level embedding buffer. When supplied, prepared rows are
+        appended for one later backend batch.
 
     Returns
     -------
@@ -2349,7 +2354,6 @@ def _flush_embedding_rows(
     recomputed = 0
     reused = 0
     prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
-    texts_to_encode: dict[str, str] = {}
 
     for row in sorted(
         embedding_rows,
@@ -2369,12 +2373,47 @@ def _flush_embedding_rows(
             reused += 1
         else:
             prepared_rows.append((row, content_hash, None))
-            texts_to_encode.setdefault(content_hash, row.text)
             recomputed += 1
 
+    if pending_embedding_rows is not None:
+        pending_embedding_rows.extend(prepared_rows)
+        return (recomputed, reused)
+
+    _flush_prepared_embedding_rows(conn, prepared_rows=prepared_rows, backend=backend)
+    return (recomputed, reused)
+
+
+def _flush_prepared_embedding_rows(
+    conn: _DuckDBPersistenceConnection,
+    *,
+    prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
+    backend: EmbeddingBackendSpec,
+) -> None:
+    """
+    Flush prepared embedding rows to DuckDB.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    prepared_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
+        Prepared embedding rows as ``(row, content_hash, stored_vector)``.
+    backend : EmbeddingBackendSpec
+        Active embedding backend metadata.
+
+    Returns
+    -------
+    None
+        Prepared embedding rows are inserted in place.
+    """
     encoded_vectors: dict[str, tuple[bytes, list[float]]] = {}
+    texts_to_encode = {
+        content_hash: row.text
+        for row, content_hash, stored_vector in prepared_rows
+        if stored_vector is None
+    }
     if texts_to_encode:
-        ordered_content_hashes = list(texts_to_encode)
+        ordered_content_hashes = list(dict.fromkeys(texts_to_encode))
         encoded_rows = embed_texts(
             [texts_to_encode[content_hash] for content_hash in ordered_content_hashes]
         )
@@ -2413,7 +2452,37 @@ def _flush_embedding_rows(
         insert_rows,
     )
 
-    return (recomputed, reused)
+
+def _flush_pending_embedding_rows(
+    conn: _DuckDBPersistenceConnection,
+    *,
+    pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
+    backend: EmbeddingBackendSpec,
+) -> None:
+    """
+    Flush session-level embedding rows to DuckDB.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    pending_embedding_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
+        Session-level prepared embedding rows.
+    backend : EmbeddingBackendSpec
+        Active embedding backend metadata.
+
+    Returns
+    -------
+    None
+        Pending embeddings are encoded and inserted in one backend batch.
+    """
+    if not pending_embedding_rows:
+        return
+    _flush_prepared_embedding_rows(
+        conn,
+        prepared_rows=pending_embedding_rows,
+        backend=backend,
+    )
 
 
 def _reference_scan_rows(path: Path) -> list[ReferenceSearchRow]:
@@ -2546,6 +2615,8 @@ def _store_analysis(
     *,
     backend: EmbeddingBackendSpec,
     previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
+    pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]]
+    | None = None,
     pending_reference_scan_rows: list[tuple[int, int, str]] | None = None,
     pending_call_rows: list[tuple[int, str, str, str, str, str, int, int]]
     | None = None,
@@ -2567,6 +2638,8 @@ def _store_analysis(
         Active embedding backend metadata.
     previous_embeddings : dict[str, codira.indexer.StoredEmbeddingRow] | None, optional
         Stored symbol embeddings captured before replacing file-owned rows.
+    pending_embedding_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]] | None, optional
+        Session-level buffer used to batch embedding generation across files.
     pending_reference_scan_rows : list[tuple[int, int, str]] | None, optional
         Session-level buffer used to batch reference-search rows across files.
     pending_call_rows : list[tuple[int, str, str, str, str, str, int, int]] | None, optional
@@ -2642,6 +2715,7 @@ def _store_analysis(
         embedding_rows=embedding_rows,
         backend=backend,
         previous_embeddings=previous_embeddings,
+        pending_embedding_rows=pending_embedding_rows,
     )
 
 

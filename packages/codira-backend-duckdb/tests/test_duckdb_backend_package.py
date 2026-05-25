@@ -1509,6 +1509,92 @@ def test_duckdb_backend_persist_analysis_with_shared_connection_uses_real_driver
     connection.close()
 
 
+def test_duckdb_session_batches_embedding_generation_across_files(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Batch DuckDB session embedding generation across persisted files.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace embedding generation with a deterministic test
+        double.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts session persistence makes one embedding backend call
+        for two file snapshots.
+    """
+    pytest.importorskip("duckdb")
+    calls: list[list[str]] = []
+
+    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+        """
+        Record one embedding batch.
+
+        Parameters
+        ----------
+        texts : list[str]
+            Text payloads requested from the embedding backend.
+
+        Returns
+        -------
+        list[list[float]]
+            Deterministic embedding vectors matching the requested payloads.
+        """
+        calls.append(list(texts))
+        return [[0.0] * 384 for _text in texts]
+
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_support.embed_texts",
+        fake_embed_texts,
+    )
+
+    backend = DuckDBIndexBackend()
+    session = backend.begin_index_session(tmp_path)
+    try:
+        for name in ("alpha", "beta"):
+            module_path = tmp_path / "pkg" / f"{name}.py"
+            module_path.parent.mkdir(parents=True, exist_ok=True)
+            module_path.write_text("", encoding="utf-8")
+            session.persist_analysis(
+                BackendPersistAnalysisRequest(
+                    root=tmp_path,
+                    file_metadata=FileMetadataSnapshot(
+                        path=module_path,
+                        sha256=f"duckdb-session-{name}",
+                        mtime=1.0,
+                        size=0,
+                    ),
+                    analysis=AnalysisResult(
+                        source_path=module_path,
+                        module=ModuleArtifact(
+                            name=f"pkg.{name}",
+                            stable_id=f"python:module:pkg.{name}",
+                            docstring=None,
+                            has_docstring=0,
+                        ),
+                        classes=(),
+                        functions=(),
+                        declarations=(),
+                        imports=(),
+                    ),
+                )
+            )
+        session.rebuild_derived_indexes()
+        session.commit()
+    finally:
+        session.close()
+
+    assert len(calls) == 1
+    assert len(calls[0]) == 2
+
+
 def test_duckdb_embedding_candidates_use_stored_vector_values(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

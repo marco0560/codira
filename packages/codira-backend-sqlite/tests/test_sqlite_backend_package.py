@@ -7,6 +7,10 @@ import sqlite3
 import tomllib
 from pathlib import Path
 
+import pytest
+
+from codira.contracts import BackendPersistAnalysisRequest
+from codira.models import AnalysisResult, FileMetadataSnapshot, ModuleArtifact
 from codira.schema import DDL
 from codira_backend_sqlite import SQLiteIndexBackend, build_backend
 
@@ -343,3 +347,88 @@ def test_sqlite_backend_delete_paths_removes_file_owned_edge_rows(
         assert reopened.execute("SELECT COUNT(*) FROM callable_refs").fetchone() == (0,)
     finally:
         reopened.close()
+
+
+def test_sqlite_session_batches_embedding_generation_across_files(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Batch SQLite session embedding generation across persisted files.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace embedding generation with a deterministic test
+        double.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts session persistence makes one embedding backend call
+        for two file snapshots.
+    """
+    calls: list[list[str]] = []
+
+    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+        """
+        Record one embedding batch.
+
+        Parameters
+        ----------
+        texts : list[str]
+            Text payloads requested from the embedding backend.
+
+        Returns
+        -------
+        list[list[float]]
+            Deterministic embedding vectors matching the requested payloads.
+        """
+        calls.append(list(texts))
+        return [[0.0] * 384 for _text in texts]
+
+    monkeypatch.setattr(
+        "codira_backend_sqlite.sqlite_support.embed_texts",
+        fake_embed_texts,
+    )
+
+    backend = SQLiteIndexBackend()
+    session = backend.begin_index_session(tmp_path)
+    try:
+        for name in ("alpha", "beta"):
+            module_path = tmp_path / "pkg" / f"{name}.py"
+            module_path.parent.mkdir(parents=True, exist_ok=True)
+            module_path.write_text("", encoding="utf-8")
+            session.persist_analysis(
+                BackendPersistAnalysisRequest(
+                    root=tmp_path,
+                    file_metadata=FileMetadataSnapshot(
+                        path=module_path,
+                        sha256=f"sqlite-session-{name}",
+                        mtime=1.0,
+                        size=0,
+                    ),
+                    analysis=AnalysisResult(
+                        source_path=module_path,
+                        module=ModuleArtifact(
+                            name=f"pkg.{name}",
+                            stable_id=f"python:module:pkg.{name}",
+                            docstring=None,
+                            has_docstring=0,
+                        ),
+                        classes=(),
+                        functions=(),
+                        declarations=(),
+                        imports=(),
+                    ),
+                )
+            )
+        session.rebuild_derived_indexes()
+        session.commit()
+    finally:
+        session.close()
+
+    assert len(calls) == 1
+    assert len(calls[0]) == 2

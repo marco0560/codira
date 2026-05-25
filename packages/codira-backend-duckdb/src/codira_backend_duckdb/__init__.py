@@ -28,11 +28,13 @@ from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
+    PendingEmbeddingRow,
     StoredEmbeddingRow,
 )
 from .duckdb_support import (
     _DuckDBPersistenceConnection,
     _delete_indexed_file_data,
+    _flush_pending_embedding_rows,
     _flush_pending_reference_scan_rows,
     _flush_pending_relationship_rows,
     _store_analysis,
@@ -182,6 +184,10 @@ class _DuckDBIndexWriteSession:
         self._closed = False
         self._completed = False
         self._deferred_schema_indexes = False
+        self._pending_embedding_rows: list[
+            tuple[PendingEmbeddingRow, str, bytes | None]
+        ] = []
+        self._embedding_backend: EmbeddingBackendSpec | None = None
         self._pending_reference_scan_rows: list[tuple[int, int, str]] = []
         self._pending_call_rows: list[
             tuple[int, str, str, str, str, str, int, int]
@@ -402,6 +408,12 @@ class _DuckDBIndexWriteSession:
             if request.embedding_backend is None
             else request.embedding_backend
         )
+        if self._embedding_backend is None:
+            self._embedding_backend = active_backend
+        elif self._embedding_backend != active_backend:
+            self._flush_pending_embeddings()
+            self._embedding_backend = active_backend
+
         duckdb_error = _duckdb_module().Error
         try:
             return _store_analysis(
@@ -413,6 +425,7 @@ class _DuckDBIndexWriteSession:
                     "dict[str, StoredEmbeddingRow] | None",
                     request.previous_embeddings,
                 ),
+                pending_embedding_rows=self._pending_embedding_rows,
                 pending_reference_scan_rows=self._pending_reference_scan_rows,
                 pending_call_rows=self._pending_call_rows,
                 pending_ref_rows=self._pending_ref_rows,
@@ -431,6 +444,32 @@ class _DuckDBIndexWriteSession:
             )
             raise
 
+    def _flush_pending_embeddings(self) -> None:
+        """
+        Flush pending session-level embedding rows.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Buffered embedding rows are encoded and inserted in place.
+        """
+        if not self._pending_embedding_rows:
+            return
+        backend = self._embedding_backend
+        if backend is None:
+            backend = get_embedding_backend()
+            self._embedding_backend = backend
+        _flush_pending_embedding_rows(
+            cast("_DuckDBPersistenceConnection", self._conn),
+            pending_embedding_rows=self._pending_embedding_rows,
+            backend=backend,
+        )
+        self._pending_embedding_rows = []
+
     def rebuild_derived_indexes(self) -> None:
         """
         Refresh derived backend tables after file persistence.
@@ -444,6 +483,7 @@ class _DuckDBIndexWriteSession:
         None
             Derived backend state is refreshed in place.
         """
+        self._flush_pending_embeddings()
         _flush_pending_relationship_rows(
             cast("_DuckDBPersistenceConnection", self._conn),
             pending_call_rows=self._pending_call_rows,
@@ -495,6 +535,7 @@ class _DuckDBIndexWriteSession:
             Pending writes are committed once per session.
         """
         if not self._completed and self._transaction_open:
+            self._flush_pending_embeddings()
             _flush_pending_reference_scan_rows(
                 cast("_DuckDBPersistenceConnection", self._conn),
                 self._pending_reference_scan_rows,

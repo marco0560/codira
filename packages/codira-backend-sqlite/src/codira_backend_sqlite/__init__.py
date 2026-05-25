@@ -31,6 +31,7 @@ from codira.contracts import (
     BackendRelationQueryRequest,
     BackendRuntimeInventoryRequest,
     BackendSymbolInventoryItem,
+    PendingEmbeddingRow,
     StoredEmbeddingRow,
 )
 from codira.prefix import normalize_prefix, prefix_clause
@@ -47,6 +48,7 @@ from codira_backend_sqlite.sqlite_support import (
     _current_embedding_state_matches,
     _delete_indexed_file_data,
     _dot_similarity,
+    _flush_pending_embedding_rows,
     _load_existing_file_hashes,
     _load_existing_file_ownership,
     _load_previous_embeddings_by_path,
@@ -98,6 +100,10 @@ class _SQLiteIndexWriteSession:
         self._conn = backend.open_connection(root)
         self._closed = False
         self._completed = False
+        self._pending_embedding_rows: list[
+            tuple[PendingEmbeddingRow, str, bytes | None]
+        ] = []
+        self._embedding_backend: EmbeddingBackendSpec | None = None
 
     def purge_skipped_docstring_issues(self) -> None:
         """
@@ -279,17 +285,74 @@ class _SQLiteIndexWriteSession:
         -------
         tuple[int, int]
             ``(recomputed, reused)`` embedding counts for the file.
+
+        Raises
+        ------
+        BackendError
+            If SQLite rejects persistence for the analyzed file.
+        OSError
+            If file-backed persistence fails while storing analyzed artifacts.
+        RuntimeError
+            If embedding persistence cannot complete for the analyzed file.
+        ValueError
+            If validated persistence inputs are semantically inconsistent.
         """
-        return self._backend.persist_analysis(
-            BackendPersistAnalysisRequest(
-                root=request.root,
-                file_metadata=request.file_metadata,
-                analysis=request.analysis,
-                embedding_backend=request.embedding_backend,
-                previous_embeddings=request.previous_embeddings,
-                conn=self._conn,
-            )
+        active_backend = (
+            get_embedding_backend()
+            if request.embedding_backend is None
+            else request.embedding_backend
         )
+        if self._embedding_backend is None:
+            self._embedding_backend = active_backend
+        elif self._embedding_backend != active_backend:
+            self._flush_pending_embeddings()
+            self._embedding_backend = active_backend
+
+        try:
+            return _store_analysis(
+                self._conn,
+                request.file_metadata,
+                request.analysis,
+                backend=active_backend,
+                previous_embeddings=cast(
+                    "dict[str, StoredEmbeddingRow] | None",
+                    request.previous_embeddings,
+                ),
+                pending_embedding_rows=self._pending_embedding_rows,
+            )
+        except sqlite3.Error as exc:
+            _delete_indexed_file_data(self._conn, str(request.file_metadata.path))
+            msg = str(exc)
+            raise BackendError(msg) from exc
+        except (OSError, RuntimeError, ValueError):
+            _delete_indexed_file_data(self._conn, str(request.file_metadata.path))
+            raise
+
+    def _flush_pending_embeddings(self) -> None:
+        """
+        Flush pending session-level embedding rows.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Buffered embedding rows are encoded and inserted in place.
+        """
+        if not self._pending_embedding_rows:
+            return
+        backend = self._embedding_backend
+        if backend is None:
+            backend = get_embedding_backend()
+            self._embedding_backend = backend
+        _flush_pending_embedding_rows(
+            self._conn,
+            pending_embedding_rows=self._pending_embedding_rows,
+            backend=backend,
+        )
+        self._pending_embedding_rows = []
 
     def rebuild_derived_indexes(self) -> None:
         """
@@ -304,6 +367,7 @@ class _SQLiteIndexWriteSession:
         None
             Derived backend state is refreshed in place.
         """
+        self._flush_pending_embeddings()
         self._backend.rebuild_derived_indexes(self._root, conn=self._conn)
 
     def persist_runtime_inventory(
@@ -348,6 +412,7 @@ class _SQLiteIndexWriteSession:
             Pending writes are committed once per session.
         """
         if not self._completed:
+            self._flush_pending_embeddings()
             self._backend.commit(self._root, conn=self._conn)
             self._completed = True
 
