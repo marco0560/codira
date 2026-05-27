@@ -4130,10 +4130,8 @@ def _count_reused_embeddings(
     if not reused_paths:
         return 0
 
-    placeholders = ",".join("?" for _ in reused_paths)
-    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     row = conn.execute(
-        f"""
+        """
         SELECT COUNT(*)
         FROM embeddings e
         JOIN symbol_index s
@@ -4141,9 +4139,9 @@ def _count_reused_embeddings(
          AND e.object_id = s.id
         JOIN files f
           ON s.file_id = f.id
-        WHERE f.path IN ({placeholders})
+        WHERE f.path IN (SELECT * FROM unnest(?))
         """,
-        tuple(reused_paths),
+        (reused_paths,),
     ).fetchone()
     assert row is not None
     return _duckdb_int(row[0])
