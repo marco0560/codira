@@ -143,3 +143,30 @@ rules:
           - pattern: from codira_backend_sqlite import $IMPORT
           - pattern: import codira_backend_duckdb
           - pattern: from codira_backend_duckdb import $IMPORT
+
+  - id: codira.arch.no-duckdb-executemany-in-support
+    message: >
+      DuckDB support persistence must use columnar batch loading instead of
+      row-wise executemany calls.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-backend-duckdb/src/codira_backend_duckdb/duckdb_support.py
+        - /fixtures/packages/codira-backend-duckdb/src/**/*.py
+    patterns:
+      - pattern: $CONN.executemany(...)
+
+  - id: codira.arch.no-duckdb-returning-id-in-support
+    message: >
+      DuckDB support persistence must allocate IDs before columnar batch
+      loading instead of using INSERT ... RETURNING id.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-backend-duckdb/src/codira_backend_duckdb/duckdb_support.py
+        - /fixtures/packages/codira-backend-duckdb/src/**/*.py
+    pattern-regex: RETURNING\s+id

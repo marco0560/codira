@@ -96,6 +96,42 @@ class _FakeDuckDBConnection:
         self.executed.append((query, tuple(parameters)))
         return self
 
+    def register(self, view_name: str, python_object: object) -> object:
+        """
+        Record one replacement-scan registration.
+
+        Parameters
+        ----------
+        view_name : str
+            Registered replacement-scan name.
+        python_object : object
+            Registered Python object.
+
+        Returns
+        -------
+        object
+            The fake connection itself for cursor-style chaining.
+        """
+        self.executed.append((f"REGISTER {view_name}", (python_object,)))
+        return self
+
+    def unregister(self, view_name: str) -> object:
+        """
+        Record one replacement-scan unregistration.
+
+        Parameters
+        ----------
+        view_name : str
+            Registered replacement-scan name.
+
+        Returns
+        -------
+        object
+            The fake connection itself for cursor-style chaining.
+        """
+        self.executed.append((f"UNREGISTER {view_name}", None))
+        return self
+
     def fetchone(self) -> tuple[object, ...] | None:
         """
         Return no result rows.
@@ -401,6 +437,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
+        "pyarrow>=18.0.0",
     ]
     assert project["project"]["entry-points"]["codira.backends"] == {
         "duckdb": "codira_backend_duckdb:build_backend"

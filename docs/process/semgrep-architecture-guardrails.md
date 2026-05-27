@@ -20,6 +20,8 @@ It exists to:
 - `codira.arch.no-backend-import-in-analyzers`
 - `codira.arch.no-sqlite3-in-analyzers`
 - `codira.arch.require-analyzer-capability-declaration`
+- `codira.arch.no-duckdb-executemany-in-support`
+- `codira.arch.no-duckdb-returning-id-in-support`
 - `codira.plugins.no-broad-except-exception`
 
 ### Enforced with allowlist

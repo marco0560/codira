@@ -32,11 +32,16 @@ from codira.contracts import (
     StoredEmbeddingRow,
 )
 from .duckdb_support import (
+    DuckDBIdAllocator,
+    DuckDBStructuralRowBuffers,
     _DuckDBPersistenceConnection,
     _delete_indexed_file_data,
+    _flush_docstring_issue_rows,
+    _flush_import_rows,
     _flush_pending_embedding_rows,
     _flush_pending_reference_scan_rows,
     _flush_pending_relationship_rows,
+    _flush_structural_rows,
     _store_analysis,
 )
 from .repo_storage import get_codira_dir, get_metadata_path
@@ -180,10 +185,13 @@ class _DuckDBIndexWriteSession:
         raw = cast("DuckDBConnection", self._conn)._raw
         _repair_nullable_edge_tables(raw)
         self._conn.execute("BEGIN TRANSACTION")
+        persistence_conn = cast("_DuckDBPersistenceConnection", self._conn)
         self._transaction_open = True
         self._closed = False
         self._completed = False
         self._deferred_schema_indexes = False
+        self._id_allocator = DuckDBIdAllocator(persistence_conn)
+        self._structural_rows = DuckDBStructuralRowBuffers()
         self._pending_embedding_rows: list[
             tuple[PendingEmbeddingRow, str, bytes | None]
         ] = []
@@ -194,6 +202,10 @@ class _DuckDBIndexWriteSession:
         ] = []
         self._pending_ref_rows: list[
             tuple[int, str, str, str, str, str, str, int, int]
+        ] = []
+        self._pending_import_rows: list[tuple[int, str, str | None, str, int]] = []
+        self._pending_docstring_issue_rows: list[
+            tuple[int, int | None, int | None, int | None, str, str]
         ] = []
 
     def purge_skipped_docstring_issues(self) -> None:
@@ -366,6 +378,9 @@ class _DuckDBIndexWriteSession:
             self._conn = self._backend.open_connection(self._root)
             self._conn.execute("BEGIN TRANSACTION")
             self._transaction_open = True
+            persistence_conn = cast("_DuckDBPersistenceConnection", self._conn)
+            self._id_allocator = DuckDBIdAllocator(persistence_conn)
+            self._structural_rows = DuckDBStructuralRowBuffers()
             _drop_duckdb_schema_indexes(self._conn)
             self._deferred_schema_indexes = True
             return
@@ -429,6 +444,10 @@ class _DuckDBIndexWriteSession:
                 pending_reference_scan_rows=self._pending_reference_scan_rows,
                 pending_call_rows=self._pending_call_rows,
                 pending_ref_rows=self._pending_ref_rows,
+                pending_import_rows=self._pending_import_rows,
+                pending_docstring_issue_rows=self._pending_docstring_issue_rows,
+                structural_rows=self._structural_rows,
+                id_allocator=self._id_allocator,
             )
         except duckdb_error as exc:
             _delete_indexed_file_data(
@@ -470,6 +489,66 @@ class _DuckDBIndexWriteSession:
         )
         self._pending_embedding_rows = []
 
+    def _flush_structural_rows(self) -> None:
+        """
+        Flush pending session-level structural rows.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Buffered structural rows are inserted in dependency order.
+        """
+        _flush_structural_rows(
+            cast("_DuckDBPersistenceConnection", self._conn),
+            self._structural_rows,
+        )
+
+    def _flush_pending_imports(self) -> None:
+        """
+        Flush pending session-level import rows.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Buffered import rows are inserted in place.
+        """
+        if not self._pending_import_rows:
+            return
+        _flush_import_rows(
+            cast("_DuckDBPersistenceConnection", self._conn),
+            self._pending_import_rows,
+        )
+        self._pending_import_rows = []
+
+    def _flush_pending_docstring_issues(self) -> None:
+        """
+        Flush pending session-level docstring issue rows.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Buffered docstring issue rows are inserted in place.
+        """
+        if not self._pending_docstring_issue_rows:
+            return
+        _flush_docstring_issue_rows(
+            cast("_DuckDBPersistenceConnection", self._conn),
+            self._pending_docstring_issue_rows,
+        )
+        self._pending_docstring_issue_rows = []
+
     def rebuild_derived_indexes(self) -> None:
         """
         Refresh derived backend tables after file persistence.
@@ -483,7 +562,15 @@ class _DuckDBIndexWriteSession:
         None
             Derived backend state is refreshed in place.
         """
+        self._flush_structural_rows()
+        self._flush_pending_imports()
+        self._flush_pending_docstring_issues()
         self._flush_pending_embeddings()
+        _flush_pending_reference_scan_rows(
+            cast("_DuckDBPersistenceConnection", self._conn),
+            self._pending_reference_scan_rows,
+        )
+        self._pending_reference_scan_rows = []
         _flush_pending_relationship_rows(
             cast("_DuckDBPersistenceConnection", self._conn),
             pending_call_rows=self._pending_call_rows,
@@ -535,6 +622,9 @@ class _DuckDBIndexWriteSession:
             Pending writes are committed once per session.
         """
         if not self._completed and self._transaction_open:
+            self._flush_structural_rows()
+            self._flush_pending_imports()
+            self._flush_pending_docstring_issues()
             self._flush_pending_embeddings()
             _flush_pending_reference_scan_rows(
                 cast("_DuckDBPersistenceConnection", self._conn),
@@ -601,6 +691,38 @@ class _DuckDBRawConnection(Protocol):
             SQL statement to execute.
         parameters : Sequence[object] | None, optional
             Positional parameters bound to ``query``.
+
+        Returns
+        -------
+        object
+            Driver-specific execution result.
+        """
+
+    def register(self, view_name: str, python_object: object) -> object:
+        """
+        Register a Python object as a DuckDB replacement scan.
+
+        Parameters
+        ----------
+        view_name : str
+            Temporary replacement-scan name.
+        python_object : object
+            Object accepted by DuckDB's Python replacement-scan API.
+
+        Returns
+        -------
+        object
+            Driver-specific execution result.
+        """
+
+    def unregister(self, view_name: str) -> object:
+        """
+        Unregister a DuckDB replacement scan.
+
+        Parameters
+        ----------
+        view_name : str
+            Temporary replacement-scan name to remove.
 
         Returns
         -------
@@ -871,6 +993,42 @@ class DuckDBConnection:
             Cursor wrapper over the most recent execution.
         """
         self._raw.executemany(query, parameters)
+        return _DuckDBCursorWrapper(self._raw)
+
+    def register(self, view_name: str, python_object: object) -> _DuckDBCursorWrapper:
+        """
+        Register a Python object as a DuckDB replacement scan.
+
+        Parameters
+        ----------
+        view_name : str
+            Temporary replacement-scan name.
+        python_object : object
+            Object accepted by DuckDB's Python replacement-scan API.
+
+        Returns
+        -------
+        _DuckDBCursorWrapper
+            Cursor wrapper over the most recent driver state.
+        """
+        self._raw.register(view_name, python_object)
+        return _DuckDBCursorWrapper(self._raw)
+
+    def unregister(self, view_name: str) -> _DuckDBCursorWrapper:
+        """
+        Unregister a DuckDB replacement scan.
+
+        Parameters
+        ----------
+        view_name : str
+            Temporary replacement-scan name to remove.
+
+        Returns
+        -------
+        _DuckDBCursorWrapper
+            Cursor wrapper over the most recent driver state.
+        """
+        self._raw.unregister(view_name)
         return _DuckDBCursorWrapper(self._raw)
 
     def cursor(self) -> _DuckDBCursorCompatibilityAdapter:
