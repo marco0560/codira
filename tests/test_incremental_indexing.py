@@ -1043,7 +1043,11 @@ def test_run_index_initializes_the_active_backend(
             embedding_reused=0,
         ),
     )
-    monkeypatch.setattr(cli_module, "_write_index_head_metadata", lambda root: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_write_index_head_metadata",
+        lambda root, *, indexed_file_count=None: None,
+    )
     monkeypatch.setattr(cli_module, "_render_index_report", lambda root, report: None)
 
     assert (
@@ -3302,11 +3306,7 @@ def test_init_db_preserves_existing_commit_metadata(tmp_path: Path) -> None:
     init_db(tmp_path)
 
     assert _read_index_metadata(tmp_path) == {
-        "analyzer_inventory": _default_analyzer_inventory_json(),
-        "backend_name": "sqlite",
-        "backend_version": str(SCHEMA_VERSION),
         "commit": "abc123",
-        "indexed_file_count": "1",
         "schema_version": str(SCHEMA_VERSION),
     }
 
