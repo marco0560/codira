@@ -96,6 +96,7 @@ from codira.semantic.embeddings import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from types import ModuleType
 
     from pytest import CaptureFixture, MonkeyPatch
@@ -658,6 +659,7 @@ class _FakeBackend:
         root: Path,
         *,
         prefix: str | None = None,
+        symbol_names: Sequence[str] | None = None,
         conn: sqlite3.Connection | None = None,
     ) -> list[tuple[str, str, str, str, str, str, str, int, int | None]]:
         """
@@ -669,6 +671,8 @@ class _FakeBackend:
             Repository root.
         prefix : str | None, optional
             Optional path filter.
+        symbol_names : collections.abc.Sequence[str] | None, optional
+            Optional symbol-name filter.
         conn : sqlite3.Connection | None, optional
             Optional SQLite connection.
 
@@ -677,7 +681,7 @@ class _FakeBackend:
         list[tuple[str, str, str, str, str, str, str, int, int | None]]
             Empty docstring issue rows for protocol validation.
         """
-        del root, prefix, conn
+        del root, prefix, symbol_names, conn
         return []
 
     def find_call_edges(

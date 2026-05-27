@@ -1118,6 +1118,7 @@ class SQLiteIndexBackend:
         root: Path,
         *,
         prefix: str | None = None,
+        symbol_names: Sequence[str] | None = None,
         conn: sqlite3.Connection | None = None,
     ) -> list[DocstringIssueRow]:
         """
@@ -1129,6 +1130,9 @@ class SQLiteIndexBackend:
             Repository root whose index should be queried.
         prefix : str | None, optional
             Repo-root-relative path prefix used to restrict issue ownership.
+        symbol_names : collections.abc.Sequence[str] | None, optional
+            Symbol names used to restrict issue ownership before backend row
+            expansion.
         conn : sqlite3.Connection | None, optional
             Existing SQLite connection to reuse.
 
@@ -1140,10 +1144,26 @@ class SQLiteIndexBackend:
         """
         owns_connection = conn is None
         normalized_prefix = normalize_prefix(root, prefix)
+        normalized_symbol_names = tuple(dict.fromkeys(symbol_names or ()))
+        if symbol_names is not None and not normalized_symbol_names:
+            return []
         if conn is None:
             conn = self.open_connection(root)
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            symbol_filter_sql = ""
+            symbol_filter_params: tuple[str, ...] = ()
+            if normalized_symbol_names:
+                placeholders = ", ".join("?" for _ in normalized_symbol_names)
+                symbol_filter_sql = f"""
+                AND (
+                    fn.name IN ({placeholders})
+                    OR (cls.name || '.' || fn.name) IN ({placeholders})
+                    OR cls.name IN ({placeholders})
+                    OR mod.name IN ({placeholders})
+                )
+                """
+                symbol_filter_params = normalized_symbol_names * 4
             # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
@@ -1215,9 +1235,10 @@ class SQLiteIndexBackend:
                  AND si_mod.lineno = 1
                 WHERE 1 = 1
                 {prefix_sql}
+                {symbol_filter_sql}
                 ORDER BY di.issue_type, f.path, lineno, di.message
                 """,
-                tuple(prefix_params),
+                (*prefix_params, *symbol_filter_params),
             ).fetchall()
             return [
                 (

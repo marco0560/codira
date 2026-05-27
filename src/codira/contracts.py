@@ -1614,6 +1614,7 @@ class IndexBackend(Protocol):
         root: Path,
         *,
         prefix: str | None = None,
+        symbol_names: Sequence[str] | None = None,
         conn: object | None = None,
     ) -> list[DocstringIssueRow]:
         """
@@ -1625,6 +1626,9 @@ class IndexBackend(Protocol):
             Repository root whose index should be queried.
         prefix : str | None, optional
             Repo-root-relative path prefix used to restrict issue ownership.
+        symbol_names : collections.abc.Sequence[str] | None, optional
+            Symbol names used to restrict issue ownership before backend row
+            expansion.
         conn : object | None, optional
             Existing backend connection to reuse.
 

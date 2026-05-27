@@ -3857,11 +3857,15 @@ def _collect_doc_issues_and_related(
     tuple[list[tuple[str, str]], list[codira.types.SymbolRow]]
         Related docstring issue rows and derived related symbols.
     """
-    issue_rows = docstring_issues(root, prefix=prefix, conn=conn)
-
     issue_rows_filtered: list[tuple[str, str]] = []
 
     symbol_names = {name for _, _, name, _, _ in top_matches if name}
+    issue_rows = docstring_issues(
+        root,
+        prefix=prefix,
+        symbol_names=tuple(sorted(symbol_names)),
+        conn=conn,
+    )
 
     for issue in issue_rows:
         issue_type = issue[0]

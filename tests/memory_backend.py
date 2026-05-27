@@ -2185,6 +2185,7 @@ class MemoryIndexBackend:
         root: Path,
         *,
         prefix: str | None = None,
+        symbol_names: Sequence[str] | None = None,
         conn: object | None = None,
     ) -> list[DocstringIssueRow]:
         """
@@ -2196,6 +2197,8 @@ class MemoryIndexBackend:
             Repository root.
         prefix : str | None, optional
             Optional repository-relative path prefix.
+        symbol_names : collections.abc.Sequence[str] | None, optional
+            Symbol names used to restrict issue ownership.
         conn : object | None, optional
             Optional backend connection.
 
@@ -2206,6 +2209,9 @@ class MemoryIndexBackend:
         """
         state = self._conn_state(root, conn)
         normalized_prefix = normalize_prefix(root, prefix)
+        normalized_symbol_names = set(symbol_names or ())
+        if symbol_names is not None and not normalized_symbol_names:
+            return []
         rows = [
             (
                 issue.issue_type,
@@ -2220,6 +2226,10 @@ class MemoryIndexBackend:
             )
             for issue in state.doc_issues
             if path_has_prefix(state.files[issue.file_id].path, normalized_prefix)
+            and (
+                not normalized_symbol_names
+                or issue.symbol_name in normalized_symbol_names
+            )
         ]
         return sorted(rows, key=lambda row: (row[0], row[6], row[7], row[1]))
 
