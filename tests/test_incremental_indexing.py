@@ -93,6 +93,34 @@ def _write_module(path: Path, source: str) -> None:
     path.write_text(source, encoding="utf-8")
 
 
+def _default_analyzer_inventory_json() -> str:
+    """
+    Return the default analyzer inventory encoded like CLI metadata.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    str
+        JSON-encoded analyzer inventory for the active test environment.
+    """
+    return json.dumps(
+        [
+            (
+                str(analyzer.name),
+                str(analyzer.version),
+                json.dumps(tuple(analyzer.discovery_globs)),
+            )
+            for analyzer in sorted(
+                registry_module.active_language_analyzers(),
+                key=lambda item: str(item.name),
+            )
+        ]
+    )
+
+
 def _load_workspace_cli_module() -> types.ModuleType:
     """
     Load the workspace `src/codira/cli.py` module under a unique name.
@@ -570,6 +598,8 @@ class _RecordingBackend:
         self.initialize_calls: list[Path] = []
         self.opened: list[Path] = []
         self.closed: list[_RecordingBackendConnection] = []
+        self.count_indexed_file_calls: list[Path] = []
+        self.load_existing_file_hash_calls: list[Path] = []
 
     def begin_index_session(self, root: Path) -> _RecordingIndexWriteSession:
         """
@@ -706,8 +736,34 @@ class _RecordingBackend:
         dict[str, str]
             Recorded file-hash mapping for the backend snapshot.
         """
-        del root, conn
+        del conn
+        self.load_existing_file_hash_calls.append(root)
         return dict(self.file_hashes)
+
+    def count_indexed_files(
+        self,
+        root: Path,
+        *,
+        conn: object | None = None,
+    ) -> int:
+        """
+        Return the number of configured indexed files.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root associated with the lookup.
+        conn : object | None, optional
+            Opaque backend connection handle reused by the caller.
+
+        Returns
+        -------
+        int
+            Count of indexed file rows for freshness checks.
+        """
+        del conn
+        self.count_indexed_file_calls.append(root)
+        return len(self.file_hashes)
 
     def load_existing_file_ownership(
         self,
@@ -1050,6 +1106,65 @@ def test_inspect_index_rebuild_request_uses_backend_connection_contract(
     assert cli_module._inspect_index_rebuild_request(tmp_path) is None
     assert backend.opened == [tmp_path]
     assert len(backend.closed) == 1
+    assert backend.count_indexed_file_calls == [tmp_path]
+    assert backend.load_existing_file_hash_calls == []
+
+
+def test_inspect_index_rebuild_request_uses_complete_metadata_fast_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Avoid opening the backend when persisted freshness metadata is complete.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root provided by pytest.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to stub backend state and Git metadata.
+
+    Returns
+    -------
+    None
+        The test asserts metadata-only checks can prove freshness without one
+        backend connection.
+    """
+    module = tmp_path / "pkg" / "sample.py"
+    cli_module = _load_workspace_cli_module()
+    _write_module(
+        module,
+        'def demo():\n    """Return a constant."""\n    return 1\n',
+    )
+    backend = _RecordingBackend(
+        analyzer_inventory=[("python", PythonAnalyzer.version, '["*.py"]')],
+        file_hashes={str(module): "abc123"},
+    )
+    cli_module._write_index_metadata(
+        tmp_path,
+        {
+            "schema_version": str(SCHEMA_VERSION),
+            "backend_name": "duckdb",
+            "backend_version": "1.5.3",
+            "analyzer_inventory": json.dumps(
+                [("python", PythonAnalyzer.version, '["*.py"]')]
+            ),
+            "indexed_file_count": "1",
+        },
+    )
+
+    monkeypatch.setattr(cli_module, "_get_head_commit", lambda root: None)
+    monkeypatch.setattr(cli_module, "active_index_backend", lambda: backend)
+    monkeypatch.setattr(
+        cli_module,
+        "active_language_analyzers",
+        lambda: [PythonAnalyzer()],
+    )
+
+    assert cli_module._inspect_index_rebuild_request(tmp_path) is None
+    assert backend.opened == []
+    assert backend.count_indexed_file_calls == []
+    assert backend.load_existing_file_hash_calls == []
 
 
 def test_cli_reports_unexpected_index_errors_without_traceback(
@@ -3187,7 +3302,11 @@ def test_init_db_preserves_existing_commit_metadata(tmp_path: Path) -> None:
     init_db(tmp_path)
 
     assert _read_index_metadata(tmp_path) == {
+        "analyzer_inventory": _default_analyzer_inventory_json(),
+        "backend_name": "sqlite",
+        "backend_version": str(SCHEMA_VERSION),
         "commit": "abc123",
+        "indexed_file_count": "1",
         "schema_version": str(SCHEMA_VERSION),
     }
 
@@ -3225,7 +3344,11 @@ def test_ensure_index_missing_db_writes_schema_and_commit_metadata(
     _ensure_index(tmp_path)
 
     assert _read_index_metadata(tmp_path) == {
+        "analyzer_inventory": _default_analyzer_inventory_json(),
+        "backend_name": "sqlite",
+        "backend_version": str(SCHEMA_VERSION),
         "commit": "abc123",
+        "indexed_file_count": "1",
         "schema_version": str(SCHEMA_VERSION),
     }
 
@@ -3267,7 +3390,11 @@ def test_open_connection_does_not_clear_commit_metadata(
     second.close()
 
     assert _read_index_metadata(tmp_path) == {
+        "analyzer_inventory": _default_analyzer_inventory_json(),
+        "backend_name": "sqlite",
+        "backend_version": str(SCHEMA_VERSION),
         "commit": "abc123",
+        "indexed_file_count": "1",
         "schema_version": str(SCHEMA_VERSION),
     }
 

@@ -44,6 +44,7 @@ from codira.semantic.embeddings import (
 )
 from codira_backend_sqlite.sqlite_support import (
     _clear_index_tables,
+    _count_indexed_files,
     _count_reused_embeddings,
     _current_embedding_state_matches,
     _delete_indexed_file_data,
@@ -1909,6 +1910,36 @@ class SQLiteIndexBackend:
             conn = self.open_connection(root)
         try:
             return _load_existing_file_hashes(conn)
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def count_indexed_files(
+        self,
+        root: Path,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> int:
+        """
+        Count files currently recorded in the index.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        int
+            Number of indexed file rows.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            return _count_indexed_files(conn)
         finally:
             if owns_connection:
                 conn.close()

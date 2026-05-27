@@ -2465,6 +2465,25 @@ def _load_existing_file_hashes(conn: sqlite3.Connection) -> dict[str, str]:
     return {str(path): str(file_hash) for path, file_hash in rows}
 
 
+def _count_indexed_files(conn: sqlite3.Connection) -> int:
+    """
+    Count files currently persisted in the SQLite index.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection.
+
+    Returns
+    -------
+    int
+        Number of rows in the indexed files table.
+    """
+    row = conn.execute("SELECT COUNT(*) FROM files").fetchone()
+    assert row is not None
+    return int(row[0])
+
+
 def _load_previous_embeddings_by_path(
     conn: sqlite3.Connection,
     paths: list[str],

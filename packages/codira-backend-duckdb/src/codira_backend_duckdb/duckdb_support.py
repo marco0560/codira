@@ -4021,6 +4021,25 @@ def _load_existing_file_hashes(conn: _DuckDBPersistenceConnection) -> dict[str, 
     return {str(path): str(file_hash) for path, file_hash in rows}
 
 
+def _count_indexed_files(conn: _DuckDBPersistenceConnection) -> int:
+    """
+    Count files currently persisted in the DuckDB index.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+
+    Returns
+    -------
+    int
+        Number of rows in the indexed files table.
+    """
+    row = conn.execute("SELECT COUNT(*) FROM files").fetchone()
+    assert row is not None
+    return _duckdb_int(row[0])
+
+
 def _load_previous_embeddings_by_path(
     conn: _DuckDBPersistenceConnection,
     paths: list[str],
