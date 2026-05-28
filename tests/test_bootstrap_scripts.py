@@ -4053,6 +4053,105 @@ def test_benchmark_campaign_main_prints_timestamp_after_each_repo_step(
     assert "second: 2026-05-20T10:15:30Z\n" in captured.out
 
 
+def test_benchmark_campaign_continue_on_error_records_all_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Keep torture campaigns running after command failures.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for manifest and artifact fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace process arguments and command execution.
+
+    Returns
+    -------
+    None
+        The test asserts failed commands are summarized while later commands
+        still execute.
+    """
+    helper = _load_benchmark_campaign_helper()
+    target = tmp_path / "target"
+    target.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {"label": "target", "category": "small", "path": str(target)}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifact_root = tmp_path / ".artifacts"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_campaign.py",
+            str(manifest),
+            "--artifact-root",
+            str(artifact_root),
+            "--run-id",
+            "torture",
+            "--continue-on-error",
+        ],
+    )
+    monkeypatch.setattr(helper, "utc_run_timestamp", lambda: "2026-05-20T10:15:30Z")
+
+    def fake_resolve_repositories(
+        repositories: Sequence[object],
+        config: object,
+    ) -> Sequence[object]:
+        del config
+        return repositories
+
+    def fake_command_plan(
+        repositories: Sequence[object],
+        config: object,
+    ) -> list[dict[str, object]]:
+        del repositories, config
+        return [
+            {
+                "label": "target",
+                "category": "small",
+                "commands": [["false"], ["true"]],
+                "output_logs": [
+                    str(artifact_root / "torture" / "logs" / "false.log"),
+                    str(artifact_root / "torture" / "logs" / "true.log"),
+                ],
+            }
+        ]
+
+    executed: list[tuple[str, ...]] = []
+
+    def fake_run_command(command: tuple[str, ...], *, output_log: Path) -> int:
+        executed.append(command)
+        output_log.parent.mkdir(parents=True, exist_ok=True)
+        output_log.write_text("log\n", encoding="utf-8")
+        return 1 if command == ("false",) else 0
+
+    monkeypatch.setattr(helper, "resolve_repositories", fake_resolve_repositories)
+    monkeypatch.setattr(helper, "command_plan", fake_command_plan)
+    monkeypatch.setattr(helper, "_run_command", fake_run_command)
+
+    assert helper.main() == 1
+
+    assert executed == [("false",), ("true",)]
+    summary = json.loads(
+        (artifact_root / "torture" / "failure-summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["failure_count"] == 1
+    assert summary["continue_on_error"] is True
+    assert summary["failures"][0]["label"] == "target"
+    assert summary["failures"][0]["return_code"] == 1
+    assert summary["failures"][0]["output_log"].endswith("false.log")
+
+
 def test_benchmark_campaign_run_command_writes_combined_output_log(
     tmp_path: Path,
 ) -> None:

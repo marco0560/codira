@@ -128,6 +128,9 @@ class CampaignConfig:
         Number of Hyperfine warmup runs.
     dry_run : bool
         Whether commands should be reported without execution.
+    continue_on_error : bool
+        Whether campaign execution should continue after command failures and
+        persist a failure summary.
     """
 
     manifest: Path
@@ -139,6 +142,7 @@ class CampaignConfig:
     runs: int
     warmup: int
     dry_run: bool
+    continue_on_error: bool = False
 
 
 @dataclass(frozen=True)
@@ -204,6 +208,23 @@ class ResolvedRepositoryBenchmark:
     requested_commands: tuple[tuple[str, ...], ...]
     skipped_commands: tuple[tuple[str, ...], ...]
     selection: dict[str, object]
+
+
+@dataclass(frozen=True)
+class AdaptiveDiscoveryContext:
+    """
+    Runtime context for adaptive command-resolution trials.
+
+    Parameters
+    ----------
+    config : CampaignConfig
+        Campaign configuration.
+    output_dir : pathlib.Path
+        Temporary Codira output directory used for discovery.
+    """
+
+    config: CampaignConfig
+    output_dir: Path
 
 
 def positive_int(value: str) -> int:
@@ -294,6 +315,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Write the command plan without executing benchmark commands.",
+    )
+    parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help=(
+            "Run every planned command, persist failure-summary.json, and return "
+            "non-zero if any command fails."
+        ),
     )
     return parser
 
@@ -505,6 +534,8 @@ def _repo_relative_prefix(repo: Path, file_path: str) -> str | None:
 
 def _json_command_result(
     command: Sequence[str],
+    *,
+    output_log: Path | None = None,
 ) -> tuple[int, dict[str, object] | None, str]:
     """
     Execute one command expected to emit a JSON payload.
@@ -513,6 +544,9 @@ def _json_command_result(
     ----------
     command : collections.abc.Sequence[str]
         Command vector to execute.
+    output_log : pathlib.Path | None, optional
+        Optional log path receiving the command, return code, stdout, and
+        stderr from the subprocess.
 
     Returns
     -------
@@ -526,6 +560,21 @@ def _json_command_result(
         capture_output=True,
         check=False,
     )
+    if output_log is not None:
+        output_log.parent.mkdir(parents=True, exist_ok=True)
+        output_log.write_text(
+            "\n".join(
+                (
+                    f"$ {shlex.join(tuple(command))}",
+                    f"return_code={process.returncode}",
+                    "[stdout]",
+                    process.stdout,
+                    "[stderr]",
+                    process.stderr,
+                )
+            ),
+            encoding="utf-8",
+        )
     payload: dict[str, object] | None = None
     if process.stdout.strip():
         try:
@@ -535,6 +584,45 @@ def _json_command_result(
         if isinstance(raw_payload, dict):
             payload = cast("dict[str, object]", raw_payload)
     return process.returncode, payload, process.stdout
+
+
+def _logged_command_result(command: Sequence[str], *, output_log: Path) -> int:
+    """
+    Execute one command and persist stdout and stderr in a structured log.
+
+    Parameters
+    ----------
+    command : collections.abc.Sequence[str]
+        Command vector to execute.
+    output_log : pathlib.Path
+        Log path receiving command, return code, stdout, and stderr.
+
+    Returns
+    -------
+    int
+        Process return code.
+    """
+    process = subprocess.run(
+        tuple(command),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    output_log.parent.mkdir(parents=True, exist_ok=True)
+    output_log.write_text(
+        "\n".join(
+            (
+                f"$ {shlex.join(tuple(command))}",
+                f"return_code={process.returncode}",
+                "[stdout]",
+                process.stdout,
+                "[stderr]",
+                process.stderr,
+            )
+        ),
+        encoding="utf-8",
+    )
+    return process.returncode
 
 
 def _primary_target_index(command: Sequence[str]) -> int | None:
@@ -723,7 +811,10 @@ def _discover_symbol_candidates(
         "--output-dir",
         str(output_dir),
     )
-    _, payload, _ = _json_command_result(command)
+    _, payload, _ = _json_command_result(
+        command,
+        output_log=discovery_log_path(repo, config, "symlist-candidates"),
+    )
     if not isinstance(payload, dict) or payload.get("status") != "ok":
         return ()
     symbols = payload.get("symbols")
@@ -854,6 +945,32 @@ def selection_directory(config: CampaignConfig) -> Path:
     return run_directory(config) / "selection"
 
 
+def discovery_log_path(
+    repo: RepositoryBenchmark | ResolvedRepositoryBenchmark,
+    config: CampaignConfig,
+    name: str,
+) -> Path:
+    """
+    Return the durable log path for one adaptive discovery command.
+
+    Parameters
+    ----------
+    repo : RepositoryBenchmark | ResolvedRepositoryBenchmark
+        Repository benchmark target.
+    config : CampaignConfig
+        Campaign configuration.
+    name : str
+        Stable discovery command label.
+
+    Returns
+    -------
+    pathlib.Path
+        Log path under the run directory.
+    """
+    prefix = f"{_safe_label(repo.category)}-{_safe_label(repo.label)}"
+    return run_directory(config) / "logs" / "discovery" / f"{prefix}-{name}.log"
+
+
 def _expand_manifest_token(
     token: str,
     *,
@@ -936,9 +1053,9 @@ def _resolve_symbol_command(
     command: Sequence[str],
     *,
     repo: RepositoryBenchmark,
-    config: CampaignConfig,
-    output_dir: Path,
+    discovery: AdaptiveDiscoveryContext,
     candidates: Sequence[SymbolCandidate],
+    trial_prefix: str,
 ) -> tuple[tuple[str, ...] | None, list[dict[str, object]]]:
     """
     Resolve one symbol-dependent benchmark command to a meaningful candidate.
@@ -949,12 +1066,12 @@ def _resolve_symbol_command(
         Manifest command tokens excluding the Codira executable.
     repo : RepositoryBenchmark
         Repository benchmark target.
-    config : CampaignConfig
-        Campaign configuration.
-    output_dir : pathlib.Path
+    discovery : AdaptiveDiscoveryContext
         Temporary discovery output directory.
     candidates : collections.abc.Sequence[SymbolCandidate]
         Ranked symbol candidates discovered for the repository.
+    trial_prefix : str
+        Stable log-name prefix for persisted trial output.
 
     Returns
     -------
@@ -978,7 +1095,7 @@ def _resolve_symbol_command(
     best_command: tuple[str, ...] | None = None
     best_score = 0
     trials: list[dict[str, object]] = []
-    for candidate in trial_candidates:
+    for trial_index, candidate in enumerate(trial_candidates, start=1):
         rewritten = _with_target(command, candidate.name)
         if rewritten is None:
             break
@@ -986,10 +1103,17 @@ def _resolve_symbol_command(
             rewritten,
             repo_path=repo.path,
             query=repo.query,
-            config=config,
-            output_dir=output_dir,
+            config=discovery.config,
+            output_dir=discovery.output_dir,
         )
-        return_code, payload, _ = _json_command_result(argv)
+        return_code, payload, _ = _json_command_result(
+            argv,
+            output_log=discovery_log_path(
+                repo,
+                discovery.config,
+                f"{trial_prefix}-symbol-{trial_index:02d}",
+            ),
+        )
         score = _score_symbol_command_result(payload=payload, candidate=candidate)
         trials.append(
             {
@@ -1001,6 +1125,13 @@ def _resolve_symbol_command(
                 "status": payload.get("status") if isinstance(payload, dict) else None,
                 "result_count": _json_list_count(payload, "results"),
                 "command": list(argv),
+                "output_log": str(
+                    discovery_log_path(
+                        repo,
+                        discovery.config,
+                        f"{trial_prefix}-symbol-{trial_index:02d}",
+                    )
+                ),
             }
         )
         if score > best_score:
@@ -1038,7 +1169,10 @@ def _resolve_text_query(
     best_query = repo.query
     best_score = 0
     trials: list[dict[str, object]] = []
-    for query_text in _candidate_query_texts(repo, candidates):
+    for trial_index, query_text in enumerate(
+        _candidate_query_texts(repo, candidates),
+        start=1,
+    ):
         argv = (
             config.codira,
             "emb",
@@ -1051,7 +1185,14 @@ def _resolve_text_query(
             "--output-dir",
             str(output_dir),
         )
-        return_code, payload, _ = _json_command_result(argv)
+        return_code, payload, _ = _json_command_result(
+            argv,
+            output_log=discovery_log_path(
+                repo,
+                config,
+                f"text-query-{trial_index:02d}",
+            ),
+        )
         score = _score_text_query_result(subcommand="emb", payload=payload)
         trials.append(
             {
@@ -1061,6 +1202,13 @@ def _resolve_text_query(
                 "status": payload.get("status") if isinstance(payload, dict) else None,
                 "result_count": _json_list_count(payload, "results"),
                 "command": list(argv),
+                "output_log": str(
+                    discovery_log_path(
+                        repo,
+                        config,
+                        f"text-query-{trial_index:02d}",
+                    )
+                ),
             }
         )
         if score > best_score:
@@ -1073,9 +1221,9 @@ def _resolve_inventory_command(
     command: Sequence[str],
     *,
     repo: RepositoryBenchmark,
-    config: CampaignConfig,
-    output_dir: Path,
+    discovery: AdaptiveDiscoveryContext,
     query: str,
+    trial_prefix: str,
 ) -> tuple[tuple[str, ...] | None, dict[str, object]]:
     """
     Resolve one inventory benchmark command after a validation trial.
@@ -1086,12 +1234,12 @@ def _resolve_inventory_command(
         Manifest command tokens excluding the Codira executable.
     repo : RepositoryBenchmark
         Repository benchmark target.
-    config : CampaignConfig
-        Campaign configuration.
-    output_dir : pathlib.Path
+    discovery : AdaptiveDiscoveryContext
         Temporary discovery output directory.
     query : str
         Resolved query text used for placeholder expansion.
+    trial_prefix : str
+        Stable log-name prefix for persisted trial output.
 
     Returns
     -------
@@ -1103,10 +1251,13 @@ def _resolve_inventory_command(
         command,
         repo_path=repo.path,
         query=query,
-        config=config,
-        output_dir=output_dir,
+        config=discovery.config,
+        output_dir=discovery.output_dir,
     )
-    return_code, payload, _ = _json_command_result(argv)
+    return_code, payload, _ = _json_command_result(
+        argv,
+        output_log=discovery_log_path(repo, discovery.config, trial_prefix),
+    )
     symbol_count = _json_list_count(payload, "symbols")
     score = (
         symbol_count * 1000
@@ -1119,6 +1270,7 @@ def _resolve_inventory_command(
         "status": payload.get("status") if isinstance(payload, dict) else None,
         "symbol_count": symbol_count,
         "command": list(argv),
+        "output_log": str(discovery_log_path(repo, discovery.config, trial_prefix)),
     }
     return (tuple(command) if score > 0 else None), metadata
 
@@ -1153,6 +1305,10 @@ def resolve_repository_benchmark(
         prefix=f"codira-benchmark-{_safe_label(repo.category)}-{_safe_label(repo.label)}-"
     ) as temporary_root:
         discovery_output_dir = Path(temporary_root) / "codira-output"
+        discovery = AdaptiveDiscoveryContext(
+            config=config,
+            output_dir=discovery_output_dir,
+        )
         discovery_index = (
             config.codira,
             "index",
@@ -1162,11 +1318,16 @@ def resolve_repository_benchmark(
             str(discovery_output_dir),
         )
         print(f"--- {repo.label.upper()} ---", flush=True)
-        return_code = subprocess.run(discovery_index, check=False).returncode
+        discovery_index_log = discovery_log_path(repo, config, "index")
+        return_code = _logged_command_result(
+            discovery_index,
+            output_log=discovery_index_log,
+        )
         selection["discovery_index"] = {
             "command": list(discovery_index),
             "return_code": return_code,
             "output_dir": str(discovery_output_dir),
+            "output_log": str(discovery_index_log),
         }
         candidates = _discover_symbol_candidates(
             repo=repo,
@@ -1199,9 +1360,9 @@ def resolve_repository_benchmark(
                 resolved, trials = _resolve_symbol_command(
                     command,
                     repo=repo,
-                    config=config,
-                    output_dir=discovery_output_dir,
+                    discovery=discovery,
                     candidates=candidates,
+                    trial_prefix=f"command-{len(command_trials) + 1:02d}",
                 )
                 command_trials.append(
                     {
@@ -1240,9 +1401,9 @@ def resolve_repository_benchmark(
                 resolved, metadata = _resolve_inventory_command(
                     command,
                     repo=repo,
-                    config=config,
-                    output_dir=discovery_output_dir,
+                    discovery=discovery,
                     query=resolved_query,
+                    trial_prefix=f"command-{len(command_trials) + 1:02d}-inventory",
                 )
                 command_trials.append(
                     {
@@ -1801,6 +1962,41 @@ def _print_repo_step_timestamp(label: str) -> None:
     print(f"{label}: {utc_run_timestamp()}", flush=True)
 
 
+def _write_failure_summary(
+    config: CampaignConfig,
+    *,
+    metadata: object,
+    failures: Sequence[dict[str, object]],
+) -> None:
+    """
+    Persist campaign command failures for post-run triage.
+
+    Parameters
+    ----------
+    config : CampaignConfig
+        Campaign configuration.
+    metadata : object
+        Benchmark metadata already recorded in the campaign plan.
+    failures : collections.abc.Sequence[dict[str, object]]
+        Failure rows collected during command execution.
+
+    Returns
+    -------
+    None
+        The summary is written under the campaign run directory.
+    """
+    write_json_artifact(
+        run_directory(config) / "failure-summary.json",
+        {
+            "metadata": metadata,
+            "run_id": config.run_id,
+            "continue_on_error": config.continue_on_error,
+            "failure_count": len(failures),
+            "failures": list(failures),
+        },
+    )
+
+
 def main() -> int:
     """
     Run or dry-run one benchmark campaign.
@@ -1831,6 +2027,7 @@ def main() -> int:
         runs=int(args.runs),
         warmup=int(args.warmup),
         dry_run=bool(args.dry_run),
+        continue_on_error=bool(args.continue_on_error),
     )
     config.artifact_root.mkdir(parents=True, exist_ok=True)
     try:
@@ -1848,6 +2045,7 @@ def main() -> int:
         ),
         "run_id": config.run_id,
         "dry_run": config.dry_run,
+        "continue_on_error": config.continue_on_error,
         "adaptive_resolution": True,
         "repositories": plan,
     }
@@ -1859,6 +2057,7 @@ def main() -> int:
         return 0
 
     (run_directory(config) / "profiles").mkdir(parents=True, exist_ok=True)
+    failures: list[dict[str, object]] = []
     for row in plan:
         commands = row["commands"]
         if not isinstance(commands, list):
@@ -1872,7 +2071,11 @@ def main() -> int:
             msg = "campaign command rows must align commands and output logs"
             raise TypeError(msg)
         label = str(row["label"])
-        for command, output_log in zip(commands, output_logs, strict=True):
+        category = str(row.get("category", ""))
+        for command_index, (command, output_log) in enumerate(
+            zip(commands, output_logs, strict=True),
+            start=1,
+        ):
             if not isinstance(command, list):
                 msg = "campaign command entries must be argument lists"
                 raise TypeError(msg)
@@ -1881,8 +2084,24 @@ def main() -> int:
                 output_log=Path(str(output_log)),
             )
             if return_code != 0:
-                _print_repo_step_timestamp(label)
-                return return_code
+                failures.append(
+                    {
+                        "category": category,
+                        "label": label,
+                        "command_index": command_index,
+                        "return_code": return_code,
+                        "command": list(command),
+                        "output_log": str(output_log),
+                    }
+                )
+                if not config.continue_on_error:
+                    _print_repo_step_timestamp(label)
+                    _write_failure_summary(
+                        config,
+                        metadata=payload["metadata"],
+                        failures=failures,
+                    )
+                    return return_code
         _print_repo_step_timestamp(label)
 
     profile_summaries = {
@@ -1893,6 +2112,13 @@ def main() -> int:
         run_directory(config) / "profile-summary.json",
         {"metadata": payload["metadata"], "profiles": profile_summaries},
     )
+    _write_failure_summary(
+        config,
+        metadata=payload["metadata"],
+        failures=failures,
+    )
+    if failures:
+        return 1
     return 0
 
 

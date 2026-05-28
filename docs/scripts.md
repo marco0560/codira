@@ -87,6 +87,11 @@ executing benchmark commands. `--dry-run` still validates the manifest before
 printing the plan. The dry run still performs the adaptive discovery pass used
 to resolve repo-specific benchmark commands.
 
+Use `--continue-on-error` for torture campaigns. In that mode every planned
+command is attempted, command stdout and stderr are retained under
+`<run-id>/logs/`, and failures are summarized in
+`<run-id>/failure-summary.json`.
+
 The manifest supports optional repository-local `commands` entries that extend
 the Hyperfine command set beyond the default `index --full`, warm `index`, and
 `ctx --json` measurements. Each command is written as a JSON argv array
@@ -128,16 +133,27 @@ adaptive discovery pass for each repository:
 - unresolved adaptive commands are skipped instead of aborting the whole repo
   campaign
 
-Discovery index state is not stored under `--artifact-root`. Only selector
+Discovery index state is not stored under `--artifact-root`. Selector
 provenance is persisted under
-`.artifacts/benchmarks/<run-id>/selection/*.json`, and the resolved or skipped
-commands are also recorded in `campaign-plan.json`.
+`.artifacts/benchmarks/<run-id>/selection/*.json`, discovery command output is
+persisted under `.artifacts/benchmarks/<run-id>/logs/discovery/`, and the
+resolved or skipped commands are also recorded in `campaign-plan.json`.
 
 Example:
 
 ```bash
 python scripts/benchmark_campaign.py benchmarks.json --dry-run
 python scripts/benchmark_campaign.py benchmarks.json --runs 10
+```
+
+## `scripts/run_bk_cpp_baseline.sh`
+
+Run the paired SQLite and DuckDB `benchmarks/bk-cpp.local.json` torture
+baseline with fixed runtime environment defaults, `--artifact-root .artifacts`,
+and `--continue-on-error`.
+
+```bash
+scripts/run_bk_cpp_baseline.sh
 ```
 
 See `docs/process/performance-benchmarking.md` for the manifest format,
