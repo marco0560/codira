@@ -139,7 +139,9 @@ _NULLABLE_EDGE_TABLE_REWRITES: dict[
         (
             "idx_call_edges_identity",
             "idx_call_edges_caller",
+            "idx_call_edges_caller_lookup",
             "idx_call_edges_callee",
+            "idx_call_edges_callee_lookup",
             "idx_call_edges_resolved",
         ),
     ),
@@ -157,7 +159,9 @@ _NULLABLE_EDGE_TABLE_REWRITES: dict[
         (
             "idx_callable_refs_identity",
             "idx_callable_refs_owner",
+            "idx_callable_refs_owner_lookup",
             "idx_callable_refs_target",
+            "idx_callable_refs_target_lookup",
             "idx_callable_refs_resolved",
         ),
     ),

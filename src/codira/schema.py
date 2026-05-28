@@ -187,8 +187,16 @@ DDL = [
     ON call_edges(caller_file_id, caller_module, caller_name);
     """,
     """
+    CREATE INDEX IF NOT EXISTS idx_call_edges_caller_lookup
+    ON call_edges(caller_name, caller_module, caller_file_id);
+    """,
+    """
     CREATE INDEX IF NOT EXISTS idx_call_edges_callee
     ON call_edges(callee_module, callee_name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_call_edges_callee_lookup
+    ON call_edges(callee_name, callee_module);
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_call_edges_resolved
@@ -230,8 +238,16 @@ DDL = [
     ON callable_refs(owner_file_id, owner_module, owner_name);
     """,
     """
+    CREATE INDEX IF NOT EXISTS idx_callable_refs_owner_lookup
+    ON callable_refs(owner_name, owner_module, owner_file_id);
+    """,
+    """
     CREATE INDEX IF NOT EXISTS idx_callable_refs_target
     ON callable_refs(target_module, target_name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_callable_refs_target_lookup
+    ON callable_refs(target_name, target_module);
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_callable_refs_resolved
@@ -357,6 +373,10 @@ DDL = [
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_symbol_name ON symbol_index(name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_symbol_exact_lookup
+    ON symbol_index(name, type, module_name, file_id, lineno);
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_symbol_file ON symbol_index(file_id);

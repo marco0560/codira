@@ -749,11 +749,15 @@ def test_duckdb_backend_index_session_repairs_legacy_nullable_edge_schema(
         for index_name in (
             "idx_call_edges_identity",
             "idx_call_edges_caller",
+            "idx_call_edges_caller_lookup",
             "idx_call_edges_callee",
+            "idx_call_edges_callee_lookup",
             "idx_call_edges_resolved",
             "idx_callable_refs_identity",
             "idx_callable_refs_owner",
+            "idx_callable_refs_owner_lookup",
             "idx_callable_refs_target",
+            "idx_callable_refs_target_lookup",
             "idx_callable_refs_resolved",
         ):
             raw.execute(f"DROP INDEX IF EXISTS {index_name}")
@@ -765,13 +769,21 @@ def test_duckdb_backend_index_session_repairs_legacy_nullable_edge_schema(
                 or "CREATE UNIQUE INDEX IF NOT EXISTS idx_call_edges_identity"
                 in statement
                 or "CREATE INDEX IF NOT EXISTS idx_call_edges_caller" in statement
+                or "CREATE INDEX IF NOT EXISTS idx_call_edges_caller_lookup"
+                in statement
                 or "CREATE INDEX IF NOT EXISTS idx_call_edges_callee" in statement
+                or "CREATE INDEX IF NOT EXISTS idx_call_edges_callee_lookup"
+                in statement
                 or "CREATE INDEX IF NOT EXISTS idx_call_edges_resolved" in statement
                 or "CREATE TABLE IF NOT EXISTS callable_refs" in statement
                 or "CREATE UNIQUE INDEX IF NOT EXISTS idx_callable_refs_identity"
                 in statement
                 or "CREATE INDEX IF NOT EXISTS idx_callable_refs_owner" in statement
+                or "CREATE INDEX IF NOT EXISTS idx_callable_refs_owner_lookup"
+                in statement
                 or "CREATE INDEX IF NOT EXISTS idx_callable_refs_target" in statement
+                or "CREATE INDEX IF NOT EXISTS idx_callable_refs_target_lookup"
+                in statement
                 or "CREATE INDEX IF NOT EXISTS idx_callable_refs_resolved" in statement
             ):
                 raw.execute(statement)
@@ -992,11 +1004,15 @@ def test_duckdb_backend_initialize_repairs_legacy_edge_identity_schema(
         for index_name in (
             "idx_call_edges_identity",
             "idx_call_edges_caller",
+            "idx_call_edges_caller_lookup",
             "idx_call_edges_callee",
+            "idx_call_edges_callee_lookup",
             "idx_call_edges_resolved",
             "idx_callable_refs_identity",
             "idx_callable_refs_owner",
+            "idx_callable_refs_owner_lookup",
             "idx_callable_refs_target",
+            "idx_callable_refs_target_lookup",
             "idx_callable_refs_resolved",
         ):
             raw.execute(f"DROP INDEX IF EXISTS {index_name}")
@@ -1386,11 +1402,15 @@ def test_duckdb_backend_rebuild_replaces_existing_resolved_edges(
     assert {
         "idx_call_edges_identity",
         "idx_call_edges_caller",
+        "idx_call_edges_caller_lookup",
         "idx_call_edges_callee",
+        "idx_call_edges_callee_lookup",
         "idx_call_edges_resolved",
         "idx_callable_refs_identity",
         "idx_callable_refs_owner",
+        "idx_callable_refs_owner_lookup",
         "idx_callable_refs_target",
+        "idx_callable_refs_target_lookup",
         "idx_callable_refs_resolved",
     } <= index_names
 

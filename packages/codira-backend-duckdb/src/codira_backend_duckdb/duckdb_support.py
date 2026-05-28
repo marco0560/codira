@@ -80,11 +80,15 @@ EnumMemberRow = tuple[int, str, str, int, str, str, int, str, str, int]
 _DERIVED_GRAPH_INDEX_DROP_DDL = (
     "DROP INDEX IF EXISTS idx_call_edges_identity",
     "DROP INDEX IF EXISTS idx_call_edges_caller",
+    "DROP INDEX IF EXISTS idx_call_edges_caller_lookup",
     "DROP INDEX IF EXISTS idx_call_edges_callee",
+    "DROP INDEX IF EXISTS idx_call_edges_callee_lookup",
     "DROP INDEX IF EXISTS idx_call_edges_resolved",
     "DROP INDEX IF EXISTS idx_callable_refs_identity",
     "DROP INDEX IF EXISTS idx_callable_refs_owner",
+    "DROP INDEX IF EXISTS idx_callable_refs_owner_lookup",
     "DROP INDEX IF EXISTS idx_callable_refs_target",
+    "DROP INDEX IF EXISTS idx_callable_refs_target_lookup",
     "DROP INDEX IF EXISTS idx_callable_refs_resolved",
 )
 _CALL_EDGES_REBUILD_TABLE_DDL = """
@@ -126,8 +130,16 @@ _DERIVED_GRAPH_INDEX_DDL = (
     ON call_edges(caller_file_id, caller_module, caller_name);
     """,
     """
+    CREATE INDEX IF NOT EXISTS idx_call_edges_caller_lookup
+    ON call_edges(caller_name, caller_module, caller_file_id);
+    """,
+    """
     CREATE INDEX IF NOT EXISTS idx_call_edges_callee
     ON call_edges(callee_module, callee_name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_call_edges_callee_lookup
+    ON call_edges(callee_name, callee_module);
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_call_edges_resolved
@@ -149,8 +161,16 @@ _DERIVED_GRAPH_INDEX_DDL = (
     ON callable_refs(owner_file_id, owner_module, owner_name);
     """,
     """
+    CREATE INDEX IF NOT EXISTS idx_callable_refs_owner_lookup
+    ON callable_refs(owner_name, owner_module, owner_file_id);
+    """,
+    """
     CREATE INDEX IF NOT EXISTS idx_callable_refs_target
     ON callable_refs(target_module, target_name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_callable_refs_target_lookup
+    ON callable_refs(target_name, target_module);
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_callable_refs_resolved
@@ -4148,6 +4168,17 @@ def _count_reused_embeddings(
     """
     if not reused_paths:
         return 0
+
+    if len(reused_paths) == _count_indexed_files(conn):
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM embeddings
+            WHERE object_type = 'symbol'
+            """
+        ).fetchone()
+        assert row is not None
+        return _duckdb_int(row[0])
 
     row = conn.execute(
         """
