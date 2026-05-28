@@ -22,7 +22,7 @@ def test_bundle_package_declares_expected_first_party_dependencies() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.5.11"
+    assert project["project"]["version"] == "1.5.12"
     assert project["project"]["dependencies"] == [
         "codira[semantic]>=1.5.0,<2.0.0",
         "codira-analyzer-python==1.5.2",
@@ -30,6 +30,6 @@ def test_bundle_package_declares_expected_first_party_dependencies() -> None:
         "codira-analyzer-c==1.5.5",
         "codira-analyzer-cpp==1.5.0",
         "codira-analyzer-bash==1.5.0",
-        "codira-backend-sqlite==1.5.3",
-        "codira-backend-duckdb==1.5.3",
+        "codira-backend-sqlite==1.5.4",
+        "codira-backend-duckdb==1.5.4",
     ]
