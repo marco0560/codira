@@ -1,3 +1,35 @@
+# [1.26.0](https://github.com/marco0560/codira/compare/v1.25.0...v1.26.0) (2026-05-28)
+
+
+### Bug Fixes
+
+* **backend:** DuckDB now rebuilds derived graph tables ([3606042](https://github.com/marco0560/codira/commit/36060425a906fa154779bdd22cc7447823de1fe8))
+* **cli:** Invalid --path values now fail with a message ([b62d4aa](https://github.com/marco0560/codira/commit/b62d4aaf3280eb818f374767bcf718ef045065d4))
+* **indexer:** reuse backend warm-planning connection ([45cfc60](https://github.com/marco0560/codira/commit/45cfc6098a30c34cf9de3268f61e4551584f361b))
+
+
+### Features
+
+* **backend:** harden backend storage boundaries ([062f080](https://github.com/marco0560/codira/commit/062f080b525b6df7f76a1426cb22e55ad9d4fa82))
+* **backend:** refactor index sessions and validation tooling ([c7c3ff1](https://github.com/marco0560/codira/commit/c7c3ff166ed8355a01540c97dd28a6d30a28072f))
+
+
+### Performance Improvements
+
+* **backend:** batch DuckDB relationship writes ([f393e57](https://github.com/marco0560/codira/commit/f393e5798a475c06bdc10a15a718a313dc3a1b97))
+* **backend:** batch DuckDB structural writes ([0bc74a7](https://github.com/marco0560/codira/commit/0bc74a7dab11aa00184dbea43e68246a5c72981d)), closes [#30](https://github.com/marco0560/codira/issues/30)
+* **backend:** complete DuckDB backend performance work ([e72e57d](https://github.com/marco0560/codira/commit/e72e57d2f78b7eeac4329a7d85c46bb86024e751)), closes [#30](https://github.com/marco0560/codira/issues/30) [#30](https://github.com/marco0560/codira/issues/30)
+* **backend:** index DuckDB symbol detail lookups ([7e0a257](https://github.com/marco0560/codira/commit/7e0a257bb8ed43bdf0cfb1a889930a1516988602))
+* **backend:** score DuckDB embeddings in SQL ([9172664](https://github.com/marco0560/codira/commit/9172664fdc0b5185608a29a8bf356e8713b9b58a))
+* **backend:** stabilize benchmark runtime measurements ([46d9fa4](https://github.com/marco0560/codira/commit/46d9fa49bf408dd760d23ac3dabe3a4632498856))
+* **backend:** stabilize DuckDB reused embedding counts ([12c118d](https://github.com/marco0560/codira/commit/12c118de23fbe02bd1956d964ab01080f8df7013)), closes [#30](https://github.com/marco0560/codira/issues/30)
+* **backend:** tune DuckDB warm and graph lookups ([4c5ed48](https://github.com/marco0560/codira/commit/4c5ed48cbca110c490857a6efdf7d43ef67a4a81))
+* **cli:** skip backend freshness reads for queries ([ce9d784](https://github.com/marco0560/codira/commit/ce9d7847cc62dbacd97719d4cddb3c1a53476b68)), closes [#30](https://github.com/marco0560/codira/issues/30)
+* **context:** narrow docstring issue lookups ([b17cfde](https://github.com/marco0560/codira/commit/b17cfde5d473adbfcec663acd37194e7ea47767f)), closes [#30](https://github.com/marco0560/codira/issues/30)
+* **embeddings:** batch session embedding writes ([879689e](https://github.com/marco0560/codira/commit/879689e25a7e3c5077c6d66bfe1a9dbd309f7095))
+* **indexer:** skip rebuild after failure-only runs ([8b4aaec](https://github.com/marco0560/codira/commit/8b4aaecb87e51abe44da11c33c99f97507dfa266))
+* **semantic:** raise default embedding batch size ([9182584](https://github.com/marco0560/codira/commit/91825847d419f7bfb667a160ea527133f8a6d94a)), closes [#30](https://github.com/marco0560/codira/issues/30)
+
 # [1.25.0](https://github.com/marco0560/codira/compare/v1.24.2...v1.25.0) (2026-05-20)
 
 
