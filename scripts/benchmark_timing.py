@@ -21,6 +21,7 @@ scripts.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from contextlib import contextmanager
@@ -31,6 +32,13 @@ from time import perf_counter
 from typing import TYPE_CHECKING
 
 from codira.registry import plugin_registrations
+from codira.semantic.embeddings import (
+    DEFAULT_EMBEDDING_BATCH_SIZE,
+    EMBEDDING_BATCH_SIZE_ENV_VAR,
+    EMBEDDING_DEVICE_ENV_VAR,
+    TORCH_NUM_INTEROP_THREADS_ENV_VAR,
+    TORCH_NUM_THREADS_ENV_VAR,
+)
 from codira.version import installed_distribution_version, package_version
 
 if TYPE_CHECKING:
@@ -289,6 +297,62 @@ def profiler_availability() -> dict[str, bool]:
     }
 
 
+def embedding_runtime_metadata() -> dict[str, object]:
+    """
+    Return effective embedding and Torch runtime settings.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-serializable embedding runtime metadata for benchmark artifacts.
+    """
+    torch_threads: int | None = None
+    torch_interop_threads: int | None = None
+    torch_available = False
+    try:
+        import torch
+    except ImportError:
+        pass
+    else:
+        torch_available = True
+        torch_threads = int(torch.get_num_threads())
+        torch_interop_threads = int(torch.get_num_interop_threads())
+
+    configured_batch_size = os.getenv(EMBEDDING_BATCH_SIZE_ENV_VAR)
+    configured_device = os.getenv(EMBEDDING_DEVICE_ENV_VAR)
+    effective_batch_size: int | str
+    if configured_batch_size is None:
+        effective_batch_size = DEFAULT_EMBEDDING_BATCH_SIZE
+    else:
+        try:
+            effective_batch_size = int(configured_batch_size)
+        except ValueError:
+            effective_batch_size = configured_batch_size
+    return {
+        "env": {
+            EMBEDDING_BATCH_SIZE_ENV_VAR: configured_batch_size,
+            EMBEDDING_DEVICE_ENV_VAR: configured_device,
+            TORCH_NUM_THREADS_ENV_VAR: os.getenv(TORCH_NUM_THREADS_ENV_VAR),
+            TORCH_NUM_INTEROP_THREADS_ENV_VAR: os.getenv(
+                TORCH_NUM_INTEROP_THREADS_ENV_VAR
+            ),
+        },
+        "effective": {
+            "embedding_batch_size": effective_batch_size,
+            "embedding_device": "cpu"
+            if configured_device is None
+            else configured_device,
+            "torch_available": torch_available,
+            "torch_num_threads": torch_threads,
+            "torch_num_interop_threads": torch_interop_threads,
+        },
+    }
+
+
 def benchmark_metadata(
     root: Path,
     *,
@@ -318,6 +382,7 @@ def benchmark_metadata(
         "git_commit": git_commit(root),
         "manifest": None if manifest is None else str(manifest),
         "plugins": loaded_plugin_inventory(),
+        "embedding_runtime": embedding_runtime_metadata(),
         "tools": {
             "hyperfine": executable_available(hyperfine),
             **profiler_availability(),

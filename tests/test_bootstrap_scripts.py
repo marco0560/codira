@@ -3126,13 +3126,16 @@ def test_embedding_startup_benchmark_helper_separates_cold_and_warm_costs(
     ]
 
 
-def test_benchmark_metadata_includes_first_party_plugins() -> None:
+def test_benchmark_metadata_includes_first_party_plugins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Keep benchmark artifacts tied to the first-party plugin set.
 
     Parameters
     ----------
-    None
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to set embedding runtime environment variables.
 
     Returns
     -------
@@ -3142,6 +3145,10 @@ def test_benchmark_metadata_includes_first_party_plugins() -> None:
         providers.
     """
     helper = _load_benchmark_timing_helper()
+    monkeypatch.setenv("CODIRA_EMBED_BATCH_SIZE", "64")
+    monkeypatch.setenv("CODIRA_EMBED_DEVICE", "cpu")
+    monkeypatch.setenv("CODIRA_TORCH_NUM_THREADS", "4")
+    monkeypatch.setenv("CODIRA_TORCH_NUM_INTEROP_THREADS", "1")
     expected_providers = (
         "codira-analyzer-python",
         "codira-analyzer-json",
@@ -3158,6 +3165,9 @@ def test_benchmark_metadata_includes_first_party_plugins() -> None:
     )
     plugins = cast("list[dict[str, object]]", metadata["plugins"])
     tools = cast("dict[str, object]", metadata["tools"])
+    embedding_runtime = cast("dict[str, object]", metadata["embedding_runtime"])
+    embedding_env = cast("dict[str, object]", embedding_runtime["env"])
+    embedding_effective = cast("dict[str, object]", embedding_runtime["effective"])
     providers = {
         str(plugin["provider"])
         for plugin in plugins
@@ -3179,6 +3189,17 @@ def test_benchmark_metadata_includes_first_party_plugins() -> None:
     assert tools["hyperfine"] is False
     assert "pyinstrument" in tools
     assert "snakeviz" in tools
+    assert embedding_env == {
+        "CODIRA_EMBED_BATCH_SIZE": "64",
+        "CODIRA_EMBED_DEVICE": "cpu",
+        "CODIRA_TORCH_NUM_THREADS": "4",
+        "CODIRA_TORCH_NUM_INTEROP_THREADS": "1",
+    }
+    assert embedding_effective["embedding_batch_size"] == 64
+    assert embedding_effective["embedding_device"] == "cpu"
+    assert "torch_available" in embedding_effective
+    assert "torch_num_threads" in embedding_effective
+    assert "torch_num_interop_threads" in embedding_effective
 
 
 def test_benchmark_campaign_helper_builds_dry_run_plan(
@@ -3444,6 +3465,7 @@ def test_benchmark_campaign_helper_expands_manifest_commands(
 
     assert any("codira help" in command for command in display_commands)
     assert "--show-output" in commands[1]
+    assert "--ignore-failure" in commands[1]
     assert row["output_logs"] == [
         str(
             config.artifact_root

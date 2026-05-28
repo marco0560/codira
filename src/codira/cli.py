@@ -1649,7 +1649,8 @@ def _run_coverage(root: Path, *, as_json: bool = False) -> int:
     Returns
     -------
     int
-        Zero when coverage is complete, otherwise one.
+        Zero when coverage is complete. JSON output also returns zero for
+        incomplete coverage so automation can consume the structured findings.
     """
     analyzers = sorted(active_language_analyzers(), key=lambda item: str(item.name))
     issues = audit_repo_coverage(root)
@@ -1681,7 +1682,7 @@ def _run_coverage(root: Path, *, as_json: bool = False) -> int:
                 ],
             )
         )
-        return 0 if not issues else 1
+        return 0
 
     print(f"Coverage complete: {'yes' if not issues else 'no'}")
     print(f"Active analyzers: {len(analyzers)}")

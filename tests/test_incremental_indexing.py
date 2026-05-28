@@ -2700,8 +2700,8 @@ def test_coverage_cli_emits_json(
     Returns
     -------
     None
-        The test asserts the JSON coverage envelope includes analyzer and
-        issue metadata.
+        The test asserts the JSON coverage envelope includes analyzer and issue
+        metadata without making coverage findings a command failure.
     """
     rust_module = tmp_path / "src" / "lib.rs"
     rust_module.parent.mkdir(parents=True, exist_ok=True)
@@ -2710,7 +2710,7 @@ def test_coverage_cli_emits_json(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["codira", "cov", "--json"])
 
-    assert main() == 1
+    assert main() == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "cov"
     assert payload["status"] == "incomplete"
