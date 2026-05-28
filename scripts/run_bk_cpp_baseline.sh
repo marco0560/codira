@@ -38,6 +38,7 @@ CODIRA_TORCH_NUM_INTEROP_THREADS="${CODIRA_TORCH_NUM_INTEROP_THREADS:-1}"
 
 run_backend() {
   local backend="$1"
+  shift
   local run_id="${STAMP}-bk-cpp-${backend}"
   local run_dir="${ARTIFACT_ROOT}/${run_id}"
   local log_path="${run_dir}/campaign-console.log"
