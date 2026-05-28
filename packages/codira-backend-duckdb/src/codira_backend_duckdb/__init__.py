@@ -122,6 +122,16 @@ _DUCKDB_EMBEDDINGS_DDL = """
         vector_values DOUBLE[]
     );
 """
+_DUCKDB_SYMBOL_DETAIL_INDEX_DDL = (
+    """
+    CREATE INDEX IF NOT EXISTS idx_duckdb_modules_file_name
+    ON modules(file_id, name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_duckdb_functions_symbol_detail
+    ON functions(name, lineno, is_method, module_id);
+    """,
+)
 _NULLABLE_EDGE_TABLE_REWRITES: dict[
     str, tuple[str, tuple[str, ...], tuple[str, ...]]
 ] = {
@@ -1244,7 +1254,7 @@ def _duckdb_schema_ddl() -> tuple[str, ...]:
         for sequence_name in _TABLE_ID_SEQUENCE.values()
     )
     table_statements = tuple(_rewrite_duckdb_ddl(statement) for statement in DDL)
-    return (*sequence_statements, *table_statements)
+    return (*sequence_statements, *table_statements, *_DUCKDB_SYMBOL_DETAIL_INDEX_DDL)
 
 
 def _duckdb_schema_index_ddl() -> tuple[str, ...]:

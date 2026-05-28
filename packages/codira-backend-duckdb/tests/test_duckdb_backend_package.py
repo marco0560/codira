@@ -486,6 +486,34 @@ def test_duckdb_schema_ddl_declares_sequences_and_defaults() -> None:
     assert any("DEFAULT nextval('symbol_index_id_seq')" in stmt for stmt in statements)
 
 
+def test_duckdb_schema_ddl_declares_symbol_detail_indexes() -> None:
+    """
+    Keep DuckDB exact-symbol enrichment lookups backed by supporting indexes.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB schema DDL includes indexes for module and
+        function lookups used while rendering ``sym --json`` details.
+    """
+    statements = _duckdb_schema_ddl()
+
+    assert any(
+        "CREATE INDEX IF NOT EXISTS idx_duckdb_modules_file_name" in stmt
+        and "ON modules(file_id, name)" in stmt
+        for stmt in statements
+    )
+    assert any(
+        "CREATE INDEX IF NOT EXISTS idx_duckdb_functions_symbol_detail" in stmt
+        and "ON functions(name, lineno, is_method, module_id)" in stmt
+        for stmt in statements
+    )
+
+
 def test_duckdb_schema_ddl_keeps_unresolved_edge_targets_nullable() -> None:
     """
     Keep unresolved graph edge targets nullable in DuckDB schema rewrites.
