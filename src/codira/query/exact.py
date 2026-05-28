@@ -24,6 +24,7 @@ from codira.contracts import BackendRelationQueryRequest, BackendSymbolInventory
 from codira.registry import active_index_backend
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
     from codira.types import (
@@ -216,6 +217,7 @@ def docstring_issues(
     root: Path,
     *,
     prefix: str | None = None,
+    symbol_names: Sequence[str] | None = None,
     conn: BackendConnection | None = None,
 ) -> list[DocstringIssueRow]:
     """
@@ -227,6 +229,9 @@ def docstring_issues(
         Repository root containing the index database.
     prefix : str | None, optional
         Repo-root-relative path prefix used to restrict issue ownership.
+    symbol_names : collections.abc.Sequence[str] | None, optional
+        Symbol names used to restrict issue ownership before backend row
+        expansion.
     conn : object | None, optional
         Existing database connection to reuse. When omitted, the function
         opens and closes its own connection.
@@ -238,7 +243,12 @@ def docstring_issues(
         metadata.
     """
     backend = active_index_backend()
-    return backend.docstring_issues(root, prefix=prefix, conn=conn)
+    return backend.docstring_issues(
+        root,
+        prefix=prefix,
+        symbol_names=symbol_names,
+        conn=conn,
+    )
 
 
 def find_symbol_overloads(

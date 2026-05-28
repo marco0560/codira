@@ -17,16 +17,18 @@ This module belongs to the **indexing layer** and glues together analyzers, stor
 
 from __future__ import annotations
 
+import json
 import warnings
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
+    IndexBackend,
     PendingEmbeddingRow,
     StoredEmbeddingRow,
 )
@@ -51,10 +53,7 @@ from codira.semantic.embeddings import (
 )
 
 if TYPE_CHECKING:
-    from codira_backend_sqlite import SQLiteIndexBackend as SQLiteIndexBackend
-
-    from codira.contracts import IndexBackend, LanguageAnalyzer
-    from codira.semantic.embeddings import EmbeddingBackendSpec
+    from codira.contracts import IndexWriteSession, LanguageAnalyzer
 
 ParsedFile = tuple[Path, FileMetadataSnapshot, AnalysisResult]
 _IGNORED_COVERAGE_SUFFIXES = frozenset({"<no-suffix>", ".md", ".txt", ".typed"})
@@ -62,75 +61,8 @@ _BINARY_SNIFF_BYTES = 8192
 __all__ = [
     "PendingEmbeddingRow",
     "StoredEmbeddingRow",
-    "SQLiteIndexBackend",
     "index_repo",
 ]
-
-
-def __getattr__(name: str) -> object:
-    """
-    Resolve historical module exports lazily during the backend packaging split.
-
-    Parameters
-    ----------
-    name : str
-        Module attribute requested from ``codira.indexer``.
-
-    Returns
-    -------
-    object
-        Lazily imported compatibility export.
-
-    Raises
-    ------
-    AttributeError
-        If ``name`` is not a supported compatibility export.
-    """
-    if name == "SQLiteIndexBackend":
-        from codira_backend_sqlite import SQLiteIndexBackend
-
-        return SQLiteIndexBackend
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
-
-
-def _flush_embedding_rows(
-    conn: object,
-    *,
-    embedding_rows: list[PendingEmbeddingRow],
-    backend: EmbeddingBackendSpec,
-    previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
-) -> tuple[int, int]:
-    """
-    Persist pending embedding payloads through the historical indexer export.
-
-    Parameters
-    ----------
-    conn : object
-        Open backend connection handle reused by the compatibility helper.
-    embedding_rows : list[codira.contracts.PendingEmbeddingRow]
-        Pending embedding payloads collected during persistence.
-    backend : codira.semantic.embeddings.EmbeddingBackendSpec
-        Active embedding backend metadata.
-    previous_embeddings : dict[str, codira.contracts.StoredEmbeddingRow] | None, optional
-        Previously stored embedding rows eligible for reuse.
-
-    Returns
-    -------
-    tuple[int, int]
-        ``(recomputed, reused)`` embedding counts for the file.
-    """
-
-    from codira_backend_sqlite.sqlite_support import (
-        _flush_embedding_rows as _sqlite_flush,
-    )
-
-    return _sqlite_flush(
-        cast("Any", conn),
-        embedding_rows=embedding_rows,
-        backend=backend,
-        previous_embeddings=previous_embeddings,
-    )
 
 
 @dataclass(frozen=True)
@@ -341,10 +273,8 @@ class PersistIndexedFileAnalysesRequest:
     ----------
     root : pathlib.Path
         Repository root being indexed.
-    conn : object
-        Open backend connection reused across writes.
-    backend : codira.contracts.IndexBackend
-        Concrete backend receiving normalized artifacts.
+    session : codira.contracts.IndexWriteSession
+        Active backend write session reused across indexed files.
     parsed_files : list[ParsedFile]
         Analyzed file snapshots in deterministic order.
     embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
@@ -354,8 +284,7 @@ class PersistIndexedFileAnalysesRequest:
     """
 
     root: Path
-    conn: object
-    backend: IndexBackend
+    session: IndexWriteSession
     parsed_files: list[ParsedFile]
     embedding_backend: EmbeddingBackendSpec
     previous_embeddings_by_path: dict[str, dict[str, StoredEmbeddingRow]]
@@ -573,6 +502,36 @@ def _active_language_analyzers() -> list[LanguageAnalyzer]:
     return active_language_analyzers()
 
 
+def _current_analyzer_inventory_rows(
+    analyzers: list[LanguageAnalyzer],
+) -> list[tuple[str, str, str]]:
+    """
+    Return the active analyzer inventory in persisted comparison form.
+
+    Parameters
+    ----------
+    analyzers : list[codira.contracts.LanguageAnalyzer]
+        Analyzer instances active for the current run.
+
+    Returns
+    -------
+    list[tuple[str, str, str]]
+        Active analyzer rows as ``(name, version, discovery_globs_json)``
+        ordered by analyzer name.
+    """
+    return [
+        (
+            str(analyzer.name),
+            str(analyzer.version),
+            json.dumps(tuple(analyzer.discovery_globs)),
+        )
+        for analyzer in sorted(
+            analyzers,
+            key=lambda item: str(item.name),
+        )
+    ]
+
+
 def _select_language_analyzer(
     path: Path,
     analyzers: list[LanguageAnalyzer],
@@ -760,7 +719,7 @@ def _persist_indexed_file_analyses(
                     request.root,
                     duplicate_stable_ids,
                 )
-            recomputed, reused = request.backend.persist_analysis(
+            recomputed, reused = request.session.persist_analysis(
                 BackendPersistAnalysisRequest(
                     root=request.root,
                     file_metadata=file_metadata_snapshot,
@@ -770,7 +729,6 @@ def _persist_indexed_file_analyses(
                         str(file_metadata_snapshot.path),
                         {},
                     ),
-                    conn=request.conn,
                 )
             )
         except (OSError, BackendError, RuntimeError, ValueError) as exc:
@@ -840,7 +798,7 @@ def _load_existing_index_state(
     *,
     backend: IndexBackend,
     embedding_backend: EmbeddingBackendSpec,
-    conn: object,
+    conn: object | None = None,
 ) -> ExistingIndexState:
     """
     Load the persisted state needed for incremental index planning.
@@ -848,13 +806,13 @@ def _load_existing_index_state(
     Parameters
     ----------
     root : pathlib.Path
-        Repository root whose index should be queried.
-    backend : codira.contracts.IndexBackend
-        Concrete backend providing the persisted state.
+        Repository root whose persisted backend state should be loaded.
+    backend : object
+        Active backend exposing the incremental-planning read surface.
     embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
         Active embedding backend metadata.
-    conn : object
-        Open backend connection reused across reads.
+    conn : object | None, optional
+        Existing backend connection to reuse for read-side planning.
 
     Returns
     -------
@@ -864,10 +822,7 @@ def _load_existing_index_state(
     file_hashes = backend.load_existing_file_hashes(root, conn=conn)
     return ExistingIndexState(
         file_hashes=file_hashes,
-        file_ownership=backend.load_existing_file_ownership(
-            root,
-            conn=conn,
-        ),
+        file_ownership=backend.load_existing_file_ownership(root, conn=conn),
         paths=sorted(file_hashes),
         embedding_backend_matches=backend.current_embedding_state_matches(
             root,
@@ -962,43 +917,66 @@ def _plan_index_run(
 
 
 def _prepare_index_storage(
-    root: Path,
     *,
     full: bool,
     plan: IndexPlan,
-    backend: IndexBackend,
-    conn: object,
+    session: IndexWriteSession,
 ) -> None:
     """
     Delete persisted rows that the current index plan will replace.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root being indexed.
     full : bool
         Whether the current run is a full rebuild.
     plan : IndexPlan
         Deterministic indexing plan for the current run.
-    backend : codira.contracts.IndexBackend
-        Concrete backend receiving deletion requests.
-    conn : object
-        Open backend connection reused across writes.
+    session : codira.contracts.IndexWriteSession
+        Active backend write session receiving deletion requests.
 
     Returns
     -------
     None
         Persisted rows are removed in place before fresh analysis is stored.
     """
-    if full:
-        backend.clear_index(root, conn=conn)
-        return
-
-    backend.delete_paths(
-        root,
-        paths=sorted(set(plan.indexed_paths) | set(plan.deleted_paths)),
-        conn=conn,
+    session.prepare(
+        full=full,
+        indexed_paths=plan.indexed_paths,
+        deleted_paths=plan.deleted_paths,
     )
+
+
+def _index_run_mutated_graph_inputs(
+    *,
+    full: bool,
+    plan: IndexPlan,
+    existing_state: ExistingIndexState,
+    persisted_files: list[ParsedFile],
+) -> bool:
+    """
+    Return whether the completed run changed graph-derived source rows.
+
+    Parameters
+    ----------
+    full : bool
+        Whether the current run cleared all indexed storage.
+    plan : IndexPlan
+        Deterministic indexing plan for the current run.
+    existing_state : ExistingIndexState
+        Persisted state observed before the current run.
+    persisted_files : list[ParsedFile]
+        Successfully persisted parsed-file rows.
+
+    Returns
+    -------
+    bool
+        ``True`` when derived graph indexes may need rebuilding.
+    """
+    if full or plan.deleted_paths or persisted_files:
+        return True
+
+    existing_paths = set(existing_state.paths)
+    return any(path in existing_paths for path in plan.indexed_paths)
 
 
 def _finalize_index_report(request: FinalizeIndexReportRequest) -> IndexReport:
@@ -1076,57 +1054,102 @@ def index_repo(
     -------
     IndexReport
         Deterministic summary of the indexing run.
+
+    Raises
+    ------
+    BackendError
+        If the active backend rejects one repository-scoped mutation outside
+        per-file persistence failure handling.
+    OSError
+        If repository scanning or backend-owned file mutation fails.
+    RuntimeError
+        If one backend-owned runtime operation cannot complete.
+    ValueError
+        If validated indexing inputs are semantically inconsistent.
     """
     index_backend = active_index_backend()
     analyzers = _active_language_analyzers()
-    conn = index_backend.open_connection(root)
     backend = get_embedding_backend()
     coverage_issues = _audit_canonical_directory_coverage(root, analyzers=analyzers)
-
+    current_state = _collect_project_scan_state(root, analyzers=analyzers)
+    planning_conn = index_backend.open_connection(root)
     try:
-        index_backend.purge_skipped_docstring_issues(root, conn=conn)
-        index_backend.prune_orphaned_embeddings(root, conn=conn)
-        current_state = _collect_project_scan_state(root, analyzers=analyzers)
         existing_state = _load_existing_index_state(
             root,
             backend=index_backend,
             embedding_backend=backend,
-            conn=conn,
+            conn=planning_conn,
         )
         plan = _plan_index_run(
             full=full,
             current_state=current_state,
             existing_state=existing_state,
         )
-        previous_embeddings_by_path = (
-            {}
-            if full
-            else cast(
-                "dict[str, dict[str, StoredEmbeddingRow]]",
-                index_backend.load_previous_embeddings_by_path(
-                    root,
-                    paths=plan.indexed_paths,
-                    embedding_backend=backend,
-                    conn=conn,
-                ),
-            )
+        current_runtime_inventory = (
+            str(index_backend.name),
+            str(index_backend.version),
+            int(not coverage_issues),
         )
-        _prepare_index_storage(
+        runtime_inventory_matches = (
+            index_backend.load_runtime_inventory(root, conn=planning_conn)
+            == current_runtime_inventory
+        )
+        analyzer_inventory_matches = index_backend.load_analyzer_inventory(
             root,
-            full=full,
-            plan=plan,
-            backend=index_backend,
-            conn=conn,
+            conn=planning_conn,
+        ) == _current_analyzer_inventory_rows(analyzers)
+        needs_maintenance = getattr(
+            index_backend,
+            "needs_maintenance",
+            lambda _root, *, conn=None: True,
         )
-
+        backend_needs_maintenance = bool(needs_maintenance(root, conn=planning_conn))
         unchanged_embeddings_reused = (
             0
             if full
             else index_backend.count_reusable_embeddings(
                 root,
                 paths=plan.reused_paths,
-                conn=conn,
+                conn=planning_conn,
             )
+        )
+    finally:
+        index_backend.close_connection(planning_conn)
+    if (
+        not plan.indexed_paths
+        and not plan.deleted_paths
+        and runtime_inventory_matches
+        and analyzer_inventory_matches
+        and not backend_needs_maintenance
+    ):
+        return _finalize_index_report(
+            FinalizeIndexReportRequest(
+                plan=plan,
+                parsed_files=[],
+                failures=[],
+                warnings=[],
+                coverage_issues=coverage_issues,
+                embeddings_recomputed=0,
+                embeddings_reused=unchanged_embeddings_reused,
+            )
+        )
+
+    session = index_backend.begin_index_session(root)
+    try:
+        session.purge_skipped_docstring_issues()
+        session.prune_orphaned_embeddings()
+        previous_embeddings_by_path = (
+            {}
+            if full
+            else session.load_previous_embeddings_by_path(
+                paths=plan.indexed_paths,
+                embedding_backend=backend,
+            )
+        )
+        _prepare_index_storage(
+            full=full,
+            plan=plan,
+            session=session,
         )
 
         parsed_files, failures, collected_warnings = _collect_indexed_file_analyses(
@@ -1143,8 +1166,7 @@ def index_repo(
         ) = _persist_indexed_file_analyses(
             PersistIndexedFileAnalysesRequest(
                 root=root,
-                conn=conn,
-                backend=index_backend,
+                session=session,
                 parsed_files=parsed_files,
                 embedding_backend=backend,
                 previous_embeddings_by_path=previous_embeddings_by_path,
@@ -1153,18 +1175,23 @@ def index_repo(
         failures.extend(persistence_failures)
         embeddings_reused = unchanged_embeddings_reused + changed_file_embeddings_reused
 
-        index_backend.rebuild_derived_indexes(root, conn=conn)
-        index_backend.persist_runtime_inventory(
+        if _index_run_mutated_graph_inputs(
+            full=full,
+            plan=plan,
+            existing_state=existing_state,
+            persisted_files=persisted_files,
+        ):
+            session.rebuild_derived_indexes()
+        session.persist_runtime_inventory(
             BackendRuntimeInventoryRequest(
                 root=root,
                 backend_name=str(index_backend.name),
                 backend_version=str(index_backend.version),
                 coverage_complete=not coverage_issues,
                 analyzers=analyzers,
-                conn=conn,
             )
         )
-        index_backend.commit(root, conn=conn)
+        session.commit()
 
         return _finalize_index_report(
             FinalizeIndexReportRequest(
@@ -1177,5 +1204,8 @@ def index_repo(
                 embeddings_reused=embeddings_reused,
             )
         )
+    except BaseException:
+        session.abort()
+        raise
     finally:
-        index_backend.close_connection(conn)
+        session.close()

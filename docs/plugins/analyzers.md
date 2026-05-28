@@ -62,9 +62,9 @@ demo = "codira_demo_analyzer:build_analyzer"
 
 Rules:
 
-- analyzer names must be unique across built-ins and external plugins
+- analyzer names must be unique across registered plugins
 - duplicate names are rejected deterministically
-- analyzers participate after built-ins in deterministic discovery order
+- analyzers participate in deterministic discovery order
 - analyzer discovery globs must be stable and sufficient for scanner
   candidate discovery
 - scanner discovery confirms ownership through `supports_path(path)` before a

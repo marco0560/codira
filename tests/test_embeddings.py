@@ -22,12 +22,12 @@ import types
 from typing import TYPE_CHECKING
 
 from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
+from codira_backend_sqlite.sqlite_support import _flush_embedding_rows
 
 from codira.cli import main
 from codira.indexer import (
     PendingEmbeddingRow,
     StoredEmbeddingRow,
-    _flush_embedding_rows,
     index_repo,
 )
 from codira.query.exact import find_symbol

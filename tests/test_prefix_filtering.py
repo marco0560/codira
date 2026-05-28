@@ -344,6 +344,11 @@ def test_docstring_audit_respects_prefix(tmp_path: Path) -> None:
 
     pkg_issues = docstring_issues(tmp_path, prefix="pkg")
     other_issues = docstring_issues(tmp_path, prefix="other")
+    targeted_issues = docstring_issues(
+        tmp_path,
+        symbol_names=("undocumented_pkg",),
+    )
+    empty_targeted_issues = docstring_issues(tmp_path, symbol_names=())
 
     assert any(
         issue[1] == "Function undocumented_pkg: Missing docstring"
@@ -355,6 +360,12 @@ def test_docstring_audit_respects_prefix(tmp_path: Path) -> None:
         for issue in other_issues
     )
     assert all("undocumented_pkg" not in issue[1] for issue in other_issues)
+    assert any(
+        issue[1] == "Function undocumented_pkg: Missing docstring"
+        for issue in targeted_issues
+    )
+    assert all("undocumented_other" not in issue[1] for issue in targeted_issues)
+    assert empty_targeted_issues == []
 
 
 def test_docstring_audit_skips_bash_module_missing_docstring_noise(

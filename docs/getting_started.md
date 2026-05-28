@@ -10,8 +10,8 @@ source .venv/bin/activate
 pip install codira-bundle-official
 ```
 
-That installs `codira`, the first-party Python, JSON, C, and Bash analyzers,
-and the first-party SQLite backend.
+That installs `codira`, the first-party Python, JSON, C, C++, and Bash
+analyzers, and the first-party SQLite and DuckDB backends.
 
 The package is published on PyPI. If you only need to use `codira`, prefer this
 published install path over an editable checkout from a development branch.
@@ -94,6 +94,25 @@ You can still prefetch the model explicitly:
 source .venv/bin/activate
 uv run python ../codira/scripts/provision_embedding_model.py
 ```
+
+## Tune embedding runtime
+
+`codira` computes semantic embeddings through the local sentence-transformers
+backend during indexing. The default settings are deterministic, but operators
+can tune the runtime explicitly for a host or benchmark run with environment
+variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `CODIRA_EMBED_BATCH_SIZE` | Batch size passed to the sentence-transformers `encode` call. Larger batches can improve full-index throughput when memory is sufficient. |
+| `CODIRA_EMBED_DEVICE` | Device string passed to sentence-transformers. The default is `cpu`; use another value only when the local PyTorch and model environment supports it. |
+| `CODIRA_TORCH_NUM_THREADS` | Optional intra-op PyTorch thread count, applied with `torch.set_num_threads`. This controls CPU parallelism inside individual Torch operations. |
+| `CODIRA_TORCH_NUM_INTEROP_THREADS` | Optional inter-op PyTorch thread count, applied with `torch.set_num_interop_threads`. This controls scheduling parallelism across independent Torch operations. |
+
+Unset `CODIRA_TORCH_*` values leave PyTorch defaults unchanged. Invalid integer
+values fail fast before embedding inference. These variables change runtime
+scheduling only; they do not change indexed symbols, embedding payloads, or
+query semantics.
 
 ## First commands
 

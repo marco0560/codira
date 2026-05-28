@@ -17,7 +17,7 @@ This module belongs to the **storage infrastructure layer** and anchors table de
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 16
 
 DDL = [
     """
@@ -158,13 +158,15 @@ DDL = [
         caller_name TEXT NOT NULL,
         callee_module TEXT,
         callee_name TEXT,
+        unresolved_identity TEXT NOT NULL DEFAULT '',
         resolved INTEGER NOT NULL,
         PRIMARY KEY (
             caller_file_id,
             caller_module,
             caller_name,
             callee_module,
-            callee_name
+            callee_name,
+            unresolved_identity
         ),
         FOREIGN KEY(caller_file_id) REFERENCES files(id)
     );
@@ -176,7 +178,8 @@ DDL = [
         caller_module,
         caller_name,
         COALESCE(callee_module, ''),
-        COALESCE(callee_name, '')
+        COALESCE(callee_name, ''),
+        unresolved_identity
     );
     """,
     """
@@ -184,8 +187,16 @@ DDL = [
     ON call_edges(caller_file_id, caller_module, caller_name);
     """,
     """
+    CREATE INDEX IF NOT EXISTS idx_call_edges_caller_lookup
+    ON call_edges(caller_name, caller_module, caller_file_id);
+    """,
+    """
     CREATE INDEX IF NOT EXISTS idx_call_edges_callee
     ON call_edges(callee_module, callee_name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_call_edges_callee_lookup
+    ON call_edges(callee_name, callee_module);
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_call_edges_resolved
@@ -198,13 +209,15 @@ DDL = [
         owner_name TEXT NOT NULL,
         target_module TEXT,
         target_name TEXT,
+        unresolved_identity TEXT NOT NULL DEFAULT '',
         resolved INTEGER NOT NULL,
         PRIMARY KEY (
             owner_file_id,
             owner_module,
             owner_name,
             target_module,
-            target_name
+            target_name,
+            unresolved_identity
         ),
         FOREIGN KEY(owner_file_id) REFERENCES files(id)
     );
@@ -216,7 +229,8 @@ DDL = [
         owner_module,
         owner_name,
         COALESCE(target_module, ''),
-        COALESCE(target_name, '')
+        COALESCE(target_name, ''),
+        unresolved_identity
     );
     """,
     """
@@ -224,8 +238,16 @@ DDL = [
     ON callable_refs(owner_file_id, owner_module, owner_name);
     """,
     """
+    CREATE INDEX IF NOT EXISTS idx_callable_refs_owner_lookup
+    ON callable_refs(owner_name, owner_module, owner_file_id);
+    """,
+    """
     CREATE INDEX IF NOT EXISTS idx_callable_refs_target
     ON callable_refs(target_module, target_name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_callable_refs_target_lookup
+    ON callable_refs(target_name, target_module);
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_callable_refs_resolved
@@ -351,6 +373,10 @@ DDL = [
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_symbol_name ON symbol_index(name);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_symbol_exact_lookup
+    ON symbol_index(name, type, module_name, file_id, lineno);
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_symbol_file ON symbol_index(file_id);

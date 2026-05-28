@@ -171,18 +171,24 @@ def resolve_runtime_paths(
         CODIRA_OUTPUT_DIR_ENV
     )
 
-    target_root = (
-        _resolve_candidate_directory(raw_target, must_exist=True)
-        if raw_target is not None
-        else Path.cwd().resolve()
-    )
+    try:
+        target_root = (
+            _resolve_candidate_directory(raw_target, must_exist=True)
+            if raw_target is not None
+            else Path.cwd().resolve()
+        )
+    except OSError as exc:
+        parser.error(f"Target directory cannot be resolved: {exc}")
     _validate_target_root(parser, target_root)
 
-    output_root = (
-        _resolve_candidate_directory(raw_output, must_exist=False)
-        if raw_output is not None
-        else target_root
-    )
+    try:
+        output_root = (
+            _resolve_candidate_directory(raw_output, must_exist=False)
+            if raw_output is not None
+            else target_root
+        )
+    except OSError as exc:
+        parser.error(f"Output directory cannot be resolved: {exc}")
     _validate_output_root(parser, output_root)
 
     return ResolvedRuntimePaths(

@@ -20,6 +20,8 @@ It exists to:
 - `codira.arch.no-backend-import-in-analyzers`
 - `codira.arch.no-sqlite3-in-analyzers`
 - `codira.arch.require-analyzer-capability-declaration`
+- `codira.arch.no-duckdb-executemany-in-support`
+- `codira.arch.no-duckdb-returning-id-in-support`
 - `codira.plugins.no-broad-except-exception`
 
 ### Enforced with allowlist
@@ -63,30 +65,19 @@ delegate to core storage helpers.
 
 ### `codira.arch.no-sqlite3-outside-allowed-layers`
 
-#### `src/codira/storage.py`
-
-Rationale:
-This module still owns the repository-local SQLite storage implementation and
-schema application helpers.
-
-Removal condition:
-Remove this allowlist entry when SQLite-specific persistence logic no longer
-lives in core storage helpers.
-
-#### `src/codira/cli.py`
-
-Rationale:
-The CLI still performs SQLite-shaped freshness and rebuild inspection during
-index lifecycle checks.
-
-Removal condition:
-Remove this allowlist entry when CLI rebuild inspection delegates fully to the
-active backend contract.
-
 #### `packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py`
 
 Rationale:
 This is the production SQLite backend implementation.
+
+Removal condition:
+No removal planned while SQLite remains a supported backend.
+
+#### `packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_storage.py`
+
+Rationale:
+This module owns SQLite database path resolution, schema bootstrap, and schema
+refresh behavior for the production SQLite backend.
 
 Removal condition:
 No removal planned while SQLite remains a supported backend.
@@ -102,20 +93,11 @@ No removal planned while SQLite remains a supported backend.
 
 ### `codira.arch.no-backend-package-import-outside-allowed-layers`
 
-#### `src/codira/indexer.py`
-
-Rationale:
-This module still exposes the historical `codira.indexer.SQLiteIndexBackend`
-compatibility export through lazy import.
-
-Removal condition:
-Remove this allowlist entry when the compatibility export is retired.
-
 #### `packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py`
 
 Rationale:
 The SQLite backend package now imports its helper implementation from the
-package-local `sqlite_support` module.
+package-local `sqlite_storage` and `sqlite_support` modules.
 
 Removal condition:
 Remove this allowlist entry when the backend module no longer needs a separate

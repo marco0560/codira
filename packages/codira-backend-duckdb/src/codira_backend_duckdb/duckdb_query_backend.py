@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import importlib
 import json
+import re
 from typing import TYPE_CHECKING, Protocol, cast
 
 from codira.contracts import (
@@ -47,10 +48,10 @@ from codira.semantic.embeddings import (
 from .duckdb_support import (
     _DuckDBPersistenceConnection,
     _clear_index_tables,
+    _count_indexed_files,
     _count_reused_embeddings,
     _current_embedding_state_matches,
     _delete_indexed_file_data,
-    _dot_similarity,
     _load_existing_file_hashes,
     _load_existing_file_ownership,
     _load_previous_embeddings_by_path,
@@ -78,6 +79,21 @@ CallableRefRow = tuple[str, str, str | None, str | None, int]
 EmbeddingInventoryRow = tuple[str, str, int, int]
 
 __all__ = ["DuckDBQueryBackend"]
+
+_SAFE_GRAPH_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
+_ALLOWED_GRAPH_TABLES = frozenset({"call_edges", "callable_refs"})
+_ALLOWED_GRAPH_COLUMNS = frozenset(
+    {
+        "caller_module",
+        "caller_name",
+        "callee_module",
+        "callee_name",
+        "owner_module",
+        "owner_name",
+        "target_module",
+        "target_name",
+    }
+)
 
 
 class _BackendCompatibleCursor(Protocol):
@@ -131,6 +147,40 @@ class _BackendCompatibleCursor(Protocol):
         list[tuple[codira.contracts.BackendQueryValue, ...]]
             Remaining rows from the active result set.
         """
+
+
+def _validated_graph_identifier(identifier: str, *, kind: str) -> str:
+    """
+    Validate one internal DuckDB graph identifier before SQL interpolation.
+
+    Parameters
+    ----------
+    identifier : str
+        Internal table or column identifier interpolated into SQL text.
+    kind : str
+        Human-readable identifier class used in error messages.
+
+    Returns
+    -------
+    str
+        The validated identifier.
+
+    Raises
+    ------
+    ValueError
+        Raised when ``identifier`` is not one of the repository-owned graph
+        identifiers expected by the backend query helpers.
+    """
+    if not _SAFE_GRAPH_IDENTIFIER_PATTERN.fullmatch(identifier):
+        msg = f"Unsafe DuckDB graph {kind} identifier: {identifier!r}"
+        raise ValueError(msg)
+    if kind == "table" and identifier not in _ALLOWED_GRAPH_TABLES:
+        msg = f"Unsupported DuckDB graph table identifier: {identifier!r}"
+        raise ValueError(msg)
+    if kind == "column" and identifier not in _ALLOWED_GRAPH_COLUMNS:
+        msg = f"Unsupported DuckDB graph column identifier: {identifier!r}"
+        raise ValueError(msg)
+    return identifier
 
 
 class _BackendCompatibleConnectionAdapter(Protocol):
@@ -248,6 +298,23 @@ def _backend_int(value: BackendQueryValue) -> int:
     return int(cast("str | bytes | bytearray | int | float", value))
 
 
+def _backend_float(value: BackendQueryValue) -> float:
+    """
+    Coerce one backend-compatible scalar into a float.
+
+    Parameters
+    ----------
+    value : BackendQueryValue
+        Scalar value returned from one backend query row.
+
+    Returns
+    -------
+    float
+        Floating-point form of ``value``.
+    """
+    return float(cast("str | bytes | bytearray | int | float", value))
+
+
 def _backend_bytes(value: BackendQueryValue) -> bytes:
     """
     Coerce one backend-compatible scalar into raw bytes.
@@ -264,6 +331,25 @@ def _backend_bytes(value: BackendQueryValue) -> bytes:
     """
 
     return bytes(cast("bytes | bytearray", value))
+
+
+def _dot_similarity(left: list[float], right: list[float]) -> float:
+    """
+    Compute a dot-product similarity between normalized vectors.
+
+    Parameters
+    ----------
+    left : list[float]
+        Left embedding vector.
+    right : list[float]
+        Right embedding vector.
+
+    Returns
+    -------
+    float
+        Dot-product similarity.
+    """
+    return sum(a * b for a, b in zip(left, right, strict=True))
 
 
 def _duckdb_error_type() -> type[BaseException]:
@@ -372,6 +458,61 @@ class DuckDBQueryBackend:
             if owns_connection:
                 conn.close()
 
+    def needs_maintenance(
+        self,
+        root: Path,
+        *,
+        conn: _BackendCompatibleConnection | None = None,
+    ) -> bool:
+        """
+        Report whether warm-index maintenance still needs one write session.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be checked.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
+
+        Returns
+        -------
+        bool
+            ``True`` when stale shell docstring issues or orphaned embeddings
+            still require mutation work.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            row = conn.execute(
+                """
+                SELECT
+                    EXISTS(
+                        SELECT 1
+                        FROM docstring_issues di
+                        JOIN files f ON f.id = di.file_id
+                        WHERE f.analyzer_name = 'bash'
+                           OR f.path LIKE '%.sh'
+                           OR f.path LIKE '%.bash'
+                    ),
+                    EXISTS(
+                        SELECT 1
+                        FROM embeddings e
+                        WHERE e.object_type = 'symbol'
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM symbol_index s
+                              WHERE s.id = e.object_id
+                          )
+                    )
+                """
+            ).fetchone()
+            assert row is not None
+            return bool(_backend_int(row[0])) or bool(_backend_int(row[1]))
+        finally:
+            if owns_connection:
+                conn.close()
+
     def initialize(self, root: Path) -> None:
         """
         Prepare backend-owned persistent state for one repository root.
@@ -456,6 +597,7 @@ class DuckDBQueryBackend:
         try:
             normalized_prefix = normalize_prefix(root, prefix)
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT s.type, s.module_name, s.name, f.path, s.lineno
@@ -509,6 +651,7 @@ class DuckDBQueryBackend:
             conn = self.open_connection(root)
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT s.type, s.module_name, s.name, f.path, s.lineno
@@ -579,74 +722,144 @@ class DuckDBQueryBackend:
                 if include_tests
                 else "AND s.module_name != 'tests' AND s.module_name NOT LIKE 'tests.%'"
             )
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
-                SELECT s.type, s.module_name, s.name, f.path, s.lineno
-                FROM symbol_index s
-                JOIN files f
-                  ON s.file_id = f.id
-                WHERE 1 = 1
-                {prefix_sql}
-                {test_sql}
-                ORDER BY s.module_name, s.name, s.type, f.path, s.lineno
-                """,
-                tuple(prefix_params),
-            ).fetchall()
-            symbols: list[tuple[str, str, str, str, int]] = []
-            seen_identities: set[tuple[str, str]] = set()
-            for symbol_type, module_name, symbol_name, file_path, lineno in rows:
-                identity = (str(module_name), str(symbol_name))
-                if identity in seen_identities:
-                    continue
-                seen_identities.add(identity)
-                symbols.append(
-                    (
-                        str(symbol_type),
-                        identity[0],
-                        identity[1],
-                        str(file_path),
-                        _backend_int(lineno),
-                    )
+                WITH ranked_symbols AS (
+                    SELECT
+                        s.type,
+                        s.module_name,
+                        s.name,
+                        f.path,
+                        s.lineno,
+                        row_number() OVER (
+                            PARTITION BY s.module_name, s.name
+                            ORDER BY s.module_name, s.name, s.type, f.path, s.lineno
+                        ) AS symbol_rank
+                    FROM symbol_index s
+                    JOIN files f
+                      ON s.file_id = f.id
+                    WHERE 1 = 1
+                    {prefix_sql}
+                    {test_sql}
+                ),
+                limited_symbols AS (
+                    SELECT type, module_name, name, path, lineno
+                    FROM ranked_symbols
+                    WHERE symbol_rank = 1
+                    ORDER BY module_name, name, type, path, lineno
+                    LIMIT ?
+                ),
+                call_out AS (
+                    SELECT
+                        caller_module AS module_name,
+                        caller_name AS name,
+                        COUNT(*) AS total,
+                        COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
+                            AS unresolved
+                    FROM call_edges
+                    GROUP BY caller_module, caller_name
+                ),
+                call_in AS (
+                    SELECT
+                        callee_module AS module_name,
+                        callee_name AS name,
+                        COUNT(*) AS total,
+                        COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
+                            AS unresolved
+                    FROM call_edges
+                    GROUP BY callee_module, callee_name
+                ),
+                refs_out AS (
+                    SELECT
+                        owner_module AS module_name,
+                        owner_name AS name,
+                        COUNT(*) AS total,
+                        COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
+                            AS unresolved
+                    FROM callable_refs
+                    GROUP BY owner_module, owner_name
+                ),
+                refs_in AS (
+                    SELECT
+                        target_module AS module_name,
+                        target_name AS name,
+                        COUNT(*) AS total,
+                        COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
+                            AS unresolved
+                    FROM callable_refs
+                    GROUP BY target_module, target_name
                 )
-
-            limited_symbols = symbols[:limit]
+                SELECT
+                    ls.type,
+                    ls.module_name,
+                    ls.name,
+                    ls.path,
+                    ls.lineno,
+                    COALESCE(call_out.total, 0),
+                    COALESCE(call_out.unresolved, 0),
+                    COALESCE(call_in.total, 0),
+                    COALESCE(call_in.unresolved, 0),
+                    COALESCE(refs_out.total, 0),
+                    COALESCE(refs_out.unresolved, 0),
+                    COALESCE(refs_in.total, 0),
+                    COALESCE(refs_in.unresolved, 0)
+                FROM limited_symbols ls
+                LEFT JOIN call_out
+                  ON call_out.module_name = ls.module_name
+                 AND call_out.name = ls.name
+                LEFT JOIN call_in
+                  ON call_in.module_name = ls.module_name
+                 AND call_in.name = ls.name
+                LEFT JOIN refs_out
+                  ON refs_out.module_name = ls.module_name
+                 AND refs_out.name = ls.name
+                LEFT JOIN refs_in
+                  ON refs_in.module_name = ls.module_name
+                 AND refs_in.name = ls.name
+                ORDER BY ls.module_name, ls.name, ls.type, ls.path, ls.lineno
+                """,
+                (*prefix_params, limit),
+            ).fetchall()
             return [
                 BackendSymbolInventoryItem(
-                    symbol_type=symbol_type,
-                    module=module_name,
-                    name=symbol_name,
-                    file=file_path,
-                    lineno=lineno,
-                    calls_out=self._symbol_metric(
-                        conn,
-                        "call_edges",
-                        "caller_module",
-                        "caller_name",
-                        (module_name, symbol_name),
+                    symbol_type=str(symbol_type),
+                    module=str(module_name),
+                    name=str(symbol_name),
+                    file=str(file_path),
+                    lineno=_backend_int(lineno),
+                    calls_out=BackendGraphMetric(
+                        total=_backend_int(calls_out_total),
+                        unresolved=_backend_int(calls_out_unresolved),
                     ),
-                    calls_in=self._symbol_metric(
-                        conn,
-                        "call_edges",
-                        "callee_module",
-                        "callee_name",
-                        (module_name, symbol_name),
+                    calls_in=BackendGraphMetric(
+                        total=_backend_int(calls_in_total),
+                        unresolved=_backend_int(calls_in_unresolved),
                     ),
-                    refs_out=self._symbol_metric(
-                        conn,
-                        "callable_refs",
-                        "owner_module",
-                        "owner_name",
-                        (module_name, symbol_name),
+                    refs_out=BackendGraphMetric(
+                        total=_backend_int(refs_out_total),
+                        unresolved=_backend_int(refs_out_unresolved),
                     ),
-                    refs_in=self._symbol_metric(
-                        conn,
-                        "callable_refs",
-                        "target_module",
-                        "target_name",
-                        (module_name, symbol_name),
+                    refs_in=BackendGraphMetric(
+                        total=_backend_int(refs_in_total),
+                        unresolved=_backend_int(refs_in_unresolved),
                     ),
                 )
-                for symbol_type, module_name, symbol_name, file_path, lineno in limited_symbols
+                for (
+                    symbol_type,
+                    module_name,
+                    symbol_name,
+                    file_path,
+                    lineno,
+                    calls_out_total,
+                    calls_out_unresolved,
+                    calls_in_total,
+                    calls_in_unresolved,
+                    refs_out_total,
+                    refs_out_unresolved,
+                    refs_in_total,
+                    refs_in_unresolved,
+                ) in rows
             ]
         finally:
             if owns_connection:
@@ -682,12 +895,16 @@ class DuckDBQueryBackend:
             Total and unresolved counts for the selected relation direction.
         """
         module_name, symbol_name = symbol_identity
+        safe_table = _validated_graph_identifier(table, kind="table")
+        safe_module_column = _validated_graph_identifier(module_column, kind="column")
+        safe_name_column = _validated_graph_identifier(name_column, kind="column")
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         row = conn.execute(
             f"""
             SELECT COUNT(*), COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
-            FROM {table}
-            WHERE {module_column} = ?
-              AND {name_column} = ?
+            FROM {safe_table}
+            WHERE {safe_module_column} = ?
+              AND {safe_name_column} = ?
             """,
             (module_name, symbol_name),
         ).fetchone()
@@ -871,6 +1088,7 @@ class DuckDBQueryBackend:
         root: Path,
         *,
         prefix: str | None = None,
+        symbol_names: Sequence[str] | None = None,
         conn: _BackendCompatibleConnection | None = None,
     ) -> list[DocstringIssueRow]:
         """
@@ -882,6 +1100,9 @@ class DuckDBQueryBackend:
             Repository root whose index should be queried.
         prefix : str | None, optional
             Repo-root-relative path prefix used to restrict issue ownership.
+        symbol_names : collections.abc.Sequence[str] | None, optional
+            Symbol names used to restrict issue ownership before backend row
+            expansion.
         conn : _BackendCompatibleConnection | None, optional
             Existing backend-compatible connection to reuse.
 
@@ -893,10 +1114,27 @@ class DuckDBQueryBackend:
         """
         owns_connection = conn is None
         normalized_prefix = normalize_prefix(root, prefix)
+        normalized_symbol_names = tuple(dict.fromkeys(symbol_names or ()))
+        if symbol_names is not None and not normalized_symbol_names:
+            return []
         if conn is None:
             conn = self.open_connection(root)
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            symbol_filter_sql = ""
+            symbol_filter_params: tuple[str, ...] = ()
+            if normalized_symbol_names:
+                placeholders = ", ".join("?" for _ in normalized_symbol_names)
+                symbol_filter_sql = f"""
+                AND (
+                    fn.name IN ({placeholders})
+                    OR (cls.name || '.' || fn.name) IN ({placeholders})
+                    OR cls.name IN ({placeholders})
+                    OR mod.name IN ({placeholders})
+                )
+                """
+                symbol_filter_params = normalized_symbol_names * 4
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT
@@ -967,9 +1205,10 @@ class DuckDBQueryBackend:
                  AND si_mod.lineno = 1
                 WHERE 1 = 1
                 {prefix_sql}
+                {symbol_filter_sql}
                 ORDER BY di.issue_type, f.path, lineno, di.message
                 """,
-                tuple(prefix_params),
+                (*prefix_params, *symbol_filter_params),
             ).fetchall()
             return [
                 (
@@ -1029,8 +1268,14 @@ class DuckDBQueryBackend:
 
         direction_column = "callee_name" if incoming else "caller_name"
         module_column = "callee_module" if incoming else "caller_module"
+        safe_direction_column = _validated_graph_identifier(
+            direction_column,
+            kind="column",
+        )
+        safe_module_column = _validated_graph_identifier(module_column, kind="column")
         prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
 
+        # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
         query = f"""
             SELECT
                 ce.caller_module,
@@ -1041,13 +1286,13 @@ class DuckDBQueryBackend:
             FROM call_edges ce
             JOIN files f
               ON ce.caller_file_id = f.id
-            WHERE {direction_column} = ?
+            WHERE {safe_direction_column} = ?
             {prefix_sql}
         """
         params: list[str] = [name, *prefix_params]
 
         if module is not None:
-            query += f" AND {module_column} = ?"
+            query += f" AND {safe_module_column} = ?"
             params.append(module)
 
         query += """
@@ -1060,7 +1305,10 @@ class DuckDBQueryBackend:
         """
 
         try:
-            rows = conn.execute(query, tuple(params)).fetchall()
+            rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                query,
+                tuple(params),
+            ).fetchall()
             return [
                 (
                     str(caller_module),
@@ -1111,8 +1359,14 @@ class DuckDBQueryBackend:
 
         direction_column = "target_name" if incoming else "owner_name"
         module_column = "target_module" if incoming else "owner_module"
+        safe_direction_column = _validated_graph_identifier(
+            direction_column,
+            kind="column",
+        )
+        safe_module_column = _validated_graph_identifier(module_column, kind="column")
         prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
 
+        # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
         query = f"""
             SELECT
                 cr.owner_module,
@@ -1123,13 +1377,13 @@ class DuckDBQueryBackend:
             FROM callable_refs cr
             JOIN files f
               ON cr.owner_file_id = f.id
-            WHERE {direction_column} = ?
+            WHERE {safe_direction_column} = ?
             {prefix_sql}
         """
         params: list[str] = [name, *prefix_params]
 
         if module is not None:
-            query += f" AND {module_column} = ?"
+            query += f" AND {safe_module_column} = ?"
             params.append(module)
 
         query += """
@@ -1142,7 +1396,10 @@ class DuckDBQueryBackend:
         """
 
         try:
-            rows = conn.execute(query, tuple(params)).fetchall()
+            rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                query,
+                tuple(params),
+            ).fetchall()
             return [
                 (
                     str(owner_module),
@@ -1193,6 +1450,9 @@ class DuckDBQueryBackend:
             conn = self.open_connection(root)
 
         prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+        # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
         query = f"""
             SELECT
                 m.name,
@@ -1228,7 +1488,10 @@ class DuckDBQueryBackend:
         """
 
         try:
-            rows = conn.execute(query, tuple(params)).fetchall()
+            rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                query,
+                tuple(params),
+            ).fetchall()
             return [
                 (str(owner_module), str(target_name), str(kind), _backend_int(lineno))
                 for owner_module, target_name, kind, lineno in rows
@@ -1276,6 +1539,7 @@ class DuckDBQueryBackend:
             if "." in logical_name:
                 class_name, method_name = logical_name.rsplit(".", 1)
                 prefix_sql, prefix_params = prefix_clause(normalized_prefix, "fp.path")
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 rows = conn.execute(
                     f"""
                     SELECT
@@ -1304,6 +1568,7 @@ class DuckDBQueryBackend:
                 ).fetchall()
             else:
                 prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 rows = conn.execute(
                     f"""
                     SELECT s.type, s.module_name, s.name, f.path, s.lineno
@@ -1453,6 +1718,8 @@ class DuckDBQueryBackend:
 
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
                 SELECT f.path, rsl.lineno, rsl.line_text
@@ -1510,63 +1777,120 @@ class DuckDBQueryBackend:
 
         try:
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            scored_rows = conn.execute(
+                f"""
+                WITH scored_embeddings AS (
+                    SELECT
+                        list_dot_product(e.vector_values, ?) AS score,
+                        s.type,
+                        s.module_name,
+                        s.name,
+                        f.path,
+                        s.lineno
+                    FROM embeddings e
+                    JOIN symbol_index s
+                      ON e.object_type = 'symbol'
+                     AND e.object_id = s.id
+                    JOIN files f
+                      ON s.file_id = f.id
+                    WHERE e.backend = ?
+                      AND e.version = ?
+                      AND e.dim = ?
+                      AND e.vector_values IS NOT NULL
+                    {prefix_sql}
+                )
+                SELECT
+                    score,
+                    type,
+                    module_name,
+                    name,
+                    path,
+                    lineno
+                FROM scored_embeddings
+                WHERE score >= ?
+                ORDER BY score DESC, module_name, name, path, lineno, type
+                LIMIT ?
+                """,
+                (
+                    query_vector,
+                    backend.name,
+                    backend.version,
+                    backend.dim,
+                    *prefix_params,
+                    min_score,
+                    limit,
+                ),
+            ).fetchall()
+
             rows = conn.execute(
                 f"""
                 SELECT
+                    e.vector,
                     s.type,
                     s.module_name,
                     s.name,
                     f.path,
-                    s.lineno,
-                    e.version,
-                    e.dim,
-                    e.vector
+                    s.lineno
                 FROM embeddings e
                 JOIN symbol_index s
                   ON e.object_type = 'symbol'
                  AND e.object_id = s.id
                 JOIN files f
                   ON s.file_id = f.id
-                WHERE e.backend = ? AND e.version = ?
+                WHERE e.backend = ?
+                  AND e.version = ?
+                  AND e.dim = ?
+                  AND e.vector_values IS NULL
                 {prefix_sql}
                 ORDER BY s.module_name, s.name, f.path, s.lineno, s.type
                 """,
-                (backend.name, backend.version, *prefix_params),
+                (
+                    backend.name,
+                    backend.version,
+                    backend.dim,
+                    *prefix_params,
+                ),
             ).fetchall()
 
-            results: ChannelResults = []
-
-            for row in rows:
-                symbol: SymbolRow = (
-                    str(row[0]),
-                    str(row[1]),
-                    str(row[2]),
-                    str(row[3]),
-                    _backend_int(row[4]),
+            legacy_scored_rows = [
+                (
+                    _dot_similarity(
+                        deserialize_vector(_backend_bytes(vector), dim=backend.dim),
+                        query_vector,
+                    ),
+                    str(symbol_type),
+                    str(module_name),
+                    str(symbol_name),
+                    str(file_path),
+                    _backend_int(lineno),
                 )
-                version = str(row[5])
-                dim = _backend_int(row[6])
-                blob = _backend_bytes(row[7])
-                if version != backend.version or dim != backend.dim:
-                    continue
-
-                score = _dot_similarity(query_vector, deserialize_vector(blob, dim=dim))
-                if score < min_score:
-                    continue
-
-                results.append((score, symbol))
-
-            results.sort(
-                key=lambda item: (
-                    -item[0],
-                    item[1][1],
-                    item[1][2],
-                    item[1][3],
-                    item[1][4],
-                    item[1][0],
+                for vector, symbol_type, module_name, symbol_name, file_path, lineno in rows
+            ]
+            all_scored_rows = [
+                (
+                    _backend_float(score),
+                    str(symbol_type),
+                    str(module_name),
+                    str(symbol_name),
+                    str(file_path),
+                    _backend_int(lineno),
                 )
+                for score, symbol_type, module_name, symbol_name, file_path, lineno in scored_rows
+            ]
+            all_scored_rows.extend(
+                row for row in legacy_scored_rows if row[0] >= min_score
             )
-            return results[:limit]
+            ranked_rows = sorted(
+                all_scored_rows,
+                key=lambda row: (-row[0], row[2], row[3], row[4], row[5], row[1]),
+            )[:limit]
+            return [
+                (
+                    score,
+                    (symbol_type, module_name, symbol_name, file_path, lineno),
+                )
+                for score, symbol_type, module_name, symbol_name, file_path, lineno in ranked_rows
+            ]
         finally:
             if owns_connection:
                 conn.close()
@@ -1631,6 +1955,36 @@ class DuckDBQueryBackend:
             return _load_existing_file_hashes(
                 cast("_DuckDBPersistenceConnection", conn)
             )
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def count_indexed_files(
+        self,
+        root: Path,
+        *,
+        conn: _BackendCompatibleConnection | None = None,
+    ) -> int:
+        """
+        Count files currently recorded in the index.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend-compatible connection to reuse.
+
+        Returns
+        -------
+        int
+            Number of indexed file rows.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            return _count_indexed_files(cast("_DuckDBPersistenceConnection", conn))
         finally:
             if owns_connection:
                 conn.close()

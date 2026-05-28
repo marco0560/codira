@@ -22,13 +22,12 @@ import ast
 import contextlib
 import json
 import shutil
-import sqlite3
 import subprocess
 import sys
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from codira.capabilities import build_capability_contract
 from codira.contracts import BackendError
@@ -84,6 +83,7 @@ from codira.version import installed_distribution_version, package_version
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import Protocol
 
     import codira.indexer as indexer_types
     from codira.contracts import (
@@ -92,10 +92,36 @@ if TYPE_CHECKING:
     )
     from codira.types import DocstringIssueRow
 
+    class _IndexedFileHashLoader(Protocol):
+        """
+        Backend read surface used by CLI freshness fallback checks.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Protocol definitions are only evaluated by type checkers.
+        """
+
+        def load_existing_file_hashes(
+            self,
+            root: Path,
+            *,
+            conn: object | None = None,
+        ) -> dict[str, str]: ...
+
+
 GIT_EXE = shutil.which("git") or "git"
 __version__ = package_version()
 
 QUERY_JSON_SCHEMA_VERSION = "1.0"
+INDEX_METADATA_ANALYZER_INVENTORY = "analyzer_inventory"
+INDEX_METADATA_BACKEND_NAME = "backend_name"
+INDEX_METADATA_BACKEND_VERSION = "backend_version"
+INDEX_METADATA_FILE_COUNT = "indexed_file_count"
 _REPO_PATH_COMMANDS = frozenset(
     {"index", "cov", "sym", "symlist", "emb", "calls", "refs", "audit", "ctx"}
 )
@@ -1248,7 +1274,10 @@ def _run_index(
 
     active_index_backend().initialize(root)
     report = index_repo(root, full=full)
-    _write_index_head_metadata(root)
+    _write_index_head_metadata(
+        root,
+        indexed_file_count=report.indexed + report.reused,
+    )
     if as_json:
         _emit_json(
             _index_payload(
@@ -1442,7 +1471,11 @@ def _render_required_coverage_failure(
     return True
 
 
-def _write_index_head_metadata(root: Path) -> None:
+def _write_index_head_metadata(
+    root: Path,
+    *,
+    indexed_file_count: int | None = None,
+) -> None:
     """
     Persist index metadata derived from the current repository head.
 
@@ -1450,17 +1483,16 @@ def _write_index_head_metadata(root: Path) -> None:
     ----------
     root : pathlib.Path
         Repository root whose metadata should be updated.
+    indexed_file_count : int | None, optional
+        Number of indexed file rows known after a successful index run.
 
     Returns
     -------
     None
         Index metadata is updated in place.
     """
-    commit = _get_head_commit(root)
     metadata = _read_index_metadata(root)
-    metadata["schema_version"] = str(SCHEMA_VERSION)
-    if commit:
-        metadata["commit"] = commit
+    metadata.update(_build_index_metadata(root, indexed_file_count=indexed_file_count))
     _write_index_metadata(root, metadata)
 
 
@@ -1617,7 +1649,8 @@ def _run_coverage(root: Path, *, as_json: bool = False) -> int:
     Returns
     -------
     int
-        Zero when coverage is complete, otherwise one.
+        Zero when coverage is complete. JSON output also returns zero for
+        incomplete coverage so automation can consume the structured findings.
     """
     analyzers = sorted(active_language_analyzers(), key=lambda item: str(item.name))
     issues = audit_repo_coverage(root)
@@ -1649,7 +1682,7 @@ def _run_coverage(root: Path, *, as_json: bool = False) -> int:
                 ],
             )
         )
-        return 0 if not issues else 1
+        return 0
 
     print(f"Coverage complete: {'yes' if not issues else 'no'}")
     print(f"Active analyzers: {len(analyzers)}")
@@ -1689,126 +1722,135 @@ def _run_symbol(
     int
         Zero when at least one symbol is found, otherwise one.
     """
-    rows = find_symbol(root, name, prefix=prefix)
+    backend = active_index_backend()
+    conn = backend.open_connection(root)
+    try:
+        rows = find_symbol(root, name, prefix=prefix, conn=conn)
 
-    if as_json:
+        if as_json:
 
-        def _symbol_json_result(
-            symbol_type: str,
-            module_name: str,
-            symbol_name: str,
-            file_path: str,
-            lineno: int,
-        ) -> dict[str, object]:
-            row: dict[str, object] = {
-                "type": symbol_type,
-                "module": module_name,
-                "name": symbol_name,
-                "file": file_path,
-                "lineno": lineno,
-            }
-            overloads = find_symbol_overloads(
-                root,
-                (
-                    symbol_type,
-                    module_name,
-                    symbol_name,
-                    file_path,
-                    lineno,
-                ),
-            )
-            if overloads:
-                row["overloads"] = [
-                    {
-                        "kind": "overload",
-                        "stable_id": stable_id,
-                        "parent_stable_id": parent_stable_id,
-                        "ordinal": ordinal,
-                        "signature": signature,
-                        "lineno": overload_lineno,
-                        "end_lineno": end_lineno,
-                        "docstring": docstring,
-                    }
-                    for (
-                        stable_id,
-                        parent_stable_id,
-                        ordinal,
-                        signature,
-                        overload_lineno,
-                        end_lineno,
-                        docstring,
-                    ) in overloads
-                ]
-            enum_members = find_symbol_enum_members(
-                root,
-                (
-                    symbol_type,
-                    module_name,
-                    symbol_name,
-                    file_path,
-                    lineno,
-                ),
-            )
-            if enum_members:
-                row["enum_members"] = [
-                    {
-                        "kind": "enum_member",
-                        "stable_id": stable_id,
-                        "parent_stable_id": parent_stable_id,
-                        "ordinal": ordinal,
-                        "name": member_name,
-                        "signature": signature,
-                        "lineno": member_lineno,
-                    }
-                    for (
-                        stable_id,
-                        parent_stable_id,
-                        ordinal,
-                        member_name,
-                        signature,
-                        member_lineno,
-                    ) in enum_members
-                ]
-            if symbol_type == "constant":
-                constant_detail = _python_constant_json_detail(
-                    file_path=file_path,
-                    symbol_name=symbol_name,
-                    lineno=lineno,
-                )
-                if constant_detail is not None:
-                    row["constant_detail"] = constant_detail
-            return row
-
-        _emit_json(
-            _query_payload(
-                "sym",
-                "ok" if rows else "no_matches",
-                {"name": name, "prefix": query_prefix},
-                [
-                    _symbol_json_result(
+            def _symbol_json_result(
+                symbol_type: str,
+                module_name: str,
+                symbol_name: str,
+                file_path: str,
+                lineno: int,
+            ) -> dict[str, object]:
+                row: dict[str, object] = {
+                    "type": symbol_type,
+                    "module": module_name,
+                    "name": symbol_name,
+                    "file": file_path,
+                    "lineno": lineno,
+                }
+                overloads = find_symbol_overloads(
+                    root,
+                    (
                         symbol_type,
                         module_name,
                         symbol_name,
                         file_path,
                         lineno,
+                    ),
+                    conn=conn,
+                )
+                if overloads:
+                    row["overloads"] = [
+                        {
+                            "kind": "overload",
+                            "stable_id": stable_id,
+                            "parent_stable_id": parent_stable_id,
+                            "ordinal": ordinal,
+                            "signature": signature,
+                            "lineno": overload_lineno,
+                            "end_lineno": end_lineno,
+                            "docstring": docstring,
+                        }
+                        for (
+                            stable_id,
+                            parent_stable_id,
+                            ordinal,
+                            signature,
+                            overload_lineno,
+                            end_lineno,
+                            docstring,
+                        ) in overloads
+                    ]
+                enum_members = find_symbol_enum_members(
+                    root,
+                    (
+                        symbol_type,
+                        module_name,
+                        symbol_name,
+                        file_path,
+                        lineno,
+                    ),
+                    conn=conn,
+                )
+                if enum_members:
+                    row["enum_members"] = [
+                        {
+                            "kind": "enum_member",
+                            "stable_id": stable_id,
+                            "parent_stable_id": parent_stable_id,
+                            "ordinal": ordinal,
+                            "name": member_name,
+                            "signature": signature,
+                            "lineno": member_lineno,
+                        }
+                        for (
+                            stable_id,
+                            parent_stable_id,
+                            ordinal,
+                            member_name,
+                            signature,
+                            member_lineno,
+                        ) in enum_members
+                    ]
+                if symbol_type == "constant":
+                    constant_detail = _python_constant_json_detail(
+                        file_path=file_path,
+                        symbol_name=symbol_name,
+                        lineno=lineno,
                     )
-                    for symbol_type, module_name, symbol_name, file_path, lineno in rows
-                ],
+                    if constant_detail is not None:
+                        row["constant_detail"] = constant_detail
+                return row
+
+            _emit_json(
+                _query_payload(
+                    "sym",
+                    "ok" if rows else "no_matches",
+                    {"name": name, "prefix": query_prefix},
+                    [
+                        _symbol_json_result(
+                            symbol_type,
+                            module_name,
+                            symbol_name,
+                            file_path,
+                            lineno,
+                        )
+                        for symbol_type, module_name, symbol_name, file_path, lineno in rows
+                    ],
+                )
             )
-        )
-        return 0 if rows else 1
+            return 0 if rows else 1
 
-    if not rows:
-        print(f"No symbol found: {name}")
-        return 1
+        if not rows:
+            print(f"No symbol found: {name}")
+            return 1
 
-    for symbol_type, module_name, symbol_name, file_path, lineno in rows:
-        if symbol_type == "module":
-            print(f"{symbol_type}: {module_name} {file_path}:{lineno}")
-        else:
-            print(f"{symbol_type}: {module_name}.{symbol_name} {file_path}:{lineno}")
+        for symbol_type, module_name, symbol_name, file_path, lineno in rows:
+            if symbol_type == "module":
+                print(f"{symbol_type}: {module_name} {file_path}:{lineno}")
+            else:
+                print(
+                    f"{symbol_type}: {module_name}.{symbol_name} {file_path}:{lineno}"
+                )
 
-    return 0
+        return 0
+    finally:
+        backend.close_connection(conn)
 
 
 def _graph_metric_payload(metric: BackendGraphMetric) -> dict[str, int]:
@@ -2889,7 +2931,11 @@ def _resolve_prefix_argument(
         parser.error(str(exc))
 
 
-def _build_index_metadata(root: Path) -> dict[str, str]:
+def _build_index_metadata(
+    root: Path,
+    *,
+    indexed_file_count: int | None = None,
+) -> dict[str, str]:
     """
     Build the persisted freshness metadata for the current repository head.
 
@@ -2897,18 +2943,141 @@ def _build_index_metadata(root: Path) -> dict[str, str]:
     ----------
     root : pathlib.Path
         Repository root whose current Git metadata should be recorded.
+    indexed_file_count : int | None, optional
+        Number of file rows known to be present after a successful index run.
 
     Returns
     -------
     dict[str, str]
-        Metadata payload containing the schema version and current commit when
-        available.
+        Metadata payload containing schema, plugin, analyzer, file-count, and
+        current commit facts when available.
     """
     metadata = {"schema_version": str(SCHEMA_VERSION)}
     commit = _get_head_commit(root)
     if commit:
         metadata["commit"] = commit
+    backend = active_index_backend()
+    metadata[INDEX_METADATA_BACKEND_NAME] = str(backend.name)
+    metadata[INDEX_METADATA_BACKEND_VERSION] = str(backend.version)
+    metadata[INDEX_METADATA_ANALYZER_INVENTORY] = json.dumps(
+        _current_analyzer_inventory()
+    )
+    if indexed_file_count is not None:
+        metadata[INDEX_METADATA_FILE_COUNT] = str(indexed_file_count)
     return metadata
+
+
+def _count_indexed_files_for_freshness(
+    backend: object,
+    root: Path,
+    *,
+    conn: object | None = None,
+) -> int:
+    """
+    Count indexed files for CLI freshness checks.
+
+    Parameters
+    ----------
+    backend : object
+        Active index backend.
+    root : pathlib.Path
+        Repository root whose index should be inspected.
+    conn : object | None, optional
+        Existing backend connection to reuse.
+
+    Returns
+    -------
+    int
+        Number of files currently recorded in the index.
+    """
+    count_indexed_files = getattr(backend, "count_indexed_files", None)
+    if callable(count_indexed_files):
+        return int(count_indexed_files(root, conn=conn))
+    hash_loader = cast("_IndexedFileHashLoader", backend)
+    return len(hash_loader.load_existing_file_hashes(root, conn=conn))
+
+
+def _inspect_index_metadata_freshness(
+    root: Path,
+    metadata: dict[str, str],
+) -> tuple[bool, IndexRebuildRequest | None]:
+    """
+    Inspect metadata-only freshness facts when available.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose metadata should be inspected.
+    metadata : dict[str, str]
+        Parsed persisted index metadata.
+
+    Returns
+    -------
+    tuple[bool, IndexRebuildRequest | None]
+        ``(True, request)`` when metadata is complete enough to decide, where
+        ``request`` is ``None`` for a fresh index. ``(False, None)`` when the
+        caller must fall back to backend inspection.
+    """
+    metadata_file_count = metadata.get(INDEX_METADATA_FILE_COUNT)
+    metadata_analyzers = metadata.get(INDEX_METADATA_ANALYZER_INVENTORY)
+    metadata_backend_name = metadata.get(INDEX_METADATA_BACKEND_NAME)
+    metadata_backend_version = metadata.get(INDEX_METADATA_BACKEND_VERSION)
+    if (
+        metadata_file_count is None
+        or metadata_analyzers is None
+        or metadata_backend_name is None
+        or metadata_backend_version is None
+    ):
+        return (False, None)
+
+    backend = active_index_backend()
+    current_runtime = (str(backend.name), str(backend.version))
+    if (metadata_backend_name, metadata_backend_version) != current_runtime:
+        return (
+            True,
+            IndexRebuildRequest(
+                message="[codira] Index stale (backend plugin changed) — rebuilding...",
+                reset_db=True,
+                stderr=True,
+            ),
+        )
+
+    current_analyzers = _current_analyzer_inventory()
+    if metadata_analyzers != json.dumps(current_analyzers):
+        return (
+            True,
+            IndexRebuildRequest(
+                message="[codira] Index stale "
+                "(analyzer plugin inventory changed) — rebuilding...",
+                reset_db=True,
+                stderr=True,
+            ),
+        )
+
+    try:
+        indexed_files = int(metadata_file_count)
+    except ValueError:
+        return (
+            True,
+            IndexRebuildRequest(
+                message="[codira] Index stale — rebuilding...",
+                reset_db=True,
+                stderr=True,
+            ),
+        )
+    current_files = len(
+        list(iter_project_files(root, analyzers=active_language_analyzers()))
+    )
+    if indexed_files != current_files:
+        return (
+            True,
+            IndexRebuildRequest(
+                message="[codira] Index stale — rebuilding...",
+                reset_db=True,
+                stderr=True,
+            ),
+        )
+    return (True, None)
 
 
 def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
@@ -2962,6 +3131,13 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
             stderr=True,
         )
 
+    metadata_decided, metadata_request = _inspect_index_metadata_freshness(
+        root,
+        metadata,
+    )
+    if metadata_decided:
+        return metadata_request
+
     backend = active_index_backend()
     conn = backend.open_connection(root)
     try:
@@ -2992,7 +3168,11 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
                 stderr=True,
             )
 
-        indexed_files = len(backend.load_existing_file_hashes(root, conn=conn))
+        indexed_files = _count_indexed_files_for_freshness(
+            backend,
+            root,
+            conn=conn,
+        )
         current_files = len(
             list(iter_project_files(root, analyzers=active_language_analyzers()))
         )
@@ -3032,8 +3212,14 @@ def _run_locked_index_refresh(
     else:
         print(request.message)
     active_index_backend().initialize(root)
-    index_repo(root)
-    _write_index_metadata(root, _build_index_metadata(root))
+    report = index_repo(root)
+    _write_index_metadata(
+        root,
+        _build_index_metadata(
+            root,
+            indexed_file_count=report.indexed + report.reused,
+        ),
+    )
     print("[codira] Index ready", file=sys.stderr)
 
 
@@ -3089,7 +3275,7 @@ def _ensure_index(root: Path) -> None:
     initial_error: Exception | None = None
     try:
         request = _inspect_index_rebuild_request(root)
-    except (BackendError, OSError, sqlite3.Error, RuntimeError, ValueError) as error:
+    except (BackendError, OSError, RuntimeError, ValueError) as error:
         request = None
         initial_error = error
 
@@ -3115,7 +3301,6 @@ def _ensure_index(root: Path) -> None:
         except (
             BackendError,
             OSError,
-            sqlite3.Error,
             RuntimeError,
             ValueError,
         ) as error:
@@ -3132,7 +3317,6 @@ def _ensure_index(root: Path) -> None:
                 except (
                     BackendError,
                     OSError,
-                    sqlite3.Error,
                     RuntimeError,
                     ValueError,
                 ) as error:
@@ -3146,7 +3330,6 @@ def _ensure_index(root: Path) -> None:
             except (
                 BackendError,
                 OSError,
-                sqlite3.Error,
                 RuntimeError,
                 ValueError,
             ) as error:
@@ -3160,7 +3343,6 @@ def _ensure_index(root: Path) -> None:
             except (
                 BackendError,
                 OSError,
-                sqlite3.Error,
                 RuntimeError,
                 ValueError,
             ) as error:
@@ -3645,7 +3827,7 @@ def main() -> int:
     except EmbeddingBackendError as exc:
         print(f"[codira] {exc}", file=sys.stderr)
         return 2
-    except (BackendError, OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+    except (BackendError, OSError, RuntimeError, ValueError) as exc:
         print(
             f"[codira] {type(exc).__name__}: {exc}",
             file=sys.stderr,

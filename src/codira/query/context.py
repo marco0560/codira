@@ -1993,7 +1993,7 @@ def _retrieve_symbol_candidates(
     prefix_sql, prefix_params = prefix_clause(prefix, "f.path")
 
     for term in search_terms:
-        rows = conn.execute(
+        rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT s.type, s.module_name, s.name, f.path, s.lineno
             FROM symbol_index s
@@ -2031,7 +2031,7 @@ def _retrieve_symbol_candidates(
             key=lambda symbol: (symbol[1], symbol[2], symbol[3], symbol[4]),
         )
     else:
-        rows = conn.execute(
+        rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             SELECT s.type, s.module_name, s.name, f.path, s.lineno
             FROM symbol_index s
@@ -3531,7 +3531,7 @@ def _retrieve_semantic_candidates(
         return []
 
     prefix_sql, prefix_params = prefix_clause(prefix, "f.path")
-    rows = conn.execute(
+    rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         f"""
         SELECT s.type, s.module_name, s.name, f.path, s.lineno
         FROM symbol_index s
@@ -3857,11 +3857,15 @@ def _collect_doc_issues_and_related(
     tuple[list[tuple[str, str]], list[codira.types.SymbolRow]]
         Related docstring issue rows and derived related symbols.
     """
-    issue_rows = docstring_issues(root, prefix=prefix, conn=conn)
-
     issue_rows_filtered: list[tuple[str, str]] = []
 
     symbol_names = {name for _, _, name, _, _ in top_matches if name}
+    issue_rows = docstring_issues(
+        root,
+        prefix=prefix,
+        symbol_names=tuple(sorted(symbol_names)),
+        conn=conn,
+    )
 
     for issue in issue_rows:
         issue_type = issue[0]
@@ -5871,8 +5875,8 @@ def context_for(
 
     Raises
     ------
-    sqlite3.Error
-        If the repository index cannot be opened or queried.
+    codira.contracts.BackendError
+        If the active backend cannot open or query the repository index.
     """
     conn = cast(
         "BackendQueryConnection",

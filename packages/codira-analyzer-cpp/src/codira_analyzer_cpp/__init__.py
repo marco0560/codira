@@ -1192,7 +1192,7 @@ def _disambiguate_callable_stable_ids(
     for function in functions:
         stable_id = function.stable_id
         if counts[stable_id] > 1:
-            digest = hashlib.sha1(function.signature.encode("utf-8")).hexdigest()[:12]
+            digest = hashlib.sha256(function.signature.encode("utf-8")).hexdigest()[:12]
             stable_id = f"{stable_id}:{digest}"
             if stable_id in used_ids:
                 stable_id = f"{stable_id}:{function.lineno}"
@@ -2281,7 +2281,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "1"
+    version = "2"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",

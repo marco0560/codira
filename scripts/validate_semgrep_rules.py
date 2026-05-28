@@ -49,6 +49,14 @@ FIXTURES = (
         ),
     ),
     (
+        "architecture-duckdb",
+        "fixtures/packages/codira-backend-duckdb",
+        (
+            "codira.arch.no-duckdb-executemany-in-support",
+            "codira.arch.no-duckdb-returning-id-in-support",
+        ),
+    ),
+    (
         "plugins",
         "fixtures/packages",
         ("codira.plugins.no-broad-except-exception",),

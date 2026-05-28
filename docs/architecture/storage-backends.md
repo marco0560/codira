@@ -31,6 +31,35 @@ Current package-local ownership notes:
   DuckDB-local query and maintenance implementation used by the production
   backend
 
+## Index Session Contract
+
+Issue `#30` introduces an explicit split between the backend read path and the
+backend write path.
+
+Read-side responsibilities remain on `IndexBackend`:
+
+- loading runtime inventory and analyzer inventory
+- loading file hashes and per-file analyzer ownership
+- checking embedding backend compatibility
+- counting reusable embeddings for unchanged files
+- serving normal query commands
+- reporting whether warm-index maintenance still needs mutation work
+
+Write-side responsibilities now belong to `begin_index_session(root)` and the
+returned `IndexWriteSession`:
+
+- purge skipped docstring issues
+- prune orphaned embeddings
+- load reusable embeddings for paths being replaced
+- prepare full or incremental storage replacement
+- persist analyzed file snapshots
+- rebuild derived indexes
+- write runtime inventory
+- commit, abort, and close
+
+This contract exists to make warm read-heavy command paths cheap while keeping
+mutation ownership explicit and backend-local.
+
 ## Current Constraints
 
 The accepted backend model is still constrained:
@@ -96,6 +125,26 @@ Phase 21 makes SQLite use that metadata for deterministic rebuild policy:
 DuckDB follows the same rebuild policy through the same runtime and analyzer
 inventory contract.
 
+## Warm Read Path
+
+Unchanged repositories should not enter writer setup just to confirm the index
+is still current.
+
+The accepted warm-path sequence is:
+
+1. inspect runtime inventory through the backend read path
+2. inspect analyzer inventory through the backend read path
+3. load indexed file hashes and analyzer ownership
+4. compare against the current repository scan
+5. skip `begin_index_session(...)` only when no file mutations are required
+   and the backend reports no maintenance work
+
+Maintenance work still forces a write session even when file contents are
+unchanged. Current examples:
+
+- stale shell-owned docstring issues from older audit rules
+- orphaned embedding rows left behind by previous storage versions
+
 ## Current Boundary Status
 
 The branch-local backend-agnostic refactor has established these boundaries:
@@ -112,6 +161,11 @@ The branch-local backend-agnostic refactor has established these boundaries:
 
 The DuckDB package-local query and maintenance implementation is now the
 supported production surface rather than a migration-only compatibility layer.
+
+Issue `#30` also moves DuckDB schema repair for legacy nullable edge tables out
+of ordinary read-only opens. Repair now happens when a write session starts,
+so `ctx`, `sym`, `calls`, `symlist`, `audit`, and other query commands do not
+pay repair cost during warm reads.
 
 ## Contributor Contract Validation Backend
 

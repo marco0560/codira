@@ -9,7 +9,8 @@ agent-assisted development. It gives coding agents a compact, deterministic
 map of the repository so they can spend fewer tokens rediscovering files,
 symbols, call paths, and docstring issues.
 
-It builds a SQLite index inside the target repository and currently provides:
+It builds a repository-local index through the active storage backend and
+currently provides:
 
 - exact symbol lookup
 - docstring auditing
@@ -45,15 +46,17 @@ The repository documentation covers:
 
 ## Current architecture status
 
-The current implementation is SQLite-backed and registry-driven.
+The current implementation is registry-driven, with SQLite as the default
+backend and DuckDB available as a first-party optional backend.
 
 It now supports:
 
 - one active backend per repository index
 - multiple analyzers in one indexing run
-- deterministic indexing for tracked `*.py`, `*.c`, and `*.h` files
+- deterministic indexing for tracked Python, supported JSON, C, C++, and Bash
+  files
 
-The accepted future architectural direction is documented in
+The accepted architectural direction is documented in
 [`ADR-004`](adr/ADR-004-pluggable-backends-migration-plan.md).
 
 The current architecture and migration state are documented under

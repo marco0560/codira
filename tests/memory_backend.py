@@ -27,7 +27,14 @@ import struct
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from codira.contracts import BackendGraphMetric, BackendSymbolInventoryItem
+from codira.contracts import (
+    BackendGraphMetric,
+    BackendPersistAnalysisRequest,
+    BackendRelationQueryRequest,
+    BackendRuntimeInventoryRequest,
+    BackendSymbolInventoryItem,
+    StoredEmbeddingRow,
+)
 from codira.docstring import DocstringValidationRequest, validate_docstring
 from codira.prefix import normalize_prefix, path_has_prefix
 from codira.repository_scope import path_has_excluded_tree_name
@@ -39,9 +46,6 @@ if TYPE_CHECKING:
 
     from codira.contracts import (
         BackendEmbeddingCandidatesRequest,
-        BackendPersistAnalysisRequest,
-        BackendRelationQueryRequest,
-        BackendRuntimeInventoryRequest,
     )
     from codira.models import (
         CallableReference,
@@ -221,16 +225,6 @@ class _MemoryEnumMember:
     name: str
     signature: str
     lineno: int
-
-
-@dataclass(frozen=True)
-class _StoredEmbedding:
-    """Reusable embedding row returned by ``load_previous_embeddings_by_path``."""
-
-    stable_id: str
-    content_hash: str
-    dim: int
-    vector: bytes
 
 
 @dataclass
@@ -419,6 +413,311 @@ def _should_require_raises_section(source_path: Path, function_name: str) -> boo
     )
 
 
+class _MemoryIndexWriteSession:
+    """
+    In-memory write session for one indexing run.
+
+    Parameters
+    ----------
+    backend : MemoryIndexBackend
+        Backend instance that owns the session.
+    root : pathlib.Path
+        Repository root whose backend state will be mutated.
+    """
+
+    def __init__(self, backend: MemoryIndexBackend, root: Path) -> None:
+        self._backend = backend
+        self._root = root
+        self._conn = backend.open_connection(root)
+        self._closed = False
+        self._completed = False
+
+    def purge_skipped_docstring_issues(self) -> None:
+        """
+        Remove stale diagnostics for files excluded from docstring auditing.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Matching persisted issues are removed in place.
+        """
+        self._backend.purge_skipped_docstring_issues(self._root, conn=self._conn)
+
+    def prune_orphaned_embeddings(self) -> None:
+        """
+        Remove embedding rows whose owning symbols no longer exist.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Orphaned embedding rows are removed in place.
+        """
+        self._backend.prune_orphaned_embeddings(self._root, conn=self._conn)
+
+    def load_existing_file_hashes(self) -> dict[str, str]:
+        """
+        Return persisted file hashes used for incremental planning.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, str]
+            Indexed file hashes keyed by absolute path.
+        """
+        return self._backend.load_existing_file_hashes(self._root, conn=self._conn)
+
+    def load_existing_file_ownership(self) -> dict[str, tuple[str, str]]:
+        """
+        Return persisted analyzer ownership keyed by absolute path.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, tuple[str, str]]
+            Stored analyzer name and version keyed by absolute path.
+        """
+        return self._backend.load_existing_file_ownership(self._root, conn=self._conn)
+
+    def current_embedding_state_matches(
+        self,
+        embedding_backend: EmbeddingBackendSpec,
+    ) -> bool:
+        """
+        Report whether persisted embeddings match the active backend.
+
+        Parameters
+        ----------
+        embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+            Active embedding backend metadata.
+
+        Returns
+        -------
+        bool
+            ``True`` when persisted embeddings remain reusable.
+        """
+        return self._backend.current_embedding_state_matches(
+            self._root,
+            embedding_backend=embedding_backend,
+            conn=self._conn,
+        )
+
+    def load_previous_embeddings_by_path(
+        self,
+        *,
+        paths: Sequence[str],
+        embedding_backend: EmbeddingBackendSpec,
+    ) -> dict[str, dict[str, StoredEmbeddingRow]]:
+        """
+        Load reusable embeddings for files selected for replacement.
+
+        Parameters
+        ----------
+        paths : collections.abc.Sequence[str]
+            Absolute file paths being replaced by the current run.
+        embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+            Active embedding backend metadata.
+
+        Returns
+        -------
+        dict[str, dict[str, codira.contracts.StoredEmbeddingRow]]
+            Reusable embeddings grouped by absolute file path.
+        """
+        return self._backend.load_previous_embeddings_by_path(
+            self._root,
+            paths=paths,
+            embedding_backend=embedding_backend,
+            conn=self._conn,
+        )
+
+    def count_reusable_embeddings(self, *, paths: Sequence[str]) -> int:
+        """
+        Count embeddings preserved for unchanged files.
+
+        Parameters
+        ----------
+        paths : collections.abc.Sequence[str]
+            Absolute file paths reused without reparsing.
+
+        Returns
+        -------
+        int
+            Number of reusable embedding rows.
+        """
+        return self._backend.count_reusable_embeddings(
+            self._root,
+            paths=paths,
+            conn=self._conn,
+        )
+
+    def prepare(
+        self,
+        *,
+        full: bool,
+        indexed_paths: Sequence[str],
+        deleted_paths: Sequence[str],
+    ) -> None:
+        """
+        Delete persisted rows that the current index run will replace.
+
+        Parameters
+        ----------
+        full : bool
+            Whether the current run is a full rebuild.
+        indexed_paths : collections.abc.Sequence[str]
+            Absolute file paths selected for reindexing.
+        deleted_paths : collections.abc.Sequence[str]
+            Absolute file paths removed from the repository.
+
+        Returns
+        -------
+        None
+            Matching persisted rows are removed in place.
+        """
+        if full:
+            self._backend.clear_index(self._root, conn=self._conn)
+            return
+        self._backend.delete_paths(
+            self._root,
+            paths=sorted(set(indexed_paths) | set(deleted_paths)),
+            conn=self._conn,
+        )
+
+    def persist_analysis(
+        self,
+        request: BackendPersistAnalysisRequest,
+    ) -> tuple[int, int]:
+        """
+        Persist one analyzed file through the shared in-memory session.
+
+        Parameters
+        ----------
+        request : BackendPersistAnalysisRequest
+            Persistence request for one analyzed file snapshot.
+
+        Returns
+        -------
+        tuple[int, int]
+            ``(recomputed, reused)`` embedding counts for the file.
+        """
+        return self._backend.persist_analysis(
+            BackendPersistAnalysisRequest(
+                root=request.root,
+                file_metadata=request.file_metadata,
+                analysis=request.analysis,
+                embedding_backend=request.embedding_backend,
+                previous_embeddings=request.previous_embeddings,
+                conn=self._conn,
+            )
+        )
+
+    def rebuild_derived_indexes(self) -> None:
+        """
+        Refresh derived backend tables after file persistence.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Derived backend state is refreshed in place.
+        """
+        self._backend.rebuild_derived_indexes(self._root, conn=self._conn)
+
+    def persist_runtime_inventory(
+        self,
+        request: BackendRuntimeInventoryRequest,
+    ) -> None:
+        """
+        Persist backend and analyzer inventory for the completed run.
+
+        Parameters
+        ----------
+        request : BackendRuntimeInventoryRequest
+            Runtime inventory request for the completed index run.
+
+        Returns
+        -------
+        None
+            Runtime inventory rows are replaced in place.
+        """
+        self._backend.persist_runtime_inventory(
+            BackendRuntimeInventoryRequest(
+                root=request.root,
+                backend_name=request.backend_name,
+                backend_version=request.backend_version,
+                coverage_complete=request.coverage_complete,
+                analyzers=request.analyzers,
+                conn=self._conn,
+            )
+        )
+
+    def commit(self) -> None:
+        """
+        Commit pending writes for the current indexing session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Pending writes are marked committed once per session.
+        """
+        self._backend.commit(self._root, conn=self._conn)
+        self._completed = True
+
+    def abort(self) -> None:
+        """
+        Abort pending writes for the current indexing session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The in-memory session performs no rollback work.
+        """
+        if self._completed or self._closed:
+            return
+
+    def close(self) -> None:
+        """
+        Close resources owned by the current indexing session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The shared in-memory connection is closed once per session.
+        """
+        if self._closed:
+            return
+        self._backend.close_connection(self._conn)
+        self._closed = True
+
+
 class MemoryIndexBackend:
     """
     Minimal in-memory backend implementing the complete index contract.
@@ -444,6 +743,22 @@ class MemoryIndexBackend:
             The backend starts with no root state.
         """
         self._states: dict[Path, _MemoryState] = {}
+
+    def begin_index_session(self, root: Path) -> _MemoryIndexWriteSession:
+        """
+        Open the explicit write-side lifecycle for one indexing run.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state will be mutated.
+
+        Returns
+        -------
+        _MemoryIndexWriteSession
+            Mutable session object used only by indexing flows.
+        """
+        return _MemoryIndexWriteSession(self, root)
 
     def _state(self, root: Path) -> _MemoryState:
         """
@@ -719,7 +1034,7 @@ class MemoryIndexBackend:
         paths: Sequence[str],
         embedding_backend: EmbeddingBackendSpec,
         conn: object | None = None,
-    ) -> dict[str, dict[str, object]]:
+    ) -> dict[str, dict[str, StoredEmbeddingRow]]:
         """
         Load reusable embeddings for paths selected for replacement.
 
@@ -736,13 +1051,13 @@ class MemoryIndexBackend:
 
         Returns
         -------
-        dict[str, dict[str, object]]
+        dict[str, dict[str, StoredEmbeddingRow]]
             Reusable embeddings keyed by path and stable symbol id.
         """
         state = self._conn_state(root, conn)
         path_set = set(paths)
         symbol_by_id = {symbol.id: symbol for symbol in state.symbols}
-        results: dict[str, dict[str, object]] = {}
+        results: dict[str, dict[str, StoredEmbeddingRow]] = {}
         for embedding in state.embeddings:
             if (
                 embedding.backend != embedding_backend.name
@@ -755,7 +1070,7 @@ class MemoryIndexBackend:
             file_path = state.files[symbol.file_id].path
             if file_path not in path_set:
                 continue
-            results.setdefault(file_path, {})[embedding.stable_id] = _StoredEmbedding(
+            results.setdefault(file_path, {})[embedding.stable_id] = StoredEmbeddingRow(
                 stable_id=embedding.stable_id,
                 content_hash=embedding.content_hash,
                 dim=embedding.dim,
@@ -1870,6 +2185,7 @@ class MemoryIndexBackend:
         root: Path,
         *,
         prefix: str | None = None,
+        symbol_names: Sequence[str] | None = None,
         conn: object | None = None,
     ) -> list[DocstringIssueRow]:
         """
@@ -1881,6 +2197,8 @@ class MemoryIndexBackend:
             Repository root.
         prefix : str | None, optional
             Optional repository-relative path prefix.
+        symbol_names : collections.abc.Sequence[str] | None, optional
+            Symbol names used to restrict issue ownership.
         conn : object | None, optional
             Optional backend connection.
 
@@ -1891,6 +2209,9 @@ class MemoryIndexBackend:
         """
         state = self._conn_state(root, conn)
         normalized_prefix = normalize_prefix(root, prefix)
+        normalized_symbol_names = set(symbol_names or ())
+        if symbol_names is not None and not normalized_symbol_names:
+            return []
         rows = [
             (
                 issue.issue_type,
@@ -1905,6 +2226,10 @@ class MemoryIndexBackend:
             )
             for issue in state.doc_issues
             if path_has_prefix(state.files[issue.file_id].path, normalized_prefix)
+            and (
+                not normalized_symbol_names
+                or issue.symbol_name in normalized_symbol_names
+            )
         ]
         return sorted(rows, key=lambda row: (row[0], row[6], row[7], row[1]))
 

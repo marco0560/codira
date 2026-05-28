@@ -1442,6 +1442,8 @@ def build_hyperfine_argv(
         str(config.warmup),
         "--runs",
         str(config.runs),
+        "--show-output",
+        "--ignore-failure",
         "--export-json",
         str(output),
         *hyperfine_command_strings(
@@ -1451,6 +1453,32 @@ def build_hyperfine_argv(
             config=config,
         ),
     )
+
+
+def command_output_log_path(
+    repo: ResolvedRepositoryBenchmark,
+    config: CampaignConfig,
+    command_index: int,
+) -> Path:
+    """
+    Return the combined stdout/stderr log path for one campaign command.
+
+    Parameters
+    ----------
+    repo : ResolvedRepositoryBenchmark
+        Repository benchmark target.
+    config : CampaignConfig
+        Campaign configuration.
+    command_index : int
+        Zero-based command index within the repository step.
+
+    Returns
+    -------
+    pathlib.Path
+        Output log path under the run directory.
+    """
+    prefix = f"{_safe_label(repo.category)}-{_safe_label(repo.label)}"
+    return run_directory(config) / "logs" / f"{prefix}-command-{command_index + 1}.log"
 
 
 def build_phase_benchmark_argv(
@@ -1657,6 +1685,10 @@ def command_plan(
             *build_profile_argvs(repo, config),
             *build_pyinstrument_argvs(repo, config),
         ]
+        output_logs = [
+            command_output_log_path(repo, config, index)
+            for index, _command in enumerate(commands)
+        ]
         plan.append(
             {
                 "label": repo.label,
@@ -1678,6 +1710,7 @@ def command_plan(
                 ),
                 "commands": [list(command) for command in commands],
                 "display_commands": [shlex.join(command) for command in commands],
+                "output_logs": [str(path) for path in output_logs],
             }
         )
     return plan
@@ -1723,7 +1756,7 @@ def summarize_profile(profile: Path, *, limit: int = 20) -> list[dict[str, objec
     ]
 
 
-def _run_command(command: tuple[str, ...]) -> int:
+def _run_command(command: tuple[str, ...], *, output_log: Path) -> int:
     """
     Execute one benchmark command.
 
@@ -1731,13 +1764,41 @@ def _run_command(command: tuple[str, ...]) -> int:
     ----------
     command : tuple[str, ...]
         Command vector to execute.
+    output_log : pathlib.Path
+        File that receives combined command stdout and stderr.
 
     Returns
     -------
     int
         Process return code.
     """
-    return subprocess.run(command, check=False).returncode
+    output_log.parent.mkdir(parents=True, exist_ok=True)
+    with output_log.open("w", encoding="utf-8") as stream:
+        stream.write(f"$ {shlex.join(command)}\n")
+        stream.flush()
+        return subprocess.run(
+            command,
+            check=False,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+        ).returncode
+
+
+def _print_repo_step_timestamp(label: str) -> None:
+    """
+    Print the completion timestamp for one benchmark repository step.
+
+    Parameters
+    ----------
+    label : str
+        Repository label associated with the completed campaign step.
+
+    Returns
+    -------
+    None
+        The timestamp is written to stdout for interactive campaign tracking.
+    """
+    print(f"{label}: {utc_run_timestamp()}", flush=True)
 
 
 def main() -> int:
@@ -1803,13 +1864,26 @@ def main() -> int:
         if not isinstance(commands, list):
             msg = "campaign command rows must contain a command list"
             raise TypeError(msg)
-        for command in commands:
+        output_logs = row["output_logs"]
+        if not isinstance(output_logs, list):
+            msg = "campaign command rows must contain an output log list"
+            raise TypeError(msg)
+        if len(output_logs) != len(commands):
+            msg = "campaign command rows must align commands and output logs"
+            raise TypeError(msg)
+        label = str(row["label"])
+        for command, output_log in zip(commands, output_logs, strict=True):
             if not isinstance(command, list):
                 msg = "campaign command entries must be argument lists"
                 raise TypeError(msg)
-            return_code = _run_command(tuple(str(part) for part in command))
+            return_code = _run_command(
+                tuple(str(part) for part in command),
+                output_log=Path(str(output_log)),
+            )
             if return_code != 0:
+                _print_repo_step_timestamp(label)
                 return return_code
+        _print_repo_step_timestamp(label)
 
     profile_summaries = {
         str(profile): summarize_profile(profile)

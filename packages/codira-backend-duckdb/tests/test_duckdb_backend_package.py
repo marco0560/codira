@@ -6,23 +6,39 @@ import json
 import sys
 import tomllib
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from codira.contracts import (
+    BackendEmbeddingCandidatesRequest,
     BackendError,
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
 )
-from codira.models import AnalysisResult, FileMetadataSnapshot, ModuleArtifact
+from codira.models import (
+    AnalysisResult,
+    CallSite,
+    FileMetadataSnapshot,
+    FunctionArtifact,
+    ModuleArtifact,
+)
 from codira.schema import DDL
 from codira_backend_duckdb import (
     DuckDBIndexBackend,
     _duckdb_db_path,
     _duckdb_schema_ddl,
     build_backend,
+)
+from codira_backend_duckdb.duckdb_support import _flush_pending_reference_scan_rows
+
+
+_UNRESOLVED_CALL_RECORDS = (
+    ("name", "", "PyLong_FromLong", 1, 4),
+    ("name", "", "PyUnicode_AsUTF8AndSize", 2, 4),
+    ("name", "", "system", 3, 4),
 )
 
 
@@ -78,6 +94,42 @@ class _FakeDuckDBConnection:
             The fake connection itself for cursor-style chaining.
         """
         self.executed.append((query, tuple(parameters)))
+        return self
+
+    def register(self, view_name: str, python_object: object) -> object:
+        """
+        Record one replacement-scan registration.
+
+        Parameters
+        ----------
+        view_name : str
+            Registered replacement-scan name.
+        python_object : object
+            Registered Python object.
+
+        Returns
+        -------
+        object
+            The fake connection itself for cursor-style chaining.
+        """
+        self.executed.append((f"REGISTER {view_name}", (python_object,)))
+        return self
+
+    def unregister(self, view_name: str) -> object:
+        """
+        Record one replacement-scan unregistration.
+
+        Parameters
+        ----------
+        view_name : str
+            Registered replacement-scan name.
+
+        Returns
+        -------
+        object
+            The fake connection itself for cursor-style chaining.
+        """
+        self.executed.append((f"UNREGISTER {view_name}", None))
         return self
 
     def fetchone(self) -> tuple[object, ...] | None:
@@ -385,6 +437,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
+        "pyarrow>=18.0.0",
     ]
     assert project["project"]["entry-points"]["codira.backends"] == {
         "duckdb": "codira_backend_duckdb:build_backend"
@@ -433,6 +486,34 @@ def test_duckdb_schema_ddl_declares_sequences_and_defaults() -> None:
     assert any("DEFAULT nextval('symbol_index_id_seq')" in stmt for stmt in statements)
 
 
+def test_duckdb_schema_ddl_declares_symbol_detail_indexes() -> None:
+    """
+    Keep DuckDB exact-symbol enrichment lookups backed by supporting indexes.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB schema DDL includes indexes for module and
+        function lookups used while rendering ``sym --json`` details.
+    """
+    statements = _duckdb_schema_ddl()
+
+    assert any(
+        "CREATE INDEX IF NOT EXISTS idx_duckdb_modules_file_name" in stmt
+        and "ON modules(file_id, name)" in stmt
+        for stmt in statements
+    )
+    assert any(
+        "CREATE INDEX IF NOT EXISTS idx_duckdb_functions_symbol_detail" in stmt
+        and "ON functions(name, lineno, is_method, module_id)" in stmt
+        for stmt in statements
+    )
+
+
 def test_duckdb_schema_ddl_keeps_unresolved_edge_targets_nullable() -> None:
     """
     Keep unresolved graph edge targets nullable in DuckDB schema rewrites.
@@ -460,9 +541,11 @@ def test_duckdb_schema_ddl_keeps_unresolved_edge_targets_nullable() -> None:
     assert "PRIMARY KEY" not in call_edges_statement
     assert "callee_module TEXT" in call_edges_statement
     assert "callee_name TEXT" in call_edges_statement
+    assert "unresolved_identity TEXT NOT NULL DEFAULT ''" in call_edges_statement
     assert "PRIMARY KEY" not in callable_refs_statement
     assert "target_module TEXT" in callable_refs_statement
     assert "target_name TEXT" in callable_refs_statement
+    assert "unresolved_identity TEXT NOT NULL DEFAULT ''" in callable_refs_statement
 
 
 def test_duckdb_backend_initialize_bootstraps_schema_and_metadata(
@@ -499,7 +582,7 @@ def test_duckdb_backend_initialize_bootstraps_schema_and_metadata(
         for query, _parameters in fake_module.connections[0].executed
     )
     metadata = (tmp_path / ".codira" / "metadata.json").read_text(encoding="utf-8")
-    assert '"schema_version": "14"' in metadata
+    assert '"schema_version": "16"' in metadata
 
 
 def test_duckdb_backend_open_connection_initializes_missing_database(
@@ -667,7 +750,7 @@ def test_duckdb_backend_persist_analysis_translates_driver_errors(
     assert connection.closed is True
 
 
-def test_duckdb_backend_open_connection_repairs_legacy_nullable_edge_schema(
+def test_duckdb_backend_index_session_repairs_legacy_nullable_edge_schema(
     tmp_path: Path,
 ) -> None:
     """
@@ -681,8 +764,8 @@ def test_duckdb_backend_open_connection_repairs_legacy_nullable_edge_schema(
     Returns
     -------
     None
-        The test asserts reopening a legacy DuckDB database restores nullable
-        unresolved edge target columns.
+        The test asserts starting an index session restores nullable unresolved
+        edge target columns while keeping normal read-only opens cheap.
     """
     duckdb = pytest.importorskip("duckdb")
     db_path = _duckdb_db_path(tmp_path)
@@ -694,11 +777,15 @@ def test_duckdb_backend_open_connection_repairs_legacy_nullable_edge_schema(
         for index_name in (
             "idx_call_edges_identity",
             "idx_call_edges_caller",
+            "idx_call_edges_caller_lookup",
             "idx_call_edges_callee",
+            "idx_call_edges_callee_lookup",
             "idx_call_edges_resolved",
             "idx_callable_refs_identity",
             "idx_callable_refs_owner",
+            "idx_callable_refs_owner_lookup",
             "idx_callable_refs_target",
+            "idx_callable_refs_target_lookup",
             "idx_callable_refs_resolved",
         ):
             raw.execute(f"DROP INDEX IF EXISTS {index_name}")
@@ -710,13 +797,21 @@ def test_duckdb_backend_open_connection_repairs_legacy_nullable_edge_schema(
                 or "CREATE UNIQUE INDEX IF NOT EXISTS idx_call_edges_identity"
                 in statement
                 or "CREATE INDEX IF NOT EXISTS idx_call_edges_caller" in statement
+                or "CREATE INDEX IF NOT EXISTS idx_call_edges_caller_lookup"
+                in statement
                 or "CREATE INDEX IF NOT EXISTS idx_call_edges_callee" in statement
+                or "CREATE INDEX IF NOT EXISTS idx_call_edges_callee_lookup"
+                in statement
                 or "CREATE INDEX IF NOT EXISTS idx_call_edges_resolved" in statement
                 or "CREATE TABLE IF NOT EXISTS callable_refs" in statement
                 or "CREATE UNIQUE INDEX IF NOT EXISTS idx_callable_refs_identity"
                 in statement
                 or "CREATE INDEX IF NOT EXISTS idx_callable_refs_owner" in statement
+                or "CREATE INDEX IF NOT EXISTS idx_callable_refs_owner_lookup"
+                in statement
                 or "CREATE INDEX IF NOT EXISTS idx_callable_refs_target" in statement
+                or "CREATE INDEX IF NOT EXISTS idx_callable_refs_target_lookup"
+                in statement
                 or "CREATE INDEX IF NOT EXISTS idx_callable_refs_resolved" in statement
             ):
                 raw.execute(statement)
@@ -724,8 +819,31 @@ def test_duckdb_backend_open_connection_repairs_legacy_nullable_edge_schema(
     finally:
         raw.close()
 
-    connection = DuckDBIndexBackend().open_connection(tmp_path)
+    backend = DuckDBIndexBackend()
+
+    connection = backend.open_connection(tmp_path)
     connection.close()
+
+    unrepaired = duckdb.connect(str(db_path))
+    try:
+        unrepaired.execute("PRAGMA table_info('call_edges')")
+        unrepaired_call_edges_info = {
+            str(row[1]): bool(int(row[3])) for row in unrepaired.fetchall()
+        }
+        unrepaired.execute("PRAGMA table_info('callable_refs')")
+        unrepaired_callable_refs_info = {
+            str(row[1]): bool(int(row[3])) for row in unrepaired.fetchall()
+        }
+    finally:
+        unrepaired.close()
+
+    assert unrepaired_call_edges_info["callee_module"] is True
+    assert unrepaired_call_edges_info["callee_name"] is True
+    assert unrepaired_callable_refs_info["target_module"] is True
+    assert unrepaired_callable_refs_info["target_name"] is True
+
+    session = backend.begin_index_session(tmp_path)
+    session.close()
 
     repaired = duckdb.connect(str(db_path))
     try:
@@ -744,6 +862,664 @@ def test_duckdb_backend_open_connection_repairs_legacy_nullable_edge_schema(
     assert call_edges_info["callee_name"] is False
     assert callable_refs_info["target_module"] is False
     assert callable_refs_info["target_name"] is False
+
+
+def test_duckdb_backend_bulk_reference_rows_preserve_empty_lines(
+    tmp_path: Path,
+) -> None:
+    """
+    Preserve empty reference-scan lines during DuckDB bulk import.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts the CSV bulk path stores empty strings instead of
+        importing them as NULL values.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    raw = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            raw.execute(statement)
+        raw.execute(
+            "INSERT INTO files"
+            "(id, path, hash, mtime, size, analyzer_name, analyzer_version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, str(tmp_path / "sample.py"), "hash", 1.0, 1, "python", "1"),
+        )
+        rows = [
+            (1, lineno, "" if lineno == 50 else f"line {lineno}")
+            for lineno in range(120)
+        ]
+
+        _flush_pending_reference_scan_rows(raw, rows)
+
+        stored = raw.execute(
+            "SELECT line_text FROM reference_scan_lines WHERE lineno = 50"
+        ).fetchone()
+        total = raw.execute("SELECT COUNT(*) FROM reference_scan_lines").fetchone()
+    finally:
+        raw.close()
+
+    assert stored == ("",)
+    assert total == (120,)
+
+
+def test_duckdb_write_session_flushes_relationship_rows_before_rebuild(
+    tmp_path: Path,
+) -> None:
+    """
+    Flush session-level relationship rows before derived graph rebuild.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts write-session batching still persists call records
+        before derived call edges are rebuilt.
+    """
+    pytest.importorskip("duckdb")
+    backend = DuckDBIndexBackend()
+    session = backend.begin_index_session(tmp_path)
+    source = tmp_path / "pkg" / "sample.py"
+    source.parent.mkdir()
+    source.write_text("def demo():\n    helper()\n", encoding="utf-8")
+
+    try:
+        session.persist_analysis(
+            BackendPersistAnalysisRequest(
+                root=tmp_path,
+                file_metadata=FileMetadataSnapshot(
+                    path=source,
+                    sha256="duckdb-relationship-batch",
+                    mtime=1.0,
+                    size=source.stat().st_size,
+                ),
+                analysis=AnalysisResult(
+                    source_path=source,
+                    module=ModuleArtifact(
+                        name="pkg.sample",
+                        stable_id="python:module:pkg.sample",
+                        docstring=None,
+                        has_docstring=0,
+                    ),
+                    classes=(),
+                    functions=(
+                        FunctionArtifact(
+                            name="demo",
+                            stable_id="python:function:pkg.sample:demo",
+                            lineno=1,
+                            end_lineno=2,
+                            signature="def demo()",
+                            docstring=None,
+                            has_docstring=0,
+                            is_method=0,
+                            is_public=1,
+                            parameters=(),
+                            returns_value=0,
+                            yields_value=0,
+                            raises=0,
+                            has_asserts=0,
+                            decorators=(),
+                            calls=(
+                                CallSite(
+                                    kind="name",
+                                    target="helper",
+                                    lineno=2,
+                                    col_offset=4,
+                                ),
+                            ),
+                            callable_refs=(),
+                        ),
+                    ),
+                    declarations=(),
+                    imports=(),
+                ),
+            )
+        )
+        session.rebuild_derived_indexes()
+        session.commit()
+    finally:
+        session.close()
+
+    connection = backend.open_connection(tmp_path)
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM call_records").fetchone() == (
+            1,
+        )
+        assert connection.execute(
+            "SELECT caller_module, caller_name, unresolved_identity FROM call_edges"
+        ).fetchone() == ("pkg.sample", "demo", '["name","","helper"]')
+    finally:
+        connection.close()
+
+
+def test_duckdb_backend_initialize_repairs_legacy_edge_identity_schema(
+    tmp_path: Path,
+) -> None:
+    """
+    Repair legacy DuckDB edge tables that predate unresolved-target identity.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts backend initialization adds the discriminator
+        column while preserving existing rows.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    raw = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            raw.execute(statement)
+        for index_name in (
+            "idx_call_edges_identity",
+            "idx_call_edges_caller",
+            "idx_call_edges_caller_lookup",
+            "idx_call_edges_callee",
+            "idx_call_edges_callee_lookup",
+            "idx_call_edges_resolved",
+            "idx_callable_refs_identity",
+            "idx_callable_refs_owner",
+            "idx_callable_refs_owner_lookup",
+            "idx_callable_refs_target",
+            "idx_callable_refs_target_lookup",
+            "idx_callable_refs_resolved",
+        ):
+            raw.execute(f"DROP INDEX IF EXISTS {index_name}")
+        raw.execute("DROP TABLE call_edges")
+        raw.execute("DROP TABLE callable_refs")
+        raw.execute("""
+            CREATE TABLE call_edges (
+                caller_file_id INTEGER NOT NULL,
+                caller_module TEXT NOT NULL,
+                caller_name TEXT NOT NULL,
+                callee_module TEXT,
+                callee_name TEXT,
+                resolved INTEGER NOT NULL
+            )
+            """)
+        raw.execute("""
+            CREATE TABLE callable_refs (
+                owner_file_id INTEGER NOT NULL,
+                owner_module TEXT NOT NULL,
+                owner_name TEXT NOT NULL,
+                target_module TEXT,
+                target_name TEXT,
+                resolved INTEGER NOT NULL
+            )
+            """)
+        raw.execute(
+            """
+            INSERT INTO files(
+                id,
+                path,
+                hash,
+                mtime,
+                size,
+                analyzer_name,
+                analyzer_version
+            ) VALUES (1, ?, 'seed-hash', 1.0, 1, 'python', '1.0')
+            """,
+            (str(tmp_path / "pkg" / "sample.py"),),
+        )
+        raw.execute(
+            """
+            INSERT INTO call_edges(
+                caller_file_id,
+                caller_module,
+                caller_name,
+                callee_module,
+                callee_name,
+                resolved
+            ) VALUES (1, 'pkg.sample', 'caller', NULL, NULL, 0)
+            """
+        )
+        raw.execute(
+            """
+            INSERT INTO callable_refs(
+                owner_file_id,
+                owner_module,
+                owner_name,
+                target_module,
+                target_name,
+                resolved
+            ) VALUES (1, 'pkg.sample', 'caller', NULL, NULL, 0)
+            """
+        )
+        raw.commit()
+    finally:
+        raw.close()
+
+    backend = DuckDBIndexBackend()
+    backend.initialize(tmp_path)
+
+    repaired = duckdb.connect(str(db_path))
+    try:
+        repaired.execute("PRAGMA table_info('call_edges')")
+        call_edges_columns = {str(row[1]) for row in repaired.fetchall()}
+        callable_refs_columns = {
+            str(row[1])
+            for row in repaired.execute("PRAGMA table_info('callable_refs')").fetchall()
+        }
+        call_edge_row = repaired.execute(
+            "SELECT unresolved_identity FROM call_edges"
+        ).fetchone()
+        callable_ref_row = repaired.execute(
+            "SELECT unresolved_identity FROM callable_refs"
+        ).fetchone()
+    finally:
+        repaired.close()
+
+    assert "unresolved_identity" in call_edges_columns
+    assert "unresolved_identity" in callable_refs_columns
+    assert call_edge_row == ("",)
+    assert callable_ref_row == ("",)
+
+
+def test_duckdb_backend_full_prepare_clears_populated_database_in_session(
+    tmp_path: Path,
+) -> None:
+    """
+    Clear a populated DuckDB index during a full rebuild session.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts a second full rebuild can clear previously indexed
+        rows without tripping DuckDB foreign-key enforcement.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    raw = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            raw.execute(statement)
+        raw.execute(
+            """
+            INSERT INTO files(
+                id,
+                path,
+                hash,
+                mtime,
+                size,
+                analyzer_name,
+                analyzer_version
+            ) VALUES (1, ?, 'seed-hash', 1.0, 1, 'python', '1.0')
+            """,
+            (str(tmp_path / "pkg" / "sample.py"),),
+        )
+        raw.execute(
+            """
+            INSERT INTO modules(id, file_id, name, docstring, has_docstring)
+            VALUES (1, 1, 'pkg.sample', NULL, 0)
+            """
+        )
+        raw.execute(
+            """
+            INSERT INTO classes(
+                id,
+                module_id,
+                name,
+                lineno,
+                end_lineno,
+                docstring,
+                has_docstring
+            ) VALUES (1, 1, 'SampleClass', 1, 2, NULL, 0)
+            """
+        )
+        raw.execute(
+            """
+            INSERT INTO functions(
+                id,
+                module_id,
+                class_id,
+                name,
+                lineno,
+                end_lineno,
+                signature,
+                docstring,
+                has_docstring,
+                is_method,
+                is_public
+            ) VALUES (1, 1, 1, 'method', 1, 1, NULL, NULL, 0, 1, 1)
+            """
+        )
+        raw.commit()
+    finally:
+        raw.close()
+
+    backend = DuckDBIndexBackend()
+    session = backend.begin_index_session(tmp_path)
+    try:
+        session.prepare(full=True, indexed_paths=(), deleted_paths=())
+        session.commit()
+    finally:
+        session.close()
+
+    reopened = duckdb.connect(str(db_path))
+    try:
+        assert reopened.execute("SELECT COUNT(*) FROM files").fetchone() == (0,)
+        assert reopened.execute("SELECT COUNT(*) FROM modules").fetchone() == (0,)
+        assert reopened.execute("SELECT COUNT(*) FROM classes").fetchone() == (0,)
+        assert reopened.execute("SELECT COUNT(*) FROM functions").fetchone() == (0,)
+    finally:
+        reopened.close()
+
+
+def test_duckdb_backend_rebuild_keeps_distinct_unresolved_call_edges(
+    tmp_path: Path,
+) -> None:
+    """
+    Preserve distinct unresolved call targets owned by one DuckDB caller.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts graph rebuilds keep unresolved raw target identity in
+        the derived edge tables.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    module_path = tmp_path / "pkg" / "sample.py"
+    raw = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            raw.execute(statement)
+        raw.execute(
+            """
+            INSERT INTO files(
+                id,
+                path,
+                hash,
+                mtime,
+                size,
+                analyzer_name,
+                analyzer_version
+            ) VALUES (1, ?, 'seed-hash', 1.0, 1, 'python', '1.0')
+            """,
+            (str(module_path),),
+        )
+        for kind, base, target, lineno, col_offset in _UNRESOLVED_CALL_RECORDS:
+            raw.execute(
+                """
+                INSERT INTO call_records(
+                    file_id,
+                    owner_module,
+                    owner_name,
+                    kind,
+                    base,
+                    target,
+                    lineno,
+                    col_offset
+                ) VALUES (1, 'pkg.sample', 'caller', ?, ?, ?, ?, ?)
+                """,
+                (kind, base, target, lineno, col_offset),
+            )
+        raw.commit()
+    finally:
+        raw.close()
+
+    backend = DuckDBIndexBackend()
+    backend.rebuild_derived_indexes(tmp_path)
+
+    reopened = duckdb.connect(str(db_path))
+    try:
+        rows = reopened.execute("""
+            SELECT callee_module, callee_name, unresolved_identity, resolved
+            FROM call_edges
+            ORDER BY unresolved_identity
+            """).fetchall()
+    finally:
+        reopened.close()
+
+    assert rows == [
+        (
+            None,
+            None,
+            json.dumps((kind, base, target), separators=(",", ":")),
+            0,
+        )
+        for kind, base, target, _lineno, _col_offset in _UNRESOLVED_CALL_RECORDS
+    ]
+
+
+def test_duckdb_backend_rebuild_replaces_existing_resolved_edges(
+    tmp_path: Path,
+) -> None:
+    """
+    Replace existing resolved DuckDB edges without unique-index collisions.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts graph rebuilds can replace an existing derived edge
+        with the same identity produced from raw call records.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    module_path = tmp_path / "pkg" / "sample.py"
+    raw = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            raw.execute(statement)
+        raw.execute(
+            """
+            INSERT INTO files(
+                id,
+                path,
+                hash,
+                mtime,
+                size,
+                analyzer_name,
+                analyzer_version
+            ) VALUES (1, ?, 'seed-hash', 1.0, 1, 'python', '1.0')
+            """,
+            (str(module_path),),
+        )
+        raw.execute(
+            """
+            INSERT INTO modules(id, file_id, name, docstring, has_docstring)
+            VALUES (1, 1, 'pkg.sample', NULL, 0)
+            """
+        )
+        raw.execute(
+            """
+            INSERT INTO functions(
+                id,
+                module_id,
+                class_id,
+                name,
+                lineno,
+                end_lineno,
+                signature,
+                docstring,
+                has_docstring,
+                is_method,
+                is_public
+            ) VALUES (1, 1, NULL, 'target', 1, 1, NULL, NULL, 0, 0, 1)
+            """
+        )
+        raw.execute(
+            """
+            INSERT INTO call_records(
+                file_id,
+                owner_module,
+                owner_name,
+                kind,
+                base,
+                target,
+                lineno,
+                col_offset
+            ) VALUES (1, 'pkg.sample', 'caller', 'name', '', 'target', 2, 4)
+            """
+        )
+        raw.execute(
+            """
+            INSERT INTO call_edges(
+                caller_file_id,
+                caller_module,
+                caller_name,
+                callee_module,
+                callee_name,
+                unresolved_identity,
+                resolved
+            ) VALUES (1, 'pkg.sample', 'caller', 'pkg.sample', 'target', '', 1)
+            """
+        )
+        raw.commit()
+    finally:
+        raw.close()
+
+    backend = DuckDBIndexBackend()
+    backend.rebuild_derived_indexes(tmp_path)
+
+    reopened = duckdb.connect(str(db_path))
+    try:
+        rows = reopened.execute("""
+            SELECT caller_module, caller_name, callee_module, callee_name, resolved
+            FROM call_edges
+            """).fetchall()
+        index_names = {
+            str(row[0])
+            for row in reopened.execute("""
+                SELECT index_name
+                FROM duckdb_indexes()
+                WHERE table_name IN ('call_edges', 'callable_refs')
+                """).fetchall()
+        }
+    finally:
+        reopened.close()
+
+    assert rows == [("pkg.sample", "caller", "pkg.sample", "target", 1)]
+    assert {
+        "idx_call_edges_identity",
+        "idx_call_edges_caller",
+        "idx_call_edges_caller_lookup",
+        "idx_call_edges_callee",
+        "idx_call_edges_callee_lookup",
+        "idx_call_edges_resolved",
+        "idx_callable_refs_identity",
+        "idx_callable_refs_owner",
+        "idx_callable_refs_owner_lookup",
+        "idx_callable_refs_target",
+        "idx_callable_refs_target_lookup",
+        "idx_callable_refs_resolved",
+    } <= index_names
+
+
+def test_duckdb_backend_delete_paths_removes_file_owned_edge_rows(
+    tmp_path: Path,
+) -> None:
+    """
+    Remove file-owned edge rows before deleting one DuckDB file record.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts deleting one indexed file also removes file-owned
+        edge rows that reference the file primary key.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    module_path = tmp_path / "pkg" / "sample.py"
+    raw = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            raw.execute(statement)
+        raw.execute(
+            """
+            INSERT INTO files(
+                id,
+                path,
+                hash,
+                mtime,
+                size,
+                analyzer_name,
+                analyzer_version
+            ) VALUES (1, ?, 'seed-hash', 1.0, 1, 'python', '1.0')
+            """,
+            (str(module_path),),
+        )
+        raw.execute(
+            """
+            INSERT INTO call_edges(
+                caller_file_id,
+                caller_module,
+                caller_name,
+                callee_module,
+                callee_name,
+                resolved
+            ) VALUES (1, 'pkg.sample', 'method', NULL, NULL, 0)
+            """
+        )
+        raw.execute(
+            """
+            INSERT INTO callable_refs(
+                owner_file_id,
+                owner_module,
+                owner_name,
+                target_module,
+                target_name,
+                resolved
+            ) VALUES (1, 'pkg.sample', 'method', NULL, NULL, 0)
+            """
+        )
+        raw.commit()
+    finally:
+        raw.close()
+
+    backend = DuckDBIndexBackend()
+    backend.delete_paths(tmp_path, paths=[str(module_path)])
+
+    reopened = duckdb.connect(str(db_path))
+    try:
+        assert reopened.execute("SELECT COUNT(*) FROM files").fetchone() == (0,)
+        assert reopened.execute("SELECT COUNT(*) FROM call_edges").fetchone() == (0,)
+        assert reopened.execute("SELECT COUNT(*) FROM callable_refs").fetchone() == (0,)
+    finally:
+        reopened.close()
 
 
 def test_duckdb_backend_persist_analysis_with_shared_connection_uses_real_driver(
@@ -806,7 +1582,207 @@ def test_duckdb_backend_persist_analysis_with_shared_connection_uses_real_driver
         "SELECT path FROM files WHERE path = ?",
         (str(tmp_path / "pkg" / "sample.py"),),
     ).fetchone()
+    stored_embedding = connection.execute(
+        "SELECT vector_values FROM embeddings"
+    ).fetchone()
 
     assert (recomputed, reused) == (1, 0)
     assert stored_row == (str(tmp_path / "pkg" / "sample.py"),)
+    assert stored_embedding is not None
+    stored_vector_values = cast("object", stored_embedding[0])
+    assert stored_vector_values == [0.0] * 384
     connection.close()
+
+
+def test_duckdb_session_batches_embedding_generation_across_files(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Batch DuckDB session embedding generation across persisted files.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace embedding generation with a deterministic test
+        double.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts session persistence makes one embedding backend call
+        for two file snapshots.
+    """
+    pytest.importorskip("duckdb")
+    calls: list[list[str]] = []
+
+    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+        """
+        Record one embedding batch.
+
+        Parameters
+        ----------
+        texts : list[str]
+            Text payloads requested from the embedding backend.
+
+        Returns
+        -------
+        list[list[float]]
+            Deterministic embedding vectors matching the requested payloads.
+        """
+        calls.append(list(texts))
+        return [[0.0] * 384 for _text in texts]
+
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_support.embed_texts",
+        fake_embed_texts,
+    )
+
+    backend = DuckDBIndexBackend()
+    session = backend.begin_index_session(tmp_path)
+    try:
+        for name in ("alpha", "beta"):
+            module_path = tmp_path / "pkg" / f"{name}.py"
+            module_path.parent.mkdir(parents=True, exist_ok=True)
+            module_path.write_text("", encoding="utf-8")
+            session.persist_analysis(
+                BackendPersistAnalysisRequest(
+                    root=tmp_path,
+                    file_metadata=FileMetadataSnapshot(
+                        path=module_path,
+                        sha256=f"duckdb-session-{name}",
+                        mtime=1.0,
+                        size=0,
+                    ),
+                    analysis=AnalysisResult(
+                        source_path=module_path,
+                        module=ModuleArtifact(
+                            name=f"pkg.{name}",
+                            stable_id=f"python:module:pkg.{name}",
+                            docstring=None,
+                            has_docstring=0,
+                        ),
+                        classes=(),
+                        functions=(),
+                        declarations=(),
+                        imports=(),
+                    ),
+                )
+            )
+        session.rebuild_derived_indexes()
+        session.commit()
+    finally:
+        session.close()
+
+    assert len(calls) == 1
+    assert len(calls[0]) == 2
+
+
+def test_duckdb_embedding_candidates_use_stored_vector_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Score DuckDB embedding candidates through stored list vectors.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace embedding generation and reject blob fallback.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB can rank candidates without deserializing
+        stored embedding blobs in Python.
+    """
+    pytest.importorskip("duckdb")
+    backend = DuckDBIndexBackend()
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_support.embed_texts",
+        lambda texts: [[1.0] + [0.0] * 383 for _text in texts],
+    )
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_query_backend.embed_text",
+        lambda text: [1.0] + [0.0] * 383,
+    )
+
+    backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=FileMetadataSnapshot(
+                path=tmp_path / "pkg" / "sample.py",
+                sha256="duckdb-vector-values",
+                mtime=1.0,
+                size=1,
+            ),
+            analysis=AnalysisResult(
+                source_path=tmp_path / "pkg" / "sample.py",
+                module=ModuleArtifact(
+                    name="pkg.sample",
+                    stable_id="python:module:pkg.sample",
+                    docstring=None,
+                    has_docstring=0,
+                ),
+                classes=(),
+                functions=(),
+                declarations=(),
+                imports=(),
+            ),
+        )
+    )
+
+    def reject_blob_deserialization(blob: bytes, *, dim: int) -> list[float]:
+        """
+        Reject the legacy Python blob-scoring path.
+
+        Parameters
+        ----------
+        blob : bytes
+            Stored embedding blob supplied by a legacy fallback path.
+        dim : int
+            Expected embedding dimensionality.
+
+        Returns
+        -------
+        list[float]
+            This helper never returns.
+
+        Raises
+        ------
+        AssertionError
+            Always raised when the legacy fallback is used.
+        """
+        del blob, dim
+        raise AssertionError("legacy embedding blob fallback was used")
+
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_query_backend.deserialize_vector",
+        reject_blob_deserialization,
+    )
+
+    results = backend.embedding_candidates(
+        BackendEmbeddingCandidatesRequest(
+            root=tmp_path,
+            query="sample",
+            limit=5,
+            min_score=0.0,
+        )
+    )
+
+    assert results == [
+        (
+            1.0,
+            (
+                "module",
+                "pkg.sample",
+                "pkg.sample",
+                str(tmp_path / "pkg" / "sample.py"),
+                1,
+            ),
+        )
+    ]

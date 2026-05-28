@@ -97,11 +97,14 @@ feat/batch-embedding-indexing
   `threads=8`, `interop=1`, `batch=64` at `32.123s +/- 0.256s` for
   `codira index --full`, confirming that the release benchmark helper did not
   materially distort the indexing measurement.
-* [x] Recorded the current operator recommendation for this host and repository:
-  use `CODIRA_TORCH_NUM_THREADS=10`,
-  `CODIRA_TORCH_NUM_INTEROP_THREADS=1`, and
-  `CODIRA_EMBED_BATCH_SIZE=128` for fastest measured full indexing. This is a
-  local operational baseline, not a universal default; rerun the same Hyperfine
-  profile matrix after significant changes to analyzers, embedding payloads,
-  storage, or repository size.
+* [x] Recorded the 20/04/2026 operator recommendation for this host and
+  repository: use `CODIRA_TORCH_NUM_THREADS=10`,
+  `CODIRA_TORCH_NUM_INTEROP_THREADS=1`, and `CODIRA_EMBED_BATCH_SIZE=128` for
+  fastest measured full indexing at that time. This was a local operational
+  baseline, not a universal default.
+* [x] Superseded that recommendation on 28/05/2026 after the issue #30
+  post-step4 campaign: a short controlled SQLite full-index matrix on `codira`
+  measured the default PyTorch runtime with `CODIRA_EMBED_BATCH_SIZE=32` as the
+  fastest tested profile. Keep `CODIRA_TORCH_*` unset for general campaign
+  commands unless a fresh host-local Hyperfine matrix proves otherwise.
 * [x] Create the final branch commit.

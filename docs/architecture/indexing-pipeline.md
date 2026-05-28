@@ -20,8 +20,8 @@ The current indexing entry point is `index_repo()` in
 8. When a file changes, the backend compares old and new stable-id sets so
    unchanged symbols can reuse stored vectors while disappeared symbols are
    removed deterministically.
-9. The active backend persists all artifacts into `.codira/index.db` and
-   rebuilds derived indexes.
+9. The active backend persists all artifacts under `.codira/` and rebuilds
+   derived indexes.
 10. Canonical source directories are audited for uncovered tracked files so the
    summary can report files under `src/`, `tests/`, or `scripts/` that no
    active analyzer currently covers.
@@ -84,15 +84,15 @@ Phase 22 adds the operator-facing coverage controls:
 - `codira index --require-full-coverage` fails before indexing when
   canonical tracked files remain uncovered
 
-## Current Coupling
+## Current Boundary
 
-The current implementation still combines two SQLite-specific responsibilities
-inside `indexer.py`:
+The current implementation keeps orchestration and persistence separated:
 
-- incremental orchestration decisions
-- direct SQLite backend implementation details
+- `indexer.py` owns incremental orchestration decisions
+- the selected backend owns storage-specific persistence and derived-index
+  rebuilds
 
-Language-specific extraction no longer lives in the indexer itself.
+Language-specific extraction does not live in the indexer itself.
 
 ## Stability Requirements
 

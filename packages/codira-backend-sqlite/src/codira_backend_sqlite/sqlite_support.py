@@ -538,6 +538,36 @@ def _resolve_call_record(
     return (None, None, 0)
 
 
+def _unresolved_identity(record: CallRecord, *, resolved: int) -> str:
+    """
+    Return the stable unresolved-target identity for one derived edge.
+
+    Parameters
+    ----------
+    record : CallRecord
+        Raw call-style record that produced the derived relation.
+    resolved : int
+        Stored relation resolution flag.
+
+    Returns
+    -------
+    str
+        Empty string for resolved relations, otherwise a deterministic raw
+        target identity that distinguishes different unresolved callees owned
+        by the same caller.
+    """
+    if resolved:
+        return ""
+    return json.dumps(
+        (
+            str(record.get("kind", "")),
+            str(record.get("base", "")),
+            str(record.get("target", "")),
+        ),
+        separators=(",", ":"),
+    )
+
+
 def _embedding_text(request: EmbeddingTextRequest) -> str:
     """
     Build the deterministic text payload embedded for one symbol.
@@ -833,8 +863,8 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM call_edges")
     conn.execute("DELETE FROM callable_refs")
 
-    edges: set[tuple[int, str, str, str | None, str | None, int]] = set()
-    refs: set[tuple[int, str, str, str | None, str | None, int]] = set()
+    edges: set[tuple[int, str, str, str | None, str | None, str, int]] = set()
+    refs: set[tuple[int, str, str, str | None, str | None, str, int]] = set()
 
     call_rows = conn.execute("""
         SELECT
@@ -894,6 +924,7 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
                 caller_name,
                 callee_module,
                 callee_name,
+                _unresolved_identity(record, resolved=resolved),
                 resolved,
             )
         )
@@ -948,6 +979,7 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
                 caller_name,
                 target_module,
                 target_name,
+                _unresolved_identity(record, resolved=resolved),
                 resolved,
             )
         )
@@ -961,12 +993,13 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
             item[3] or "",
             item[4] or "",
             item[5],
+            item[6],
         ),
     ):
         conn.execute(
             "INSERT OR IGNORE INTO call_edges"
             "(caller_file_id, caller_module, caller_name, callee_module, "
-            "callee_name, resolved) VALUES (?, ?, ?, ?, ?, ?)",
+            "callee_name, unresolved_identity, resolved) VALUES (?, ?, ?, ?, ?, ?, ?)",
             edge,
         )
 
@@ -979,12 +1012,13 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
             item[3] or "",
             item[4] or "",
             item[5],
+            item[6],
         ),
     ):
         conn.execute(
             "INSERT OR IGNORE INTO callable_refs"
             "(owner_file_id, owner_module, owner_name, target_module, "
-            "target_name, resolved) VALUES (?, ?, ?, ?, ?, ?)",
+            "target_name, unresolved_identity, resolved) VALUES (?, ?, ?, ?, ?, ?, ?)",
             ref_row,
         )
 
@@ -1794,6 +1828,8 @@ def _flush_embedding_rows(
     embedding_rows: list[PendingEmbeddingRow],
     backend: EmbeddingBackendSpec,
     previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
+    pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]]
+    | None = None,
 ) -> tuple[int, int]:
     """
     Persist pending embedding payloads for one analyzed file.
@@ -1809,6 +1845,9 @@ def _flush_embedding_rows(
     previous_embeddings : dict[str, codira.indexer.StoredEmbeddingRow] | None, optional
         Stored symbol embeddings keyed by stable identity before the owner file
         was replaced.
+    pending_embedding_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]] | None, optional
+        Session-level embedding buffer. When supplied, prepared rows are
+        appended for one later backend batch.
 
     Returns
     -------
@@ -1818,7 +1857,6 @@ def _flush_embedding_rows(
     recomputed = 0
     reused = 0
     prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
-    texts_to_encode: dict[str, str] = {}
 
     for row in sorted(
         embedding_rows,
@@ -1838,12 +1876,47 @@ def _flush_embedding_rows(
             reused += 1
         else:
             prepared_rows.append((row, content_hash, None))
-            texts_to_encode.setdefault(content_hash, row.text)
             recomputed += 1
 
+    if pending_embedding_rows is not None:
+        pending_embedding_rows.extend(prepared_rows)
+        return (recomputed, reused)
+
+    _flush_prepared_embedding_rows(conn, prepared_rows=prepared_rows, backend=backend)
+    return (recomputed, reused)
+
+
+def _flush_prepared_embedding_rows(
+    conn: sqlite3.Connection,
+    *,
+    prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
+    backend: EmbeddingBackendSpec,
+) -> None:
+    """
+    Flush prepared embedding rows to SQLite.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection.
+    prepared_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
+        Prepared embedding rows as ``(row, content_hash, stored_vector)``.
+    backend : EmbeddingBackendSpec
+        Active embedding backend metadata.
+
+    Returns
+    -------
+    None
+        Prepared embedding rows are inserted in place.
+    """
     encoded_vectors: dict[str, bytes] = {}
+    texts_to_encode = {
+        content_hash: row.text
+        for row, content_hash, stored_vector in prepared_rows
+        if stored_vector is None
+    }
     if texts_to_encode:
-        ordered_content_hashes = list(texts_to_encode)
+        ordered_content_hashes = list(dict.fromkeys(texts_to_encode))
         encoded_rows = embed_texts(
             [texts_to_encode[content_hash] for content_hash in ordered_content_hashes]
         )
@@ -1878,7 +1951,37 @@ def _flush_embedding_rows(
         insert_rows,
     )
 
-    return (recomputed, reused)
+
+def _flush_pending_embedding_rows(
+    conn: sqlite3.Connection,
+    *,
+    pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
+    backend: EmbeddingBackendSpec,
+) -> None:
+    """
+    Flush session-level embedding rows to SQLite.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection.
+    pending_embedding_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
+        Session-level prepared embedding rows.
+    backend : EmbeddingBackendSpec
+        Active embedding backend metadata.
+
+    Returns
+    -------
+    None
+        Pending embeddings are encoded and inserted in one backend batch.
+    """
+    if not pending_embedding_rows:
+        return
+    _flush_prepared_embedding_rows(
+        conn,
+        prepared_rows=pending_embedding_rows,
+        backend=backend,
+    )
 
 
 def _reference_scan_rows(path: Path) -> list[ReferenceSearchRow]:
@@ -1951,6 +2054,8 @@ def _store_analysis(
     *,
     backend: EmbeddingBackendSpec,
     previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
+    pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]]
+    | None = None,
 ) -> tuple[int, int]:
     """
     Persist one parsed file snapshot into the index.
@@ -1967,6 +2072,8 @@ def _store_analysis(
         Active embedding backend metadata.
     previous_embeddings : dict[str, codira.indexer.StoredEmbeddingRow] | None, optional
         Stored symbol embeddings captured before replacing file-owned rows.
+    pending_embedding_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]] | None, optional
+        Session-level buffer used to batch embedding generation across files.
 
     Returns
     -------
@@ -2032,6 +2139,7 @@ def _store_analysis(
         embedding_rows=embedding_rows,
         backend=backend,
         previous_embeddings=previous_embeddings,
+        pending_embedding_rows=pending_embedding_rows,
     )
 
 
@@ -2185,6 +2293,7 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
             (file_id,),
         )
         conn.execute(
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"""
             DELETE FROM overloads
             WHERE function_id IN (
@@ -2200,18 +2309,22 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
             (file_id,),
         )
         conn.execute(
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"DELETE FROM imports WHERE module_id IN ({_placeholders(module_ids)})",
             tuple(module_ids),
         )
         conn.execute(
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"DELETE FROM functions WHERE module_id IN ({_placeholders(module_ids)})",
             tuple(module_ids),
         )
         conn.execute(
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"DELETE FROM classes WHERE module_id IN ({_placeholders(module_ids)})",
             tuple(module_ids),
         )
         conn.execute(
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             f"DELETE FROM modules WHERE id IN ({_placeholders(module_ids)})",
             tuple(module_ids),
         )
@@ -2224,6 +2337,8 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
         conn.execute("DELETE FROM docstring_issues WHERE file_id = ?", (file_id,))
 
     conn.execute("DELETE FROM symbol_index WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM call_edges WHERE caller_file_id = ?", (file_id,))
+    conn.execute("DELETE FROM callable_refs WHERE owner_file_id = ?", (file_id,))
     conn.execute("DELETE FROM call_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM callable_ref_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM reference_scan_lines WHERE file_id = ?", (file_id,))
@@ -2350,6 +2465,25 @@ def _load_existing_file_hashes(conn: sqlite3.Connection) -> dict[str, str]:
     return {str(path): str(file_hash) for path, file_hash in rows}
 
 
+def _count_indexed_files(conn: sqlite3.Connection) -> int:
+    """
+    Count files currently persisted in the SQLite index.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection.
+
+    Returns
+    -------
+    int
+        Number of rows in the indexed files table.
+    """
+    row = conn.execute("SELECT COUNT(*) FROM files").fetchone()
+    assert row is not None
+    return int(row[0])
+
+
 def _load_previous_embeddings_by_path(
     conn: sqlite3.Connection,
     paths: list[str],
@@ -2430,6 +2564,7 @@ def _count_reused_embeddings(
         return 0
 
     placeholders = ",".join("?" for _ in reused_paths)
+    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     row = conn.execute(
         f"""
         SELECT COUNT(*)

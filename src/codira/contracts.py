@@ -645,6 +645,259 @@ class BackendQueryConnection(Protocol):
 
 
 @runtime_checkable
+class IndexWriteSession(Protocol):
+    """
+    Explicit write-side lifecycle for one indexing run.
+
+    Implementations own mutable backend state for a single repository index
+    pass. Query commands must not rely on this session surface.
+    """
+
+    def purge_skipped_docstring_issues(self) -> None:
+        """
+        Remove backend-owned legacy diagnostics skipped by policy.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Matching diagnostics are removed in place.
+        """
+        ...
+
+    def prune_orphaned_embeddings(self) -> None:
+        """
+        Remove embedding rows whose owning symbols no longer exist.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Orphaned embedding rows are removed in place.
+        """
+        ...
+
+    def load_existing_file_hashes(self) -> dict[str, str]:
+        """
+        Load indexed file hashes used for incremental reuse decisions.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, str]
+            Indexed file hashes keyed by absolute file path.
+        """
+        ...
+
+    def load_existing_file_ownership(self) -> dict[str, tuple[str, str]]:
+        """
+        Load persisted analyzer ownership keyed by absolute path.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, tuple[str, str]]
+            Indexed analyzer ownership keyed by absolute file path.
+        """
+        ...
+
+    def current_embedding_state_matches(
+        self,
+        embedding_backend: EmbeddingBackendSpec,
+    ) -> bool:
+        """
+        Report whether persisted embeddings match the active embedding backend.
+
+        Parameters
+        ----------
+        embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+            Active embedding backend metadata.
+
+        Returns
+        -------
+        bool
+            ``True`` when the persisted embedding state can be reused.
+        """
+        ...
+
+    def load_previous_embeddings_by_path(
+        self,
+        *,
+        paths: Sequence[str],
+        embedding_backend: EmbeddingBackendSpec,
+    ) -> dict[str, dict[str, StoredEmbeddingRow]]:
+        """
+        Load reusable semantic artifacts for paths that will be replaced.
+
+        Parameters
+        ----------
+        paths : collections.abc.Sequence[str]
+            Absolute file paths selected for replacement.
+        embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+            Active semantic backend metadata used to filter reusable artifacts.
+
+        Returns
+        -------
+        dict[str, dict[str, StoredEmbeddingRow]]
+            Previous semantic artifacts grouped by absolute file path.
+        """
+        ...
+
+    def count_reusable_embeddings(self, *, paths: Sequence[str]) -> int:
+        """
+        Count semantic artifacts that remain reusable for unchanged files.
+
+        Parameters
+        ----------
+        paths : collections.abc.Sequence[str]
+            Absolute file paths considered reusable.
+
+        Returns
+        -------
+        int
+            Number of reusable semantic artifacts retained by the backend.
+        """
+        ...
+
+    def prepare(
+        self,
+        *,
+        full: bool,
+        indexed_paths: Sequence[str],
+        deleted_paths: Sequence[str],
+    ) -> None:
+        """
+        Delete persisted rows that the current index plan will replace.
+
+        Parameters
+        ----------
+        full : bool
+            Whether the current run is a full rebuild.
+        indexed_paths : collections.abc.Sequence[str]
+            Absolute file paths whose rows will be replaced.
+        deleted_paths : collections.abc.Sequence[str]
+            Absolute file paths whose rows will be removed.
+
+        Returns
+        -------
+        None
+            Persisted rows are removed in place before fresh analysis is stored.
+        """
+        ...
+
+    def persist_analysis(
+        self,
+        request: BackendPersistAnalysisRequest,
+    ) -> tuple[int, int]:
+        """
+        Persist normalized artifacts for one analyzed file snapshot.
+
+        Parameters
+        ----------
+        request : BackendPersistAnalysisRequest
+            Persistence request carrying file metadata, normalized analysis,
+            embedding state, and optional reusable artifacts.
+
+        Returns
+        -------
+        tuple[int, int]
+            ``(recomputed, reused)`` semantic-artifact counts for the file.
+        """
+        ...
+
+    def rebuild_derived_indexes(self) -> None:
+        """
+        Rebuild derived backend state after raw artifact persistence.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Derived backend indexes are refreshed in place.
+        """
+        ...
+
+    def persist_runtime_inventory(
+        self,
+        request: BackendRuntimeInventoryRequest,
+    ) -> None:
+        """
+        Persist backend and analyzer inventory for a completed index run.
+
+        Parameters
+        ----------
+        request : BackendRuntimeInventoryRequest
+            Runtime inventory persistence request.
+
+        Returns
+        -------
+        None
+            Runtime inventory rows are replaced in place.
+        """
+        ...
+
+    def commit(self) -> None:
+        """
+        Commit pending backend writes for the indexing run.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Pending backend writes are committed.
+        """
+        ...
+
+    def abort(self) -> None:
+        """
+        Abort pending backend writes for the indexing run.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Pending backend writes are rolled back when possible.
+        """
+        ...
+
+    def close(self) -> None:
+        """
+        Release resources owned by the indexing session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Session-owned resources are closed in place.
+        """
+        ...
+
+
+@runtime_checkable
 class IndexBackend(Protocol):
     """
     Contract for the single active persistence backend of one repository index.
@@ -655,6 +908,22 @@ class IndexBackend(Protocol):
 
     name: str
     version: str
+
+    def begin_index_session(self, root: Path) -> IndexWriteSession:
+        """
+        Open the explicit write-side lifecycle for one indexing run.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state will be mutated.
+
+        Returns
+        -------
+        IndexWriteSession
+            Mutable session object used only by indexing flows.
+        """
+        ...
 
     def open_connection(self, root: Path) -> object:
         """
@@ -853,7 +1122,7 @@ class IndexBackend(Protocol):
         paths: Sequence[str],
         embedding_backend: EmbeddingBackendSpec,
         conn: object | None = None,
-    ) -> dict[str, dict[str, object]]:
+    ) -> dict[str, dict[str, StoredEmbeddingRow]]:
         """
         Load reusable semantic artifacts for paths that will be replaced.
 
@@ -870,7 +1139,7 @@ class IndexBackend(Protocol):
 
         Returns
         -------
-        dict[str, dict[str, object]]
+        dict[str, dict[str, StoredEmbeddingRow]]
             Previous semantic artifacts grouped by absolute file path.
         """
         ...
@@ -1345,6 +1614,7 @@ class IndexBackend(Protocol):
         root: Path,
         *,
         prefix: str | None = None,
+        symbol_names: Sequence[str] | None = None,
         conn: object | None = None,
     ) -> list[DocstringIssueRow]:
         """
@@ -1356,6 +1626,9 @@ class IndexBackend(Protocol):
             Repository root whose index should be queried.
         prefix : str | None, optional
             Repo-root-relative path prefix used to restrict issue ownership.
+        symbol_names : collections.abc.Sequence[str] | None, optional
+            Symbol names used to restrict issue ownership before backend row
+            expansion.
         conn : object | None, optional
             Existing backend connection to reuse.
 

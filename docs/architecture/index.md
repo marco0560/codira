@@ -7,12 +7,12 @@ migration boundary introduced by
 The current implementation remains:
 
 - registry-driven
-- SQLite-backed
-- mixed-language across Python, JSON, Bash, and C-family analyzers
+- backed by one active storage backend, defaulting to SQLite
+- mixed-language across Python, JSON, C, C++, and Bash analyzers
 - CLI-driven through a single repository-local index
 
-These documents describe the post-Phase-9 architecture produced by the
-`ADR-004` migration branch.
+These documents describe the current architecture produced by the accepted
+`ADR-004` migration work and later backend/analyzer extensions.
 
 - [System overview](system-overview.md)
 - [Indexing pipeline](indexing-pipeline.md)

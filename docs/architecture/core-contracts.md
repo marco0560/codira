@@ -1,6 +1,6 @@
 # Core Contracts
 
-`ADR-004` Phase 3 introduces explicit backend-neutral contracts in code:
+`ADR-004` Phase 3 introduced explicit backend-neutral contracts in code:
 
 - `src/codira/contracts.py`
 - `src/codira/models.py`
@@ -98,8 +98,8 @@ Invariants:
 - stable IDs are unique across all artifacts within one `AnalysisResult`
 - module, class, function, and declaration artifacts now expose durable stable
   identities independent of database row ids
-- integer flags stay compatible with the existing SQLite schema while the
-  migration is in progress
+- integer flags remain part of the persisted backend schema for deterministic
+  cross-backend storage
 - logical callable identity remains `function` or `Class.method`
 
 ## `IndexBackend`
@@ -107,9 +107,11 @@ Invariants:
 Responsibilities:
 
 - initialize repository-local backend state
+- expose cheap read/query operations through the backend surface
+- create write sessions for full or incremental indexing work
 - load indexed file hashes for incremental decisions
 - delete persisted artifacts for removed or reindexed paths
-- persist one normalized file analysis
+- persist normalized file analyses
 - count reusable semantic artifacts for unchanged files
 - rebuild derived backend indexes after raw persistence
 
@@ -125,7 +127,7 @@ The Phase 3 contract layer is now active in the live indexing path:
 
 - analyzers emit `AnalysisResult` objects into the orchestrator
 - the registry activates analyzers and the concrete backend
-- the SQLite backend persists and serves current query needs
+- the active backend persists and serves current query needs
 
 The remaining extension work is additive rather than foundational.
 

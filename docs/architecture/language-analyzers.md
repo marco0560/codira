@@ -93,9 +93,10 @@ That module owns:
 
 ## Phase-8 Registration Rules
 
-Phase 8 moves analyzer registration into `src/codira/registry.py`.
+Phase 8 moved analyzer registration into `src/codira/registry.py`.
 
-- analyzers are instantiated from built-ins plus entry-point plugin discovery
+- analyzers are instantiated from registered plugin factories and entry-point
+  plugin discovery
 - registry order defines deterministic first-match routing order after
   scanner-side ownership filtering
 - an empty analyzer registry raises `ValueError`
@@ -169,7 +170,8 @@ analyzer-specific dependencies.
 - the C analyzer loads when `codira-analyzer-c` is installed
 - the C++ analyzer loads when `codira-analyzer-cpp` is installed
 - the Bash analyzer loads when `codira-analyzer-bash` is installed
-- the supported package form for C-family indexing is `codira-analyzer-c`
+- the supported package forms for C-family indexing are `codira-analyzer-c`
+  and `codira-analyzer-cpp`
 - third-party analyzers must declare their own discovery globs so indexing can
   see their files without core changes
 
