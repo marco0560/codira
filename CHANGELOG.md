@@ -1,3 +1,16 @@
+# [1.28.0](https://github.com/marco0560/codira/compare/v1.27.0...v1.28.0) (2026-05-31)
+
+
+### Bug Fixes
+
+* **storage:** rebuild stale schema indexes ([0d916b7](https://github.com/marco0560/codira/commit/0d916b710a626f6c7aa6b622f8aca1d48ab5d0bc))
+
+
+### Features
+
+* **analyzer:** label unresolved relation targets ([98ee863](https://github.com/marco0560/codira/commit/98ee863d1f96fd8f2e83de4965a3cc4f34e5a852))
+* **analyzer:** merge unresolved target labels ([0dde33e](https://github.com/marco0560/codira/commit/0dde33e3a7a67dce874d6bf21da8a7e5367cb8fd)), closes [#31](https://github.com/marco0560/codira/issues/31)
+
 # [1.27.0](https://github.com/marco0560/codira/compare/v1.26.1...v1.27.0) (2026-05-31)
 
 
