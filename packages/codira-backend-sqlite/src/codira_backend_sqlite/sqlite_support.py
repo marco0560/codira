@@ -2236,6 +2236,30 @@ def _placeholders(values: list[int]) -> str:
     return ",".join("?" for _ in values)
 
 
+_SQLITE_VARIABLE_BATCH_SIZE = 900
+
+
+def _path_batches(paths: list[str]) -> list[list[str]]:
+    """
+    Split path values into SQLite variable-limit-safe batches.
+
+    Parameters
+    ----------
+    paths : list[str]
+        Path values to bind into SQL statements.
+
+    Returns
+    -------
+    list[list[str]]
+        Consecutive non-empty batches sized below SQLite's conservative
+        bound-variable limit.
+    """
+    return [
+        paths[index : index + _SQLITE_VARIABLE_BATCH_SIZE]
+        for index in range(0, len(paths), _SQLITE_VARIABLE_BATCH_SIZE)
+    ]
+
+
 def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
     """
     Remove all indexed data owned by one file.
@@ -2563,20 +2587,23 @@ def _count_reused_embeddings(
     if not reused_paths:
         return 0
 
-    placeholders = ",".join("?" for _ in reused_paths)
-    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-    row = conn.execute(
-        f"""
-        SELECT COUNT(*)
-        FROM embeddings e
-        JOIN symbol_index s
-          ON e.object_type = 'symbol'
-         AND e.object_id = s.id
-        JOIN files f
-          ON s.file_id = f.id
-        WHERE f.path IN ({placeholders})
-        """,
-        tuple(reused_paths),
-    ).fetchone()
-    assert row is not None
-    return int(row[0])
+    total = 0
+    for path_batch in _path_batches(reused_paths):
+        placeholders = ",".join("?" for _ in path_batch)
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM embeddings e
+            JOIN symbol_index s
+              ON e.object_type = 'symbol'
+             AND e.object_id = s.id
+            JOIN files f
+              ON s.file_id = f.id
+            WHERE f.path IN ({placeholders})
+            """,
+            tuple(path_batch),
+        ).fetchone()
+        assert row is not None
+        total += int(row[0])
+    return total

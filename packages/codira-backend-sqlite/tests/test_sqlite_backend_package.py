@@ -38,7 +38,7 @@ def test_sqlite_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.5.3"
+    assert project["project"]["version"] == "1.5.5"
     assert project["project"]["dependencies"] == ["codira>=1.5.0,<2.0.0"]
     assert project["project"]["entry-points"]["codira.backends"] == {
         "sqlite": "codira_backend_sqlite:build_backend"
@@ -90,6 +90,84 @@ def test_sqlite_backend_open_connection_enables_foreign_keys(
         connection.close()
 
     assert pragma_value == (1,)
+
+
+def test_sqlite_backend_counts_reusable_embeddings_in_path_batches(
+    tmp_path: Path,
+) -> None:
+    """
+    Count reusable embeddings when reused paths exceed SQLite variable limits.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts reusable embedding counting chunks path bindings.
+    """
+    backend = SQLiteIndexBackend()
+    connection = backend.open_connection(tmp_path)
+    try:
+        for index in range(1001):
+            path = tmp_path / "pkg" / f"module_{index}.py"
+            connection.execute(
+                """
+                INSERT INTO files(path, hash, mtime, size, analyzer_name, analyzer_version)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (str(path), f"hash-{index}", 1.0, 1, "python", "4"),
+            )
+            file_id = int(
+                connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+            )
+            connection.execute(
+                """
+                INSERT INTO symbol_index(name, stable_id, type, module_name, file_id, lineno)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"pkg.module_{index}",
+                    f"python:module:pkg.module_{index}",
+                    "module",
+                    f"pkg.module_{index}",
+                    file_id,
+                    1,
+                ),
+            )
+            symbol_id = int(
+                connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+            )
+            connection.execute(
+                """
+                INSERT INTO embeddings(
+                    object_type,
+                    object_id,
+                    backend,
+                    version,
+                    content_hash,
+                    dim,
+                    vector
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("symbol", symbol_id, "local", "1", f"content-{index}", 1, b"\0"),
+            )
+        connection.commit()
+
+        count = backend.count_reusable_embeddings(
+            tmp_path,
+            paths=[
+                str(tmp_path / "pkg" / f"module_{index}.py") for index in range(1001)
+            ],
+            conn=connection,
+        )
+    finally:
+        connection.close()
+
+    assert count == 1001
 
 
 def test_sqlite_backend_full_prepare_clears_populated_database_in_session(

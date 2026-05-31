@@ -33,7 +33,10 @@ if TYPE_CHECKING:
     from codira.models import (
         AnalysisResult,
         ClassArtifact,
+        DeclarationArtifact,
+        EnumMemberArtifact,
         FunctionArtifact,
+        OverloadArtifact,
     )
 
 from codira.contracts import AnalyzerCapabilityDeclaration
@@ -126,6 +129,329 @@ def _replace_function_stable_id(
         replace(overload, parent_stable_id=stable_id) for overload in function.overloads
     )
     return replace(function, stable_id=stable_id, overloads=overloads)
+
+
+def _rebase_python_stable_id(stable_id: str, old_module: str, new_module: str) -> str:
+    """
+    Rebase one Python stable ID from an import module to a path module.
+
+    Parameters
+    ----------
+    stable_id : str
+        Stable ID emitted by Python normalization.
+    old_module : str
+        Import-style module namespace currently encoded in ``stable_id``.
+    new_module : str
+        Path-qualified module namespace to encode.
+
+    Returns
+    -------
+    str
+        Stable ID rebased to ``new_module`` when it belongs to ``old_module``.
+    """
+    for symbol_type in ("module", "class", "function", "method", "overload"):
+        prefix = f"python:{symbol_type}:{old_module}"
+        if stable_id == prefix:
+            return f"python:{symbol_type}:{new_module}"
+        if stable_id.startswith(f"{prefix}:"):
+            return f"python:{symbol_type}:{new_module}{stable_id[len(prefix) :]}"
+
+    declaration_prefix = "python:"
+    module_segment = f":{old_module}:"
+    if stable_id.startswith(declaration_prefix) and module_segment in stable_id:
+        return stable_id.replace(module_segment, f":{new_module}:", 1)
+    return stable_id
+
+
+def _rebase_overload_module(
+    overload: OverloadArtifact,
+    *,
+    old_module: str,
+    new_module: str,
+) -> OverloadArtifact:
+    """
+    Rebase an overload stable ID and its parent stable ID.
+
+    Parameters
+    ----------
+    overload : codira.models.OverloadArtifact
+        Overload artifact to rewrite.
+    old_module : str
+        Import-style module namespace currently encoded in stable IDs.
+    new_module : str
+        Path-qualified module namespace to encode.
+
+    Returns
+    -------
+    codira.models.OverloadArtifact
+        Overload artifact with module-qualified identities rewritten.
+    """
+    return replace(
+        overload,
+        stable_id=_rebase_python_stable_id(overload.stable_id, old_module, new_module),
+        parent_stable_id=_rebase_python_stable_id(
+            overload.parent_stable_id,
+            old_module,
+            new_module,
+        ),
+    )
+
+
+def _rebase_function_module(
+    function: FunctionArtifact,
+    *,
+    old_module: str,
+    new_module: str,
+) -> FunctionArtifact:
+    """
+    Rebase a function or method and its overload identities.
+
+    Parameters
+    ----------
+    function : codira.models.FunctionArtifact
+        Function-like artifact to rewrite.
+    old_module : str
+        Import-style module namespace currently encoded in stable IDs.
+    new_module : str
+        Path-qualified module namespace to encode.
+
+    Returns
+    -------
+    codira.models.FunctionArtifact
+        Function artifact with module-qualified identities rewritten.
+    """
+    return replace(
+        function,
+        stable_id=_rebase_python_stable_id(function.stable_id, old_module, new_module),
+        overloads=tuple(
+            _rebase_overload_module(
+                overload,
+                old_module=old_module,
+                new_module=new_module,
+            )
+            for overload in function.overloads
+        ),
+    )
+
+
+def _rebase_class_module(
+    class_artifact: ClassArtifact,
+    *,
+    old_module: str,
+    new_module: str,
+) -> ClassArtifact:
+    """
+    Rebase a class and its method identities.
+
+    Parameters
+    ----------
+    class_artifact : codira.models.ClassArtifact
+        Class artifact to rewrite.
+    old_module : str
+        Import-style module namespace currently encoded in stable IDs.
+    new_module : str
+        Path-qualified module namespace to encode.
+
+    Returns
+    -------
+    codira.models.ClassArtifact
+        Class artifact with module-qualified identities rewritten.
+    """
+    return replace(
+        class_artifact,
+        stable_id=_rebase_python_stable_id(
+            class_artifact.stable_id,
+            old_module,
+            new_module,
+        ),
+        methods=tuple(
+            _rebase_function_module(
+                method,
+                old_module=old_module,
+                new_module=new_module,
+            )
+            for method in class_artifact.methods
+        ),
+    )
+
+
+def _rebase_enum_member_module(
+    enum_member: EnumMemberArtifact,
+    *,
+    old_module: str,
+    new_module: str,
+) -> EnumMemberArtifact:
+    """
+    Rebase an enum member identity.
+
+    Parameters
+    ----------
+    enum_member : codira.models.EnumMemberArtifact
+        Enum member artifact to rewrite.
+    old_module : str
+        Import-style module namespace currently encoded in stable IDs.
+    new_module : str
+        Path-qualified module namespace to encode.
+
+    Returns
+    -------
+    codira.models.EnumMemberArtifact
+        Enum member artifact with module-qualified identities rewritten.
+    """
+    return replace(
+        enum_member,
+        stable_id=_rebase_python_stable_id(
+            enum_member.stable_id,
+            old_module,
+            new_module,
+        ),
+        parent_stable_id=_rebase_python_stable_id(
+            enum_member.parent_stable_id,
+            old_module,
+            new_module,
+        ),
+    )
+
+
+def _rebase_declaration_module(
+    declaration: DeclarationArtifact,
+    *,
+    old_module: str,
+    new_module: str,
+) -> DeclarationArtifact:
+    """
+    Rebase a declaration and attached enum-member identities.
+
+    Parameters
+    ----------
+    declaration : codira.models.DeclarationArtifact
+        Declaration artifact to rewrite.
+    old_module : str
+        Import-style module namespace currently encoded in stable IDs.
+    new_module : str
+        Path-qualified module namespace to encode.
+
+    Returns
+    -------
+    codira.models.DeclarationArtifact
+        Declaration artifact with module-qualified identities rewritten.
+    """
+    return replace(
+        declaration,
+        stable_id=_rebase_python_stable_id(
+            declaration.stable_id,
+            old_module,
+            new_module,
+        ),
+        enum_members=tuple(
+            _rebase_enum_member_module(
+                enum_member,
+                old_module=old_module,
+                new_module=new_module,
+            )
+            for enum_member in declaration.enum_members
+        ),
+    )
+
+
+def _shadowed_module_namespace(path: Path, root: Path, module_name: str) -> str | None:
+    """
+    Return a path-qualified namespace for import-shadowed module files.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Python source file being analyzed.
+    root : pathlib.Path
+        Repository root used for relative path identity.
+    module_name : str
+        Import-style module namespace emitted by normalization.
+
+    Returns
+    -------
+    str | None
+        Path-qualified module namespace when ``path`` is shadowed by a sibling
+        package ``__init__.py``; otherwise ``None``.
+    """
+    if path.name == "__init__.py" or path.suffix != ".py":
+        return None
+
+    package_init = path.with_suffix("") / "__init__.py"
+    if not package_init.is_file():
+        return None
+
+    try:
+        relative_path = path.relative_to(root).as_posix()
+    except ValueError:
+        relative_path = path.as_posix()
+    return f"{module_name}:path:{relative_path}"
+
+
+def _disambiguate_shadowed_module_file(
+    analysis: AnalysisResult,
+    *,
+    path: Path,
+    root: Path,
+) -> AnalysisResult:
+    """
+    Rebase valid Python module files shadowed by sibling packages.
+
+    Parameters
+    ----------
+    analysis : codira.models.AnalysisResult
+        Normalized Python analyzer output.
+    path : pathlib.Path
+        Python source file that produced ``analysis``.
+    root : pathlib.Path
+        Repository root used for relative path identity.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Analysis result with path-qualified stable IDs when ``path`` is an
+        import-shadowed module file.
+    """
+    old_module = analysis.module.name
+    new_module = _shadowed_module_namespace(path, root, old_module)
+    if new_module is None:
+        return analysis
+
+    module = replace(
+        analysis.module,
+        stable_id=_rebase_python_stable_id(
+            analysis.module.stable_id,
+            old_module,
+            new_module,
+        ),
+    )
+    return replace(
+        analysis,
+        module=module,
+        classes=tuple(
+            _rebase_class_module(
+                class_artifact,
+                old_module=old_module,
+                new_module=new_module,
+            )
+            for class_artifact in analysis.classes
+        ),
+        functions=tuple(
+            _rebase_function_module(
+                function,
+                old_module=old_module,
+                new_module=new_module,
+            )
+            for function in analysis.functions
+        ),
+        declarations=tuple(
+            _rebase_declaration_module(
+                declaration,
+                old_module=old_module,
+                new_module=new_module,
+            )
+            for declaration in analysis.declarations
+        ),
+    )
 
 
 def _disambiguate_overload_stable_ids(
@@ -297,7 +623,7 @@ class PythonAnalyzer:
     """
 
     name = "python"
-    version = "4"
+    version = "5"
     discovery_globs: tuple[str, ...] = ("*.py",)
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
@@ -365,6 +691,7 @@ class PythonAnalyzer:
         """
         source = _read_python_source(path)
         analysis = analysis_result_from_parsed(path, parse_source(path, root, source))
+        analysis = _disambiguate_shadowed_module_file(analysis, path=path, root=root)
         return _disambiguate_analysis_stable_ids(analysis)
 
 

@@ -153,7 +153,7 @@ def _load_workspace_cli_module() -> types.ModuleType:
     return module
 
 
-class _PythonAnalyzerV5:
+class _PythonAnalyzerV6:
     """
     Python analyzer stub with a bumped version for staleness tests.
 
@@ -163,7 +163,7 @@ class _PythonAnalyzerV5:
     """
 
     name = "python"
-    version = "5"
+    version = "6"
     discovery_globs: tuple[str, ...] = ("*.py",)
 
     def supports_path(self, path: Path) -> bool:
@@ -1564,6 +1564,72 @@ def test_index_repo_reports_duplicate_stable_ids_as_file_failures(
     assert "duplicate stable_id(s)" in report.failures[0].reason
 
 
+def test_index_repo_indexes_python_module_file_shadowed_by_package(
+    tmp_path: Path,
+) -> None:
+    """
+    Index valid Python module files shadowed by sibling packages.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts shadowed module files receive path-qualified stable
+        IDs while package ``__init__`` files keep canonical import identities.
+    """
+    module_file = tmp_path / "pkg" / "mod.py"
+    package_init = tmp_path / "pkg" / "mod" / "__init__.py"
+    _write_module(
+        module_file,
+        '"""Module file."""\n'
+        "\n"
+        "def from_file():\n"
+        '    """Return file value."""\n'
+        "    return 1\n",
+    )
+    _write_module(
+        package_init,
+        '"""Package module."""\n'
+        "\n"
+        "def from_package():\n"
+        '    """Return package value."""\n'
+        "    return 2\n",
+    )
+
+    report = index_repo(tmp_path)
+
+    conn = sqlite3.connect(get_db_path(tmp_path))
+    try:
+        rows = conn.execute(
+            """
+            SELECT name, stable_id, type
+            FROM symbol_index
+            WHERE module_name = 'pkg.mod'
+            ORDER BY stable_id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    stable_ids = [str(row[1]) for row in rows]
+
+    assert report.indexed == 2
+    assert report.failed == 0
+    assert len(stable_ids) == len(set(stable_ids))
+    assert ("pkg.mod", "python:module:pkg.mod", "module") in rows
+    assert (
+        "pkg.mod",
+        "python:module:pkg.mod:path:pkg/mod.py",
+        "module",
+    ) in rows
+    assert "python:function:pkg.mod:path:pkg/mod.py:from_file" in stable_ids
+    assert "python:function:pkg.mod:from_package" in stable_ids
+
+
 def test_persist_analysis_deduplicates_identical_call_and_ref_rows(
     tmp_path: Path,
 ) -> None:
@@ -2056,7 +2122,7 @@ def test_index_repo_reindexes_unchanged_files_when_analyzer_changes(
 
     monkeypatch.setattr(
         "codira.indexer.active_language_analyzers",
-        lambda: [_PythonAnalyzerV5()],
+        lambda: [_PythonAnalyzerV6()],
     )
     report = index_repo(tmp_path)
 
@@ -2076,7 +2142,7 @@ def test_index_repo_reindexes_unchanged_files_when_analyzer_changes(
         and decision.reason == "analyzer plugin or version changed"
         for decision in report.decisions
     )
-    assert owners == [("python", "5")]
+    assert owners == [("python", "6")]
 
 
 def test_index_cli_reports_summary_and_decisions(
@@ -3211,11 +3277,11 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(
         "codira.cli.active_language_analyzers",
-        lambda: [_PythonAnalyzerV5()],
+        lambda: [_PythonAnalyzerV6()],
     )
     monkeypatch.setattr(
         "codira.indexer.active_language_analyzers",
-        lambda: [_PythonAnalyzerV5()],
+        lambda: [_PythonAnalyzerV6()],
     )
 
     _ensure_index(tmp_path)
@@ -3223,7 +3289,7 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
     backend = SQLiteIndexBackend()
 
     assert "Index stale (analyzer plugin inventory changed)" in captured.err
-    assert backend.load_analyzer_inventory(tmp_path) == [("python", "5", '["*.py"]')]
+    assert backend.load_analyzer_inventory(tmp_path) == [("python", "6", '["*.py"]')]
 
 
 def test_ensure_index_rebuilds_when_backend_inventory_changes(
