@@ -3289,7 +3289,7 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
     backend = SQLiteIndexBackend()
 
     assert "Index stale (analyzer plugin inventory changed)" in captured.err
-    assert backend.load_analyzer_inventory(tmp_path) == [("python", "6", '["*.py"]')]
+    assert backend.load_analyzer_inventory(tmp_path) == [("python", "7", '["*.py"]')]
 
 
 def test_ensure_index_rebuilds_when_backend_inventory_changes(
