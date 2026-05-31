@@ -1,3 +1,10 @@
+## [1.26.1](https://github.com/marco0560/codira/compare/v1.26.0...v1.26.1) (2026-05-31)
+
+
+### Bug Fixes
+
+* **package:** handle benchmark indexing edge cases ([0c83ccc](https://github.com/marco0560/codira/commit/0c83ccce993cb05e4fd51ece85e748e01fb997ac))
+
 # [1.26.0](https://github.com/marco0560/codira/compare/v1.25.0...v1.26.0) (2026-05-28)
 
 
