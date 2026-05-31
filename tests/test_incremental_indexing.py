@@ -153,7 +153,7 @@ def _load_workspace_cli_module() -> types.ModuleType:
     return module
 
 
-class _PythonAnalyzerV6:
+class _PythonAnalyzerV7:
     """
     Python analyzer stub with a bumped version for staleness tests.
 
@@ -163,7 +163,7 @@ class _PythonAnalyzerV6:
     """
 
     name = "python"
-    version = "6"
+    version = "7"
     discovery_globs: tuple[str, ...] = ("*.py",)
 
     def supports_path(self, path: Path) -> bool:
@@ -2122,7 +2122,7 @@ def test_index_repo_reindexes_unchanged_files_when_analyzer_changes(
 
     monkeypatch.setattr(
         "codira.indexer.active_language_analyzers",
-        lambda: [_PythonAnalyzerV6()],
+        lambda: [_PythonAnalyzerV7()],
     )
     report = index_repo(tmp_path)
 
@@ -2142,7 +2142,7 @@ def test_index_repo_reindexes_unchanged_files_when_analyzer_changes(
         and decision.reason == "analyzer plugin or version changed"
         for decision in report.decisions
     )
-    assert owners == [("python", "6")]
+    assert owners == [("python", "7")]
 
 
 def test_index_cli_reports_summary_and_decisions(
@@ -3277,11 +3277,11 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(
         "codira.cli.active_language_analyzers",
-        lambda: [_PythonAnalyzerV6()],
+        lambda: [_PythonAnalyzerV7()],
     )
     monkeypatch.setattr(
         "codira.indexer.active_language_analyzers",
-        lambda: [_PythonAnalyzerV6()],
+        lambda: [_PythonAnalyzerV7()],
     )
 
     _ensure_index(tmp_path)

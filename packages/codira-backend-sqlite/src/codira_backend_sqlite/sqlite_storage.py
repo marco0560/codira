@@ -48,6 +48,41 @@ def get_db_path(root: Path) -> Path:
     return get_codira_dir(root) / "index.db"
 
 
+def _database_has_current_schema(db_path: Path) -> bool:
+    """
+    Return whether an existing SQLite database exposes current relation columns.
+
+    Parameters
+    ----------
+    db_path : pathlib.Path
+        Existing SQLite database path.
+
+    Returns
+    -------
+    bool
+        ``True`` when required schema-17 relation columns are present.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        table_columns = {
+            table_name: {
+                str(row[1])
+                for row in conn.execute(f"PRAGMA table_info('{table_name}')")
+            }
+            for table_name in (
+                "call_edges",
+                "callable_refs",
+                "call_records",
+                "callable_ref_records",
+            )
+        }
+    finally:
+        conn.close()
+
+    required_columns = {"external_target_kind", "external_target_name"}
+    return all(required_columns.issubset(columns) for columns in table_columns.values())
+
+
 def init_db(root: Path) -> None:
     """
     Create the SQLite backend schema for one repository root.
@@ -61,12 +96,19 @@ def init_db(root: Path) -> None:
     -------
     None
         The repository-local SQLite backend state is prepared in place. Existing
-        databases are expected to already match the current development schema.
+        databases with mismatched schema metadata are discarded and rebuilt.
     """
     repo_dir = get_codira_dir(root)
     repo_dir.mkdir(parents=True, exist_ok=True)
 
     db_path = get_db_path(root)
+    metadata_path = get_metadata_path(root)
+    metadata = _read_metadata_file(metadata_path)
+    if db_path.exists() and (
+        metadata.get("schema_version") != str(SCHEMA_VERSION)
+        or not _database_has_current_schema(db_path)
+    ):
+        db_path.unlink()
 
     conn = sqlite3.connect(db_path)
     try:
@@ -76,7 +118,5 @@ def init_db(root: Path) -> None:
     finally:
         conn.close()
 
-    metadata_path = get_metadata_path(root)
-    metadata = _read_metadata_file(metadata_path)
     metadata["schema_version"] = str(SCHEMA_VERSION)
     _write_metadata_file(metadata_path, metadata)
