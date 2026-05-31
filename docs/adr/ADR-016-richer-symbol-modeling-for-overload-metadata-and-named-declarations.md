@@ -282,10 +282,11 @@ Backward-compatibility rule:
 ## Phase Ledger
 
 * [x] Phase 0 — ADR and execution ledger
-* [ ] Phase 1 — Symbol ontology inventory and contract update
-* [ ] Phase 2 — Overload child metadata model
-* [ ] Phase 3 — Storage and schema migration
-* [ ] Phase 4 — `sym` JSON/detail rendering
-* [ ] Phase 5 — `ctx` typed metadata integration
-* [ ] Phase 6 — `audit` and docstring policy alignment
-* [ ] Phase 7 — Analyzer-specific named declaration expansion
+* [x] Phase 1 — Symbol ontology inventory and contract update
+* [x] Phase 2 — Overload child metadata model
+* [x] Phase 3 — Storage and schema migration
+* [x] Phase 4 — `sym` JSON/detail rendering
+* [x] Phase 5 — `ctx` typed metadata integration
+* [x] Phase 6 — `audit` and docstring policy alignment
+* [x] Phase 7 — Analyzer-specific named declaration expansion for the accepted
+  V1 categories

@@ -209,13 +209,15 @@ extension semantics are validated in practice.
 Mark each phase as work lands.
 
 * [x] Phase 0 — ADR and detailed implementation plan
-* [ ] Phase 1 — Inventory current evidence and scoring entry points
-* [ ] Phase 2 — Minimal capability model
-* [ ] Phase 3 — Typed signal model and normalization rules
-* [ ] Phase 4 — Adapters from current evidence to signals
-* [ ] Phase 5 — Capability-gated signal collection
+* [x] Phase 1 — Inventory current evidence and scoring entry points
+* [x] Phase 2 — Minimal capability model
+* [x] Phase 3 — Typed signal model and normalization rules
+* [x] Phase 4 — Adapters from current evidence to signals
+* [x] Phase 5 — Capability-gated signal collection
 * [ ] Phase 6 — Core signal aggregation for current ranking behavior
-* [ ] Phase 7 — Call and proximity integration through signals
-* [ ] Phase 8 — Explain and JSON alignment
+* [x] Phase 7 — Call and proximity integration through signals
+* [x] Phase 8 — Explain and JSON alignment
 * [ ] Phase 9 — Analyzer and channel contract follow-up
 * [ ] Phase 10 — Validation matrix and migration hardening
+
+Remaining migration work is tracked by issue `#32`.

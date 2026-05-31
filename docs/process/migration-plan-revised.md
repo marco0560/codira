@@ -217,7 +217,7 @@ Phase 0 implementation note:
   maintainers can intentionally target exported split repositories.
 - [x] `tests/test_bootstrap_scripts.py` verifies the split-package-root install
   command plan.
-- [ ] Decide whether `py.typed` files should be ignored by coverage or covered
+- [x] Decide whether `py.typed` files should be ignored by coverage or covered
   by a metadata analyzer before requiring full coverage.
 
 ## Phase 1 - Freeze And Audit The Starting State
@@ -351,8 +351,9 @@ Tasks:
 - [x] Do not transfer the old `repoindex` repository.
 - [x] Do not create a new repository at the old `repoindex` location after any
   rename or transfer operation.
-- [ ] Configure the new repository with the expected default branch, branch
-  protection, Actions settings, and trusted publishing settings if used.
+- [x] Configure the new repository with the expected default branch.
+- [ ] Configure branch protection, Actions settings, and trusted publishing
+  settings if used. Tracked by issue `#34`.
 
 Exit criteria:
 

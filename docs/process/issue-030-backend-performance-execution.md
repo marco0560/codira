@@ -38,10 +38,10 @@ feat-issue-30-backend-contract-duckdb
 - [x] Rework DuckDB writer and cheap-read path
 - [x] Update backend docs and benchmark workflow docs
 - [x] Add or update subsystem tests
-- [ ] Run benchmarks and record artifacts
+- [x] Run benchmarks and record artifacts
 - [x] Run full validation
 - [x] Run `uv run codira audit` and fix all flagged docstrings
-- [ ] Merge with issue-closing commit block
+- [x] Merge with issue-closing commit block
 
 ## Status Notes
 

@@ -1,7 +1,7 @@
 # ADR-010 — Call-graph retrieval producer and bounded user surfaces
 
 **Date:** 03/04/2026
-**Status:** Under review
+**Status:** Accepted
 
 ## Context
 

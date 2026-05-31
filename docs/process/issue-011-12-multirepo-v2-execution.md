@@ -253,6 +253,6 @@ These items block the final `v2.0.0` publish until cleared:
 
 - [x] `#11` complete
 - [x] `#12` complete
-- [ ] multirepo split complete
+- [ ] multirepo split complete. Tracked by issue `#33`.
 - [x] `#13` complete
-- [ ] publish rehearsals complete
+- [ ] publish rehearsals complete. Tracked by issue `#33`.
