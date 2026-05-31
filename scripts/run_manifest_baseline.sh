@@ -2,6 +2,15 @@
 set -u
 set -o pipefail
 
+if [ "$#" -gt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ] || { [ "$#" -eq 1 ] && [ ! -f "$1" ]; }; then
+    echo "Uso: $0 [manifest.json]"
+    echo "  -h, --help    Mostra questo messaggio di aiuto"
+    echo "  Nota: Se specificato, il file manifest.json deve esistere."
+    echo "        Il suo valore per default è benchmarks/bk-cpp.local.json."
+    echo "Esempio: $0 benchmarks/bk-llvm.local.json"
+    exit 1
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -26,7 +35,7 @@ if [[ ! -x "$CODIRA" ]]; then
   exit 2
 fi
 
-MANIFEST="${MANIFEST:-benchmarks/bk-cpp.local.json}"
+MANIFEST="${MANIFEST:-${1:-benchmarks/bk-cpp.local.json}}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-.artifacts}"
 STAMP="${STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 RUNS="${RUNS:-5}"
