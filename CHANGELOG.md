@@ -1,3 +1,10 @@
+# [1.40.0](https://github.com/marco0560/codira/compare/v1.28.0...v1.40.0) (2026-05-31)
+
+
+### Release
+
+* **package:** align core, plugin, backend, and bundle release metadata at 1.40.0
+
 # [1.28.0](https://github.com/marco0560/codira/compare/v1.27.0...v1.28.0) (2026-05-31)
 
 
