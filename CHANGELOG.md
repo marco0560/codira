@@ -1,3 +1,10 @@
+# [1.27.0](https://github.com/marco0560/codira/compare/v1.26.1...v1.27.0) (2026-05-31)
+
+
+### Features
+
+* **dev:** rename baseline script and add manifest argument ([5ef6c5d](https://github.com/marco0560/codira/commit/5ef6c5d347b31c602b1b305de9f0c3ae18e0f4f5))
+
 ## [1.26.1](https://github.com/marco0560/codira/compare/v1.26.0...v1.26.1) (2026-05-31)
 
 
