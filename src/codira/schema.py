@@ -17,7 +17,7 @@ This module belongs to the **storage infrastructure layer** and anchors table de
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 DDL = [
     """
@@ -159,6 +159,8 @@ DDL = [
         callee_module TEXT,
         callee_name TEXT,
         unresolved_identity TEXT NOT NULL DEFAULT '',
+        external_target_kind TEXT,
+        external_target_name TEXT,
         resolved INTEGER NOT NULL,
         PRIMARY KEY (
             caller_file_id,
@@ -210,6 +212,8 @@ DDL = [
         target_module TEXT,
         target_name TEXT,
         unresolved_identity TEXT NOT NULL DEFAULT '',
+        external_target_kind TEXT,
+        external_target_name TEXT,
         resolved INTEGER NOT NULL,
         PRIMARY KEY (
             owner_file_id,
@@ -277,6 +281,8 @@ DDL = [
         kind TEXT NOT NULL,
         base TEXT NOT NULL,
         target TEXT NOT NULL,
+        external_target_kind TEXT,
+        external_target_name TEXT,
         lineno INTEGER NOT NULL,
         col_offset INTEGER NOT NULL,
         PRIMARY KEY (
@@ -309,6 +315,8 @@ DDL = [
         ref_kind TEXT NOT NULL,
         base TEXT NOT NULL,
         target TEXT NOT NULL,
+        external_target_kind TEXT,
+        external_target_name TEXT,
         lineno INTEGER NOT NULL,
         col_offset INTEGER NOT NULL,
         PRIMARY KEY (

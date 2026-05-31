@@ -34,6 +34,45 @@ from codira.models import AnalysisResult, CallSite, FunctionArtifact, ModuleArti
 
 _BASH_SUFFIXES = {".sh", ".bash"}
 _LANGUAGE = Language(language())
+_SHELL_BUILTINS = frozenset(
+    {
+        ".",
+        ":",
+        "alias",
+        "bg",
+        "break",
+        "cd",
+        "command",
+        "continue",
+        "declare",
+        "echo",
+        "eval",
+        "exec",
+        "exit",
+        "export",
+        "fg",
+        "getopts",
+        "hash",
+        "jobs",
+        "local",
+        "printf",
+        "pwd",
+        "read",
+        "readonly",
+        "return",
+        "set",
+        "shift",
+        "source",
+        "test",
+        "trap",
+        "type",
+        "ulimit",
+        "umask",
+        "unalias",
+        "unset",
+        "wait",
+    }
+)
 __all__ = ["BashAnalyzer", "build_analyzer"]
 
 
@@ -188,12 +227,17 @@ def _extract_calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
         if not target:
             continue
 
+        external_target_kind = (
+            "Bash:<builtin>" if target in _SHELL_BUILTINS else "Bash:<external>"
+        )
         calls.append(
             CallSite(
                 kind="name",
                 target=target,
                 lineno=name_node.start_point.row + 1,
                 col_offset=name_node.start_point.column,
+                external_target_kind=external_target_kind,
+                external_target_name=target,
             )
         )
 
@@ -284,7 +328,7 @@ class BashAnalyzer:
     """
 
     name = "bash"
-    version = "1"
+    version = "2"
     discovery_globs: tuple[str, ...] = ("*.sh", "*.bash")
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:

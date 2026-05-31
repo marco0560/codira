@@ -311,7 +311,7 @@ class RelationCommandSpec:
         JSON key for the target name field.
     row_fetcher : collections.abc.Callable[
         [codira.query.exact.EdgeQueryRequest],
-        list[tuple[str, str, str | None, str | None, int]],
+        list[tuple[str, str, str | None, str | None, str | None, str | None, int]],
     ]
         Exact lookup helper for flat relation rows.
     tree_builder : collections.abc.Callable[
@@ -335,7 +335,7 @@ class RelationCommandSpec:
     target_name_key: str
     row_fetcher: Callable[
         [EdgeQueryRequest],
-        list[tuple[str, str, str | None, str | None, int]],
+        list[tuple[str, str, str | None, str | None, str | None, str | None, int]],
     ]
     tree_builder: Callable[[TreeQueryRequest], CallTreeResult | None]
 
@@ -2263,7 +2263,7 @@ def _relation_query_metadata(
 
 
 def _relation_rows_payload(
-    rows: list[tuple[str, str, str | None, str | None, int]],
+    rows: list[tuple[str, str, str | None, str | None, str | None, str | None, int]],
     spec: RelationCommandSpec,
 ) -> list[dict[str, object]]:
     """
@@ -2271,7 +2271,7 @@ def _relation_rows_payload(
 
     Parameters
     ----------
-    rows : list[tuple[str, str, str | None, str | None, int]]
+    rows : list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
         Flat relation rows returned by the exact query layer.
     spec : RelationCommandSpec
         Command-specific rendering and naming hooks.
@@ -2287,14 +2287,32 @@ def _relation_rows_payload(
             spec.source_name_key: source_name,
             spec.target_module_key: target_module,
             spec.target_name_key: target_name,
+            **(
+                {"external_target_kind": external_target_kind}
+                if external_target_kind is not None
+                else {}
+            ),
+            **(
+                {"external_target_name": external_target_name}
+                if external_target_name is not None
+                else {}
+            ),
             "resolved": bool(resolved),
         }
-        for source_module, source_name, target_module, target_name, resolved in rows
+        for (
+            source_module,
+            source_name,
+            target_module,
+            target_name,
+            external_target_kind,
+            external_target_name,
+            resolved,
+        ) in rows
     ]
 
 
 def _print_relation_rows(
-    rows: list[tuple[str, str, str | None, str | None, int]],
+    rows: list[tuple[str, str, str | None, str | None, str | None, str | None, int]],
     spec: RelationCommandSpec,
 ) -> None:
     """
@@ -2302,7 +2320,7 @@ def _print_relation_rows(
 
     Parameters
     ----------
-    rows : list[tuple[str, str, str | None, str | None, int]]
+    rows : list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
         Flat relation rows returned by the exact query layer.
     spec : RelationCommandSpec
         Command-specific rendering and naming hooks.
@@ -2312,12 +2330,24 @@ def _print_relation_rows(
     None
         Relation rows are printed to standard output.
     """
-    for source_module, source_name, target_module, target_name, resolved in rows:
+    for (
+        source_module,
+        source_name,
+        target_module,
+        target_name,
+        external_target_kind,
+        external_target_name,
+        resolved,
+    ) in rows:
         source = f"{source_module}.{source_name}"
         if resolved:
             assert target_module is not None
             assert target_name is not None
             target = f"{target_module}.{target_name}"
+        elif external_target_kind is not None and external_target_name is not None:
+            target = f"{external_target_kind}:{external_target_name}"
+        elif external_target_name is not None:
+            target = external_target_name
         else:
             target = "<unresolved>"
         print(f"{source} {spec.plain_arrow} {target}")
@@ -2674,7 +2704,7 @@ def _call_tree_node_payload(node: CallTreeNode) -> dict[str, object]:
     dict[str, object]
         JSON-serializable tree node payload.
     """
-    return {
+    payload: dict[str, object] = {
         "module": node.module,
         "name": node.name,
         "display": _call_tree_display(
@@ -2686,6 +2716,11 @@ def _call_tree_node_payload(node: CallTreeNode) -> dict[str, object]:
         "cycle": node.cycle,
         "children": [_call_tree_node_payload(child) for child in node.children],
     }
+    if node.external_target_kind is not None:
+        payload["external_target_kind"] = node.external_target_kind
+    if node.external_target_name is not None:
+        payload["external_target_name"] = node.external_target_name
+    return payload
 
 
 def _call_tree_result_payload(tree: CallTreeResult) -> dict[str, object]:

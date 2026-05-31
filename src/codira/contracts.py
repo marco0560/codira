@@ -1642,7 +1642,7 @@ class IndexBackend(Protocol):
     def find_call_edges(
         self,
         request: BackendRelationQueryRequest,
-    ) -> list[tuple[str, str, str | None, str | None, int]]:
+    ) -> list[tuple[str, str, str | None, str | None, str | None, str | None, int]]:
         """
         Find exact call edges for a caller or callee logical name.
 
@@ -1653,7 +1653,7 @@ class IndexBackend(Protocol):
 
         Returns
         -------
-        list[tuple[str, str, str | None, str | None, int]]
+        list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
             Matching call-edge rows ordered deterministically.
         """
         ...
@@ -1661,7 +1661,7 @@ class IndexBackend(Protocol):
     def find_callable_refs(
         self,
         request: BackendRelationQueryRequest,
-    ) -> list[tuple[str, str, str | None, str | None, int]]:
+    ) -> list[tuple[str, str, str | None, str | None, str | None, str | None, int]]:
         """
         Find exact callable-object references for an owner or target.
 
@@ -1672,7 +1672,7 @@ class IndexBackend(Protocol):
 
         Returns
         -------
-        list[tuple[str, str, str | None, str | None, int]]
+        list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
             Matching callable-reference rows ordered deterministically.
         """
         ...

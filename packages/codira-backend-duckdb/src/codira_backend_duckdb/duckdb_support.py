@@ -53,8 +53,8 @@ if TYPE_CHECKING:
     from codira.types import ReferenceSearchRow
 
 CallRecord = dict[str, str | int]
-CallRow = tuple[int, str, str, str, str, str, int, int]
-RefRow = tuple[int, str, str, str, str, str, str, int, int]
+CallRow = tuple[int, str, str, str, str, str, str | None, str | None, int, int]
+RefRow = tuple[int, str, str, str, str, str, str, str | None, str | None, int, int]
 FileRow = tuple[int, str, str, float, int, str, str]
 ModuleRow = tuple[int, int, str, str | None, int]
 ClassRow = tuple[int, int, str, int, int | None, str | None, int]
@@ -99,6 +99,8 @@ _CALL_EDGES_REBUILD_TABLE_DDL = """
         callee_module TEXT,
         callee_name TEXT,
         unresolved_identity TEXT NOT NULL DEFAULT '',
+        external_target_kind TEXT,
+        external_target_name TEXT,
         resolved INTEGER NOT NULL
     );
 """
@@ -110,6 +112,8 @@ _CALLABLE_REFS_REBUILD_TABLE_DDL = """
         target_module TEXT,
         target_name TEXT,
         unresolved_identity TEXT NOT NULL DEFAULT '',
+        external_target_kind TEXT,
+        external_target_name TEXT,
         resolved INTEGER NOT NULL
     );
 """
@@ -1255,6 +1259,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             callee_module TEXT,
             callee_name TEXT,
             unresolved_identity TEXT NOT NULL,
+            external_target_kind TEXT,
+            external_target_name TEXT,
             resolved INTEGER NOT NULL
         )
         """)
@@ -1266,12 +1272,38 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             target_module TEXT,
             target_name TEXT,
             unresolved_identity TEXT NOT NULL,
+            external_target_kind TEXT,
+            external_target_name TEXT,
             resolved INTEGER NOT NULL
         )
         """)
 
-    edges: set[tuple[int, str, str, str | None, str | None, str, int]] = set()
-    refs: set[tuple[int, str, str, str | None, str | None, str, int]] = set()
+    edges: set[
+        tuple[
+            int,
+            str,
+            str,
+            str | None,
+            str | None,
+            str,
+            str | None,
+            str | None,
+            int,
+        ]
+    ] = set()
+    refs: set[
+        tuple[
+            int,
+            str,
+            str,
+            str | None,
+            str | None,
+            str,
+            str | None,
+            str | None,
+            int,
+        ]
+    ] = set()
 
     call_rows = conn.execute("""
         SELECT
@@ -1281,6 +1313,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             kind,
             base,
             target,
+            external_target_kind,
+            external_target_name,
             lineno,
             col_offset
         FROM call_records
@@ -1301,6 +1335,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
         kind,
         base,
         target,
+        external_target_kind,
+        external_target_name,
         _lineno,
         _col_offset,
     ) in call_rows:
@@ -1324,6 +1360,16 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                 class_methods=class_methods,
             )
         )
+        edge_external_target_kind = (
+            None
+            if resolved or external_target_kind is None
+            else str(external_target_kind)
+        )
+        edge_external_target_name = (
+            None
+            if resolved or external_target_name is None
+            else str(external_target_name)
+        )
         edges.add(
             (
                 _duckdb_int(file_id),
@@ -1332,12 +1378,24 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                 callee_module,
                 callee_name,
                 _unresolved_identity(record, resolved=resolved),
+                edge_external_target_kind,
+                edge_external_target_name,
                 resolved,
             )
         )
 
     ref_rows = conn.execute("""
-        SELECT file_id, owner_module, owner_name, kind, base, target, lineno, col_offset
+        SELECT
+            file_id,
+            owner_module,
+            owner_name,
+            kind,
+            base,
+            target,
+            external_target_kind,
+            external_target_name,
+            lineno,
+            col_offset
         FROM callable_ref_records
         ORDER BY
             file_id,
@@ -1356,6 +1414,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
         kind,
         base,
         target,
+        external_target_kind,
+        external_target_name,
         _lineno,
         _col_offset,
     ) in ref_rows:
@@ -1379,6 +1439,16 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                 class_methods=class_methods,
             )
         )
+        ref_external_target_kind = (
+            None
+            if resolved or external_target_kind is None
+            else str(external_target_kind)
+        )
+        ref_external_target_name = (
+            None
+            if resolved or external_target_name is None
+            else str(external_target_name)
+        )
         refs.add(
             (
                 _duckdb_int(file_id),
@@ -1387,6 +1457,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                 target_module,
                 target_name,
                 _unresolved_identity(record, resolved=resolved),
+                ref_external_target_kind,
+                ref_external_target_name,
                 resolved,
             )
         )
@@ -1400,7 +1472,9 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             item[3] or "",
             item[4] or "",
             item[5],
-            item[6],
+            item[6] or "",
+            item[7] or "",
+            item[8],
         ),
     )
     if sorted_edges:
@@ -1432,7 +1506,15 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                     [row[5] for row in sorted_edges],
                     type=pa.string(),
                 ),
-                "resolved": pa.array([row[6] for row in sorted_edges], type=pa.int64()),
+                "external_target_kind": pa.array(
+                    [row[6] for row in sorted_edges],
+                    type=pa.string(),
+                ),
+                "external_target_name": pa.array(
+                    [row[7] for row in sorted_edges],
+                    type=pa.string(),
+                ),
+                "resolved": pa.array([row[8] for row in sorted_edges], type=pa.int64()),
             }
         )
         _flush_registered_arrow_table(
@@ -1447,6 +1529,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                     callee_module,
                     callee_name,
                     unresolved_identity,
+                    external_target_kind,
+                    external_target_name,
                     resolved
                 )
                 SELECT
@@ -1456,6 +1540,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                     callee_module,
                     callee_name,
                     unresolved_identity,
+                    external_target_kind,
+                    external_target_name,
                     resolved
                 FROM __codira_temp_call_edge_rows
                 """,
@@ -1470,7 +1556,9 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             item[3] or "",
             item[4] or "",
             item[5],
-            item[6],
+            item[6] or "",
+            item[7] or "",
+            item[8],
         ),
     )
     if sorted_refs:
@@ -1502,7 +1590,15 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                     [row[5] for row in sorted_refs],
                     type=pa.string(),
                 ),
-                "resolved": pa.array([row[6] for row in sorted_refs], type=pa.int64()),
+                "external_target_kind": pa.array(
+                    [row[6] for row in sorted_refs],
+                    type=pa.string(),
+                ),
+                "external_target_name": pa.array(
+                    [row[7] for row in sorted_refs],
+                    type=pa.string(),
+                ),
+                "resolved": pa.array([row[8] for row in sorted_refs], type=pa.int64()),
             }
         )
         _flush_registered_arrow_table(
@@ -1517,6 +1613,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                     target_module,
                     target_name,
                     unresolved_identity,
+                    external_target_kind,
+                    external_target_name,
                     resolved
                 )
                 SELECT
@@ -1526,6 +1624,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
                     target_module,
                     target_name,
                     unresolved_identity,
+                    external_target_kind,
+                    external_target_name,
                     resolved
                 FROM __codira_temp_callable_ref_rows
                 """,
@@ -1545,6 +1645,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             callee_module,
             callee_name,
             unresolved_identity,
+            external_target_kind,
+            external_target_name,
             resolved
         )
         SELECT
@@ -1554,6 +1656,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             callee_module,
             callee_name,
             unresolved_identity,
+            external_target_kind,
+            external_target_name,
             resolved
         FROM temp_call_edges_rebuild
         """)
@@ -1565,6 +1669,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             target_module,
             target_name,
             unresolved_identity,
+            external_target_kind,
+            external_target_name,
             resolved
         )
         SELECT
@@ -1574,6 +1680,8 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
             target_module,
             target_name,
             unresolved_identity,
+            external_target_kind,
+            external_target_name,
             resolved
         FROM temp_callable_refs_rebuild
         """)
@@ -1588,7 +1696,7 @@ def _record_tuple(
     owner_module: str,
     owner_name: str,
     record: CallSite,
-) -> tuple[int, str, str, str, str, str, int, int]:
+) -> CallRow:
     """
     Normalize one raw call-style record for DuckDB persistence.
 
@@ -1605,7 +1713,7 @@ def _record_tuple(
 
     Returns
     -------
-    tuple[int, str, str, str, str, str, int, int]
+    CallRow
         Normalized DuckDB row values.
     """
     return (
@@ -1615,6 +1723,8 @@ def _record_tuple(
         record.kind,
         record.base,
         record.target,
+        record.external_target_kind,
+        record.external_target_name,
         record.lineno,
         record.col_offset,
     )
@@ -1625,7 +1735,7 @@ def _reference_tuple(
     owner_module: str,
     owner_name: str,
     record: CallableReference,
-) -> tuple[int, str, str, str, str, str, str, int, int]:
+) -> RefRow:
     """
     Normalize one callable-reference record for DuckDB persistence.
 
@@ -1642,7 +1752,7 @@ def _reference_tuple(
 
     Returns
     -------
-    tuple[int, str, str, str, str, str, str, int, int]
+    RefRow
         Normalized DuckDB row values.
     """
     return (
@@ -1653,6 +1763,8 @@ def _reference_tuple(
         record.ref_kind,
         record.base,
         record.target,
+        record.external_target_kind,
+        record.external_target_name,
         record.lineno,
         record.col_offset,
     )
@@ -2364,12 +2476,10 @@ def _persist_import_artifacts(
 def _flush_persisted_relationship_rows(
     conn: _DuckDBPersistenceConnection,
     *,
-    call_rows: list[tuple[int, str, str, str, str, str, int, int]],
-    ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]],
-    pending_call_rows: list[tuple[int, str, str, str, str, str, int, int]]
-    | None = None,
-    pending_ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]]
-    | None = None,
+    call_rows: list[CallRow],
+    ref_rows: list[RefRow],
+    pending_call_rows: list[CallRow] | None = None,
+    pending_ref_rows: list[RefRow] | None = None,
 ) -> None:
     """
     Flush pending call and callable-reference rows to DuckDB.
@@ -2378,14 +2488,14 @@ def _flush_persisted_relationship_rows(
     ----------
     conn : _DuckDBPersistenceConnection
         Open database connection.
-    call_rows : list[tuple[int, str, str, str, str, str, int, int]]
+    call_rows : list[CallRow]
         Pending normalized call rows.
-    ref_rows : list[tuple[int, str, str, str, str, str, str, int, int]]
+    ref_rows : list[RefRow]
         Pending normalized callable-reference rows.
-    pending_call_rows : list[tuple[int, str, str, str, str, str, int, int]] | None, optional
+    pending_call_rows : list[CallRow] | None, optional
         Session-level call-record buffer. When supplied, rows are appended for
         one later backend batch.
-    pending_ref_rows : list[tuple[int, str, str, str, str, str, str, int, int]] | None, optional
+    pending_ref_rows : list[RefRow] | None, optional
         Session-level callable-reference buffer. When supplied, rows are
         appended for one later backend batch.
 
@@ -2412,8 +2522,8 @@ def _flush_persisted_relationship_rows(
 def _flush_pending_relationship_rows(
     conn: _DuckDBPersistenceConnection,
     *,
-    pending_call_rows: list[tuple[int, str, str, str, str, str, int, int]],
-    pending_ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]],
+    pending_call_rows: list[CallRow],
+    pending_ref_rows: list[RefRow],
 ) -> None:
     """
     Flush session-level relationship rows to DuckDB.
@@ -2422,9 +2532,9 @@ def _flush_pending_relationship_rows(
     ----------
     conn : _DuckDBPersistenceConnection
         Open database connection.
-    pending_call_rows : list[tuple[int, str, str, str, str, str, int, int]]
+    pending_call_rows : list[CallRow]
         Session-level normalized call rows.
-    pending_ref_rows : list[tuple[int, str, str, str, str, str, str, int, int]]
+    pending_ref_rows : list[RefRow]
         Session-level normalized callable-reference rows.
 
     Returns
@@ -3062,7 +3172,7 @@ def _flush_import_rows(
 
 def _flush_call_record_rows(
     conn: _DuckDBPersistenceConnection,
-    rows: list[tuple[int, str, str, str, str, str, int, int]],
+    rows: list[CallRow],
 ) -> None:
     """
     Flush raw call records to DuckDB.
@@ -3071,7 +3181,7 @@ def _flush_call_record_rows(
     ----------
     conn : _DuckDBPersistenceConnection
         Open database connection.
-    rows : list[tuple[int, str, str, str, str, str, int, int]]
+    rows : list[CallRow]
         Normalized call rows.
 
     Returns
@@ -3093,6 +3203,8 @@ def _flush_call_record_rows(
                 kind,
                 base,
                 target,
+                external_target_kind,
+                external_target_name,
                 lineno,
                 col_offset
             )
@@ -3108,6 +3220,8 @@ def _flush_call_record_rows(
                     'kind': 'VARCHAR',
                     'base': 'VARCHAR',
                     'target': 'VARCHAR',
+                    'external_target_kind': 'VARCHAR',
+                    'external_target_name': 'VARCHAR',
                     'lineno': 'INTEGER',
                     'col_offset': 'INTEGER'
                 }
@@ -3124,7 +3238,7 @@ def _flush_call_record_rows(
 
 def _flush_callable_ref_record_rows(
     conn: _DuckDBPersistenceConnection,
-    rows: list[tuple[int, str, str, str, str, str, str, int, int]],
+    rows: list[RefRow],
 ) -> None:
     """
     Flush raw callable-reference records to DuckDB.
@@ -3133,7 +3247,7 @@ def _flush_callable_ref_record_rows(
     ----------
     conn : _DuckDBPersistenceConnection
         Open database connection.
-    rows : list[tuple[int, str, str, str, str, str, str, int, int]]
+    rows : list[RefRow]
         Normalized callable-reference rows.
 
     Returns
@@ -3156,6 +3270,8 @@ def _flush_callable_ref_record_rows(
                 ref_kind,
                 base,
                 target,
+                external_target_kind,
+                external_target_name,
                 lineno,
                 col_offset
             )
@@ -3172,6 +3288,8 @@ def _flush_callable_ref_record_rows(
                     'ref_kind': 'VARCHAR',
                     'base': 'VARCHAR',
                     'target': 'VARCHAR',
+                    'external_target_kind': 'VARCHAR',
+                    'external_target_name': 'VARCHAR',
                     'lineno': 'INTEGER',
                     'col_offset': 'INTEGER'
                 }
@@ -3525,10 +3643,8 @@ def _store_analysis(
     pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]]
     | None = None,
     pending_reference_scan_rows: list[tuple[int, int, str]] | None = None,
-    pending_call_rows: list[tuple[int, str, str, str, str, str, int, int]]
-    | None = None,
-    pending_ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]]
-    | None = None,
+    pending_call_rows: list[CallRow] | None = None,
+    pending_ref_rows: list[RefRow] | None = None,
     pending_import_rows: list[ImportRow] | None = None,
     pending_docstring_issue_rows: list[DocstringIssueRow] | None = None,
     structural_rows: DuckDBStructuralRowBuffers | None = None,
@@ -3553,9 +3669,9 @@ def _store_analysis(
         Session-level buffer used to batch embedding generation across files.
     pending_reference_scan_rows : list[tuple[int, int, str]] | None, optional
         Session-level buffer used to batch reference-search rows across files.
-    pending_call_rows : list[tuple[int, str, str, str, str, str, int, int]] | None, optional
+    pending_call_rows : list[CallRow] | None, optional
         Session-level buffer used to batch call records across files.
-    pending_ref_rows : list[tuple[int, str, str, str, str, str, str, int, int]] | None, optional
+    pending_ref_rows : list[RefRow] | None, optional
         Session-level buffer used to batch callable-reference records across
         files.
     pending_import_rows : list[ImportRow] | None, optional
@@ -3575,8 +3691,8 @@ def _store_analysis(
         ``(recomputed, reused)`` embedding counts for the file.
     """
     embedding_rows: list[PendingEmbeddingRow] = []
-    call_rows: list[tuple[int, str, str, str, str, str, int, int]] = []
-    ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]] = []
+    call_rows: list[CallRow] = []
+    ref_rows: list[RefRow] = []
     owns_structural_rows = structural_rows is None
     if structural_rows is None:
         structural_rows = DuckDBStructuralRowBuffers()

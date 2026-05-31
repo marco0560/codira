@@ -48,8 +48,8 @@ if TYPE_CHECKING:
     from codira.types import ReferenceSearchRow
 
 CallRecord = dict[str, str | int]
-CallRow = tuple[int, str, str, str, str, str, int, int]
-RefRow = tuple[int, str, str, str, str, str, str, int, int]
+CallRow = tuple[int, str, str, str, str, str, str | None, str | None, int, int]
+RefRow = tuple[int, str, str, str, str, str, str, str | None, str | None, int, int]
 
 
 @dataclass(frozen=True)
@@ -863,8 +863,32 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM call_edges")
     conn.execute("DELETE FROM callable_refs")
 
-    edges: set[tuple[int, str, str, str | None, str | None, str, int]] = set()
-    refs: set[tuple[int, str, str, str | None, str | None, str, int]] = set()
+    edges: set[
+        tuple[
+            int,
+            str,
+            str,
+            str | None,
+            str | None,
+            str,
+            str | None,
+            str | None,
+            int,
+        ]
+    ] = set()
+    refs: set[
+        tuple[
+            int,
+            str,
+            str,
+            str | None,
+            str | None,
+            str,
+            str | None,
+            str | None,
+            int,
+        ]
+    ] = set()
 
     call_rows = conn.execute("""
         SELECT
@@ -874,6 +898,8 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
             kind,
             base,
             target,
+            external_target_kind,
+            external_target_name,
             lineno,
             col_offset
         FROM call_records
@@ -894,6 +920,8 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
         kind,
         base,
         target,
+        external_target_kind,
+        external_target_name,
         _lineno,
         _col_offset,
     ) in call_rows:
@@ -925,12 +953,24 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
                 callee_module,
                 callee_name,
                 _unresolved_identity(record, resolved=resolved),
+                None if resolved else external_target_kind,
+                None if resolved else external_target_name,
                 resolved,
             )
         )
 
     ref_rows = conn.execute("""
-        SELECT file_id, owner_module, owner_name, kind, base, target, lineno, col_offset
+        SELECT
+            file_id,
+            owner_module,
+            owner_name,
+            kind,
+            base,
+            target,
+            external_target_kind,
+            external_target_name,
+            lineno,
+            col_offset
         FROM callable_ref_records
         ORDER BY
             file_id,
@@ -949,6 +989,8 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
         kind,
         base,
         target,
+        external_target_kind,
+        external_target_name,
         _lineno,
         _col_offset,
     ) in ref_rows:
@@ -980,6 +1022,8 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
                 target_module,
                 target_name,
                 _unresolved_identity(record, resolved=resolved),
+                None if resolved else external_target_kind,
+                None if resolved else external_target_name,
                 resolved,
             )
         )
@@ -993,13 +1037,16 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
             item[3] or "",
             item[4] or "",
             item[5],
-            item[6],
+            item[6] or "",
+            item[7] or "",
+            item[8],
         ),
     ):
         conn.execute(
             "INSERT OR IGNORE INTO call_edges"
             "(caller_file_id, caller_module, caller_name, callee_module, "
-            "callee_name, unresolved_identity, resolved) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "callee_name, unresolved_identity, external_target_kind, "
+            "external_target_name, resolved) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             edge,
         )
 
@@ -1012,13 +1059,16 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
             item[3] or "",
             item[4] or "",
             item[5],
-            item[6],
+            item[6] or "",
+            item[7] or "",
+            item[8],
         ),
     ):
         conn.execute(
             "INSERT OR IGNORE INTO callable_refs"
             "(owner_file_id, owner_module, owner_name, target_module, "
-            "target_name, unresolved_identity, resolved) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "target_name, unresolved_identity, external_target_kind, "
+            "external_target_name, resolved) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ref_row,
         )
 
@@ -1028,7 +1078,7 @@ def _record_tuple(
     owner_module: str,
     owner_name: str,
     record: CallSite,
-) -> tuple[int, str, str, str, str, str, int, int]:
+) -> CallRow:
     """
     Normalize one raw call-style record for SQLite persistence.
 
@@ -1045,7 +1095,7 @@ def _record_tuple(
 
     Returns
     -------
-    tuple[int, str, str, str, str, str, int, int]
+    CallRow
         Normalized SQLite row values.
     """
     return (
@@ -1055,6 +1105,8 @@ def _record_tuple(
         record.kind,
         record.base,
         record.target,
+        record.external_target_kind,
+        record.external_target_name,
         record.lineno,
         record.col_offset,
     )
@@ -1065,7 +1117,7 @@ def _reference_tuple(
     owner_module: str,
     owner_name: str,
     record: CallableReference,
-) -> tuple[int, str, str, str, str, str, str, int, int]:
+) -> RefRow:
     """
     Normalize one callable-reference record for SQLite persistence.
 
@@ -1082,7 +1134,7 @@ def _reference_tuple(
 
     Returns
     -------
-    tuple[int, str, str, str, str, str, str, int, int]
+    RefRow
         Normalized SQLite row values.
     """
     return (
@@ -1093,6 +1145,8 @@ def _reference_tuple(
         record.ref_kind,
         record.base,
         record.target,
+        record.external_target_kind,
+        record.external_target_name,
         record.lineno,
         record.col_offset,
     )
@@ -1783,8 +1837,8 @@ def _persist_import_artifacts(
 def _flush_persisted_relationship_rows(
     conn: sqlite3.Connection,
     *,
-    call_rows: list[tuple[int, str, str, str, str, str, int, int]],
-    ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]],
+    call_rows: list[CallRow],
+    ref_rows: list[RefRow],
 ) -> None:
     """
     Flush pending call and callable-reference rows to SQLite.
@@ -1793,9 +1847,9 @@ def _flush_persisted_relationship_rows(
     ----------
     conn : sqlite3.Connection
         Open database connection.
-    call_rows : list[tuple[int, str, str, str, str, str, int, int]]
+    call_rows : list[CallRow]
         Pending normalized call rows.
-    ref_rows : list[tuple[int, str, str, str, str, str, str, int, int]]
+    ref_rows : list[RefRow]
         Pending normalized callable-reference rows.
 
     Returns
@@ -1807,8 +1861,8 @@ def _flush_persisted_relationship_rows(
         conn.execute(
             "INSERT INTO call_records"
             "(file_id, owner_module, owner_name, kind, base, target, "
-            "lineno, col_offset) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "external_target_kind, external_target_name, lineno, col_offset) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             row,
         )
 
@@ -1816,8 +1870,8 @@ def _flush_persisted_relationship_rows(
         conn.execute(
             "INSERT INTO callable_ref_records"
             "(file_id, owner_module, owner_name, kind, ref_kind, base, "
-            "target, lineno, col_offset) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "target, external_target_kind, external_target_name, lineno, col_offset) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ref_row,
         )
 
@@ -2081,8 +2135,8 @@ def _store_analysis(
         ``(recomputed, reused)`` embedding counts for the file.
     """
     embedding_rows: list[PendingEmbeddingRow] = []
-    call_rows: list[tuple[int, str, str, str, str, str, int, int]] = []
-    ref_rows: list[tuple[int, str, str, str, str, str, str, int, int]] = []
+    call_rows: list[CallRow] = []
+    ref_rows: list[RefRow] = []
 
     cur = conn.execute(
         "INSERT INTO files"

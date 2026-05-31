@@ -433,7 +433,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.5.3"
+    assert project["project"]["version"] == "1.5.5"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -582,7 +582,7 @@ def test_duckdb_backend_initialize_bootstraps_schema_and_metadata(
         for query, _parameters in fake_module.connections[0].executed
     )
     metadata = (tmp_path / ".codira" / "metadata.json").read_text(encoding="utf-8")
-    assert '"schema_version": "16"' in metadata
+    assert '"schema_version": "17"' in metadata
 
 
 def test_duckdb_backend_open_connection_initializes_missing_database(

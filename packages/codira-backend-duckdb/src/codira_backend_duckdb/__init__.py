@@ -32,8 +32,10 @@ from codira.contracts import (
     StoredEmbeddingRow,
 )
 from .duckdb_support import (
+    CallRow,
     DuckDBIdAllocator,
     DuckDBStructuralRowBuffers,
+    RefRow,
     _DuckDBPersistenceConnection,
     _delete_indexed_file_data,
     _flush_docstring_issue_rows,
@@ -58,7 +60,7 @@ if TYPE_CHECKING:
 
     from codira.contracts import IndexBackend, IndexWriteSession
 
-PACKAGE_VERSION = "1.5.4"
+PACKAGE_VERSION = "1.5.5"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -93,6 +95,8 @@ _DUCKDB_CALL_EDGES_DDL = """
         callee_module TEXT,
         callee_name TEXT,
         unresolved_identity TEXT NOT NULL DEFAULT '',
+        external_target_kind TEXT,
+        external_target_name TEXT,
         resolved INTEGER NOT NULL,
         FOREIGN KEY(caller_file_id) REFERENCES files(id)
     );
@@ -105,6 +109,8 @@ _DUCKDB_CALLABLE_REFS_DDL = """
         target_module TEXT,
         target_name TEXT,
         unresolved_identity TEXT NOT NULL DEFAULT '',
+        external_target_kind TEXT,
+        external_target_name TEXT,
         resolved INTEGER NOT NULL,
         FOREIGN KEY(owner_file_id) REFERENCES files(id)
     );
@@ -144,6 +150,8 @@ _NULLABLE_EDGE_TABLE_REWRITES: dict[
             "callee_module",
             "callee_name",
             "unresolved_identity",
+            "external_target_kind",
+            "external_target_name",
             "resolved",
         ),
         (
@@ -164,6 +172,8 @@ _NULLABLE_EDGE_TABLE_REWRITES: dict[
             "target_module",
             "target_name",
             "unresolved_identity",
+            "external_target_kind",
+            "external_target_name",
             "resolved",
         ),
         (
@@ -211,12 +221,8 @@ class _DuckDBIndexWriteSession:
         ] = []
         self._embedding_backend: EmbeddingBackendSpec | None = None
         self._pending_reference_scan_rows: list[tuple[int, int, str]] = []
-        self._pending_call_rows: list[
-            tuple[int, str, str, str, str, str, int, int]
-        ] = []
-        self._pending_ref_rows: list[
-            tuple[int, str, str, str, str, str, str, int, int]
-        ] = []
+        self._pending_call_rows: list[CallRow] = []
+        self._pending_ref_rows: list[RefRow] = []
         self._pending_import_rows: list[tuple[int, str, str | None, str, int]] = []
         self._pending_docstring_issue_rows: list[
             tuple[int, int | None, int | None, int | None, str, str]
@@ -1401,8 +1407,8 @@ def _repair_nullable_edge_table(
     Raises
     ------
     RuntimeError
-        If the legacy table is missing columns other than the supported
-        unresolved-target identity migration column.
+        If the legacy table is missing columns other than supported nullable
+        edge metadata columns.
     """
     safe_table_name = _validated_sql_identifier(table_name, kind="table")
     legacy_table_name = _validated_sql_identifier(
@@ -1411,14 +1417,25 @@ def _repair_nullable_edge_table(
     )
     current_columns = set(_table_info_notnull_by_name(raw, table_name))
     missing_columns = set(column_names) - current_columns
-    unsupported_missing_columns = missing_columns - {"unresolved_identity"}
+    supported_missing_columns = {
+        "unresolved_identity",
+        "external_target_kind",
+        "external_target_name",
+    }
+    unsupported_missing_columns = missing_columns - supported_missing_columns
     if unsupported_missing_columns:
         columns = ", ".join(sorted(unsupported_missing_columns))
         msg = f"Cannot repair DuckDB {table_name} with missing columns: {columns}"
         raise RuntimeError(msg)
     column_list = ", ".join(column_names)
     select_list = ", ".join(
-        column_name if column_name in current_columns else f"'' AS {column_name}"
+        column_name
+        if column_name in current_columns
+        else (
+            f"'' AS {column_name}"
+            if column_name == "unresolved_identity"
+            else f"NULL AS {column_name}"
+        )
         for column_name in column_names
     )
     for index_name in index_names:
