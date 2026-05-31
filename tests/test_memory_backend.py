@@ -49,12 +49,16 @@ if TYPE_CHECKING:
         def find_call_edges(
             self,
             request: BackendRelationQueryRequest,
-        ) -> list[tuple[str, str, str | None, str | None, int]]: ...
+        ) -> list[
+            tuple[str, str, str | None, str | None, str | None, str | None, int]
+        ]: ...
 
         def find_callable_refs(
             self,
             request: BackendRelationQueryRequest,
-        ) -> list[tuple[str, str, str | None, str | None, int]]: ...
+        ) -> list[
+            tuple[str, str, str | None, str | None, str | None, str | None, int]
+        ]: ...
 
         def docstring_issues(self, root: Path) -> list[DocstringIssueRow]: ...
 

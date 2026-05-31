@@ -687,7 +687,7 @@ class _FakeBackend:
     def find_call_edges(
         self,
         request: BackendRelationQueryRequest,
-    ) -> list[tuple[str, str, str | None, str | None, int]]:
+    ) -> list[tuple[str, str, str | None, str | None, str | None, str | None, int]]:
         """
         Return no call edges for protocol validation.
 
@@ -698,7 +698,7 @@ class _FakeBackend:
 
         Returns
         -------
-        list[tuple[str, str, str | None, str | None, int]]
+        list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
             Empty call-edge rows for protocol validation.
         """
         del request
@@ -707,7 +707,7 @@ class _FakeBackend:
     def find_callable_refs(
         self,
         request: BackendRelationQueryRequest,
-    ) -> list[tuple[str, str, str | None, str | None, int]]:
+    ) -> list[tuple[str, str, str | None, str | None, str | None, str | None, int]]:
         """
         Return no callable references for protocol validation.
 
@@ -718,7 +718,7 @@ class _FakeBackend:
 
         Returns
         -------
-        list[tuple[str, str, str | None, str | None, int]]
+        list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
             Empty callable-reference rows for protocol validation.
         """
         del request
@@ -2134,13 +2134,13 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
     ]
     assert optional_dependencies["bundle-official"] == [
         "sentence-transformers>=5.4,<6.0",
-        "codira-analyzer-python==1.5.3",
+        "codira-analyzer-python==1.5.4",
         "codira-analyzer-json==1.5.1",
-        "codira-analyzer-c==1.5.5",
-        "codira-analyzer-cpp==1.5.0",
-        "codira-analyzer-bash==1.5.0",
-        "codira-backend-sqlite==1.5.5",
-        "codira-backend-duckdb==1.5.4",
+        "codira-analyzer-c==1.5.6",
+        "codira-analyzer-cpp==1.5.1",
+        "codira-analyzer-bash==1.5.1",
+        "codira-backend-sqlite==1.5.6",
+        "codira-backend-duckdb==1.5.5",
     ]
     assert pyproject.get("tool", {}).get("poetry") is None
 
@@ -3901,6 +3901,8 @@ def test_c_analyzer_extracts_calls_returns_and_module_comment(tmp_path: Path) ->
             lineno=4,
             col_offset=16,
             base="obj",
+            external_target_kind="C:<external>",
+            external_target_name="normalize",
         ),
     )
     assert result.functions[1].returns_value == 1

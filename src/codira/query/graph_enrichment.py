@@ -140,7 +140,7 @@ class ResolvedEdgeExpansionRequest:
 
     Parameters
     ----------
-    edges : list[tuple[str, str, str | None, str | None, int]]
+    edges : list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
         Stored graph edge rows to expand.
     graph_request : GraphExpansionRequest
         Graph expansion request carrying storage and signal buffers.
@@ -156,7 +156,7 @@ class ResolvedEdgeExpansionRequest:
         Callback admitting symbols into the expanded result set.
     """
 
-    edges: list[tuple[str, str, str | None, str | None, int]]
+    edges: list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
     graph_request: GraphExpansionRequest
     source_symbol: SymbolRow
     module_index: int
@@ -416,7 +416,7 @@ def _expand_resolved_edges(request: ResolvedEdgeExpansionRequest) -> None:
     """
     graph_request = request.graph_request
     for edge in request.edges:
-        resolved = bool(edge[4])
+        resolved = bool(edge[6])
         related_module = cast("str | None", edge[request.module_index])
         related_name = cast("str | None", edge[request.name_index])
         if not resolved or related_module is None or related_name is None:

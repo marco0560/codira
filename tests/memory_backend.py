@@ -75,7 +75,7 @@ else:
     EmbeddingBackendSpec = object
 
 
-CallEdgeRow = tuple[str, str, str | None, str | None, int]
+CallEdgeRow = tuple[str, str, str | None, str | None, str | None, str | None, int]
 
 
 @dataclass(frozen=True)
@@ -161,6 +161,8 @@ class _MemoryRelation:
     kind: str
     base: str
     target: str
+    external_target_kind: str | None
+    external_target_name: str | None
     lineno: int
     col_offset: int
 
@@ -2085,7 +2087,7 @@ class MemoryIndexBackend:
         ]
         return BackendGraphMetric(
             total=len(matched_rows),
-            unresolved=sum(1 for row in matched_rows if row[4] == 0),
+            unresolved=sum(1 for row in matched_rows if row[6] == 0),
         )
 
     def find_symbol_overloads(
@@ -2575,6 +2577,8 @@ class MemoryIndexBackend:
                     kind=str(call.kind),
                     base=str(call.base),
                     target=str(call.target),
+                    external_target_kind=call.external_target_kind,
+                    external_target_name=call.external_target_name,
                     lineno=int(call.lineno),
                     col_offset=int(call.col_offset),
                 )
@@ -2588,6 +2592,8 @@ class MemoryIndexBackend:
                     kind=str(ref.kind),
                     base=str(ref.base),
                     target=str(ref.target),
+                    external_target_kind=ref.external_target_kind,
+                    external_target_name=ref.external_target_name,
                     lineno=int(ref.lineno),
                     col_offset=int(ref.col_offset),
                 )
@@ -2888,13 +2894,28 @@ class MemoryIndexBackend:
             (
                 record.owner_module,
                 record.owner_name,
-                *self._resolve_relation(state, record),
+                target_module,
+                target_name,
+                None if resolved else record.external_target_kind,
+                None if resolved else record.external_target_name,
+                resolved,
             )
             for record in records
+            for target_module, target_name, resolved in (
+                self._resolve_relation(state, record),
+            )
         }
         return sorted(
             rows,
-            key=lambda row: (row[0], row[1], row[2] or "", row[3] or "", row[4]),
+            key=lambda row: (
+                row[0],
+                row[1],
+                row[2] or "",
+                row[3] or "",
+                row[4] or "",
+                row[5] or "",
+                row[6],
+            ),
         )
 
     def _find_relations(
@@ -2963,7 +2984,15 @@ class MemoryIndexBackend:
         ]
         return sorted(
             rows,
-            key=lambda row: (row[0], row[1], row[2] or "", row[3] or "", row[4]),
+            key=lambda row: (
+                row[0],
+                row[1],
+                row[2] or "",
+                row[3] or "",
+                row[4] or "",
+                row[5] or "",
+                row[6],
+            ),
         )
 
 

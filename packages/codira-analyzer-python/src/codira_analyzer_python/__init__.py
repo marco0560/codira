@@ -20,6 +20,8 @@ first-party Python analyzer distribution for Phase 2 packaging.
 
 from __future__ import annotations
 
+import builtins
+import sys
 import tokenize
 from collections import Counter
 from dataclasses import replace
@@ -46,6 +48,8 @@ from codira.parser_ast import parse_source
 __all__ = ["PythonAnalyzer", "build_analyzer"]
 
 ArtifactT = TypeVar("ArtifactT")
+_PYTHON_BUILTINS = frozenset(dir(builtins))
+_PYTHON_STDLIB_MODULES = frozenset(sys.stdlib_module_names)
 
 
 def _read_python_source(path: Path) -> str:
@@ -608,6 +612,191 @@ def _disambiguate_analysis_stable_ids(analysis: AnalysisResult) -> AnalysisResul
     )
 
 
+def _import_aliases(analysis: AnalysisResult) -> dict[str, str]:
+    """
+    Build Python import aliases visible to relation target classification.
+
+    Parameters
+    ----------
+    analysis : codira.models.AnalysisResult
+        Normalized analyzer result.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping from local binding names to imported dotted targets.
+    """
+    aliases: dict[str, str] = {}
+    for imported in analysis.imports:
+        if imported.kind != "import":
+            continue
+        local_name = imported.alias
+        if local_name is None:
+            local_name = imported.name.split(".")[-1]
+        aliases[local_name] = imported.name
+    return aliases
+
+
+def _stdlib_target_name(base: str, target: str, aliases: dict[str, str]) -> str | None:
+    """
+    Resolve a Python attribute target to a stdlib display name when possible.
+
+    Parameters
+    ----------
+    base : str
+        Static receiver path from the call or reference record.
+    target : str
+        Target attribute token.
+    aliases : dict[str, str]
+        Local import aliases mapped to imported dotted targets.
+
+    Returns
+    -------
+    str | None
+        Fully qualified stdlib target name, or ``None`` when unknown.
+    """
+    if not base:
+        return None
+    base_head, _, base_tail = base.partition(".")
+    imported = aliases.get(base_head)
+    if imported is None:
+        return None
+    imported_root = imported.split(".", 1)[0]
+    if imported_root not in _PYTHON_STDLIB_MODULES:
+        return None
+    rebased = imported if not base_tail else f"{imported}.{base_tail}"
+    return f"{rebased}.{target}" if target else rebased
+
+
+def _classify_python_external_target(
+    *,
+    kind: str,
+    base: str,
+    target: str,
+    aliases: dict[str, str],
+) -> tuple[str | None, str | None]:
+    """
+    Classify one Python relation target using analyzer-local language rules.
+
+    Parameters
+    ----------
+    kind : str
+        Normalized relation target kind.
+    base : str
+        Static receiver path for attribute targets.
+    target : str
+        Target token.
+    aliases : dict[str, str]
+        Local import aliases mapped to imported dotted targets.
+
+    Returns
+    -------
+    tuple[str | None, str | None]
+        External target classifier and display name.
+    """
+    if kind == "name" and target in _PYTHON_BUILTINS:
+        return ("Python:<builtin>", target)
+    if kind == "name":
+        imported = aliases.get(target)
+        if imported is not None and imported.split(".", 1)[0] in _PYTHON_STDLIB_MODULES:
+            return ("Python:<stdlib>", imported)
+    if kind == "attribute":
+        stdlib_name = _stdlib_target_name(base, target, aliases)
+        if stdlib_name is not None:
+            return ("Python:<stdlib>", stdlib_name)
+        if base:
+            return ("Python:<object-method>", f"{base}.{target}")
+    if target:
+        return ("Python:<external>", target)
+    return (None, None)
+
+
+def _classify_function_python_targets(
+    function: FunctionArtifact,
+    aliases: dict[str, str],
+) -> FunctionArtifact:
+    """
+    Attach Python external target labels to one function artifact.
+
+    Parameters
+    ----------
+    function : codira.models.FunctionArtifact
+        Function or method artifact to classify.
+    aliases : dict[str, str]
+        Local import aliases mapped to imported dotted targets.
+
+    Returns
+    -------
+    codira.models.FunctionArtifact
+        Function artifact with classified call and reference records.
+    """
+    calls = tuple(
+        replace(
+            call,
+            external_target_kind=external_target_kind,
+            external_target_name=external_target_name,
+        )
+        for call in function.calls
+        for external_target_kind, external_target_name in (
+            _classify_python_external_target(
+                kind=call.kind,
+                base=call.base,
+                target=call.target,
+                aliases=aliases,
+            ),
+        )
+    )
+    refs = tuple(
+        replace(
+            ref,
+            external_target_kind=external_target_kind,
+            external_target_name=external_target_name,
+        )
+        for ref in function.callable_refs
+        for external_target_kind, external_target_name in (
+            _classify_python_external_target(
+                kind=ref.kind,
+                base=ref.base,
+                target=ref.target,
+                aliases=aliases,
+            ),
+        )
+    )
+    return replace(function, calls=calls, callable_refs=refs)
+
+
+def _classify_python_relation_targets(analysis: AnalysisResult) -> AnalysisResult:
+    """
+    Attach Python-owned external target labels to call and reference records.
+
+    Parameters
+    ----------
+    analysis : codira.models.AnalysisResult
+        Normalized Python analyzer result.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Analysis result with analyzer-provided unresolved target labels.
+    """
+    aliases = _import_aliases(analysis)
+    functions = tuple(
+        _classify_function_python_targets(function, aliases)
+        for function in analysis.functions
+    )
+    classes = tuple(
+        replace(
+            class_artifact,
+            methods=tuple(
+                _classify_function_python_targets(method, aliases)
+                for method in class_artifact.methods
+            ),
+        )
+        for class_artifact in analysis.classes
+    )
+    return replace(analysis, functions=functions, classes=classes)
+
+
 class PythonAnalyzer:
     """
     Concrete Python analyzer for repository indexing.
@@ -623,7 +812,7 @@ class PythonAnalyzer:
     """
 
     name = "python"
-    version = "5"
+    version = "6"
     discovery_globs: tuple[str, ...] = ("*.py",)
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
@@ -692,6 +881,7 @@ class PythonAnalyzer:
         source = _read_python_source(path)
         analysis = analysis_result_from_parsed(path, parse_source(path, root, source))
         analysis = _disambiguate_shadowed_module_file(analysis, path=path, root=root)
+        analysis = _classify_python_relation_targets(analysis)
         return _disambiguate_analysis_stable_ids(analysis)
 
 

@@ -236,6 +236,28 @@ def _call_kind(value: object) -> CallKind:
     return cast("CallKind", kind)
 
 
+def _optional_string(value: object) -> str | None:
+    """
+    Normalize an optional analyzer-provided string field.
+
+    Parameters
+    ----------
+    value : object
+        Raw parsed value.
+
+    Returns
+    -------
+    str | None
+        Non-empty string value, or ``None`` when absent.
+    """
+    if value is None:
+        return None
+    text = str(value)
+    if not text:
+        return None
+    return text
+
+
 def _reference_kind(value: object) -> CallableReferenceKind:
     """
     Validate one normalized callable-reference kind.
@@ -313,6 +335,8 @@ def _call_site_from_mapping(raw: Mapping[str, object]) -> CallSite:
         lineno=_int_value(raw.get("lineno", 0)),
         col_offset=_int_value(raw.get("col_offset", 0)),
         base=str(raw.get("base", "")),
+        external_target_kind=_optional_string(raw.get("external_target_kind")),
+        external_target_name=_optional_string(raw.get("external_target_name")),
     )
 
 
@@ -337,6 +361,8 @@ def _callable_reference_from_mapping(raw: Mapping[str, object]) -> CallableRefer
         col_offset=_int_value(raw.get("col_offset", 0)),
         ref_kind=_reference_kind(raw.get("ref_kind", "return_value")),
         base=str(raw.get("base", "")),
+        external_target_kind=_optional_string(raw.get("external_target_kind")),
+        external_target_name=_optional_string(raw.get("external_target_name")),
     )
 
 

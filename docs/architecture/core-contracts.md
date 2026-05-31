@@ -101,6 +101,12 @@ Invariants:
 - integer flags remain part of the persisted backend schema for deterministic
   cross-backend storage
 - logical callable identity remains `function` or `Class.method`
+- call and callable-reference records may carry analyzer-provided
+  `external_target_kind` and `external_target_name` fields for unresolved
+  external targets
+- language plugins own external-target classification; core storage and query
+  layers persist and render those fields without embedding language-specific
+  rules
 
 ## `IndexBackend`
 

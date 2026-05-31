@@ -64,6 +64,38 @@ _TYPE_LIKE_NAMES = {
     "int64_t",
     "void",
 }
+_C_SYSTEM_FUNCTIONS = frozenset(
+    {
+        "calloc",
+        "fclose",
+        "fopen",
+        "fprintf",
+        "free",
+        "fwrite",
+        "malloc",
+        "memcmp",
+        "memcpy",
+        "memmove",
+        "memset",
+        "printf",
+        "puts",
+        "snprintf",
+        "sprintf",
+        "strcmp",
+        "strcpy",
+        "strlen",
+        "strncmp",
+    }
+)
+_C_MACROS = frozenset(
+    {
+        "Py_DECREF",
+        "Py_INCREF",
+        "Py_XDECREF",
+        "Py_XINCREF",
+        "assert",
+    }
+)
 
 
 def _new_parser() -> Parser:
@@ -662,6 +694,27 @@ def _is_supported_function_definition(node: Node) -> bool:
     return _find_parameter_list(declarator) is not None
 
 
+def _c_external_target_kind(target: str) -> str:
+    """
+    Classify one C call target for unresolved graph rendering.
+
+    Parameters
+    ----------
+    target : str
+        Call target token.
+
+    Returns
+    -------
+    str
+        Analyzer-owned external target classifier.
+    """
+    if target in _C_MACROS or target.isupper():
+        return "C:<macro>"
+    if target in _C_SYSTEM_FUNCTIONS:
+        return "C:<system-header>"
+    return "C:<external>"
+
+
 def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     """
     Convert one tree-sitter call expression into a normalized call record.
@@ -683,11 +736,14 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
         return None
 
     if function_node.type == "identifier":
+        target = _node_text(function_node, source)
         return CallSite(
             kind="name",
-            target=_node_text(function_node, source),
+            target=target,
             lineno=function_node.start_point.row + 1,
             col_offset=function_node.start_point.column,
+            external_target_kind=_c_external_target_kind(target),
+            external_target_name=target,
         )
 
     if function_node.type == "field_expression":
@@ -695,12 +751,15 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
         field = function_node.child_by_field_name("field")
         if receiver is None or field is None:
             return None
+        target = _node_text(field, source)
         return CallSite(
             kind="attribute",
-            target=_node_text(field, source),
+            target=target,
             lineno=field.start_point.row + 1,
             col_offset=field.start_point.column,
             base=_node_text(receiver, source),
+            external_target_kind="C:<external>",
+            external_target_name=target,
         )
 
     return CallSite(
@@ -1389,7 +1448,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "8"
+    version = "9"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:

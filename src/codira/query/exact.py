@@ -35,8 +35,8 @@ if TYPE_CHECKING:
         SymbolRow,
     )
 
-CallEdgeRow = tuple[str, str, str | None, str | None, int]
-CallableRefRow = tuple[str, str, str | None, str | None, int]
+CallEdgeRow = tuple[str, str, str | None, str | None, str | None, str | None, int]
+CallableRefRow = tuple[str, str, str | None, str | None, str | None, str | None, int]
 EmbeddingInventoryRow = tuple[str, str, int, int]
 BackendConnection = object
 
@@ -59,6 +59,10 @@ class CallTreeNode:
     cycle : bool, optional
         Whether traversal stopped because this node would repeat the current
         branch path.
+    external_target_kind : str | None, optional
+        Analyzer-provided classifier for unresolved external targets.
+    external_target_name : str | None, optional
+        Analyzer-provided display name for unresolved external targets.
     """
 
     module: str | None
@@ -66,6 +70,8 @@ class CallTreeNode:
     resolved: bool
     children: tuple[CallTreeNode, ...] = ()
     cycle: bool = False
+    external_target_kind: str | None = None
+    external_target_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +111,29 @@ class CallTreeResult:
 
 
 EdgeQueryRequest = BackendRelationQueryRequest
+
+
+def _external_target_display(kind: str | None, name: str | None) -> str:
+    """
+    Return the display label for an unresolved analyzer-provided target.
+
+    Parameters
+    ----------
+    kind : str | None
+        Analyzer-provided external target classifier.
+    name : str | None
+        Analyzer-provided external target name.
+
+    Returns
+    -------
+    str
+        Deterministic unresolved target display label.
+    """
+    if kind is not None and name is not None:
+        return f"{kind}:{name}"
+    if name is not None:
+        return name
+    return "<unresolved>"
 
 
 @dataclass(frozen=True)
@@ -365,7 +394,15 @@ def build_call_tree(
             and callee_name is not None
             else (caller_module, caller_name)
         )
-        for caller_module, caller_name, callee_module, callee_name, _resolved in initial_rows
+        for (
+            caller_module,
+            caller_name,
+            callee_module,
+            callee_name,
+            _external_target_kind,
+            _external_target_name,
+            _resolved,
+        ) in initial_rows
     }
     if len(root_candidates) == 1:
         root_module, root_name = next(iter(root_candidates))
@@ -379,16 +416,36 @@ def build_call_tree(
 
     def ordered_neighbors(
         rows: list[CallEdgeRow],
-    ) -> list[tuple[str | None, str, bool]]:
-        deduped: dict[tuple[str | None, str, bool], tuple[str | None, str, bool]] = {}
-        for caller_module, caller_name, callee_module, callee_name, resolved in rows:
-            key: tuple[str | None, str, bool]
+    ) -> list[tuple[str | None, str, bool, str | None, str | None]]:
+        deduped: dict[
+            tuple[str | None, str, bool, str | None, str | None],
+            tuple[str | None, str, bool, str | None, str | None],
+        ] = {}
+        for (
+            caller_module,
+            caller_name,
+            callee_module,
+            callee_name,
+            external_target_kind,
+            external_target_name,
+            resolved,
+        ) in rows:
+            key: tuple[str | None, str, bool, str | None, str | None]
             if request.incoming:
-                key = (caller_module, caller_name, True)
+                key = (caller_module, caller_name, True, None, None)
             elif resolved and callee_module is not None and callee_name is not None:
-                key = (callee_module, callee_name, True)
+                key = (callee_module, callee_name, True, None, None)
             else:
-                key = (None, "<unresolved>", False)
+                key = (
+                    None,
+                    _external_target_display(
+                        external_target_kind,
+                        external_target_name,
+                    ),
+                    False,
+                    external_target_kind,
+                    external_target_name,
+                )
             deduped.setdefault(key, key)
         return sorted(
             deduped.values(),
@@ -425,7 +482,13 @@ def build_call_tree(
             return ()
 
         children: list[CallTreeNode] = []
-        for child_module, child_name, child_resolved in ordered_neighbors(rows):
+        for (
+            child_module,
+            child_name,
+            child_resolved,
+            external_target_kind,
+            external_target_name,
+        ) in ordered_neighbors(rows):
             if rendered_nodes >= request.max_nodes:
                 truncated_by_nodes = True
                 break
@@ -439,6 +502,8 @@ def build_call_tree(
                         module=None,
                         name=child_name,
                         resolved=False,
+                        external_target_kind=external_target_kind,
+                        external_target_name=external_target_name,
                     )
                 )
                 continue
@@ -547,7 +612,15 @@ def build_ref_tree(
             and target_name is not None
             else (owner_module, owner_name)
         )
-        for owner_module, owner_name, target_module, target_name, _resolved in initial_rows
+        for (
+            owner_module,
+            owner_name,
+            target_module,
+            target_name,
+            _external_target_kind,
+            _external_target_name,
+            _resolved,
+        ) in initial_rows
     }
     if len(root_candidates) == 1:
         root_module, root_name = next(iter(root_candidates))
@@ -561,16 +634,36 @@ def build_ref_tree(
 
     def ordered_neighbors(
         rows: list[CallableRefRow],
-    ) -> list[tuple[str | None, str, bool]]:
-        deduped: dict[tuple[str | None, str, bool], tuple[str | None, str, bool]] = {}
-        for owner_module, owner_name, target_module, target_name, resolved in rows:
-            key: tuple[str | None, str, bool]
+    ) -> list[tuple[str | None, str, bool, str | None, str | None]]:
+        deduped: dict[
+            tuple[str | None, str, bool, str | None, str | None],
+            tuple[str | None, str, bool, str | None, str | None],
+        ] = {}
+        for (
+            owner_module,
+            owner_name,
+            target_module,
+            target_name,
+            external_target_kind,
+            external_target_name,
+            resolved,
+        ) in rows:
+            key: tuple[str | None, str, bool, str | None, str | None]
             if request.incoming:
-                key = (owner_module, owner_name, True)
+                key = (owner_module, owner_name, True, None, None)
             elif resolved and target_module is not None and target_name is not None:
-                key = (target_module, target_name, True)
+                key = (target_module, target_name, True, None, None)
             else:
-                key = (None, "<unresolved>", False)
+                key = (
+                    None,
+                    _external_target_display(
+                        external_target_kind,
+                        external_target_name,
+                    ),
+                    False,
+                    external_target_kind,
+                    external_target_name,
+                )
             deduped.setdefault(key, key)
         return sorted(
             deduped.values(),
@@ -607,7 +700,13 @@ def build_ref_tree(
             return ()
 
         children: list[CallTreeNode] = []
-        for child_module, child_name, child_resolved in ordered_neighbors(rows):
+        for (
+            child_module,
+            child_name,
+            child_resolved,
+            external_target_kind,
+            external_target_name,
+        ) in ordered_neighbors(rows):
             if rendered_nodes >= request.max_nodes:
                 truncated_by_nodes = True
                 break
@@ -617,7 +716,13 @@ def build_ref_tree(
 
             if not child_resolved:
                 children.append(
-                    CallTreeNode(module=None, name=child_name, resolved=False)
+                    CallTreeNode(
+                        module=None,
+                        name=child_name,
+                        resolved=False,
+                        external_target_kind=external_target_kind,
+                        external_target_name=external_target_name,
+                    )
                 )
                 continue
 

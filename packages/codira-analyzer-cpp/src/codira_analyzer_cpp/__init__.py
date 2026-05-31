@@ -77,6 +77,33 @@ _TYPE_LIKE_NAMES = {
     "void",
     "wchar_t",
 }
+_CPP_SYSTEM_FUNCTIONS = frozenset(
+    {
+        "begin",
+        "emplace_back",
+        "end",
+        "make_pair",
+        "make_shared",
+        "move",
+        "printf",
+        "push_back",
+        "size",
+        "sort",
+        "swap",
+    }
+)
+_CPP_MACROS = frozenset(
+    {
+        "ASSERT_EQ",
+        "ASSERT_FALSE",
+        "ASSERT_TRUE",
+        "EXPECT_EQ",
+        "EXPECT_FALSE",
+        "EXPECT_TRUE",
+        "Py_DECREF",
+        "Py_INCREF",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -450,6 +477,29 @@ def _split_qualified_name(text: str) -> tuple[str, ...]:
     """
     normalized = text.replace(" ", "")
     return tuple(part for part in normalized.split("::") if part)
+
+
+def _cpp_external_target_kind(base: str, target: str) -> str:
+    """
+    Classify one C++ call target for unresolved graph rendering.
+
+    Parameters
+    ----------
+    base : str
+        Static receiver or namespace qualifier.
+    target : str
+        Call target token.
+
+    Returns
+    -------
+    str
+        Analyzer-owned external target classifier.
+    """
+    if target in _CPP_MACROS or target.isupper():
+        return "C++:<macro>"
+    if base == "std" or base.startswith("std::") or target in _CPP_SYSTEM_FUNCTIONS:
+        return "C++:<system-header>"
+    return "C++:<external>"
 
 
 def _comment_to_summary(text: str) -> str | None:
@@ -925,23 +975,29 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
         return None
 
     if function_node.type == "identifier":
+        target = _node_text(function_node, source)
         return CallSite(
             kind="name",
-            target=_node_text(function_node, source),
+            target=target,
             lineno=function_node.start_point.row + 1,
             col_offset=function_node.start_point.column,
+            external_target_kind=_cpp_external_target_kind("", target),
+            external_target_name=target,
         )
 
     if function_node.type == "qualified_identifier":
-        target = _split_qualified_name(_node_text(function_node, source))
-        if not target:
+        target_parts = _split_qualified_name(_node_text(function_node, source))
+        if not target_parts:
             return None
+        base = "::".join(target_parts[:-1])
         return CallSite(
             kind="name",
-            target=target[-1],
+            target=target_parts[-1],
             lineno=function_node.start_point.row + 1,
             col_offset=function_node.start_point.column,
-            base="::".join(target[:-1]),
+            base=base,
+            external_target_kind=_cpp_external_target_kind(base, target_parts[-1]),
+            external_target_name="::".join(target_parts),
         )
 
     if function_node.type == "field_expression":
@@ -949,12 +1005,16 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
         field = function_node.child_by_field_name("field")
         if receiver is None or field is None:
             return None
+        target = _node_text(field, source)
+        base = _node_text(receiver, source)
         return CallSite(
             kind="attribute",
-            target=_node_text(field, source),
+            target=target,
             lineno=field.start_point.row + 1,
             col_offset=field.start_point.column,
-            base=_node_text(receiver, source),
+            base=base,
+            external_target_kind=_cpp_external_target_kind(base, target),
+            external_target_name=f"{base}.{target}",
         )
 
     return CallSite(
@@ -2281,7 +2341,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "2"
+    version = "3"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",

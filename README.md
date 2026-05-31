@@ -459,6 +459,8 @@ codira calls context_for --tree --dot
 Expected result semantics:
 
 - covers direct static call edges only
+- unresolved external targets use analyzer-provided labels when available, such
+  as `Python:<builtin>:print` or `C:<system-header>:printf`
 - tree mode remains bounded by `--max-depth` and `--max-nodes`
 - DOT export is opt-in and only available for bounded tree mode
 
@@ -485,6 +487,7 @@ Expected result semantics:
 
 - focuses on callable-object references such as registries, assignment values,
   and returned function objects
+- unresolved external targets use analyzer-provided labels when available
 - is complementary to `calls`, not interchangeable with it
 
 ### 6. `ctx`

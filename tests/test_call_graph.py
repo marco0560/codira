@@ -160,8 +160,8 @@ def test_call_edges_are_resolved_and_deduplicated(tmp_path: Path) -> None:
     assert find_call_edges(
         EdgeQueryRequest(root=tmp_path, name="caller", module="pkg.a")
     ) == [
-        ("pkg.a", "caller", "pkg.a", "dynamic", 1),
-        ("pkg.a", "caller", "pkg.a", "helper", 1),
+        ("pkg.a", "caller", "pkg.a", "dynamic", None, None, 1),
+        ("pkg.a", "caller", "pkg.a", "helper", None, None, 1),
     ]
     assert find_call_edges(
         EdgeQueryRequest(
@@ -171,15 +171,15 @@ def test_call_edges_are_resolved_and_deduplicated(tmp_path: Path) -> None:
             incoming=True,
         )
     ) == [
-        ("pkg.a", "imported_caller", "pkg.b", "imported_helper", 1),
+        ("pkg.a", "imported_caller", "pkg.b", "imported_helper", None, None, 1),
     ]
 
     assert find_callable_refs(
         EdgeQueryRequest(root=tmp_path, name="registry", module="pkg.a")
     ) == [
-        ("pkg.a", "registry", "pkg.a", "Demo.helper", 1),
-        ("pkg.a", "registry", "pkg.a", "helper", 1),
-        ("pkg.a", "registry", "pkg.b", "imported_helper", 1),
+        ("pkg.a", "registry", "pkg.a", "Demo.helper", None, None, 1),
+        ("pkg.a", "registry", "pkg.a", "helper", None, None, 1),
+        ("pkg.a", "registry", "pkg.b", "imported_helper", None, None, 1),
     ]
     assert find_callable_refs(
         EdgeQueryRequest(
@@ -189,7 +189,7 @@ def test_call_edges_are_resolved_and_deduplicated(tmp_path: Path) -> None:
             incoming=True,
         )
     ) == [
-        ("pkg.a", "registry", "pkg.a", "helper", 1),
+        ("pkg.a", "registry", "pkg.a", "helper", None, None, 1),
     ]
 
 
@@ -344,7 +344,7 @@ def test_calls_cli_tree_prints_bounded_outgoing_traversal(
     assert captured.out.strip().splitlines() == [
         "pkg.a.caller",
         "  -> pkg.a.dynamic",
-        "    -> <unresolved>",
+        "    -> Python:<external>:callback",
         "  -> pkg.a.helper",
     ]
 
@@ -481,7 +481,7 @@ def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> N
     assert find_call_edges(
         EdgeQueryRequest(root=tmp_path, name="public_api", module="native.sample")
     ) == [
-        ("native.sample", "public_api", "native.sample", "helper", 1),
+        ("native.sample", "public_api", "native.sample", "helper", None, None, 1),
     ]
     assert find_call_edges(
         EdgeQueryRequest(
@@ -490,7 +490,7 @@ def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> N
             module="native.sample",
             incoming=True,
         )
-    ) == [("native.sample", "public_api", "native.sample", "helper", 1)]
+    ) == [("native.sample", "public_api", "native.sample", "helper", None, None, 1)]
 
 
 def test_top_level_help_includes_examples_and_calls_command() -> None:

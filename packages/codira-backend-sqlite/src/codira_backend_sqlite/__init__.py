@@ -76,8 +76,8 @@ if TYPE_CHECKING:
         SymbolRow,
     )
 
-CallEdgeRow = tuple[str, str, str | None, str | None, int]
-CallableRefRow = tuple[str, str, str | None, str | None, int]
+CallEdgeRow = tuple[str, str, str | None, str | None, str | None, str | None, int]
+CallableRefRow = tuple[str, str, str | None, str | None, str | None, str | None, int]
 EmbeddingInventoryRow = tuple[str, str, int, int]
 
 __all__ = ["SQLiteIndexBackend", "build_backend"]
@@ -1283,7 +1283,7 @@ class SQLiteIndexBackend:
 
         Returns
         -------
-        list[tuple[str, str, str | None, str | None, int]]
+        list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
             Matching call-edge rows ordered deterministically.
         """
         root = request.root
@@ -1309,6 +1309,8 @@ class SQLiteIndexBackend:
                 ce.caller_name,
                 ce.callee_module,
                 ce.callee_name,
+                ce.external_target_kind,
+                ce.external_target_name,
                 ce.resolved
             FROM call_edges ce
             JOIN files f
@@ -1328,6 +1330,8 @@ class SQLiteIndexBackend:
                 caller_name,
                 COALESCE(callee_module, ''),
                 COALESCE(callee_name, ''),
+                COALESCE(external_target_kind, ''),
+                COALESCE(external_target_name, ''),
                 resolved
         """
 
@@ -1339,6 +1343,8 @@ class SQLiteIndexBackend:
                     str(caller_name),
                     None if callee_module is None else str(callee_module),
                     None if callee_name is None else str(callee_name),
+                    None if external_target_kind is None else str(external_target_kind),
+                    None if external_target_name is None else str(external_target_name),
                     int(resolved),
                 )
                 for (
@@ -1346,6 +1352,8 @@ class SQLiteIndexBackend:
                     caller_name,
                     callee_module,
                     callee_name,
+                    external_target_kind,
+                    external_target_name,
                     resolved,
                 ) in rows
             ]
@@ -1367,7 +1375,7 @@ class SQLiteIndexBackend:
 
         Returns
         -------
-        list[tuple[str, str, str | None, str | None, int]]
+        list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
             Matching callable-reference rows ordered deterministically.
         """
         root = request.root
@@ -1393,6 +1401,8 @@ class SQLiteIndexBackend:
                 cr.owner_name,
                 cr.target_module,
                 cr.target_name,
+                cr.external_target_kind,
+                cr.external_target_name,
                 cr.resolved
             FROM callable_refs cr
             JOIN files f
@@ -1412,6 +1422,8 @@ class SQLiteIndexBackend:
                 owner_name,
                 COALESCE(target_module, ''),
                 COALESCE(target_name, ''),
+                COALESCE(external_target_kind, ''),
+                COALESCE(external_target_name, ''),
                 resolved
         """
 
@@ -1423,6 +1435,8 @@ class SQLiteIndexBackend:
                     str(owner_name),
                     None if target_module is None else str(target_module),
                     None if target_name is None else str(target_name),
+                    None if external_target_kind is None else str(external_target_kind),
+                    None if external_target_name is None else str(external_target_name),
                     int(resolved),
                 )
                 for (
@@ -1430,6 +1444,8 @@ class SQLiteIndexBackend:
                     owner_name,
                     target_module,
                     target_name,
+                    external_target_kind,
+                    external_target_name,
                     resolved,
                 ) in rows
             ]

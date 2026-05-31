@@ -215,6 +215,10 @@ class CallSite:
         Source column of the call target token.
     base : str, optional
         Static attribute receiver path when the call is attribute-based.
+    external_target_kind : str | None, optional
+        Analyzer-provided classifier for unresolved external targets.
+    external_target_name : str | None, optional
+        Analyzer-provided display name for unresolved external targets.
     """
 
     kind: CallKind
@@ -222,6 +226,8 @@ class CallSite:
     lineno: int
     col_offset: int
     base: str = ""
+    external_target_kind: str | None = None
+    external_target_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -243,6 +249,10 @@ class CallableReference:
         Stable classifier for the owning expression context.
     base : str, optional
         Static attribute receiver path when the reference is attribute-based.
+    external_target_kind : str | None, optional
+        Analyzer-provided classifier for unresolved external targets.
+    external_target_name : str | None, optional
+        Analyzer-provided display name for unresolved external targets.
     """
 
     kind: CallKind
@@ -251,6 +261,8 @@ class CallableReference:
     col_offset: int
     ref_kind: CallableReferenceKind
     base: str = ""
+    external_target_kind: str | None = None
+    external_target_name: str | None = None
 
 
 @dataclass(frozen=True)
