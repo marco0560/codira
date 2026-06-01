@@ -219,6 +219,13 @@ class _GitConfigInstallModule(Protocol):
         ...
 
 
+class _GithubSnapshotModule(Protocol):
+    """Protocol for the GitHub planning snapshot generator."""
+
+    OWNER: str
+    REPOSITORY: str
+
+
 class _BuildHelperModule(Protocol):
     """Protocol for the standalone first-party build helper module."""
 
@@ -1217,6 +1224,34 @@ def _load_git_config_install_helper() -> _GitConfigInstallModule:
     return cast("_GitConfigInstallModule", module)
 
 
+def _load_github_snapshot_helper() -> _GithubSnapshotModule:
+    """
+    Load the GitHub planning snapshot helper from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the snapshot generator script.
+    """
+    helper_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "generate_github_snapshot.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "generate_github_snapshot",
+        helper_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_GithubSnapshotModule", module)
+
+
 def _load_build_helper() -> _BuildHelperModule:
     """
     Load the standalone build helper module from its repository path.
@@ -1692,6 +1727,13 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
         "&& uv run python scripts/run_repo_tool.py ruff format ."
     )
     assert entries["alias.docs-build"] == "!uv run mkdocs build --strict"
+    assert entries["alias.gen-issues"] == (
+        "!uv run python scripts/generate_github_snapshot.py issues --output issues.json"
+    )
+    assert entries["alias.gen-miles"] == (
+        "!uv run python scripts/generate_github_snapshot.py milestones --output "
+        "milestones.json"
+    )
     assert "rsync" not in entries["alias.txz"]
     assert "--transform='s,^,repo/,'" in entries["alias.txz"]
     assert "\x00" not in entries["alias.txz"]
@@ -1701,6 +1743,25 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
     assert "user.email" not in entries
     assert not any(key.startswith("remote.") for key in entries)
     assert not any("credential" in key for key in entries)
+
+
+def test_github_snapshot_generator_targets_codira_repository() -> None:
+    """
+    Keep generated planning snapshots scoped to this repository.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the generator queries the Codira GitHub repository.
+    """
+    helper = _load_github_snapshot_helper()
+
+    assert helper.OWNER == "marco0560"
+    assert helper.REPOSITORY == "codira"
 
 
 def test_repo_tool_runner_uses_non_repository_tool_state(tmp_path: Path) -> None:
