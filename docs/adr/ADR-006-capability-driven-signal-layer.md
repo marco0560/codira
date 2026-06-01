@@ -214,10 +214,14 @@ Mark each phase as work lands.
 * [x] Phase 3 — Typed signal model and normalization rules
 * [x] Phase 4 — Adapters from current evidence to signals
 * [x] Phase 5 — Capability-gated signal collection
-* [ ] Phase 6 — Core signal aggregation for current ranking behavior
+* [x] Phase 6 — Core signal aggregation for current ranking behavior
 * [x] Phase 7 — Call and proximity integration through signals
 * [x] Phase 8 — Explain and JSON alignment
-* [ ] Phase 9 — Analyzer and channel contract follow-up
-* [ ] Phase 10 — Validation matrix and migration hardening
+* [x] Phase 9 — Analyzer and channel contract follow-up
+* [x] Phase 10 — Validation matrix and migration hardening
 
-Remaining migration work is tracked by issue `#32`.
+Issue `#32` completed the remaining migration by routing symbol-channel
+candidate scoring through normalized retrieval signals, making shared query
+producer specs satisfy the retrieval-producer contract, and adding regression
+coverage for deterministic aggregation, exact-match dominance, capability-gated
+producer contracts, and representative channel mixes.

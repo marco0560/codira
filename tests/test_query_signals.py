@@ -3,7 +3,7 @@
 Responsibilities
 ----------------
 - Validate the normalized signal schema introduced for capability-driven retrieval.
-- Keep deterministic signal ordering explicit before aggregation migrates to the new substrate.
+- Keep deterministic signal ordering explicit for the aggregation substrate.
 - Ensure producer and capability attribution survive as first-class signal fields.
 
 Design principles

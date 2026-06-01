@@ -22,14 +22,16 @@ from typing import TYPE_CHECKING
 
 from codira.query.classifier import build_retrieval_plan, classify_query
 from codira.query.context import (
-    PRIMARY_SYMBOL_SCORING_RULES,
+    PRIMARY_SYMBOL_AGGREGATION_RULES,
     ExplainSectionsRequest,
     MainContextSectionsRequest,
+    _aggregate_candidate_signals,
     _append_explain_signal_sections,
     _append_main_context_sections,
-    _apply_scoring_rules,
+    _candidate_has_signal,
+    _candidate_retrieval_signals,
+    _candidate_signal_strength,
     _classify_file_role,
-    _extract_candidate_score_features,
     _find_references,
     _load_cached_python_file,
     _load_reference_scan_file,
@@ -280,9 +282,9 @@ def test_path_bias_flips_test_preference_when_query_is_test_related() -> None:
     assert explicit_test_bias > implementation_bias
 
 
-def test_table_driven_symbol_scoring_applies_weighted_features() -> None:
+def test_symbol_signal_aggregation_applies_weighted_evidence() -> None:
     """
-    Preserve deterministic weighted lexical scoring under the rule-table model.
+    Preserve deterministic weighted lexical scoring through signal aggregation.
 
     Parameters
     ----------
@@ -291,7 +293,7 @@ def test_table_driven_symbol_scoring_applies_weighted_features() -> None:
     Returns
     -------
     None
-        The test asserts extracted features produce the expected weighted score.
+        The test asserts candidate signals produce the expected weighted score.
     """
     intent = classify_query("cache invalidation")
     query_tokens = sorted(["cache", "invalidation"])
@@ -302,7 +304,7 @@ def test_table_driven_symbol_scoring_applies_weighted_features() -> None:
         "src/pkg/core.py",
         10,
     )
-    features = _extract_candidate_score_features(
+    signals = _candidate_retrieval_signals(
         query_tokens,
         symbol,
         intent=intent,
@@ -310,13 +312,69 @@ def test_table_driven_symbol_scoring_applies_weighted_features() -> None:
         target_symbol="cache_invalidation",
     )
 
-    assert features.exact_target_symbol_match == 1
-    assert features.path_bias == 3
-    assert features.implementation_module_bonus == 1
-    assert features.strong_token_hit == 1
+    assert _candidate_signal_strength(signals, "exact_target_symbol_match") == 1
+    assert _candidate_signal_strength(signals, "path_bias") == 3
+    assert _candidate_signal_strength(signals, "implementation_module_bonus") == 1
+    assert _candidate_has_signal(signals, "strong_token_hit")
     assert (
-        _apply_scoring_rules(features, PRIMARY_SYMBOL_SCORING_RULES)
+        _aggregate_candidate_signals(signals, PRIMARY_SYMBOL_AGGREGATION_RULES)
         == 20 + 5 + 3 + 10 + 4 + 2
+    )
+
+
+def test_symbol_signal_aggregation_preserves_exact_match_dominance() -> None:
+    """
+    Keep exact symbol evidence above partial lexical evidence.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts signal aggregation keeps exact-name dominance
+        explicit for symbol-channel candidates.
+    """
+    intent = classify_query("cache")
+    query_tokens = ["cache"]
+    exact_symbol = (
+        "function",
+        "pkg.core",
+        "cache",
+        "src/pkg/core.py",
+        10,
+    )
+    partial_symbol = (
+        "function",
+        "pkg.core",
+        "cache_worker",
+        "src/pkg/core.py",
+        20,
+    )
+    exact_signals = _candidate_retrieval_signals(
+        query_tokens,
+        exact_symbol,
+        intent=intent,
+        raw_query="cache",
+        target_symbol="cache",
+    )
+    partial_signals = _candidate_retrieval_signals(
+        query_tokens,
+        partial_symbol,
+        intent=intent,
+        raw_query="cache",
+        target_symbol="cache",
+    )
+
+    assert _candidate_has_signal(exact_signals, "exact_name_match")
+    assert not _candidate_has_signal(partial_signals, "exact_name_match")
+    assert _aggregate_candidate_signals(
+        exact_signals,
+        PRIMARY_SYMBOL_AGGREGATION_RULES,
+    ) > _aggregate_candidate_signals(
+        partial_signals,
+        PRIMARY_SYMBOL_AGGREGATION_RULES,
     )
 
 

@@ -3,7 +3,7 @@
 Responsibilities
 ----------------
 - Define the normalized signal objects that carry retrieval evidence without embedding final ranking policy.
-- Preserve producer and capability attribution for explain-mode and future aggregation.
+- Preserve producer and capability attribution for explain-mode and aggregation.
 - Provide deterministic ordering helpers so signal collections remain reproducible.
 
 Design principles
@@ -12,7 +12,7 @@ Signals stay explicit, immutable, and score-free. They represent evidence, not f
 
 Architectural role
 ------------------
-This module belongs to the **retrieval normalization layer** that sits between capability-aware producers and future core aggregation.
+This module belongs to the **retrieval normalization layer** that sits between capability-aware producers and core aggregation.
 """
 
 from __future__ import annotations
