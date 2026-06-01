@@ -1,3 +1,10 @@
+## [1.40.1](https://github.com/marco0560/codira/compare/v1.40.0...v1.40.1) (2026-06-01)
+
+
+### Bug Fixes
+
+* **dev:** paginate GitHub snapshot aliases ([9b8f043](https://github.com/marco0560/codira/commit/9b8f043dad206885201893d026f79beed5bd823a)), closes [#29](https://github.com/marco0560/codira/issues/29)
+
 # [1.40.0](https://github.com/marco0560/codira/compare/v1.28.0...v1.40.0) (2026-05-31)
 
 
