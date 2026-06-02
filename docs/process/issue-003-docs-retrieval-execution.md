@@ -57,23 +57,27 @@ Out of scope for V1:
 
 V2 is future implementation scope, not part of the completed V1 feature.
 
-Recommended V2 phases:
+Accepted V2 implementation phases:
 
 1. Add explicit docs/code diversity quotas and expose quota decisions in
    explain diagnostics.
-2. Add a docs-only CLI inspection command that reuses the existing
+2. Add stronger path-aware ranking for `docs/process`, `docs/adr`, `README`,
+   and `CHANGELOG` documentation.
+3. Add a docs-only CLI inspection command that reuses the existing
    `documentation_candidates` contract and does not replace mixed `ctx`
    retrieval.
-3. Add a strict plain-text document analyzer for clearly documentation-scoped
+4. Add a strict plain-text document analyzer for clearly documentation-scoped
    `.txt` files only, excluding fixtures, logs, generated outputs, and vendor
    material by default.
-4. Extend documentation artifacts for declaration-attached docs with explicit
+5. Extend documentation artifacts for declaration-attached docs with explicit
    owner identity, owner kind, and attachment confidence.
-5. Add C/C++ Doxygen support through the C/C++ analyzer plugins, limited to
+6. Add C/C++ Doxygen support through the C/C++ analyzer plugins, limited to
    analyzer-proven file/header docs and declaration-attached docs.
-6. Add Rust module and item docs through a future Rust analyzer plugin.
-7. Consider Python callable docs only as a separate declaration-doc source
-   class after ranking safeguards are proven.
+7. Keep Python callable docs out of V2.
+8. Validate SQLite and DuckDB parity from the start of each persistence/schema
+   change.
+9. Update repository documentation as a cleanup step so user-facing docs,
+   process docs, and implementation behavior remain synchronized.
 
 V2 should preserve these V1 boundaries:
 
