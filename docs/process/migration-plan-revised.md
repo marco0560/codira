@@ -479,8 +479,8 @@ Required repository checks:
 
 ```bash
 source .venv/bin/activate
-black --check src scripts tests
 ruff check src scripts tests
+ruff format --check src scripts tests
 mypy src scripts tests
 pytest -q
 ```
@@ -782,8 +782,8 @@ Repository contract:
 
 ```bash
 source .venv/bin/activate
-black --check src scripts tests
 ruff check src scripts tests
+ruff format --check src scripts tests
 mypy src scripts tests
 pytest -q
 ```

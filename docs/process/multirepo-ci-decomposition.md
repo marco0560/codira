@@ -44,8 +44,8 @@ Validation commands:
 
 ```bash
 python -m pre_commit run --all-files
-python -m black --check src scripts tests
 python -m ruff check src scripts tests
+python -m ruff format --check src scripts tests
 python -m mypy src scripts tests
 python -m pytest -q
 ```
@@ -76,8 +76,8 @@ python -m pip install -e ".[test]"
 Validation commands:
 
 ```bash
-python -m black --check src tests
 python -m ruff check src tests
+python -m ruff format --check src tests
 python -m mypy src tests
 python -m pytest -q tests
 ```
@@ -106,8 +106,8 @@ python -m pip install -e ".[test]"
 Validation commands:
 
 ```bash
-python -m black --check tests
 python -m ruff check tests
+python -m ruff format --check tests
 python -m mypy tests
 python -m pytest -q tests
 ```

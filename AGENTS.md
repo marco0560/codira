@@ -344,8 +344,8 @@ pytest -q
 Fallback:
 
 ```bash
-black --check .
 ruff check .
+ruff format --check .
 mypy .
 pytest -q
 ```

@@ -11,7 +11,7 @@ Evidence:
 
 - `.github/workflows/ci.yml` sets `runs-on: ubuntu-latest`.
 - The same workflow installs the project, installs repository git config, runs
-  pre-commit, `black --check .`, `ruff check .`, `mypy .`, `pytest`, and
+  pre-commit, `ruff check .`, `ruff format --check .`, `mypy .`, `pytest`, and
   `bash scripts/release_audit.sh`.
 
 The repository also contains Windows-facing path and shell usage through local

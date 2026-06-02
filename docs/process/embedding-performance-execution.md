@@ -34,8 +34,8 @@ feat/batch-embedding-indexing
 * [x] Added regression tests for batching and same-run payload reuse.
 * [x] Added a benchmark script for phase timings and embedding batch metrics.
 * [x] Ran the full validation surface:
-  `black --check src scripts tests`,
   `ruff check src scripts tests`,
+  `ruff format --check src scripts tests`,
   `mypy src scripts tests`,
   `pytest -q`.
 * [x] Captured one instrumented full-index benchmark on this repository. The

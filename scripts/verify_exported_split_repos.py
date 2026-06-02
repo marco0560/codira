@@ -136,15 +136,15 @@ def build_repo_validation_commands(
 
     if exported_repo_root.name == BUNDLE_REPO:
         validate_commands: tuple[tuple[str, ...], ...] = (
-            (python, "-m", "black", "--check", "tests"),
             (python, "-m", "ruff", "check", "tests"),
+            (python, "-m", "ruff", "format", "--check", "tests"),
             (python, "-m", "mypy", "tests"),
             (python, "-m", "pytest", "-q", "tests"),
         )
     else:
         validate_commands = (
-            (python, "-m", "black", "--check", "src", "tests"),
             (python, "-m", "ruff", "check", "src", "tests"),
+            (python, "-m", "ruff", "format", "--check", "src", "tests"),
             (python, "-m", "mypy", "src", "tests"),
             (python, "-m", "pytest", "-q", "tests"),
         )
