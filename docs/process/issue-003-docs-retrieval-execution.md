@@ -30,9 +30,9 @@ Out of scope for V1:
 
 | Phase | Status | Evidence | Commit |
 |-------|--------|----------|--------|
-| 0. Scope and execution ledger | In progress | Ledger created. | Pending |
-| 1. Models and analyzer contract | Complete | Added `DocumentationArtifact`, documentation literals, and shared row aliases. `uv run ruff check src/codira/models.py src/codira/types.py`; `uv run ruff format --check src/codira/models.py src/codira/types.py`. | Pending |
-| 2. Source extraction | Pending | Add Markdown section analyzer and Python module-doc artifacts. | Pending |
+| 0. Scope and execution ledger | Complete | Ledger created. | `217e8d4` |
+| 1. Models and analyzer contract | Complete | Added `DocumentationArtifact`, documentation literals, and shared row aliases. `uv run ruff check src/codira/models.py src/codira/types.py`; `uv run ruff format --check src/codira/models.py src/codira/types.py`. | `562b9cd` |
+| 2. Source extraction | Complete | Markdown analyzer, Python module-doc artifacts, analyzer capability wiring, first-party package wiring, and symbol-index skip guard for documentation-only analyses. Focused analyzer/plugin/package tests and Ruff checks passed. | Pending |
 | 3. Backend persistence and embeddings | Pending | SQLite, DuckDB, and in-memory backends persist/query docs and doc embeddings. | Pending |
 | 4. `ctx` retrieval and output | Pending | `docs` channel, result union, intent weighting, provenance, and explain output. | Pending |
 | 5. Validation and cleanup | Pending | Full validation and ledger closure. | Pending |
@@ -64,3 +64,23 @@ Out of scope for V1:
 - Extended `AnalysisResult` with ordered documentation artifacts while keeping
   the default empty for existing analyzer outputs.
 - Added shared documentation row aliases for later backend and query work.
+
+### Phase 2
+
+- Added a first-party Markdown analyzer package that emits deterministic
+  section/file documentation artifacts without pretending Markdown is a symbol
+  language.
+- Added Python module docstring documentation artifacts while leaving callable
+  docstrings out of scope.
+- Declared the `documentation` ontology capability across analyzer contracts
+  and marked non-documenting analyzers as not supporting it.
+- Wired Markdown into first-party package inventory, bundle metadata, split-repo
+  scripts, bootstrap expectations, and compatibility shims.
+- Added backend guards so documentation-only analyses can preserve file
+  ownership without creating code symbols or reference-scan rows.
+- Validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q packages/codira-analyzer-markdown/tests/test_markdown_package.py packages/codira-analyzer-python/tests/test_python_package.py tests/test_capabilities.py tests/test_plugins.py -k "markdown or python_analyzer_declares or capability_contract_validates or orders_first_party or compatibility_shims"`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_future_repo_ci.py tests/test_future_repo_split_manifest.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q packages/codira-bundle-official/tests/test_bundle_package.py tests/test_contracts.py::test_root_optional_dependencies_support_monorepo_bundle_install tests/test_bootstrap_scripts.py -k "first_party_package_inventory or editable_package_paths or build_install_argv_installs_each_first_party_package_editably or release_artifact_helper_covers_core or benchmark_metadata_includes_first_party_plugins or split_repo_verification_installs_local_first_party_packages_for_bundle"`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check ...`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check ...`

@@ -471,6 +471,9 @@ class AnalysisResult:
         Ordered import artifacts.
     documentation : tuple[codira.models.DocumentationArtifact, ...], optional
         Ordered documentation artifacts emitted by the analyzer.
+    index_symbols : bool, optional
+        Whether backend persistence should index the module, symbol, relation,
+        and reference artifacts as code symbols.
 
     Notes
     -----
@@ -485,6 +488,7 @@ class AnalysisResult:
     declarations: tuple[DeclarationArtifact, ...]
     imports: tuple[ImportArtifact, ...]
     documentation: tuple[DocumentationArtifact, ...] = ()
+    index_symbols: bool = True
 
     def iter_functions(self) -> tuple[FunctionArtifact, ...]:
         """

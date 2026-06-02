@@ -918,7 +918,7 @@ class JsonAnalyzer:
                 "constant",
                 "variable",
             ),
-            does_not_support=("namespace",),
+            does_not_support=("namespace", "documentation"),
             mappings={
                 "module": "module",
                 "json_schema_definition": "type",

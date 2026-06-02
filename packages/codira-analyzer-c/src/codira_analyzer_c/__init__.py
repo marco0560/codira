@@ -1470,7 +1470,7 @@ class CAnalyzer:
             source="first_party",
             entrypoint="codira_analyzer_c:build_analyzer",
             supports=("module", "type", "callable", "import", "constant"),
-            does_not_support=("variable", "namespace"),
+            does_not_support=("variable", "namespace", "documentation"),
             mappings={
                 "module": "module",
                 "function": "callable",

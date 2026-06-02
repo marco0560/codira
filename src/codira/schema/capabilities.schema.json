@@ -30,7 +30,8 @@
               "import",
               "constant",
               "variable",
-              "namespace"
+              "namespace",
+              "documentation"
             ]
           },
           "uniqueItems": true

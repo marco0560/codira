@@ -63,7 +63,14 @@ def test_python_analyzer_declares_explicit_ontology_mapping() -> None:
     declaration = PythonAnalyzer().analyzer_capability_declaration()
 
     assert declaration.analyzer_name == "python"
-    assert declaration.supports == ("module", "type", "callable", "import", "constant")
+    assert declaration.supports == (
+        "module",
+        "type",
+        "callable",
+        "import",
+        "constant",
+        "documentation",
+    )
     assert declaration.does_not_support == ("variable", "namespace")
     assert declaration.mappings == {
         "module": "module",
@@ -73,6 +80,7 @@ def test_python_analyzer_declares_explicit_ontology_mapping() -> None:
         "function": "callable",
         "method": "callable",
         "import": "import",
+        "module_docstring": "documentation",
     }
 
 
@@ -93,7 +101,7 @@ def test_c_analyzer_declares_explicit_ontology_mapping() -> None:
 
     assert declaration.analyzer_name == "c"
     assert declaration.supports == ("module", "type", "callable", "import", "constant")
-    assert declaration.does_not_support == ("variable", "namespace")
+    assert declaration.does_not_support == ("variable", "namespace", "documentation")
     assert declaration.mappings == {
         "module": "module",
         "function": "callable",
@@ -132,7 +140,7 @@ def test_cpp_analyzer_declares_explicit_ontology_mapping() -> None:
         "constant",
         "namespace",
     )
-    assert declaration.does_not_support == ("variable",)
+    assert declaration.does_not_support == ("variable", "documentation")
     assert declaration.mappings == {
         "module": "module",
         "class": "type",
@@ -175,6 +183,7 @@ def test_capability_contract_validates_against_schema() -> None:
             "constant",
             "variable",
             "namespace",
+            "documentation",
         ],
     }
     assert payload["validation"] == {"status": "ok", "issues": []}

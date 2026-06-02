@@ -221,6 +221,7 @@ OntologyObjectType = Literal[
     "constant",
     "variable",
     "namespace",
+    "documentation",
 ]
 
 CANONICAL_ONTOLOGY_TYPES: tuple[OntologyObjectType, ...] = (
@@ -231,6 +232,7 @@ CANONICAL_ONTOLOGY_TYPES: tuple[OntologyObjectType, ...] = (
     "constant",
     "variable",
     "namespace",
+    "documentation",
 )
 
 

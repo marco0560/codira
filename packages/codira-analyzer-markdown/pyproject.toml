@@ -3,21 +3,13 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codira-bundle-official"
+name = "codira-analyzer-markdown"
 version = "1.40.0"
-description = "Curated first-party plugin bundle for codira"
+description = "First-party Markdown documentation analyzer plugin for codira"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "codira[semantic]>=1.40.0,<2.0.0",
-    "codira-analyzer-python==1.40.0",
-    "codira-analyzer-json==1.40.0",
-    "codira-analyzer-c==1.40.0",
-    "codira-analyzer-cpp==1.40.0",
-    "codira-analyzer-bash==1.40.0",
-    "codira-analyzer-markdown==1.40.0",
-    "codira-backend-sqlite==1.40.0",
-    "codira-backend-duckdb==1.40.0",
+    "codira>=1.5.0,<2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +19,18 @@ test = [
     "pytest",
     "ruff",
 ]
+
+[project.entry-points."codira.analyzers"]
+markdown = "codira_analyzer_markdown:build_analyzer"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+codira_analyzer_markdown = ["py.typed"]
 
 [tool.black]
 line-length = 88

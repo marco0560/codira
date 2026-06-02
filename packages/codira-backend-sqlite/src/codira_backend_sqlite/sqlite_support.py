@@ -2153,6 +2153,14 @@ def _store_analysis(
     )
     assert cur.lastrowid is not None
     file_id = int(cur.lastrowid)
+    if not analysis.index_symbols:
+        return _flush_embedding_rows(
+            conn,
+            embedding_rows=embedding_rows,
+            backend=backend,
+            previous_embeddings=previous_embeddings,
+            pending_embedding_rows=pending_embedding_rows,
+        )
     module_name, module_id, c_embedding_context = _persist_module_artifacts(
         conn,
         file_id=file_id,

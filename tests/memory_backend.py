@@ -1120,6 +1120,9 @@ class MemoryIndexBackend:
             analyzer_version=request.file_metadata.analyzer_version,
         )
         state.file_id_by_path[path_text] = file_id
+        analysis = request.analysis
+        if not analysis.index_symbols:
+            return (0, 0)
         state.reference_scan_lines.extend(
             (file_id, lineno, line_text)
             for lineno, line_text in self._reference_scan_lines(
@@ -1128,7 +1131,6 @@ class MemoryIndexBackend:
         )
 
         embedding_payloads: list[tuple[int, str, str]] = []
-        analysis = request.analysis
         module_name = analysis.module.name
         module_symbol_id = self._append_symbol(
             state,

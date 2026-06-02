@@ -50,6 +50,7 @@ FIRST_PARTY_PLUGIN_PROVIDERS: tuple[str, ...] = (
     "codira-analyzer-c",
     "codira-analyzer-cpp",
     "codira-analyzer-bash",
+    "codira-analyzer-markdown",
     "codira-backend-sqlite",
     "codira-backend-duckdb",
 )

@@ -2371,7 +2371,7 @@ class CppAnalyzer:
             source="first_party",
             entrypoint="codira_analyzer_cpp:build_analyzer",
             supports=("module", "type", "callable", "import", "constant", "namespace"),
-            does_not_support=("variable",),
+            does_not_support=("variable", "documentation"),
             mappings={
                 "module": "module",
                 "class": "type",

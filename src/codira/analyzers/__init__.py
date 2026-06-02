@@ -20,9 +20,10 @@ This module belongs to the **language analyzer registration layer** of ADR-004.
 import importlib
 
 from codira.analyzers.json import JsonAnalyzer
+from codira.analyzers.markdown import MarkdownAnalyzer
 from codira.analyzers.python import PythonAnalyzer
 
-__all__ = ["PythonAnalyzer", "JsonAnalyzer"]
+__all__ = ["PythonAnalyzer", "JsonAnalyzer", "MarkdownAnalyzer"]
 
 try:
     c_module = importlib.import_module("codira.analyzers.c")

@@ -2144,6 +2144,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-c==1.40.0",
         "codira-analyzer-cpp==1.40.0",
         "codira-analyzer-bash==1.40.0",
+        "codira-analyzer-markdown==1.40.0",
         "codira-backend-sqlite==1.40.0",
         "codira-backend-duckdb==1.40.0",
     ]

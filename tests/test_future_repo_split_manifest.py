@@ -83,6 +83,7 @@ def test_future_repo_split_manifests_cover_the_accepted_repository_set() -> None
         "codira-analyzer-c",
         "codira-analyzer-cpp",
         "codira-analyzer-bash",
+        "codira-analyzer-markdown",
         "codira-backend-sqlite",
         "codira-backend-duckdb",
         "codira-bundle-official",

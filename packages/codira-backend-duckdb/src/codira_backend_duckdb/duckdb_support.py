@@ -3718,6 +3718,16 @@ def _store_analysis(
             file_metadata.analyzer_version,
         )
     )
+    if not analysis.index_symbols:
+        if owns_structural_rows:
+            _flush_structural_rows(conn, structural_rows)
+        return _flush_embedding_rows(
+            conn,
+            embedding_rows=embedding_rows,
+            backend=backend,
+            previous_embeddings=previous_embeddings,
+            pending_embedding_rows=pending_embedding_rows,
+        )
     module_name, module_id, c_embedding_context = _persist_module_artifacts(
         conn,
         file_id=file_id,
