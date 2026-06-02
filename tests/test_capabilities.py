@@ -195,8 +195,11 @@ def test_capability_contract_validates_against_schema() -> None:
     assert [item["declaration_status"] for item in analyzers] == ["declared"]
     assert "symbol" in channels
     assert "ctx" in commands
+    assert "docs" in commands
     symlist_command = cast("Mapping[str, object]", commands["symlist"])
     assert symlist_command["intent"] == "symbol_inventory"
+    docs_command = cast("Mapping[str, object]", commands["docs"])
+    assert docs_command["channels"] == ["docs"]
     assert "symbol_lookup" in retrieval_capabilities
 
 

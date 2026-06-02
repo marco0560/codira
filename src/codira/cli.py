@@ -71,7 +71,12 @@ from codira.registry import (
 from codira.scanner import iter_project_files
 from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendError, get_embedding_backend
-from codira.semantic.search import EmbeddingCandidatesRequest, embedding_candidates
+from codira.semantic.search import (
+    DocumentationCandidatesRequest,
+    EmbeddingCandidatesRequest,
+    documentation_candidates,
+    embedding_candidates,
+)
 from codira.storage import (
     _read_metadata_file,
     _write_metadata_file,
@@ -123,7 +128,18 @@ INDEX_METADATA_BACKEND_NAME = "backend_name"
 INDEX_METADATA_BACKEND_VERSION = "backend_version"
 INDEX_METADATA_FILE_COUNT = "indexed_file_count"
 _REPO_PATH_COMMANDS = frozenset(
-    {"index", "cov", "sym", "symlist", "emb", "calls", "refs", "audit", "ctx"}
+    {
+        "index",
+        "cov",
+        "sym",
+        "symlist",
+        "emb",
+        "docs",
+        "calls",
+        "refs",
+        "audit",
+        "ctx",
+    }
 )
 
 
@@ -202,6 +218,38 @@ class EmbeddingCommandRequest:
     limit: int
     prefix: str | None = None
     as_json: bool = False
+    query_prefix: str | None = None
+
+
+@dataclass(frozen=True)
+class DocumentationCommandRequest:
+    """
+    Runtime options for the ``docs`` CLI command.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index.
+    query : str
+        Natural-language documentation query to score.
+    limit : int
+        Maximum number of documentation matches to print.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict matched documents.
+    as_json : bool, optional
+        Whether to render structured JSON output.
+    explain : bool, optional
+        Whether to render inspection details for the docs-only retrieval pass.
+    query_prefix : str | None, optional
+        User-facing repo-root-relative prefix echoed in JSON output.
+    """
+
+    root: Path
+    query: str
+    limit: int
+    prefix: str | None = None
+    as_json: bool = False
+    explain: bool = False
     query_prefix: str | None = None
 
 
@@ -669,6 +717,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  codira index --path /mnt/readonly/repo --output-dir /tmp/codira-run\n"
             "  codira sym build_parser\n"
             '  codira emb "schema migration rules"\n'
+            '  codira docs "release process"\n'
             "  codira symlist --limit 20\n"
             '  codira ctx "find schema migration logic"\n'
             "  codira ctx --prompt "
@@ -688,7 +737,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         title="subcommands",
-        metavar=("{help,index,cov,sym,symlist,emb,calls,refs,audit,ctx,plugins,caps}"),
+        metavar=(
+            "{help,index,cov,sym,symlist,emb,docs,calls,refs,audit,ctx,plugins,caps}"
+        ),
     )
 
     sub.add_parser("help", help="Show help")
@@ -854,6 +905,50 @@ def build_parser() -> argparse.ArgumentParser:
         help="Restrict matches to files under this repo-root-relative path prefix",
     )
     _add_repo_path_arguments(embeddings_parser)
+
+    docs_parser = sub.add_parser(
+        "docs",
+        help="Inspect documentation-channel matches",
+        description=(
+            "Inspect documentation-only retrieval for a natural-language query. "
+            "This is an inspection surface for the docs channel; mixed code and "
+            "documentation retrieval remains available through ctx."
+        ),
+        epilog=(
+            "Examples:\n"
+            '  codira docs "release process"\n'
+            '  codira docs "release process" --json\n'
+            '  codira docs "architecture decisions" --explain\n'
+            '  codira docs "plugin loading" --prefix docs'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    docs_parser.add_argument(
+        "query",
+        help="Natural-language query to score against stored documentation",
+    )
+    docs_parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="Maximum number of documentation matches to print",
+    )
+    docs_mode_group = docs_parser.add_mutually_exclusive_group()
+    docs_mode_group.add_argument(
+        "--json",
+        action="store_true",
+        help="Output structured JSON for machine consumption",
+    )
+    docs_mode_group.add_argument(
+        "--explain",
+        action="store_true",
+        help="Show docs-only retrieval diagnostics",
+    )
+    docs_parser.add_argument(
+        "--prefix",
+        help="Restrict matches to files under this repo-root-relative path prefix",
+    )
+    _add_repo_path_arguments(docs_parser)
 
     calls_parser = sub.add_parser(
         "calls",
@@ -2204,6 +2299,142 @@ def _run_embeddings(
     return 0
 
 
+def _run_documentation_lookup(
+    request: DocumentationCommandRequest,
+) -> int:
+    """
+    Print docs-only retrieval matches.
+
+    Parameters
+    ----------
+    request : codira.cli.DocumentationCommandRequest
+        Runtime options for the docs command.
+
+    Returns
+    -------
+    int
+        Zero when documentation retrieval completed, otherwise one when no
+        stored embeddings exist.
+    """
+    root = request.root
+    backend = get_embedding_backend()
+    inventory = embedding_inventory(root)
+
+    if not inventory:
+        if request.as_json:
+            _emit_json(
+                _query_payload(
+                    "docs",
+                    "not_indexed",
+                    {
+                        "text": request.query,
+                        "limit": request.limit,
+                        "prefix": request.query_prefix,
+                    },
+                    [],
+                    backend={
+                        "name": backend.name,
+                        "version": backend.version,
+                        "dim": backend.dim,
+                    },
+                )
+            )
+            return 1
+        print("No stored embeddings found. Run: codira index")
+        return 1
+
+    matches = documentation_candidates(
+        DocumentationCandidatesRequest(
+            root=root,
+            query=request.query,
+            limit=request.limit,
+            min_score=0.0,
+            prefix=request.prefix,
+        )
+    )
+
+    if request.as_json:
+        _emit_json(
+            _query_payload(
+                "docs",
+                "ok" if matches else "no_matches",
+                {
+                    "text": request.query,
+                    "limit": request.limit,
+                    "prefix": request.query_prefix,
+                },
+                [
+                    {
+                        "score": round(score, 2),
+                        "stable_id": stable_id,
+                        "kind": kind,
+                        "source_format": source_format,
+                        "file": file_path,
+                        "lineno": lineno,
+                        "end_lineno": end_lineno,
+                        "title": title,
+                        "heading_path": list(heading_path),
+                        "text": text,
+                    }
+                    for score, (
+                        stable_id,
+                        kind,
+                        source_format,
+                        file_path,
+                        lineno,
+                        end_lineno,
+                        title,
+                        heading_path,
+                        text,
+                    ) in matches
+                ],
+                backend={
+                    "name": backend.name,
+                    "version": backend.version,
+                    "dim": backend.dim,
+                },
+            )
+        )
+        return 0
+
+    if request.explain:
+        print(f"backend: {backend.name} version={backend.version} dim={backend.dim}")
+        print(f"query: {request.query}")
+        print(f"limit: {request.limit}")
+        print(f"prefix: {request.query_prefix}")
+        print(f"matches: {len(matches)}")
+
+    if not matches:
+        print("No documentation matches found.")
+        return 0
+
+    for score, (
+        stable_id,
+        kind,
+        source_format,
+        file_path,
+        lineno,
+        end_lineno,
+        title,
+        heading_path,
+        text,
+    ) in matches:
+        rel_path = _relative_report_path(root, file_path)
+        end_label = f"-{end_lineno}" if end_lineno is not None else ""
+        print(
+            f"{score:.2f} {kind}: {title} "
+            f"{rel_path}:{lineno}{end_label} [{source_format}]"
+        )
+        if request.explain:
+            heading = " > ".join(heading_path)
+            print(f"  stable_id: {stable_id}")
+            print(f"  heading_path: {heading}")
+            preview = " ".join(text.split())[:160]
+            print(f"  preview: {preview}")
+
+    return 0
+
+
 def _validate_relation_request(
     request: RelationCommandRequest,
 ) -> int | None:
@@ -3532,6 +3763,46 @@ def _run_embeddings_command(
     )
 
 
+def _run_docs_command(
+    args: argparse.Namespace,
+    root: Path,
+    *,
+    prefix: str | None,
+    raw_prefix: str | None,
+) -> int:
+    """
+    Run the ``docs`` command after index freshness checks.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command-line arguments.
+    root : pathlib.Path
+        Repository root containing the index.
+    prefix : str | None
+        Normalized absolute prefix used for backend filtering.
+    raw_prefix : str | None
+        User-facing repo-root-relative prefix echoed in JSON output.
+
+    Returns
+    -------
+    int
+        Process exit status for the documentation command.
+    """
+    _ensure_index(root)
+    return _run_documentation_lookup(
+        DocumentationCommandRequest(
+            root=root,
+            query=args.query,
+            limit=args.limit,
+            prefix=prefix,
+            as_json=args.json,
+            explain=args.explain,
+            query_prefix=raw_prefix,
+        )
+    )
+
+
 def _run_symbol_inventory_command(
     args: argparse.Namespace,
     root: Path,
@@ -3773,6 +4044,12 @@ def _command_handlers(
             raw_prefix=raw_prefix,
         ),
         "emb": lambda: _run_embeddings_command(
+            args,
+            root,
+            prefix=prefix,
+            raw_prefix=raw_prefix,
+        ),
+        "docs": lambda: _run_docs_command(
             args,
             root,
             prefix=prefix,
