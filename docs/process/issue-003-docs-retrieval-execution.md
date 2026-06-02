@@ -35,7 +35,7 @@ Out of scope for V1:
 | 2. Source extraction | Complete | Markdown analyzer, Python module-doc artifacts, analyzer capability wiring, first-party package wiring, and symbol-index skip guard for documentation-only analyses. Focused analyzer/plugin/package tests and Ruff checks passed. | `a89dfc0` |
 | 3. Backend persistence and embeddings | Complete | SQLite, DuckDB, and in-memory backends persist/query docs and doc embeddings through a distinct documentation object type. Focused backend tests and Ruff checks passed. | `9000e0d` |
 | 4. `ctx` retrieval and output | Complete | `docs` channel, typed documentation top matches, intent weighting, provenance, explain output, and context JSON schema 1.3. Focused context tests and Ruff checks passed. | `917966e` |
-| 5. Validation and cleanup | Complete | Full pre-commit and pytest passed after expectation cleanup. | Pending |
+| 5. Validation and cleanup | Complete | Full pre-commit and pytest passed after expectation cleanup. | `6edee25` |
 
 ## Decisions
 
@@ -49,7 +49,40 @@ Out of scope for V1:
   navigation, process, setup, release, configuration, API contract, and
   rationale queries; conservative for runtime behavior, debugging, bug fixing,
   and tests.
+- Documentation artifacts under `docs/` receive a small merge-time boost, while
+  still preserving the docs channel's separate provenance and weighting.
 - Backend parity is mandatory for SQLite, DuckDB, and the in-memory backend.
+
+## V2 Proposal
+
+V2 is future implementation scope, not part of the completed V1 feature.
+
+Recommended V2 phases:
+
+1. Add explicit docs/code diversity quotas and expose quota decisions in
+   explain diagnostics.
+2. Add a docs-only CLI inspection command that reuses the existing
+   `documentation_candidates` contract and does not replace mixed `ctx`
+   retrieval.
+3. Add a strict plain-text document analyzer for clearly documentation-scoped
+   `.txt` files only, excluding fixtures, logs, generated outputs, and vendor
+   material by default.
+4. Extend documentation artifacts for declaration-attached docs with explicit
+   owner identity, owner kind, and attachment confidence.
+5. Add C/C++ Doxygen support through the C/C++ analyzer plugins, limited to
+   analyzer-proven file/header docs and declaration-attached docs.
+6. Add Rust module and item docs through a future Rust analyzer plugin.
+7. Consider Python callable docs only as a separate declaration-doc source
+   class after ranking safeguards are proven.
+
+V2 should preserve these V1 boundaries:
+
+- analyzers own source-format parsing
+- the query layer consumes normalized documentation artifacts
+- arbitrary comment harvesting remains out of scope
+- documentation embeddings remain distinct from symbol embeddings
+- docs-only retrieval remains an inspection/debug surface, while `ctx` stays the
+  default mixed retrieval UX
 
 ## Phase Notes
 

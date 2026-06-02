@@ -143,6 +143,7 @@ CHANNEL_WEIGHTS: dict[ChannelName, float] = {
     "include_graph": 0.25,
 }
 MERGE_CROSS_FAMILY_BONUS = 0.15
+DOCUMENTATION_DOCS_PATH_BONUS = 0.10
 GRAPH_RETRIEVAL_LIMIT_PER_PRODUCER = 5
 OVERLOAD_RETRIEVAL_LIMIT = 5
 OVERLOAD_MATCH_HINTS = frozenset(
@@ -1581,6 +1582,32 @@ def _file_role_bias(role: FileRole, intent: QueryIntent | None = None) -> int:
     return 0
 
 
+def _documentation_docs_path_bonus(
+    symbol: SymbolRow,
+    channel_scores: dict[str, float],
+) -> float:
+    """
+    Return the small ranking bonus for docs-channel artifacts under ``docs/``.
+
+    Parameters
+    ----------
+    symbol : codira.types.SymbolRow
+        Candidate symbol or documentation-shaped row.
+    channel_scores : dict[str, float]
+        Weighted channel scores that contributed to the candidate.
+
+    Returns
+    -------
+    float
+        Small additive score for documentation artifacts under a ``docs`` path.
+    """
+    if symbol[0] != "documentation" or "docs" not in channel_scores:
+        return 0.0
+    if "docs" not in Path(symbol[3]).parts:
+        return 0.0
+    return DOCUMENTATION_DOCS_PATH_BONUS
+
+
 def _path_bias(
     file_path: str,
     module_name: str,
@@ -2549,12 +2576,13 @@ def _rank_signals_with_provenance(
         role_bias = _file_role_bias(role, intent)
         evidence_bonus = _merge_evidence_bonus(family_scores)
         role_bonus = float(role_bias) / 4.0
-        merge_score = rrf_score + evidence_bonus + role_bonus
+        docs_path_bonus = _documentation_docs_path_bonus(symbol, symbol_channel_scores)
+        merge_score = rrf_score + evidence_bonus + role_bonus + docs_path_bonus
         winner = max(
             sorted(symbol_channel_scores.items()),
             key=lambda item: item[1],
         )[0]
-        diagnostics[symbol] = {
+        diagnostics_entry: MergeDiagnosticsEntry = {
             "channels": dict(
                 sorted(
                     symbol_channel_scores.items(),
@@ -2573,6 +2601,9 @@ def _rank_signals_with_provenance(
             "merge_score": merge_score,
             "winner": winner,
         }
+        if docs_path_bonus:
+            diagnostics_entry["docs_path_bonus"] = docs_path_bonus
+        diagnostics[symbol] = diagnostics_entry
         ranked_with_scores.append((symbol, merge_score))
 
     ranked = sorted(

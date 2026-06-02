@@ -37,11 +37,13 @@ from codira.query.context import (
     _load_cached_python_file,
     _load_reference_scan_file,
     _path_bias,
+    _rank_signals_with_provenance,
     _ReferenceScanFile,
     _retrieve_documentation_candidates,
     _snippet_from_node,
     _top_matches_payload,
 )
+from codira.query.signals import RetrievalSignal
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -472,6 +474,72 @@ def test_retrieve_documentation_candidates_renders_explicit_provenance(
             "provenance": "markdown_section",
         }
     ]
+
+
+def test_rank_signals_boosts_documentation_under_docs_path(tmp_path: Path) -> None:
+    """
+    Give documentation artifacts under ``docs/`` a small deterministic boost.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root used to build stable absolute candidate paths.
+
+    Returns
+    -------
+    None
+        The test asserts the boost only affects docs-channel documentation
+        artifacts whose file path is under a ``docs`` directory.
+    """
+    docs_symbol = (
+        "documentation",
+        "markdown_section",
+        "Architecture",
+        str(tmp_path / "docs" / "architecture.md"),
+        1,
+    )
+    root_symbol = (
+        "documentation",
+        "markdown_section",
+        "Architecture",
+        str(tmp_path / "architecture.md"),
+        1,
+    )
+    signals = [
+        RetrievalSignal(
+            kind="embedding_similarity",
+            family="semantic",
+            target=docs_symbol,
+            producer_name="query-channel-docs",
+            producer_version="1",
+            capability_name="embedding_similarity",
+            capability_version="1",
+            channel_name="docs",
+            rank=1,
+            strength=0.9,
+        ),
+        RetrievalSignal(
+            kind="embedding_similarity",
+            family="semantic",
+            target=root_symbol,
+            producer_name="query-channel-docs",
+            producer_version="1",
+            capability_name="embedding_similarity",
+            capability_version="1",
+            channel_name="docs",
+            rank=1,
+            strength=0.9,
+        ),
+    ]
+
+    ranked, diagnostics = _rank_signals_with_provenance(
+        signals,
+        intent=classify_query("architecture overview"),
+    )
+
+    assert [symbol for symbol, _score in ranked] == [docs_symbol, root_symbol]
+    assert diagnostics[docs_symbol]["docs_path_bonus"] == 0.1
+    assert "docs_path_bonus" not in diagnostics[root_symbol]
 
 
 def test_classify_query_assigns_primary_intent_families() -> None:
