@@ -73,6 +73,7 @@ from codira.normalization import analysis_result_from_parsed
 from codira.parser_ast import parse_file
 from codira.query.producers import (
     CALL_GRAPH_RETRIEVAL_PRODUCER,
+    CHANNEL_PRODUCER_SPECS,
     EMBEDDING_RETRIEVAL_PRODUCER,
     INCLUDE_GRAPH_RETRIEVAL_PRODUCER,
     REFERENCE_RETRIEVAL_PRODUCER,
@@ -2050,6 +2051,10 @@ def test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_che
     assert isinstance(_FakeBackend(), IndexBackend)
     assert isinstance(_FakeRetrievalProducer(), RetrievalProducer)
     assert isinstance(EMBEDDING_RETRIEVAL_PRODUCER, RetrievalProducer)
+    assert all(
+        isinstance(producer, RetrievalProducer)
+        for producer in CHANNEL_PRODUCER_SPECS.values()
+    )
 
 
 def test_cpp_analyzer_shim_reexports_package_analyzer() -> None:

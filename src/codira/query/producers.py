@@ -74,6 +74,40 @@ class QueryProducerSpec:
     source_kind: Literal["channel", "enrichment"]
     source_name: str
 
+    def retrieval_producer_info(self) -> RetrievalProducerInfo:
+        """
+        Return versioned identity metadata for this retrieval producer.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        codira.contracts.RetrievalProducerInfo
+            Producer identity and capability-version metadata.
+        """
+        return RetrievalProducerInfo(
+            producer_name=self.producer_name,
+            producer_version=self.producer_version,
+            capability_version=self.capability_version,
+        )
+
+    def retrieval_capabilities(self) -> tuple[str, ...]:
+        """
+        Return declared retrieval capabilities for this producer.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        tuple[str, ...]
+            Declared capability names in deterministic order.
+        """
+        return self.capabilities
+
 
 @dataclass(frozen=True)
 class QueryChannelSpec:

@@ -59,7 +59,12 @@ from codira.query.producers import (
     channel_producer_specs,
     selected_enrichment_producers,
 )
-from codira.query.signals import RetrievalSignal, signal_sort_key
+from codira.query.signals import (
+    RetrievalSignal,
+    RetrievalSignalFamily,
+    RetrievalSignalKind,
+    signal_sort_key,
+)
 from codira.registry import active_index_backend
 from codira.semantic.embeddings import get_embedding_backend
 from codira.types import (
@@ -696,131 +701,80 @@ class ContextExecutionState:
 
 
 @dataclass(frozen=True)
-class CandidateScoringRule:
+class SignalAggregationRule:
     """
-    Declarative weight applied to one extracted candidate-scoring feature.
+    Declarative weight applied to one normalized candidate signal.
 
     Parameters
     ----------
-    feature : str
-        Name of the numeric feature field on ``CandidateScoreFeatures``.
+    evidence_detail : str
+        Stable signal evidence detail to aggregate.
     weight : int
-        Signed contribution multiplier applied to the feature value.
+        Signed contribution multiplier applied to signal strength.
     """
 
-    feature: str
+    evidence_detail: str
     weight: int
 
 
 @dataclass(frozen=True)
-class CandidateScoreFeatures:
+class CandidateSignalValue:
     """
-    Deterministic lexical-scoring features for one symbol candidate.
+    Raw value used to build one symbol-candidate retrieval signal.
 
     Parameters
     ----------
-    exact_name_match : int
-        Whether the normalized query exactly matches the symbol name.
-    substring_name_match : int
-        Whether the normalized query is a substring of the symbol name when no
-        exact match applies.
-    name_token_overlap_count : int
-        Number of overlapping normalized tokens between the query and symbol
-        name.
-    module_token_overlap_count : int
-        Number of overlapping normalized tokens between the query and module
-        name.
-    is_function : int
-        Whether the candidate is a top-level function.
-    is_private : int
-        Whether the symbol name starts with an underscore.
-    path_bias : int
-        Intent-aware location bias derived from the owning file path.
-    query_targets_module_as_module : int
-        Whether the query explicitly asks for a module and this candidate is a
-        module.
-    query_targets_module_as_non_module : int
-        Whether the query explicitly asks for a module and this candidate is
-        not a module.
-    module_depth_penalty_count : int
-        Depth count used to penalize deeply nested modules.
-    exact_target_symbol_match : int
-        Whether the candidate symbol matches the extracted identifier-like
-        target token.
-    exact_raw_query_match : int
-        Whether the raw query text exactly matches the symbol name.
-    lexical_frequency_count : int
-        Count of query tokens contained in the symbol name.
-    implementation_module_bonus : int
-        Whether the owning module is neither tests nor scripts.
-    lowered_module_penalty : int
-        Whether the module path contains biased infrastructure terms.
-    identifier_exact_match : int
-        Whether an identifier query exactly matches the symbol name.
-    identifier_module_suffix_match : int
-        Whether an identifier query matches the end of the module name.
-    multi_term_module_bonus : int
-        Whether a multi-term query should lightly favor module candidates.
-    strong_token_hit : int
-        Whether the candidate name contains at least one strong query token.
+    evidence_detail : str
+        Stable signal detail that identifies the ranking evidence.
+    value : int
+        Integer evidence magnitude before core aggregation applies policy.
+    kind : codira.query.signals.RetrievalSignalKind
+        Signal kind assigned to this evidence.
+    family : codira.query.signals.RetrievalSignalFamily
+        Signal family assigned to this evidence.
     """
 
-    exact_name_match: int
-    substring_name_match: int
-    name_token_overlap_count: int
-    module_token_overlap_count: int
-    is_function: int
-    is_private: int
-    path_bias: int
-    query_targets_module_as_module: int
-    query_targets_module_as_non_module: int
-    module_depth_penalty_count: int
-    exact_target_symbol_match: int
-    exact_raw_query_match: int
-    lexical_frequency_count: int
-    implementation_module_bonus: int
-    lowered_module_penalty: int
-    identifier_exact_match: int
-    identifier_module_suffix_match: int
-    multi_term_module_bonus: int
-    strong_token_hit: int
+    evidence_detail: str
+    value: int
+    kind: RetrievalSignalKind
+    family: RetrievalSignalFamily
 
 
-PRIMARY_SYMBOL_SCORING_RULES: tuple[CandidateScoringRule, ...] = (
-    CandidateScoringRule("exact_name_match", 100),
-    CandidateScoringRule("substring_name_match", 50),
-    CandidateScoringRule("name_token_overlap_count", 10),
-    CandidateScoringRule("module_token_overlap_count", 3),
-    CandidateScoringRule("is_function", 5),
-    CandidateScoringRule("is_private", -20),
-    CandidateScoringRule("path_bias", 1),
-    CandidateScoringRule("query_targets_module_as_module", 120),
-    CandidateScoringRule("query_targets_module_as_non_module", -40),
-    CandidateScoringRule("module_depth_penalty_count", -5),
-    CandidateScoringRule("exact_target_symbol_match", 10),
-    CandidateScoringRule("exact_raw_query_match", 5),
-    CandidateScoringRule("lexical_frequency_count", 2),
-    CandidateScoringRule("implementation_module_bonus", 2),
-    CandidateScoringRule("lowered_module_penalty", -2),
-    CandidateScoringRule("identifier_exact_match", 25),
-    CandidateScoringRule("identifier_module_suffix_match", 8),
-    CandidateScoringRule("multi_term_module_bonus", 1),
+PRIMARY_SYMBOL_AGGREGATION_RULES: tuple[SignalAggregationRule, ...] = (
+    SignalAggregationRule("exact_name_match", 100),
+    SignalAggregationRule("substring_name_match", 50),
+    SignalAggregationRule("name_token_overlap_count", 10),
+    SignalAggregationRule("module_token_overlap_count", 3),
+    SignalAggregationRule("is_function", 5),
+    SignalAggregationRule("is_private", -20),
+    SignalAggregationRule("path_bias", 1),
+    SignalAggregationRule("query_targets_module_as_module", 120),
+    SignalAggregationRule("query_targets_module_as_non_module", -40),
+    SignalAggregationRule("module_depth_penalty_count", -5),
+    SignalAggregationRule("exact_target_symbol_match", 10),
+    SignalAggregationRule("exact_raw_query_match", 5),
+    SignalAggregationRule("lexical_frequency_count", 2),
+    SignalAggregationRule("implementation_module_bonus", 2),
+    SignalAggregationRule("lowered_module_penalty", -2),
+    SignalAggregationRule("identifier_exact_match", 25),
+    SignalAggregationRule("identifier_module_suffix_match", 8),
+    SignalAggregationRule("multi_term_module_bonus", 1),
 )
 
-FALLBACK_SYMBOL_SCORING_RULES: tuple[CandidateScoringRule, ...] = (
-    CandidateScoringRule("exact_name_match", 100),
-    CandidateScoringRule("substring_name_match", 50),
-    CandidateScoringRule("name_token_overlap_count", 10),
-    CandidateScoringRule("module_token_overlap_count", 3),
-    CandidateScoringRule("is_function", 5),
-    CandidateScoringRule("is_private", -20),
-    CandidateScoringRule("path_bias", 1),
-    CandidateScoringRule("query_targets_module_as_module", 120),
-    CandidateScoringRule("query_targets_module_as_non_module", -40),
-    CandidateScoringRule("module_depth_penalty_count", -5),
-    CandidateScoringRule("identifier_exact_match", 25),
-    CandidateScoringRule("identifier_module_suffix_match", 8),
-    CandidateScoringRule("multi_term_module_bonus", 1),
+FALLBACK_SYMBOL_AGGREGATION_RULES: tuple[SignalAggregationRule, ...] = (
+    SignalAggregationRule("exact_name_match", 100),
+    SignalAggregationRule("substring_name_match", 50),
+    SignalAggregationRule("name_token_overlap_count", 10),
+    SignalAggregationRule("module_token_overlap_count", 3),
+    SignalAggregationRule("is_function", 5),
+    SignalAggregationRule("is_private", -20),
+    SignalAggregationRule("path_bias", 1),
+    SignalAggregationRule("query_targets_module_as_module", 120),
+    SignalAggregationRule("query_targets_module_as_non_module", -40),
+    SignalAggregationRule("module_depth_penalty_count", -5),
+    SignalAggregationRule("identifier_exact_match", 25),
+    SignalAggregationRule("identifier_module_suffix_match", 8),
+    SignalAggregationRule("multi_term_module_bonus", 1),
 )
 
 
@@ -1678,12 +1632,12 @@ def _score_match(
     int
         Deterministic relevance score for the candidate.
     """
-    features = _extract_candidate_score_features(
+    signals = _candidate_retrieval_signals(
         query_tokens,
         symbol,
         intent=intent,
     )
-    return _apply_scoring_rules(features, PRIMARY_SYMBOL_SCORING_RULES)
+    return _aggregate_candidate_signals(signals, PRIMARY_SYMBOL_AGGREGATION_RULES)
 
 
 def _extract_target_symbol(query_tokens: list[str]) -> str | None:
@@ -1746,16 +1700,16 @@ def _normalized_strong_query_tokens(query_tokens: list[str]) -> list[str]:
     return normalized_tokens
 
 
-def _extract_candidate_score_features(
+def _candidate_signal_values(
     query_tokens: list[str],
     symbol: SymbolRow,
     *,
     intent: QueryIntent | None = None,
     raw_query: str | None = None,
     target_symbol: str | None = None,
-) -> CandidateScoreFeatures:
+) -> tuple[CandidateSignalValue, ...]:
     """
-    Extract deterministic lexical-scoring features for one symbol candidate.
+    Extract deterministic signal values for one symbol candidate.
 
     Parameters
     ----------
@@ -1772,8 +1726,8 @@ def _extract_candidate_score_features(
 
     Returns
     -------
-    CandidateScoreFeatures
-        Extracted numeric features consumed by the scoring rule tables.
+    tuple[CandidateSignalValue, ...]
+        Extracted signal values consumed by core aggregation rules.
     """
     symbol_type, module_name, name, file_path, _lineno = symbol
     normalized_query = " ".join(query_tokens)
@@ -1782,79 +1736,277 @@ def _extract_candidate_score_features(
     name_tokens = set(_tokenize(symbol_name))
     normalized_strong_tokens = _normalized_strong_query_tokens(query_tokens)
 
-    return CandidateScoreFeatures(
-        exact_name_match=int(normalized_query == symbol_name),
-        substring_name_match=int(
-            normalized_query != symbol_name and bool(normalized_query in symbol_name)
+    lexical_kind: RetrievalSignalKind = "text_match"
+    lexical_family: RetrievalSignalFamily = "lexical"
+    task_kind: RetrievalSignalKind = "proximity"
+    task_family: RetrievalSignalFamily = "task"
+
+    return (
+        CandidateSignalValue(
+            "exact_name_match",
+            int(normalized_query == symbol_name),
+            "exact_symbol",
+            lexical_family,
         ),
-        name_token_overlap_count=len(set(query_tokens) & name_tokens),
-        module_token_overlap_count=len(set(query_tokens) & module_tokens),
-        is_function=int(symbol_type == "function"),
-        is_private=int(symbol_name.startswith("_")),
-        path_bias=_path_bias(file_path, module_name, intent=intent),
-        query_targets_module_as_module=int(
-            "module" in query_tokens and symbol_type == "module"
+        CandidateSignalValue(
+            "substring_name_match",
+            int(
+                normalized_query != symbol_name
+                and bool(normalized_query in symbol_name)
+            ),
+            lexical_kind,
+            lexical_family,
         ),
-        query_targets_module_as_non_module=int(
-            "module" in query_tokens and symbol_type != "module"
+        CandidateSignalValue(
+            "name_token_overlap_count",
+            len(set(query_tokens) & name_tokens),
+            lexical_kind,
+            lexical_family,
         ),
-        module_depth_penalty_count=(
-            module_name.count(".") if symbol_type == "module" else 0
+        CandidateSignalValue(
+            "module_token_overlap_count",
+            len(set(query_tokens) & module_tokens),
+            lexical_kind,
+            lexical_family,
         ),
-        exact_target_symbol_match=int(
-            target_symbol is not None and symbol_name == target_symbol
+        CandidateSignalValue(
+            "is_function",
+            int(symbol_type == "function"),
+            task_kind,
+            task_family,
         ),
-        exact_raw_query_match=int(raw_query is not None and symbol_name == raw_query),
-        lexical_frequency_count=sum(
-            1 for token in query_tokens if token in symbol_name.lower()
+        CandidateSignalValue(
+            "is_private",
+            int(symbol_name.startswith("_")),
+            task_kind,
+            task_family,
         ),
-        implementation_module_bonus=int(
-            not module_name.startswith("tests.")
-            and not module_name.startswith("scripts.")
+        CandidateSignalValue(
+            "path_bias",
+            _path_bias(file_path, module_name, intent=intent),
+            task_kind,
+            task_family,
         ),
-        lowered_module_penalty=int(
-            any(x in module_name.lower() for x in ("cli", "scanner", "storage"))
+        CandidateSignalValue(
+            "query_targets_module_as_module",
+            int("module" in query_tokens and symbol_type == "module"),
+            task_kind,
+            task_family,
         ),
-        identifier_exact_match=int(
-            bool(intent and intent.is_identifier_query and symbol_name == intent.raw)
+        CandidateSignalValue(
+            "query_targets_module_as_non_module",
+            int("module" in query_tokens and symbol_type != "module"),
+            task_kind,
+            task_family,
         ),
-        identifier_module_suffix_match=int(
-            bool(
-                intent
-                and intent.is_identifier_query
-                and module_name.endswith(intent.raw)
-                and symbol_name != intent.raw
-            )
+        CandidateSignalValue(
+            "module_depth_penalty_count",
+            module_name.count(".") if symbol_type == "module" else 0,
+            task_kind,
+            task_family,
         ),
-        multi_term_module_bonus=int(
-            bool(intent and intent.is_multi_term and symbol_type == "module")
+        CandidateSignalValue(
+            "exact_target_symbol_match",
+            int(target_symbol is not None and symbol_name == target_symbol),
+            "exact_symbol",
+            lexical_family,
         ),
-        strong_token_hit=int(
-            any(token in _tokenize(symbol_name) for token in normalized_strong_tokens)
+        CandidateSignalValue(
+            "exact_raw_query_match",
+            int(raw_query is not None and symbol_name == raw_query),
+            "exact_symbol",
+            lexical_family,
+        ),
+        CandidateSignalValue(
+            "lexical_frequency_count",
+            sum(1 for token in query_tokens if token in symbol_name.lower()),
+            lexical_kind,
+            lexical_family,
+        ),
+        CandidateSignalValue(
+            "implementation_module_bonus",
+            int(
+                not module_name.startswith("tests.")
+                and not module_name.startswith("scripts.")
+            ),
+            task_kind,
+            task_family,
+        ),
+        CandidateSignalValue(
+            "lowered_module_penalty",
+            int(any(x in module_name.lower() for x in ("cli", "scanner", "storage"))),
+            task_kind,
+            task_family,
+        ),
+        CandidateSignalValue(
+            "identifier_exact_match",
+            int(
+                bool(
+                    intent and intent.is_identifier_query and symbol_name == intent.raw
+                )
+            ),
+            "exact_symbol",
+            lexical_family,
+        ),
+        CandidateSignalValue(
+            "identifier_module_suffix_match",
+            int(
+                bool(
+                    intent
+                    and intent.is_identifier_query
+                    and module_name.endswith(intent.raw)
+                    and symbol_name != intent.raw
+                )
+            ),
+            lexical_kind,
+            lexical_family,
+        ),
+        CandidateSignalValue(
+            "multi_term_module_bonus",
+            int(bool(intent and intent.is_multi_term and symbol_type == "module")),
+            task_kind,
+            task_family,
+        ),
+        CandidateSignalValue(
+            "strong_token_hit",
+            int(
+                any(
+                    token in _tokenize(symbol_name)
+                    for token in normalized_strong_tokens
+                )
+            ),
+            lexical_kind,
+            lexical_family,
         ),
     )
 
 
-def _apply_scoring_rules(
-    features: CandidateScoreFeatures,
-    rules: tuple[CandidateScoringRule, ...],
-) -> int:
+def _candidate_retrieval_signals(
+    query_tokens: list[str],
+    symbol: SymbolRow,
+    *,
+    intent: QueryIntent | None = None,
+    raw_query: str | None = None,
+    target_symbol: str | None = None,
+) -> list[RetrievalSignal]:
     """
-    Apply a declarative rule table to extracted candidate-scoring features.
+    Build normalized retrieval signals for one symbol candidate.
 
     Parameters
     ----------
-    features : CandidateScoreFeatures
-        Extracted feature values for one candidate symbol.
-    rules : tuple[CandidateScoringRule, ...]
-        Ordered score rules to apply.
+    query_tokens : list[str]
+        Normalized query tokens.
+    symbol : codira.types.SymbolRow
+        Candidate symbol row to score.
+    intent : codira.query.classifier.QueryIntent | None, optional
+        Structured query classification.
+    raw_query : str | None, optional
+        Unsanitized query text used for exact-name bonuses.
+    target_symbol : str | None, optional
+        Identifier-like query token singled out for exact-name boosts.
+
+    Returns
+    -------
+    list[codira.query.signals.RetrievalSignal]
+        Score-free candidate evidence signals consumed by aggregation rules.
+    """
+    signals: list[RetrievalSignal] = []
+    for value in _candidate_signal_values(
+        query_tokens,
+        symbol,
+        intent=intent,
+        raw_query=raw_query,
+        target_symbol=target_symbol,
+    ):
+        if value.value == 0:
+            continue
+        signals.append(
+            RetrievalSignal(
+                kind=value.kind,
+                family=value.family,
+                target=symbol,
+                producer_name="query-channel-symbol",
+                producer_version=package_version(),
+                capability_name="symbol_lookup",
+                capability_version="1",
+                evidence_detail=value.evidence_detail,
+                channel_name="symbol",
+                strength=float(value.value),
+            )
+        )
+
+    return sorted(signals, key=signal_sort_key)
+
+
+def _candidate_signal_strength(
+    signals: list[RetrievalSignal], evidence_detail: str
+) -> float:
+    """
+    Sum signal strength for one candidate evidence detail.
+
+    Parameters
+    ----------
+    signals : list[codira.query.signals.RetrievalSignal]
+        Candidate retrieval signals.
+    evidence_detail : str
+        Evidence detail to aggregate.
+
+    Returns
+    -------
+    float
+        Total strength for matching signals.
+    """
+    return sum(
+        signal.strength if signal.strength is not None else 0.0
+        for signal in signals
+        if signal.evidence_detail == evidence_detail
+    )
+
+
+def _aggregate_candidate_signals(
+    signals: list[RetrievalSignal],
+    rules: tuple[SignalAggregationRule, ...],
+) -> int:
+    """
+    Apply core aggregation policy to candidate retrieval signals.
+
+    Parameters
+    ----------
+    signals : list[codira.query.signals.RetrievalSignal]
+        Score-free candidate evidence signals.
+    rules : tuple[SignalAggregationRule, ...]
+        Ordered aggregation rules to apply.
 
     Returns
     -------
     int
         Total deterministic score contribution from the supplied rules.
     """
-    return sum(getattr(features, rule.feature) * rule.weight for rule in rules)
+    return int(
+        sum(
+            _candidate_signal_strength(signals, rule.evidence_detail) * rule.weight
+            for rule in rules
+        )
+    )
+
+
+def _candidate_has_signal(signals: list[RetrievalSignal], evidence_detail: str) -> bool:
+    """
+    Return whether a candidate emitted one named evidence signal.
+
+    Parameters
+    ----------
+    signals : list[codira.query.signals.RetrievalSignal]
+        Candidate retrieval signals.
+    evidence_detail : str
+        Evidence detail to look for.
+
+    Returns
+    -------
+    bool
+        ``True`` when any signal carries the requested evidence detail.
+    """
+    return any(signal.evidence_detail == evidence_detail for signal in signals)
 
 
 def _format_symbol(root: Path, symbol: SymbolRow, *, include_path: bool) -> str:
@@ -2053,16 +2205,16 @@ def _retrieve_symbol_candidates(
     scored: list[tuple[float, SymbolRow]] = []
 
     for candidate in all_candidates:
-        features = _extract_candidate_score_features(
+        signals = _candidate_retrieval_signals(
             query_tokens,
             candidate,
             intent=intent,
             raw_query=query,
             target_symbol=target_symbol,
         )
-        if not features.strong_token_hit:
+        if not _candidate_has_signal(signals, "strong_token_hit"):
             continue
-        score = _apply_scoring_rules(features, PRIMARY_SYMBOL_SCORING_RULES)
+        score = _aggregate_candidate_signals(signals, PRIMARY_SYMBOL_AGGREGATION_RULES)
         if score >= _MIN_SCORE:
             scored.append((float(score), candidate))
 
@@ -2072,12 +2224,15 @@ def _retrieve_symbol_candidates(
         fallback_scored: list[tuple[float, SymbolRow]] = []
 
         for candidate in all_candidates:
-            features = _extract_candidate_score_features(
+            signals = _candidate_retrieval_signals(
                 query_tokens,
                 candidate,
                 intent=intent,
             )
-            score = _apply_scoring_rules(features, FALLBACK_SYMBOL_SCORING_RULES)
+            score = _aggregate_candidate_signals(
+                signals,
+                FALLBACK_SYMBOL_AGGREGATION_RULES,
+            )
             fallback_scored.append((float(score), candidate))
 
         fallback_scored.sort(key=_scored_symbol_sort_key)
