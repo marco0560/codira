@@ -31,7 +31,7 @@ Out of scope for V1:
 | Phase | Status | Evidence | Commit |
 |-------|--------|----------|--------|
 | 0. Scope and execution ledger | In progress | Ledger created. | Pending |
-| 1. Models and analyzer contract | Pending | Add `DocumentationArtifact` and extend `AnalysisResult`. | Pending |
+| 1. Models and analyzer contract | Complete | Added `DocumentationArtifact`, documentation literals, and shared row aliases. `uv run ruff check src/codira/models.py src/codira/types.py`; `uv run ruff format --check src/codira/models.py src/codira/types.py`. | Pending |
 | 2. Source extraction | Pending | Add Markdown section analyzer and Python module-doc artifacts. | Pending |
 | 3. Backend persistence and embeddings | Pending | SQLite, DuckDB, and in-memory backends persist/query docs and doc embeddings. | Pending |
 | 4. `ctx` retrieval and output | Pending | `docs` channel, result union, intent weighting, provenance, and explain output. | Pending |
@@ -57,3 +57,10 @@ Out of scope for V1:
 
 - Created this ledger before behavior changes.
 - Worktree was clean before the ledger was added.
+
+### Phase 1
+
+- Added the backend-neutral documentation artifact model.
+- Extended `AnalysisResult` with ordered documentation artifacts while keeping
+  the default empty for existing analyzer outputs.
+- Added shared documentation row aliases for later backend and query work.
