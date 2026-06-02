@@ -1,3 +1,11 @@
+# [1.41.0](https://github.com/marco0560/codira/compare/v1.40.1...v1.41.0) (2026-06-02)
+
+
+### Features
+
+* **query:** complete signal aggregation migration ([82a9e8d](https://github.com/marco0560/codira/commit/82a9e8d19c909da120ece8ce5614dd34ce7bb6e0)), closes [#32](https://github.com/marco0560/codira/issues/32)
+* **query:** merge signal aggregation migration ([247ec7c](https://github.com/marco0560/codira/commit/247ec7ccde0a3efbb54cb8c57de890d83717b5fe)), closes [#32](https://github.com/marco0560/codira/issues/32)
+
 ## [1.40.1](https://github.com/marco0560/codira/compare/v1.40.0...v1.40.1) (2026-06-01)
 
 
