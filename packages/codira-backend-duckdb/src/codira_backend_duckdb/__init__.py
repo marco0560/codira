@@ -76,6 +76,7 @@ _SEQUENCED_TABLES: tuple[str, ...] = (
     "enum_members",
     "docstring_issues",
     "symbol_index",
+    "documentation_artifacts",
     "embeddings",
 )
 _TABLE_ID_SEQUENCE: dict[str, str] = {

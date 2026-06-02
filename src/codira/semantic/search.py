@@ -19,13 +19,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from codira.contracts import BackendEmbeddingCandidatesRequest
+from codira.contracts import (
+    BackendDocumentationCandidatesRequest,
+    BackendEmbeddingCandidatesRequest,
+)
 from codira.registry import active_index_backend
 
 if TYPE_CHECKING:
-    from codira.types import ChannelResults
+    from codira.types import ChannelResults, DocumentationChannelResults
 
 EmbeddingCandidatesRequest = BackendEmbeddingCandidatesRequest
+DocumentationCandidatesRequest = BackendDocumentationCandidatesRequest
 
 
 def embedding_candidates(
@@ -47,3 +51,24 @@ def embedding_candidates(
     """
     backend = active_index_backend()
     return backend.embedding_candidates(request)
+
+
+def documentation_candidates(
+    request: DocumentationCandidatesRequest,
+) -> DocumentationChannelResults:
+    """
+    Return ranked documentation candidates using stored embedding similarity.
+
+    Parameters
+    ----------
+    request : DocumentationCandidatesRequest
+        Documentation candidate request carrying query and filtering options.
+
+    Returns
+    -------
+    codira.types.DocumentationChannelResults
+        Ranked documentation candidates ordered by descending similarity and
+        stable documentation identity.
+    """
+    backend = active_index_backend()
+    return backend.documentation_candidates(request)

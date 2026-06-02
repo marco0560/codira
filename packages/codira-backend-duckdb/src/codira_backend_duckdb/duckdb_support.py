@@ -44,6 +44,7 @@ if TYPE_CHECKING:
         AnalysisResult,
         CallableReference,
         CallSite,
+        DocumentationArtifact,
         EnumMemberArtifact,
         FileMetadataSnapshot,
         FunctionArtifact,
@@ -72,6 +73,19 @@ FunctionRow = tuple[
     int,
 ]
 SymbolIndexRow = tuple[int, str, str, str, str, int, int]
+DocumentationArtifactRow = tuple[
+    int,
+    int,
+    str,
+    str,
+    str,
+    int,
+    int | None,
+    str,
+    str,
+    str,
+    str | None,
+]
 DocstringIssueRow = tuple[int, int | None, int | None, int | None, str, str]
 ImportRow = tuple[int, str, str | None, str, int]
 OverloadRow = tuple[int, str, str, int, str, str | None, int, int | None]
@@ -389,6 +403,8 @@ class DuckDBStructuralRowBuffers:
         Pending function rows.
     symbol_index : list[SymbolIndexRow]
         Pending symbol-index rows.
+    documentation_artifacts : list[DocumentationArtifactRow]
+        Pending documentation artifact rows.
     overloads : list[OverloadRow]
         Pending overload rows.
     enum_members : list[EnumMemberRow]
@@ -400,6 +416,9 @@ class DuckDBStructuralRowBuffers:
     classes: list[ClassRow] = field(default_factory=list)
     functions: list[FunctionRow] = field(default_factory=list)
     symbol_index: list[SymbolIndexRow] = field(default_factory=list)
+    documentation_artifacts: list[DocumentationArtifactRow] = field(
+        default_factory=list
+    )
     overloads: list[OverloadRow] = field(default_factory=list)
     enum_members: list[EnumMemberRow] = field(default_factory=list)
 
@@ -421,6 +440,7 @@ class DuckDBStructuralRowBuffers:
         self.classes.clear()
         self.functions.clear()
         self.symbol_index.clear()
+        self.documentation_artifacts.clear()
         self.overloads.clear()
         self.enum_members.clear()
 
@@ -696,6 +716,7 @@ def _clear_index_tables(conn: _DuckDBPersistenceConnection) -> None:
     conn.execute("DELETE FROM overloads")
     conn.execute("DELETE FROM enum_members")
     conn.execute("DELETE FROM embeddings")
+    conn.execute("DELETE FROM documentation_artifacts")
     conn.execute("DELETE FROM symbol_index")
     conn.execute("DELETE FROM imports")
     conn.execute("DELETE FROM functions")
@@ -1845,6 +1866,97 @@ def _append_embedding_row(
     )
 
 
+def _insert_documentation_artifact(
+    structural_rows: DuckDBStructuralRowBuffers,
+    id_allocator: DuckDBIdAllocator,
+    *,
+    file_id: int,
+    artifact: DocumentationArtifact,
+) -> int:
+    """
+    Buffer one documentation artifact and return its explicit identifier.
+
+    Parameters
+    ----------
+    structural_rows : DuckDBStructuralRowBuffers
+        Pending structural row buffers.
+    id_allocator : DuckDBIdAllocator
+        Explicit-ID allocator for the current write session.
+    file_id : int
+        Integer identifier of the owner file.
+    artifact : codira.models.DocumentationArtifact
+        Normalized documentation artifact emitted by an analyzer.
+
+    Returns
+    -------
+    int
+        Allocated documentation row identifier.
+    """
+    documentation_id = id_allocator.next_id("documentation_artifacts")
+    structural_rows.documentation_artifacts.append(
+        (
+            documentation_id,
+            file_id,
+            artifact.stable_id,
+            artifact.kind,
+            artifact.source_format,
+            artifact.lineno,
+            artifact.end_lineno,
+            artifact.title,
+            json.dumps(list(artifact.heading_path)),
+            artifact.text,
+            artifact.owner_stable_id,
+        )
+    )
+    return documentation_id
+
+
+def _persist_documentation_artifacts(
+    *,
+    structural_rows: DuckDBStructuralRowBuffers,
+    id_allocator: DuckDBIdAllocator,
+    file_id: int,
+    analysis: AnalysisResult,
+    embedding_rows: list[PendingEmbeddingRow],
+) -> None:
+    """
+    Persist analyzer-emitted documentation artifacts for one file.
+
+    Parameters
+    ----------
+    structural_rows : DuckDBStructuralRowBuffers
+        Pending structural row buffers.
+    id_allocator : DuckDBIdAllocator
+        Explicit-ID allocator for the current write session.
+    file_id : int
+        Integer identifier of the owner file.
+    analysis : codira.models.AnalysisResult
+        Normalized analyzer output for the file.
+    embedding_rows : list[codira.contracts.PendingEmbeddingRow]
+        Pending embedding rows collected for the file.
+
+    Returns
+    -------
+    None
+        Documentation rows and embedding payloads are appended in place.
+    """
+    for artifact in analysis.documentation:
+        documentation_id = _insert_documentation_artifact(
+            structural_rows,
+            id_allocator,
+            file_id=file_id,
+            artifact=artifact,
+        )
+        embedding_rows.append(
+            PendingEmbeddingRow(
+                object_type="documentation",
+                object_id=documentation_id,
+                stable_id=artifact.stable_id,
+                text=artifact.text,
+            )
+        )
+
+
 def _persist_docstring_issues(
     conn: _DuckDBPersistenceConnection,
     request: DocstringIssueRequest,
@@ -2871,6 +2983,80 @@ def _flush_structural_symbol_index_rows(
     )
 
 
+def _flush_structural_documentation_rows(
+    conn: _DuckDBPersistenceConnection,
+    rows: list[DocumentationArtifactRow],
+) -> None:
+    """
+    Flush documentation rows to DuckDB through an Arrow replacement scan.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    rows : list[DocumentationArtifactRow]
+        Documentation artifact rows to persist.
+
+    Returns
+    -------
+    None
+        Rows are inserted in place.
+    """
+    if not rows:
+        return
+
+    import pyarrow as pa
+
+    table = pa.table(
+        {
+            "id": pa.array([row[0] for row in rows], type=pa.int64()),
+            "file_id": pa.array([row[1] for row in rows], type=pa.int64()),
+            "stable_id": pa.array([row[2] for row in rows], type=pa.string()),
+            "kind": pa.array([row[3] for row in rows], type=pa.string()),
+            "source_format": pa.array([row[4] for row in rows], type=pa.string()),
+            "lineno": pa.array([row[5] for row in rows], type=pa.int64()),
+            "end_lineno": pa.array([row[6] for row in rows], type=pa.int64()),
+            "title": pa.array([row[7] for row in rows], type=pa.string()),
+            "heading_path": pa.array([row[8] for row in rows], type=pa.string()),
+            "text": pa.array([row[9] for row in rows], type=pa.string()),
+            "owner_stable_id": pa.array([row[10] for row in rows], type=pa.string()),
+        }
+    )
+    _flush_registered_arrow_table(
+        conn,
+        view_name="__codira_pending_documentation_rows",
+        table=table,
+        insert_sql="""
+            INSERT INTO documentation_artifacts(
+                id,
+                file_id,
+                stable_id,
+                kind,
+                source_format,
+                lineno,
+                end_lineno,
+                title,
+                heading_path,
+                text,
+                owner_stable_id
+            )
+            SELECT
+                id,
+                file_id,
+                stable_id,
+                kind,
+                source_format,
+                lineno,
+                end_lineno,
+                title,
+                heading_path,
+                text,
+                owner_stable_id
+            FROM __codira_pending_documentation_rows
+            """,
+    )
+
+
 def _flush_structural_overload_rows(
     conn: _DuckDBPersistenceConnection,
     rows: list[OverloadRow],
@@ -3031,6 +3217,7 @@ def _flush_structural_rows(
     _flush_structural_class_rows(conn, rows.classes)
     _flush_structural_function_rows(conn, rows.functions)
     _flush_structural_symbol_index_rows(conn, rows.symbol_index)
+    _flush_structural_documentation_rows(conn, rows.documentation_artifacts)
     _flush_structural_overload_rows(conn, rows.overloads)
     _flush_structural_enum_member_rows(conn, rows.enum_members)
     rows.clear()
@@ -3718,6 +3905,13 @@ def _store_analysis(
             file_metadata.analyzer_version,
         )
     )
+    _persist_documentation_artifacts(
+        structural_rows=structural_rows,
+        id_allocator=id_allocator,
+        file_id=file_id,
+        analysis=analysis,
+        embedding_rows=embedding_rows,
+    )
     if not analysis.index_symbols:
         if owns_structural_rows:
             _flush_structural_rows(conn, structural_rows)
@@ -3947,6 +4141,13 @@ def _delete_indexed_file_data(
             (file_id,),
         ).fetchall()
     ]
+    documentation_ids = [
+        _duckdb_int(row[0])
+        for row in conn.execute(
+            "SELECT id FROM documentation_artifacts WHERE file_id = ?",
+            (file_id,),
+        ).fetchall()
+    ]
 
     if module_ids:
         class_ids = [
@@ -3987,6 +4188,12 @@ def _delete_indexed_file_data(
                 f"DELETE FROM embeddings WHERE object_type = 'symbol' "
                 f"AND object_id IN ({_placeholders(symbol_ids)})",
                 tuple(symbol_ids),
+            )
+        if documentation_ids:
+            conn.execute(
+                f"DELETE FROM embeddings WHERE object_type = 'documentation' "
+                f"AND object_id IN ({_placeholders(documentation_ids)})",
+                tuple(documentation_ids),
             )
 
         conn.execute(
@@ -4037,7 +4244,14 @@ def _delete_indexed_file_data(
             tuple(symbol_ids),
         )
         conn.execute("DELETE FROM docstring_issues WHERE file_id = ?", (file_id,))
+    elif documentation_ids:
+        conn.execute(
+            f"DELETE FROM embeddings WHERE object_type = 'documentation' "
+            f"AND object_id IN ({_placeholders(documentation_ids)})",
+            tuple(documentation_ids),
+        )
 
+    conn.execute("DELETE FROM documentation_artifacts WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM symbol_index WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM call_edges WHERE caller_file_id = ?", (file_id,))
     conn.execute("DELETE FROM callable_refs WHERE owner_file_id = ?", (file_id,))
@@ -4090,6 +4304,28 @@ def _load_previous_symbol_embeddings(
         """,
         (file_path, backend.name, backend.version),
     ).fetchall()
+    rows.extend(
+        conn.execute(
+            """
+            SELECT
+                d.stable_id,
+                e.content_hash,
+                e.dim,
+                e.vector
+            FROM embeddings e
+            JOIN documentation_artifacts d
+              ON e.object_type = 'documentation'
+             AND e.object_id = d.id
+            JOIN files f
+              ON d.file_id = f.id
+            WHERE f.path = ?
+              AND e.backend = ?
+              AND e.version = ?
+            ORDER BY d.stable_id
+            """,
+            (file_path, backend.name, backend.version),
+        ).fetchall()
+    )
     return {
         str(stable_id): StoredEmbeddingRow(
             stable_id=str(stable_id),
@@ -4146,6 +4382,11 @@ def _prune_orphaned_embeddings(conn: _DuckDBPersistenceConnection) -> None:
         DELETE FROM embeddings
         WHERE object_type = 'symbol'
           AND object_id NOT IN (SELECT id FROM symbol_index)
+        """)
+    conn.execute("""
+        DELETE FROM embeddings
+        WHERE object_type = 'documentation'
+          AND object_id NOT IN (SELECT id FROM documentation_artifacts)
         """)
 
 
@@ -4235,6 +4476,29 @@ def _load_previous_embeddings_by_path(
         """,
         (*paths, backend.name, backend.version),
     ).fetchall()
+    rows.extend(
+        conn.execute(
+            f"""
+            SELECT
+                f.path,
+                d.stable_id,
+                e.content_hash,
+                e.dim,
+                e.vector
+            FROM embeddings e
+            JOIN documentation_artifacts d
+              ON e.object_type = 'documentation'
+             AND e.object_id = d.id
+            JOIN files f
+              ON d.file_id = f.id
+            WHERE f.path IN ({_placeholders(paths)})
+              AND e.backend = ?
+              AND e.version = ?
+            ORDER BY f.path, d.stable_id
+            """,
+            (*paths, backend.name, backend.version),
+        ).fetchall()
+    )
     for file_path, stable_id, content_hash, dim, vector in rows:
         path_key = str(file_path)
         result.setdefault(path_key, {})[str(stable_id)] = StoredEmbeddingRow(
@@ -4300,7 +4564,7 @@ def _count_reused_embeddings(
             """
             SELECT COUNT(*)
             FROM embeddings
-            WHERE object_type = 'symbol'
+            WHERE object_type IN ('symbol', 'documentation')
             """
         ).fetchone()
         assert row is not None
@@ -4309,15 +4573,27 @@ def _count_reused_embeddings(
     row = conn.execute(
         """
         SELECT COUNT(*)
-        FROM embeddings e
-        JOIN symbol_index s
-          ON e.object_type = 'symbol'
-         AND e.object_id = s.id
-        JOIN files f
-          ON s.file_id = f.id
-        WHERE f.path IN (SELECT * FROM unnest(?))
+        FROM (
+            SELECT e.id
+            FROM embeddings e
+            JOIN symbol_index s
+              ON e.object_type = 'symbol'
+             AND e.object_id = s.id
+            JOIN files f
+              ON s.file_id = f.id
+            WHERE f.path IN (SELECT * FROM unnest(?))
+            UNION ALL
+            SELECT e.id
+            FROM embeddings e
+            JOIN documentation_artifacts d
+              ON e.object_type = 'documentation'
+             AND e.object_id = d.id
+            JOIN files f
+              ON d.file_id = f.id
+            WHERE f.path IN (SELECT * FROM unnest(?))
+        )
         """,
-        (reused_paths,),
+        (reused_paths, reused_paths),
     ).fetchone()
     assert row is not None
     return _duckdb_int(row[0])

@@ -32,8 +32,8 @@ Out of scope for V1:
 |-------|--------|----------|--------|
 | 0. Scope and execution ledger | Complete | Ledger created. | `217e8d4` |
 | 1. Models and analyzer contract | Complete | Added `DocumentationArtifact`, documentation literals, and shared row aliases. `uv run ruff check src/codira/models.py src/codira/types.py`; `uv run ruff format --check src/codira/models.py src/codira/types.py`. | `562b9cd` |
-| 2. Source extraction | Complete | Markdown analyzer, Python module-doc artifacts, analyzer capability wiring, first-party package wiring, and symbol-index skip guard for documentation-only analyses. Focused analyzer/plugin/package tests and Ruff checks passed. | Pending |
-| 3. Backend persistence and embeddings | Pending | SQLite, DuckDB, and in-memory backends persist/query docs and doc embeddings. | Pending |
+| 2. Source extraction | Complete | Markdown analyzer, Python module-doc artifacts, analyzer capability wiring, first-party package wiring, and symbol-index skip guard for documentation-only analyses. Focused analyzer/plugin/package tests and Ruff checks passed. | `a89dfc0` |
+| 3. Backend persistence and embeddings | Complete | SQLite, DuckDB, and in-memory backends persist/query docs and doc embeddings through a distinct documentation object type. Focused backend tests and Ruff checks passed. | Pending |
 | 4. `ctx` retrieval and output | Pending | `docs` channel, result union, intent weighting, provenance, and explain output. | Pending |
 | 5. Validation and cleanup | Pending | Full validation and ledger closure. | Pending |
 
@@ -84,3 +84,21 @@ Out of scope for V1:
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q packages/codira-bundle-official/tests/test_bundle_package.py tests/test_contracts.py::test_root_optional_dependencies_support_monorepo_bundle_install tests/test_bootstrap_scripts.py -k "first_party_package_inventory or editable_package_paths or build_install_argv_installs_each_first_party_package_editably or release_artifact_helper_covers_core or benchmark_metadata_includes_first_party_plugins or split_repo_verification_installs_local_first_party_packages_for_bundle"`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check ...`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check ...`
+
+### Phase 3
+
+- Added `documentation_artifacts` to schema version 18 with dedicated stable
+  identity, provenance, location, heading path, text, and owner fields.
+- Added a backend-neutral `documentation_candidates` contract and semantic
+  wrapper separate from symbol embedding candidates.
+- Persisted documentation artifacts and `object_type = 'documentation'`
+  embeddings in SQLite, DuckDB, and the in-memory backend.
+- Updated delete, clear, reuse-count, previous-embedding, and orphan-prune
+  paths so documentation rows are not left stale and can be reused
+  incrementally.
+- Added SQLite and DuckDB tests proving docs-only analyses produce no symbol
+  candidates while returning documentation candidates.
+- Validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_contracts.py::test_sqlite_index_backend_persists_documentation_without_symbols tests/test_contracts.py::test_sqlite_index_backend_persists_and_deletes_normalized_analysis packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py::test_duckdb_documentation_candidates_use_stored_vector_values packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py::test_duckdb_embedding_candidates_use_stored_vector_values`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/test_contracts.py packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py tests/memory_backend.py packages/codira-backend-sqlite/src/codira_backend_sqlite packages/codira-backend-duckdb/src/codira_backend_duckdb src/codira/contracts.py src/codira/semantic/search.py src/codira/schema.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check tests/test_contracts.py packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py tests/memory_backend.py packages/codira-backend-sqlite/src/codira_backend_sqlite packages/codira-backend-duckdb/src/codira_backend_duckdb src/codira/contracts.py src/codira/semantic/search.py src/codira/schema.py`

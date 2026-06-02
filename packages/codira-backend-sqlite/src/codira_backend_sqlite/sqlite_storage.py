@@ -50,7 +50,7 @@ def get_db_path(root: Path) -> Path:
 
 def _database_has_current_schema(db_path: Path) -> bool:
     """
-    Return whether an existing SQLite database exposes current relation columns.
+    Return whether an existing SQLite database exposes current schema columns.
 
     Parameters
     ----------
@@ -60,7 +60,8 @@ def _database_has_current_schema(db_path: Path) -> bool:
     Returns
     -------
     bool
-        ``True`` when required schema-17 relation columns are present.
+        ``True`` when required relation columns and documentation tables are
+        present.
     """
     conn = sqlite3.connect(db_path)
     try:
@@ -74,13 +75,28 @@ def _database_has_current_schema(db_path: Path) -> bool:
                 "callable_refs",
                 "call_records",
                 "callable_ref_records",
+                "documentation_artifacts",
             )
         }
     finally:
         conn.close()
 
-    required_columns = {"external_target_kind", "external_target_name"}
-    return all(required_columns.issubset(columns) for columns in table_columns.values())
+    required_relation_columns = {"external_target_kind", "external_target_name"}
+    return all(
+        required_relation_columns.issubset(table_columns[table_name])
+        for table_name in (
+            "call_edges",
+            "callable_refs",
+            "call_records",
+            "callable_ref_records",
+        )
+    ) and {
+        "stable_id",
+        "kind",
+        "source_format",
+        "heading_path",
+        "text",
+    }.issubset(table_columns["documentation_artifacts"])
 
 
 def init_db(root: Path) -> None:

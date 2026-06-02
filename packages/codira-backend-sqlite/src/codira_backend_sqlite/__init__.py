@@ -24,6 +24,7 @@ import sqlite3
 from typing import TYPE_CHECKING, cast
 
 from codira.contracts import (
+    BackendDocumentationCandidatesRequest,
     BackendEmbeddingCandidatesRequest,
     BackendError,
     BackendGraphMetric,
@@ -68,6 +69,8 @@ if TYPE_CHECKING:
     from codira.contracts import IndexBackend, IndexWriteSession
     from codira.types import (
         ChannelResults,
+        DocumentationChannelResults,
+        DocumentationRow,
         DocstringIssueRow,
         EnumMemberRow,
         IncludeEdgeRow,
@@ -1858,6 +1861,107 @@ class SQLiteIndexBackend:
                     -item[0],
                     item[1][1],
                     item[1][2],
+                    item[1][3],
+                    item[1][4],
+                    item[1][0],
+                )
+            )
+            return results[:limit]
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def documentation_candidates(
+        self,
+        request: BackendDocumentationCandidatesRequest,
+    ) -> DocumentationChannelResults:
+        """
+        Return ranked documentation candidates using stored embedding similarity.
+
+        Parameters
+        ----------
+        request : BackendDocumentationCandidatesRequest
+            Documentation candidate lookup request.
+
+        Returns
+        -------
+        codira.types.DocumentationChannelResults
+            Ranked documentation candidates ordered deterministically.
+        """
+        root = request.root
+        query = request.query
+        limit = request.limit
+        min_score = request.min_score
+        prefix = request.prefix
+        conn = cast("sqlite3.Connection | None", request.conn)
+        owns_connection = conn is None
+        normalized_prefix = normalize_prefix(root, prefix)
+        if conn is None:
+            conn = self.open_connection(root)
+
+        backend = get_embedding_backend()
+        query_vector = embed_text(query)
+        if not any(query_vector):
+            return []
+
+        try:
+            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            rows = conn.execute(
+                f"""
+                SELECT
+                    d.stable_id,
+                    d.kind,
+                    d.source_format,
+                    f.path,
+                    d.lineno,
+                    d.end_lineno,
+                    d.title,
+                    d.heading_path,
+                    d.text,
+                    e.version,
+                    e.dim,
+                    e.vector
+                FROM embeddings e
+                JOIN documentation_artifacts d
+                  ON e.object_type = 'documentation'
+                 AND e.object_id = d.id
+                JOIN files f
+                  ON d.file_id = f.id
+                WHERE e.backend = ? AND e.version = ?
+                {prefix_sql}
+                ORDER BY f.path, d.lineno, d.stable_id
+                """,
+                (backend.name, backend.version, *prefix_params),
+            ).fetchall()
+
+            results: DocumentationChannelResults = []
+            for row in rows:
+                version = str(row[9])
+                dim = int(row[10])
+                blob = bytes(row[11])
+                if version != backend.version or dim != backend.dim:
+                    continue
+                score = _dot_similarity(query_vector, deserialize_vector(blob, dim=dim))
+                if score < min_score:
+                    continue
+                documentation: DocumentationRow = (
+                    str(row[0]),
+                    str(row[1]),
+                    str(row[2]),
+                    str(row[3]),
+                    int(row[4]),
+                    None if row[5] is None else int(row[5]),
+                    str(row[6]),
+                    tuple(str(part) for part in json.loads(str(row[7]))),
+                    str(row[8]),
+                )
+                results.append((score, documentation))
+
+            results.sort(
+                key=lambda item: (
+                    -item[0],
                     item[1][3],
                     item[1][4],
                     item[1][0],

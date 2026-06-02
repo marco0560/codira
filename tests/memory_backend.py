@@ -45,11 +45,13 @@ if TYPE_CHECKING:
     from typing import Protocol
 
     from codira.contracts import (
+        BackendDocumentationCandidatesRequest,
         BackendEmbeddingCandidatesRequest,
     )
     from codira.models import (
         CallableReference,
         CallSite,
+        DocumentationArtifact,
         EnumMemberArtifact,
         OverloadArtifact,
     )
@@ -57,6 +59,8 @@ if TYPE_CHECKING:
     from codira.types import (
         ChannelResults,
         DocstringIssueRow,
+        DocumentationChannelResults,
+        DocumentationRow,
         EnumMemberRow,
         IncludeEdgeRow,
         OverloadRow,
@@ -184,15 +188,59 @@ class _MemoryDocIssue:
 
 @dataclass(frozen=True)
 class _MemoryEmbedding:
-    """Stored embedding metadata for one symbol."""
+    """Stored embedding metadata for one index object."""
 
-    symbol_id: int
+    object_type: str
+    object_id: int
     stable_id: str
     backend: str
     version: str
     content_hash: str
     dim: int
     vector: bytes
+
+
+@dataclass(frozen=True)
+class _MemoryDocumentation:
+    """Stored documentation artifact with public query metadata."""
+
+    id: int
+    file_id: int
+    stable_id: str
+    kind: str
+    source_format: str
+    lineno: int
+    end_lineno: int | None
+    title: str
+    heading_path: tuple[str, ...]
+    text: str
+    owner_stable_id: str | None
+
+    def row(self, file_path: str) -> DocumentationRow:
+        """
+        Return the backend-neutral documentation row for this stored artifact.
+
+        Parameters
+        ----------
+        file_path : str
+            Absolute path owning the documentation artifact.
+
+        Returns
+        -------
+        codira.types.DocumentationRow
+            Public documentation-row representation.
+        """
+        return (
+            self.stable_id,
+            self.kind,
+            self.source_format,
+            file_path,
+            self.lineno,
+            self.end_lineno,
+            self.title,
+            self.heading_path,
+            self.text,
+        )
 
 
 @dataclass(frozen=True)
@@ -235,6 +283,7 @@ class _MemoryState:
 
     next_file_id: int = 1
     next_symbol_id: int = 1
+    next_documentation_id: int = 1
     files: dict[int, _MemoryFile] = field(default_factory=dict)
     file_id_by_path: dict[str, int] = field(default_factory=dict)
     symbols: list[_MemorySymbol] = field(default_factory=list)
@@ -246,6 +295,7 @@ class _MemoryState:
     overloads: list[_MemoryOverload] = field(default_factory=list)
     enum_members: list[_MemoryEnumMember] = field(default_factory=list)
     doc_issues: list[_MemoryDocIssue] = field(default_factory=list)
+    documentation: list[_MemoryDocumentation] = field(default_factory=list)
     embeddings: list[_MemoryEmbedding] = field(default_factory=list)
     runtime_inventory: tuple[str, str, int] | None = None
     analyzer_inventory: list[tuple[str, str, str]] = field(default_factory=list)
@@ -986,6 +1036,7 @@ class MemoryIndexBackend:
         state = self._conn_state(root, conn)
         state.next_file_id = 1
         state.next_symbol_id = 1
+        state.next_documentation_id = 1
         state.files.clear()
         state.file_id_by_path.clear()
         state.symbols.clear()
@@ -996,6 +1047,7 @@ class MemoryIndexBackend:
         state.overloads.clear()
         state.enum_members.clear()
         state.doc_issues.clear()
+        state.documentation.clear()
         state.embeddings.clear()
 
     def purge_skipped_docstring_issues(
@@ -1059,6 +1111,7 @@ class MemoryIndexBackend:
         state = self._conn_state(root, conn)
         path_set = set(paths)
         symbol_by_id = {symbol.id: symbol for symbol in state.symbols}
+        documentation_by_id = {doc.id: doc for doc in state.documentation}
         results: dict[str, dict[str, StoredEmbeddingRow]] = {}
         for embedding in state.embeddings:
             if (
@@ -1066,10 +1119,18 @@ class MemoryIndexBackend:
                 or embedding.version != embedding_backend.version
             ):
                 continue
-            symbol = symbol_by_id.get(embedding.symbol_id)
-            if symbol is None:
+            if embedding.object_type == "symbol":
+                symbol = symbol_by_id.get(embedding.object_id)
+                if symbol is None:
+                    continue
+                file_path = state.files[symbol.file_id].path
+            elif embedding.object_type == "documentation":
+                documentation = documentation_by_id.get(embedding.object_id)
+                if documentation is None:
+                    continue
+                file_path = state.files[documentation.file_id].path
+            else:
                 continue
-            file_path = state.files[symbol.file_id].path
             if file_path not in path_set:
                 continue
             results.setdefault(file_path, {})[embedding.stable_id] = StoredEmbeddingRow(
@@ -1121,8 +1182,20 @@ class MemoryIndexBackend:
         )
         state.file_id_by_path[path_text] = file_id
         analysis = request.analysis
+        embedding_payloads: list[tuple[str, int, str, str]] = []
+        self._append_documentation(
+            state,
+            file_id=file_id,
+            artifacts=analysis.documentation,
+            embedding_payloads=embedding_payloads,
+        )
         if not analysis.index_symbols:
-            return (0, 0)
+            return self._persist_embeddings(
+                state,
+                embedding_payloads=embedding_payloads,
+                embedding_backend=request.embedding_backend,
+                previous_embeddings=request.previous_embeddings or {},
+            )
         state.reference_scan_lines.extend(
             (file_id, lineno, line_text)
             for lineno, line_text in self._reference_scan_lines(
@@ -1130,7 +1203,6 @@ class MemoryIndexBackend:
             )
         )
 
-        embedding_payloads: list[tuple[int, str, str]] = []
         module_name = analysis.module.name
         module_symbol_id = self._append_symbol(
             state,
@@ -1144,6 +1216,7 @@ class MemoryIndexBackend:
         )
         embedding_payloads.append(
             (
+                "symbol",
                 module_symbol_id,
                 analysis.module.stable_id,
                 _embedding_text(
@@ -1181,6 +1254,7 @@ class MemoryIndexBackend:
             )
             embedding_payloads.append(
                 (
+                    "symbol",
                     class_symbol_id,
                     cls.stable_id,
                     _embedding_text(
@@ -1230,6 +1304,7 @@ class MemoryIndexBackend:
                 )
                 embedding_payloads.append(
                     (
+                        "symbol",
                         method_symbol_id,
                         method.stable_id,
                         _embedding_text(
@@ -1306,6 +1381,7 @@ class MemoryIndexBackend:
             )
             embedding_payloads.append(
                 (
+                    "symbol",
                     function_symbol_id,
                     fn.stable_id,
                     _embedding_text(
@@ -1368,6 +1444,7 @@ class MemoryIndexBackend:
             )
             embedding_payloads.append(
                 (
+                    "symbol",
                     declaration_symbol_id,
                     decl.stable_id,
                     _embedding_text(
@@ -1434,12 +1511,22 @@ class MemoryIndexBackend:
         state = self._conn_state(root, conn)
         path_set = set(paths)
         symbol_by_id = {symbol.id: symbol for symbol in state.symbols}
+        documentation_by_id = {doc.id: doc for doc in state.documentation}
         return sum(
             1
             for embedding in state.embeddings
             if (
-                (symbol := symbol_by_id.get(embedding.symbol_id)) is not None
-                and state.files[symbol.file_id].path in path_set
+                (
+                    embedding.object_type == "symbol"
+                    and (symbol := symbol_by_id.get(embedding.object_id)) is not None
+                    and state.files[symbol.file_id].path in path_set
+                )
+                or (
+                    embedding.object_type == "documentation"
+                    and (documentation := documentation_by_id.get(embedding.object_id))
+                    is not None
+                    and state.files[documentation.file_id].path in path_set
+                )
             )
         )
 
@@ -1780,9 +1867,10 @@ class MemoryIndexBackend:
             if (
                 embedding.backend != backend_name
                 or embedding.version != backend_version
+                or embedding.object_type != "symbol"
             ):
                 continue
-            symbol = symbol_by_id.get(embedding.symbol_id)
+            symbol = symbol_by_id.get(embedding.object_id)
             if symbol is None:
                 continue
             file_path = state.files[symbol.file_id].path
@@ -1800,6 +1888,66 @@ class MemoryIndexBackend:
                 -item[0],
                 item[1][1],
                 item[1][2],
+                item[1][3],
+                item[1][4],
+                item[1][0],
+            )
+        )
+        return results[: request.limit]
+
+    def documentation_candidates(
+        self,
+        request: BackendDocumentationCandidatesRequest,
+    ) -> DocumentationChannelResults:
+        """
+        Return deterministic pseudo-vector documentation candidates.
+
+        Parameters
+        ----------
+        request : BackendDocumentationCandidatesRequest
+            Documentation candidate lookup request.
+
+        Returns
+        -------
+        codira.types.DocumentationChannelResults
+            Ranked documentation candidate rows.
+        """
+        root = request.root
+        state = self._conn_state(root, request.conn)
+        normalized_prefix = normalize_prefix(root, request.prefix)
+        active = self.embedding_inventory(root, conn=request.conn)
+        if not active:
+            return []
+        backend_name, backend_version, dim, _count = active[0]
+        query_vector = _deserialize_vector(
+            _pseudo_vector_blob(request.query, dim=dim),
+            dim=dim,
+        )
+        documentation_by_id = {doc.id: doc for doc in state.documentation}
+        results: DocumentationChannelResults = []
+        for embedding in state.embeddings:
+            if (
+                embedding.backend != backend_name
+                or embedding.version != backend_version
+                or embedding.object_type != "documentation"
+            ):
+                continue
+            documentation = documentation_by_id.get(embedding.object_id)
+            if documentation is None:
+                continue
+            file_path = state.files[documentation.file_id].path
+            if not path_has_prefix(file_path, normalized_prefix):
+                continue
+            score = _dot_similarity(
+                query_vector,
+                _deserialize_vector(embedding.vector, dim=embedding.dim),
+            )
+            if score < request.min_score:
+                continue
+            results.append((score, documentation.row(file_path)))
+        results.sort(
+            key=lambda item: (
+                -item[0],
                 item[1][3],
                 item[1][4],
                 item[1][0],
@@ -1830,10 +1978,15 @@ class MemoryIndexBackend:
         """
         state = self._conn_state(root, conn)
         symbol_ids = {symbol.id for symbol in state.symbols}
+        documentation_ids = {doc.id for doc in state.documentation}
         state.embeddings = [
             embedding
             for embedding in state.embeddings
-            if embedding.symbol_id in symbol_ids
+            if (embedding.object_type == "symbol" and embedding.object_id in symbol_ids)
+            or (
+                embedding.object_type == "documentation"
+                and embedding.object_id in documentation_ids
+            )
         ]
 
     def current_embedding_state_matches(
@@ -2346,6 +2499,56 @@ class MemoryIndexBackend:
         )
         return symbol_id
 
+    def _append_documentation(
+        self,
+        state: _MemoryState,
+        *,
+        file_id: int,
+        artifacts: Sequence[DocumentationArtifact],
+        embedding_payloads: list[tuple[str, int, str, str]],
+    ) -> None:
+        """
+        Append documentation artifacts and their embedding payloads.
+
+        Parameters
+        ----------
+        state : _MemoryState
+            Mutable backend state.
+        file_id : int
+            Owning file identifier.
+        artifacts : collections.abc.Sequence[codira.models.DocumentationArtifact]
+            Documentation artifacts emitted by the analyzer.
+        embedding_payloads : list[tuple[str, int, str, str]]
+            Object type, object id, stable id, and embedding text rows to
+            persist.
+
+        Returns
+        -------
+        None
+            Documentation and embedding payload rows are appended in place.
+        """
+        for artifact in artifacts:
+            documentation_id = state.next_documentation_id
+            state.next_documentation_id += 1
+            state.documentation.append(
+                _MemoryDocumentation(
+                    id=documentation_id,
+                    file_id=file_id,
+                    stable_id=artifact.stable_id,
+                    kind=artifact.kind,
+                    source_format=artifact.source_format,
+                    lineno=artifact.lineno,
+                    end_lineno=artifact.end_lineno,
+                    title=artifact.title,
+                    heading_path=artifact.heading_path,
+                    text=artifact.text,
+                    owner_stable_id=artifact.owner_stable_id,
+                )
+            )
+            embedding_payloads.append(
+                ("documentation", documentation_id, artifact.stable_id, artifact.text)
+            )
+
     def _append_doc_issues(
         self,
         state: _MemoryState,
@@ -2605,7 +2808,7 @@ class MemoryIndexBackend:
         self,
         state: _MemoryState,
         *,
-        embedding_payloads: list[tuple[int, str, str]],
+        embedding_payloads: list[tuple[str, int, str, str]],
         embedding_backend: EmbeddingBackendSpec,
         previous_embeddings: Mapping[str, object],
     ) -> tuple[int, int]:
@@ -2616,8 +2819,9 @@ class MemoryIndexBackend:
         ----------
         state : _MemoryState
             Mutable backend state.
-        embedding_payloads : list[tuple[int, str, str]]
-            Symbol id, stable id, and embedding text rows to persist.
+        embedding_payloads : list[tuple[str, int, str, str]]
+            Object type, object id, stable id, and embedding text rows to
+            persist.
         embedding_backend : codira.contracts.EmbeddingBackendSpec
             Active embedding backend metadata.
         previous_embeddings : collections.abc.Mapping[str, object]
@@ -2630,7 +2834,7 @@ class MemoryIndexBackend:
         """
         recomputed = 0
         reused = 0
-        for symbol_id, stable_id, text in sorted(embedding_payloads):
+        for object_type, object_id, stable_id, text in sorted(embedding_payloads):
             content_hash = _content_hash(text)
             reusable = previous_embeddings.get(stable_id)
             reusable_row = cast("_ReusableEmbedding", reusable)
@@ -2646,7 +2850,8 @@ class MemoryIndexBackend:
                 recomputed += 1
             state.embeddings.append(
                 _MemoryEmbedding(
-                    symbol_id=symbol_id,
+                    object_type=object_type,
+                    object_id=object_id,
                     stable_id=stable_id,
                     backend=embedding_backend.name,
                     version=embedding_backend.version,
@@ -2727,10 +2932,25 @@ class MemoryIndexBackend:
         state.doc_issues = [
             issue for issue in state.doc_issues if issue.file_id != file_id
         ]
+        deleted_documentation_ids = {
+            doc.id for doc in state.documentation if doc.file_id == file_id
+        }
+        state.documentation = [
+            doc for doc in state.documentation if doc.file_id != file_id
+        ]
         state.embeddings = [
             embedding
             for embedding in state.embeddings
-            if embedding.symbol_id not in deleted_symbol_ids
+            if not (
+                (
+                    embedding.object_type == "symbol"
+                    and embedding.object_id in deleted_symbol_ids
+                )
+                or (
+                    embedding.object_type == "documentation"
+                    and embedding.object_id in deleted_documentation_ids
+                )
+            )
         ]
 
     def _module_functions(self, state: _MemoryState) -> dict[str, set[str]]:

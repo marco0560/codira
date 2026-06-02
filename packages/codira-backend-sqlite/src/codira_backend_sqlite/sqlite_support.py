@@ -39,6 +39,7 @@ if TYPE_CHECKING:
         AnalysisResult,
         CallableReference,
         CallSite,
+        DocumentationArtifact,
         EnumMemberArtifact,
         FileMetadataSnapshot,
         FunctionArtifact,
@@ -311,6 +312,7 @@ def _clear_index_tables(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM overloads")
     conn.execute("DELETE FROM enum_members")
     conn.execute("DELETE FROM embeddings")
+    conn.execute("DELETE FROM documentation_artifacts")
     conn.execute("DELETE FROM symbol_index")
     conn.execute("DELETE FROM imports")
     conn.execute("DELETE FROM functions")
@@ -1224,6 +1226,99 @@ def _append_embedding_row(
             ),
         )
     )
+
+
+def _insert_documentation_artifact(
+    conn: sqlite3.Connection,
+    file_id: int,
+    artifact: DocumentationArtifact,
+) -> int:
+    """
+    Insert one documentation artifact and return its integer identifier.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection.
+    file_id : int
+        Integer identifier of the owner file.
+    artifact : codira.models.DocumentationArtifact
+        Normalized documentation artifact emitted by an analyzer.
+
+    Returns
+    -------
+    int
+        Inserted documentation row identifier.
+    """
+    cur = conn.execute(
+        """
+        INSERT INTO documentation_artifacts(
+            file_id,
+            stable_id,
+            kind,
+            source_format,
+            lineno,
+            end_lineno,
+            title,
+            heading_path,
+            text,
+            owner_stable_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            file_id,
+            artifact.stable_id,
+            artifact.kind,
+            artifact.source_format,
+            artifact.lineno,
+            artifact.end_lineno,
+            artifact.title,
+            json.dumps(list(artifact.heading_path)),
+            artifact.text,
+            artifact.owner_stable_id,
+        ),
+    )
+    assert cur.lastrowid is not None
+    return int(cur.lastrowid)
+
+
+def _persist_documentation_artifacts(
+    conn: sqlite3.Connection,
+    *,
+    file_id: int,
+    analysis: AnalysisResult,
+    embedding_rows: list[PendingEmbeddingRow],
+) -> None:
+    """
+    Persist analyzer-emitted documentation artifacts for one file.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open database connection.
+    file_id : int
+        Integer identifier of the owner file.
+    analysis : codira.models.AnalysisResult
+        Normalized analyzer output for the file.
+    embedding_rows : list[codira.contracts.PendingEmbeddingRow]
+        Pending embedding rows collected for the file.
+
+    Returns
+    -------
+    None
+        Documentation rows and embedding payloads are appended in place.
+    """
+    for artifact in analysis.documentation:
+        documentation_id = _insert_documentation_artifact(conn, file_id, artifact)
+        embedding_rows.append(
+            PendingEmbeddingRow(
+                object_type="documentation",
+                object_id=documentation_id,
+                stable_id=artifact.stable_id,
+                text=artifact.text,
+            )
+        )
 
 
 def _persist_docstring_issues(
@@ -2153,6 +2248,12 @@ def _store_analysis(
     )
     assert cur.lastrowid is not None
     file_id = int(cur.lastrowid)
+    _persist_documentation_artifacts(
+        conn,
+        file_id=file_id,
+        analysis=analysis,
+        embedding_rows=embedding_rows,
+    )
     if not analysis.index_symbols:
         return _flush_embedding_rows(
             conn,
@@ -2365,6 +2466,13 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
             (file_id,),
         ).fetchall()
     ]
+    documentation_ids = [
+        int(row[0])
+        for row in conn.execute(
+            "SELECT id FROM documentation_artifacts WHERE file_id = ?",
+            (file_id,),
+        ).fetchall()
+    ]
 
     if module_ids:
         if symbol_ids:
@@ -2372,6 +2480,12 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
                 f"DELETE FROM embeddings WHERE object_type = 'symbol' "
                 f"AND object_id IN ({_placeholders(symbol_ids)})",
                 tuple(symbol_ids),
+            )
+        if documentation_ids:
+            conn.execute(
+                f"DELETE FROM embeddings WHERE object_type = 'documentation' "
+                f"AND object_id IN ({_placeholders(documentation_ids)})",
+                tuple(documentation_ids),
             )
 
         conn.execute(
@@ -2421,7 +2535,14 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
             tuple(symbol_ids),
         )
         conn.execute("DELETE FROM docstring_issues WHERE file_id = ?", (file_id,))
+    elif documentation_ids:
+        conn.execute(
+            f"DELETE FROM embeddings WHERE object_type = 'documentation' "
+            f"AND object_id IN ({_placeholders(documentation_ids)})",
+            tuple(documentation_ids),
+        )
 
+    conn.execute("DELETE FROM documentation_artifacts WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM symbol_index WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM call_edges WHERE caller_file_id = ?", (file_id,))
     conn.execute("DELETE FROM callable_refs WHERE owner_file_id = ?", (file_id,))
@@ -2474,6 +2595,28 @@ def _load_previous_symbol_embeddings(
         """,
         (file_path, backend.name, backend.version),
     ).fetchall()
+    rows.extend(
+        conn.execute(
+            """
+            SELECT
+                d.stable_id,
+                e.content_hash,
+                e.dim,
+                e.vector
+            FROM embeddings e
+            JOIN documentation_artifacts d
+              ON e.object_type = 'documentation'
+             AND e.object_id = d.id
+            JOIN files f
+              ON d.file_id = f.id
+            WHERE f.path = ?
+              AND e.backend = ?
+              AND e.version = ?
+            ORDER BY d.stable_id
+            """,
+            (file_path, backend.name, backend.version),
+        ).fetchall()
+    )
     return {
         str(stable_id): StoredEmbeddingRow(
             stable_id=str(stable_id),
@@ -2530,6 +2673,11 @@ def _prune_orphaned_embeddings(conn: sqlite3.Connection) -> None:
         DELETE FROM embeddings
         WHERE object_type = 'symbol'
           AND object_id NOT IN (SELECT id FROM symbol_index)
+        """)
+    conn.execute("""
+        DELETE FROM embeddings
+        WHERE object_type = 'documentation'
+          AND object_id NOT IN (SELECT id FROM documentation_artifacts)
         """)
 
 
@@ -2656,15 +2804,27 @@ def _count_reused_embeddings(
         row = conn.execute(
             f"""
             SELECT COUNT(*)
-            FROM embeddings e
-            JOIN symbol_index s
-              ON e.object_type = 'symbol'
-             AND e.object_id = s.id
-            JOIN files f
-              ON s.file_id = f.id
-            WHERE f.path IN ({placeholders})
+            FROM (
+                SELECT e.id
+                FROM embeddings e
+                JOIN symbol_index s
+                  ON e.object_type = 'symbol'
+                 AND e.object_id = s.id
+                JOIN files f
+                  ON s.file_id = f.id
+                WHERE f.path IN ({placeholders})
+                UNION ALL
+                SELECT e.id
+                FROM embeddings e
+                JOIN documentation_artifacts d
+                  ON e.object_type = 'documentation'
+                 AND e.object_id = d.id
+                JOIN files f
+                  ON d.file_id = f.id
+                WHERE f.path IN ({placeholders})
+            )
             """,
-            tuple(path_batch),
+            (*path_batch, *path_batch),
         ).fetchone()
         assert row is not None
         total += int(row[0])

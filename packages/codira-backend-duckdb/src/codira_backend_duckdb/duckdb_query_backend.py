@@ -27,6 +27,7 @@ import re
 from typing import TYPE_CHECKING, Protocol, cast
 
 from codira.contracts import (
+    BackendDocumentationCandidatesRequest,
     BackendEmbeddingCandidatesRequest,
     BackendError,
     BackendGraphMetric,
@@ -66,6 +67,8 @@ if TYPE_CHECKING:
 
     from codira.types import (
         ChannelResults,
+        DocumentationChannelResults,
+        DocumentationRow,
         DocstringIssueRow,
         EnumMemberRow,
         IncludeEdgeRow,
@@ -1907,6 +1910,220 @@ class DuckDBQueryBackend:
                 )
                 for score, symbol_type, module_name, symbol_name, file_path, lineno in ranked_rows
             ]
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def documentation_candidates(
+        self,
+        request: BackendDocumentationCandidatesRequest,
+    ) -> DocumentationChannelResults:
+        """
+        Return ranked documentation candidates using stored embedding similarity.
+
+        Parameters
+        ----------
+        request : BackendDocumentationCandidatesRequest
+            Documentation candidate lookup request.
+
+        Returns
+        -------
+        codira.types.DocumentationChannelResults
+            Ranked documentation candidates ordered deterministically.
+        """
+        root = request.root
+        query = request.query
+        limit = request.limit
+        min_score = request.min_score
+        prefix = request.prefix
+        conn = cast("_BackendCompatibleConnection | None", request.conn)
+        owns_connection = conn is None
+        normalized_prefix = normalize_prefix(root, prefix)
+        if conn is None:
+            conn = self.open_connection(root)
+
+        backend = get_embedding_backend()
+        query_vector = embed_text(query)
+        if not any(query_vector):
+            return []
+
+        try:
+            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            scored_rows = conn.execute(
+                f"""
+                WITH scored_embeddings AS (
+                    SELECT
+                        list_dot_product(e.vector_values, ?) AS score,
+                        d.stable_id,
+                        d.kind,
+                        d.source_format,
+                        f.path,
+                        d.lineno,
+                        d.end_lineno,
+                        d.title,
+                        d.heading_path,
+                        d.text
+                    FROM embeddings e
+                    JOIN documentation_artifacts d
+                      ON e.object_type = 'documentation'
+                     AND e.object_id = d.id
+                    JOIN files f
+                      ON d.file_id = f.id
+                    WHERE e.backend = ?
+                      AND e.version = ?
+                      AND e.dim = ?
+                      AND e.vector_values IS NOT NULL
+                    {prefix_sql}
+                )
+                SELECT
+                    score,
+                    stable_id,
+                    kind,
+                    source_format,
+                    path,
+                    lineno,
+                    end_lineno,
+                    title,
+                    heading_path,
+                    text
+                FROM scored_embeddings
+                WHERE score >= ?
+                ORDER BY score DESC, path, lineno, stable_id
+                LIMIT ?
+                """,
+                (
+                    query_vector,
+                    backend.name,
+                    backend.version,
+                    backend.dim,
+                    *prefix_params,
+                    min_score,
+                    limit,
+                ),
+            ).fetchall()
+
+            rows = conn.execute(
+                f"""
+                SELECT
+                    e.vector,
+                    d.stable_id,
+                    d.kind,
+                    d.source_format,
+                    f.path,
+                    d.lineno,
+                    d.end_lineno,
+                    d.title,
+                    d.heading_path,
+                    d.text
+                FROM embeddings e
+                JOIN documentation_artifacts d
+                  ON e.object_type = 'documentation'
+                 AND e.object_id = d.id
+                JOIN files f
+                  ON d.file_id = f.id
+                WHERE e.backend = ?
+                  AND e.version = ?
+                  AND e.dim = ?
+                  AND e.vector_values IS NULL
+                {prefix_sql}
+                ORDER BY f.path, d.lineno, d.stable_id
+                """,
+                (
+                    backend.name,
+                    backend.version,
+                    backend.dim,
+                    *prefix_params,
+                ),
+            ).fetchall()
+
+            legacy_scored_rows = [
+                (
+                    _dot_similarity(
+                        deserialize_vector(_backend_bytes(vector), dim=backend.dim),
+                        query_vector,
+                    ),
+                    str(stable_id),
+                    str(kind),
+                    str(source_format),
+                    str(file_path),
+                    _backend_int(lineno),
+                    None if end_lineno is None else _backend_int(end_lineno),
+                    str(title),
+                    str(heading_path),
+                    str(text),
+                )
+                for (
+                    vector,
+                    stable_id,
+                    kind,
+                    source_format,
+                    file_path,
+                    lineno,
+                    end_lineno,
+                    title,
+                    heading_path,
+                    text,
+                ) in rows
+            ]
+            all_scored_rows = [
+                (
+                    _backend_float(score),
+                    str(stable_id),
+                    str(kind),
+                    str(source_format),
+                    str(file_path),
+                    _backend_int(lineno),
+                    None if end_lineno is None else _backend_int(end_lineno),
+                    str(title),
+                    str(heading_path),
+                    str(text),
+                )
+                for (
+                    score,
+                    stable_id,
+                    kind,
+                    source_format,
+                    file_path,
+                    lineno,
+                    end_lineno,
+                    title,
+                    heading_path,
+                    text,
+                ) in scored_rows
+            ]
+            all_scored_rows.extend(
+                row for row in legacy_scored_rows if row[0] >= min_score
+            )
+            ranked_rows = sorted(
+                all_scored_rows,
+                key=lambda row: (-row[0], row[4], row[5], row[1]),
+            )[:limit]
+            results: DocumentationChannelResults = []
+            for (
+                score,
+                stable_id,
+                kind,
+                source_format,
+                file_path,
+                lineno,
+                end_lineno,
+                title,
+                heading_path,
+                text,
+            ) in ranked_rows:
+                documentation: DocumentationRow = (
+                    stable_id,
+                    kind,
+                    source_format,
+                    file_path,
+                    lineno,
+                    end_lineno,
+                    title,
+                    tuple(str(part) for part in json.loads(heading_path)),
+                    text,
+                )
+                results.append((score, documentation))
+            return results
         finally:
             if owns_connection:
                 conn.close()

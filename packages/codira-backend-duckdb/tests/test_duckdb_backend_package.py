@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from codira.contracts import (
+    BackendDocumentationCandidatesRequest,
     BackendEmbeddingCandidatesRequest,
     BackendError,
     BackendPersistAnalysisRequest,
@@ -21,11 +22,12 @@ from codira.contracts import (
 from codira.models import (
     AnalysisResult,
     CallSite,
+    DocumentationArtifact,
     FileMetadataSnapshot,
     FunctionArtifact,
     ModuleArtifact,
 )
-from codira.schema import DDL
+from codira.schema import DDL, SCHEMA_VERSION
 from codira_backend_duckdb import (
     DuckDBIndexBackend,
     _duckdb_db_path,
@@ -582,7 +584,7 @@ def test_duckdb_backend_initialize_bootstraps_schema_and_metadata(
         for query, _parameters in fake_module.connections[0].executed
     )
     metadata = (tmp_path / ".codira" / "metadata.json").read_text(encoding="utf-8")
-    assert '"schema_version": "17"' in metadata
+    assert f'"schema_version": "{SCHEMA_VERSION}"' in metadata
 
 
 def test_duckdb_backend_open_connection_initializes_missing_database(
@@ -1783,6 +1785,143 @@ def test_duckdb_embedding_candidates_use_stored_vector_values(
                 "pkg.sample",
                 str(tmp_path / "pkg" / "sample.py"),
                 1,
+            ),
+        )
+    ]
+
+
+def test_duckdb_documentation_candidates_use_stored_vector_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Score DuckDB documentation candidates through stored list vectors.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace embedding generation and reject blob fallback.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB can rank documentation candidates without
+        mixing them into the symbol embedding channel.
+    """
+    pytest.importorskip("duckdb")
+    backend = DuckDBIndexBackend()
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_support.embed_texts",
+        lambda texts: [[1.0] + [0.0] * 383 for _text in texts],
+    )
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_query_backend.embed_text",
+        lambda text: [1.0] + [0.0] * 383,
+    )
+    document = tmp_path / "docs" / "architecture.md"
+    artifact = DocumentationArtifact(
+        stable_id="doc:section:docs/architecture.md:plugin-loading:1",
+        kind="section",
+        source_format="markdown_section",
+        source_path=document,
+        lineno=1,
+        end_lineno=3,
+        title="Plugin Loading",
+        heading_path=("Plugin Loading",),
+        text="Plugin Loading\nPlugins are discovered through entry points.",
+    )
+
+    backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=FileMetadataSnapshot(
+                path=document,
+                sha256="duckdb-docs",
+                mtime=1.0,
+                size=1,
+                analyzer_name="markdown",
+                analyzer_version="1",
+            ),
+            analysis=AnalysisResult(
+                source_path=document,
+                module=ModuleArtifact(
+                    name="docs.architecture",
+                    stable_id="module:docs.architecture",
+                    docstring=None,
+                    has_docstring=0,
+                ),
+                classes=(),
+                functions=(),
+                declarations=(),
+                imports=(),
+                documentation=(artifact,),
+                index_symbols=False,
+            ),
+        )
+    )
+
+    def reject_blob_deserialization(blob: bytes, *, dim: int) -> list[float]:
+        """
+        Reject the legacy Python blob-scoring path.
+
+        Parameters
+        ----------
+        blob : bytes
+            Stored embedding blob supplied by a legacy fallback path.
+        dim : int
+            Expected embedding dimensionality.
+
+        Returns
+        -------
+        list[float]
+            This helper never returns.
+
+        Raises
+        ------
+        AssertionError
+            Always raised when the legacy fallback is used.
+        """
+        del blob, dim
+        raise AssertionError("legacy embedding blob fallback was used")
+
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_query_backend.deserialize_vector",
+        reject_blob_deserialization,
+    )
+
+    assert (
+        backend.embedding_candidates(
+            BackendEmbeddingCandidatesRequest(
+                root=tmp_path,
+                query="plugin loading entry points",
+                limit=5,
+                min_score=0.0,
+            )
+        )
+        == []
+    )
+    assert backend.documentation_candidates(
+        BackendDocumentationCandidatesRequest(
+            root=tmp_path,
+            query="plugin loading entry points",
+            limit=5,
+            min_score=0.0,
+        )
+    ) == [
+        (
+            1.0,
+            (
+                artifact.stable_id,
+                "section",
+                "markdown_section",
+                str(document),
+                1,
+                3,
+                "Plugin Loading",
+                ("Plugin Loading",),
+                artifact.text,
             ),
         )
     ]
