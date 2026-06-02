@@ -1947,9 +1947,9 @@ def test_index_repo_reuses_unchanged_symbol_embeddings_in_changed_file(
     finally:
         conn.close()
 
-    assert first.embeddings_recomputed == 3
+    assert first.embeddings_recomputed == 4
     assert report.indexed == 1
-    assert report.embeddings_reused == 2
+    assert report.embeddings_reused == 3
     assert report.embeddings_recomputed == 1
     assert before == after
 

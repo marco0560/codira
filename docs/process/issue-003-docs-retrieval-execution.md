@@ -34,8 +34,8 @@ Out of scope for V1:
 | 1. Models and analyzer contract | Complete | Added `DocumentationArtifact`, documentation literals, and shared row aliases. `uv run ruff check src/codira/models.py src/codira/types.py`; `uv run ruff format --check src/codira/models.py src/codira/types.py`. | `562b9cd` |
 | 2. Source extraction | Complete | Markdown analyzer, Python module-doc artifacts, analyzer capability wiring, first-party package wiring, and symbol-index skip guard for documentation-only analyses. Focused analyzer/plugin/package tests and Ruff checks passed. | `a89dfc0` |
 | 3. Backend persistence and embeddings | Complete | SQLite, DuckDB, and in-memory backends persist/query docs and doc embeddings through a distinct documentation object type. Focused backend tests and Ruff checks passed. | `9000e0d` |
-| 4. `ctx` retrieval and output | Complete | `docs` channel, typed documentation top matches, intent weighting, provenance, explain output, and context JSON schema 1.3. Focused context tests and Ruff checks passed. | Pending |
-| 5. Validation and cleanup | Pending | Full validation and ledger closure. | Pending |
+| 4. `ctx` retrieval and output | Complete | `docs` channel, typed documentation top matches, intent weighting, provenance, explain output, and context JSON schema 1.3. Focused context tests and Ruff checks passed. | `917966e` |
+| 5. Validation and cleanup | Complete | Full pre-commit and pytest passed after expectation cleanup. | Pending |
 
 ## Decisions
 
@@ -119,3 +119,15 @@ Out of scope for V1:
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_context_rendering.py tests/test_characterization_phase2.py tests/test_json_schema.py`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/codira/query/context.py src/codira/query/classifier.py src/codira/query/producers.py tests/test_context_rendering.py tests/test_characterization_phase2.py tests/test_json_schema.py`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check src/codira/query/context.py src/codira/query/classifier.py src/codira/query/producers.py tests/test_context_rendering.py tests/test_characterization_phase2.py tests/test_json_schema.py`
+
+### Phase 5
+
+- Updated regression expectations for the new Markdown analyzer, schema version
+  18, dedicated documentation embeddings, and incremental reuse accounting.
+- Re-ran the focused failures from full-suite validation before final checks.
+- Validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_bootstrap_scripts.py::test_build_helper_rehearses_each_first_party_package_boundary tests/test_contracts.py::test_active_phase_8_registries_expose_default_backend_and_analyzers tests/test_embeddings.py::test_index_repo_persists_symbol_embeddings tests/test_incremental_indexing.py::test_index_repo_reuses_unchanged_symbol_embeddings_in_changed_file tests/test_plugins.py::test_plugins_cli_marks_only_the_configured_backend_active tests/test_plugins.py::test_core_can_discover_installed_first_party_packages_from_built_wheels`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/test_bootstrap_scripts.py tests/test_contracts.py tests/test_embeddings.py tests/test_incremental_indexing.py tests/test_plugins.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check tests/test_bootstrap_scripts.py tests/test_contracts.py tests/test_embeddings.py tests/test_incremental_indexing.py tests/test_plugins.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --all-files`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q`

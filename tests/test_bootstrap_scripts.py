@@ -2722,6 +2722,17 @@ def test_build_helper_rehearses_each_first_party_package_boundary() -> None:
             "--out-dir",
             "/tmp/codira/.artifacts/wheels",
             "--no-build-isolation",
+            "/tmp/codira/packages/codira-analyzer-markdown",
+        ),
+        (
+            "uv",
+            "build",
+            "--python",
+            "/tmp/codira/.venv/bin/python",
+            "--wheel",
+            "--out-dir",
+            "/tmp/codira/.artifacts/wheels",
+            "--no-build-isolation",
             "/tmp/codira/packages/codira-backend-sqlite",
         ),
         (

@@ -2201,6 +2201,7 @@ def test_active_phase_8_registries_expose_default_backend_and_analyzers() -> Non
         "c",
         "cpp",
         "bash",
+        "markdown",
     ]
 
 
