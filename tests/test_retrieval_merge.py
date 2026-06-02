@@ -979,3 +979,43 @@ def test_diversify_merged_symbols_explain_reports_language_cap() -> None:
         "language": "python",
         "reason": "language_cap",
     }
+
+
+def test_diversify_merged_symbols_explain_reserves_code_for_behavior_intent() -> None:
+    """
+    Keep documentation from crowding out code for behavior-oriented queries.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts docs are deferred while code candidates remain
+        available, preserving at least half code results when code exists.
+    """
+    first_doc = _symbol(
+        "documentation",
+        "markdown_section",
+        "Architecture",
+        "docs/architecture.md",
+        10,
+    )
+    second_doc = _symbol(
+        "documentation",
+        "markdown_section",
+        "Process",
+        "docs/process/release.md",
+        20,
+    )
+    code = _symbol("function", "pkg.core", "cache_flow", "src/core.py", 30)
+    ranked = [first_doc, second_doc, code]
+
+    diversified, diagnostics = _diversify_merged_symbols_explain(
+        ranked,
+        intent=classify_query("cache invalidation"),
+    )
+
+    assert diversified == [code, first_doc]
+    assert diagnostics["deferred"][0]["reason"] == "docs_code_quota"

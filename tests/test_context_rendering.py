@@ -491,6 +491,20 @@ def test_rank_signals_boosts_documentation_under_docs_path(tmp_path: Path) -> No
         The test asserts the boost only affects docs-channel documentation
         artifacts whose file path is under a ``docs`` directory.
     """
+    process_symbol = (
+        "documentation",
+        "markdown_section",
+        "Release Process",
+        str(tmp_path / "docs" / "process" / "release.md"),
+        1,
+    )
+    readme_symbol = (
+        "documentation",
+        "markdown_section",
+        "README",
+        str(tmp_path / "README.md"),
+        1,
+    )
     docs_symbol = (
         "documentation",
         "markdown_section",
@@ -506,6 +520,30 @@ def test_rank_signals_boosts_documentation_under_docs_path(tmp_path: Path) -> No
         1,
     )
     signals = [
+        RetrievalSignal(
+            kind="embedding_similarity",
+            family="semantic",
+            target=process_symbol,
+            producer_name="query-channel-docs",
+            producer_version="1",
+            capability_name="embedding_similarity",
+            capability_version="1",
+            channel_name="docs",
+            rank=1,
+            strength=0.9,
+        ),
+        RetrievalSignal(
+            kind="embedding_similarity",
+            family="semantic",
+            target=readme_symbol,
+            producer_name="query-channel-docs",
+            producer_version="1",
+            capability_name="embedding_similarity",
+            capability_version="1",
+            channel_name="docs",
+            rank=1,
+            strength=0.9,
+        ),
         RetrievalSignal(
             kind="embedding_similarity",
             family="semantic",
@@ -537,7 +575,14 @@ def test_rank_signals_boosts_documentation_under_docs_path(tmp_path: Path) -> No
         intent=classify_query("architecture overview"),
     )
 
-    assert [symbol for symbol, _score in ranked] == [docs_symbol, root_symbol]
+    assert [symbol for symbol, _score in ranked] == [
+        process_symbol,
+        readme_symbol,
+        docs_symbol,
+        root_symbol,
+    ]
+    assert diagnostics[process_symbol]["docs_path_bonus"] == 0.2
+    assert diagnostics[readme_symbol]["docs_path_bonus"] == 0.18
     assert diagnostics[docs_symbol]["docs_path_bonus"] == 0.1
     assert "docs_path_bonus" not in diagnostics[root_symbol]
 

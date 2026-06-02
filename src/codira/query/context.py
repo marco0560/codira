@@ -21,7 +21,7 @@ import ast
 import contextlib
 import json
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -144,6 +144,8 @@ CHANNEL_WEIGHTS: dict[ChannelName, float] = {
 }
 MERGE_CROSS_FAMILY_BONUS = 0.15
 DOCUMENTATION_DOCS_PATH_BONUS = 0.10
+DOCUMENTATION_SPECIAL_PATH_BONUS = 0.20
+DOCUMENTATION_NAMED_DOC_BONUS = 0.18
 GRAPH_RETRIEVAL_LIMIT_PER_PRODUCER = 5
 OVERLOAD_RETRIEVAL_LIMIT = 5
 OVERLOAD_MATCH_HINTS = frozenset(
@@ -186,7 +188,7 @@ OVERLOAD_QUERY_STOPWORDS = frozenset(
 )
 FileRole = Literal["implementation", "interface", "test", "tooling", "other"]
 SelectionStage = Literal["primary", "deferred"]
-DeferralReason = Literal["file_cap", "role_cap", "language_cap"]
+DeferralReason = Literal["file_cap", "role_cap", "language_cap", "docs_code_quota"]
 DiversityEntry = dict[str, object]
 DiversityDiagnostics = dict[str, list[DiversityEntry]]
 MergeDiagnosticsEntry = dict[str, object]
@@ -194,6 +196,61 @@ MergeDiagnostics = dict[SymbolRow, MergeDiagnosticsEntry]
 ExpansionDiagnostics = dict[str, list[dict[str, object]]]
 ProducerDiagnosticsEntry = dict[str, object]
 SignalCollectionDiagnostics = dict[str, object]
+
+
+@dataclass
+class _DiversitySelectionState:
+    """
+    Mutable selection state for merged-result diversity.
+
+    Parameters
+    ----------
+    selected : list[codira.types.SymbolRow]
+        Selected result rows in final display order.
+    seen_files : dict[str, int]
+        Number of selected rows per source file.
+    role_counts : dict[str, int]
+        Number of selected rows per classified file role.
+    language_counts : dict[str, int]
+        Number of selected rows per language family.
+    selected_code_count : int
+        Number of selected non-documentation rows.
+    selected_docs_count : int
+        Number of selected documentation rows.
+    deferred : list[tuple[codira.types.SymbolRow, str]]
+        Primary-stage rows deferred by diversity caps.
+    selected_entries : list[dict[str, object]]
+        Explain diagnostics for selected rows.
+    """
+
+    selected: list[SymbolRow] = field(default_factory=list)
+    seen_files: dict[str, int] = field(default_factory=dict)
+    role_counts: dict[FileRole, int] = field(default_factory=dict)
+    language_counts: dict[str, int] = field(default_factory=dict)
+    selected_code_count: int = 0
+    selected_docs_count: int = 0
+    deferred: list[tuple[SymbolRow, DeferralReason]] = field(default_factory=list)
+    selected_entries: list[DiversityEntry] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _DiversitySelectionPolicy:
+    """
+    Immutable policy inputs for one diversity selection pass.
+
+    Parameters
+    ----------
+    enforce_docs_code_quota : bool
+        Whether docs/code parity is active for the current query intent.
+    code_candidate_count : int
+        Total non-documentation candidates available in ranked input.
+    available_language_count : int
+        Number of distinct language families available in ranked input.
+    """
+
+    enforce_docs_code_quota: bool
+    code_candidate_count: int
+    available_language_count: int
 
 
 @dataclass(frozen=True)
@@ -1603,9 +1660,17 @@ def _documentation_docs_path_bonus(
     """
     if symbol[0] != "documentation" or "docs" not in channel_scores:
         return 0.0
-    if "docs" not in Path(symbol[3]).parts:
-        return 0.0
-    return DOCUMENTATION_DOCS_PATH_BONUS
+    path = Path(symbol[3])
+    parts = tuple(part.lower() for part in path.parts)
+    stem = path.stem.lower()
+
+    if stem in {"readme", "changelog"}:
+        return DOCUMENTATION_NAMED_DOC_BONUS
+    if "docs" in parts and ("process" in parts or "adr" in parts):
+        return DOCUMENTATION_SPECIAL_PATH_BONUS
+    if "docs" in parts:
+        return DOCUMENTATION_DOCS_PATH_BONUS
+    return 0.0
 
 
 def _path_bias(
@@ -2451,7 +2516,10 @@ def _merge_ranked_channel_bundles_explain(
         Top merged symbols and a provenance map keyed by symbol.
     """
     ranked, provenance = _rank_merged_symbols_with_provenance(bundles, intent=intent)
-    top_symbols = _diversify_merged_symbols([symbol for symbol, _ in ranked])
+    top_symbols = _diversify_merged_symbols(
+        [symbol for symbol, _ in ranked],
+        intent=intent,
+    )
 
     return top_symbols, provenance
 
@@ -2613,7 +2681,180 @@ def _rank_signals_with_provenance(
     return ranked, diagnostics
 
 
-def _diversify_merged_symbols(ranked_symbols: list[SymbolRow]) -> list[SymbolRow]:
+def _should_defer_documentation_for_code_quota(
+    *,
+    enforce_quota: bool,
+    is_documentation: bool,
+    selected_docs_count: int,
+    selected_code_count: int,
+) -> bool:
+    """
+    Return whether a documentation result would violate docs/code parity.
+
+    Parameters
+    ----------
+    enforce_quota : bool
+        Whether the active query intent requires docs/code quota enforcement.
+    is_documentation : bool
+        Whether the candidate is a documentation-shaped result.
+    selected_docs_count : int
+        Number of already selected documentation results.
+    selected_code_count : int
+        Number of already selected non-documentation results.
+
+    Returns
+    -------
+    bool
+        ``True`` when appending the documentation result would make code less
+        than half of the selected result set.
+    """
+    return (
+        enforce_quota
+        and is_documentation
+        and selected_docs_count >= selected_code_count
+    )
+
+
+def _diversity_diagnostic_entry(
+    symbol: SymbolRow,
+    *,
+    role: FileRole,
+    language: str,
+    selection_stage: SelectionStage | None = None,
+    reason: DeferralReason | None = None,
+) -> DiversityEntry:
+    """
+    Build one deterministic diversity diagnostic entry.
+
+    Parameters
+    ----------
+    symbol : codira.types.SymbolRow
+        Candidate row being described.
+    role : {"implementation", "interface", "test", "tooling", "other"}
+        Classified file role.
+    language : str
+        Classified language family.
+    selection_stage : {"primary", "deferred"} | None, optional
+        Selection pass that accepted the candidate.
+    reason : str | None, optional
+        Deferral reason when the candidate was not accepted in the primary pass.
+
+    Returns
+    -------
+    dict[str, object]
+        Stable explain-mode diversity diagnostic entry.
+    """
+    symbol_type, module_name, name, file_path, lineno = symbol
+    entry: DiversityEntry = {
+        "type": symbol_type,
+        "module": module_name,
+        "name": name,
+        "file": file_path,
+        "lineno": lineno,
+        "role": role,
+        "language": language,
+    }
+    if selection_stage is not None:
+        entry["selection_stage"] = selection_stage
+    if reason is not None:
+        entry["reason"] = reason
+    return entry
+
+
+def _try_append_diversified_symbol(
+    state: _DiversitySelectionState,
+    symbol: SymbolRow,
+    *,
+    selection_stage: SelectionStage,
+    policy: _DiversitySelectionPolicy,
+) -> bool:
+    """
+    Try to append one ranked symbol under diversity and docs/code quota rules.
+
+    Parameters
+    ----------
+    state : codira.query.context._DiversitySelectionState
+        Mutable diversity selection state.
+    symbol : codira.types.SymbolRow
+        Candidate row under consideration.
+    selection_stage : {"primary", "deferred"}
+        Current diversity selection pass.
+    policy : codira.query.context._DiversitySelectionPolicy
+        Immutable selection policy for quota and cap checks.
+
+    Returns
+    -------
+    bool
+        ``True`` when the candidate was selected.
+    """
+    file_path = symbol[3]
+    module_name = symbol[1]
+    role = _classify_file_role(file_path, module_name)
+    language = _classify_file_language(file_path)
+    is_documentation = symbol[0] == "documentation"
+
+    quota_would_defer = _should_defer_documentation_for_code_quota(
+        enforce_quota=policy.enforce_docs_code_quota,
+        is_documentation=is_documentation,
+        selected_docs_count=state.selected_docs_count,
+        selected_code_count=state.selected_code_count,
+    )
+    if quota_would_defer and state.selected_code_count < policy.code_candidate_count:
+        if selection_stage == "primary":
+            state.deferred.append((symbol, "docs_code_quota"))
+        return False
+
+    if selection_stage == "deferred" and quota_would_defer:
+        return False
+
+    if state.seen_files.get(file_path, 0) >= MERGE_MAX_PER_FILE:
+        if selection_stage == "primary":
+            state.deferred.append((symbol, "file_cap"))
+        return False
+
+    if (
+        selection_stage == "primary"
+        and state.role_counts.get(role, 0) >= MERGE_ROLE_CAPS[role]
+    ):
+        state.deferred.append((symbol, "role_cap"))
+        return False
+
+    if (
+        selection_stage == "primary"
+        and policy.available_language_count > 1
+        and state.language_counts.get(language, 0)
+        >= MERGE_LANGUAGE_CAPS.get(
+            language,
+            1,
+        )
+    ):
+        state.deferred.append((symbol, "language_cap"))
+        return False
+
+    state.selected.append(symbol)
+    if is_documentation:
+        state.selected_docs_count += 1
+    else:
+        state.selected_code_count += 1
+    state.seen_files[file_path] = state.seen_files.get(file_path, 0) + 1
+    state.role_counts[role] = state.role_counts.get(role, 0) + 1
+    state.language_counts[language] = state.language_counts.get(language, 0) + 1
+    state.selected_entries.append(
+        _diversity_diagnostic_entry(
+            symbol,
+            role=role,
+            language=language,
+            selection_stage=selection_stage,
+        )
+    )
+    return True
+
+
+def _diversify_merged_symbols(
+    ranked_symbols: list[SymbolRow],
+    *,
+    intent: QueryIntent | None = None,
+) -> list[SymbolRow]:
     """
     Apply deterministic file and role caps to merged ranked symbols.
 
@@ -2627,12 +2868,17 @@ def _diversify_merged_symbols(ranked_symbols: list[SymbolRow]) -> list[SymbolRow
     list[codira.types.SymbolRow]
         Diversified top symbols capped by file and role before truncation.
     """
-    selected, _diagnostics = _diversify_merged_symbols_explain(ranked_symbols)
+    selected, _diagnostics = _diversify_merged_symbols_explain(
+        ranked_symbols,
+        intent=intent,
+    )
     return selected
 
 
 def _diversify_merged_symbols_explain(
     ranked_symbols: list[SymbolRow],
+    *,
+    intent: QueryIntent | None = None,
 ) -> tuple[list[SymbolRow], DiversityDiagnostics]:
     """
     Diversify merged symbols while collecting deterministic diagnostics.
@@ -2647,91 +2893,39 @@ def _diversify_merged_symbols_explain(
     tuple[list[codira.types.SymbolRow], codira.query.context.DiversityDiagnostics]
         Diversified symbols plus selected and deferred diagnostic entries.
     """
-    selected: list[SymbolRow] = []
-    seen_files: dict[str, int] = {}
-    role_counts: dict[FileRole, int] = {}
-    language_counts: dict[str, int] = {}
     available_languages = {
         _classify_file_language(symbol[3]) for symbol in ranked_symbols
     }
-    deferred: list[tuple[SymbolRow, DeferralReason]] = []
-    selected_entries: list[DiversityEntry] = []
+    code_candidate_count = sum(
+        1 for symbol in ranked_symbols if symbol[0] != "documentation"
+    )
+    policy = _DiversitySelectionPolicy(
+        enforce_docs_code_quota=bool(
+            code_candidate_count
+            and intent is not None
+            and intent.primary_intent in {"behavior", "test"}
+        ),
+        code_candidate_count=code_candidate_count,
+        available_language_count=len(available_languages),
+    )
+    state = _DiversitySelectionState()
     deferred_entries: list[DiversityEntry] = []
 
-    def _diagnostic_entry(
-        symbol: SymbolRow,
-        *,
-        role: FileRole,
-        language: str,
-        selection_stage: SelectionStage | None = None,
-        reason: DeferralReason | None = None,
-    ) -> DiversityEntry:
-        symbol_type, module_name, name, file_path, lineno = symbol
-        entry: DiversityEntry = {
-            "type": symbol_type,
-            "module": module_name,
-            "name": name,
-            "file": file_path,
-            "lineno": lineno,
-            "role": role,
-            "language": language,
-        }
-        if selection_stage is not None:
-            entry["selection_stage"] = selection_stage
-        if reason is not None:
-            entry["reason"] = reason
-        return entry
-
-    def _try_append(symbol: SymbolRow, *, selection_stage: SelectionStage) -> bool:
-        file_path = symbol[3]
-        module_name = symbol[1]
-        role = _classify_file_role(file_path, module_name)
-        language = _classify_file_language(file_path)
-
-        if seen_files.get(file_path, 0) >= MERGE_MAX_PER_FILE:
-            if selection_stage == "primary":
-                deferred.append((symbol, "file_cap"))
-            return False
-
-        if (
-            selection_stage == "primary"
-            and role_counts.get(role, 0) >= MERGE_ROLE_CAPS[role]
-        ):
-            deferred.append((symbol, "role_cap"))
-            return False
-
-        if (
-            selection_stage == "primary"
-            and len(available_languages) > 1
-            and language_counts.get(language, 0) >= MERGE_LANGUAGE_CAPS.get(language, 1)
-        ):
-            deferred.append((symbol, "language_cap"))
-            return False
-
-        selected.append(symbol)
-        seen_files[file_path] = seen_files.get(file_path, 0) + 1
-        role_counts[role] = role_counts.get(role, 0) + 1
-        language_counts[language] = language_counts.get(language, 0) + 1
-        selected_entries.append(
-            _diagnostic_entry(
-                symbol,
-                role=role,
-                language=language,
-                selection_stage=selection_stage,
-            )
-        )
-        return True
-
     for symbol in ranked_symbols:
-        if len(selected) >= MERGE_RESULT_LIMIT:
+        if len(state.selected) >= MERGE_RESULT_LIMIT:
             break
-        _try_append(symbol, selection_stage="primary")
+        _try_append_diversified_symbol(
+            state,
+            symbol,
+            selection_stage="primary",
+            policy=policy,
+        )
 
-    for symbol, reason in deferred:
+    for symbol, reason in state.deferred:
         role = _classify_file_role(symbol[3], symbol[1])
         language = _classify_file_language(symbol[3])
         deferred_entries.append(
-            _diagnostic_entry(
+            _diversity_diagnostic_entry(
                 symbol,
                 role=role,
                 language=language,
@@ -2739,16 +2933,21 @@ def _diversify_merged_symbols_explain(
             )
         )
 
-    for symbol, _reason in deferred:
-        if len(selected) >= MERGE_RESULT_LIMIT:
+    for symbol, _reason in state.deferred:
+        if len(state.selected) >= MERGE_RESULT_LIMIT:
             break
-        _try_append(symbol, selection_stage="deferred")
+        _try_append_diversified_symbol(
+            state,
+            symbol,
+            selection_stage="deferred",
+            policy=policy,
+        )
 
     diagnostics: DiversityDiagnostics = {
-        "selected": selected_entries,
+        "selected": state.selected_entries,
         "deferred": deferred_entries,
     }
-    return selected, diagnostics
+    return state.selected, diagnostics
 
 
 def _channel_weights() -> dict[ChannelName, float]:
@@ -5957,11 +6156,13 @@ def _initial_context_state(
     )
     if request.explain:
         top_matches, diversity = _diversify_merged_symbols_explain(
-            [symbol for symbol, _score in ranked_merged]
+            [symbol for symbol, _score in ranked_merged],
+            intent=intent,
         )
     else:
         top_matches = _diversify_merged_symbols(
-            [symbol for symbol, _score in ranked_merged]
+            [symbol for symbol, _score in ranked_merged],
+            intent=intent,
         )
         diversity = None
         ordered_channels = None
@@ -6138,11 +6339,13 @@ def _apply_graph_signal_rerank(
     )
     if state.enabled is not None:
         state.top_matches, state.diversity = _diversify_merged_symbols_explain(
-            [symbol for symbol, _score in ranked_merged]
+            [symbol for symbol, _score in ranked_merged],
+            intent=state.intent,
         )
     else:
         state.top_matches = _diversify_merged_symbols(
-            [symbol for symbol, _score in ranked_merged]
+            [symbol for symbol, _score in ranked_merged],
+            intent=state.intent,
         )
 
 
