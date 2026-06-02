@@ -4,7 +4,7 @@
   "type": "object",
   "required": ["schema_version", "status", "top_matches"],
   "properties": {
-    "schema_version": { "type": "string", "enum": ["1.2"] },
+    "schema_version": { "type": "string", "enum": ["1.3"] },
     "status": { "type": "string", "enum": ["ok", "no_matches"] },
     "top_matches": { "type": "array", "items": { "$ref": "#/definitions/symbol" } },
     "doc_issues": { "type": "array", "items": { "$ref": "#/definitions/doc_issue" } },
@@ -123,6 +123,8 @@
         "name": { "type": "string" },
         "file": { "type": "string" },
         "lineno": { "type": "integer" },
+        "source_format": { "type": "string" },
+        "provenance": { "type": "string" },
         "confidence": { "type": "number" }
       },
       "additionalProperties": false
@@ -147,12 +149,15 @@
     },
     "channel_result": {
       "type": "object",
-      "required": ["type", "module", "name", "lineno", "score"],
+      "required": ["type", "module", "name", "file", "lineno", "score"],
       "properties": {
         "type": { "type": "string" },
         "module": { "type": "string" },
         "name": { "type": "string" },
+        "file": { "type": "string" },
         "lineno": { "type": "integer" },
+        "source_format": { "type": "string" },
+        "provenance": { "type": "string" },
         "score": { "type": "number" }
       },
       "additionalProperties": false
@@ -318,6 +323,8 @@
         "module": { "type": "string" },
         "name": { "type": "string" },
         "lineno": { "type": "integer" },
+        "source_format": { "type": "string" },
+        "provenance": { "type": "string" },
         "channels": {
           "type": "object",
           "additionalProperties": { "type": "number" }

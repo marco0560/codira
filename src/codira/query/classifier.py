@@ -260,7 +260,7 @@ def build_retrieval_plan(intent: QueryIntent) -> RetrievalPlan:
     if intent.primary_intent == "test":
         return RetrievalPlan(
             primary_intent="test",
-            channels=("test", "symbol", "embedding", "semantic"),
+            channels=("test", "symbol", "embedding", "semantic", "docs"),
             include_doc_issues=False,
             include_include_graph=False,
             include_references=True,
@@ -268,7 +268,7 @@ def build_retrieval_plan(intent: QueryIntent) -> RetrievalPlan:
     if intent.primary_intent == "configuration":
         return RetrievalPlan(
             primary_intent="configuration",
-            channels=("script", "symbol", "embedding", "semantic"),
+            channels=("script", "docs", "symbol", "embedding", "semantic"),
             include_doc_issues=False,
             include_include_graph=False,
             include_references=True,
@@ -276,7 +276,7 @@ def build_retrieval_plan(intent: QueryIntent) -> RetrievalPlan:
     if intent.primary_intent == "api_surface":
         return RetrievalPlan(
             primary_intent="api_surface",
-            channels=("symbol", "embedding", "semantic"),
+            channels=("symbol", "docs", "embedding", "semantic"),
             include_doc_issues=True,
             include_include_graph=True,
             include_references=True,
@@ -284,14 +284,14 @@ def build_retrieval_plan(intent: QueryIntent) -> RetrievalPlan:
     if intent.primary_intent == "architecture":
         return RetrievalPlan(
             primary_intent="architecture",
-            channels=("symbol", "semantic", "embedding"),
+            channels=("docs", "symbol", "semantic", "embedding"),
             include_doc_issues=False,
             include_include_graph=True,
             include_references=True,
         )
     return RetrievalPlan(
         primary_intent="behavior",
-        channels=("symbol", "embedding", "semantic"),
+        channels=("symbol", "embedding", "semantic", "docs"),
         include_doc_issues=True,
         include_include_graph=True,
         include_references=True,

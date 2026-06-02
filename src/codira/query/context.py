@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 from codira.contracts import (
+    BackendDocumentationCandidatesRequest,
     BackendQueryConnection,
     split_declared_retrieval_capabilities,
 )
@@ -72,6 +73,7 @@ from codira.types import (
     ChannelName,
     ChannelResults,
     CodeContext,
+    DocumentationRow,
     IncludeEdgeRow,
     ReferenceRow,
     ReferenceSearchRow,
@@ -83,7 +85,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 # Current schema version
-SCHEMA_VERSION = "1.2"
+SCHEMA_VERSION = "1.3"
 # Minimum accepted score
 _MIN_SCORE = 1
 # Maximum number of rows inspected by the symbol fallback scan.
@@ -96,6 +98,7 @@ SEMANTIC_SCAN_LIMIT = 500
 SEMANTIC_RESULT_LIMIT = 50
 # Maximum number of embedding results returned.
 EMBEDDING_RESULT_LIMIT = 50
+DOCUMENTATION_RESULT_LIMIT = 50
 # Maximum number of merged symbols returned.
 MERGE_RESULT_LIMIT = 10
 MERGE_MAX_PER_FILE = 1
@@ -131,6 +134,7 @@ CHANNEL_WEIGHTS: dict[ChannelName, float] = {
     "symbol": 1.0,
     "embedding": 1.0,
     "semantic": 1.0,
+    "docs": 0.4,
     "test": 1.0,
     "script": 1.0,
     "overloads": 0.2,
@@ -2009,6 +2013,52 @@ def _candidate_has_signal(signals: list[RetrievalSignal], evidence_detail: str) 
     return any(signal.evidence_detail == evidence_detail for signal in signals)
 
 
+def _is_documentation_symbol(symbol: SymbolRow) -> bool:
+    """
+    Return whether a symbol-shaped row represents documentation retrieval.
+
+    Parameters
+    ----------
+    symbol : codira.types.SymbolRow
+        Symbol-shaped top-match row.
+
+    Returns
+    -------
+    bool
+        ``True`` when the row came from the documentation channel.
+    """
+    return symbol[0] == "documentation"
+
+
+def _documentation_symbol(documentation: DocumentationRow) -> SymbolRow:
+    """
+    Convert one documentation artifact row into a top-match row.
+
+    Parameters
+    ----------
+    documentation : codira.types.DocumentationRow
+        Documentation candidate row returned by a backend.
+
+    Returns
+    -------
+    codira.types.SymbolRow
+        Symbol-shaped row with explicit documentation provenance.
+    """
+    (
+        _stable_id,
+        kind,
+        source_format,
+        file_path,
+        lineno,
+        _end_lineno,
+        title,
+        _heading_path,
+        _text,
+    ) = documentation
+    display_title = title if title else kind
+    return ("documentation", source_format, display_title, file_path, lineno)
+
+
 def _format_symbol(root: Path, symbol: SymbolRow, *, include_path: bool) -> str:
     """
     Format a symbol row for human-readable output.
@@ -2028,6 +2078,16 @@ def _format_symbol(root: Path, symbol: SymbolRow, *, include_path: bool) -> str:
         Single-line textual representation of the symbol.
     """
     symbol_type, module_name, name, file_path, lineno = symbol
+
+    if _is_documentation_symbol(symbol):
+        head = f"documentation: {name}:{lineno} [{module_name}]"
+        if include_path:
+            try:
+                rel_path = str(Path(file_path).relative_to(root))
+            except ValueError:
+                rel_path = str(file_path)
+            return f"{head} ({rel_path})"
+        return head
 
     if symbol_type == "module":
         head = f"{symbol_type}: {module_name}:{lineno}"
@@ -2066,6 +2126,18 @@ def _format_enriched_symbol(
         Multi-line textual block describing the symbol.
     """
     symbol_type, module_name, name, file_path, lineno = symbol
+    if _is_documentation_symbol(symbol):
+        try:
+            rel_path = str(Path(file_path).relative_to(root))
+        except ValueError:
+            rel_path = str(file_path)
+        return [
+            f"documentation {name}",
+            f"  File: {rel_path}",
+            f"  Line: {lineno}",
+            f"  Provenance: {module_name}",
+        ]
+
     signature, docstring, snippet = _extract_code_context(root, symbol, cache)
 
     lines: list[str] = []
@@ -2445,7 +2517,11 @@ def _rank_signals_with_provenance(
         if channel_name is None:
             continue
 
-        weight = weights.get(channel_name, 1.0)
+        weight = _channel_weight_for_intent(
+            channel_name,
+            intent,
+            default=weights.get(channel_name, 1.0),
+        )
         strength = signal.strength if signal.strength is not None else 0.0
         weighted_score = strength * weight
         symbol_channel_scores = channel_scores.setdefault(symbol, {})
@@ -2660,6 +2736,38 @@ def _channel_weights() -> dict[ChannelName, float]:
     return dict(CHANNEL_WEIGHTS)
 
 
+def _channel_weight_for_intent(
+    channel_name: ChannelName,
+    intent: QueryIntent | None,
+    *,
+    default: float,
+) -> float:
+    """
+    Return an intent-aware channel weight.
+
+    Parameters
+    ----------
+    channel_name : codira.types.ChannelName
+        Retrieval channel contributing to rank fusion.
+    intent : codira.query.classifier.QueryIntent | None
+        Classified query intent, when available.
+    default : float
+        Baseline channel weight.
+
+    Returns
+    -------
+    float
+        Weight adjusted for documentation-oriented query families.
+    """
+    if channel_name != "docs" or intent is None:
+        return default
+    if intent.primary_intent in {"architecture", "configuration", "api_surface"}:
+        return 1.15
+    if intent.primary_intent == "test":
+        return 0.15
+    return 0.25
+
+
 def _channel_evidence_family(channel_name: ChannelName) -> str:
     """
     Map one retrieval channel to a stable evidence family label.
@@ -2676,7 +2784,7 @@ def _channel_evidence_family(channel_name: ChannelName) -> str:
     """
     if channel_name == "symbol":
         return "lexical"
-    if channel_name in {"embedding", "semantic"}:
+    if channel_name in {"embedding", "semantic", "docs"}:
         return "semantic"
     return "task"
 
@@ -2877,6 +2985,8 @@ def _signal_kind_for_channel(channel_name: ChannelName) -> str:
         return "exact_symbol"
     if channel_name == "embedding":
         return "embedding_similarity"
+    if channel_name == "docs":
+        return "embedding_similarity"
     return "text_match"
 
 
@@ -2896,7 +3006,7 @@ def _signal_family_for_channel(channel_name: ChannelName) -> str:
     """
     if channel_name == "symbol":
         return "lexical"
-    if channel_name in {"embedding", "semantic"}:
+    if channel_name in {"embedding", "semantic", "docs"}:
         return "semantic"
     return "task"
 
@@ -2921,6 +3031,8 @@ def _signal_capability_for_channel(channel_name: ChannelName) -> str:
         return "embedding_similarity"
     if channel_name == "semantic":
         return "semantic_text"
+    if channel_name == "docs":
+        return "embedding_similarity"
     return "task_specialization"
 
 
@@ -3785,6 +3897,53 @@ def _retrieve_embedding_candidates(
     return sorted_results
 
 
+def _retrieve_documentation_candidates(
+    root: Path,
+    query: str,
+    conn: BackendQueryConnection,
+    intent: QueryIntent,
+    prefix: str | None,
+) -> ChannelResults:
+    """
+    Retrieve ranked candidates from the documentation channel.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    query : str
+        User query string.
+    conn : object
+        Open database connection.
+    intent : codira.query.classifier.QueryIntent
+        Structured query classification used to weight documentation results.
+    prefix : str | None
+        Absolute normalized prefix used to restrict candidate files.
+
+    Returns
+    -------
+    codira.types.ChannelResults
+        Ranked documentation candidates converted to top-match rows.
+    """
+    del intent
+    backend = active_index_backend()
+    rows = backend.documentation_candidates(
+        BackendDocumentationCandidatesRequest(
+            root=root,
+            query=query,
+            limit=DOCUMENTATION_RESULT_LIMIT,
+            min_score=EMBEDDING_MIN_SCORE,
+            prefix=prefix,
+            conn=conn,
+        )
+    )
+    results: ChannelResults = [
+        (score, _documentation_symbol(documentation)) for score, documentation in rows
+    ]
+    results.sort(key=_scored_symbol_sort_key)
+    return results
+
+
 def _channel_registry() -> dict[ChannelName, QueryChannelSpec]:
     """
     Return query-channel specs keyed by channel name.
@@ -3823,6 +3982,11 @@ def _channel_registry() -> dict[ChannelName, QueryChannelSpec]:
             name="semantic",
             retrieve=_retrieve_semantic_candidates,
             producer=CHANNEL_PRODUCER_SPECS["semantic"],
+        ),
+        "docs": QueryChannelSpec(
+            name="docs",
+            retrieve=_retrieve_documentation_candidates,
+            producer=CHANNEL_PRODUCER_SPECS["docs"],
         ),
     }
 
@@ -4014,7 +4178,11 @@ def _collect_doc_issues_and_related(
     """
     issue_rows_filtered: list[tuple[str, str]] = []
 
-    symbol_names = {name for _, _, name, _, _ in top_matches if name}
+    symbol_names = {
+        name
+        for symbol_type, _module_name, name, _file_path, _lineno in top_matches
+        if name and symbol_type != "documentation"
+    }
     issue_rows = docstring_issues(
         root,
         prefix=prefix,
@@ -4359,7 +4527,9 @@ def _expand_module_related_symbols(
     """
     seen_modules: set[str] = set()
 
-    for _, module_name, _, _, _ in top_matches:
+    for symbol_type, module_name, _, _, _ in top_matches:
+        if symbol_type == "documentation":
+            continue
         if module_name in seen_modules:
             continue
         seen_modules.add(module_name)
@@ -4426,7 +4596,10 @@ def _collect_reference_rows(
         return []
 
     backend = active_index_backend()
-    symbol_names = {name for _, _, name, _, _ in top_matches if name}
+    code_matches = [
+        symbol for symbol in top_matches if not _is_documentation_symbol(symbol)
+    ]
+    symbol_names = {name for _, _, name, _, _ in code_matches if name}
     top_files = {file_path for _, _, _, file_path, _ in top_matches}
     test_refs: list[ReferenceRow] = []
     other_refs: list[ReferenceRow] = []
@@ -4645,8 +4818,9 @@ def _top_matches_payload(
     list[dict[str, object]]
         JSON-serializable top-match rows.
     """
-    return [
-        {
+    rows: list[dict[str, object]] = []
+    for symbol_type, module_name, name, file_path, lineno in top_matches:
+        row: dict[str, object] = {
             "type": symbol_type,
             "module": module_name,
             "name": name,
@@ -4660,8 +4834,11 @@ def _top_matches_payload(
                 else 1.0
             ),
         }
-        for symbol_type, module_name, name, file_path, lineno in top_matches
-    ]
+        if symbol_type == "documentation":
+            row["source_format"] = module_name
+            row["provenance"] = module_name
+        rows.append(row)
+    return rows
 
 
 def _module_expansion_payload(
@@ -4711,18 +4888,21 @@ def _channel_results_payload(
     channel_results: dict[str, list[dict[str, object]]] = {}
 
     for channel_name, channel in bundles:
-        channel_results[channel_name] = [
-            {
+        rows: list[dict[str, object]] = []
+        for score, (symbol_type, module_name, name, file_path, lineno) in channel[:5]:
+            row: dict[str, object] = {
                 "type": symbol_type,
                 "module": module_name,
                 "name": name,
+                "file": file_path,
                 "lineno": lineno,
                 "score": round(score, 2),
             }
-            for score, (symbol_type, module_name, name, _file_path, lineno) in channel[
-                :5
-            ]
-        ]
+            if symbol_type == "documentation":
+                row["source_format"] = module_name
+                row["provenance"] = module_name
+            rows.append(row)
+        channel_results[channel_name] = rows
 
     return channel_results
 
@@ -4759,26 +4939,28 @@ def _merge_explain_payload(
         symbol_type, module_name, name, _file_path, lineno = symbol
         role = _classify_file_role(symbol[3], module_name)
         role_bias = _file_role_bias(role, intent)
-        merge_entries.append(
-            {
-                "type": symbol_type,
-                "module": module_name,
-                "name": name,
-                "lineno": lineno,
-                "channels": cast("dict[str, float]", merge_details["channels"]),
-                "families": cast("dict[str, float]", merge_details["families"]),
-                "rrf_score": round(cast("float", merge_details["rrf_score"]), 4),
-                "evidence_bonus": round(
-                    cast("float", merge_details["evidence_bonus"]),
-                    4,
-                ),
-                "role_bonus": round(cast("float", merge_details["role_bonus"]), 4),
-                "merge_score": round(cast("float", merge_details["merge_score"]), 4),
-                "winner": cast("str", merge_details["winner"]),
-                "role": role,
-                "role_bias": role_bias,
-            }
-        )
+        entry: dict[str, object] = {
+            "type": symbol_type,
+            "module": module_name,
+            "name": name,
+            "lineno": lineno,
+            "channels": cast("dict[str, float]", merge_details["channels"]),
+            "families": cast("dict[str, float]", merge_details["families"]),
+            "rrf_score": round(cast("float", merge_details["rrf_score"]), 4),
+            "evidence_bonus": round(
+                cast("float", merge_details["evidence_bonus"]),
+                4,
+            ),
+            "role_bonus": round(cast("float", merge_details["role_bonus"]), 4),
+            "merge_score": round(cast("float", merge_details["merge_score"]), 4),
+            "winner": cast("str", merge_details["winner"]),
+            "role": role,
+            "role_bias": role_bias,
+        }
+        if symbol_type == "documentation":
+            entry["source_format"] = module_name
+            entry["provenance"] = module_name
+        merge_entries.append(entry)
 
     return merge_entries
 
@@ -5824,7 +6006,7 @@ def _filter_redundant_module_matches(
     modules_with_functions = {
         module_name
         for symbol_type, module_name, _name, _file_path, _lineno in top_matches
-        if symbol_type != "module"
+        if symbol_type not in {"module", "documentation"}
     }
     return [
         symbol
@@ -5902,7 +6084,11 @@ def _apply_graph_signal_rerank(
     graph_retrieval_signals = _collect_graph_retrieval_signals(
         GraphRetrievalRequest(
             root=root,
-            top_matches=state.top_matches,
+            top_matches=[
+                symbol
+                for symbol in state.top_matches
+                if not _is_documentation_symbol(symbol)
+            ],
             conn=conn,
             include_include_graph=state.plan.include_include_graph,
             include_references=state.plan.include_references,

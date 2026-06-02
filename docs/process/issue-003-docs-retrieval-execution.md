@@ -33,8 +33,8 @@ Out of scope for V1:
 | 0. Scope and execution ledger | Complete | Ledger created. | `217e8d4` |
 | 1. Models and analyzer contract | Complete | Added `DocumentationArtifact`, documentation literals, and shared row aliases. `uv run ruff check src/codira/models.py src/codira/types.py`; `uv run ruff format --check src/codira/models.py src/codira/types.py`. | `562b9cd` |
 | 2. Source extraction | Complete | Markdown analyzer, Python module-doc artifacts, analyzer capability wiring, first-party package wiring, and symbol-index skip guard for documentation-only analyses. Focused analyzer/plugin/package tests and Ruff checks passed. | `a89dfc0` |
-| 3. Backend persistence and embeddings | Complete | SQLite, DuckDB, and in-memory backends persist/query docs and doc embeddings through a distinct documentation object type. Focused backend tests and Ruff checks passed. | Pending |
-| 4. `ctx` retrieval and output | Pending | `docs` channel, result union, intent weighting, provenance, and explain output. | Pending |
+| 3. Backend persistence and embeddings | Complete | SQLite, DuckDB, and in-memory backends persist/query docs and doc embeddings through a distinct documentation object type. Focused backend tests and Ruff checks passed. | `9000e0d` |
+| 4. `ctx` retrieval and output | Complete | `docs` channel, typed documentation top matches, intent weighting, provenance, explain output, and context JSON schema 1.3. Focused context tests and Ruff checks passed. | Pending |
 | 5. Validation and cleanup | Pending | Full validation and ledger closure. | Pending |
 
 ## Decisions
@@ -102,3 +102,20 @@ Out of scope for V1:
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_contracts.py::test_sqlite_index_backend_persists_documentation_without_symbols tests/test_contracts.py::test_sqlite_index_backend_persists_and_deletes_normalized_analysis packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py::test_duckdb_documentation_candidates_use_stored_vector_values packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py::test_duckdb_embedding_candidates_use_stored_vector_values`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/test_contracts.py packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py tests/memory_backend.py packages/codira-backend-sqlite/src/codira_backend_sqlite packages/codira-backend-duckdb/src/codira_backend_duckdb src/codira/contracts.py src/codira/semantic/search.py src/codira/schema.py`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check tests/test_contracts.py packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py tests/memory_backend.py packages/codira-backend-sqlite/src/codira_backend_sqlite packages/codira-backend-duckdb/src/codira_backend_duckdb src/codira/contracts.py src/codira/semantic/search.py src/codira/schema.py`
+
+### Phase 4
+
+- Added the `docs` channel to retrieval planning and producer diagnostics.
+- Routed documentation candidates through the dedicated backend docs method and
+  converted them to explicit `documentation` top matches with provenance.
+- Added intent-aware docs weighting: strong for architecture, configuration,
+  and API-surface queries; conservative for behavior and test queries.
+- Kept graph expansion, reference lookup, docstring issue lookup, and redundant
+  module filtering code-symbol-only.
+- Added documentation provenance to text rendering, JSON top matches,
+  explain-channel results, and merge diagnostics.
+- Bumped context JSON schema to `1.3` for documentation provenance fields.
+- Validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_context_rendering.py tests/test_characterization_phase2.py tests/test_json_schema.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/codira/query/context.py src/codira/query/classifier.py src/codira/query/producers.py tests/test_context_rendering.py tests/test_characterization_phase2.py tests/test_json_schema.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check src/codira/query/context.py src/codira/query/classifier.py src/codira/query/producers.py tests/test_context_rendering.py tests/test_characterization_phase2.py tests/test_json_schema.py`
