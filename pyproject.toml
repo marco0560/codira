@@ -19,6 +19,7 @@ bundle-official = [
     "codira-analyzer-cpp==1.40.0",
     "codira-analyzer-bash==1.40.0",
     "codira-analyzer-markdown==1.40.0",
+    "codira-analyzer-text==1.40.0",
     "codira-backend-sqlite==1.40.0",
     "codira-backend-duckdb==1.40.0",
 ]
@@ -74,6 +75,7 @@ codira-analyzer-c = { path = "packages/codira-analyzer-c", editable = true }
 codira-analyzer-cpp = { path = "packages/codira-analyzer-cpp", editable = true }
 codira-analyzer-bash = { path = "packages/codira-analyzer-bash", editable = true }
 codira-analyzer-markdown = { path = "packages/codira-analyzer-markdown", editable = true }
+codira-analyzer-text = { path = "packages/codira-analyzer-text", editable = true }
 codira-backend-sqlite = { path = "packages/codira-backend-sqlite", editable = true }
 codira-backend-duckdb = { path = "packages/codira-backend-duckdb", editable = true }
 codira-bundle-official = { path = "packages/codira-bundle-official", editable = true }

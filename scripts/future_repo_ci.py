@@ -138,6 +138,12 @@ def future_repo_ci_specs() -> tuple[FutureRepoCISpec, ...]:
             validate=package_validate,
         ),
         FutureRepoCISpec(
+            repository="codira-analyzer-text",
+            purpose="first-party plain-text documentation analyzer plugin",
+            install=(("uv", "sync", "--frozen", "--extra", "test"),),
+            validate=package_validate,
+        ),
+        FutureRepoCISpec(
             repository="codira-backend-sqlite",
             purpose="first-party SQLite backend plugin",
             install=(("uv", "sync", "--frozen", "--extra", "test"),),

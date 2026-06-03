@@ -52,6 +52,7 @@ DocumentationKind = Literal["module", "file", "section"]
 DocumentationSourceFormat = Literal[
     "markdown_section",
     "module_docstring",
+    "plain_text_document",
 ]
 
 
@@ -419,7 +420,7 @@ class DocumentationArtifact:
         Durable analyzer-owned identity for the documentation artifact.
     kind : {"module", "file", "section"}
         Stable documentation artifact classifier.
-    source_format : {"markdown_section", "module_docstring"}
+    source_format : {"markdown_section", "module_docstring", "plain_text_document"}
         Provenance class for the artifact text.
     source_path : pathlib.Path
         Absolute path that owns the documentation artifact.

@@ -34,6 +34,7 @@ PACKAGE_REPOS: tuple[str, ...] = (
     "codira-analyzer-cpp",
     "codira-analyzer-bash",
     "codira-analyzer-markdown",
+    "codira-analyzer-text",
     "codira-backend-sqlite",
     "codira-backend-duckdb",
 )

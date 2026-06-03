@@ -160,6 +160,19 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
             ),
         ),
         FutureRepoSplitManifest(
+            repository="codira-analyzer-text",
+            owned_paths=(
+                "packages/codira-analyzer-text/README.md",
+                "packages/codira-analyzer-text/pyproject.toml",
+                "packages/codira-analyzer-text/src/",
+                "packages/codira-analyzer-text/tests/",
+            ),
+            stays_in_core=(
+                "src/codira/analyzers/text.py",
+                "tests/test_plugins.py",
+            ),
+        ),
+        FutureRepoSplitManifest(
             repository="codira-backend-sqlite",
             owned_paths=(
                 "packages/codira-backend-sqlite/README.md",

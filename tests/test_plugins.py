@@ -306,6 +306,22 @@ def _build_markdown_analyzer() -> LanguageAnalyzer:
     return _build_optional_first_party_analyzer("markdown")
 
 
+def _build_text_analyzer() -> LanguageAnalyzer:
+    """
+    Build one fake first-party text analyzer.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    codira.contracts.LanguageAnalyzer
+        Deterministic text analyzer stub for registry tests.
+    """
+    return _build_optional_first_party_analyzer("text")
+
+
 def _build_python_analyzer() -> LanguageAnalyzer:
     """
     Build one fake first-party Python analyzer.
@@ -1122,7 +1138,15 @@ def test_core_can_discover_installed_first_party_packages_from_built_wheels(
 
     assert Path(payload["codira_file"]).is_relative_to(install_dir)
     assert payload["backend_module"] == "codira_backend_sqlite"
-    assert payload["analyzers"] == ["python", "json", "c", "cpp", "bash", "markdown"]
+    assert payload["analyzers"] == [
+        "python",
+        "json",
+        "c",
+        "cpp",
+        "bash",
+        "markdown",
+        "text",
+    ]
 
 
 def test_registry_orders_first_party_analyzers_across_sources(
@@ -1181,6 +1205,12 @@ def test_registry_orders_first_party_analyzers_across_sources(
                 dist=_FakeDistribution("codira-analyzer-markdown"),
                 loaded=_build_markdown_analyzer,
             ),
+            _FakeEntryPoint(
+                name="text",
+                value="codira_analyzer_text:build_analyzer",
+                dist=_FakeDistribution("codira-analyzer-text"),
+                loaded=_build_text_analyzer,
+            ),
         ],
         backends=[],
     )
@@ -1190,7 +1220,7 @@ def test_registry_orders_first_party_analyzers_across_sources(
     ]
     registrations = registry.plugin_registrations()
 
-    assert analyzer_names == ["python", "json", "c", "cpp", "bash", "markdown"]
+    assert analyzer_names == ["python", "json", "c", "cpp", "bash", "markdown", "text"]
     assert any(
         record.family == "analyzer"
         and record.name == "python"
@@ -1296,6 +1326,11 @@ def test_compatibility_shims_do_not_fall_back_to_checkout_local_package_sources(
             "src/codira/analyzers/markdown.py",
             "codira_analyzer_markdown",
             "codira-analyzer-markdown",
+        ),
+        (
+            "src/codira/analyzers/text.py",
+            "codira_analyzer_text",
+            "codira-analyzer-text",
         ),
     )
 
