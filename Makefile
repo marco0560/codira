@@ -1,5 +1,4 @@
-UV_CACHE_DIR ?= /tmp/uv-cache
-UV := UV_CACHE_DIR=$(UV_CACHE_DIR) uv
+UV := uv
 
 MANIFEST ?= benchmarks/bk-cpp.local.json
 NAME ?= repo
