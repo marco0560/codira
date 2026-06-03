@@ -45,6 +45,15 @@ CAPABILITY_SCHEMA_VERSION = "1.0"
 ONTOLOGY_VERSION = "2"
 
 COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
+    "help": {
+        "intent": "cli_help_rendering",
+        "channels": [],
+        "guarantee": "deterministic_cli_help_text",
+        "limitations": [
+            "human-oriented output",
+            "machine-readable command metadata is exported by caps",
+        ],
+    },
     "index": {
         "intent": "build_or_refresh_index",
         "channels": [],

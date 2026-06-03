@@ -205,6 +205,7 @@ def test_capability_contract_validates_against_schema() -> None:
     assert [item["declaration_status"] for item in analyzers] == ["declared"]
     assert "symbol" in channels
     assert "docs" in channels
+    assert "help" in commands
     assert "ctx" in commands
     assert "docs" in commands
     declared_channels = set(channels)
@@ -216,6 +217,9 @@ def test_capability_contract_validates_against_schema() -> None:
         )
         referenced_channels.update(command_channels)
     assert referenced_channels <= declared_channels
+    help_command = cast("Mapping[str, object]", commands["help"])
+    assert help_command["intent"] == "cli_help_rendering"
+    assert help_command["channels"] == []
     symlist_command = cast("Mapping[str, object]", commands["symlist"])
     assert symlist_command["intent"] == "symbol_inventory"
     docs_command = cast("Mapping[str, object]", commands["docs"])
