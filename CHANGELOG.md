@@ -1,3 +1,10 @@
+## [1.42.3](https://github.com/marco0560/codira/compare/v1.42.2...v1.42.3) (2026-06-03)
+
+
+### Bug Fixes
+
+* **dev:** corrected use of /tmp/uv-cache  in makefile ([68a4379](https://github.com/marco0560/codira/commit/68a437907a9e0a36a571fcdd976e8866c8098b88))
+
 ## [1.42.2](https://github.com/marco0560/codira/compare/v1.42.1...v1.42.2) (2026-06-03)
 
 
