@@ -1,3 +1,10 @@
+## [1.42.2](https://github.com/marco0560/codira/compare/v1.42.1...v1.42.2) (2026-06-03)
+
+
+### Bug Fixes
+
+* **cli:** help was absent in capability contracts ([68c0125](https://github.com/marco0560/codira/commit/68c0125663eeb55fa835baa160472b1f1e823686))
+
 ## [1.42.1](https://github.com/marco0560/codira/compare/v1.42.0...v1.42.1) (2026-06-03)
 
 
