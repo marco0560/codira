@@ -60,7 +60,7 @@ if TYPE_CHECKING:
 
     from codira.contracts import IndexBackend, IndexWriteSession
 
-PACKAGE_VERSION = "1.40.0"
+PACKAGE_VERSION = "1.42.0"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",

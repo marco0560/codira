@@ -184,7 +184,7 @@ def test_capability_contract_validates_against_schema() -> None:
     jsonschema.validate(payload, _capabilities_schema())
     assert payload["schema_version"] == "1.0"
     assert payload["ontology"] == {
-        "version": "1",
+        "version": "2",
         "types": [
             "module",
             "type",

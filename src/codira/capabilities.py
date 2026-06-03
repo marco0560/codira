@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 CAPABILITY_SCHEMA_VERSION = "1.0"
-ONTOLOGY_VERSION = "1"
+ONTOLOGY_VERSION = "2"
 
 COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
     "index": {

@@ -2165,15 +2165,15 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
     ]
     assert optional_dependencies["bundle-official"] == [
         "sentence-transformers>=5.4,<6.0",
-        "codira-analyzer-python==1.40.0",
+        "codira-analyzer-python==1.42.0",
         "codira-analyzer-json==1.40.0",
-        "codira-analyzer-c==1.40.0",
-        "codira-analyzer-cpp==1.40.0",
+        "codira-analyzer-c==1.42.0",
+        "codira-analyzer-cpp==1.42.0",
         "codira-analyzer-bash==1.40.0",
-        "codira-analyzer-markdown==1.40.0",
-        "codira-analyzer-text==1.40.0",
-        "codira-backend-sqlite==1.40.0",
-        "codira-backend-duckdb==1.40.0",
+        "codira-analyzer-markdown==1.42.0",
+        "codira-analyzer-text==1.42.0",
+        "codira-backend-sqlite==1.42.0",
+        "codira-backend-duckdb==1.42.0",
     ]
     assert pyproject.get("tool", {}).get("poetry") is None
 
