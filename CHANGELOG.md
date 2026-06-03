@@ -1,3 +1,10 @@
+## [1.42.1](https://github.com/marco0560/codira/compare/v1.42.0...v1.42.1) (2026-06-03)
+
+
+### Bug Fixes
+
+* **bootstrap:** update uv uninstall command ([8210b90](https://github.com/marco0560/codira/commit/8210b90b96488a29573dcaad3cd6b61df9764a90))
+
 # [1.42.0](https://github.com/marco0560/codira/compare/v1.41.0...v1.42.0) (2026-06-03)
 
 
