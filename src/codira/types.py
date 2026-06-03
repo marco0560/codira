@@ -21,13 +21,17 @@ import ast
 from pathlib import Path
 
 SymbolRow = tuple[str, str, str, str, int]
+DocumentationRow = tuple[str, str, str, str, int, int | None, str, tuple[str, ...], str]
 OverloadRow = tuple[str, str, int, str, int, int | None, str | None]
 EnumMemberRow = tuple[str, str, int, str, str, int]
 DocstringIssueRow = tuple[str, str, str, str, str, str, str, int, int | None]
 ScoredSymbol = tuple[float, SymbolRow]
+ScoredDocumentation = tuple[float, DocumentationRow]
 ChannelResults = list[ScoredSymbol]
+DocumentationChannelResults = list[ScoredDocumentation]
 ChannelName = str
 ChannelBundle = tuple[ChannelName, ChannelResults]
+DocumentationChannelBundle = tuple[ChannelName, DocumentationChannelResults]
 ReferenceRow = tuple[str, int]
 ReferenceSearchRow = tuple[str, int, str]
 IncludeEdgeRow = tuple[str, str, str, int]

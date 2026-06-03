@@ -422,6 +422,14 @@ CHANNEL_PRODUCER_SPECS: dict[ChannelName, QueryProducerSpec] = {
         source_kind="channel",
         source_name="semantic",
     ),
+    "docs": QueryProducerSpec(
+        producer_name="query-channel-docs",
+        producer_version=QUERY_PRODUCER_VERSION,
+        capability_version=QUERY_CAPABILITY_VERSION,
+        capabilities=("semantic_text", "embedding_similarity", "diagnostics_metadata"),
+        source_kind="channel",
+        source_name="docs",
+    ),
 }
 
 

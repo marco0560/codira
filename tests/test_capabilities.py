@@ -16,7 +16,7 @@ from codira.capabilities import build_capability_contract
 from codira.cli import main
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
     from codira.contracts import LanguageAnalyzer
     from codira.models import AnalysisResult
@@ -63,7 +63,14 @@ def test_python_analyzer_declares_explicit_ontology_mapping() -> None:
     declaration = PythonAnalyzer().analyzer_capability_declaration()
 
     assert declaration.analyzer_name == "python"
-    assert declaration.supports == ("module", "type", "callable", "import", "constant")
+    assert declaration.supports == (
+        "module",
+        "type",
+        "callable",
+        "import",
+        "constant",
+        "documentation",
+    )
     assert declaration.does_not_support == ("variable", "namespace")
     assert declaration.mappings == {
         "module": "module",
@@ -73,6 +80,7 @@ def test_python_analyzer_declares_explicit_ontology_mapping() -> None:
         "function": "callable",
         "method": "callable",
         "import": "import",
+        "module_docstring": "documentation",
     }
 
 
@@ -92,7 +100,14 @@ def test_c_analyzer_declares_explicit_ontology_mapping() -> None:
     declaration = CAnalyzer().analyzer_capability_declaration()
 
     assert declaration.analyzer_name == "c"
-    assert declaration.supports == ("module", "type", "callable", "import", "constant")
+    assert declaration.supports == (
+        "module",
+        "type",
+        "callable",
+        "import",
+        "constant",
+        "documentation",
+    )
     assert declaration.does_not_support == ("variable", "namespace")
     assert declaration.mappings == {
         "module": "module",
@@ -105,6 +120,7 @@ def test_c_analyzer_declares_explicit_ontology_mapping() -> None:
         "typedef": "type",
         "include_local": "import",
         "include_system": "import",
+        "doxygen": "documentation",
     }
 
 
@@ -131,6 +147,7 @@ def test_cpp_analyzer_declares_explicit_ontology_mapping() -> None:
         "import",
         "constant",
         "namespace",
+        "documentation",
     )
     assert declaration.does_not_support == ("variable",)
     assert declaration.mappings == {
@@ -145,6 +162,7 @@ def test_cpp_analyzer_declares_explicit_ontology_mapping() -> None:
         "namespace": "namespace",
         "include_local": "import",
         "include_system": "import",
+        "doxygen": "documentation",
     }
 
 
@@ -175,6 +193,7 @@ def test_capability_contract_validates_against_schema() -> None:
             "constant",
             "variable",
             "namespace",
+            "documentation",
         ],
     }
     assert payload["validation"] == {"status": "ok", "issues": []}
@@ -185,9 +204,22 @@ def test_capability_contract_validates_against_schema() -> None:
     assert [item["analyzer_name"] for item in analyzers] == ["python"]
     assert [item["declaration_status"] for item in analyzers] == ["declared"]
     assert "symbol" in channels
+    assert "docs" in channels
     assert "ctx" in commands
+    assert "docs" in commands
+    declared_channels = set(channels)
+    referenced_channels: set[str] = set()
+    for command in commands.values():
+        command_channels = cast(
+            "Sequence[str]",
+            cast("Mapping[str, object]", command)["channels"],
+        )
+        referenced_channels.update(command_channels)
+    assert referenced_channels <= declared_channels
     symlist_command = cast("Mapping[str, object]", commands["symlist"])
     assert symlist_command["intent"] == "symbol_inventory"
+    docs_command = cast("Mapping[str, object]", commands["docs"])
+    assert docs_command["channels"] == ["docs"]
     assert "symbol_lookup" in retrieval_capabilities
 
 

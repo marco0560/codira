@@ -47,6 +47,8 @@ OPTIONAL_ANALYZER_PACKAGE_BY_NAME: dict[str, str] = {
     "c": "codira-analyzer-c",
     "cpp": "codira-analyzer-cpp",
     "bash": "codira-analyzer-bash",
+    "markdown": "codira-analyzer-markdown",
+    "text": "codira-analyzer-text",
 }
 PREFERRED_ANALYZER_ORDER: dict[str, int] = {
     "python": 0,
@@ -54,6 +56,8 @@ PREFERRED_ANALYZER_ORDER: dict[str, int] = {
     "c": 10,
     "cpp": 15,
     "bash": 20,
+    "markdown": 25,
+    "text": 30,
 }
 REQUIRED_BACKEND_METHODS: tuple[str, ...] = (
     "begin_index_session",
@@ -932,6 +936,24 @@ def missing_language_analyzer_hint(path: Path) -> str | None:
             "Shell indexing support is optional. "
             f"Install `{package_name}` to enable `*.sh` and `*.bash` files, or "
             "use `codira[bundle-official]` when the curated bundle is available."
+        )
+
+    if suffix == ".md" and "markdown" not in analyzer_names:
+        package_name = OPTIONAL_ANALYZER_PACKAGE_BY_NAME["markdown"]
+        return (
+            "Markdown documentation indexing support ships through the "
+            f"first-party `{package_name}` package. Install that package to "
+            "enable `*.md` files, or use `codira[bundle-official]` when the "
+            "curated bundle is available."
+        )
+
+    if suffix == ".txt" and "text" not in analyzer_names:
+        package_name = OPTIONAL_ANALYZER_PACKAGE_BY_NAME["text"]
+        return (
+            "Plain-text documentation indexing support ships through the "
+            f"first-party `{package_name}` package. Install that package to "
+            "enable documentation-scoped `*.txt` files, or use "
+            "`codira[bundle-official]` when the curated bundle is available."
         )
 
     return None

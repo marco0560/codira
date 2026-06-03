@@ -41,6 +41,8 @@ from codira.models import (
     ClassArtifact,
     DeclarationArtifact,
     DeclarationKind,
+    DocumentationArtifact,
+    DocumentationKind,
     EnumMemberArtifact,
     FunctionArtifact,
     ImportArtifact,
@@ -530,6 +532,83 @@ def _comment_to_summary(text: str) -> str | None:
     return "\n".join(normalized_lines)
 
 
+def _comment_to_doxygen_text(text: str) -> str | None:
+    """
+    Normalize one raw Doxygen comment block into documentation text.
+
+    Parameters
+    ----------
+    text : str
+        Raw comment text including delimiters.
+
+    Returns
+    -------
+    str | None
+        Normalized Doxygen text, or ``None`` when the comment is not Doxygen.
+    """
+    stripped = text.strip()
+    if stripped.startswith(("/**", "/*!")):
+        body = stripped[3:].removesuffix("*/")
+        lines = [line.strip().lstrip("*").strip() for line in body.splitlines()]
+    elif stripped.startswith(("///", "//!")):
+        lines = []
+        for line in stripped.splitlines():
+            normalized = line.strip()
+            if normalized.startswith(("///", "//!")):
+                lines.append(normalized[3:].strip())
+            else:
+                return None
+    else:
+        return None
+
+    normalized_lines = [line for line in lines if line]
+    if not normalized_lines:
+        return None
+    return "\n".join(normalized_lines)
+
+
+def _leading_module_doxygen(
+    root: Node, source: bytes
+) -> tuple[str, int, int | None] | None:
+    """
+    Extract the first leading Doxygen file comment as documentation text.
+
+    Parameters
+    ----------
+    root : tree_sitter.Node
+        Translation-unit root node.
+    source : bytes
+        Full source buffer.
+
+    Returns
+    -------
+    tuple[str, int, int | None] | None
+        Normalized text plus source coordinates, or ``None`` when absent.
+    """
+    for index, child in enumerate(root.children):
+        if child.type == "comment":
+            text = _comment_to_doxygen_text(_node_text(child, source))
+            if text is None:
+                return None
+            next_non_comment = next(
+                (
+                    sibling
+                    for sibling in root.children[index + 1 :]
+                    if sibling.type != "comment"
+                ),
+                None,
+            )
+            if (
+                next_non_comment is not None
+                and next_non_comment.type != "preproc_include"
+            ):
+                return None
+            return text, child.start_point.row + 1, child.end_point.row + 1
+        if child.type != "preproc_include":
+            return None
+    return None
+
+
 def _leading_module_comment(root: Node, source: bytes) -> str | None:
     """
     Extract the first leading file comment as module summary text.
@@ -552,6 +631,51 @@ def _leading_module_comment(root: Node, source: bytes) -> str | None:
         if child.type != "preproc_include":
             return None
     return None
+
+
+def _attached_doxygen_comment_map(
+    children: Sequence[Node], source: bytes
+) -> dict[int, tuple[str, int, int | None]]:
+    """
+    Map declaration start lines to nearby leading Doxygen comments.
+
+    Parameters
+    ----------
+    children : collections.abc.Sequence[tree_sitter.Node]
+        Sibling nodes that may carry leading comments.
+    source : bytes
+        Full source buffer.
+
+    Returns
+    -------
+    dict[int, tuple[str, int, int | None]]
+        Doxygen text and source coordinates keyed by declaration start line.
+    """
+    attached: dict[int, tuple[str, int, int | None]] = {}
+    pending_comment: tuple[str, int, int | None] | None = None
+    pending_end_row: int | None = None
+    previous_non_comment_end_row: int | None = None
+
+    for child in children:
+        if child.type == "comment":
+            if previous_non_comment_end_row != child.start_point.row:
+                text = _comment_to_doxygen_text(_node_text(child, source))
+                pending_comment = (
+                    (text, child.start_point.row + 1, child.end_point.row + 1)
+                    if text is not None
+                    else None
+                )
+                pending_end_row = child.end_point.row
+            continue
+
+        if pending_comment is not None and pending_end_row is not None:
+            if child.start_point.row - pending_end_row <= 2:
+                attached[child.start_point.row + 1] = pending_comment
+            pending_comment = None
+            pending_end_row = None
+        previous_non_comment_end_row = child.end_point.row
+
+    return attached
 
 
 def _attached_comment_map(children: Sequence[Node], source: bytes) -> dict[int, str]:
@@ -1713,6 +1837,7 @@ class _CppAnalysisBuilder:
         self.class_builders: dict[str, _ClassBuilder] = {}
         self.functions_by_key: dict[tuple[str, tuple[str, ...]], _PendingFunction] = {}
         self.declarations_by_id: dict[str, DeclarationArtifact] = {}
+        self.doxygen_by_lineno: dict[int, tuple[str, int, int | None]] = {}
 
     def _ensure_class_builder(
         self,
@@ -1998,6 +2123,9 @@ class _CppAnalysisBuilder:
 
         current_public = any(child.type == "struct" for child in node.children)
         attached_comments = _attached_comment_map(field_list.children, self.source)
+        self.doxygen_by_lineno.update(
+            _attached_doxygen_comment_map(field_list.children, self.source)
+        )
         for child in field_list.children:
             if child.type == "access_specifier":
                 current_public = _node_text(child, self.source) in {
@@ -2191,6 +2319,9 @@ class _CppAnalysisBuilder:
             Matching artifacts are stored in place.
         """
         attached_comments = _attached_comment_map(children, self.source)
+        self.doxygen_by_lineno.update(
+            _attached_doxygen_comment_map(children, self.source)
+        )
         for child in children:
             if child.type in {"comment", "preproc_include"}:
                 continue
@@ -2282,6 +2413,200 @@ class _CppAnalysisBuilder:
         )
 
 
+def _documentation_artifact(
+    *,
+    path: Path,
+    owner_stable_id: str,
+    owner_kind: str,
+    title: str,
+    text: str,
+    lineno: int,
+    end_lineno: int | None,
+    kind: DocumentationKind = "declaration",
+) -> DocumentationArtifact:
+    """
+    Build one Doxygen documentation artifact for a C++ owner.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Source file that owns the documentation artifact.
+    owner_stable_id : str
+        Stable identity of the documented owner.
+    owner_kind : str
+        Stable classifier of the documented owner.
+    title : str
+        Human-readable owner title.
+    text : str
+        Normalized Doxygen payload.
+    lineno : int
+        First Doxygen source line.
+    end_lineno : int | None
+        Inclusive final Doxygen source line when available.
+    kind : codira.models.DocumentationKind, optional
+        Documentation artifact kind.
+
+    Returns
+    -------
+    codira.models.DocumentationArtifact
+        Normalized documentation artifact for retrieval.
+    """
+    return DocumentationArtifact(
+        stable_id=f"doc:{kind}:{owner_stable_id}:doxygen",
+        kind=kind,
+        source_format="doxygen",
+        source_path=path,
+        lineno=lineno,
+        end_lineno=end_lineno,
+        title=title,
+        heading_path=(),
+        text=text,
+        owner_stable_id=owner_stable_id,
+        owner_kind=owner_kind,
+        attachment_confidence="explicit",
+    )
+
+
+def _append_attached_documentation_artifact(
+    artifacts: list[DocumentationArtifact],
+    *,
+    path: Path,
+    owner_stable_id: str,
+    owner_kind: str,
+    title: str,
+    owner_lineno: int,
+    doxygen_by_lineno: dict[int, tuple[str, int, int | None]],
+) -> None:
+    """
+    Append one owner-attached Doxygen artifact when a match exists.
+
+    Parameters
+    ----------
+    artifacts : list[codira.models.DocumentationArtifact]
+        Mutable documentation artifact accumulator.
+    path : pathlib.Path
+        Source file that owns the documentation artifact.
+    owner_stable_id : str
+        Stable identity of the documented owner.
+    owner_kind : str
+        Stable classifier of the documented owner.
+    title : str
+        Human-readable owner title.
+    owner_lineno : int
+        Source line where the documented owner starts.
+    doxygen_by_lineno : dict[int, tuple[str, int, int | None]]
+        Attached Doxygen documentation keyed by owner start line.
+
+    Returns
+    -------
+    None
+        The accumulator is updated in place when documentation exists.
+    """
+    attached = doxygen_by_lineno.get(owner_lineno)
+    if attached is None:
+        return
+    text, lineno, end_lineno = attached
+    artifacts.append(
+        _documentation_artifact(
+            path=path,
+            owner_stable_id=owner_stable_id,
+            owner_kind=owner_kind,
+            title=title,
+            text=text,
+            lineno=lineno,
+            end_lineno=end_lineno,
+        )
+    )
+
+
+def _documentation_artifacts(
+    *,
+    path: Path,
+    analysis: AnalysisResult,
+    module_doxygen: tuple[str, int, int | None] | None,
+    doxygen_by_lineno: dict[int, tuple[str, int, int | None]],
+) -> tuple[DocumentationArtifact, ...]:
+    """
+    Build C++ Doxygen documentation artifacts for module and declaration owners.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        C++ source path being analyzed.
+    analysis : codira.models.AnalysisResult
+        Analyzer result whose owners may have attached Doxygen documentation.
+    module_doxygen : tuple[str, int, int | None] | None
+        Leading Doxygen module documentation and source coordinates.
+    doxygen_by_lineno : dict[int, tuple[str, int, int | None]]
+        Attached Doxygen documentation keyed by owner start line.
+
+    Returns
+    -------
+    tuple[codira.models.DocumentationArtifact, ...]
+        Deterministic Doxygen documentation artifacts.
+    """
+    artifacts: list[DocumentationArtifact] = []
+    if module_doxygen is not None:
+        text, lineno, end_lineno = module_doxygen
+        artifacts.append(
+            _documentation_artifact(
+                path=path,
+                owner_stable_id=analysis.module.stable_id,
+                owner_kind="module",
+                title=analysis.module.name,
+                text=text,
+                lineno=lineno,
+                end_lineno=end_lineno,
+                kind="module",
+            )
+        )
+
+    for class_artifact in analysis.classes:
+        _append_attached_documentation_artifact(
+            artifacts,
+            path=path,
+            owner_stable_id=class_artifact.stable_id,
+            owner_kind="class",
+            title=class_artifact.name,
+            owner_lineno=class_artifact.lineno,
+            doxygen_by_lineno=doxygen_by_lineno,
+        )
+        for method in class_artifact.methods:
+            _append_attached_documentation_artifact(
+                artifacts,
+                path=path,
+                owner_stable_id=method.stable_id,
+                owner_kind="method",
+                title=method.name,
+                owner_lineno=method.lineno,
+                doxygen_by_lineno=doxygen_by_lineno,
+            )
+
+    for function in analysis.functions:
+        _append_attached_documentation_artifact(
+            artifacts,
+            path=path,
+            owner_stable_id=function.stable_id,
+            owner_kind="function",
+            title=function.name,
+            owner_lineno=function.lineno,
+            doxygen_by_lineno=doxygen_by_lineno,
+        )
+
+    for declaration in analysis.declarations:
+        _append_attached_documentation_artifact(
+            artifacts,
+            path=path,
+            owner_stable_id=declaration.stable_id,
+            owner_kind=declaration.kind,
+            title=declaration.name,
+            owner_lineno=declaration.lineno,
+            doxygen_by_lineno=doxygen_by_lineno,
+        )
+
+    return tuple(artifacts)
+
+
 def _extract_imports(root: Node, source: bytes) -> tuple[ImportArtifact, ...]:
     """
     Extract include rows from one translation unit.
@@ -2341,7 +2666,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "3"
+    version = "4"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -2370,7 +2695,15 @@ class CppAnalyzer:
             analyzer_version=self.version,
             source="first_party",
             entrypoint="codira_analyzer_cpp:build_analyzer",
-            supports=("module", "type", "callable", "import", "constant", "namespace"),
+            supports=(
+                "module",
+                "type",
+                "callable",
+                "import",
+                "constant",
+                "namespace",
+                "documentation",
+            ),
             does_not_support=("variable",),
             mappings={
                 "module": "module",
@@ -2384,6 +2717,7 @@ class CppAnalyzer:
                 "namespace": "namespace",
                 "include_local": "import",
                 "include_system": "import",
+                "doxygen": "documentation",
             },
         )
 
@@ -2422,6 +2756,7 @@ class CppAnalyzer:
         source = path.read_bytes()
         root_node = _new_parser().parse(source).root_node
         module_comment = _leading_module_comment(root_node, source)
+        module_doxygen = _leading_module_doxygen(root_node, source)
         module_name = _module_name_for_path(path, root)
         module_stable_id = _module_stable_id(path, root)
         owner_id = _symbol_owner_id(path, root)
@@ -2438,7 +2773,15 @@ class CppAnalyzer:
             module_stable_id=module_stable_id,
             module_docstring=module_comment,
         )
-        return result
+        return replace(
+            result,
+            documentation=_documentation_artifacts(
+                path=path,
+                analysis=result,
+                module_doxygen=module_doxygen,
+                doxygen_by_lineno=builder.doxygen_by_lineno,
+            ),
+        )
 
 
 def build_analyzer() -> LanguageAnalyzer:

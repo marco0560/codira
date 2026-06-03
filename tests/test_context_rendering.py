@@ -18,7 +18,7 @@ This module belongs to the **context rendering verification layer** that keeps t
 from __future__ import annotations
 
 import ast
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from codira.query.classifier import build_retrieval_plan, classify_query
 from codira.query.context import (
@@ -33,17 +33,28 @@ from codira.query.context import (
     _candidate_signal_strength,
     _classify_file_role,
     _find_references,
+    _format_symbol,
     _load_cached_python_file,
     _load_reference_scan_file,
     _path_bias,
+    _rank_signals_with_provenance,
     _ReferenceScanFile,
+    _retrieve_documentation_candidates,
     _snippet_from_node,
+    _top_matches_payload,
 )
+from codira.query.signals import RetrievalSignal
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from codira.types import ReferenceSearchRow
+    from pytest import MonkeyPatch
+
+    from codira.contracts import (
+        BackendDocumentationCandidatesRequest,
+        BackendQueryConnection,
+    )
+    from codira.types import DocumentationChannelResults, ReferenceSearchRow
 
 
 def test_snippet_from_node_removes_docstring_and_collapses_blank_lines() -> None:
@@ -378,6 +389,204 @@ def test_symbol_signal_aggregation_preserves_exact_match_dominance() -> None:
     )
 
 
+def test_retrieve_documentation_candidates_renders_explicit_provenance(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Convert documentation backend rows into explicit context top matches.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace the active backend.
+    tmp_path : pathlib.Path
+        Temporary directory used for relative rendering.
+
+    Returns
+    -------
+    None
+        The test asserts docs-channel rows keep documentation provenance in
+        text and JSON rendering.
+    """
+
+    class _FakeBackend:
+        def documentation_candidates(
+            self,
+            request: BackendDocumentationCandidatesRequest,
+        ) -> DocumentationChannelResults:
+            del request
+            return [
+                (
+                    0.91,
+                    (
+                        "doc:section:docs/architecture.md:plugin-loading:1",
+                        "section",
+                        "markdown_section",
+                        str(tmp_path / "docs" / "architecture.md"),
+                        7,
+                        12,
+                        "Plugin Loading",
+                        ("Plugin Loading",),
+                        "Plugin Loading\nPlugins are discovered through entry points.",
+                    ),
+                )
+            ]
+
+    monkeypatch.setattr(
+        "codira.query.context.active_index_backend",
+        lambda: _FakeBackend(),
+    )
+
+    results = _retrieve_documentation_candidates(
+        tmp_path,
+        "plugin loading docs",
+        cast("BackendQueryConnection", object()),
+        classify_query("architecture plugin loading docs"),
+        None,
+    )
+
+    assert results == [
+        (
+            0.91,
+            (
+                "documentation",
+                "markdown_section",
+                "Plugin Loading",
+                str(tmp_path / "docs" / "architecture.md"),
+                7,
+            ),
+        )
+    ]
+    rendered = _format_symbol(tmp_path, results[0][1], include_path=True)
+    assert rendered == (
+        "documentation: Plugin Loading:7 [markdown_section] (docs/architecture.md)"
+    )
+    assert _top_matches_payload([results[0][1]], None) == [
+        {
+            "type": "documentation",
+            "module": "markdown_section",
+            "name": "Plugin Loading",
+            "file": str(tmp_path / "docs" / "architecture.md"),
+            "lineno": 7,
+            "confidence": 1.0,
+            "source_format": "markdown_section",
+            "provenance": "markdown_section",
+        }
+    ]
+
+
+def test_rank_signals_boosts_documentation_under_docs_path(tmp_path: Path) -> None:
+    """
+    Give documentation artifacts under ``docs/`` a small deterministic boost.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root used to build stable absolute candidate paths.
+
+    Returns
+    -------
+    None
+        The test asserts the boost only affects docs-channel documentation
+        artifacts whose file path is under a ``docs`` directory.
+    """
+    process_symbol = (
+        "documentation",
+        "markdown_section",
+        "Release Process",
+        str(tmp_path / "docs" / "process" / "release.md"),
+        1,
+    )
+    readme_symbol = (
+        "documentation",
+        "markdown_section",
+        "README",
+        str(tmp_path / "README.md"),
+        1,
+    )
+    docs_symbol = (
+        "documentation",
+        "markdown_section",
+        "Architecture",
+        str(tmp_path / "docs" / "architecture.md"),
+        1,
+    )
+    root_symbol = (
+        "documentation",
+        "markdown_section",
+        "Architecture",
+        str(tmp_path / "architecture.md"),
+        1,
+    )
+    signals = [
+        RetrievalSignal(
+            kind="embedding_similarity",
+            family="semantic",
+            target=process_symbol,
+            producer_name="query-channel-docs",
+            producer_version="1",
+            capability_name="embedding_similarity",
+            capability_version="1",
+            channel_name="docs",
+            rank=1,
+            strength=0.9,
+        ),
+        RetrievalSignal(
+            kind="embedding_similarity",
+            family="semantic",
+            target=readme_symbol,
+            producer_name="query-channel-docs",
+            producer_version="1",
+            capability_name="embedding_similarity",
+            capability_version="1",
+            channel_name="docs",
+            rank=1,
+            strength=0.9,
+        ),
+        RetrievalSignal(
+            kind="embedding_similarity",
+            family="semantic",
+            target=docs_symbol,
+            producer_name="query-channel-docs",
+            producer_version="1",
+            capability_name="embedding_similarity",
+            capability_version="1",
+            channel_name="docs",
+            rank=1,
+            strength=0.9,
+        ),
+        RetrievalSignal(
+            kind="embedding_similarity",
+            family="semantic",
+            target=root_symbol,
+            producer_name="query-channel-docs",
+            producer_version="1",
+            capability_name="embedding_similarity",
+            capability_version="1",
+            channel_name="docs",
+            rank=1,
+            strength=0.9,
+        ),
+    ]
+
+    ranked, diagnostics = _rank_signals_with_provenance(
+        signals,
+        intent=classify_query("architecture overview"),
+    )
+
+    assert [symbol for symbol, _score in ranked] == [
+        process_symbol,
+        readme_symbol,
+        docs_symbol,
+        root_symbol,
+    ]
+    assert diagnostics[process_symbol]["docs_path_bonus"] == 0.2
+    assert diagnostics[readme_symbol]["docs_path_bonus"] == 0.18
+    assert diagnostics[docs_symbol]["docs_path_bonus"] == 0.1
+    assert "docs_path_bonus" not in diagnostics[root_symbol]
+
+
 def test_classify_query_assigns_primary_intent_families() -> None:
     """
     Keep the Phase 17 primary intent families deterministic.
@@ -422,19 +631,25 @@ def test_build_retrieval_plan_routes_channels_and_graph_policy() -> None:
         classify_query("architecture graph overview")
     )
 
-    assert behavior_plan.channels == ("symbol", "embedding", "semantic")
+    assert behavior_plan.channels == ("symbol", "embedding", "semantic", "docs")
     assert behavior_plan.include_doc_issues is True
     assert behavior_plan.include_include_graph is True
 
-    assert test_plan.channels == ("test", "symbol", "embedding", "semantic")
+    assert test_plan.channels == ("test", "symbol", "embedding", "semantic", "docs")
     assert test_plan.include_doc_issues is False
     assert test_plan.include_include_graph is False
 
-    assert config_plan.channels == ("script", "symbol", "embedding", "semantic")
+    assert config_plan.channels == (
+        "script",
+        "docs",
+        "symbol",
+        "embedding",
+        "semantic",
+    )
     assert config_plan.include_doc_issues is False
     assert config_plan.include_include_graph is False
 
-    assert architecture_plan.channels == ("symbol", "semantic", "embedding")
+    assert architecture_plan.channels == ("docs", "symbol", "semantic", "embedding")
     assert architecture_plan.include_include_graph is True
 
 

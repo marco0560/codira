@@ -17,7 +17,7 @@ This module belongs to the **storage infrastructure layer** and anchors table de
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 19
 
 DDL = [
     """
@@ -150,6 +150,36 @@ DDL = [
         ,
         FOREIGN KEY(file_id) REFERENCES files(id)
     );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS documentation_artifacts (
+        id INTEGER PRIMARY KEY,
+        file_id INTEGER NOT NULL,
+        stable_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        source_format TEXT NOT NULL,
+        lineno INTEGER NOT NULL,
+        end_lineno INTEGER,
+        title TEXT NOT NULL,
+        heading_path TEXT NOT NULL,
+        text TEXT NOT NULL,
+        owner_stable_id TEXT,
+        owner_kind TEXT,
+        attachment_confidence TEXT,
+        FOREIGN KEY(file_id) REFERENCES files(id)
+    );
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_documentation_stable_id
+    ON documentation_artifacts(stable_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_documentation_file
+    ON documentation_artifacts(file_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_documentation_kind_format
+    ON documentation_artifacts(kind, source_format);
     """,
     """
     CREATE TABLE IF NOT EXISTS call_edges (

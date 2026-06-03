@@ -356,6 +356,7 @@ class BashAnalyzer:
                 "constant",
                 "variable",
                 "namespace",
+                "documentation",
             ),
             mappings={
                 "module": "module",

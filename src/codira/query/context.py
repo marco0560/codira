@@ -21,11 +21,12 @@ import ast
 import contextlib
 import json
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 from codira.contracts import (
+    BackendDocumentationCandidatesRequest,
     BackendQueryConnection,
     split_declared_retrieval_capabilities,
 )
@@ -72,6 +73,7 @@ from codira.types import (
     ChannelName,
     ChannelResults,
     CodeContext,
+    DocumentationRow,
     IncludeEdgeRow,
     ReferenceRow,
     ReferenceSearchRow,
@@ -83,7 +85,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 # Current schema version
-SCHEMA_VERSION = "1.2"
+SCHEMA_VERSION = "1.3"
 # Minimum accepted score
 _MIN_SCORE = 1
 # Maximum number of rows inspected by the symbol fallback scan.
@@ -96,6 +98,7 @@ SEMANTIC_SCAN_LIMIT = 500
 SEMANTIC_RESULT_LIMIT = 50
 # Maximum number of embedding results returned.
 EMBEDDING_RESULT_LIMIT = 50
+DOCUMENTATION_RESULT_LIMIT = 50
 # Maximum number of merged symbols returned.
 MERGE_RESULT_LIMIT = 10
 MERGE_MAX_PER_FILE = 1
@@ -131,6 +134,7 @@ CHANNEL_WEIGHTS: dict[ChannelName, float] = {
     "symbol": 1.0,
     "embedding": 1.0,
     "semantic": 1.0,
+    "docs": 0.4,
     "test": 1.0,
     "script": 1.0,
     "overloads": 0.2,
@@ -139,6 +143,9 @@ CHANNEL_WEIGHTS: dict[ChannelName, float] = {
     "include_graph": 0.25,
 }
 MERGE_CROSS_FAMILY_BONUS = 0.15
+DOCUMENTATION_DOCS_PATH_BONUS = 0.10
+DOCUMENTATION_SPECIAL_PATH_BONUS = 0.20
+DOCUMENTATION_NAMED_DOC_BONUS = 0.18
 GRAPH_RETRIEVAL_LIMIT_PER_PRODUCER = 5
 OVERLOAD_RETRIEVAL_LIMIT = 5
 OVERLOAD_MATCH_HINTS = frozenset(
@@ -181,7 +188,7 @@ OVERLOAD_QUERY_STOPWORDS = frozenset(
 )
 FileRole = Literal["implementation", "interface", "test", "tooling", "other"]
 SelectionStage = Literal["primary", "deferred"]
-DeferralReason = Literal["file_cap", "role_cap", "language_cap"]
+DeferralReason = Literal["file_cap", "role_cap", "language_cap", "docs_code_quota"]
 DiversityEntry = dict[str, object]
 DiversityDiagnostics = dict[str, list[DiversityEntry]]
 MergeDiagnosticsEntry = dict[str, object]
@@ -189,6 +196,61 @@ MergeDiagnostics = dict[SymbolRow, MergeDiagnosticsEntry]
 ExpansionDiagnostics = dict[str, list[dict[str, object]]]
 ProducerDiagnosticsEntry = dict[str, object]
 SignalCollectionDiagnostics = dict[str, object]
+
+
+@dataclass
+class _DiversitySelectionState:
+    """
+    Mutable selection state for merged-result diversity.
+
+    Parameters
+    ----------
+    selected : list[codira.types.SymbolRow]
+        Selected result rows in final display order.
+    seen_files : dict[str, int]
+        Number of selected rows per source file.
+    role_counts : dict[str, int]
+        Number of selected rows per classified file role.
+    language_counts : dict[str, int]
+        Number of selected rows per language family.
+    selected_code_count : int
+        Number of selected non-documentation rows.
+    selected_docs_count : int
+        Number of selected documentation rows.
+    deferred : list[tuple[codira.types.SymbolRow, str]]
+        Primary-stage rows deferred by diversity caps.
+    selected_entries : list[dict[str, object]]
+        Explain diagnostics for selected rows.
+    """
+
+    selected: list[SymbolRow] = field(default_factory=list)
+    seen_files: dict[str, int] = field(default_factory=dict)
+    role_counts: dict[FileRole, int] = field(default_factory=dict)
+    language_counts: dict[str, int] = field(default_factory=dict)
+    selected_code_count: int = 0
+    selected_docs_count: int = 0
+    deferred: list[tuple[SymbolRow, DeferralReason]] = field(default_factory=list)
+    selected_entries: list[DiversityEntry] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _DiversitySelectionPolicy:
+    """
+    Immutable policy inputs for one diversity selection pass.
+
+    Parameters
+    ----------
+    enforce_docs_code_quota : bool
+        Whether docs/code parity is active for the current query intent.
+    code_candidate_count : int
+        Total non-documentation candidates available in ranked input.
+    available_language_count : int
+        Number of distinct language families available in ranked input.
+    """
+
+    enforce_docs_code_quota: bool
+    code_candidate_count: int
+    available_language_count: int
 
 
 @dataclass(frozen=True)
@@ -1577,6 +1639,40 @@ def _file_role_bias(role: FileRole, intent: QueryIntent | None = None) -> int:
     return 0
 
 
+def _documentation_docs_path_bonus(
+    symbol: SymbolRow,
+    channel_scores: dict[str, float],
+) -> float:
+    """
+    Return the small ranking bonus for docs-channel artifacts under ``docs/``.
+
+    Parameters
+    ----------
+    symbol : codira.types.SymbolRow
+        Candidate symbol or documentation-shaped row.
+    channel_scores : dict[str, float]
+        Weighted channel scores that contributed to the candidate.
+
+    Returns
+    -------
+    float
+        Small additive score for documentation artifacts under a ``docs`` path.
+    """
+    if symbol[0] != "documentation" or "docs" not in channel_scores:
+        return 0.0
+    path = Path(symbol[3])
+    parts = tuple(part.lower() for part in path.parts)
+    stem = path.stem.lower()
+
+    if stem in {"readme", "changelog"}:
+        return DOCUMENTATION_NAMED_DOC_BONUS
+    if "docs" in parts and ("process" in parts or "adr" in parts):
+        return DOCUMENTATION_SPECIAL_PATH_BONUS
+    if "docs" in parts:
+        return DOCUMENTATION_DOCS_PATH_BONUS
+    return 0.0
+
+
 def _path_bias(
     file_path: str,
     module_name: str,
@@ -2009,6 +2105,52 @@ def _candidate_has_signal(signals: list[RetrievalSignal], evidence_detail: str) 
     return any(signal.evidence_detail == evidence_detail for signal in signals)
 
 
+def _is_documentation_symbol(symbol: SymbolRow) -> bool:
+    """
+    Return whether a symbol-shaped row represents documentation retrieval.
+
+    Parameters
+    ----------
+    symbol : codira.types.SymbolRow
+        Symbol-shaped top-match row.
+
+    Returns
+    -------
+    bool
+        ``True`` when the row came from the documentation channel.
+    """
+    return symbol[0] == "documentation"
+
+
+def _documentation_symbol(documentation: DocumentationRow) -> SymbolRow:
+    """
+    Convert one documentation artifact row into a top-match row.
+
+    Parameters
+    ----------
+    documentation : codira.types.DocumentationRow
+        Documentation candidate row returned by a backend.
+
+    Returns
+    -------
+    codira.types.SymbolRow
+        Symbol-shaped row with explicit documentation provenance.
+    """
+    (
+        _stable_id,
+        kind,
+        source_format,
+        file_path,
+        lineno,
+        _end_lineno,
+        title,
+        _heading_path,
+        _text,
+    ) = documentation
+    display_title = title if title else kind
+    return ("documentation", source_format, display_title, file_path, lineno)
+
+
 def _format_symbol(root: Path, symbol: SymbolRow, *, include_path: bool) -> str:
     """
     Format a symbol row for human-readable output.
@@ -2028,6 +2170,16 @@ def _format_symbol(root: Path, symbol: SymbolRow, *, include_path: bool) -> str:
         Single-line textual representation of the symbol.
     """
     symbol_type, module_name, name, file_path, lineno = symbol
+
+    if _is_documentation_symbol(symbol):
+        head = f"documentation: {name}:{lineno} [{module_name}]"
+        if include_path:
+            try:
+                rel_path = str(Path(file_path).relative_to(root))
+            except ValueError:
+                rel_path = str(file_path)
+            return f"{head} ({rel_path})"
+        return head
 
     if symbol_type == "module":
         head = f"{symbol_type}: {module_name}:{lineno}"
@@ -2066,6 +2218,18 @@ def _format_enriched_symbol(
         Multi-line textual block describing the symbol.
     """
     symbol_type, module_name, name, file_path, lineno = symbol
+    if _is_documentation_symbol(symbol):
+        try:
+            rel_path = str(Path(file_path).relative_to(root))
+        except ValueError:
+            rel_path = str(file_path)
+        return [
+            f"documentation {name}",
+            f"  File: {rel_path}",
+            f"  Line: {lineno}",
+            f"  Provenance: {module_name}",
+        ]
+
     signature, docstring, snippet = _extract_code_context(root, symbol, cache)
 
     lines: list[str] = []
@@ -2352,7 +2516,10 @@ def _merge_ranked_channel_bundles_explain(
         Top merged symbols and a provenance map keyed by symbol.
     """
     ranked, provenance = _rank_merged_symbols_with_provenance(bundles, intent=intent)
-    top_symbols = _diversify_merged_symbols([symbol for symbol, _ in ranked])
+    top_symbols = _diversify_merged_symbols(
+        [symbol for symbol, _ in ranked],
+        intent=intent,
+    )
 
     return top_symbols, provenance
 
@@ -2445,7 +2612,11 @@ def _rank_signals_with_provenance(
         if channel_name is None:
             continue
 
-        weight = weights.get(channel_name, 1.0)
+        weight = _channel_weight_for_intent(
+            channel_name,
+            intent,
+            default=weights.get(channel_name, 1.0),
+        )
         strength = signal.strength if signal.strength is not None else 0.0
         weighted_score = strength * weight
         symbol_channel_scores = channel_scores.setdefault(symbol, {})
@@ -2473,12 +2644,13 @@ def _rank_signals_with_provenance(
         role_bias = _file_role_bias(role, intent)
         evidence_bonus = _merge_evidence_bonus(family_scores)
         role_bonus = float(role_bias) / 4.0
-        merge_score = rrf_score + evidence_bonus + role_bonus
+        docs_path_bonus = _documentation_docs_path_bonus(symbol, symbol_channel_scores)
+        merge_score = rrf_score + evidence_bonus + role_bonus + docs_path_bonus
         winner = max(
             sorted(symbol_channel_scores.items()),
             key=lambda item: item[1],
         )[0]
-        diagnostics[symbol] = {
+        diagnostics_entry: MergeDiagnosticsEntry = {
             "channels": dict(
                 sorted(
                     symbol_channel_scores.items(),
@@ -2497,6 +2669,9 @@ def _rank_signals_with_provenance(
             "merge_score": merge_score,
             "winner": winner,
         }
+        if docs_path_bonus:
+            diagnostics_entry["docs_path_bonus"] = docs_path_bonus
+        diagnostics[symbol] = diagnostics_entry
         ranked_with_scores.append((symbol, merge_score))
 
     ranked = sorted(
@@ -2506,7 +2681,180 @@ def _rank_signals_with_provenance(
     return ranked, diagnostics
 
 
-def _diversify_merged_symbols(ranked_symbols: list[SymbolRow]) -> list[SymbolRow]:
+def _should_defer_documentation_for_code_quota(
+    *,
+    enforce_quota: bool,
+    is_documentation: bool,
+    selected_docs_count: int,
+    selected_code_count: int,
+) -> bool:
+    """
+    Return whether a documentation result would violate docs/code parity.
+
+    Parameters
+    ----------
+    enforce_quota : bool
+        Whether the active query intent requires docs/code quota enforcement.
+    is_documentation : bool
+        Whether the candidate is a documentation-shaped result.
+    selected_docs_count : int
+        Number of already selected documentation results.
+    selected_code_count : int
+        Number of already selected non-documentation results.
+
+    Returns
+    -------
+    bool
+        ``True`` when appending the documentation result would make code less
+        than half of the selected result set.
+    """
+    return (
+        enforce_quota
+        and is_documentation
+        and selected_docs_count >= selected_code_count
+    )
+
+
+def _diversity_diagnostic_entry(
+    symbol: SymbolRow,
+    *,
+    role: FileRole,
+    language: str,
+    selection_stage: SelectionStage | None = None,
+    reason: DeferralReason | None = None,
+) -> DiversityEntry:
+    """
+    Build one deterministic diversity diagnostic entry.
+
+    Parameters
+    ----------
+    symbol : codira.types.SymbolRow
+        Candidate row being described.
+    role : {"implementation", "interface", "test", "tooling", "other"}
+        Classified file role.
+    language : str
+        Classified language family.
+    selection_stage : {"primary", "deferred"} | None, optional
+        Selection pass that accepted the candidate.
+    reason : str | None, optional
+        Deferral reason when the candidate was not accepted in the primary pass.
+
+    Returns
+    -------
+    dict[str, object]
+        Stable explain-mode diversity diagnostic entry.
+    """
+    symbol_type, module_name, name, file_path, lineno = symbol
+    entry: DiversityEntry = {
+        "type": symbol_type,
+        "module": module_name,
+        "name": name,
+        "file": file_path,
+        "lineno": lineno,
+        "role": role,
+        "language": language,
+    }
+    if selection_stage is not None:
+        entry["selection_stage"] = selection_stage
+    if reason is not None:
+        entry["reason"] = reason
+    return entry
+
+
+def _try_append_diversified_symbol(
+    state: _DiversitySelectionState,
+    symbol: SymbolRow,
+    *,
+    selection_stage: SelectionStage,
+    policy: _DiversitySelectionPolicy,
+) -> bool:
+    """
+    Try to append one ranked symbol under diversity and docs/code quota rules.
+
+    Parameters
+    ----------
+    state : codira.query.context._DiversitySelectionState
+        Mutable diversity selection state.
+    symbol : codira.types.SymbolRow
+        Candidate row under consideration.
+    selection_stage : {"primary", "deferred"}
+        Current diversity selection pass.
+    policy : codira.query.context._DiversitySelectionPolicy
+        Immutable selection policy for quota and cap checks.
+
+    Returns
+    -------
+    bool
+        ``True`` when the candidate was selected.
+    """
+    file_path = symbol[3]
+    module_name = symbol[1]
+    role = _classify_file_role(file_path, module_name)
+    language = _classify_file_language(file_path)
+    is_documentation = symbol[0] == "documentation"
+
+    quota_would_defer = _should_defer_documentation_for_code_quota(
+        enforce_quota=policy.enforce_docs_code_quota,
+        is_documentation=is_documentation,
+        selected_docs_count=state.selected_docs_count,
+        selected_code_count=state.selected_code_count,
+    )
+    if quota_would_defer and state.selected_code_count < policy.code_candidate_count:
+        if selection_stage == "primary":
+            state.deferred.append((symbol, "docs_code_quota"))
+        return False
+
+    if selection_stage == "deferred" and quota_would_defer:
+        return False
+
+    if state.seen_files.get(file_path, 0) >= MERGE_MAX_PER_FILE:
+        if selection_stage == "primary":
+            state.deferred.append((symbol, "file_cap"))
+        return False
+
+    if (
+        selection_stage == "primary"
+        and state.role_counts.get(role, 0) >= MERGE_ROLE_CAPS[role]
+    ):
+        state.deferred.append((symbol, "role_cap"))
+        return False
+
+    if (
+        selection_stage == "primary"
+        and policy.available_language_count > 1
+        and state.language_counts.get(language, 0)
+        >= MERGE_LANGUAGE_CAPS.get(
+            language,
+            1,
+        )
+    ):
+        state.deferred.append((symbol, "language_cap"))
+        return False
+
+    state.selected.append(symbol)
+    if is_documentation:
+        state.selected_docs_count += 1
+    else:
+        state.selected_code_count += 1
+    state.seen_files[file_path] = state.seen_files.get(file_path, 0) + 1
+    state.role_counts[role] = state.role_counts.get(role, 0) + 1
+    state.language_counts[language] = state.language_counts.get(language, 0) + 1
+    state.selected_entries.append(
+        _diversity_diagnostic_entry(
+            symbol,
+            role=role,
+            language=language,
+            selection_stage=selection_stage,
+        )
+    )
+    return True
+
+
+def _diversify_merged_symbols(
+    ranked_symbols: list[SymbolRow],
+    *,
+    intent: QueryIntent | None = None,
+) -> list[SymbolRow]:
     """
     Apply deterministic file and role caps to merged ranked symbols.
 
@@ -2520,12 +2868,17 @@ def _diversify_merged_symbols(ranked_symbols: list[SymbolRow]) -> list[SymbolRow
     list[codira.types.SymbolRow]
         Diversified top symbols capped by file and role before truncation.
     """
-    selected, _diagnostics = _diversify_merged_symbols_explain(ranked_symbols)
+    selected, _diagnostics = _diversify_merged_symbols_explain(
+        ranked_symbols,
+        intent=intent,
+    )
     return selected
 
 
 def _diversify_merged_symbols_explain(
     ranked_symbols: list[SymbolRow],
+    *,
+    intent: QueryIntent | None = None,
 ) -> tuple[list[SymbolRow], DiversityDiagnostics]:
     """
     Diversify merged symbols while collecting deterministic diagnostics.
@@ -2540,91 +2893,39 @@ def _diversify_merged_symbols_explain(
     tuple[list[codira.types.SymbolRow], codira.query.context.DiversityDiagnostics]
         Diversified symbols plus selected and deferred diagnostic entries.
     """
-    selected: list[SymbolRow] = []
-    seen_files: dict[str, int] = {}
-    role_counts: dict[FileRole, int] = {}
-    language_counts: dict[str, int] = {}
     available_languages = {
         _classify_file_language(symbol[3]) for symbol in ranked_symbols
     }
-    deferred: list[tuple[SymbolRow, DeferralReason]] = []
-    selected_entries: list[DiversityEntry] = []
+    code_candidate_count = sum(
+        1 for symbol in ranked_symbols if symbol[0] != "documentation"
+    )
+    policy = _DiversitySelectionPolicy(
+        enforce_docs_code_quota=bool(
+            code_candidate_count
+            and intent is not None
+            and intent.primary_intent in {"behavior", "test"}
+        ),
+        code_candidate_count=code_candidate_count,
+        available_language_count=len(available_languages),
+    )
+    state = _DiversitySelectionState()
     deferred_entries: list[DiversityEntry] = []
 
-    def _diagnostic_entry(
-        symbol: SymbolRow,
-        *,
-        role: FileRole,
-        language: str,
-        selection_stage: SelectionStage | None = None,
-        reason: DeferralReason | None = None,
-    ) -> DiversityEntry:
-        symbol_type, module_name, name, file_path, lineno = symbol
-        entry: DiversityEntry = {
-            "type": symbol_type,
-            "module": module_name,
-            "name": name,
-            "file": file_path,
-            "lineno": lineno,
-            "role": role,
-            "language": language,
-        }
-        if selection_stage is not None:
-            entry["selection_stage"] = selection_stage
-        if reason is not None:
-            entry["reason"] = reason
-        return entry
-
-    def _try_append(symbol: SymbolRow, *, selection_stage: SelectionStage) -> bool:
-        file_path = symbol[3]
-        module_name = symbol[1]
-        role = _classify_file_role(file_path, module_name)
-        language = _classify_file_language(file_path)
-
-        if seen_files.get(file_path, 0) >= MERGE_MAX_PER_FILE:
-            if selection_stage == "primary":
-                deferred.append((symbol, "file_cap"))
-            return False
-
-        if (
-            selection_stage == "primary"
-            and role_counts.get(role, 0) >= MERGE_ROLE_CAPS[role]
-        ):
-            deferred.append((symbol, "role_cap"))
-            return False
-
-        if (
-            selection_stage == "primary"
-            and len(available_languages) > 1
-            and language_counts.get(language, 0) >= MERGE_LANGUAGE_CAPS.get(language, 1)
-        ):
-            deferred.append((symbol, "language_cap"))
-            return False
-
-        selected.append(symbol)
-        seen_files[file_path] = seen_files.get(file_path, 0) + 1
-        role_counts[role] = role_counts.get(role, 0) + 1
-        language_counts[language] = language_counts.get(language, 0) + 1
-        selected_entries.append(
-            _diagnostic_entry(
-                symbol,
-                role=role,
-                language=language,
-                selection_stage=selection_stage,
-            )
-        )
-        return True
-
     for symbol in ranked_symbols:
-        if len(selected) >= MERGE_RESULT_LIMIT:
+        if len(state.selected) >= MERGE_RESULT_LIMIT:
             break
-        _try_append(symbol, selection_stage="primary")
+        _try_append_diversified_symbol(
+            state,
+            symbol,
+            selection_stage="primary",
+            policy=policy,
+        )
 
-    for symbol, reason in deferred:
+    for symbol, reason in state.deferred:
         role = _classify_file_role(symbol[3], symbol[1])
         language = _classify_file_language(symbol[3])
         deferred_entries.append(
-            _diagnostic_entry(
+            _diversity_diagnostic_entry(
                 symbol,
                 role=role,
                 language=language,
@@ -2632,16 +2933,21 @@ def _diversify_merged_symbols_explain(
             )
         )
 
-    for symbol, _reason in deferred:
-        if len(selected) >= MERGE_RESULT_LIMIT:
+    for symbol, _reason in state.deferred:
+        if len(state.selected) >= MERGE_RESULT_LIMIT:
             break
-        _try_append(symbol, selection_stage="deferred")
+        _try_append_diversified_symbol(
+            state,
+            symbol,
+            selection_stage="deferred",
+            policy=policy,
+        )
 
     diagnostics: DiversityDiagnostics = {
-        "selected": selected_entries,
+        "selected": state.selected_entries,
         "deferred": deferred_entries,
     }
-    return selected, diagnostics
+    return state.selected, diagnostics
 
 
 def _channel_weights() -> dict[ChannelName, float]:
@@ -2660,6 +2966,38 @@ def _channel_weights() -> dict[ChannelName, float]:
     return dict(CHANNEL_WEIGHTS)
 
 
+def _channel_weight_for_intent(
+    channel_name: ChannelName,
+    intent: QueryIntent | None,
+    *,
+    default: float,
+) -> float:
+    """
+    Return an intent-aware channel weight.
+
+    Parameters
+    ----------
+    channel_name : codira.types.ChannelName
+        Retrieval channel contributing to rank fusion.
+    intent : codira.query.classifier.QueryIntent | None
+        Classified query intent, when available.
+    default : float
+        Baseline channel weight.
+
+    Returns
+    -------
+    float
+        Weight adjusted for documentation-oriented query families.
+    """
+    if channel_name != "docs" or intent is None:
+        return default
+    if intent.primary_intent in {"architecture", "configuration", "api_surface"}:
+        return 1.15
+    if intent.primary_intent == "test":
+        return 0.15
+    return 0.25
+
+
 def _channel_evidence_family(channel_name: ChannelName) -> str:
     """
     Map one retrieval channel to a stable evidence family label.
@@ -2676,7 +3014,7 @@ def _channel_evidence_family(channel_name: ChannelName) -> str:
     """
     if channel_name == "symbol":
         return "lexical"
-    if channel_name in {"embedding", "semantic"}:
+    if channel_name in {"embedding", "semantic", "docs"}:
         return "semantic"
     return "task"
 
@@ -2877,6 +3215,8 @@ def _signal_kind_for_channel(channel_name: ChannelName) -> str:
         return "exact_symbol"
     if channel_name == "embedding":
         return "embedding_similarity"
+    if channel_name == "docs":
+        return "embedding_similarity"
     return "text_match"
 
 
@@ -2896,7 +3236,7 @@ def _signal_family_for_channel(channel_name: ChannelName) -> str:
     """
     if channel_name == "symbol":
         return "lexical"
-    if channel_name in {"embedding", "semantic"}:
+    if channel_name in {"embedding", "semantic", "docs"}:
         return "semantic"
     return "task"
 
@@ -2921,6 +3261,8 @@ def _signal_capability_for_channel(channel_name: ChannelName) -> str:
         return "embedding_similarity"
     if channel_name == "semantic":
         return "semantic_text"
+    if channel_name == "docs":
+        return "embedding_similarity"
     return "task_specialization"
 
 
@@ -3785,6 +4127,53 @@ def _retrieve_embedding_candidates(
     return sorted_results
 
 
+def _retrieve_documentation_candidates(
+    root: Path,
+    query: str,
+    conn: BackendQueryConnection,
+    intent: QueryIntent,
+    prefix: str | None,
+) -> ChannelResults:
+    """
+    Retrieve ranked candidates from the documentation channel.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing the index database.
+    query : str
+        User query string.
+    conn : object
+        Open database connection.
+    intent : codira.query.classifier.QueryIntent
+        Structured query classification used to weight documentation results.
+    prefix : str | None
+        Absolute normalized prefix used to restrict candidate files.
+
+    Returns
+    -------
+    codira.types.ChannelResults
+        Ranked documentation candidates converted to top-match rows.
+    """
+    del intent
+    backend = active_index_backend()
+    rows = backend.documentation_candidates(
+        BackendDocumentationCandidatesRequest(
+            root=root,
+            query=query,
+            limit=DOCUMENTATION_RESULT_LIMIT,
+            min_score=EMBEDDING_MIN_SCORE,
+            prefix=prefix,
+            conn=conn,
+        )
+    )
+    results: ChannelResults = [
+        (score, _documentation_symbol(documentation)) for score, documentation in rows
+    ]
+    results.sort(key=_scored_symbol_sort_key)
+    return results
+
+
 def _channel_registry() -> dict[ChannelName, QueryChannelSpec]:
     """
     Return query-channel specs keyed by channel name.
@@ -3823,6 +4212,11 @@ def _channel_registry() -> dict[ChannelName, QueryChannelSpec]:
             name="semantic",
             retrieve=_retrieve_semantic_candidates,
             producer=CHANNEL_PRODUCER_SPECS["semantic"],
+        ),
+        "docs": QueryChannelSpec(
+            name="docs",
+            retrieve=_retrieve_documentation_candidates,
+            producer=CHANNEL_PRODUCER_SPECS["docs"],
         ),
     }
 
@@ -4014,7 +4408,11 @@ def _collect_doc_issues_and_related(
     """
     issue_rows_filtered: list[tuple[str, str]] = []
 
-    symbol_names = {name for _, _, name, _, _ in top_matches if name}
+    symbol_names = {
+        name
+        for symbol_type, _module_name, name, _file_path, _lineno in top_matches
+        if name and symbol_type != "documentation"
+    }
     issue_rows = docstring_issues(
         root,
         prefix=prefix,
@@ -4359,7 +4757,9 @@ def _expand_module_related_symbols(
     """
     seen_modules: set[str] = set()
 
-    for _, module_name, _, _, _ in top_matches:
+    for symbol_type, module_name, _, _, _ in top_matches:
+        if symbol_type == "documentation":
+            continue
         if module_name in seen_modules:
             continue
         seen_modules.add(module_name)
@@ -4426,7 +4826,10 @@ def _collect_reference_rows(
         return []
 
     backend = active_index_backend()
-    symbol_names = {name for _, _, name, _, _ in top_matches if name}
+    code_matches = [
+        symbol for symbol in top_matches if not _is_documentation_symbol(symbol)
+    ]
+    symbol_names = {name for _, _, name, _, _ in code_matches if name}
     top_files = {file_path for _, _, _, file_path, _ in top_matches}
     test_refs: list[ReferenceRow] = []
     other_refs: list[ReferenceRow] = []
@@ -4645,8 +5048,9 @@ def _top_matches_payload(
     list[dict[str, object]]
         JSON-serializable top-match rows.
     """
-    return [
-        {
+    rows: list[dict[str, object]] = []
+    for symbol_type, module_name, name, file_path, lineno in top_matches:
+        row: dict[str, object] = {
             "type": symbol_type,
             "module": module_name,
             "name": name,
@@ -4660,8 +5064,11 @@ def _top_matches_payload(
                 else 1.0
             ),
         }
-        for symbol_type, module_name, name, file_path, lineno in top_matches
-    ]
+        if symbol_type == "documentation":
+            row["source_format"] = module_name
+            row["provenance"] = module_name
+        rows.append(row)
+    return rows
 
 
 def _module_expansion_payload(
@@ -4711,18 +5118,21 @@ def _channel_results_payload(
     channel_results: dict[str, list[dict[str, object]]] = {}
 
     for channel_name, channel in bundles:
-        channel_results[channel_name] = [
-            {
+        rows: list[dict[str, object]] = []
+        for score, (symbol_type, module_name, name, file_path, lineno) in channel[:5]:
+            row: dict[str, object] = {
                 "type": symbol_type,
                 "module": module_name,
                 "name": name,
+                "file": file_path,
                 "lineno": lineno,
                 "score": round(score, 2),
             }
-            for score, (symbol_type, module_name, name, _file_path, lineno) in channel[
-                :5
-            ]
-        ]
+            if symbol_type == "documentation":
+                row["source_format"] = module_name
+                row["provenance"] = module_name
+            rows.append(row)
+        channel_results[channel_name] = rows
 
     return channel_results
 
@@ -4759,26 +5169,28 @@ def _merge_explain_payload(
         symbol_type, module_name, name, _file_path, lineno = symbol
         role = _classify_file_role(symbol[3], module_name)
         role_bias = _file_role_bias(role, intent)
-        merge_entries.append(
-            {
-                "type": symbol_type,
-                "module": module_name,
-                "name": name,
-                "lineno": lineno,
-                "channels": cast("dict[str, float]", merge_details["channels"]),
-                "families": cast("dict[str, float]", merge_details["families"]),
-                "rrf_score": round(cast("float", merge_details["rrf_score"]), 4),
-                "evidence_bonus": round(
-                    cast("float", merge_details["evidence_bonus"]),
-                    4,
-                ),
-                "role_bonus": round(cast("float", merge_details["role_bonus"]), 4),
-                "merge_score": round(cast("float", merge_details["merge_score"]), 4),
-                "winner": cast("str", merge_details["winner"]),
-                "role": role,
-                "role_bias": role_bias,
-            }
-        )
+        entry: dict[str, object] = {
+            "type": symbol_type,
+            "module": module_name,
+            "name": name,
+            "lineno": lineno,
+            "channels": cast("dict[str, float]", merge_details["channels"]),
+            "families": cast("dict[str, float]", merge_details["families"]),
+            "rrf_score": round(cast("float", merge_details["rrf_score"]), 4),
+            "evidence_bonus": round(
+                cast("float", merge_details["evidence_bonus"]),
+                4,
+            ),
+            "role_bonus": round(cast("float", merge_details["role_bonus"]), 4),
+            "merge_score": round(cast("float", merge_details["merge_score"]), 4),
+            "winner": cast("str", merge_details["winner"]),
+            "role": role,
+            "role_bias": role_bias,
+        }
+        if symbol_type == "documentation":
+            entry["source_format"] = module_name
+            entry["provenance"] = module_name
+        merge_entries.append(entry)
 
     return merge_entries
 
@@ -5744,11 +6156,13 @@ def _initial_context_state(
     )
     if request.explain:
         top_matches, diversity = _diversify_merged_symbols_explain(
-            [symbol for symbol, _score in ranked_merged]
+            [symbol for symbol, _score in ranked_merged],
+            intent=intent,
         )
     else:
         top_matches = _diversify_merged_symbols(
-            [symbol for symbol, _score in ranked_merged]
+            [symbol for symbol, _score in ranked_merged],
+            intent=intent,
         )
         diversity = None
         ordered_channels = None
@@ -5824,7 +6238,7 @@ def _filter_redundant_module_matches(
     modules_with_functions = {
         module_name
         for symbol_type, module_name, _name, _file_path, _lineno in top_matches
-        if symbol_type != "module"
+        if symbol_type not in {"module", "documentation"}
     }
     return [
         symbol
@@ -5902,7 +6316,11 @@ def _apply_graph_signal_rerank(
     graph_retrieval_signals = _collect_graph_retrieval_signals(
         GraphRetrievalRequest(
             root=root,
-            top_matches=state.top_matches,
+            top_matches=[
+                symbol
+                for symbol in state.top_matches
+                if not _is_documentation_symbol(symbol)
+            ],
             conn=conn,
             include_include_graph=state.plan.include_include_graph,
             include_references=state.plan.include_references,
@@ -5921,11 +6339,13 @@ def _apply_graph_signal_rerank(
     )
     if state.enabled is not None:
         state.top_matches, state.diversity = _diversify_merged_symbols_explain(
-            [symbol for symbol, _score in ranked_merged]
+            [symbol for symbol, _score in ranked_merged],
+            intent=state.intent,
         )
     else:
         state.top_matches = _diversify_merged_symbols(
-            [symbol for symbol, _score in ranked_merged]
+            [symbol for symbol, _score in ranked_merged],
+            intent=state.intent,
         )
 
 

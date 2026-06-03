@@ -290,7 +290,7 @@ def test_context_for_explain_reports_phase_17_retrieval_plan(tmp_path: Path) -> 
     assert test_explain["intent"]["primary_intent"] == "test"
     assert test_explain["planner"] == {
         "primary_intent": "test",
-        "channels": ["test", "symbol", "embedding", "semantic"],
+        "channels": ["test", "symbol", "embedding", "semantic", "docs"],
         "include_doc_issues": False,
         "include_include_graph": False,
         "include_references": True,
@@ -299,6 +299,7 @@ def test_context_for_explain_reports_phase_17_retrieval_plan(tmp_path: Path) -> 
     architecture_explain = architecture_payload["explain"]
     assert architecture_explain["intent"]["primary_intent"] == "architecture"
     assert architecture_explain["planner"]["channels"] == [
+        "docs",
         "symbol",
         "semantic",
         "embedding",
@@ -349,6 +350,24 @@ def test_context_for_explain_reports_phase_17_retrieval_plan(tmp_path: Path) -> 
             "source_name": "semantic",
             "declared_capabilities": ["semantic_text"],
             "known_capabilities": ["semantic_text"],
+            "unknown_capabilities": [],
+        },
+        {
+            "producer_name": "query-channel-docs",
+            "producer_version": "1",
+            "capability_version": "1",
+            "source_kind": "channel",
+            "source_name": "docs",
+            "declared_capabilities": [
+                "semantic_text",
+                "embedding_similarity",
+                "diagnostics_metadata",
+            ],
+            "known_capabilities": [
+                "semantic_text",
+                "embedding_similarity",
+                "diagnostics_metadata",
+            ],
             "unknown_capabilities": [],
         },
         {
@@ -406,6 +425,24 @@ def test_context_for_explain_reports_phase_17_retrieval_plan(tmp_path: Path) -> 
         "producers",
     } <= set(test_signal_merge[0])
     assert architecture_explain["retrieval_producers"] == [
+        {
+            "producer_name": "query-channel-docs",
+            "producer_version": "1",
+            "capability_version": "1",
+            "source_kind": "channel",
+            "source_name": "docs",
+            "declared_capabilities": [
+                "semantic_text",
+                "embedding_similarity",
+                "diagnostics_metadata",
+            ],
+            "known_capabilities": [
+                "semantic_text",
+                "embedding_similarity",
+                "diagnostics_metadata",
+            ],
+            "unknown_capabilities": [],
+        },
         {
             "producer_name": "query-channel-symbol",
             "producer_version": "1",

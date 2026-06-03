@@ -290,6 +290,38 @@ def _build_bash_analyzer() -> LanguageAnalyzer:
     return _build_optional_first_party_analyzer("bash")
 
 
+def _build_markdown_analyzer() -> LanguageAnalyzer:
+    """
+    Build one fake first-party Markdown analyzer.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    codira.contracts.LanguageAnalyzer
+        Deterministic Markdown analyzer stub for registry tests.
+    """
+    return _build_optional_first_party_analyzer("markdown")
+
+
+def _build_text_analyzer() -> LanguageAnalyzer:
+    """
+    Build one fake first-party text analyzer.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    codira.contracts.LanguageAnalyzer
+        Deterministic text analyzer stub for registry tests.
+    """
+    return _build_optional_first_party_analyzer("text")
+
+
 def _build_python_analyzer() -> LanguageAnalyzer:
     """
     Build one fake first-party Python analyzer.
@@ -745,12 +777,12 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
         (
             "backend: sqlite [active, loaded] "
             "provider=codira-backend-sqlite origin=first_party "
-            "source=entry_point version=17 entry_point=sqlite"
+            "source=entry_point version=19 entry_point=sqlite"
         ),
         (
             "backend: duckdb [loaded] "
             "provider=codira-backend-duckdb origin=first_party "
-            "source=entry_point version=17 entry_point=duckdb"
+            "source=entry_point version=19 entry_point=duckdb"
         ),
     ]
 
@@ -765,7 +797,7 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
             "origin": "first_party",
             "source": "entry_point",
             "status": "loaded",
-            "version": "17",
+            "version": "19",
             "entry_point": "sqlite",
             "detail": None,
         },
@@ -777,7 +809,7 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
             "origin": "first_party",
             "source": "entry_point",
             "status": "loaded",
-            "version": "17",
+            "version": "19",
             "entry_point": "duckdb",
             "detail": None,
         },
@@ -1106,7 +1138,15 @@ def test_core_can_discover_installed_first_party_packages_from_built_wheels(
 
     assert Path(payload["codira_file"]).is_relative_to(install_dir)
     assert payload["backend_module"] == "codira_backend_sqlite"
-    assert payload["analyzers"] == ["python", "json", "c", "cpp", "bash"]
+    assert payload["analyzers"] == [
+        "python",
+        "json",
+        "c",
+        "cpp",
+        "bash",
+        "markdown",
+        "text",
+    ]
 
 
 def test_registry_orders_first_party_analyzers_across_sources(
@@ -1123,8 +1163,8 @@ def test_registry_orders_first_party_analyzers_across_sources(
     Returns
     -------
     None
-        The test asserts Python, JSON, C, C++, and Bash load as first-party
-        entry-point plugins in the final routing order.
+        The test asserts Python, JSON, C, C++, Bash, and Markdown load as
+        first-party entry-point plugins in the final routing order.
     """
     _patch_entry_points(
         monkeypatch,
@@ -1159,6 +1199,18 @@ def test_registry_orders_first_party_analyzers_across_sources(
                 dist=_FakeDistribution("codira-analyzer-bash"),
                 loaded=_build_bash_analyzer,
             ),
+            _FakeEntryPoint(
+                name="markdown",
+                value="codira_analyzer_markdown:build_analyzer",
+                dist=_FakeDistribution("codira-analyzer-markdown"),
+                loaded=_build_markdown_analyzer,
+            ),
+            _FakeEntryPoint(
+                name="text",
+                value="codira_analyzer_text:build_analyzer",
+                dist=_FakeDistribution("codira-analyzer-text"),
+                loaded=_build_text_analyzer,
+            ),
         ],
         backends=[],
     )
@@ -1168,7 +1220,7 @@ def test_registry_orders_first_party_analyzers_across_sources(
     ]
     registrations = registry.plugin_registrations()
 
-    assert analyzer_names == ["python", "json", "c", "cpp", "bash"]
+    assert analyzer_names == ["python", "json", "c", "cpp", "bash", "markdown", "text"]
     assert any(
         record.family == "analyzer"
         and record.name == "python"
@@ -1209,6 +1261,15 @@ def test_registry_orders_first_party_analyzers_across_sources(
         record.family == "analyzer"
         and record.name == "bash"
         and record.provider == "codira-analyzer-bash"
+        and record.source == "entry_point"
+        and record.origin == "first_party"
+        and record.status == "loaded"
+        for record in registrations
+    )
+    assert any(
+        record.family == "analyzer"
+        and record.name == "markdown"
+        and record.provider == "codira-analyzer-markdown"
         and record.source == "entry_point"
         and record.origin == "first_party"
         and record.status == "loaded"
@@ -1260,6 +1321,16 @@ def test_compatibility_shims_do_not_fall_back_to_checkout_local_package_sources(
             "src/codira/analyzers/bash.py",
             "codira_analyzer_bash",
             "codira-analyzer-bash",
+        ),
+        (
+            "src/codira/analyzers/markdown.py",
+            "codira_analyzer_markdown",
+            "codira-analyzer-markdown",
+        ),
+        (
+            "src/codira/analyzers/text.py",
+            "codira_analyzer_text",
+            "codira-analyzer-text",
         ),
     )
 

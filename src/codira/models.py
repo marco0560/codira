@@ -48,6 +48,14 @@ DeclarationKind = Literal[
     "json_release_plugin",
     "json_release_branch",
 ]
+DocumentationKind = Literal["module", "file", "section", "declaration"]
+DocumentationSourceFormat = Literal[
+    "markdown_section",
+    "module_docstring",
+    "plain_text_document",
+    "doxygen",
+]
+DocumentationAttachmentConfidence = Literal["explicit"]
 
 
 @dataclass(frozen=True)
@@ -404,6 +412,55 @@ class ModuleArtifact:
 
 
 @dataclass(frozen=True)
+class DocumentationArtifact:
+    """
+    Normalized repository documentation artifact produced by analyzers.
+
+    Parameters
+    ----------
+    stable_id : str
+        Durable analyzer-owned identity for the documentation artifact.
+    kind : {"module", "file", "section", "declaration"}
+        Stable documentation artifact classifier.
+    source_format : {"markdown_section", "module_docstring", "plain_text_document", "doxygen"}
+        Provenance class for the artifact text.
+    source_path : pathlib.Path
+        Absolute path that owns the documentation artifact.
+    lineno : int
+        First source line of the documentation artifact.
+    end_lineno : int | None
+        Inclusive last source line when available.
+    title : str
+        Human-readable heading or owner title for display.
+    heading_path : tuple[str, ...]
+        Heading hierarchy for sectioned documents, or an empty tuple when the
+        source does not have a heading hierarchy.
+    text : str
+        Normalized documentation payload used for retrieval.
+    owner_stable_id : str | None, optional
+        Stable identity of the owning code artifact when applicable.
+    owner_kind : str | None, optional
+        Stable classifier of the owning code artifact when applicable.
+    attachment_confidence : {"explicit"} | None, optional
+        Analyzer confidence that the documentation is explicitly attached to
+        the owner.
+    """
+
+    stable_id: str
+    kind: DocumentationKind
+    source_format: DocumentationSourceFormat
+    source_path: Path
+    lineno: int
+    end_lineno: int | None
+    title: str
+    heading_path: tuple[str, ...]
+    text: str
+    owner_stable_id: str | None = None
+    owner_kind: str | None = None
+    attachment_confidence: DocumentationAttachmentConfidence | None = None
+
+
+@dataclass(frozen=True)
 class AnalysisResult:
     """
     Normalized analyzer output for one source file.
@@ -422,6 +479,11 @@ class AnalysisResult:
         Ordered module-level declaration artifacts.
     imports : tuple[codira.models.ImportArtifact, ...]
         Ordered import artifacts.
+    documentation : tuple[codira.models.DocumentationArtifact, ...], optional
+        Ordered documentation artifacts emitted by the analyzer.
+    index_symbols : bool, optional
+        Whether backend persistence should index the module, symbol, relation,
+        and reference artifacts as code symbols.
 
     Notes
     -----
@@ -435,6 +497,8 @@ class AnalysisResult:
     functions: tuple[FunctionArtifact, ...]
     declarations: tuple[DeclarationArtifact, ...]
     imports: tuple[ImportArtifact, ...]
+    documentation: tuple[DocumentationArtifact, ...] = ()
+    index_symbols: bool = True
 
     def iter_functions(self) -> tuple[FunctionArtifact, ...]:
         """

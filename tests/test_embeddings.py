@@ -434,11 +434,18 @@ def test_index_repo_persists_symbol_embeddings(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    assert len(embedding_rows) == symbol_count
+    symbol_embedding_rows = [row for row in embedding_rows if row[0] == "symbol"]
+    documentation_embedding_rows = [
+        row for row in embedding_rows if row[0] == "documentation"
+    ]
+    assert len(symbol_embedding_rows) == symbol_count
     assert all(
         row == ("symbol", EMBEDDING_BACKEND, EMBEDDING_VERSION, EMBEDDING_DIM)
-        for row in embedding_rows
+        for row in symbol_embedding_rows
     )
+    assert documentation_embedding_rows == [
+        ("documentation", EMBEDDING_BACKEND, EMBEDDING_VERSION, EMBEDDING_DIM)
+    ]
 
 
 def test_embedding_candidates_are_deterministic_and_overlap(tmp_path: Path) -> None:

@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from codira.types import (
         ChannelResults,
         DocstringIssueRow,
+        DocumentationChannelResults,
         EnumMemberRow,
         IncludeEdgeRow,
         OverloadRow,
@@ -221,6 +222,7 @@ OntologyObjectType = Literal[
     "constant",
     "variable",
     "namespace",
+    "documentation",
 ]
 
 CANONICAL_ONTOLOGY_TYPES: tuple[OntologyObjectType, ...] = (
@@ -231,6 +233,7 @@ CANONICAL_ONTOLOGY_TYPES: tuple[OntologyObjectType, ...] = (
     "constant",
     "variable",
     "namespace",
+    "documentation",
 )
 
 
@@ -340,6 +343,35 @@ class BackendEmbeddingCandidatesRequest:
         Minimum similarity threshold for emitted results.
     prefix : str | None, optional
         Repo-root-relative path prefix used to restrict matched symbol files.
+    conn : object | None, optional
+        Existing backend connection to reuse.
+    """
+
+    root: Path
+    query: str
+    limit: int
+    min_score: float
+    prefix: str | None = None
+    conn: object | None = None
+
+
+@dataclass(frozen=True)
+class BackendDocumentationCandidatesRequest:
+    """
+    Backend request for ranked documentation candidate lookup.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose index should be queried.
+    query : str
+        User query string.
+    limit : int
+        Maximum number of ranked documentation results to return.
+    min_score : float
+        Minimum similarity threshold for emitted results.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict matched documents.
     conn : object | None, optional
         Existing backend connection to reuse.
     """
@@ -1413,6 +1445,25 @@ class IndexBackend(Protocol):
         -------
         codira.types.ChannelResults
             Ranked symbol candidates ordered deterministically.
+        """
+        ...
+
+    def documentation_candidates(
+        self,
+        request: BackendDocumentationCandidatesRequest,
+    ) -> DocumentationChannelResults:
+        """
+        Return ranked documentation candidates using stored embedding similarity.
+
+        Parameters
+        ----------
+        request : BackendDocumentationCandidatesRequest
+            Documentation candidate lookup request.
+
+        Returns
+        -------
+        codira.types.DocumentationChannelResults
+            Ranked documentation candidates ordered deterministically.
         """
         ...
 

@@ -510,11 +510,67 @@ def test_top_level_help_includes_examples_and_calls_command() -> None:
     help_text = parser.format_help()
 
     assert 'codira emb "schema migration rules"' in help_text
+    assert 'codira docs "release process"' in help_text
     assert "codira calls caller" in help_text
     assert "codira refs _retrieve_script_candidates --incoming" in help_text
     assert "codira ctx --prompt" in help_text
     assert 'codira ctx "find schema migration logic"' in help_text
     assert "audit" in help_text
+
+
+def test_docs_cli_json_returns_documentation_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Query documentation artifacts through the docs-only CLI surface.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to control process state.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture CLI output.
+
+    Returns
+    -------
+    None
+        The test asserts ``codira docs --json`` returns documentation rows
+        without requiring mixed ``ctx`` retrieval.
+    """
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "release.md").write_text(
+        "# Release Process\n\nRelease metadata is documented here.\n",
+        encoding="utf-8",
+    )
+    init_db(tmp_path)
+    index_repo(tmp_path)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["codira", "docs", "release metadata", "--json", "--limit", "1"],
+    )
+
+    assert main() == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["command"] == "docs"
+    assert payload["status"] == "ok"
+    assert payload["query"] == {
+        "text": "release metadata",
+        "limit": 1,
+        "prefix": None,
+    }
+    assert len(payload["results"]) == 1
+    assert payload["results"][0]["kind"] == "section"
+    assert payload["results"][0]["source_format"] == "markdown_section"
+    assert payload["results"][0]["title"] == "Release Process"
 
 
 def test_context_for_expands_related_cross_module_graph_symbols(
@@ -1019,6 +1075,7 @@ def test_query_subcommand_help_includes_json_examples(
     expected_examples = {
         "sym": "codira sym build_parser --json",
         "emb": 'codira emb "schema migration rules" --json',
+        "docs": 'codira docs "release process" --json',
         "calls": "codira calls caller --json",
         "refs": "codira refs helper --json",
         "audit": "codira audit --json",

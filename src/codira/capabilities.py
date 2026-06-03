@@ -88,6 +88,15 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
             "requires persisted embeddings for indexed artifacts",
         ],
     },
+    "docs": {
+        "intent": "documentation_similarity_lookup",
+        "channels": ["docs"],
+        "guarantee": "documentation_embedding_similarity_order",
+        "limitations": [
+            "returns documentation artifacts only",
+            "requires persisted documentation embeddings",
+        ],
+    },
     "calls": {
         "intent": "static_call_graph_lookup",
         "channels": ["call_graph"],
@@ -108,7 +117,7 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
     },
     "ctx": {
         "intent": "task_focused_context_retrieval",
-        "channels": ["symbol", "semantic", "embedding"],
+        "channels": ["symbol", "semantic", "embedding", "docs"],
         "guarantee": "deterministic_channel_merge_for_current_index",
         "limitations": [
             "ranking depends on declared producer capabilities",
@@ -430,6 +439,11 @@ def build_capability_contract(
                 "match": "diagnostic",
                 "source": "docstring_issues",
                 "guarantee": "deterministic_issue_annotations",
+            },
+            "docs": {
+                "match": "approximate",
+                "source": "documentation_artifacts",
+                "guarantee": "documentation_embedding_similarity_order",
             },
             "embedding": {
                 "match": "approximate",

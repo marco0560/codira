@@ -21,6 +21,7 @@ first-party Python analyzer distribution for Phase 2 packaging.
 from __future__ import annotations
 
 import builtins
+import ast
 import sys
 import tokenize
 from collections import Counter
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
     )
 
 from codira.contracts import AnalyzerCapabilityDeclaration
+from codira.models import DocumentationArtifact
 from codira.normalization import analysis_result_from_parsed
 from codira.parser_ast import parse_source
 
@@ -797,6 +799,79 @@ def _classify_python_relation_targets(analysis: AnalysisResult) -> AnalysisResul
     return replace(analysis, functions=functions, classes=classes)
 
 
+def _module_docstring_location(source: str) -> tuple[int, int | None] | None:
+    """
+    Return source coordinates for a module docstring.
+
+    Parameters
+    ----------
+    source : str
+        Python source text to inspect.
+
+    Returns
+    -------
+    tuple[int, int | None] | None
+        Start and inclusive end line for the module docstring, or ``None``
+        when no syntactic module docstring exists.
+    """
+    tree = ast.parse(source)
+    if not tree.body:
+        return None
+    first_node = tree.body[0]
+    if not isinstance(first_node, ast.Expr):
+        return None
+    value = first_node.value
+    if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+        return None
+    return first_node.lineno, first_node.end_lineno
+
+
+def _module_documentation_artifacts(
+    analysis: AnalysisResult,
+    *,
+    path: Path,
+    source: str,
+) -> tuple[DocumentationArtifact, ...]:
+    """
+    Build Python module-level documentation artifacts for V1 retrieval.
+
+    Parameters
+    ----------
+    analysis : codira.models.AnalysisResult
+        Normalized Python analyzer result.
+    path : pathlib.Path
+        Source path that produced ``analysis``.
+    source : str
+        Python source text used to locate the docstring.
+
+    Returns
+    -------
+    tuple[codira.models.DocumentationArtifact, ...]
+        One module-docstring artifact when present, otherwise an empty tuple.
+    """
+    docstring = analysis.module.docstring
+    if not docstring:
+        return ()
+    location = _module_docstring_location(source)
+    if location is None:
+        return ()
+    lineno, end_lineno = location
+    return (
+        DocumentationArtifact(
+            stable_id=f"doc:module:{analysis.module.stable_id}:module_docstring",
+            kind="module",
+            source_format="module_docstring",
+            source_path=path,
+            lineno=lineno,
+            end_lineno=end_lineno,
+            title=analysis.module.name,
+            heading_path=(),
+            text=docstring,
+            owner_stable_id=analysis.module.stable_id,
+        ),
+    )
+
+
 class PythonAnalyzer:
     """
     Concrete Python analyzer for repository indexing.
@@ -833,7 +908,14 @@ class PythonAnalyzer:
             analyzer_version=self.version,
             source="first_party",
             entrypoint="codira_analyzer_python:build_analyzer",
-            supports=("module", "type", "callable", "import", "constant"),
+            supports=(
+                "module",
+                "type",
+                "callable",
+                "import",
+                "constant",
+                "documentation",
+            ),
             does_not_support=("variable", "namespace"),
             mappings={
                 "module": "module",
@@ -843,6 +925,7 @@ class PythonAnalyzer:
                 "function": "callable",
                 "method": "callable",
                 "import": "import",
+                "module_docstring": "documentation",
             },
         )
 
@@ -882,7 +965,15 @@ class PythonAnalyzer:
         analysis = analysis_result_from_parsed(path, parse_source(path, root, source))
         analysis = _disambiguate_shadowed_module_file(analysis, path=path, root=root)
         analysis = _classify_python_relation_targets(analysis)
-        return _disambiguate_analysis_stable_ids(analysis)
+        analysis = _disambiguate_analysis_stable_ids(analysis)
+        return replace(
+            analysis,
+            documentation=_module_documentation_artifacts(
+                analysis,
+                path=path,
+                source=source,
+            ),
+        )
 
 
 def build_analyzer() -> LanguageAnalyzer:

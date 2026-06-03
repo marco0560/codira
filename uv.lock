@@ -294,7 +294,9 @@ bundle-official = [
     { name = "codira-analyzer-c" },
     { name = "codira-analyzer-cpp" },
     { name = "codira-analyzer-json" },
+    { name = "codira-analyzer-markdown" },
     { name = "codira-analyzer-python" },
+    { name = "codira-analyzer-text" },
     { name = "codira-backend-duckdb" },
     { name = "codira-backend-sqlite" },
     { name = "sentence-transformers" },
@@ -331,7 +333,9 @@ requires-dist = [
     { name = "codira-analyzer-c", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-c" },
     { name = "codira-analyzer-cpp", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-cpp" },
     { name = "codira-analyzer-json", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-json" },
+    { name = "codira-analyzer-markdown", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-markdown" },
     { name = "codira-analyzer-python", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-python" },
+    { name = "codira-analyzer-text", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-text" },
     { name = "codira-backend-duckdb", marker = "extra == 'bundle-official'", editable = "packages/codira-backend-duckdb" },
     { name = "codira-backend-sqlite", marker = "extra == 'bundle-official'", editable = "packages/codira-backend-sqlite" },
     { name = "jsonschema", specifier = ">=4.0" },
@@ -441,9 +445,45 @@ requires-dist = [
 provides-extras = ["test"]
 
 [[package]]
+name = "codira-analyzer-markdown"
+version = "1.40.0"
+source = { editable = "packages/codira-analyzer-markdown" }
+dependencies = [
+    { name = "codira" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "black", marker = "extra == 'test'" },
+    { name = "codira", specifier = ">=1.5.0,<2.0.0" },
+    { name = "mypy", marker = "extra == 'test'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "ruff", marker = "extra == 'test'" },
+]
+provides-extras = ["test"]
+
+[[package]]
 name = "codira-analyzer-python"
 version = "1.40.0"
 source = { editable = "packages/codira-analyzer-python" }
+dependencies = [
+    { name = "codira" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "black", marker = "extra == 'test'" },
+    { name = "codira", specifier = ">=1.5.0,<2.0.0" },
+    { name = "mypy", marker = "extra == 'test'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "ruff", marker = "extra == 'test'" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "codira-analyzer-text"
+version = "1.40.0"
+source = { editable = "packages/codira-analyzer-text" }
 dependencies = [
     { name = "codira" },
 ]

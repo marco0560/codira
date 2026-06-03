@@ -76,6 +76,8 @@ def test_future_repo_ci_specs_cover_the_accepted_repository_set() -> None:
         "codira-analyzer-c",
         "codira-analyzer-cpp",
         "codira-analyzer-bash",
+        "codira-analyzer-markdown",
+        "codira-analyzer-text",
         "codira-backend-sqlite",
         "codira-backend-duckdb",
         "codira-bundle-official",

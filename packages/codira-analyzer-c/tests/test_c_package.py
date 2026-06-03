@@ -48,3 +48,41 @@ def test_c_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CAnalyzer)
     assert analyzer.name == "c"
+
+
+def test_c_analyzer_emits_doxygen_documentation_only(tmp_path: Path) -> None:
+    """
+    Keep C documentation artifacts scoped to explicit Doxygen comments.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts Doxygen comments produce documentation artifacts while
+        ordinary comments do not.
+    """
+    source = tmp_path / "sample.c"
+    source.write_text(
+        "\n".join(
+            (
+                "/// Adds one to the value.",
+                "int documented(int value) { return value + 1; }",
+                "",
+                "// Ordinary implementation note.",
+                "int undocumented(int value) { return value; }",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    analysis = CAnalyzer().analyze_file(source, tmp_path)
+
+    assert [
+        (doc.title, doc.source_format, doc.owner_kind) for doc in analysis.documentation
+    ] == [("documented", "doxygen", "function")]
+    assert analysis.documentation[0].text == "Adds one to the value."
+    assert analysis.documentation[0].attachment_confidence == "explicit"

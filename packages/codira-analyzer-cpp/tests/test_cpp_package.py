@@ -48,3 +48,50 @@ def test_cpp_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CppAnalyzer)
     assert analyzer.name == "cpp"
+
+
+def test_cpp_analyzer_emits_doxygen_documentation_only(tmp_path: Path) -> None:
+    """
+    Keep C++ documentation artifacts scoped to explicit Doxygen comments.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts nested C++ owners can emit Doxygen documentation
+        artifacts while ordinary comments do not.
+    """
+    source = tmp_path / "sample.cpp"
+    source.write_text(
+        "\n".join(
+            (
+                "/** Widget type. */",
+                "class Widget {",
+                "public:",
+                "  /// Runs the widget.",
+                "  void run() {}",
+                "};",
+                "",
+                "// Ordinary implementation note.",
+                "int undocumented() { return 0; }",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    analysis = CppAnalyzer().analyze_file(source, tmp_path)
+
+    assert [
+        (doc.title, doc.source_format, doc.owner_kind, doc.text)
+        for doc in analysis.documentation
+    ] == [
+        ("Widget", "doxygen", "class", "Widget type."),
+        ("run", "doxygen", "method", "Runs the widget."),
+    ]
+    assert all(
+        doc.attachment_confidence == "explicit" for doc in analysis.documentation
+    )

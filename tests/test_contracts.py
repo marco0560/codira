@@ -44,6 +44,7 @@ from codira.analyzers.c import _disambiguate_function_stable_ids
 from codira.cli import _run_symbol
 from codira.contracts import (
     KNOWN_RETRIEVAL_CAPABILITIES,
+    BackendDocumentationCandidatesRequest,
     BackendEmbeddingCandidatesRequest,
     BackendPersistAnalysisRequest,
     BackendRelationQueryRequest,
@@ -64,6 +65,7 @@ from codira.indexer import (
 from codira.models import (
     AnalysisResult,
     CallSite,
+    DocumentationArtifact,
     EnumMemberArtifact,
     FileMetadataSnapshot,
     FunctionArtifact,
@@ -874,6 +876,30 @@ class _FakeBackend:
         Returns
         -------
         list[tuple[float, tuple[str, str, str, str, int]]]
+            Empty candidate rows for protocol validation.
+        """
+        del request
+        return []
+
+    def documentation_candidates(
+        self,
+        request: BackendDocumentationCandidatesRequest,
+    ) -> list[
+        tuple[
+            float, tuple[str, str, str, str, int, int | None, str, tuple[str, ...], str]
+        ]
+    ]:
+        """
+        Return no documentation candidates for protocol validation.
+
+        Parameters
+        ----------
+        request : BackendDocumentationCandidatesRequest
+            Documentation candidate lookup request.
+
+        Returns
+        -------
+        list[tuple[float, tuple[str, str, str, str, int, int | None, str, tuple[str, ...], str]]]
             Empty candidate rows for protocol validation.
         """
         del request
@@ -2144,6 +2170,8 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-c==1.40.0",
         "codira-analyzer-cpp==1.40.0",
         "codira-analyzer-bash==1.40.0",
+        "codira-analyzer-markdown==1.40.0",
+        "codira-analyzer-text==1.40.0",
         "codira-backend-sqlite==1.40.0",
         "codira-backend-duckdb==1.40.0",
     ]
@@ -2174,6 +2202,8 @@ def test_active_phase_8_registries_expose_default_backend_and_analyzers() -> Non
         "c",
         "cpp",
         "bash",
+        "markdown",
+        "text",
     ]
 
 
@@ -4540,6 +4570,167 @@ def test_sqlite_index_backend_persists_and_deletes_normalized_analysis(
 
     backend.delete_paths(tmp_path, paths=[str(module)])
     assert backend.load_existing_file_hashes(tmp_path) == {}
+
+
+def test_sqlite_index_backend_persists_documentation_without_symbols(
+    tmp_path: Path,
+) -> None:
+    """
+    Persist documentation artifacts without blending them into symbol retrieval.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts documentation artifacts are stored, embedded, queried
+        through the documentation channel, and deleted independently from
+        symbols.
+    """
+    document = tmp_path / "docs" / "architecture.md"
+    document.parent.mkdir()
+    document.write_text(
+        "# Plugin Loading\n\nPlugins are discovered through entry points.\n",
+        encoding="utf-8",
+    )
+    artifact = DocumentationArtifact(
+        stable_id="doc:section:docs/architecture.md:plugin-loading:1",
+        kind="section",
+        source_format="markdown_section",
+        source_path=document,
+        lineno=1,
+        end_lineno=3,
+        title="Plugin Loading",
+        heading_path=("Plugin Loading",),
+        text="Plugin Loading\nPlugins are discovered through entry points.",
+        owner_stable_id="doc-owner:docs.architecture",
+        owner_kind="section",
+        attachment_confidence="explicit",
+    )
+    analysis = AnalysisResult(
+        source_path=document,
+        module=ModuleArtifact(
+            name="docs.architecture",
+            stable_id="module:docs.architecture",
+            docstring=None,
+            has_docstring=0,
+        ),
+        classes=(),
+        functions=(),
+        declarations=(),
+        imports=(),
+        documentation=(artifact,),
+        index_symbols=False,
+    )
+    snapshot = FileMetadataSnapshot(
+        path=document,
+        sha256="doc123",
+        mtime=1.0,
+        size=document.stat().st_size,
+        analyzer_name="markdown",
+        analyzer_version="1",
+    )
+
+    backend = SQLiteIndexBackend()
+    backend.initialize(tmp_path)
+    recomputed, reused = backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+        )
+    )
+
+    conn = sqlite3.connect(get_db_path(tmp_path))
+    try:
+        symbols = conn.execute("SELECT COUNT(*) FROM symbol_index").fetchone()
+        docs = conn.execute(
+            """
+            SELECT stable_id,
+                   kind,
+                   source_format,
+                   title,
+                   heading_path,
+                   text,
+                   owner_stable_id,
+                   owner_kind,
+                   attachment_confidence
+            FROM documentation_artifacts
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert recomputed == 1
+    assert reused == 0
+    assert symbols == (0,)
+    assert docs == [
+        (
+            artifact.stable_id,
+            "section",
+            "markdown_section",
+            "Plugin Loading",
+            '["Plugin Loading"]',
+            artifact.text,
+            "doc-owner:docs.architecture",
+            "section",
+            "explicit",
+        )
+    ]
+    assert backend.find_symbol(tmp_path, "Plugin Loading") == []
+    assert (
+        backend.embedding_candidates(
+            BackendEmbeddingCandidatesRequest(
+                root=tmp_path,
+                query="entry point plugin loading",
+                limit=5,
+                min_score=0.0,
+            )
+        )
+        == []
+    )
+    documentation_results = backend.documentation_candidates(
+        BackendDocumentationCandidatesRequest(
+            root=tmp_path,
+            query="entry point plugin loading",
+            limit=5,
+            min_score=0.0,
+        )
+    )
+    assert [row for _score, row in documentation_results] == [
+        (
+            artifact.stable_id,
+            "section",
+            "markdown_section",
+            str(document),
+            1,
+            3,
+            "Plugin Loading",
+            ("Plugin Loading",),
+            artifact.text,
+        )
+    ]
+    assert backend.embedding_inventory(tmp_path) == [
+        (EMBEDDING_BACKEND, EMBEDDING_VERSION, EMBEDDING_DIM, 1)
+    ]
+    assert backend.count_reusable_embeddings(tmp_path, paths=[str(document)]) == 1
+
+    backend.delete_paths(tmp_path, paths=[str(document)])
+    assert backend.load_existing_file_hashes(tmp_path) == {}
+    assert (
+        backend.documentation_candidates(
+            BackendDocumentationCandidatesRequest(
+                root=tmp_path,
+                query="entry point plugin loading",
+                limit=5,
+                min_score=0.0,
+            )
+        )
+        == []
+    )
 
 
 def test_select_language_analyzer_uses_first_supporting_analyzer(
