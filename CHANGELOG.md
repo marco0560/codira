@@ -1,3 +1,24 @@
+# [1.42.0](https://github.com/marco0560/codira/compare/v1.41.0...v1.42.0) (2026-06-03)
+
+
+### Bug Fixes
+
+* **schema:** declare docs capability channel ([affa206](https://github.com/marco0560/codira/commit/affa2068940bb64bc9d50c367e9aac60be600f3a))
+
+
+### Features
+
+* **analyzer:** add documentation source extraction ([85bb995](https://github.com/marco0560/codira/commit/85bb995d37c165468adf09d554b75ced2f18714f))
+* **analyzer:** add text documentation analyzer ([e71623b](https://github.com/marco0560/codira/commit/e71623bbfc796adf878beac71c571c80676b1e9f))
+* **analyzer:** index doxygen documentation artifacts ([3b93c02](https://github.com/marco0560/codira/commit/3b93c02bf09bce1e933dc8be2b970cd3eab67bc4))
+* **backend:** persist documentation embeddings ([b10cce9](https://github.com/marco0560/codira/commit/b10cce923522edc8897c486ae7c8d36195444ca8))
+* **cli:** add docs retrieval command ([4bc6a17](https://github.com/marco0560/codira/commit/4bc6a17f342a2c6876087ee5a2e10b1cb5fd53d8))
+* **context:** add docs retrieval channel ([426b22a](https://github.com/marco0560/codira/commit/426b22a36f8accaeee5c404ce919107b1ae2b53b))
+* **context:** add docs v2 ranking safeguards ([7fe1858](https://github.com/marco0560/codira/commit/7fe18583773ba6a3f9efddc7248eeda26ee446a9))
+* **context:** add documentation retrieval channel ([f9cff90](https://github.com/marco0560/codira/commit/f9cff90a13bf8629e64d2b9b652b9dc1023353fb)), closes [#3](https://github.com/marco0560/codira/issues/3) [#3](https://github.com/marco0560/codira/issues/3)
+* **context:** boost docs path documentation ([cb23611](https://github.com/marco0560/codira/commit/cb236117e85a43f650a6a76e7ebb88ba1101b0d9)), closes [#3](https://github.com/marco0560/codira/issues/3)
+* **contracts:** add documentation artifact model ([8951bda](https://github.com/marco0560/codira/commit/8951bdaba6a7654b46fe2641914451108b87d5ad)), closes [#3](https://github.com/marco0560/codira/issues/3)
+
 # [1.41.0](https://github.com/marco0560/codira/compare/v1.40.1...v1.41.0) (2026-06-02)
 
 
