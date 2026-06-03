@@ -4606,6 +4606,9 @@ def test_sqlite_index_backend_persists_documentation_without_symbols(
         title="Plugin Loading",
         heading_path=("Plugin Loading",),
         text="Plugin Loading\nPlugins are discovered through entry points.",
+        owner_stable_id="doc-owner:docs.architecture",
+        owner_kind="section",
+        attachment_confidence="explicit",
     )
     analysis = AnalysisResult(
         source_path=document,
@@ -4646,7 +4649,15 @@ def test_sqlite_index_backend_persists_documentation_without_symbols(
         symbols = conn.execute("SELECT COUNT(*) FROM symbol_index").fetchone()
         docs = conn.execute(
             """
-            SELECT stable_id, kind, source_format, title, heading_path, text
+            SELECT stable_id,
+                   kind,
+                   source_format,
+                   title,
+                   heading_path,
+                   text,
+                   owner_stable_id,
+                   owner_kind,
+                   attachment_confidence
             FROM documentation_artifacts
             """
         ).fetchall()
@@ -4664,6 +4675,9 @@ def test_sqlite_index_backend_persists_documentation_without_symbols(
             "Plugin Loading",
             '["Plugin Loading"]',
             artifact.text,
+            "doc-owner:docs.architecture",
+            "section",
+            "explicit",
         )
     ]
     assert backend.find_symbol(tmp_path, "Plugin Loading") == []

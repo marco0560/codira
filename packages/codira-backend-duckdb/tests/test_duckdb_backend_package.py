@@ -1831,6 +1831,9 @@ def test_duckdb_documentation_candidates_use_stored_vector_values(
         title="Plugin Loading",
         heading_path=("Plugin Loading",),
         text="Plugin Loading\nPlugins are discovered through entry points.",
+        owner_stable_id="doc-owner:docs.architecture",
+        owner_kind="section",
+        attachment_confidence="explicit",
     )
 
     backend.persist_analysis(
@@ -1889,6 +1892,23 @@ def test_duckdb_documentation_candidates_use_stored_vector_values(
     monkeypatch.setattr(
         "codira_backend_duckdb.duckdb_query_backend.deserialize_vector",
         reject_blob_deserialization,
+    )
+
+    conn = backend.open_connection(tmp_path)
+    try:
+        stored_owner = conn.execute(
+            """
+            SELECT owner_stable_id, owner_kind, attachment_confidence
+            FROM documentation_artifacts
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert stored_owner == (
+        "doc-owner:docs.architecture",
+        "section",
+        "explicit",
     )
 
     assert (

@@ -17,7 +17,7 @@ This module belongs to the **storage infrastructure layer** and anchors table de
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 DDL = [
     """
@@ -164,6 +164,8 @@ DDL = [
         heading_path TEXT NOT NULL,
         text TEXT NOT NULL,
         owner_stable_id TEXT,
+        owner_kind TEXT,
+        attachment_confidence TEXT,
         FOREIGN KEY(file_id) REFERENCES files(id)
     );
     """,

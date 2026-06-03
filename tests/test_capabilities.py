@@ -100,8 +100,15 @@ def test_c_analyzer_declares_explicit_ontology_mapping() -> None:
     declaration = CAnalyzer().analyzer_capability_declaration()
 
     assert declaration.analyzer_name == "c"
-    assert declaration.supports == ("module", "type", "callable", "import", "constant")
-    assert declaration.does_not_support == ("variable", "namespace", "documentation")
+    assert declaration.supports == (
+        "module",
+        "type",
+        "callable",
+        "import",
+        "constant",
+        "documentation",
+    )
+    assert declaration.does_not_support == ("variable", "namespace")
     assert declaration.mappings == {
         "module": "module",
         "function": "callable",
@@ -113,6 +120,7 @@ def test_c_analyzer_declares_explicit_ontology_mapping() -> None:
         "typedef": "type",
         "include_local": "import",
         "include_system": "import",
+        "doxygen": "documentation",
     }
 
 
@@ -139,8 +147,9 @@ def test_cpp_analyzer_declares_explicit_ontology_mapping() -> None:
         "import",
         "constant",
         "namespace",
+        "documentation",
     )
-    assert declaration.does_not_support == ("variable", "documentation")
+    assert declaration.does_not_support == ("variable",)
     assert declaration.mappings == {
         "module": "module",
         "class": "type",
@@ -153,6 +162,7 @@ def test_cpp_analyzer_declares_explicit_ontology_mapping() -> None:
         "namespace": "namespace",
         "include_local": "import",
         "include_system": "import",
+        "doxygen": "documentation",
     }
 
 

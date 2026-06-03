@@ -85,6 +85,8 @@ DocumentationArtifactRow = tuple[
     str,
     str,
     str | None,
+    str | None,
+    str | None,
 ]
 DocstringIssueRow = tuple[int, int | None, int | None, int | None, str, str]
 ImportRow = tuple[int, str, str | None, str, int]
@@ -1906,6 +1908,8 @@ def _insert_documentation_artifact(
             json.dumps(list(artifact.heading_path)),
             artifact.text,
             artifact.owner_stable_id,
+            artifact.owner_kind,
+            artifact.attachment_confidence,
         )
     )
     return documentation_id
@@ -3020,6 +3024,10 @@ def _flush_structural_documentation_rows(
             "heading_path": pa.array([row[8] for row in rows], type=pa.string()),
             "text": pa.array([row[9] for row in rows], type=pa.string()),
             "owner_stable_id": pa.array([row[10] for row in rows], type=pa.string()),
+            "owner_kind": pa.array([row[11] for row in rows], type=pa.string()),
+            "attachment_confidence": pa.array(
+                [row[12] for row in rows], type=pa.string()
+            ),
         }
     )
     _flush_registered_arrow_table(
@@ -3038,7 +3046,9 @@ def _flush_structural_documentation_rows(
                 title,
                 heading_path,
                 text,
-                owner_stable_id
+                owner_stable_id,
+                owner_kind,
+                attachment_confidence
             )
             SELECT
                 id,
@@ -3051,7 +3061,9 @@ def _flush_structural_documentation_rows(
                 title,
                 heading_path,
                 text,
-                owner_stable_id
+                owner_stable_id,
+                owner_kind,
+                attachment_confidence
             FROM __codira_pending_documentation_rows
             """,
     )

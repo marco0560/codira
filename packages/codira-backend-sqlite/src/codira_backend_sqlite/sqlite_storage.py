@@ -96,6 +96,8 @@ def _database_has_current_schema(db_path: Path) -> bool:
         "source_format",
         "heading_path",
         "text",
+        "owner_kind",
+        "attachment_confidence",
     }.issubset(table_columns["documentation_artifacts"])
 
 

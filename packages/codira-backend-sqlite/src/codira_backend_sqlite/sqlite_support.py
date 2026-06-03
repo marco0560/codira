@@ -1262,9 +1262,11 @@ def _insert_documentation_artifact(
             title,
             heading_path,
             text,
-            owner_stable_id
+            owner_stable_id,
+            owner_kind,
+            attachment_confidence
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -1277,6 +1279,8 @@ def _insert_documentation_artifact(
             json.dumps(list(artifact.heading_path)),
             artifact.text,
             artifact.owner_stable_id,
+            artifact.owner_kind,
+            artifact.attachment_confidence,
         ),
     )
     assert cur.lastrowid is not None

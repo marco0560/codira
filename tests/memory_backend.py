@@ -215,6 +215,8 @@ class _MemoryDocumentation:
     heading_path: tuple[str, ...]
     text: str
     owner_stable_id: str | None
+    owner_kind: str | None
+    attachment_confidence: str | None
 
     def row(self, file_path: str) -> DocumentationRow:
         """
@@ -2543,6 +2545,8 @@ class MemoryIndexBackend:
                     heading_path=artifact.heading_path,
                     text=artifact.text,
                     owner_stable_id=artifact.owner_stable_id,
+                    owner_kind=artifact.owner_kind,
+                    attachment_confidence=artifact.attachment_confidence,
                 )
             )
             embedding_payloads.append(

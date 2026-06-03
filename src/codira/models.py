@@ -48,12 +48,14 @@ DeclarationKind = Literal[
     "json_release_plugin",
     "json_release_branch",
 ]
-DocumentationKind = Literal["module", "file", "section"]
+DocumentationKind = Literal["module", "file", "section", "declaration"]
 DocumentationSourceFormat = Literal[
     "markdown_section",
     "module_docstring",
     "plain_text_document",
+    "doxygen",
 ]
+DocumentationAttachmentConfidence = Literal["explicit"]
 
 
 @dataclass(frozen=True)
@@ -418,9 +420,9 @@ class DocumentationArtifact:
     ----------
     stable_id : str
         Durable analyzer-owned identity for the documentation artifact.
-    kind : {"module", "file", "section"}
+    kind : {"module", "file", "section", "declaration"}
         Stable documentation artifact classifier.
-    source_format : {"markdown_section", "module_docstring", "plain_text_document"}
+    source_format : {"markdown_section", "module_docstring", "plain_text_document", "doxygen"}
         Provenance class for the artifact text.
     source_path : pathlib.Path
         Absolute path that owns the documentation artifact.
@@ -437,6 +439,11 @@ class DocumentationArtifact:
         Normalized documentation payload used for retrieval.
     owner_stable_id : str | None, optional
         Stable identity of the owning code artifact when applicable.
+    owner_kind : str | None, optional
+        Stable classifier of the owning code artifact when applicable.
+    attachment_confidence : {"explicit"} | None, optional
+        Analyzer confidence that the documentation is explicitly attached to
+        the owner.
     """
 
     stable_id: str
@@ -449,6 +456,8 @@ class DocumentationArtifact:
     heading_path: tuple[str, ...]
     text: str
     owner_stable_id: str | None = None
+    owner_kind: str | None = None
+    attachment_confidence: DocumentationAttachmentConfidence | None = None
 
 
 @dataclass(frozen=True)
