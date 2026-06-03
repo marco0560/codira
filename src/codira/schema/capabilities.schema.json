@@ -39,8 +39,64 @@
       },
       "additionalProperties": false
     },
-    "commands": { "type": "object" },
-    "channels": { "type": "object" },
+    "commands": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["intent", "channels", "guarantee", "limitations"],
+        "properties": {
+          "intent": { "type": "string" },
+          "aliases": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "call_graph",
+                "doc_issues",
+                "docs",
+                "embedding",
+                "references",
+                "semantic",
+                "symbol"
+              ]
+            },
+            "uniqueItems": true
+          },
+          "guarantee": { "type": "string" },
+          "limitations": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "channels": {
+      "type": "object",
+      "required": [
+        "call_graph",
+        "doc_issues",
+        "docs",
+        "embedding",
+        "references",
+        "semantic",
+        "symbol"
+      ],
+      "additionalProperties": {
+        "type": "object",
+        "required": ["match", "source", "guarantee"],
+        "properties": {
+          "match": { "type": "string" },
+          "source": { "type": "string" },
+          "guarantee": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
     "retrieval_capabilities": {
       "type": "array",
       "items": { "type": "string" },

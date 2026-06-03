@@ -440,6 +440,11 @@ def build_capability_contract(
                 "source": "docstring_issues",
                 "guarantee": "deterministic_issue_annotations",
             },
+            "docs": {
+                "match": "approximate",
+                "source": "documentation_artifacts",
+                "guarantee": "documentation_embedding_similarity_order",
+            },
             "embedding": {
                 "match": "approximate",
                 "source": "embeddings",

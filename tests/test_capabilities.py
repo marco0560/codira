@@ -16,7 +16,7 @@ from codira.capabilities import build_capability_contract
 from codira.cli import main
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
     from codira.contracts import LanguageAnalyzer
     from codira.models import AnalysisResult
@@ -204,8 +204,18 @@ def test_capability_contract_validates_against_schema() -> None:
     assert [item["analyzer_name"] for item in analyzers] == ["python"]
     assert [item["declaration_status"] for item in analyzers] == ["declared"]
     assert "symbol" in channels
+    assert "docs" in channels
     assert "ctx" in commands
     assert "docs" in commands
+    declared_channels = set(channels)
+    referenced_channels: set[str] = set()
+    for command in commands.values():
+        command_channels = cast(
+            "Sequence[str]",
+            cast("Mapping[str, object]", command)["channels"],
+        )
+        referenced_channels.update(command_channels)
+    assert referenced_channels <= declared_channels
     symlist_command = cast("Mapping[str, object]", commands["symlist"])
     assert symlist_command["intent"] == "symbol_inventory"
     docs_command = cast("Mapping[str, object]", commands["docs"])
