@@ -263,7 +263,6 @@ def build_install_commands(
                 "uninstall",
                 "--python",
                 request.python,
-                "-y",
                 "codira-bundle-official",
             )
         )

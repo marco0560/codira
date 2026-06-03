@@ -2364,7 +2364,6 @@ def test_install_helper_can_target_exported_split_repositories() -> None:
             "uninstall",
             "--python",
             "/tmp/codira/.venv/bin/python",
-            "-y",
             "codira-bundle-official",
         ),
         (
@@ -2608,7 +2607,6 @@ def test_install_helper_can_opt_into_bundle_package() -> None:
             "uninstall",
             "--python",
             "/tmp/codira/.venv/bin/python",
-            "-y",
             "codira-bundle-official",
         ),
         (
