@@ -16,6 +16,11 @@ In scope:
 - Use dedicated documentation embeddings instead of mixing documentation text
   into the symbol embedding pool.
 - Expose documentation provenance in JSON and explain output.
+- Provide a docs-only CLI inspection command for documentation retrieval
+  debugging and focused documentation queries.
+- Index clearly documentation-scoped plain-text `.txt` files.
+- Index C/C++ Doxygen module/file and declaration-attached documentation
+  through the C/C++ analyzer plugins.
 
 Out of scope for V1:
 
@@ -25,6 +30,13 @@ Out of scope for V1:
 - Rustdoc, Doxygen, reStructuredText, or other non-Markdown documentation
   formats.
 - A docs-only CLI command.
+
+Out of scope after V2:
+
+- Python callable docstring retrieval.
+- Arbitrary generic comment harvesting.
+- Non-Doxygen C/C++ comments.
+- Rustdoc, reStructuredText, and other future documentation formats.
 
 ## Phase Ledger
 
@@ -36,6 +48,10 @@ Out of scope for V1:
 | 3. Backend persistence and embeddings | Complete | SQLite, DuckDB, and in-memory backends persist/query docs and doc embeddings through a distinct documentation object type. Focused backend tests and Ruff checks passed. | `9000e0d` |
 | 4. `ctx` retrieval and output | Complete | `docs` channel, typed documentation top matches, intent weighting, provenance, explain output, and context JSON schema 1.3. Focused context tests and Ruff checks passed. | `917966e` |
 | 5. Validation and cleanup | Complete | Full pre-commit and pytest passed after expectation cleanup. | `6edee25` |
+| 6. V2 ranking and docs CLI | Complete | Added behavior-query docs/code quota safeguards, stronger docs path ranking, and `codira docs` inspection command. Focused context, CLI, capability, Ruff, and format checks passed. | `9fc513e`, `5b12b8d` |
+| 7. V2 plain-text documents | Complete | Added first-party text analyzer package for path-scoped `.txt` docs with generated, fixture, log, and vendor exclusions. Focused analyzer, plugin, bundle, split-repo, bootstrap, Ruff, format, and mypy checks passed. | `7048fe6` |
+| 8. V2 declaration-attached docs | Complete | Extended artifact owner metadata and added C/C++ Doxygen-only documentation artifacts with SQLite, DuckDB, and in-memory backend parity. Focused analyzer, backend, capability, Ruff, format, and mypy checks passed. | `c06ae40` |
+| 9. V2 documentation cleanup | Complete | Updated the execution ledger and README command reference to match V2 behavior. | Pending |
 
 ## Decisions
 
@@ -53,11 +69,14 @@ Out of scope for V1:
   still preserving the docs channel's separate provenance and weighting.
 - Backend parity is mandatory for SQLite, DuckDB, and the in-memory backend.
 
-## V2 Proposal
+## V2 Implementation
 
-V2 is future implementation scope, not part of the completed V1 feature.
+V2 extends the completed V1 feature while preserving the same retrieval
+architecture: analyzers emit normalized documentation artifacts, persistence
+keeps documentation distinct from symbols, and `ctx` remains the default mixed
+retrieval UX.
 
-Accepted V2 implementation phases:
+Implemented V2 phases:
 
 1. Add explicit docs/code diversity quotas and expose quota decisions in
    explain diagnostics.
@@ -79,7 +98,7 @@ Accepted V2 implementation phases:
 9. Update repository documentation as a cleanup step so user-facing docs,
    process docs, and implementation behavior remain synchronized.
 
-V2 should preserve these V1 boundaries:
+V2 preserves these V1 boundaries:
 
 - analyzers own source-format parsing
 - the query layer consumes normalized documentation artifacts
@@ -168,3 +187,64 @@ V2 should preserve these V1 boundaries:
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check tests/test_bootstrap_scripts.py tests/test_contracts.py tests/test_embeddings.py tests/test_incremental_indexing.py tests/test_plugins.py`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --all-files`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q`
+
+### Phase 6
+
+- Added a behavior/test intent safeguard so documentation results cannot crowd
+  out code results when code candidates exist.
+- Exposed docs/code quota diagnostics in explain output.
+- Added stronger path-aware ranking for `docs/process`, `docs/adr`, `README`,
+  and `CHANGELOG` documentation, while retaining the smaller generic `docs/`
+  boost.
+- Added `codira docs` as a docs-only inspection command with text, JSON,
+  explain, limit, prefix, and storage-path options.
+- Validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_context_rendering.py tests/test_retrieval_merge.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_call_graph.py::test_cli_docs_command_renders_documentation_results tests/test_call_graph.py::test_cli_docs_command_emits_json_results tests/test_call_graph.py::test_cli_docs_command_explain_includes_backend_and_prefix tests/test_call_graph.py::test_help_lists_docs_command tests/test_capabilities.py::test_capabilities_include_docs_command`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check ...`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check ...`
+
+### Phase 7
+
+- Added the first-party `codira-analyzer-text` package and compatibility shim.
+- Accepted `.txt` documents only when they are clearly documentation scoped:
+  `docs/`, `doc/`, `adr/`, `process/`, or root-style `README.txt`,
+  `CHANGELOG.txt`, and `LICENSE.txt`.
+- Excluded generated, fixture, log, vendor, build, cache, and artifact trees by
+  default.
+- Added `plain_text_document` provenance while keeping plain-text artifacts out
+  of symbol retrieval.
+- Wired the package through the official bundle, first-party inventory,
+  split-repo manifests, release/build helpers, benchmark metadata, and plugin
+  ordering tests.
+- Validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q packages/codira-analyzer-text/tests/test_text_package.py packages/codira-bundle-official/tests/test_bundle_package.py tests/test_contracts.py::test_root_optional_dependencies_support_monorepo_bundle_install tests/test_contracts.py::test_active_phase_8_registries_expose_default_backend_and_analyzers tests/test_plugins.py::test_core_can_discover_installed_first_party_packages_from_built_wheels tests/test_plugins.py::test_registry_orders_first_party_analyzers_across_sources tests/test_future_repo_ci.py tests/test_future_repo_split_manifest.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_bootstrap_scripts.py -k "first_party_package_inventory or editable_package_paths or build_install_argv_installs_each_first_party_package_editably or release_artifact_helper_covers_core or benchmark_metadata_includes_first_party_plugins or split_repo_verification_installs_local_first_party_packages_for_bundle or build_helper_rehearses_each_first_party_package_boundary"`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check ...`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check ...`
+  - Commit hook mypy passed.
+
+### Phase 8
+
+- Extended documentation artifacts with `owner_kind` and
+  `attachment_confidence`; schema version is now 19.
+- Persisted the new metadata in SQLite, DuckDB, and the in-memory contract
+  backend.
+- Added C and C++ Doxygen-only documentation artifacts for module/file header
+  docs and declaration-attached owners.
+- Kept generic C/C++ comments out of documentation retrieval.
+- Kept Python callable docstrings out of the docs channel.
+- Validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q packages/codira-analyzer-c/tests/test_c_package.py packages/codira-analyzer-cpp/tests/test_cpp_package.py tests/test_capabilities.py tests/test_contracts.py::test_sqlite_index_backend_persists_documentation_without_symbols packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py::test_duckdb_documentation_candidates_use_stored_vector_values`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check ...`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check ...`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run mypy ...`
+  - Commit hook pre-commit checks passed.
+
+### Phase 9
+
+- Updated this execution ledger so the V2 implementation status, behavior
+  boundaries, commit evidence, and validation evidence match the repository
+  implementation.
+- Updated the README command reference for `codira docs`, documentation-aware
+  `ctx` behavior, and documentation-only JSON/explain output modes.

@@ -514,11 +514,35 @@ codira ctx "missing numpy docstring" --explain
 Expected result semantics:
 
 - uses bounded multi-channel retrieval rather than exact lookup only
+- can include documentation artifacts from Markdown, scoped plain-text docs,
+  Python module docstrings, and C/C++ Doxygen comments
 - can use bounded graph evidence during ranking
 - can expand related cross-module symbols after ranking
 - is a focused context pack, not a full repository report
 
-### 7. `audit`
+### 7. `docs`
+
+Use `docs` when you want to inspect only documentation retrieval results.
+This is a focused inspection command; `ctx` remains the default mixed
+code-and-document retrieval workflow.
+
+Suggested use cases:
+
+- inspect documentation candidates for a natural-language query
+- debug docs-channel ranking with `--explain`
+- emit machine-readable documentation matches with `--json`
+- constrain documentation lookup to one subtree with `--prefix`
+
+Examples:
+
+```bash
+codira docs "plugin loading contract"
+codira docs "release metadata" --json
+codira docs "architecture decisions" --explain
+codira docs "setup process" --prefix docs/process
+```
+
+### 8. `audit`
 
 Use `audit` to inspect indexed docstring problems directly.
 
@@ -541,7 +565,7 @@ Expected result semantics:
 - reports indexed docstring issues, not arbitrary style suggestions
 - is most useful after a fresh `codira index`
 
-### 8. `plugins`
+### 9. `plugins`
 
 Use `plugins` to inspect which capabilities are active and where they come
 from.
@@ -564,7 +588,7 @@ Expected result semantics:
 - reports installed or active plugin and capability surfaces
 - is useful when debugging environment or packaging issues
 
-### 9. `caps`
+### 10. `caps`
 
 Use `caps` when a tool, contributor, or agent needs codira to declare what it
 can answer before making retrieval decisions. The longer `capabilities` command
@@ -768,6 +792,11 @@ The `emb` command is a debugging surface for the embedding channel only.
 Use it when you want backend metadata and raw embedding-ranked matches without
 the normal multi-channel merge used by `ctx`.
 
+The `docs` command is the matching inspection surface for documentation
+retrieval. Use `docs --json` for automation and `docs --explain` when you need
+to see backend, prefix, and result provenance decisions for documentation-only
+queries.
+
 ## Query Examples
 
 Natural-language queries:
@@ -969,6 +998,8 @@ Use output modes as follows:
 - `ctx --json`: structured tool/agent workflows
 - `ctx --prompt`: copy-ready agent preamble
 - `ctx --explain`: retrieval diagnostics
+- `docs --json`: structured documentation-only matches
+- `docs --explain`: documentation-channel diagnostics
 
 `codira` narrows search and improves determinism. It does not replace
 reading the actual source files before editing.
