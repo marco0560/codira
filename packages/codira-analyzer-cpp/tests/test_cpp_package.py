@@ -24,7 +24,7 @@ def test_cpp_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.42.0"
+    assert project["project"]["version"] == "1.44.0"
     assert "codira>=1.5.0,<2.0.0" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "cpp": "codira_analyzer_cpp:build_analyzer"
@@ -48,6 +48,57 @@ def test_cpp_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CppAnalyzer)
     assert analyzer.name == "cpp"
+
+
+def test_cpp_analyzer_applies_configuration_options(tmp_path: Path) -> None:
+    """
+    Apply C++ analyzer documentation, import, namespace, and macro toggles.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts configured options prune optional C++ artifacts.
+    """
+
+    source = tmp_path / "src" / "sample.cpp"
+    source.parent.mkdir()
+    source.write_text(
+        "#include <vector>\n"
+        "#define VALUE 1\n"
+        "/** Module docs. */\n"
+        "namespace demo { int run() { return VALUE; } }\n",
+        encoding="utf-8",
+    )
+
+    analyzer = CppAnalyzer()
+    schema = analyzer.configuration_json_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    analyzer.configure(
+        {
+            "include_paths": ["src"],
+            "use_leading_comments": False,
+            "emit_doxygen_documentation": False,
+            "include_system_includes": False,
+            "emit_namespaces": False,
+            "emit_macros": False,
+        }
+    )
+    analysis = analyzer.analyze_file(source, tmp_path)
+
+    assert "emit_namespaces" in properties
+    assert "emit_macros" in properties
+    assert analyzer.allows_path(source, tmp_path) is True
+    assert analysis.module.docstring is None
+    assert analysis.imports == ()
+    assert analysis.documentation == ()
+    assert all(declaration.kind != "namespace" for declaration in analysis.declarations)
+    assert all(declaration.kind != "macro" for declaration in analysis.declarations)
 
 
 def test_cpp_analyzer_emits_doxygen_documentation_only(tmp_path: Path) -> None:

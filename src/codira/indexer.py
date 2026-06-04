@@ -17,7 +17,6 @@ This module belongs to the **indexing layer** and glues together analyzers, stor
 
 from __future__ import annotations
 
-import json
 import warnings
 from collections import Counter
 from dataclasses import dataclass
@@ -36,6 +35,7 @@ from codira.models import (
     AnalysisResult,
     FileMetadataSnapshot,
 )
+from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.registry import (
     active_index_backend,
     active_language_analyzers,
@@ -43,6 +43,7 @@ from codira.registry import (
 )
 from codira.scanner import (
     CANONICAL_SOURCE_DIRS,
+    analyzer_accepts_path,
     file_metadata,
     iter_canonical_project_files,
     iter_project_files,
@@ -385,7 +386,7 @@ def _audit_canonical_directory_coverage(
     issues: list[CoverageIssue] = []
 
     for path in iter_canonical_project_files(root):
-        if any(analyzer.supports_path(path) for analyzer in analyzers):
+        if any(analyzer_accepts_path(analyzer, path, root) for analyzer in analyzers):
             continue
         rel_path = path.relative_to(root)
         top_dir = rel_path.parts[0] if rel_path.parts else ""
@@ -519,22 +520,25 @@ def _current_analyzer_inventory_rows(
         Active analyzer rows as ``(name, version, discovery_globs_json)``
         ordered by analyzer name.
     """
-    return [
-        (
-            str(analyzer.name),
-            str(analyzer.version),
-            json.dumps(tuple(analyzer.discovery_globs)),
+    rows: list[tuple[str, str, str]] = []
+    for analyzer in sorted(
+        analyzers,
+        key=lambda item: str(item.name),
+    ):
+        rows.append(
+            (
+                str(analyzer.name),
+                str(analyzer.version),
+                analyzer_inventory_discovery_json(analyzer),
+            )
         )
-        for analyzer in sorted(
-            analyzers,
-            key=lambda item: str(item.name),
-        )
-    ]
+    return rows
 
 
 def _select_language_analyzer(
     path: Path,
     analyzers: list[LanguageAnalyzer],
+    root: Path | None = None,
 ) -> LanguageAnalyzer:
     """
     Select the analyzer responsible for one source path.
@@ -545,6 +549,10 @@ def _select_language_analyzer(
         Repository file that must be analyzed.
     analyzers : list[codira.contracts.LanguageAnalyzer]
         Analyzer instances consulted in deterministic order.
+    root : pathlib.Path | None, optional
+        Repository root used by optional analyzer path filters. When omitted,
+        ``path.parent`` is used for compatibility with direct unit tests that
+        do not exercise repo-relative filters.
 
     Returns
     -------
@@ -556,8 +564,9 @@ def _select_language_analyzer(
     ValueError
         If no registered analyzer accepts the path.
     """
+    effective_root = path.parent if root is None else root
     for analyzer in analyzers:
-        if analyzer.supports_path(path):
+        if analyzer_accepts_path(analyzer, path, effective_root):
             return analyzer
 
     msg = f"No language analyzer registered for path: {path.as_posix()}"
@@ -600,7 +609,7 @@ def _collect_indexed_file_analyses(
     for path in indexed_paths:
         path_obj = Path(path)
         metadata_snapshot = _snapshot_from_metadata(current_metadata[path])
-        analyzer = _select_language_analyzer(path_obj, analyzers)
+        analyzer = _select_language_analyzer(path_obj, analyzers, root=root)
         metadata_snapshot = _snapshot_with_analyzer(metadata_snapshot, analyzer)
         try:
             with warnings.catch_warnings(record=True) as warning_records:
@@ -784,7 +793,11 @@ def _collect_project_scan_state(
             # Git-backed discovery can briefly enumerate a tracked path that
             # has already been removed from the working tree but not staged yet.
             continue
-        analyzers_by_path[path_str] = _select_language_analyzer(path, analyzers)
+        analyzers_by_path[path_str] = _select_language_analyzer(
+            path,
+            analyzers,
+            root=root,
+        )
 
     return ProjectScanState(
         analyzers_by_path=analyzers_by_path,

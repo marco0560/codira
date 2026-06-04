@@ -31,8 +31,10 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from codira_backend_sqlite import SQLiteIndexBackend
 
+import codira.config as config_module
 import codira.registry as registry
 from codira.cli import main
+from codira.config import ConfigError
 from codira.contracts import IndexBackend, LanguageAnalyzer
 from codira.models import AnalysisResult, ModuleArtifact
 
@@ -360,6 +362,53 @@ class _DemoBackend(SQLiteIndexBackend):
     name = "demo-backend"
 
 
+class _ConfigurableDemoAnalyzer(_DemoAnalyzer):
+    """Analyzer stub exposing configuration injection hooks."""
+
+    configured: dict[str, object]
+
+    def configuration_json_schema(self) -> dict[str, object]:
+        """
+        Return a strict schema for the demo analyzer config table.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, object]
+            JSON Schema for the fake plugin configuration.
+        """
+
+        return {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "flag": {"type": "boolean"},
+            },
+        }
+
+    def configure(self, config: dict[str, object]) -> None:
+        """
+        Store the injected configuration for assertions.
+
+        Parameters
+        ----------
+        config : dict[str, object]
+            Namespaced plugin configuration table.
+
+        Returns
+        -------
+        None
+            The config is stored on the analyzer instance.
+        """
+
+        self.configured = dict(config)
+
+
 class _DemoDuckDBBackend(SQLiteIndexBackend):
     """Small DuckDB-shaped backend stub used for registry-selection tests."""
 
@@ -398,6 +447,38 @@ def _patch_entry_points(
         return []
 
     monkeypatch.setattr(registry, "_entry_points_for_group", fake_group_loader)
+
+
+def _patch_user_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    text: str,
+) -> None:
+    """
+    Patch user config loading to a temporary TOML file.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to isolate config paths.
+    tmp_path : pathlib.Path
+        Temporary directory for config files.
+    text : str
+        TOML content to write.
+
+    Returns
+    -------
+    None
+        Config path providers are patched and registry caches are reset.
+    """
+
+    user_path = tmp_path / "user-config" / "config.toml"
+    system_path = tmp_path / "system-config" / "config.toml"
+    user_path.parent.mkdir(parents=True)
+    user_path.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(config_module, "user_config_path", lambda: user_path)
+    monkeypatch.setattr(config_module, "system_config_path", lambda: system_path)
+    registry.reset_plugin_registry_caches()
 
 
 def test_plugin_registrations_report_loaded_skipped_and_duplicate_plugins(
@@ -552,6 +633,178 @@ def test_active_registry_uses_loaded_entry_point_plugins(
     assert backend.name == "demo-backend"
 
 
+def test_active_registry_injects_namespaced_plugin_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Inject namespaced configuration into plugins that expose configure.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry points and config paths.
+    tmp_path : pathlib.Path
+        Temporary config directory.
+
+    Returns
+    -------
+    None
+        The test asserts active plugin instances receive only their table.
+    """
+
+    _patch_entry_points(
+        monkeypatch,
+        analyzers=[
+            _FakeEntryPoint(
+                name="demo-analyzer",
+                value="demo:analyzer",
+                dist=_FakeDistribution("demo-analyzer"),
+                loaded=_ConfigurableDemoAnalyzer,
+            )
+        ],
+        backends=[],
+    )
+    _patch_user_config(
+        monkeypatch,
+        tmp_path,
+        "[plugins.analyzer-demo]\nflag = true\n",
+    )
+
+    analyzers = registry.active_language_analyzers()
+    demo = next(analyzer for analyzer in analyzers if analyzer.name == "demo")
+
+    assert isinstance(demo, _ConfigurableDemoAnalyzer)
+    assert demo.configured == {"flag": True}
+
+
+def test_namespaced_enabled_false_disables_loaded_plugin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Disable a loaded plugin through its namespaced enabled flag.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry points and config paths.
+    tmp_path : pathlib.Path
+        Temporary config directory.
+
+    Returns
+    -------
+    None
+        The test asserts disabled plugins are reported as skipped.
+    """
+
+    _patch_entry_points(
+        monkeypatch,
+        analyzers=[
+            _FakeEntryPoint(
+                name="demo-analyzer",
+                value="demo:analyzer",
+                dist=_FakeDistribution("demo-analyzer"),
+                loaded=_DemoAnalyzer,
+            )
+        ],
+        backends=[],
+    )
+    _patch_user_config(
+        monkeypatch,
+        tmp_path,
+        "[plugins.analyzer-demo]\nenabled = false\n",
+    )
+
+    registrations = registry.plugin_registrations()
+
+    assert any(
+        registration.name == "demo"
+        and registration.status == "skipped"
+        and registration.detail == "plugin is disabled by configuration"
+        for registration in registrations
+    )
+
+
+def test_plugin_configuration_schema_validation_rejects_invalid_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Reject namespaced config values that fail a plugin schema.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry points and config paths.
+    tmp_path : pathlib.Path
+        Temporary config directory.
+
+    Returns
+    -------
+    None
+        The test asserts registry validation raises ConfigError.
+    """
+
+    _patch_entry_points(
+        monkeypatch,
+        analyzers=[
+            _FakeEntryPoint(
+                name="demo-analyzer",
+                value="demo:analyzer",
+                dist=_FakeDistribution("demo-analyzer"),
+                loaded=_ConfigurableDemoAnalyzer,
+            )
+        ],
+        backends=[],
+    )
+    _patch_user_config(
+        monkeypatch,
+        tmp_path,
+        '[plugins.analyzer-demo]\nflag = "yes"\n',
+    )
+
+    with pytest.raises(ConfigError, match="Invalid plugin configuration"):
+        registry.validate_plugin_configuration()
+
+
+def test_plugin_configuration_validation_warns_for_missing_plugin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Warn without failing when a configured plugin is not loaded.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry points, config paths, and argv.
+    tmp_path : pathlib.Path
+        Temporary config directory.
+
+    Returns
+    -------
+    None
+        The test asserts missing plugin config is non-fatal.
+    """
+
+    _patch_entry_points(monkeypatch, analyzers=[], backends=[])
+    _patch_user_config(
+        monkeypatch,
+        tmp_path,
+        "[plugins.analyzer-missing]\nflag = true\n",
+    )
+
+    warnings = registry.validate_plugin_configuration()
+
+    assert warnings == [
+        registry.PluginConfigWarning(
+            key="analyzer-missing",
+            reason="configured plugin is not loaded",
+        )
+    ]
+
+
 def test_disable_third_party_plugins_skips_untrusted_entry_points(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -597,8 +850,7 @@ def test_disable_third_party_plugins_skips_untrusted_entry_points(
         and record.provider == "demo-analyzer"
         and record.status == "skipped"
         and record.origin == "third_party"
-        and record.detail
-        == "third-party plugins are disabled by CODIRA_DISABLE_THIRD_PARTY_PLUGINS"
+        and record.detail == "third-party plugins are disabled by configuration"
         for record in registrations
     )
     assert any(

@@ -24,7 +24,7 @@ def test_markdown_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.42.0"
+    assert project["project"]["version"] == "1.43.0"
     assert project["project"]["dependencies"] == ["codira>=1.5.0,<2.0.0"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "markdown": "codira_analyzer_markdown:build_analyzer"
@@ -48,6 +48,59 @@ def test_markdown_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, MarkdownAnalyzer)
     assert analyzer.name == "markdown"
+
+
+def test_markdown_analyzer_applies_configuration_options(tmp_path: Path) -> None:
+    """
+    Apply Markdown analyzer heading and file-artifact options.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts configured options affect emitted documentation.
+    """
+
+    guide = tmp_path / "docs" / "guide.md"
+    guide.parent.mkdir()
+    guide.write_text(
+        "---\n"
+        "title: Kept when front matter is disabled\n"
+        "---\n"
+        "# Top\n"
+        "Intro.\n"
+        "## Child\n"
+        "Details.\n",
+        encoding="utf-8",
+    )
+    readme = tmp_path / "README.md"
+    readme.write_text("Repository overview.\n", encoding="utf-8")
+
+    analyzer = MarkdownAnalyzer()
+    schema = analyzer.configuration_json_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    analyzer.configure(
+        {
+            "include_paths": ["docs", "README.md"],
+            "strip_front_matter": False,
+            "emit_file_artifact_without_headings": False,
+            "min_heading_level": 2,
+            "max_heading_level": 2,
+        }
+    )
+
+    guide_result = analyzer.analyze_file(guide, tmp_path)
+    readme_result = analyzer.analyze_file(readme, tmp_path)
+
+    assert "min_heading_level" in properties
+    assert analyzer.allows_path(guide, tmp_path) is True
+    assert [artifact.title for artifact in guide_result.documentation] == ["Child"]
+    assert readme_result.documentation == ()
 
 
 def test_markdown_analyzer_emits_heading_section_documentation(

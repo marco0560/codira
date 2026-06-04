@@ -22,6 +22,9 @@ The current codebase now exposes:
 - third-party plugin discovery through Python entry points
 - deterministic duplicate rejection and load diagnostics
 - a `codira plugins` inspection surface for discovery verification
+- optional explicit configuration injection through `configure(config)`
+- optional plugin-owned JSON Schema publication through
+  `configuration_json_schema()`
 
 ## Phase-3 Baseline
 
@@ -41,17 +44,57 @@ Those modules define the accepted vocabulary for:
 
 Phase 8 introduced explicit registry helpers in `src/codira/registry.py`.
 
-Current defaults and selection rules are:
+- Current defaults and selection rules are:
 
-- `CODIRA_INDEX_BACKEND` selects the active backend
-- when unset or blank, the backend defaults to `sqlite`
+- effective configuration selects the active backend through `[backend].name`
+- `CODIRA_INDEX_BACKEND` remains a process override for `backend.name`
+- when unset or blank across all config levels, the backend defaults to `sqlite`
 - unsupported backend names raise `ValueError` before indexing or query work
 - analyzers are registered from first-party packages plus entry points and
   instantiated in deterministic order
+- `[plugins].disabled_analyzers` removes configured analyzers from the active
+  analyzer set
+- `[plugins].disable_third_party` disables third-party plugin loading
 - file routing still uses first-match analyzer selection
 
 This keeps configuration narrow while making backend selection and analyzer
 activation explicit.
+
+## Configuration Injection Contract
+
+Plugins never read global config directly. The registry extracts the
+namespaced table for each loaded plugin and injects it into fresh plugin
+instances:
+
+```toml
+[plugins.analyzer-python]
+emit_imports = false
+exclude_paths = ["tests/fixtures"]
+```
+
+The table name is `plugins.<family>-<plugin-name>`, where `<family>` is
+`analyzer` or `backend`.
+
+Plugins may expose:
+
+```python
+def configuration_json_schema(self) -> Mapping[str, object]: ...
+def configure(self, config: Mapping[str, object]) -> None: ...
+```
+
+Both hooks are optional for third-party plugins. A plugin without a schema is
+not schema-validated beyond the core table shape. A plugin without
+`configure()` keeps default behavior; if its table contains settings other than
+`enabled`, `codira config validate` reports a non-fatal warning.
+
+First-party plugins expose strict schemas with `additionalProperties = false`.
+All plugin tables accept `enabled: bool = true`. Analyzer tables also accept
+repo-relative `include_paths` and `exclude_paths`, evaluated after suffix or
+family eligibility; excludes take precedence over includes.
+
+Configured analyzer state contributes to persisted analyzer inventory through
+a deterministic configuration fingerprint. Changing analyzer configuration
+therefore invalidates stale index reuse without hidden global state.
 
 The current packaging boundary is also now explicit:
 

@@ -53,14 +53,16 @@ from .duckdb_query_backend import (
 )
 from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendSpec, get_embedding_backend
+from codira.plugin_config import analyzer_inventory_discovery_json, plugin_json_schema
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from collections.abc import Sequence
     from pathlib import Path
 
     from codira.contracts import IndexBackend, IndexWriteSession
 
-PACKAGE_VERSION = "1.42.0"
+PACKAGE_VERSION = "1.43.0"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -1553,6 +1555,39 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
     name = "duckdb"
     version = SCHEMA_VERSION
 
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the DuckDB backend configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for DuckDB backend options.
+        """
+
+        return plugin_json_schema({})
+
+    def configure(self, config: Mapping[str, object]) -> None:
+        """
+        Apply DuckDB backend configuration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Namespaced backend configuration table.
+
+        Returns
+        -------
+        None
+            DuckDB currently has no backend-specific settings.
+        """
+
+        del config
+
     def begin_index_session(self, root: Path) -> IndexWriteSession:
         """
         Open the explicit write-side lifecycle for one indexing run.
@@ -1757,7 +1792,7 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                     (
                         str(analyzer.name),
                         str(analyzer.version),
-                        json.dumps(tuple(analyzer.discovery_globs)),
+                        analyzer_inventory_discovery_json(analyzer),
                     ),
                 )
             if owns_connection:

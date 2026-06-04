@@ -23,6 +23,7 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
+from codira.contracts import PathFilteredAnalyzer
 from codira.repository_scope import is_repository_scope_excluded
 
 if TYPE_CHECKING:
@@ -156,6 +157,32 @@ def _is_excluded(path: Path, root: Path, patterns: list[str]) -> bool:
     return bool(_match_gitignore(path, root, patterns))
 
 
+def analyzer_accepts_path(analyzer: LanguageAnalyzer, path: Path, root: Path) -> bool:
+    """
+    Return whether an analyzer accepts one repository path.
+
+    Parameters
+    ----------
+    analyzer : codira.contracts.LanguageAnalyzer
+        Analyzer whose suffix and optional configured path filters are checked.
+    path : pathlib.Path
+        Candidate repository path.
+    root : pathlib.Path
+        Repository root used by optional repo-relative filters.
+
+    Returns
+    -------
+    bool
+        ``True`` when the analyzer supports and allows the path.
+    """
+
+    if not analyzer.supports_path(path):
+        return False
+    if isinstance(analyzer, PathFilteredAnalyzer):
+        return analyzer.allows_path(path, root)
+    return True
+
+
 def _iter_source_files(
     root: Path,
     *,
@@ -191,7 +218,9 @@ def _iter_source_files(
             seen.add(path)
             if _is_excluded(path, root, patterns):
                 continue
-            if not any(analyzer.supports_path(path) for analyzer in analyzers):
+            if not any(
+                analyzer_accepts_path(analyzer, path, root) for analyzer in analyzers
+            ):
                 continue
             yield path
 
@@ -245,7 +274,9 @@ def iter_project_files(
             path
             for path in sorted(files)
             if not is_repository_scope_excluded(path, root)
-            and any(analyzer.supports_path(path) for analyzer in analyzers)
+            and any(
+                analyzer_accepts_path(analyzer, path, root) for analyzer in analyzers
+            )
         ]
         return iter(supported_files)
 

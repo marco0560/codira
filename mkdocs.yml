@@ -34,6 +34,7 @@ extra_css:
 nav:
   - Home: index.md
   - Getting started: getting_started.md
+  - Configuration: configuration.md
   - Architecture:
       - Index: architecture/index.md
       - System overview: architecture/system-overview.md

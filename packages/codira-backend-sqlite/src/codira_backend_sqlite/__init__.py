@@ -36,6 +36,7 @@ from codira.contracts import (
     StoredEmbeddingRow,
 )
 from codira.prefix import normalize_prefix, prefix_clause
+from codira.plugin_config import analyzer_inventory_discovery_json, plugin_json_schema
 from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
@@ -62,9 +63,9 @@ from codira_backend_sqlite.sqlite_support import (
 from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
+    from collections.abc import Mapping
     from collections.abc import Sequence
+    from pathlib import Path
 
     from codira.contracts import IndexBackend, IndexWriteSession
     from codira.types import (
@@ -467,6 +468,39 @@ class SQLiteIndexBackend:
 
     name = "sqlite"
     version = SCHEMA_VERSION
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the SQLite backend configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for SQLite backend options.
+        """
+
+        return plugin_json_schema({})
+
+    def configure(self, config: Mapping[str, object]) -> None:
+        """
+        Apply SQLite backend configuration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Namespaced backend configuration table.
+
+        Returns
+        -------
+        None
+            SQLite currently has no backend-specific settings.
+        """
+
+        del config
 
     def begin_index_session(self, root: Path) -> IndexWriteSession:
         """
@@ -2470,7 +2504,7 @@ class SQLiteIndexBackend:
                     (
                         str(analyzer.name),
                         str(analyzer.version),
-                        json.dumps(tuple(analyzer.discovery_globs)),
+                        analyzer_inventory_discovery_json(analyzer),
                     ),
                 )
             if owns_connection:

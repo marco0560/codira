@@ -7,7 +7,9 @@ venv/
 # -------------------------------
 # Repoindex internal DB
 # -------------------------------
-.codira/
+.codira/*
+!.codira/
+!.codira/config.toml
 
 # -------------------------------
 # Build artifacts

@@ -25,8 +25,17 @@ from typing import TYPE_CHECKING
 
 from codira.contracts import AnalyzerCapabilityDeclaration
 from codira.models import AnalysisResult, DocumentationArtifact, ModuleArtifact
+from codira.plugin_config import (
+    AnalyzerPathFilters,
+    analyzer_json_schema,
+    analyzer_path_allowed,
+    analyzer_path_filters_from_config,
+    boolean_property,
+    plugin_configuration_fingerprint,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     from codira.contracts import LanguageAnalyzer
@@ -268,6 +277,61 @@ class TextAnalyzer:
     version = "1"
     discovery_globs: tuple[str, ...] = ("*.txt",)
 
+    def __init__(self) -> None:
+        self._path_filters = AnalyzerPathFilters()
+        self._include_root_files = True
+        self._include_docs_directories = True
+        self._exclude_generated = True
+        self._exclude_fixtures_logs = True
+        self.configuration_fingerprint = plugin_configuration_fingerprint({})
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the plain-text analyzer configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for text analyzer options.
+        """
+
+        return analyzer_json_schema(
+            {
+                "include_root_files": boolean_property(True),
+                "include_docs_directories": boolean_property(True),
+                "exclude_generated": boolean_property(True),
+                "exclude_fixtures_logs": boolean_property(True),
+            }
+        )
+
+    def configure(self, config: Mapping[str, object]) -> None:
+        """
+        Apply plain-text analyzer configuration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Namespaced analyzer configuration table.
+
+        Returns
+        -------
+        None
+            Analyzer options are stored on this instance.
+        """
+
+        self._path_filters = analyzer_path_filters_from_config(config)
+        self._include_root_files = bool(config.get("include_root_files", True))
+        self._include_docs_directories = bool(
+            config.get("include_docs_directories", True)
+        )
+        self._exclude_generated = bool(config.get("exclude_generated", True))
+        self._exclude_fixtures_logs = bool(config.get("exclude_fixtures_logs", True))
+        self.configuration_fingerprint = plugin_configuration_fingerprint(config)
+
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
         """
         Return text analyzer ontology coverage.
@@ -318,6 +382,80 @@ class TextAnalyzer:
         """
         return path.suffix.lower() == ".txt"
 
+    def _is_configured_documentation_text_path(self, path: Path, root: Path) -> bool:
+        """
+        Return whether configured policy accepts one text path.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Candidate text file.
+        root : pathlib.Path
+            Repository root used for relative policy checks.
+
+        Returns
+        -------
+        bool
+            ``True`` when configured text policy accepts the file.
+        """
+
+        if path.suffix.lower() != ".txt":
+            return False
+        relative = path.relative_to(root)
+        lowered_parts = tuple(part.lower() for part in relative.parts)
+        generated_parts = {".artifacts", "build", "dist", "generated", "snapshots"}
+        fixture_log_parts = {"fixtures", "logs"}
+        other_excluded_parts = (
+            _EXCLUDED_PATH_PARTS - generated_parts - fixture_log_parts
+        )
+        if any(part in other_excluded_parts for part in lowered_parts):
+            return False
+        if self._exclude_generated and any(
+            part in generated_parts for part in lowered_parts
+        ):
+            return False
+        if self._exclude_fixtures_logs and any(
+            part in fixture_log_parts for part in lowered_parts
+        ):
+            return False
+        if self._exclude_fixtures_logs and relative.name.lower().endswith(
+            _LOG_LIKE_SUFFIXES
+        ):
+            return False
+        if (
+            self._include_root_files
+            and len(relative.parts) == 1
+            and relative.stem.lower() in _DOCUMENTATION_FILE_STEMS
+        ):
+            return True
+        if self._include_docs_directories and any(
+            part in _DOCUMENTATION_PATH_PARTS for part in lowered_parts[:-1]
+        ):
+            return True
+        return False
+
+    def allows_path(self, path: Path, root: Path) -> bool:
+        """
+        Decide whether configured filters allow a supported text path.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Candidate repository file.
+        root : pathlib.Path
+            Repository root used for relative path evaluation.
+
+        Returns
+        -------
+        bool
+            ``True`` when the path is eligible and allowed by filters.
+        """
+
+        return self._is_configured_documentation_text_path(
+            path,
+            root,
+        ) and analyzer_path_allowed(path=path, root=root, filters=self._path_filters)
+
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
         """
         Analyze one plain-text file into documentation artifacts.
@@ -342,7 +480,7 @@ class TextAnalyzer:
             has_docstring=0,
         )
         documentation: tuple[DocumentationArtifact, ...]
-        if _is_documentation_text_path(path, root):
+        if self._is_configured_documentation_text_path(path, root):
             documentation = _documentation_artifacts(path, root)
         else:
             documentation = ()

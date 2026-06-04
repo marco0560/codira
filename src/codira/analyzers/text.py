@@ -34,7 +34,18 @@ class _TextAnalyzerModule(Protocol):
     TextAnalyzer: type[_TextAnalyzerType]
 
     def build_analyzer(self) -> LanguageAnalyzer:
-        """Return a text analyzer instance."""
+        """
+        Return a text analyzer instance.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        codira.contracts.LanguageAnalyzer
+            Plain-text analyzer instance built by the extracted package.
+        """
 
 
 def _load_text_module() -> object:

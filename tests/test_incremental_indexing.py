@@ -48,6 +48,7 @@ from codira.contracts import (
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
     IndexWriteSession,
+    LanguageAnalyzer,
     StoredEmbeddingRow,
 )
 from codira.indexer import audit_repo_coverage, index_repo
@@ -59,6 +60,7 @@ from codira.models import (
     FunctionArtifact,
     ModuleArtifact,
 )
+from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.query.exact import docstring_issues, find_symbol
 from codira.scanner import file_metadata
 from codira.schema import SCHEMA_VERSION
@@ -93,6 +95,28 @@ def _write_module(path: Path, source: str) -> None:
     path.write_text(source, encoding="utf-8")
 
 
+def _analyzer_inventory_row(analyzer: LanguageAnalyzer) -> tuple[str, str, str]:
+    """
+    Return one analyzer inventory row in persisted comparison form.
+
+    Parameters
+    ----------
+    analyzer : codira.contracts.LanguageAnalyzer
+        Analyzer instance to serialize.
+
+    Returns
+    -------
+    tuple[str, str, str]
+        Persisted analyzer inventory row.
+    """
+
+    return (
+        str(analyzer.name),
+        str(analyzer.version),
+        analyzer_inventory_discovery_json(analyzer),
+    )
+
+
 def _default_analyzer_inventory_json() -> str:
     """
     Return the default analyzer inventory encoded like CLI metadata.
@@ -108,11 +132,7 @@ def _default_analyzer_inventory_json() -> str:
     """
     return json.dumps(
         [
-            (
-                str(analyzer.name),
-                str(analyzer.version),
-                json.dumps(tuple(analyzer.discovery_globs)),
-            )
+            _analyzer_inventory_row(analyzer)
             for analyzer in sorted(
                 registry_module.active_language_analyzers(),
                 key=lambda item: str(item.name),
@@ -1088,8 +1108,9 @@ def test_inspect_index_rebuild_request_uses_backend_connection_contract(
         module,
         'def demo():\n    """Return a constant."""\n    return 1\n',
     )
+    python_inventory = [_analyzer_inventory_row(PythonAnalyzer())]
     backend = _RecordingBackend(
-        analyzer_inventory=[("python", PythonAnalyzer.version, '["*.py"]')],
+        analyzer_inventory=python_inventory,
         file_hashes={str(module): "abc123"},
     )
     cli_module._write_index_metadata(
@@ -1140,8 +1161,9 @@ def test_inspect_index_rebuild_request_uses_complete_metadata_fast_path(
         module,
         'def demo():\n    """Return a constant."""\n    return 1\n',
     )
+    python_inventory = [_analyzer_inventory_row(PythonAnalyzer())]
     backend = _RecordingBackend(
-        analyzer_inventory=[("python", PythonAnalyzer.version, '["*.py"]')],
+        analyzer_inventory=python_inventory,
         file_hashes={str(module): "abc123"},
     )
     cli_module._write_index_metadata(
@@ -1150,9 +1172,7 @@ def test_inspect_index_rebuild_request_uses_complete_metadata_fast_path(
             "schema_version": str(SCHEMA_VERSION),
             "backend_name": "duckdb",
             "backend_version": "1.5.3",
-            "analyzer_inventory": json.dumps(
-                [("python", PythonAnalyzer.version, '["*.py"]')]
-            ),
+            "analyzer_inventory": json.dumps(python_inventory),
             "indexed_file_count": "1",
         },
     )
@@ -3289,7 +3309,9 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
     backend = SQLiteIndexBackend()
 
     assert "Index stale (analyzer plugin inventory changed)" in captured.err
-    assert backend.load_analyzer_inventory(tmp_path) == [("python", "7", '["*.py"]')]
+    assert backend.load_analyzer_inventory(tmp_path) == [
+        _analyzer_inventory_row(_PythonAnalyzerV7())
+    ]
 
 
 def test_ensure_index_rebuilds_when_backend_inventory_changes(

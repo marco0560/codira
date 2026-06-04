@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     from codira.contracts import LanguageAnalyzer
@@ -31,6 +32,14 @@ from tree_sitter_bash import language
 
 from codira.contracts import AnalyzerCapabilityDeclaration
 from codira.models import AnalysisResult, CallSite, FunctionArtifact, ModuleArtifact
+from codira.plugin_config import (
+    AnalyzerPathFilters,
+    analyzer_json_schema,
+    analyzer_path_allowed,
+    analyzer_path_filters_from_config,
+    boolean_property,
+    plugin_configuration_fingerprint,
+)
 
 _BASH_SUFFIXES = {".sh", ".bash"}
 _LANGUAGE = Language(language())
@@ -331,6 +340,46 @@ class BashAnalyzer:
     version = "2"
     discovery_globs: tuple[str, ...] = ("*.sh", "*.bash")
 
+    def __init__(self) -> None:
+        self._path_filters = AnalyzerPathFilters()
+        self._emit_functions = True
+        self.configuration_fingerprint = plugin_configuration_fingerprint({})
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the Bash analyzer configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for Bash analyzer options.
+        """
+
+        return analyzer_json_schema({"emit_functions": boolean_property(True)})
+
+    def configure(self, config: Mapping[str, object]) -> None:
+        """
+        Apply Bash analyzer configuration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Namespaced analyzer configuration table.
+
+        Returns
+        -------
+        None
+            Analyzer options are stored on this instance.
+        """
+
+        self._path_filters = analyzer_path_filters_from_config(config)
+        self._emit_functions = bool(config.get("emit_functions", True))
+        self.configuration_fingerprint = plugin_configuration_fingerprint(config)
+
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
         """
         Return Bash analyzer ontology coverage.
@@ -380,6 +429,25 @@ class BashAnalyzer:
         """
         return path.suffix in _BASH_SUFFIXES
 
+    def allows_path(self, path: Path, root: Path) -> bool:
+        """
+        Decide whether configured path filters allow a supported shell path.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Candidate repository file.
+        root : pathlib.Path
+            Repository root used for relative path evaluation.
+
+        Returns
+        -------
+        bool
+            ``True`` when the path is allowed by include/exclude filters.
+        """
+
+        return analyzer_path_allowed(path=path, root=root, filters=self._path_filters)
+
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
         """
         Analyze one shell source file into normalized artifacts.
@@ -408,10 +476,10 @@ class BashAnalyzer:
                 has_docstring=0,
             ),
             classes=(),
-            functions=_extract_functions(
-                root_node,
-                source,
-                module_name=module_name,
+            functions=(
+                _extract_functions(root_node, source, module_name=module_name)
+                if self._emit_functions
+                else ()
             ),
             declarations=(),
             imports=(),

@@ -73,6 +73,7 @@ from codira.models import (
 )
 from codira.normalization import analysis_result_from_parsed
 from codira.parser_ast import parse_file
+from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.query.producers import (
     CALL_GRAPH_RETRIEVAL_PRODUCER,
     CHANNEL_PRODUCER_SPECS,
@@ -2165,15 +2166,15 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
     ]
     assert optional_dependencies["bundle-official"] == [
         "sentence-transformers>=5.4,<6.0",
-        "codira-analyzer-python==1.42.0",
-        "codira-analyzer-json==1.40.0",
-        "codira-analyzer-c==1.42.0",
-        "codira-analyzer-cpp==1.42.0",
-        "codira-analyzer-bash==1.40.0",
-        "codira-analyzer-markdown==1.42.0",
-        "codira-analyzer-text==1.42.0",
-        "codira-backend-sqlite==1.42.0",
-        "codira-backend-duckdb==1.42.0",
+        "codira-analyzer-python==1.43.0",
+        "codira-analyzer-json==1.41.0",
+        "codira-analyzer-c==1.43.0",
+        "codira-analyzer-cpp==1.44.0",
+        "codira-analyzer-bash==1.41.0",
+        "codira-analyzer-markdown==1.43.0",
+        "codira-analyzer-text==1.43.0",
+        "codira-backend-sqlite==1.43.0",
+        "codira-backend-duckdb==1.43.0",
     ]
     assert pyproject.get("tool", {}).get("poetry") is None
 
@@ -4920,7 +4921,7 @@ def test_sqlite_backend_persists_runtime_inventory(tmp_path: Path) -> None:
         (
             analyzer.name,
             analyzer.version,
-            json.dumps(tuple(analyzer.discovery_globs)),
+            analyzer_inventory_discovery_json(analyzer),
         )
         for analyzer in sorted(active_language_analyzers(), key=lambda item: item.name)
     ]

@@ -2862,6 +2862,8 @@ def _diversify_merged_symbols(
     ----------
     ranked_symbols : list[codira.types.SymbolRow]
         Symbols already ordered by merged ranking score.
+    intent : codira.query.classifier.QueryIntent | None, optional
+        Classified query intent used to enforce task-specific diversity quotas.
 
     Returns
     -------
@@ -2887,6 +2889,8 @@ def _diversify_merged_symbols_explain(
     ----------
     ranked_symbols : list[codira.types.SymbolRow]
         Symbols already ordered by merged ranking score.
+    intent : codira.query.classifier.QueryIntent | None, optional
+        Classified query intent used to enforce task-specific diversity quotas.
 
     Returns
     -------

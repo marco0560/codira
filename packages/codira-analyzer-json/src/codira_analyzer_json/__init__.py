@@ -24,13 +24,22 @@ from json import JSONDecodeError
 from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
     from pathlib import Path
 
     from codira.contracts import LanguageAnalyzer
 
 from codira.contracts import AnalyzerCapabilityDeclaration
 from codira.models import AnalysisResult, DeclarationArtifact, ModuleArtifact
+from codira.plugin_config import (
+    AnalyzerPathFilters,
+    analyzer_json_schema,
+    analyzer_path_allowed,
+    analyzer_path_filters_from_config,
+    boolean_property,
+    plugin_configuration_fingerprint,
+    string_enum_array_property,
+)
 
 JsonFamily = Literal[
     "json_schema",
@@ -38,6 +47,11 @@ JsonFamily = Literal[
     "semantic_release_config",
 ]
 JsonFamilyOrNone = JsonFamily | None
+_CONFIG_FAMILY_TO_JSON_FAMILY: dict[str, JsonFamily] = {
+    "schema": "json_schema",
+    "package": "npm_package_manifest",
+    "release": "semantic_release_config",
+}
 JsonScalar = str | int | float | bool | None
 _JSON_SNIFF_BYTES = 8192
 _JSON_SCHEMA_MARKERS = (
@@ -892,6 +906,65 @@ class JsonAnalyzer:
     version = "3"
     discovery_globs: tuple[str, ...] = ("*.json",)
 
+    def __init__(self) -> None:
+        self._path_filters = AnalyzerPathFilters()
+        self._enabled_families = frozenset(_CONFIG_FAMILY_TO_JSON_FAMILY.values())
+        self._emit_dependencies = True
+        self._emit_scripts = True
+        self._emit_schema_properties = True
+        self.configuration_fingerprint = plugin_configuration_fingerprint({})
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the JSON analyzer configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for JSON analyzer options.
+        """
+
+        return analyzer_json_schema(
+            {
+                "enabled_families": string_enum_array_property(
+                    _CONFIG_FAMILY_TO_JSON_FAMILY
+                ),
+                "emit_dependencies": boolean_property(True),
+                "emit_scripts": boolean_property(True),
+                "emit_schema_properties": boolean_property(True),
+            }
+        )
+
+    def configure(self, config: Mapping[str, object]) -> None:
+        """
+        Apply JSON analyzer configuration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Namespaced analyzer configuration table.
+
+        Returns
+        -------
+        None
+            Analyzer options are stored on this instance.
+        """
+
+        self._path_filters = analyzer_path_filters_from_config(config)
+        enabled_families = config.get("enabled_families")
+        if isinstance(enabled_families, list):
+            self._enabled_families = frozenset(
+                _CONFIG_FAMILY_TO_JSON_FAMILY[str(item)] for item in enabled_families
+            )
+        self._emit_dependencies = bool(config.get("emit_dependencies", True))
+        self._emit_scripts = bool(config.get("emit_scripts", True))
+        self._emit_schema_properties = bool(config.get("emit_schema_properties", True))
+        self.configuration_fingerprint = plugin_configuration_fingerprint(config)
+
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
         """
         Return JSON analyzer ontology coverage.
@@ -955,7 +1028,27 @@ class JsonAnalyzer:
         except (TypeError, ValueError):
             return False
 
-        return _classify_json_document(path, payload) is not None
+        family = _classify_json_document(path, payload)
+        return family is not None and family in self._enabled_families
+
+    def allows_path(self, path: Path, root: Path) -> bool:
+        """
+        Decide whether configured path filters allow a supported JSON path.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Candidate repository file.
+        root : pathlib.Path
+            Repository root used for relative path evaluation.
+
+        Returns
+        -------
+        bool
+            ``True`` when the path is allowed by include/exclude filters.
+        """
+
+        return analyzer_path_allowed(path=path, root=root, filters=self._path_filters)
 
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
         """
@@ -986,6 +1079,24 @@ class JsonAnalyzer:
             msg = f"Unsupported JSON document in {path}: no recognized JSON family"
             raise ValueError(msg)
 
+        if family not in self._enabled_families:
+            msg = f"Unsupported JSON document in {path}: JSON family disabled"
+            raise ValueError(msg)
+
+        declarations = _declarations_for_family(family, path=path, payload=payload)
+        declarations = tuple(
+            declaration
+            for declaration in declarations
+            if (
+                self._emit_dependencies
+                or declaration.kind != "json_manifest_dependency"
+            )
+            and (self._emit_scripts or declaration.kind != "json_manifest_script")
+            and (
+                self._emit_schema_properties
+                or declaration.kind != "json_schema_property"
+            )
+        )
         return AnalysisResult(
             source_path=path,
             module=ModuleArtifact(
@@ -996,7 +1107,7 @@ class JsonAnalyzer:
             ),
             classes=(),
             functions=(),
-            declarations=_declarations_for_family(family, path=path, payload=payload),
+            declarations=declarations,
             imports=(),
         )
 

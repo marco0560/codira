@@ -80,9 +80,13 @@ owned inside the DuckDB package boundary.
 
 ## Phase-8 Selection Rules
 
-Phase 8 makes backend activation explicit through `src/codira/registry.py`.
+Phase 8 made backend activation explicit through `src/codira/registry.py`.
+Issue #17 moves the persistent selection source into Codira configuration while
+preserving the environment variable as a process override.
 
-- the configured backend is read from `CODIRA_INDEX_BACKEND`
+- the configured backend is read from effective configuration key
+  `backend.name`
+- `CODIRA_INDEX_BACKEND` overrides config files for the current process
 - the default backend is `sqlite`
 - unsupported names fail fast with `ValueError`
 - all current indexing and query entry points resolve the backend through the

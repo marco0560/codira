@@ -17,12 +17,11 @@ This module belongs to the **contract definition layer** that governs pluggable 
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
     from pathlib import Path
 
     from codira.models import AnalysisResult, FileMetadataSnapshot
@@ -201,6 +200,86 @@ class LanguageAnalyzer(Protocol):
         codira.models.AnalysisResult
             Normalized artifacts for the file. Stable IDs within the returned
             analysis must already be internally unique.
+        """
+        ...
+
+
+@runtime_checkable
+class ConfigurablePlugin(Protocol):
+    """
+    Optional plugin contract for explicit configuration injection.
+
+    Implementations that expose this hook receive only their own namespaced
+    configuration table after the global configuration has been merged.
+    """
+
+    def configure(self, config: Mapping[str, object]) -> None:
+        """
+        Apply one plugin-specific configuration table.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Namespaced plugin configuration values.
+
+        Returns
+        -------
+        None
+            The plugin mutates its own instance state when configuration is
+            required.
+        """
+        ...
+
+
+@runtime_checkable
+class PluginConfigurationSchemaProvider(Protocol):
+    """
+    Optional plugin contract for configuration schema publication.
+
+    Plugins that expose this hook allow the core registry to validate their
+    namespaced configuration deterministically.
+    """
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the plugin-specific JSON Schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            JSON Schema for the plugin configuration table.
+        """
+        ...
+
+
+@runtime_checkable
+class PathFilteredAnalyzer(Protocol):
+    """
+    Optional analyzer contract for repo-relative path filtering.
+
+    Implementations receive the repository root explicitly so include/exclude
+    filters can be evaluated without hidden global state.
+    """
+
+    def allows_path(self, path: Path, root: Path) -> bool:
+        """
+        Decide whether a supported path is enabled for this analyzer.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Candidate repository file.
+        root : pathlib.Path
+            Repository root used for relative path evaluation.
+
+        Returns
+        -------
+        bool
+            ``True`` when the analyzer should process the file.
         """
         ...
 

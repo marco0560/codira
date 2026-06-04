@@ -98,9 +98,25 @@ uv run python ../codira/scripts/provision_embedding_model.py
 ## Tune embedding runtime
 
 `codira` computes semantic embeddings through the local sentence-transformers
-backend during indexing. The default settings are deterministic, but operators
-can tune the runtime explicitly for a host or benchmark run with environment
-variables:
+backend during indexing. The default settings are deterministic, and runtime
+commands create a user-level config on first use.
+
+Inspect the effective config:
+
+```bash
+codira config dump
+codira config explain embeddings.batch_size
+```
+
+Create an explicit profile:
+
+```bash
+codira config init --profile low-memory
+codira config init --level repo --profile gpu
+```
+
+Operators can still tune one process with environment variables. These values
+override config files:
 
 | Variable | Meaning |
 | --- | --- |

@@ -29,7 +29,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from codira.calibration import (
+    calibrate_embeddings,
+    embeddings_config_update,
+    render_embeddings_calibration_toml,
+)
 from codira.capabilities import build_capability_contract
+from codira.config import (
+    ConfigError,
+    ConfigOrigin,
+    LevelName,
+    ProfileName,
+    config_path,
+    config_to_mapping,
+    ensure_user_config,
+    explain_key,
+    load_config_level,
+    load_effective_config,
+    render_config_toml,
+    update_config_file,
+    user_config_path,
+    validate_config_mapping,
+    write_config_file,
+)
 from codira.contracts import BackendError
 from codira.indexer import (
     CoverageIssue,
@@ -44,6 +66,7 @@ from codira.path_resolution import (
     CODIRA_TARGET_DIR_ENV,
     resolve_runtime_paths,
 )
+from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.prefix import normalize_prefix
 from codira.query.context import ContextRequest, context_for
 from codira.query.exact import (
@@ -67,6 +90,7 @@ from codira.registry import (
     active_language_analyzers,
     configured_index_backend_name,
     plugin_registrations,
+    validate_plugin_configuration,
 )
 from codira.scanner import iter_project_files
 from codira.schema import SCHEMA_VERSION
@@ -139,8 +163,10 @@ _REPO_PATH_COMMANDS = frozenset(
         "refs",
         "audit",
         "ctx",
+        "config",
     }
 )
+_CONFIG_INSPECTION_ACTIONS = frozenset({"dump", "explain", "validate"})
 
 
 @dataclass(frozen=True)
@@ -520,17 +546,19 @@ def _current_analyzer_inventory() -> list[tuple[str, str, str]]:
         Active analyzer rows as ``(name, version, discovery_globs_json)``
         ordered by analyzer name.
     """
-    return [
-        (
-            str(analyzer.name),
-            str(analyzer.version),
-            json.dumps(tuple(analyzer.discovery_globs)),
+    rows: list[tuple[str, str, str]] = []
+    for analyzer in sorted(
+        active_language_analyzers(),
+        key=lambda item: str(item.name),
+    ):
+        rows.append(
+            (
+                str(analyzer.name),
+                str(analyzer.version),
+                analyzer_inventory_discovery_json(analyzer),
+            )
         )
-        for analyzer in sorted(
-            active_language_analyzers(),
-            key=lambda item: str(item.name),
-        )
-    ]
+    return rows
 
 
 def _loaded_plugin_registrations() -> list[tuple[str, str, str, str]]:
@@ -738,7 +766,8 @@ def build_parser() -> argparse.ArgumentParser:
         dest="command",
         title="subcommands",
         metavar=(
-            "{help,index,cov,sym,symlist,emb,docs,calls,refs,audit,ctx,plugins,caps}"
+            "{help,index,cov,sym,symlist,emb,docs,calls,refs,audit,ctx,plugins,"
+            "caps,config,calibrate}"
         ),
     )
 
@@ -1191,6 +1220,136 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict",
         action="store_true",
         help="Fail if active analyzers have missing or invalid declarations",
+    )
+
+    config_parser = sub.add_parser(
+        "config",
+        help="Inspect and manage Codira configuration",
+        description=(
+            "Create, inspect, explain, and validate Codira's deterministic "
+            "configuration hierarchy."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  codira config init\n"
+            "  codira config init --level repo --profile low-memory\n"
+            "  codira config dump --level effective\n"
+            "  codira config explain embeddings.batch_size\n"
+            "  codira config validate"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_repo_path_arguments(config_parser)
+    config_sub = config_parser.add_subparsers(dest="config_action")
+    config_init_parser = config_sub.add_parser(
+        "init",
+        help="Create a config file for one level",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    config_init_parser.add_argument(
+        "--level",
+        choices=("user", "repo", "system"),
+        default="user",
+        help="Config level to create (default: user)",
+    )
+    config_init_parser.add_argument(
+        "--profile",
+        choices=("default", "low-memory", "gpu"),
+        default="default",
+        help="Generated profile to write (default: default)",
+    )
+    config_init_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing config file",
+    )
+    config_init_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Include all known first-party plugin options with default values",
+    )
+    config_dump_parser = config_sub.add_parser(
+        "dump",
+        help="Print one config level or the effective config",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    config_dump_parser.add_argument(
+        "--level",
+        choices=("system", "user", "repo", "effective"),
+        default="effective",
+        help="Config level to dump (default: effective)",
+    )
+    config_dump_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output structured JSON for machine consumption",
+    )
+    config_explain_parser = config_sub.add_parser(
+        "explain",
+        help="Explain one effective config key",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    config_explain_parser.add_argument("key", help="Dotted config key to explain")
+    config_explain_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output structured JSON for machine consumption",
+    )
+    config_validate_parser = config_sub.add_parser(
+        "validate",
+        help="Validate one config level or the effective config",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    config_validate_parser.add_argument(
+        "--level",
+        choices=("system", "user", "repo", "effective"),
+        default="effective",
+        help="Config level to validate (default: effective)",
+    )
+    config_validate_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output structured JSON for machine consumption",
+    )
+
+    calibrate_parser = sub.add_parser(
+        "calibrate",
+        help="Calibrate hardware-aware Codira runtime settings",
+        description=(
+            "Run deterministic bounded calibration workflows and emit "
+            "configuration-compatible output."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  codira calibrate embeddings\n"
+            "  codira calibrate embeddings --print\n"
+            "  codira calibrate embeddings --write\n"
+            "  codira calibrate embeddings --output /tmp/codira-embeddings.toml"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    calibrate_sub = calibrate_parser.add_subparsers(dest="calibration_target")
+    embeddings_calibrate_parser = calibrate_sub.add_parser(
+        "embeddings",
+        help="Calibrate embedding runtime parameters",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    calibration_mode = embeddings_calibrate_parser.add_mutually_exclusive_group()
+    calibration_mode.add_argument(
+        "--print",
+        dest="print_output",
+        action="store_true",
+        help="Print the calibrated TOML snippet to stdout",
+    )
+    calibration_mode.add_argument(
+        "--write",
+        action="store_true",
+        help="Merge calibrated values into the user config file",
+    )
+    calibration_mode.add_argument(
+        "--output",
+        type=Path,
+        help="Write the calibrated TOML snippet to a file",
     )
 
     return parser
@@ -3992,6 +4151,329 @@ def _run_context_command(
     return 0
 
 
+def _config_origin_payload(origin: ConfigOrigin) -> dict[str, object]:
+    """
+    Convert config origin metadata into a JSON-friendly mapping.
+
+    Parameters
+    ----------
+    origin : object
+        Origin object returned by the config layer.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-serializable origin payload.
+    """
+
+    return {
+        "level": origin.level,
+        "path": None if origin.path is None else str(origin.path),
+        "detail": origin.detail,
+    }
+
+
+def _run_config_init(args: argparse.Namespace, root: Path) -> int:
+    """
+    Create one generated Codira configuration file.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed config command arguments.
+    root : pathlib.Path
+        Repository root used for repo-level config paths.
+
+    Returns
+    -------
+    int
+        Zero after writing the config file.
+    """
+
+    level = cast("LevelName", args.level)
+    profile = cast("ProfileName", args.profile)
+    path = config_path(level, root=root)
+    write_config_file(path, profile=profile, force=args.force, full=args.full)
+    print(f"Wrote {level} config: {path}")
+    return 0
+
+
+def _run_config_dump(args: argparse.Namespace, root: Path) -> int:
+    """
+    Print one config file or the effective configuration.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed config command arguments.
+    root : pathlib.Path
+        Repository root used for repo-level config paths.
+
+    Returns
+    -------
+    int
+        Zero after printing the requested config.
+    """
+
+    level = cast("LevelName", args.level)
+    if level == "effective":
+        config = load_effective_config(root=root)
+        payload = config_to_mapping(config)
+        if args.json:
+            _emit_json(
+                {
+                    "schema_version": QUERY_JSON_SCHEMA_VERSION,
+                    "command": "config dump",
+                    "status": "ok",
+                    "level": level,
+                    "results": payload,
+                    "origins": {
+                        key: _config_origin_payload(origin)
+                        for key, origin in sorted(config.origins.items())
+                    },
+                }
+            )
+            return 0
+        print(render_config_toml(payload), end="")
+        return 0
+
+    path = config_path(level, root=root)
+    values = load_config_level(level, root=root)
+    if args.json:
+        _emit_json(
+            {
+                "schema_version": QUERY_JSON_SCHEMA_VERSION,
+                "command": "config dump",
+                "status": "ok",
+                "level": level,
+                "path": str(path),
+                "results": values,
+            }
+        )
+        return 0
+    print(path.read_text(encoding="utf-8"), end="")
+    return 0
+
+
+def _run_config_explain(args: argparse.Namespace, root: Path) -> int:
+    """
+    Explain one effective configuration value and origin.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed config command arguments.
+    root : pathlib.Path
+        Repository root used for repo-level config resolution.
+
+    Returns
+    -------
+    int
+        Zero after printing explanation output.
+    """
+
+    config = load_effective_config(root=root)
+    value, origin = explain_key(config, args.key)
+    if args.json:
+        _emit_json(
+            {
+                "schema_version": QUERY_JSON_SCHEMA_VERSION,
+                "command": "config explain",
+                "status": "ok",
+                "key": args.key,
+                "value": value,
+                "origin": _config_origin_payload(origin),
+            }
+        )
+        return 0
+    origin_path = "" if origin.path is None else f" path={origin.path}"
+    print(f"{args.key} = {value!r}")
+    print(f"origin = {origin.level}{origin_path} ({origin.detail})")
+    return 0
+
+
+def _run_config_validate(args: argparse.Namespace, root: Path) -> int:
+    """
+    Validate one config level or the effective configuration.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed config command arguments.
+    root : pathlib.Path
+        Repository root used for repo-level config paths.
+
+    Returns
+    -------
+    int
+        Zero after successful validation.
+    """
+
+    level = cast("LevelName", args.level)
+    warnings: list[dict[str, object]] = []
+    if level == "effective":
+        config = load_effective_config(root=root)
+        validate_config_mapping(config_to_mapping(config))
+        _validate_config_runtime_plugins(config.backend.name)
+        warnings = [
+            {"key": warning.key, "reason": warning.reason}
+            for warning in validate_plugin_configuration()
+        ]
+        path: str | None = None
+    else:
+        path_obj = config_path(level, root=root)
+        validate_config_mapping(load_config_level(level, root=root))
+        path = str(path_obj)
+
+    if args.json:
+        _emit_json(
+            {
+                "schema_version": QUERY_JSON_SCHEMA_VERSION,
+                "command": "config validate",
+                "status": "ok_with_warnings" if warnings else "ok",
+                "level": level,
+                "path": path,
+                "warnings": warnings,
+            }
+        )
+        return 0
+    print(f"Config valid: {level}" if path is None else f"Config valid: {path}")
+    for warning in warnings:
+        print(f"Warning: plugins.{warning['key']}: {warning['reason']}")
+    return 0
+
+
+def _validate_config_runtime_plugins(backend_name: str) -> None:
+    """
+    Validate plugin names that require registry discovery.
+
+    Parameters
+    ----------
+    backend_name : str
+        Effective backend name to validate.
+
+    Returns
+    -------
+    None
+        Runtime plugin references are valid.
+
+    Raises
+    ------
+    ConfigError
+        If the configured backend is not loaded.
+    ValueError
+        If registry-level analyzer validation fails.
+    """
+
+    registrations = plugin_registrations()
+    loaded_backends = {
+        registration.name
+        for registration in registrations
+        if registration.family == "backend" and registration.status == "loaded"
+    }
+    if backend_name not in loaded_backends:
+        available = ", ".join(sorted(loaded_backends))
+        msg = (
+            f"Unsupported configured backend '{backend_name}'. "
+            f"Available backends: {available}"
+        )
+        raise ConfigError(msg)
+
+
+def _run_config_command(args: argparse.Namespace, root: Path) -> int:
+    """
+    Dispatch one ``codira config`` subcommand.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command-line arguments.
+    root : pathlib.Path
+        Repository root used for repo-level config paths.
+
+    Returns
+    -------
+    int
+        Process exit status for the config subcommand.
+
+    Raises
+    ------
+    ConfigError
+        If the parsed config action is not supported.
+    """
+
+    action = args.config_action or "dump"
+    if action == "init":
+        return _run_config_init(args, root)
+    if action == "dump":
+        return _run_config_dump(args, root)
+    if action == "explain":
+        return _run_config_explain(args, root)
+    if action == "validate":
+        return _run_config_validate(args, root)
+    msg = f"Unsupported config action: {action}"
+    raise ConfigError(msg)
+
+
+def _run_calibrate_embeddings(args: argparse.Namespace) -> int:
+    """
+    Run embeddings calibration and emit or write config-compatible output.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed calibration command arguments.
+
+    Returns
+    -------
+    int
+        Zero after successful calibration output handling.
+    """
+
+    result = calibrate_embeddings()
+    snippet = render_embeddings_calibration_toml(result)
+    output_path = cast("Path | None", args.output)
+    if args.write:
+        path = user_config_path()
+        update_config_file(path, embeddings_config_update(result))
+        print(f"Wrote user config: {path}")
+        return 0
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(snippet, encoding="utf-8")
+        print(f"Wrote calibration output: {output_path}")
+        return 0
+    print(snippet, end="")
+    return 0
+
+
+def _run_calibrate_command(args: argparse.Namespace) -> int:
+    """
+    Dispatch one ``codira calibrate`` target command.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command-line arguments.
+
+    Returns
+    -------
+    int
+        Process exit status for the calibration target.
+
+    Raises
+    ------
+    ConfigError
+        If the parsed calibration target is not supported.
+    """
+
+    target = args.calibration_target
+    if target == "embeddings":
+        return _run_calibrate_embeddings(args)
+    msg = f"Unsupported calibration target: {target}"
+    raise ConfigError(msg)
+
+
 def _command_handlers(
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
@@ -4092,6 +4574,8 @@ def _command_handlers(
             root,
             prefix=prefix,
         ),
+        "config": lambda: _run_config_command(args, root),
+        "calibrate": lambda: _run_calibrate_command(args),
     }
 
 
@@ -4125,6 +4609,8 @@ def main() -> int:
     prefix = _resolve_prefix_argument(parser, root, raw_prefix)
 
     try:
+        if command not in {"help", "config", "calibrate"}:
+            ensure_user_config()
         with storage_context:
             handlers = _command_handlers(
                 args,
@@ -4139,7 +4625,7 @@ def main() -> int:
     except EmbeddingBackendError as exc:
         print(f"[codira] {exc}", file=sys.stderr)
         return 2
-    except (BackendError, OSError, RuntimeError, ValueError) as exc:
+    except (BackendError, ConfigError, OSError, RuntimeError, ValueError) as exc:
         print(
             f"[codira] {type(exc).__name__}: {exc}",
             file=sys.stderr,

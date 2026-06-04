@@ -435,7 +435,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.42.0"
+    assert project["project"]["version"] == "1.43.0"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -464,6 +464,28 @@ def test_duckdb_backend_package_builds_expected_backend() -> None:
     assert backend.__class__.__name__ == "DuckDBIndexBackend"
     assert backend.__class__.__module__ == "codira_backend_duckdb"
     assert backend.name == "duckdb"
+
+
+def test_duckdb_backend_exposes_configuration_schema() -> None:
+    """
+    Expose a strict first-party backend configuration schema.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB currently accepts only common plugin options.
+    """
+
+    schema = DuckDBIndexBackend().configuration_json_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+
+    assert schema["additionalProperties"] is False
+    assert sorted(properties) == ["enabled"]
 
 
 def test_duckdb_schema_ddl_declares_sequences_and_defaults() -> None:

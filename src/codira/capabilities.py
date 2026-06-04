@@ -139,6 +139,23 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
         "guarantee": "deterministic_plugin_snapshot",
         "limitations": ["entry-point discovery depends on installed distributions"],
     },
+    "config": {
+        "intent": "configuration_management",
+        "channels": [],
+        "guarantee": "deterministic_effective_configuration_resolution",
+        "limitations": [
+            "system and user config locations depend on platform conventions"
+        ],
+    },
+    "calibrate": {
+        "intent": "hardware_aware_runtime_calibration",
+        "channels": ["embedding"],
+        "guarantee": "deterministic_bounded_calibration_output",
+        "limitations": [
+            "uses locally available embedding model artifacts only",
+            "GPU calibration depends on Torch CUDA device metadata",
+        ],
+    },
     "caps": {
         "intent": "capability_contract_export",
         "aliases": ["capabilities"],

@@ -39,6 +39,7 @@ from codira.contracts import (
     StoredEmbeddingRow,
 )
 from codira.prefix import normalize_prefix, prefix_clause
+from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
@@ -2641,7 +2642,7 @@ class DuckDBQueryBackend:
                     (
                         str(analyzer.name),
                         str(analyzer.version),
-                        json.dumps(tuple(analyzer.discovery_globs)),
+                        analyzer_inventory_discovery_json(analyzer),
                     ),
                 )
             if owns_connection:
