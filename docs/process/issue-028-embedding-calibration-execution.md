@@ -15,7 +15,7 @@ is compatible with the Codira configuration system introduced for issue #17.
 | Config schema compatibility | Done | Added GPU calibration metadata fields under `embeddings.gpu`; `tests/test_config.py`, `ruff check`, and `ruff format --check` passed for touched Python files. |
 | Calibration module and CLI | Done | Added isolated calibration logic, `codira calibrate embeddings`, `--print`, `--write`, and `--output`; `codira calibrate embeddings --print` completed with a TOML snippet in an isolated config environment. |
 | Documentation and tests | Done | Added configuration docs and `tests/test_calibration.py`; focused calibration/config/capability tests, `ruff check`, and `ruff format --check` passed. |
-| Full validation | Pending | Not started. |
+| Full validation | Done | `codira index`, `pre-commit run --all-files`, full `pytest -q`, and `scripts/validate_repo.py` all passed. |
 
 ## Constraints
 
