@@ -115,3 +115,64 @@ over config files:
 
 Config validation is strict. Unknown keys, invalid types, invalid enum values,
 and invalid numeric ranges fail before runtime work proceeds.
+
+When validating the effective config, Codira also validates plugin tables
+against schemas exposed by loaded plugins. Configured plugin tables for
+unloaded plugins produce warnings and keep exit status `0`; JSON output reports
+`status = "ok_with_warnings"`.
+
+## Plugin Configuration
+
+Plugin activation and plugin-specific settings live under namespaced tables:
+
+```toml
+[plugins.analyzer-python]
+enabled = true
+include_paths = ["src", "tests"]
+exclude_paths = ["tests/fixtures"]
+emit_imports = true
+
+[plugins.backend-sqlite]
+enabled = true
+```
+
+Common plugin keys:
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | bool | `true` | Disables the plugin when set to `false`. |
+
+Common analyzer keys:
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `include_paths` | list[str] | `[]` | Repo-relative POSIX paths to include after suffix/family eligibility. Empty means include all otherwise eligible paths. |
+| `exclude_paths` | list[str] | `[]` | Repo-relative POSIX paths to exclude after suffix/family eligibility. Excludes win over includes. |
+
+Path filter values must be non-empty repo-relative paths. Absolute paths and
+`..` traversal segments are invalid.
+
+First-party analyzer options:
+
+| Table | Options |
+| --- | --- |
+| `[plugins.analyzer-python]` | `emit_module_documentation`, `emit_imports`, `emit_constants`, `emit_type_aliases` |
+| `[plugins.analyzer-json]` | `enabled_families = ["schema", "package", "release"]`, `emit_dependencies`, `emit_scripts`, `emit_schema_properties` |
+| `[plugins.analyzer-c]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_macros` |
+| `[plugins.analyzer-cpp]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_namespaces` |
+| `[plugins.analyzer-bash]` | `emit_functions` |
+| `[plugins.analyzer-markdown]` | `strip_front_matter`, `emit_file_artifact_without_headings`, `min_heading_level`, `max_heading_level` |
+| `[plugins.analyzer-text]` | `include_root_files`, `include_docs_directories`, `exclude_generated`, `exclude_fixtures_logs` |
+
+First-party backend tables currently accept only common plugin keys:
+
+```toml
+[plugins.backend-sqlite]
+enabled = true
+
+[plugins.backend-duckdb]
+enabled = true
+```
+
+Disabling the configured active backend is invalid. Disable an inactive backend
+only, or change `[backend].name` first.
