@@ -22,8 +22,17 @@ from functools import lru_cache
 from importlib import metadata
 from typing import TYPE_CHECKING, Literal, cast
 
-from codira.config import DEFAULT_BACKEND_NAME, load_effective_config
-from codira.contracts import IndexBackend, LanguageAnalyzer
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
+from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
+
+from codira.config import DEFAULT_BACKEND_NAME, ConfigError, load_effective_config
+from codira.contracts import (
+    ConfigurablePlugin,
+    IndexBackend,
+    LanguageAnalyzer,
+    PluginConfigurationSchemaProvider,
+)
+from codira.plugin_config import plugin_enabled
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -133,6 +142,23 @@ class PluginRegistration:
 
 
 @dataclass(frozen=True)
+class PluginConfigWarning:
+    """
+    Non-fatal plugin configuration validation diagnostic.
+
+    Parameters
+    ----------
+    key : str
+        Namespaced plugin table key.
+    reason : str
+        Deterministic warning reason.
+    """
+
+    key: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class _LoadedPlugin:
     """
     Internal loaded-plugin representation used by registry resolution.
@@ -235,6 +261,166 @@ def _configured_disabled_analyzers() -> tuple[str, ...]:
     """
 
     return load_effective_config().plugins.disabled_analyzers
+
+
+def _configured_plugin_tables() -> dict[str, dict[str, object]]:
+    """
+    Return namespaced plugin configuration tables.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    dict[str, dict[str, object]]
+        Plugin-specific config tables keyed by ``analyzer-*`` or
+        ``backend-*`` table name.
+    """
+
+    return dict(load_effective_config().plugins.configs or {})
+
+
+def plugin_config_key(*, family: PluginFamily, name: str) -> str:
+    """
+    Return the namespaced config key for one plugin.
+
+    Parameters
+    ----------
+    family : {"analyzer", "backend"}
+        Plugin family.
+    name : str
+        Stable plugin name.
+
+    Returns
+    -------
+    str
+        Config table key such as ``"analyzer-python"``.
+    """
+
+    return f"{family}-{name}"
+
+
+def _plugin_config_for(*, family: PluginFamily, name: str) -> dict[str, object]:
+    """
+    Return the configured table for one plugin.
+
+    Parameters
+    ----------
+    family : {"analyzer", "backend"}
+        Plugin family.
+    name : str
+        Stable plugin name.
+
+    Returns
+    -------
+    dict[str, object]
+        Plugin configuration table, or an empty table when absent.
+    """
+
+    return _configured_plugin_tables().get(
+        plugin_config_key(family=family, name=name),
+        {},
+    )
+
+
+def _configuration_schema(instance: object) -> dict[str, object] | None:
+    """
+    Return a plugin JSON Schema when the plugin exposes one.
+
+    Parameters
+    ----------
+    instance : object
+        Plugin instance to inspect.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Plugin JSON Schema, or ``None`` when absent.
+    """
+
+    if not isinstance(instance, PluginConfigurationSchemaProvider):
+        return None
+    schema = instance.configuration_json_schema()
+    return dict(schema)
+
+
+def _validate_plugin_config_schema(
+    *,
+    key: str,
+    instance: object,
+    config: dict[str, object],
+) -> None:
+    """
+    Validate one plugin configuration table against a plugin schema.
+
+    Parameters
+    ----------
+    key : str
+        Namespaced plugin table key.
+    instance : object
+        Plugin instance exposing the optional schema.
+    config : dict[str, object]
+        Plugin configuration table.
+
+    Returns
+    -------
+    None
+        The table is valid when no exception is raised.
+
+    Raises
+    ------
+    ConfigError
+        If the schema is invalid or the table fails validation.
+    """
+
+    schema = _configuration_schema(instance)
+    if schema is None:
+        return
+    try:
+        Draft202012Validator.check_schema(schema)
+        errors = sorted(
+            Draft202012Validator(schema).iter_errors(config),
+            key=lambda error: tuple(str(part) for part in error.path),
+        )
+    except SchemaError as exc:
+        msg = f"Plugin configuration schema for plugins.{key} is invalid: {exc.message}"
+        raise ConfigError(msg) from exc
+    if errors:
+        error = errors[0]
+        suffix = ".".join(str(part) for part in error.path)
+        path_label = f"plugins.{key}" if not suffix else f"plugins.{key}.{suffix}"
+        msg = f"Invalid plugin configuration {path_label}: {error.message}"
+        raise ConfigError(msg) from error
+
+
+def _configure_plugin_instance(
+    *,
+    plugin: _LoadedPlugin,
+    instance: object,
+) -> object:
+    """
+    Inject namespaced configuration into one plugin instance.
+
+    Parameters
+    ----------
+    plugin : codira.registry._LoadedPlugin
+        Loaded plugin metadata.
+    instance : object
+        Fresh plugin instance.
+
+    Returns
+    -------
+    object
+        The configured plugin instance.
+    """
+
+    config = _plugin_config_for(family=plugin.family, name=plugin.name)
+    key = plugin_config_key(family=plugin.family, name=plugin.name)
+    _validate_plugin_config_schema(key=key, instance=instance, config=config)
+    if isinstance(instance, ConfigurablePlugin):
+        instance.configure(config)
+    return instance
 
 
 def _entry_point_provider(entry_point: metadata.EntryPoint) -> str:
@@ -764,6 +950,15 @@ def _plugin_snapshot(
         family,
         _third_party_plugins_disabled(),
         _configured_disabled_analyzers(),
+        tuple(
+            sorted(
+                (
+                    key,
+                    bool(value.get("enabled", True)),
+                )
+                for key, value in _configured_plugin_tables().items()
+            )
+        ),
         (_entry_points_for_group, _builtin_analyzer_plugins, _builtin_backend_plugins),
     )
     return list(resolved), list(registrations)
@@ -774,6 +969,7 @@ def _cached_plugin_snapshot(
     family: PluginFamily,
     third_party_disabled: bool,
     disabled_analyzers: tuple[str, ...],
+    configured_enabled_plugins: tuple[tuple[str, bool], ...],
     cache_tokens: tuple[object, object, object],
 ) -> tuple[tuple[_LoadedPlugin, ...], tuple[PluginRegistration, ...]]:
     """
@@ -787,6 +983,8 @@ def _cached_plugin_snapshot(
         Whether third-party entry points are disabled for this snapshot.
     disabled_analyzers : tuple[str, ...]
         Analyzer names disabled by effective configuration.
+    configured_enabled_plugins : tuple[tuple[str, bool], ...]
+        Enabled-state cache key for namespaced plugin config tables.
     cache_tokens : tuple[object, object, object]
         Cache tokens for plugin discovery wrappers so monkeypatched discovery
         functions invalidate cached snapshots deterministically.
@@ -801,6 +999,7 @@ def _cached_plugin_snapshot(
     """
     del (
         third_party_disabled,
+        configured_enabled_plugins,
         cache_tokens,
     )
     if family == "analyzer":
@@ -835,7 +1034,76 @@ def _cached_plugin_snapshot(
                 plugin.entry_point or "",
             )
         )
+    resolved, registrations = _apply_enabled_plugin_config(
+        resolved,
+        registrations,
+        family=family,
+    )
     return tuple(resolved), tuple(registrations)
+
+
+def _apply_enabled_plugin_config(
+    plugins: list[_LoadedPlugin],
+    registrations: list[PluginRegistration],
+    *,
+    family: PluginFamily,
+) -> tuple[list[_LoadedPlugin], list[PluginRegistration]]:
+    """
+    Remove plugins disabled by namespaced plugin configuration.
+
+    Parameters
+    ----------
+    plugins : list[codira.registry._LoadedPlugin]
+        Resolved plugins for one family.
+    registrations : list[codira.registry.PluginRegistration]
+        Registration diagnostics to update.
+    family : {"analyzer", "backend"}
+        Plugin family being filtered.
+
+    Returns
+    -------
+    tuple[list[codira.registry._LoadedPlugin], list[codira.registry.PluginRegistration]]
+        Filtered plugins and diagnostics with disabled plugins reported as
+        skipped.
+    """
+
+    configured_tables = _configured_plugin_tables()
+    disabled = {
+        plugin.name
+        for plugin in plugins
+        if not plugin_enabled(
+            configured_tables.get(
+                plugin_config_key(family=family, name=plugin.name), {}
+            )
+        )
+    }
+    if not disabled:
+        return plugins, registrations
+
+    filtered_plugins = [plugin for plugin in plugins if plugin.name not in disabled]
+    filtered_registrations: list[PluginRegistration] = []
+    for registration in registrations:
+        if (
+            registration.family == family
+            and registration.status == "loaded"
+            and registration.name in disabled
+        ):
+            filtered_registrations.append(
+                PluginRegistration(
+                    family=registration.family,
+                    name=registration.name,
+                    provider=registration.provider,
+                    source=registration.source,
+                    status="skipped",
+                    version=registration.version,
+                    entry_point=registration.entry_point,
+                    detail="plugin is disabled by configuration",
+                    origin=registration.origin,
+                )
+            )
+            continue
+        filtered_registrations.append(registration)
+    return filtered_plugins, filtered_registrations
 
 
 def _apply_disabled_analyzer_config(
@@ -939,6 +1207,84 @@ def plugin_registrations() -> list[PluginRegistration]:
     backend_plugins, backend_registrations = _plugin_snapshot("backend")
     del analyzer_plugins, backend_plugins
     return analyzer_registrations + backend_registrations
+
+
+def validate_plugin_configuration() -> list[PluginConfigWarning]:
+    """
+    Validate configured plugin tables against discovered plugin contracts.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    list[codira.registry.PluginConfigWarning]
+        Non-fatal warnings for configuration tables that cannot be applied
+        because the plugin is unavailable or does not expose configuration
+        support.
+
+    Raises
+    ------
+    ConfigError
+        If a loaded plugin schema rejects its table or the active backend is
+        disabled by configuration.
+    """
+
+    warnings: list[PluginConfigWarning] = []
+    configured_tables = _configured_plugin_tables()
+    analyzer_plugins, analyzer_registrations = _plugin_snapshot("analyzer")
+    backend_plugins, backend_registrations = _plugin_snapshot("backend")
+    all_plugins = {
+        plugin_config_key(family=plugin.family, name=plugin.name): plugin
+        for plugin in [*analyzer_plugins, *backend_plugins]
+    }
+    loaded_before_enabled = {
+        plugin_config_key(family=registration.family, name=registration.name)
+        for registration in [*analyzer_registrations, *backend_registrations]
+        if registration.status in {"loaded", "skipped"}
+    }
+
+    for key in sorted(configured_tables):
+        plugin = all_plugins.get(key)
+        if plugin is None:
+            if key in loaded_before_enabled:
+                continue
+            warnings.append(
+                PluginConfigWarning(
+                    key=key,
+                    reason="configured plugin is not loaded",
+                )
+            )
+            continue
+        instance = plugin.factory()
+        _validate_plugin_config_schema(
+            key=key,
+            instance=instance,
+            config=configured_tables[key],
+        )
+        if not isinstance(instance, ConfigurablePlugin) and len(
+            configured_tables[key]
+        ) > int("enabled" in configured_tables[key]):
+            warnings.append(
+                PluginConfigWarning(
+                    key=key,
+                    reason="configured plugin does not expose configure()",
+                )
+            )
+
+    configured_backend = configured_index_backend_name()
+    backend_config_key = plugin_config_key(family="backend", name=configured_backend)
+    if backend_config_key in configured_tables and not plugin_enabled(
+        configured_tables[backend_config_key]
+    ):
+        msg = (
+            f"Configured backend '{configured_backend}' is disabled by "
+            f"plugins.{backend_config_key}."
+        )
+        raise ConfigError(msg)
+
+    return warnings
 
 
 def missing_language_analyzer_hint(path: Path) -> str | None:
@@ -1104,19 +1450,24 @@ def active_index_backend() -> IndexBackend:
         )
         raise ValueError(msg)
 
-    return factory()
+    instance = factory()
+    plugin = next(item for item in plugins if item.name == configured_name)
+    return cast(
+        "IndexBackend",
+        _configure_plugin_instance(plugin=plugin, instance=instance),
+    )
 
 
 def _instantiate_language_analyzers(
-    analyzer_factories: Sequence[Callable[[], LanguageAnalyzer]],
+    analyzer_plugins: Sequence[_LoadedPlugin],
 ) -> list[LanguageAnalyzer]:
     """
     Instantiate registered analyzers in deterministic routing order.
 
     Parameters
     ----------
-    analyzer_factories : collections.abc.Sequence[Callable[[], LanguageAnalyzer]]
-        Analyzer factories in deterministic routing order.
+    analyzer_plugins : collections.abc.Sequence[codira.registry._LoadedPlugin]
+        Analyzer plugins in deterministic routing order.
 
     Returns
     -------
@@ -1128,7 +1479,13 @@ def _instantiate_language_analyzers(
     ValueError
         If no analyzers are registered.
     """
-    analyzers = [factory() for factory in analyzer_factories]
+    analyzers = [
+        cast(
+            "LanguageAnalyzer",
+            _configure_plugin_instance(plugin=plugin, instance=plugin.factory()),
+        )
+        for plugin in analyzer_plugins
+    ]
     if analyzers:
         return analyzers
 
@@ -1150,7 +1507,4 @@ def active_language_analyzers() -> list[LanguageAnalyzer]:
         Active analyzers in deterministic first-match routing order.
     """
     plugins, _registrations = _plugin_snapshot("analyzer")
-    factories = [
-        cast("Callable[[], LanguageAnalyzer]", plugin.factory) for plugin in plugins
-    ]
-    return _instantiate_language_analyzers(factories)
+    return _instantiate_language_analyzers(plugins)

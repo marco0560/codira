@@ -35,6 +35,12 @@ DEFAULT_EMBEDDING_DEVICE = "cpu"
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
 DEFAULT_EMBEDDING_GPU_DEVICE_ID = 0
 DEFAULT_EMBEDDING_GPU_MEMORY_LIMIT_MB = 0
+_PLUGIN_CONFIG_RESERVED_KEYS = frozenset(
+    {
+        "disable_third_party",
+        "disabled_analyzers",
+    }
+)
 LevelName = Literal["system", "user", "repo", "effective"]
 ProfileName = Literal["default", "low-memory", "gpu"]
 
@@ -75,10 +81,14 @@ class PluginsConfig:
         Whether third-party entry-point plugins should be skipped.
     disabled_analyzers : tuple[str, ...]
         Analyzer names to remove from the active analyzer set.
+    configs : dict[str, dict[str, object]]
+        Plugin-specific configuration tables keyed by namespaced plugin key,
+        such as ``"analyzer-python"`` or ``"backend-sqlite"``.
     """
 
     disable_third_party: bool = False
     disabled_analyzers: tuple[str, ...] = ()
+    configs: dict[str, dict[str, object]] | None = None
 
 
 @dataclass(frozen=True)
@@ -422,6 +432,11 @@ def _validate_known_keys(
 
     for key, item in value.items():
         dotted = key if not prefix else f"{prefix}.{key}"
+        if prefix == "plugins" and key not in _PLUGIN_CONFIG_RESERVED_KEYS:
+            if not isinstance(item, Mapping):
+                msg = f"Configuration key {dotted} must be a table."
+                raise ConfigError(msg)
+            continue
         if key not in schema:
             msg = f"Unknown configuration key: {dotted}"
             raise ConfigError(msg)
@@ -530,6 +545,9 @@ def _validate_schema_types(
     """
 
     for key, item in value.items():
+        if prefix == "plugins" and key not in _PLUGIN_CONFIG_RESERVED_KEYS:
+            _require_table(item, key=f"{prefix}.{key}")
+            continue
         expected = schema[key]
         dotted = key if not prefix else f"{prefix}.{key}"
         if isinstance(expected, Mapping):
@@ -579,6 +597,53 @@ def _validate_int_minimums(
             raise ConfigError(msg)
 
 
+def _validate_plugin_semantics(plugins: Mapping[str, object]) -> None:
+    """
+    Validate semantic constraints for plugin configuration tables.
+
+    Parameters
+    ----------
+    plugins : collections.abc.Mapping[str, object]
+        Plugin configuration section.
+
+    Returns
+    -------
+    None
+        The plugin configuration is accepted when no exception is raised.
+
+    Raises
+    ------
+    ConfigError
+        If a plugin table name or common enabled flag is invalid.
+    """
+
+    disabled = plugins.get("disabled_analyzers")
+    if isinstance(disabled, list):
+        for item in disabled:
+            if not isinstance(item, str) or not item.strip():
+                msg = (
+                    "Configuration key plugins.disabled_analyzers must "
+                    "contain non-empty strings."
+                )
+                raise ConfigError(msg)
+    for key, item in plugins.items():
+        if key in _PLUGIN_CONFIG_RESERVED_KEYS:
+            continue
+        if not key.startswith(("analyzer-", "backend-")):
+            msg = (
+                "Plugin configuration tables must be named "
+                f"plugins.analyzer-* or plugins.backend-*: plugins.{key}"
+            )
+            raise ConfigError(msg)
+        if not isinstance(item, Mapping):
+            msg = f"Configuration key plugins.{key} must be a table."
+            raise ConfigError(msg)
+        enabled = item.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            msg = f"Configuration key plugins.{key}.enabled must be bool."
+            raise ConfigError(msg)
+
+
 def _validate_semantics(value: Mapping[str, object]) -> None:
     """
     Validate semantic constraints after type validation.
@@ -613,15 +678,7 @@ def _validate_semantics(value: Mapping[str, object]) -> None:
 
     plugins = value.get("plugins")
     if isinstance(plugins, Mapping):
-        disabled = plugins.get("disabled_analyzers")
-        if isinstance(disabled, list):
-            for item in disabled:
-                if not isinstance(item, str) or not item.strip():
-                    msg = (
-                        "Configuration key plugins.disabled_analyzers must "
-                        "contain non-empty strings."
-                    )
-                    raise ConfigError(msg)
+        _validate_plugin_semantics(plugins)
 
     embeddings = value.get("embeddings")
     if isinstance(embeddings, Mapping):
@@ -1209,13 +1266,17 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
         Config mapping without origin metadata.
     """
 
+    plugin_mapping: dict[str, object] = {
+        "disable_third_party": config.plugins.disable_third_party,
+        "disabled_analyzers": list(config.plugins.disabled_analyzers),
+    }
+    for key, item in sorted((config.plugins.configs or {}).items()):
+        plugin_mapping[key] = _deep_copy_mapping(item)
+
     return {
         "config_version": config.config_version,
         "backend": {"name": config.backend.name},
-        "plugins": {
-            "disable_third_party": config.plugins.disable_third_party,
-            "disabled_analyzers": list(config.plugins.disabled_analyzers),
-        },
+        "plugins": plugin_mapping,
         "embeddings": {
             "enabled": config.embeddings.enabled,
             "model": config.embeddings.model,
@@ -1292,6 +1353,13 @@ def _config_from_mapping(
 
     backend = cast("Mapping[str, object]", value["backend"])
     plugins = cast("Mapping[str, object]", value["plugins"])
+    plugin_configs: dict[str, dict[str, object]] = {}
+    for key, item in plugins.items():
+        if key in _PLUGIN_CONFIG_RESERVED_KEYS:
+            continue
+        plugin_configs[key] = _deep_copy_mapping(
+            _require_table(item, key=f"plugins.{key}")
+        )
     embeddings = cast("Mapping[str, object]", value["embeddings"])
     gpu = cast("Mapping[str, object]", embeddings["gpu"])
     return CodiraConfig(
@@ -1303,6 +1371,7 @@ def _config_from_mapping(
                 str(item).strip()
                 for item in cast("list[object]", plugins["disabled_analyzers"])
             ),
+            configs=plugin_configs,
         ),
         embeddings=EmbeddingsConfig(
             enabled=cast("bool", embeddings["enabled"]),

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -41,6 +41,7 @@ from codira.semantic import embeddings as embeddings_module
 from codira.semantic.search import embedding_candidates
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
 
@@ -143,6 +144,73 @@ def test_config_validation_rejects_unknown_keys() -> None:
 
     with pytest.raises(ConfigError, match="Unknown configuration key"):
         validate_config_mapping({"embeddings": {"unknown": True}})
+
+
+def test_config_validation_accepts_namespaced_plugin_tables(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Accept dynamic plugin configuration tables under the plugins section.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths.
+    tmp_path : pathlib.Path
+        Temporary config directory.
+
+    Returns
+    -------
+    None
+        The test asserts plugin-specific tables are preserved.
+    """
+
+    user_dir, _system_dir = _isolate_config_paths(monkeypatch, tmp_path)
+    user_path = user_dir / "config.toml"
+    user_path.parent.mkdir(parents=True)
+    user_path.write_text(
+        """
+[plugins.analyzer-python]
+enabled = true
+include_paths = ["src"]
+
+[plugins.backend-sqlite]
+enabled = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_effective_config(
+        env={},
+        root=None,
+    )
+    mapping = config_to_mapping(config)
+    plugins = cast("Mapping[str, object]", mapping["plugins"])
+
+    assert plugins["analyzer-python"] == {
+        "enabled": True,
+        "include_paths": ["src"],
+    }
+    assert plugins["backend-sqlite"] == {"enabled": True}
+
+
+def test_config_validation_rejects_invalid_plugin_table_names() -> None:
+    """
+    Reject plugin tables without analyzer or backend namespace prefixes.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts invalid table names fail deterministically.
+    """
+
+    with pytest.raises(ConfigError, match="Plugin configuration tables"):
+        validate_config_mapping({"plugins": {"python": {"enabled": True}}})
 
 
 def test_profile_rendering_includes_gpu_profile_values() -> None:

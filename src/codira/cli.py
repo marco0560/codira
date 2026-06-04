@@ -89,6 +89,7 @@ from codira.registry import (
     active_language_analyzers,
     configured_index_backend_name,
     plugin_registrations,
+    validate_plugin_configuration,
 )
 from codira.scanner import iter_project_files
 from codira.schema import SCHEMA_VERSION
@@ -544,17 +545,25 @@ def _current_analyzer_inventory() -> list[tuple[str, str, str]]:
         Active analyzer rows as ``(name, version, discovery_globs_json)``
         ordered by analyzer name.
     """
-    return [
-        (
-            str(analyzer.name),
-            str(analyzer.version),
-            json.dumps(tuple(analyzer.discovery_globs)),
+    rows: list[tuple[str, str, str]] = []
+    for analyzer in sorted(
+        active_language_analyzers(),
+        key=lambda item: str(item.name),
+    ):
+        config_fingerprint = getattr(analyzer, "configuration_fingerprint", "")
+        discovery_payload: dict[str, object] = {
+            "discovery_globs": tuple(analyzer.discovery_globs),
+        }
+        if config_fingerprint:
+            discovery_payload["configuration_fingerprint"] = str(config_fingerprint)
+        rows.append(
+            (
+                str(analyzer.name),
+                str(analyzer.version),
+                json.dumps(discovery_payload, sort_keys=True),
+            )
         )
-        for analyzer in sorted(
-            active_language_analyzers(),
-            key=lambda item: str(item.name),
-        )
-    ]
+    return rows
 
 
 def _loaded_plugin_registrations() -> list[tuple[str, str, str, str]]:
@@ -4301,10 +4310,15 @@ def _run_config_validate(args: argparse.Namespace, root: Path) -> int:
     """
 
     level = cast("LevelName", args.level)
+    warnings: list[dict[str, object]] = []
     if level == "effective":
         config = load_effective_config(root=root)
         validate_config_mapping(config_to_mapping(config))
         _validate_config_runtime_plugins(config.backend.name)
+        warnings = [
+            {"key": warning.key, "reason": warning.reason}
+            for warning in validate_plugin_configuration()
+        ]
         path: str | None = None
     else:
         path_obj = config_path(level, root=root)
@@ -4316,13 +4330,16 @@ def _run_config_validate(args: argparse.Namespace, root: Path) -> int:
             {
                 "schema_version": QUERY_JSON_SCHEMA_VERSION,
                 "command": "config validate",
-                "status": "ok",
+                "status": "ok_with_warnings" if warnings else "ok",
                 "level": level,
                 "path": path,
+                "warnings": warnings,
             }
         )
         return 0
     print(f"Config valid: {level}" if path is None else f"Config valid: {path}")
+    for warning in warnings:
+        print(f"Warning: plugins.{warning['key']}: {warning['reason']}")
     return 0
 
 
