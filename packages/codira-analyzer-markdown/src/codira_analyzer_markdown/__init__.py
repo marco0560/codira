@@ -29,8 +29,17 @@ from codira.models import (
     DocumentationArtifact,
     ModuleArtifact,
 )
+from codira.plugin_config import (
+    AnalyzerPathFilters,
+    analyzer_json_schema,
+    analyzer_path_allowed,
+    analyzer_path_filters_from_config,
+    boolean_property,
+    plugin_configuration_fingerprint,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     from codira.contracts import LanguageAnalyzer
@@ -251,7 +260,13 @@ def _section_text(lines: list[str], start_index: int, end_index: int) -> str:
 
 
 def _documentation_artifacts(
-    path: Path, root: Path
+    path: Path,
+    root: Path,
+    *,
+    strip_front_matter: bool = True,
+    emit_file_artifact_without_headings: bool = True,
+    min_heading_level: int = 1,
+    max_heading_level: int = 6,
 ) -> tuple[DocumentationArtifact, ...]:
     """
     Build documentation artifacts for one Markdown file.
@@ -262,6 +277,14 @@ def _documentation_artifacts(
         Markdown source file.
     root : pathlib.Path
         Repository root used for relative identity derivation.
+    strip_front_matter : bool, optional
+        Whether YAML front matter should be removed before section extraction.
+    emit_file_artifact_without_headings : bool, optional
+        Whether heading-less Markdown files should emit a file artifact.
+    min_heading_level : int, optional
+        Lowest accepted Markdown heading level.
+    max_heading_level : int, optional
+        Highest accepted Markdown heading level.
 
     Returns
     -------
@@ -270,11 +293,20 @@ def _documentation_artifacts(
         no headings but contains non-empty text.
     """
     original_lines = path.read_text(encoding="utf-8").splitlines()
-    lines, line_offset = _strip_front_matter(original_lines)
-    headings = _markdown_headings(lines, line_offset=line_offset)
+    if strip_front_matter:
+        lines, line_offset = _strip_front_matter(original_lines)
+    else:
+        lines, line_offset = original_lines, 1
+    headings = tuple(
+        heading
+        for heading in _markdown_headings(lines, line_offset=line_offset)
+        if min_heading_level <= heading.level <= max_heading_level
+    )
     relative_path = path.relative_to(root).as_posix()
 
     if not headings:
+        if not emit_file_artifact_without_headings:
+            return ()
         text = "\n".join(lines).strip()
         if not text:
             return ()
@@ -338,6 +370,72 @@ class MarkdownAnalyzer:
     version = "1"
     discovery_globs: tuple[str, ...] = ("*.md",)
 
+    def __init__(self) -> None:
+        self._path_filters = AnalyzerPathFilters()
+        self._strip_front_matter = True
+        self._emit_file_artifact_without_headings = True
+        self._min_heading_level = 1
+        self._max_heading_level = 6
+        self.configuration_fingerprint = plugin_configuration_fingerprint({})
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the Markdown analyzer configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for Markdown analyzer options.
+        """
+
+        heading_level_property = {"type": "integer", "minimum": 1, "maximum": 6}
+        return analyzer_json_schema(
+            {
+                "strip_front_matter": boolean_property(True),
+                "emit_file_artifact_without_headings": boolean_property(True),
+                "min_heading_level": {**heading_level_property, "default": 1},
+                "max_heading_level": {**heading_level_property, "default": 6},
+            }
+        )
+
+    def configure(self, config: Mapping[str, object]) -> None:
+        """
+        Apply Markdown analyzer configuration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Namespaced analyzer configuration table.
+
+        Returns
+        -------
+        None
+            Analyzer options are stored on this instance.
+        """
+
+        self._path_filters = analyzer_path_filters_from_config(config)
+        self._strip_front_matter = bool(config.get("strip_front_matter", True))
+        self._emit_file_artifact_without_headings = bool(
+            config.get("emit_file_artifact_without_headings", True)
+        )
+        min_heading_level = config.get("min_heading_level", 1)
+        max_heading_level = config.get("max_heading_level", 6)
+        if not isinstance(min_heading_level, int) or not isinstance(
+            max_heading_level, int
+        ):
+            msg = "min_heading_level and max_heading_level must be integers."
+            raise TypeError(msg)
+        self._min_heading_level = min_heading_level
+        self._max_heading_level = max_heading_level
+        if self._min_heading_level > self._max_heading_level:
+            msg = "min_heading_level must be <= max_heading_level."
+            raise ValueError(msg)
+        self.configuration_fingerprint = plugin_configuration_fingerprint(config)
+
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
         """
         Return Markdown analyzer ontology coverage.
@@ -387,6 +485,25 @@ class MarkdownAnalyzer:
         """
         return path.suffix.lower() == ".md"
 
+    def allows_path(self, path: Path, root: Path) -> bool:
+        """
+        Decide whether configured path filters allow a supported Markdown path.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Candidate repository file.
+        root : pathlib.Path
+            Repository root used for relative path evaluation.
+
+        Returns
+        -------
+        bool
+            ``True`` when the path is allowed by include/exclude filters.
+        """
+
+        return analyzer_path_allowed(path=path, root=root, filters=self._path_filters)
+
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
         """
         Analyze one Markdown file into documentation artifacts.
@@ -416,7 +533,16 @@ class MarkdownAnalyzer:
             functions=(),
             declarations=(),
             imports=(),
-            documentation=_documentation_artifacts(path, root),
+            documentation=_documentation_artifacts(
+                path,
+                root,
+                strip_front_matter=self._strip_front_matter,
+                emit_file_artifact_without_headings=(
+                    self._emit_file_artifact_without_headings
+                ),
+                min_heading_level=self._min_heading_level,
+                max_heading_level=self._max_heading_level,
+            ),
             index_symbols=False,
         )
 

@@ -65,6 +65,28 @@ def test_sqlite_backend_package_builds_expected_backend() -> None:
     assert backend.name == "sqlite"
 
 
+def test_sqlite_backend_exposes_configuration_schema() -> None:
+    """
+    Expose a strict first-party backend configuration schema.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts SQLite currently accepts only common plugin options.
+    """
+
+    schema = SQLiteIndexBackend().configuration_json_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+
+    assert schema["additionalProperties"] is False
+    assert sorted(properties) == ["enabled"]
+
+
 def test_sqlite_backend_open_connection_enables_foreign_keys(
     tmp_path: Path,
 ) -> None:

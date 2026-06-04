@@ -53,8 +53,10 @@ from .duckdb_query_backend import (
 )
 from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendSpec, get_embedding_backend
+from codira.plugin_config import plugin_json_schema
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from collections.abc import Sequence
     from pathlib import Path
 
@@ -1552,6 +1554,39 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
 
     name = "duckdb"
     version = SCHEMA_VERSION
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the DuckDB backend configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for DuckDB backend options.
+        """
+
+        return plugin_json_schema({})
+
+    def configure(self, config: Mapping[str, object]) -> None:
+        """
+        Apply DuckDB backend configuration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Namespaced backend configuration table.
+
+        Returns
+        -------
+        None
+            DuckDB currently has no backend-specific settings.
+        """
+
+        del config
 
     def begin_index_session(self, root: Path) -> IndexWriteSession:
         """

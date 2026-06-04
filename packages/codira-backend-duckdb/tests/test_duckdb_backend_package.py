@@ -466,6 +466,28 @@ def test_duckdb_backend_package_builds_expected_backend() -> None:
     assert backend.name == "duckdb"
 
 
+def test_duckdb_backend_exposes_configuration_schema() -> None:
+    """
+    Expose a strict first-party backend configuration schema.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB currently accepts only common plugin options.
+    """
+
+    schema = DuckDBIndexBackend().configuration_json_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+
+    assert schema["additionalProperties"] is False
+    assert sorted(properties) == ["enabled"]
+
+
 def test_duckdb_schema_ddl_declares_sequences_and_defaults() -> None:
     """
     Keep the DuckDB schema bootstrap aligned to sequence-backed identifiers.

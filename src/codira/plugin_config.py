@@ -14,6 +14,8 @@ by plugin packages but does not discover or instantiate plugins.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -62,6 +64,25 @@ def plugin_enabled(config: Mapping[str, object]) -> bool:
     if isinstance(enabled, bool):
         return enabled
     return True
+
+
+def plugin_configuration_fingerprint(config: Mapping[str, object]) -> str:
+    """
+    Return a stable fingerprint for one plugin configuration table.
+
+    Parameters
+    ----------
+    config : collections.abc.Mapping[str, object]
+        Plugin configuration table.
+
+    Returns
+    -------
+    str
+        Short deterministic SHA-256 fingerprint.
+    """
+
+    payload = json.dumps(dict(config), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def plugin_base_schema() -> dict[str, object]:

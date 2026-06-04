@@ -26,7 +26,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
     from pathlib import Path
 
     from codira.contracts import LanguageAnalyzer
@@ -48,6 +48,14 @@ from codira.models import (
     ImportArtifact,
     ImportKind,
     ModuleArtifact,
+)
+from codira.plugin_config import (
+    AnalyzerPathFilters,
+    analyzer_json_schema,
+    analyzer_path_allowed,
+    analyzer_path_filters_from_config,
+    boolean_property,
+    plugin_configuration_fingerprint,
 )
 
 _CPP_SUFFIXES = {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".ipp"}
@@ -2677,6 +2685,63 @@ class CppAnalyzer:
         "*.ipp",
     )
 
+    def __init__(self) -> None:
+        self._path_filters = AnalyzerPathFilters()
+        self._use_leading_comments = True
+        self._emit_doxygen_documentation = True
+        self._include_system_includes = True
+        self._emit_namespaces = True
+        self.configuration_fingerprint = plugin_configuration_fingerprint({})
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the C++ analyzer configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for C++ analyzer options.
+        """
+
+        return analyzer_json_schema(
+            {
+                "use_leading_comments": boolean_property(True),
+                "emit_doxygen_documentation": boolean_property(True),
+                "include_system_includes": boolean_property(True),
+                "emit_namespaces": boolean_property(True),
+            }
+        )
+
+    def configure(self, config: Mapping[str, object]) -> None:
+        """
+        Apply C++ analyzer configuration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Namespaced analyzer configuration table.
+
+        Returns
+        -------
+        None
+            Analyzer options are stored on this instance.
+        """
+
+        self._path_filters = analyzer_path_filters_from_config(config)
+        self._use_leading_comments = bool(config.get("use_leading_comments", True))
+        self._emit_doxygen_documentation = bool(
+            config.get("emit_doxygen_documentation", True)
+        )
+        self._include_system_includes = bool(
+            config.get("include_system_includes", True)
+        )
+        self._emit_namespaces = bool(config.get("emit_namespaces", True))
+        self.configuration_fingerprint = plugin_configuration_fingerprint(config)
+
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
         """
         Return C++ analyzer ontology coverage.
@@ -2737,6 +2802,25 @@ class CppAnalyzer:
         """
         return path.suffix in _CPP_SUFFIXES
 
+    def allows_path(self, path: Path, root: Path) -> bool:
+        """
+        Decide whether configured path filters allow a supported C++ path.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Candidate repository file.
+        root : pathlib.Path
+            Repository root used for relative path evaluation.
+
+        Returns
+        -------
+        bool
+            ``True`` when the path is allowed by include/exclude filters.
+        """
+
+        return analyzer_path_allowed(path=path, root=root, filters=self._path_filters)
+
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
         """
         Analyze one C++ source file into normalized artifacts.
@@ -2755,7 +2839,11 @@ class CppAnalyzer:
         """
         source = path.read_bytes()
         root_node = _new_parser().parse(source).root_node
-        module_comment = _leading_module_comment(root_node, source)
+        module_comment = (
+            _leading_module_comment(root_node, source)
+            if self._use_leading_comments
+            else None
+        )
         module_doxygen = _leading_module_doxygen(root_node, source)
         module_name = _module_name_for_path(path, root)
         module_stable_id = _module_stable_id(path, root)
@@ -2773,13 +2861,46 @@ class CppAnalyzer:
             module_stable_id=module_stable_id,
             module_docstring=module_comment,
         )
+        if not self._use_leading_comments:
+            result = replace(
+                result,
+                module=replace(result.module, docstring=None, has_docstring=0),
+                classes=tuple(replace(cls, docstring=None) for cls in result.classes),
+                functions=tuple(
+                    replace(function, docstring=None) for function in result.functions
+                ),
+                declarations=tuple(
+                    replace(declaration, docstring=None)
+                    for declaration in result.declarations
+                ),
+            )
+        if not self._include_system_includes:
+            result = replace(
+                result,
+                imports=tuple(
+                    item for item in result.imports if item.kind != "include_system"
+                ),
+            )
+        if not self._emit_namespaces:
+            result = replace(
+                result,
+                declarations=tuple(
+                    declaration
+                    for declaration in result.declarations
+                    if declaration.kind != "namespace"
+                ),
+            )
         return replace(
             result,
-            documentation=_documentation_artifacts(
-                path=path,
-                analysis=result,
-                module_doxygen=module_doxygen,
-                doxygen_by_lineno=builder.doxygen_by_lineno,
+            documentation=(
+                _documentation_artifacts(
+                    path=path,
+                    analysis=result,
+                    module_doxygen=module_doxygen,
+                    doxygen_by_lineno=builder.doxygen_by_lineno,
+                )
+                if self._emit_doxygen_documentation
+                else ()
             ),
         )
 

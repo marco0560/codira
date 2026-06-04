@@ -51,6 +51,47 @@ def test_text_package_builds_expected_analyzer() -> None:
     assert analyzer.name == "text"
 
 
+def test_text_analyzer_applies_configuration_options(tmp_path: Path) -> None:
+    """
+    Apply text analyzer path-policy and include/exclude options.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts configured policy controls accepted text paths.
+    """
+
+    readme = tmp_path / "README.txt"
+    readme.write_text("Repository overview.\n", encoding="utf-8")
+    generated = tmp_path / "docs" / "generated" / "api.txt"
+    generated.parent.mkdir(parents=True)
+    generated.write_text("Generated API.\n", encoding="utf-8")
+
+    analyzer = TextAnalyzer()
+    schema = analyzer.configuration_json_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    analyzer.configure(
+        {
+            "include_paths": ["docs"],
+            "include_root_files": False,
+            "include_docs_directories": True,
+            "exclude_generated": False,
+            "exclude_fixtures_logs": True,
+        }
+    )
+
+    assert "exclude_generated" in properties
+    assert analyzer.allows_path(readme, tmp_path) is False
+    assert analyzer.allows_path(generated, tmp_path) is True
+    assert len(analyzer.analyze_file(generated, tmp_path).documentation) == 1
+
+
 def test_text_analyzer_accepts_documentation_scoped_txt(tmp_path: Path) -> None:
     """
     Emit plain-text documentation artifacts only for accepted paths.

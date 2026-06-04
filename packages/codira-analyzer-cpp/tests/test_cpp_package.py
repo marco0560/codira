@@ -50,6 +50,53 @@ def test_cpp_package_builds_expected_analyzer() -> None:
     assert analyzer.name == "cpp"
 
 
+def test_cpp_analyzer_applies_configuration_options(tmp_path: Path) -> None:
+    """
+    Apply C++ analyzer documentation, import, and namespace toggles.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts configured options prune optional C++ artifacts.
+    """
+
+    source = tmp_path / "src" / "sample.cpp"
+    source.parent.mkdir()
+    source.write_text(
+        "#include <vector>\n"
+        "/** Module docs. */\n"
+        "namespace demo { int run() { return 1; } }\n",
+        encoding="utf-8",
+    )
+
+    analyzer = CppAnalyzer()
+    schema = analyzer.configuration_json_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    analyzer.configure(
+        {
+            "include_paths": ["src"],
+            "use_leading_comments": False,
+            "emit_doxygen_documentation": False,
+            "include_system_includes": False,
+            "emit_namespaces": False,
+        }
+    )
+    analysis = analyzer.analyze_file(source, tmp_path)
+
+    assert "emit_namespaces" in properties
+    assert analyzer.allows_path(source, tmp_path) is True
+    assert analysis.module.docstring is None
+    assert analysis.imports == ()
+    assert analysis.documentation == ()
+    assert all(declaration.kind != "namespace" for declaration in analysis.declarations)
+
+
 def test_cpp_analyzer_emits_doxygen_documentation_only(tmp_path: Path) -> None:
     """
     Keep C++ documentation artifacts scoped to explicit Doxygen comments.

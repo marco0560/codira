@@ -29,7 +29,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from pathlib import Path
 
     from codira.contracts import LanguageAnalyzer
@@ -43,6 +43,14 @@ if TYPE_CHECKING:
     )
 
 from codira.contracts import AnalyzerCapabilityDeclaration
+from codira.plugin_config import (
+    AnalyzerPathFilters,
+    analyzer_json_schema,
+    analyzer_path_allowed,
+    analyzer_path_filters_from_config,
+    boolean_property,
+    plugin_configuration_fingerprint,
+)
 from codira.models import DocumentationArtifact
 from codira.normalization import analysis_result_from_parsed
 from codira.parser_ast import parse_source
@@ -890,6 +898,61 @@ class PythonAnalyzer:
     version = "6"
     discovery_globs: tuple[str, ...] = ("*.py",)
 
+    def __init__(self) -> None:
+        self._path_filters = AnalyzerPathFilters()
+        self._emit_module_documentation = True
+        self._emit_imports = True
+        self._emit_constants = True
+        self._emit_type_aliases = True
+        self.configuration_fingerprint = plugin_configuration_fingerprint({})
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the Python analyzer configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for Python analyzer options.
+        """
+
+        return analyzer_json_schema(
+            {
+                "emit_module_documentation": boolean_property(True),
+                "emit_imports": boolean_property(True),
+                "emit_constants": boolean_property(True),
+                "emit_type_aliases": boolean_property(True),
+            }
+        )
+
+    def configure(self, config: Mapping[str, object]) -> None:
+        """
+        Apply Python analyzer configuration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Namespaced analyzer configuration table.
+
+        Returns
+        -------
+        None
+            Analyzer options are stored on this instance.
+        """
+
+        self._path_filters = analyzer_path_filters_from_config(config)
+        self._emit_module_documentation = bool(
+            config.get("emit_module_documentation", True)
+        )
+        self._emit_imports = bool(config.get("emit_imports", True))
+        self._emit_constants = bool(config.get("emit_constants", True))
+        self._emit_type_aliases = bool(config.get("emit_type_aliases", True))
+        self.configuration_fingerprint = plugin_configuration_fingerprint(config)
+
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
         """
         Return Python analyzer ontology coverage.
@@ -945,6 +1008,25 @@ class PythonAnalyzer:
         """
         return path.suffix == ".py"
 
+    def allows_path(self, path: Path, root: Path) -> bool:
+        """
+        Decide whether configured path filters allow a supported Python path.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Candidate repository file.
+        root : pathlib.Path
+            Repository root used for relative path evaluation.
+
+        Returns
+        -------
+        bool
+            ``True`` when the path is allowed by include/exclude filters.
+        """
+
+        return analyzer_path_allowed(path=path, root=root, filters=self._path_filters)
+
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
         """
         Analyze one Python source file into normalized artifacts.
@@ -966,13 +1048,26 @@ class PythonAnalyzer:
         analysis = _disambiguate_shadowed_module_file(analysis, path=path, root=root)
         analysis = _classify_python_relation_targets(analysis)
         analysis = _disambiguate_analysis_stable_ids(analysis)
-        return replace(
-            analysis,
-            documentation=_module_documentation_artifacts(
+        declarations = tuple(
+            declaration
+            for declaration in analysis.declarations
+            if (self._emit_constants or declaration.kind != "constant")
+            and (self._emit_type_aliases or declaration.kind != "type_alias")
+        )
+        documentation = (
+            _module_documentation_artifacts(
                 analysis,
                 path=path,
                 source=source,
-            ),
+            )
+            if self._emit_module_documentation
+            else ()
+        )
+        return replace(
+            analysis,
+            declarations=declarations,
+            imports=analysis.imports if self._emit_imports else (),
+            documentation=documentation,
         )
 
 

@@ -48,3 +48,34 @@ def test_bash_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, BashAnalyzer)
     assert analyzer.name == "bash"
+
+
+def test_bash_analyzer_applies_configuration_options(tmp_path: Path) -> None:
+    """
+    Apply Bash analyzer path filters and function emission toggle.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts configured options affect shell analysis.
+    """
+
+    source = tmp_path / "scripts" / "tool.sh"
+    source.parent.mkdir()
+    source.write_text("run() { echo ok; }\n", encoding="utf-8")
+
+    analyzer = BashAnalyzer()
+    schema = analyzer.configuration_json_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    analyzer.configure({"include_paths": ["scripts"], "emit_functions": False})
+    result = analyzer.analyze_file(source, tmp_path)
+
+    assert "emit_functions" in properties
+    assert analyzer.allows_path(source, tmp_path) is True
+    assert result.functions == ()
