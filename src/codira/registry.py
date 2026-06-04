@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import metadata
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
@@ -32,7 +32,7 @@ from codira.contracts import (
     LanguageAnalyzer,
     PluginConfigurationSchemaProvider,
 )
-from codira.plugin_config import plugin_enabled
+from codira.plugin_config import plugin_configuration_fingerprint, plugin_enabled
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -420,6 +420,10 @@ def _configure_plugin_instance(
     _validate_plugin_config_schema(key=key, instance=instance, config=config)
     if isinstance(instance, ConfigurablePlugin):
         instance.configure(config)
+    if not hasattr(instance, "configuration_fingerprint"):
+        cast(
+            "Any", instance
+        ).configuration_fingerprint = plugin_configuration_fingerprint(config)
     return instance
 
 

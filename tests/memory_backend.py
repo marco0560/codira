@@ -21,7 +21,6 @@ This module belongs to the **backend contract verification layer**.
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import struct
 from dataclasses import dataclass, field
@@ -36,6 +35,7 @@ from codira.contracts import (
     StoredEmbeddingRow,
 )
 from codira.docstring import DocstringValidationRequest, validate_docstring
+from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.prefix import normalize_prefix, path_has_prefix
 from codira.repository_scope import path_has_excluded_tree_name
 
@@ -1583,7 +1583,7 @@ class MemoryIndexBackend:
             (
                 str(analyzer.name),
                 str(analyzer.version),
-                json.dumps(tuple(analyzer.discovery_globs)),
+                analyzer_inventory_discovery_json(analyzer),
             )
             for analyzer in sorted(request.analyzers, key=lambda item: str(item.name))
         ]

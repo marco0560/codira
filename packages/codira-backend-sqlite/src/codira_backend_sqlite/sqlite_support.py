@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, cast
 
 from codira.contracts import PendingEmbeddingRow, StoredEmbeddingRow
 from codira.docstring import DocstringValidationRequest, validate_docstring
+from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.repository_scope import path_has_excluded_tree_name
 from codira.semantic.embeddings import (
     embed_texts as embed_texts,
@@ -2372,7 +2373,7 @@ def _persist_runtime_inventory(
             (
                 str(analyzer.name),
                 str(analyzer.version),
-                json.dumps(tuple(analyzer.discovery_globs)),
+                analyzer_inventory_discovery_json(analyzer),
             ),
         )
 

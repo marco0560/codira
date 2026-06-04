@@ -17,7 +17,6 @@ This module belongs to the **indexing layer** and glues together analyzers, stor
 
 from __future__ import annotations
 
-import json
 import warnings
 from collections import Counter
 from dataclasses import dataclass
@@ -36,6 +35,7 @@ from codira.models import (
     AnalysisResult,
     FileMetadataSnapshot,
 )
+from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.registry import (
     active_index_backend,
     active_language_analyzers,
@@ -525,17 +525,11 @@ def _current_analyzer_inventory_rows(
         analyzers,
         key=lambda item: str(item.name),
     ):
-        config_fingerprint = getattr(analyzer, "configuration_fingerprint", "")
-        discovery_payload: dict[str, object] = {
-            "discovery_globs": tuple(analyzer.discovery_globs),
-        }
-        if config_fingerprint:
-            discovery_payload["configuration_fingerprint"] = str(config_fingerprint)
         rows.append(
             (
                 str(analyzer.name),
                 str(analyzer.version),
-                json.dumps(discovery_payload, sort_keys=True),
+                analyzer_inventory_discovery_json(analyzer),
             )
         )
     return rows

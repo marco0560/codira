@@ -53,7 +53,7 @@ from .duckdb_query_backend import (
 )
 from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendSpec, get_embedding_backend
-from codira.plugin_config import plugin_json_schema
+from codira.plugin_config import analyzer_inventory_discovery_json, plugin_json_schema
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -62,7 +62,7 @@ if TYPE_CHECKING:
 
     from codira.contracts import IndexBackend, IndexWriteSession
 
-PACKAGE_VERSION = "1.42.0"
+PACKAGE_VERSION = "1.43.0"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -1792,7 +1792,7 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                     (
                         str(analyzer.name),
                         str(analyzer.version),
-                        json.dumps(tuple(analyzer.discovery_globs)),
+                        analyzer_inventory_discovery_json(analyzer),
                     ),
                 )
             if owns_connection:

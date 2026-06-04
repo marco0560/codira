@@ -66,6 +66,7 @@ from codira.path_resolution import (
     CODIRA_TARGET_DIR_ENV,
     resolve_runtime_paths,
 )
+from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.prefix import normalize_prefix
 from codira.query.context import ContextRequest, context_for
 from codira.query.exact import (
@@ -550,17 +551,11 @@ def _current_analyzer_inventory() -> list[tuple[str, str, str]]:
         active_language_analyzers(),
         key=lambda item: str(item.name),
     ):
-        config_fingerprint = getattr(analyzer, "configuration_fingerprint", "")
-        discovery_payload: dict[str, object] = {
-            "discovery_globs": tuple(analyzer.discovery_globs),
-        }
-        if config_fingerprint:
-            discovery_payload["configuration_fingerprint"] = str(config_fingerprint)
         rows.append(
             (
                 str(analyzer.name),
                 str(analyzer.version),
-                json.dumps(discovery_payload, sort_keys=True),
+                analyzer_inventory_discovery_json(analyzer),
             )
         )
     return rows

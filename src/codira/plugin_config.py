@@ -18,10 +18,11 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
+
 
 JSON_SCHEMA_DRAFT = "https://json-schema.org/draft/2020-12/schema"
 
@@ -83,6 +84,36 @@ def plugin_configuration_fingerprint(config: Mapping[str, object]) -> str:
 
     payload = json.dumps(dict(config), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def analyzer_inventory_discovery_json(analyzer: object) -> str:
+    """
+    Return persisted analyzer discovery metadata.
+
+    Parameters
+    ----------
+    analyzer : object
+        Analyzer instance exposing discovery globs and optional configuration
+        fingerprint metadata.
+
+    Returns
+    -------
+    str
+        JSON payload stored in analyzer inventory rows.
+    """
+
+    analyzer_obj = cast("Any", analyzer)
+    discovery_payload: dict[str, object] = {
+        "discovery_globs": tuple(analyzer_obj.discovery_globs),
+    }
+    config_fingerprint = (
+        analyzer_obj.configuration_fingerprint
+        if hasattr(analyzer_obj, "configuration_fingerprint")
+        else ""
+    )
+    if config_fingerprint:
+        discovery_payload["configuration_fingerprint"] = str(config_fingerprint)
+    return json.dumps(discovery_payload, sort_keys=True)
 
 
 def plugin_base_schema() -> dict[str, object]:
