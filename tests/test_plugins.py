@@ -597,8 +597,7 @@ def test_disable_third_party_plugins_skips_untrusted_entry_points(
         and record.provider == "demo-analyzer"
         and record.status == "skipped"
         and record.origin == "third_party"
-        and record.detail
-        == "third-party plugins are disabled by CODIRA_DISABLE_THIRD_PARTY_PLUGINS"
+        and record.detail == "third-party plugins are disabled by configuration"
         for record in registrations
     )
     assert any(

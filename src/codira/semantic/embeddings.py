@@ -27,6 +27,15 @@ from functools import lru_cache
 from importlib import import_module
 from typing import TYPE_CHECKING, Protocol, cast
 
+from codira.config import (
+    DEFAULT_EMBEDDING_BATCH_SIZE as CONFIG_DEFAULT_EMBEDDING_BATCH_SIZE,
+    DEFAULT_EMBEDDING_DEVICE,
+    DEFAULT_EMBEDDING_DIMENSION,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EMBEDDING_VERSION,
+    load_effective_config,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -65,10 +74,10 @@ if TYPE_CHECKING:
         def set_verbosity_error(self) -> None: ...
 
 
-EMBEDDING_BACKEND = "sentence-transformers/all-MiniLM-L6-v2"
-EMBEDDING_VERSION = "1"
-EMBEDDING_DIM = 384
-DEFAULT_EMBEDDING_BATCH_SIZE = 32
+EMBEDDING_BACKEND = DEFAULT_EMBEDDING_MODEL
+EMBEDDING_VERSION = DEFAULT_EMBEDDING_VERSION
+EMBEDDING_DIM = DEFAULT_EMBEDDING_DIMENSION
+DEFAULT_EMBEDDING_BATCH_SIZE = CONFIG_DEFAULT_EMBEDDING_BATCH_SIZE
 EMBEDDING_BATCH_SIZE_ENV_VAR = "CODIRA_EMBED_BATCH_SIZE"
 EMBEDDING_DEVICE_ENV_VAR = "CODIRA_EMBED_DEVICE"
 TORCH_NUM_THREADS_ENV_VAR = "CODIRA_TORCH_NUM_THREADS"
@@ -124,11 +133,29 @@ def get_embedding_backend() -> EmbeddingBackendSpec:
     EmbeddingBackendSpec
         Stable backend metadata used by indexing and retrieval.
     """
+    config = load_effective_config().embeddings
     return EmbeddingBackendSpec(
-        name=EMBEDDING_BACKEND,
-        version=EMBEDDING_VERSION,
-        dim=EMBEDDING_DIM,
+        name=config.model,
+        version=config.version,
+        dim=config.dimension,
     )
+
+
+def embeddings_enabled() -> bool:
+    """
+    Return whether embedding computation and retrieval are enabled.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    bool
+        ``True`` when effective configuration enables embeddings.
+    """
+
+    return load_effective_config().embeddings.enabled
 
 
 def _dependency_error(message: str) -> EmbeddingBackendError:
@@ -148,7 +175,7 @@ def _dependency_error(message: str) -> EmbeddingBackendError:
     return EmbeddingBackendError(
         "The semantic embedding backend requires the optional 'semantic' "
         "dependency set and a locally available model artifact for "
-        f"{EMBEDDING_BACKEND}. {message}"
+        f"{get_embedding_backend().name}. {message}"
     )
 
 
@@ -195,48 +222,6 @@ def _configure_embedding_environment(*, offline: bool) -> None:
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
 
-def _environment_int(name: str, *, minimum: int) -> int | None:
-    """
-    Read one positive integer environment variable deterministically.
-
-    Parameters
-    ----------
-    name : str
-        Environment variable name to inspect.
-    minimum : int
-        Lowest accepted integer value.
-
-    Returns
-    -------
-    int | None
-        Parsed integer value, or ``None`` when the variable is unset.
-
-    Raises
-    ------
-    EmbeddingBackendError
-        If the configured value is not a valid integer within range.
-    """
-    raw_value = os.getenv(name)
-    if raw_value is None:
-        return None
-
-    stripped = raw_value.strip()
-    if not stripped:
-        return None
-
-    try:
-        parsed = int(stripped)
-    except ValueError as exc:
-        msg = f"{name} must be an integer greater than or equal to {minimum}."
-        raise EmbeddingBackendError(msg) from exc
-
-    if parsed < minimum:
-        msg = f"{name} must be an integer greater than or equal to {minimum}."
-        raise EmbeddingBackendError(msg)
-
-    return parsed
-
-
 def _configured_embedding_batch_size() -> int:
     """
     Return the configured batch size for embedding generation.
@@ -250,10 +235,7 @@ def _configured_embedding_batch_size() -> int:
     int
         Batch size used for sentence-transformers encode calls.
     """
-    configured = _environment_int(EMBEDDING_BATCH_SIZE_ENV_VAR, minimum=1)
-    if configured is None:
-        return DEFAULT_EMBEDDING_BATCH_SIZE
-    return configured
+    return load_effective_config().embeddings.batch_size
 
 
 def _configured_embedding_device() -> str:
@@ -269,10 +251,10 @@ def _configured_embedding_device() -> str:
     str
         Device string passed to the model loader.
     """
-    configured = os.getenv(EMBEDDING_DEVICE_ENV_VAR, "").strip()
+    configured = load_effective_config().embeddings.device.strip()
     if configured:
         return configured
-    return "cpu"
+    return DEFAULT_EMBEDDING_DEVICE
 
 
 def _configure_torch_runtime() -> None:
@@ -298,11 +280,9 @@ def _configure_torch_runtime() -> None:
     except ImportError:
         return
 
-    num_threads = _environment_int(TORCH_NUM_THREADS_ENV_VAR, minimum=1)
-    num_interop_threads = _environment_int(
-        TORCH_NUM_INTEROP_THREADS_ENV_VAR,
-        minimum=1,
-    )
+    config = load_effective_config().embeddings
+    num_threads = config.torch_num_threads or None
+    num_interop_threads = config.torch_num_interop_threads or None
 
     try:
         if num_threads is not None:
@@ -411,7 +391,7 @@ def _load_sentence_transformer(
         contextlib.redirect_stderr(io.StringIO()),
     ):
         return factory(
-            EMBEDDING_BACKEND,
+            get_embedding_backend().name,
             device=_configured_embedding_device(),
             local_files_only=offline,
         )
@@ -439,7 +419,7 @@ def provision_embedding_model(*, quiet: bool = False) -> None:
     """
     if not quiet:
         print(
-            f"[codira] Provisioning local embedding model {EMBEDDING_BACKEND}...",
+            f"[codira] Provisioning local embedding model {get_embedding_backend().name}...",
             file=sys.stderr,
         )
 
@@ -487,10 +467,12 @@ def _load_model() -> _EmbeddingModel:
         dimension = model.get_embedding_dimension()
     else:
         dimension = model.get_sentence_embedding_dimension()
-    if dimension != EMBEDDING_DIM:
+    expected_dimension = get_embedding_backend().dim
+    if dimension != expected_dimension:
         msg = (
             "Loaded embedding model dimension "
-            f"{dimension} does not match the repository contract {EMBEDDING_DIM}."
+            f"{dimension} does not match the configured contract "
+            f"{expected_dimension}."
         )
         raise EmbeddingBackendError(msg)
 
@@ -536,10 +518,13 @@ def embed_texts(texts: Sequence[str]) -> list[list[float]]:
         Raised when the local semantic backend cannot be loaded.
     """
     texts_list = list(texts)
+    dimension = get_embedding_backend().dim
     if not texts_list:
         return []
+    if not embeddings_enabled():
+        return [[0.0] * dimension for _ in texts_list]
 
-    vectors: list[list[float]] = [[0.0] * EMBEDDING_DIM for _ in texts_list]
+    vectors: list[list[float]] = [[0.0] * dimension for _ in texts_list]
     positions_by_text: dict[str, list[int]] = {}
 
     for index, text in enumerate(texts_list):

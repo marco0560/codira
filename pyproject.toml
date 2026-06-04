@@ -6,7 +6,11 @@ readme = "README.md"
 authors = [{ name = "Marco Coppola" }]
 license = "MIT"
 requires-python = ">=3.13"
-dependencies = ["jsonschema>=4.0"]
+dependencies = [
+    "jsonschema>=4.0",
+    "platformdirs>=4.9.6",
+    "tomlkit>=0.15.0",
+]
 
 [project.optional-dependencies]
 semantic = ["sentence-transformers>=5.4,<6.0"]

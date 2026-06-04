@@ -41,13 +41,17 @@ Those modules define the accepted vocabulary for:
 
 Phase 8 introduced explicit registry helpers in `src/codira/registry.py`.
 
-Current defaults and selection rules are:
+- Current defaults and selection rules are:
 
-- `CODIRA_INDEX_BACKEND` selects the active backend
-- when unset or blank, the backend defaults to `sqlite`
+- effective configuration selects the active backend through `[backend].name`
+- `CODIRA_INDEX_BACKEND` remains a process override for `backend.name`
+- when unset or blank across all config levels, the backend defaults to `sqlite`
 - unsupported backend names raise `ValueError` before indexing or query work
 - analyzers are registered from first-party packages plus entry points and
   instantiated in deterministic order
+- `[plugins].disabled_analyzers` removes configured analyzers from the active
+  analyzer set
+- `[plugins].disable_third_party` disables third-party plugin loading
 - file routing still uses first-match analyzer selection
 
 This keeps configuration narrow while making backend selection and analyzer

@@ -25,3 +25,4 @@ The repository currently tracks these architecture decision records:
 
 `ADR-004` is the active migration record for the current architecture branch
 and should be read together with the documents under `docs/architecture/`.
+- [ADR-021 — Codira configuration hierarchy and runtime policy](ADR-021-codira-configuration-hierarchy-runtime-policy.md)

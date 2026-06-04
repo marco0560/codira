@@ -139,6 +139,14 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
         "guarantee": "deterministic_plugin_snapshot",
         "limitations": ["entry-point discovery depends on installed distributions"],
     },
+    "config": {
+        "intent": "configuration_management",
+        "channels": [],
+        "guarantee": "deterministic_effective_configuration_resolution",
+        "limitations": [
+            "system and user config locations depend on platform conventions"
+        ],
+    },
     "caps": {
         "intent": "capability_contract_export",
         "aliases": ["capabilities"],

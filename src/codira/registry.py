@@ -17,19 +17,19 @@ This module belongs to the **plugin registration layer** powering ADR-004 analyz
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import metadata
 from typing import TYPE_CHECKING, Literal, cast
 
+from codira.config import DEFAULT_BACKEND_NAME, load_effective_config
 from codira.contracts import IndexBackend, LanguageAnalyzer
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from pathlib import Path
 
-DEFAULT_INDEX_BACKEND = "sqlite"
+DEFAULT_INDEX_BACKEND = DEFAULT_BACKEND_NAME
 INDEX_BACKEND_ENV_VAR = "CODIRA_INDEX_BACKEND"
 DISABLE_THIRD_PARTY_PLUGINS_ENV_VAR = "CODIRA_DISABLE_THIRD_PARTY_PLUGINS"
 ANALYZER_ENTRY_POINT_GROUP = "codira.analyzers"
@@ -214,12 +214,27 @@ def _third_party_plugins_disabled() -> bool:
     Returns
     -------
     bool
-        ``True`` when ``CODIRA_DISABLE_THIRD_PARTY_PLUGINS`` is set to a
-        truthy value.
+        ``True`` when effective configuration disables third-party plugins.
     """
 
-    value = os.getenv(DISABLE_THIRD_PARTY_PLUGINS_ENV_VAR, "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    return load_effective_config().plugins.disable_third_party
+
+
+def _configured_disabled_analyzers() -> tuple[str, ...]:
+    """
+    Return analyzer names disabled by effective configuration.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    tuple[str, ...]
+        Analyzer names removed from the active analyzer set.
+    """
+
+    return load_effective_config().plugins.disabled_analyzers
 
 
 def _entry_point_provider(entry_point: metadata.EntryPoint) -> str:
@@ -272,9 +287,7 @@ def _disabled_third_party_registration(
         status="skipped",
         version="unknown",
         entry_point=entry_point.name,
-        detail=(
-            f"third-party plugins are disabled by {DISABLE_THIRD_PARTY_PLUGINS_ENV_VAR}"
-        ),
+        detail=("third-party plugins are disabled by configuration"),
         origin="third_party",
     )
 
@@ -750,9 +763,8 @@ def _plugin_snapshot(
     resolved, registrations = _cached_plugin_snapshot(
         family,
         _third_party_plugins_disabled(),
-        _entry_points_for_group,
-        _builtin_analyzer_plugins,
-        _builtin_backend_plugins,
+        _configured_disabled_analyzers(),
+        (_entry_points_for_group, _builtin_analyzer_plugins, _builtin_backend_plugins),
     )
     return list(resolved), list(registrations)
 
@@ -761,9 +773,8 @@ def _plugin_snapshot(
 def _cached_plugin_snapshot(
     family: PluginFamily,
     third_party_disabled: bool,
-    entry_points_loader: object,
-    builtin_analyzers_loader: object,
-    builtin_backends_loader: object,
+    disabled_analyzers: tuple[str, ...],
+    cache_tokens: tuple[object, object, object],
 ) -> tuple[tuple[_LoadedPlugin, ...], tuple[PluginRegistration, ...]]:
     """
     Cache the resolved plugin snapshot for one family.
@@ -774,13 +785,11 @@ def _cached_plugin_snapshot(
         Plugin extension family.
     third_party_disabled : bool
         Whether third-party entry points are disabled for this snapshot.
-    entry_points_loader : object
-        Cache token for the entry-point discovery wrapper so monkeypatched
-        discovery functions invalidate cached snapshots deterministically.
-    builtin_analyzers_loader : object
-        Cache token for built-in analyzer discovery.
-    builtin_backends_loader : object
-        Cache token for built-in backend discovery.
+    disabled_analyzers : tuple[str, ...]
+        Analyzer names disabled by effective configuration.
+    cache_tokens : tuple[object, object, object]
+        Cache tokens for plugin discovery wrappers so monkeypatched discovery
+        functions invalidate cached snapshots deterministically.
 
     Returns
     -------
@@ -792,9 +801,7 @@ def _cached_plugin_snapshot(
     """
     del (
         third_party_disabled,
-        entry_points_loader,
-        builtin_analyzers_loader,
-        builtin_backends_loader,
+        cache_tokens,
     )
     if family == "analyzer":
         builtins = _builtin_analyzer_plugins()
@@ -815,6 +822,11 @@ def _cached_plugin_snapshot(
         external_registrations,
     )
     if family == "analyzer":
+        resolved, registrations = _apply_disabled_analyzer_config(
+            resolved,
+            registrations,
+            disabled_analyzers,
+        )
         resolved.sort(
             key=lambda plugin: (
                 PREFERRED_ANALYZER_ORDER.get(plugin.name, 1000),
@@ -824,6 +836,72 @@ def _cached_plugin_snapshot(
             )
         )
     return tuple(resolved), tuple(registrations)
+
+
+def _apply_disabled_analyzer_config(
+    plugins: list[_LoadedPlugin],
+    registrations: list[PluginRegistration],
+    disabled_analyzers: tuple[str, ...],
+) -> tuple[list[_LoadedPlugin], list[PluginRegistration]]:
+    """
+    Remove config-disabled analyzers from a resolved analyzer snapshot.
+
+    Parameters
+    ----------
+    plugins : list[codira.registry._LoadedPlugin]
+        Resolved analyzer plugins.
+    registrations : list[codira.registry.PluginRegistration]
+        Analyzer registration diagnostics.
+    disabled_analyzers : tuple[str, ...]
+        Analyzer names disabled by effective configuration.
+
+    Returns
+    -------
+    tuple[list[codira.registry._LoadedPlugin], list[codira.registry.PluginRegistration]]
+        Filtered plugins and diagnostics with disabled analyzers reported as
+        skipped.
+
+    Raises
+    ------
+    ValueError
+        If config disables an analyzer name that is not loaded.
+    """
+
+    disabled = set(disabled_analyzers)
+    if not disabled:
+        return plugins, registrations
+
+    available = {plugin.name for plugin in plugins}
+    unknown = sorted(disabled - available)
+    if unknown:
+        available_label = ", ".join(sorted(available))
+        unknown_label = ", ".join(unknown)
+        msg = (
+            "Unsupported disabled analyzer configuration "
+            f"{unknown_label!r}. Available analyzers: {available_label}"
+        )
+        raise ValueError(msg)
+
+    filtered_plugins = [plugin for plugin in plugins if plugin.name not in disabled]
+    filtered_registrations: list[PluginRegistration] = []
+    for registration in registrations:
+        if registration.status == "loaded" and registration.name in disabled:
+            filtered_registrations.append(
+                PluginRegistration(
+                    family=registration.family,
+                    name=registration.name,
+                    provider=registration.provider,
+                    source=registration.source,
+                    status="skipped",
+                    version=registration.version,
+                    entry_point=registration.entry_point,
+                    detail="analyzer is disabled by configuration",
+                    origin=registration.origin,
+                )
+            )
+            continue
+        filtered_registrations.append(registration)
+    return filtered_plugins, filtered_registrations
 
 
 def reset_plugin_registry_caches() -> None:
@@ -977,7 +1055,7 @@ def configured_index_backend_name() -> str:
     The default is a backend selection policy for compatibility. It does not
     make core own SQLite schema, connection, or query behavior.
     """
-    configured_name = os.getenv(INDEX_BACKEND_ENV_VAR, DEFAULT_INDEX_BACKEND).strip()
+    configured_name = load_effective_config().backend.name.strip()
     if configured_name:
         return configured_name
     return DEFAULT_INDEX_BACKEND

@@ -35,6 +35,7 @@ from codira.repository_scope import path_has_excluded_tree_name
 from codira.semantic.embeddings import (
     deserialize_vector,
     embed_texts as embed_texts,
+    embeddings_enabled,
     serialize_vector,
 )
 
@@ -3535,6 +3536,9 @@ def _flush_embedding_rows(
     tuple[int, int]
         ``(recomputed, reused)`` embedding counts for the file.
     """
+    if not embeddings_enabled():
+        return (0, 0)
+
     recomputed = 0
     reused = 0
     prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
@@ -3708,6 +3712,9 @@ def _flush_pending_embedding_rows(
         Pending embeddings are encoded and inserted in one backend batch.
     """
     if not pending_embedding_rows:
+        return
+    if not embeddings_enabled():
+        pending_embedding_rows.clear()
         return
     _flush_prepared_embedding_rows(
         conn,
@@ -4369,11 +4376,12 @@ def _current_embedding_state_matches(
         ``True`` when all stored embeddings use the active backend and version.
     """
     rows = conn.execute(
-        "SELECT DISTINCT backend, version FROM embeddings ORDER BY backend, version"
+        "SELECT DISTINCT backend, version, dim "
+        "FROM embeddings ORDER BY backend, version, dim"
     ).fetchall()
     if not rows:
         return True
-    return rows == [(backend.name, backend.version)]
+    return rows == [(backend.name, backend.version, backend.dim)]
 
 
 def _prune_orphaned_embeddings(conn: _DuckDBPersistenceConnection) -> None:

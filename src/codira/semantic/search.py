@@ -24,6 +24,7 @@ from codira.contracts import (
     BackendEmbeddingCandidatesRequest,
 )
 from codira.registry import active_index_backend
+from codira.semantic.embeddings import embeddings_enabled
 
 if TYPE_CHECKING:
     from codira.types import ChannelResults, DocumentationChannelResults
@@ -49,6 +50,8 @@ def embedding_candidates(
         Ranked symbol candidates ordered by descending similarity and stable
         symbol identity.
     """
+    if not embeddings_enabled():
+        return []
     backend = active_index_backend()
     return backend.embedding_candidates(request)
 
@@ -70,5 +73,7 @@ def documentation_candidates(
         Ranked documentation candidates ordered by descending similarity and
         stable documentation identity.
     """
+    if not embeddings_enabled():
+        return []
     backend = active_index_backend()
     return backend.documentation_candidates(request)
