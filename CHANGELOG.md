@@ -1,3 +1,22 @@
+# [1.43.0](https://github.com/marco0560/codira/compare/v1.42.3...v1.43.0) (2026-06-04)
+
+
+### Bug Fixes
+
+* **indexer:** persist analyzer config fingerprints ([539fcf0](https://github.com/marco0560/codira/commit/539fcf012d285ba5639f9adf1999e297c8505a68))
+
+
+### Features
+
+* **config:** add embedding calibration command ([84aab99](https://github.com/marco0560/codira/commit/84aab99e178afa57de20dc00300d87fe5e8ba76c))
+* **config:** add persistent runtime configuration ([0b1f573](https://github.com/marco0560/codira/commit/0b1f573aee220fec4bf7cd1095ace4a0e56da619))
+* **config:** expose calibrated embeddings make target ([6c04a5e](https://github.com/marco0560/codira/commit/6c04a5e038f9c68f08bed3c818d0b0ac11e657fb)), closes [#28](https://github.com/marco0560/codira/issues/28)
+* **config:** generate full default config ([f3dc0d1](https://github.com/marco0560/codira/commit/f3dc0d16910e8adcddd89c0635f604f5c6ac95d2))
+* **config:** inject plugin configuration ([6152a23](https://github.com/marco0560/codira/commit/6152a23f2fed0702fcd0cc3fdf3a4b215261fd87))
+* **config:** merge configuration runtime system ([95cba8e](https://github.com/marco0560/codira/commit/95cba8ee9109fc9149b3c9e6bcc2e344c03f4092)), closes [#17](https://github.com/marco0560/codira/issues/17) [#27](https://github.com/marco0560/codira/issues/27) [#28](https://github.com/marco0560/codira/issues/28)
+* **config:** support embedding gpu calibration metadata ([442ed21](https://github.com/marco0560/codira/commit/442ed2174ca37004c7d4340538b0401e7be9a5ba)), closes [#28](https://github.com/marco0560/codira/issues/28)
+* **plugins:** configure first-party plugins ([282eb42](https://github.com/marco0560/codira/commit/282eb42512ffb54e28f484790cb3b584ab7701cf))
+
 ## [1.42.3](https://github.com/marco0560/codira/compare/v1.42.2...v1.42.3) (2026-06-03)
 
 
