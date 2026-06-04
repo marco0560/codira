@@ -1263,6 +1263,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Overwrite an existing config file",
     )
+    config_init_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Include all known first-party plugin options with default values",
+    )
     config_dump_parser = config_sub.add_parser(
         "dump",
         help="Print one config level or the effective config",
@@ -4188,7 +4193,7 @@ def _run_config_init(args: argparse.Namespace, root: Path) -> int:
     level = cast("LevelName", args.level)
     profile = cast("ProfileName", args.profile)
     path = config_path(level, root=root)
-    write_config_file(path, profile=profile, force=args.force)
+    write_config_file(path, profile=profile, force=args.force, full=args.full)
     print(f"Wrote {level} config: {path}")
     return 0
 
@@ -4390,6 +4395,11 @@ def _run_config_command(args: argparse.Namespace, root: Path) -> int:
     -------
     int
         Process exit status for the config subcommand.
+
+    Raises
+    ------
+    ConfigError
+        If the parsed config action is not supported.
     """
 
     action = args.config_action or "dump"
@@ -4450,6 +4460,11 @@ def _run_calibrate_command(args: argparse.Namespace) -> int:
     -------
     int
         Process exit status for the calibration target.
+
+    Raises
+    ------
+    ConfigError
+        If the parsed calibration target is not supported.
     """
 
     target = args.calibration_target

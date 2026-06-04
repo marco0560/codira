@@ -415,6 +415,14 @@ class MarkdownAnalyzer:
         -------
         None
             Analyzer options are stored on this instance.
+
+        Raises
+        ------
+        TypeError
+            If heading level values are not integers.
+        ValueError
+            If the minimum heading level is greater than the maximum heading
+            level.
         """
 
         self._path_filters = analyzer_path_filters_from_config(config)

@@ -2169,7 +2169,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-python==1.43.0",
         "codira-analyzer-json==1.41.0",
         "codira-analyzer-c==1.43.0",
-        "codira-analyzer-cpp==1.43.0",
+        "codira-analyzer-cpp==1.44.0",
         "codira-analyzer-bash==1.41.0",
         "codira-analyzer-markdown==1.43.0",
         "codira-analyzer-text==1.43.0",

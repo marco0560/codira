@@ -1497,6 +1497,71 @@ def _build_alias_declaration(
     )
 
 
+def _macro_name(node: Node, source: bytes) -> str | None:
+    """
+    Extract the declared macro name from one preprocessor definition.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Preprocessor definition node.
+    source : bytes
+        Full source buffer.
+
+    Returns
+    -------
+    str | None
+        Macro identifier when present.
+    """
+    identifier = next(
+        (child for child in node.named_children if child.type == "identifier"),
+        None,
+    )
+    if identifier is None:
+        return None
+    return _node_text(identifier, source)
+
+
+def _build_macro_declaration(
+    node: Node,
+    source: bytes,
+    *,
+    owner_id: str,
+    docstring: str | None,
+) -> DeclarationArtifact | None:
+    """
+    Build one preprocessor macro declaration artifact when named.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Preprocessor definition node.
+    source : bytes
+        Full source buffer.
+    owner_id : str
+        File-scoped owner identity preserving the source suffix.
+    docstring : str | None
+        Docstring to attach to the macro declaration.
+
+    Returns
+    -------
+    codira.models.DeclarationArtifact | None
+        Normalized macro declaration artifact, or ``None`` when no macro name is
+        present.
+    """
+    name = _macro_name(node, source)
+    if name is None:
+        return None
+    return DeclarationArtifact(
+        name=name,
+        stable_id=_declaration_stable_id(owner_id, "macro", name),
+        kind="macro",
+        lineno=node.start_point.row + 1,
+        signature=_normalize_signature(_node_text(node, source)),
+        docstring=docstring,
+    )
+
+
 def _build_type_declaration(
     kind: DeclarationKind,
     qualified_name: str,
@@ -2032,6 +2097,36 @@ class _CppAnalysisBuilder:
             )
         )
 
+    def _handle_macro_declaration(
+        self,
+        node: Node,
+        *,
+        docstring: str | None,
+    ) -> None:
+        """
+        Record one named preprocessor macro declaration.
+
+        Parameters
+        ----------
+        node : tree_sitter.Node
+            Preprocessor definition node.
+        docstring : str | None
+            Attached docstring when present.
+
+        Returns
+        -------
+        None
+            Matching macro declaration artifacts are stored in place.
+        """
+        self._record_declaration(
+            _build_macro_declaration(
+                node,
+                self.source,
+                owner_id=self.owner_id,
+                docstring=docstring,
+            )
+        )
+
     def _handle_namespace(
         self,
         node: Node,
@@ -2270,6 +2365,9 @@ class _CppAnalysisBuilder:
         None
             Matching artifacts are stored in place.
         """
+        if node.type in {"preproc_def", "preproc_function_def"}:
+            self._handle_macro_declaration(node, docstring=docstring)
+            return
         if node.type == "namespace_definition":
             self._handle_namespace(node, namespace=namespace, docstring=docstring)
             return
@@ -2674,7 +2772,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "4"
+    version = "5"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -2691,6 +2789,7 @@ class CppAnalyzer:
         self._emit_doxygen_documentation = True
         self._include_system_includes = True
         self._emit_namespaces = True
+        self._emit_macros = True
         self.configuration_fingerprint = plugin_configuration_fingerprint({})
 
     def configuration_json_schema(self) -> Mapping[str, object]:
@@ -2713,6 +2812,7 @@ class CppAnalyzer:
                 "emit_doxygen_documentation": boolean_property(True),
                 "include_system_includes": boolean_property(True),
                 "emit_namespaces": boolean_property(True),
+                "emit_macros": boolean_property(True),
             }
         )
 
@@ -2740,6 +2840,7 @@ class CppAnalyzer:
             config.get("include_system_includes", True)
         )
         self._emit_namespaces = bool(config.get("emit_namespaces", True))
+        self._emit_macros = bool(config.get("emit_macros", True))
         self.configuration_fingerprint = plugin_configuration_fingerprint(config)
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
@@ -2780,6 +2881,7 @@ class CppAnalyzer:
                 "function": "callable",
                 "method": "callable",
                 "namespace": "namespace",
+                "macro": "constant",
                 "include_local": "import",
                 "include_system": "import",
                 "doxygen": "documentation",
@@ -2888,6 +2990,15 @@ class CppAnalyzer:
                     declaration
                     for declaration in result.declarations
                     if declaration.kind != "namespace"
+                ),
+            )
+        if not self._emit_macros:
+            result = replace(
+                result,
+                declarations=tuple(
+                    declaration
+                    for declaration in result.declarations
+                    if declaration.kind != "macro"
                 ),
             )
         return replace(

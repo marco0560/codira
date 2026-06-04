@@ -430,6 +430,11 @@ def _configure_torch_threads(thread_count: int) -> None:
     -------
     None
         Torch is updated only when a positive override is requested.
+
+    Raises
+    ------
+    CalibrationBenchmarkError
+        If Torch is installed but rejects the requested thread setting.
     """
 
     if thread_count < 1:

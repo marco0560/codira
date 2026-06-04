@@ -29,6 +29,7 @@ from codira.cli import main
 from codira.config import (
     ConfigError,
     config_to_mapping,
+    full_profile_config,
     load_effective_config,
     profile_config,
     render_config_toml,
@@ -236,6 +237,34 @@ def test_profile_rendering_includes_gpu_profile_values() -> None:
     assert "device_id = 0" in rendered
 
 
+def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
+    """
+    Render a full generated profile with all first-party plugin defaults.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the full template exposes all default plugin options.
+    """
+
+    rendered = render_config_toml(full_profile_config("default"))
+
+    assert "[plugins.analyzer-python]" in rendered
+    assert "emit_module_documentation = true" in rendered
+    assert "[plugins.analyzer-json]" in rendered
+    assert 'enabled_families = ["schema", "package", "release"]' in rendered
+    assert "[plugins.analyzer-c]" in rendered
+    assert "emit_macros = true" in rendered
+    assert "[plugins.analyzer-cpp]" in rendered
+    assert "emit_namespaces = true" in rendered
+    assert "[plugins.backend-sqlite]" in rendered
+    assert "[plugins.backend-duckdb]" in rendered
+
+
 def test_config_cli_init_and_dump_json(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -277,6 +306,38 @@ def test_config_cli_init_and_dump_json(
     payload = json.loads(captured.out[captured.out.index("{") :])
     assert payload["status"] == "ok"
     assert payload["results"]["embeddings"]["batch_size"] == 8
+
+
+def test_config_cli_init_full_writes_plugin_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Create a full user config through the CLI.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths and argv.
+    tmp_path : pathlib.Path
+        Temporary config directory.
+
+    Returns
+    -------
+    None
+        The test asserts ``config init --full`` writes plugin default tables.
+    """
+
+    _isolate_config_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, "argv", ["codira", "config", "init", "--full"])
+
+    assert main() == 0
+
+    rendered = config_module.user_config_path().read_text(encoding="utf-8")
+    assert "[plugins.analyzer-cpp]" in rendered
+    assert "emit_macros = true" in rendered
+    assert "include_paths = []" in rendered
+    assert "[plugins.backend-sqlite]" in rendered
 
 
 def test_config_cli_explain_reports_environment_origin(

@@ -160,6 +160,7 @@ def test_cpp_analyzer_declares_explicit_ontology_mapping() -> None:
         "function": "callable",
         "method": "callable",
         "namespace": "namespace",
+        "macro": "constant",
         "include_local": "import",
         "include_system": "import",
         "doxygen": "documentation",

@@ -6,6 +6,7 @@ writable, and users can create or inspect config files explicitly with:
 
 ```bash
 codira config init
+codira config init --full
 codira config dump
 codira config explain embeddings.batch_size
 codira config validate
@@ -65,6 +66,9 @@ configured.
 ## Profiles
 
 `codira config init --profile default` writes conservative defaults.
+
+`codira config init --full` writes the core defaults plus every known
+first-party plugin option with its default value.
 
 `codira config init --profile low-memory` lowers the embedding batch size and
 sets conservative Torch thread counts.
@@ -159,7 +163,7 @@ First-party analyzer options:
 | `[plugins.analyzer-python]` | `emit_module_documentation`, `emit_imports`, `emit_constants`, `emit_type_aliases` |
 | `[plugins.analyzer-json]` | `enabled_families = ["schema", "package", "release"]`, `emit_dependencies`, `emit_scripts`, `emit_schema_properties` |
 | `[plugins.analyzer-c]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_macros` |
-| `[plugins.analyzer-cpp]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_namespaces` |
+| `[plugins.analyzer-cpp]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_namespaces`, `emit_macros` |
 | `[plugins.analyzer-bash]` | `emit_functions` |
 | `[plugins.analyzer-markdown]` | `strip_front_matter`, `emit_file_artifact_without_headings`, `min_heading_level`, `max_heading_level` |
 | `[plugins.analyzer-text]` | `include_root_files`, `include_docs_directories`, `exclude_generated`, `exclude_fixtures_logs` |

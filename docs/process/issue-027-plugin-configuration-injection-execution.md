@@ -39,7 +39,7 @@ First-party plugin-specific options:
 - `analyzer-c`: `use_leading_comments`, `emit_doxygen_documentation`,
   `include_system_includes`, `emit_macros`
 - `analyzer-cpp`: `use_leading_comments`, `emit_doxygen_documentation`,
-  `include_system_includes`, `emit_namespaces`
+  `include_system_includes`, `emit_namespaces`, `emit_macros`
 - `analyzer-bash`: `emit_functions`
 - `analyzer-markdown`: `strip_front_matter`,
   `emit_file_artifact_without_headings`, `min_heading_level`,

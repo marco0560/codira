@@ -410,7 +410,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-cpp"
-version = "1.43.0"
+version = "1.44.0"
 source = { editable = "packages/codira-analyzer-cpp" }
 dependencies = [
     { name = "codira" },

@@ -214,6 +214,71 @@ DEFAULT_CONFIG: dict[str, object] = {
         },
     },
 }
+FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
+    "analyzer-python": {
+        "enabled": True,
+        "include_paths": [],
+        "exclude_paths": [],
+        "emit_module_documentation": True,
+        "emit_imports": True,
+        "emit_constants": True,
+        "emit_type_aliases": True,
+    },
+    "analyzer-json": {
+        "enabled": True,
+        "include_paths": [],
+        "exclude_paths": [],
+        "enabled_families": ["schema", "package", "release"],
+        "emit_dependencies": True,
+        "emit_scripts": True,
+        "emit_schema_properties": True,
+    },
+    "analyzer-c": {
+        "enabled": True,
+        "include_paths": [],
+        "exclude_paths": [],
+        "use_leading_comments": True,
+        "emit_doxygen_documentation": True,
+        "include_system_includes": True,
+        "emit_macros": True,
+    },
+    "analyzer-cpp": {
+        "enabled": True,
+        "include_paths": [],
+        "exclude_paths": [],
+        "use_leading_comments": True,
+        "emit_doxygen_documentation": True,
+        "include_system_includes": True,
+        "emit_namespaces": True,
+        "emit_macros": True,
+    },
+    "analyzer-bash": {
+        "enabled": True,
+        "include_paths": [],
+        "exclude_paths": [],
+        "emit_functions": True,
+    },
+    "analyzer-markdown": {
+        "enabled": True,
+        "include_paths": [],
+        "exclude_paths": [],
+        "strip_front_matter": True,
+        "emit_file_artifact_without_headings": True,
+        "min_heading_level": 1,
+        "max_heading_level": 6,
+    },
+    "analyzer-text": {
+        "enabled": True,
+        "include_paths": [],
+        "exclude_paths": [],
+        "include_root_files": True,
+        "include_docs_directories": True,
+        "exclude_generated": True,
+        "exclude_fixtures_logs": True,
+    },
+    "backend-sqlite": {"enabled": True},
+    "backend-duckdb": {"enabled": True},
+}
 PROFILE_OVERRIDES: dict[ProfileName, dict[str, object]] = {
     "default": {},
     "low-memory": {
@@ -958,6 +1023,29 @@ def profile_config(profile: ProfileName) -> dict[str, object]:
     return config
 
 
+def full_profile_config(profile: ProfileName) -> dict[str, object]:
+    """
+    Build a generated config that includes all known plugin defaults.
+
+    Parameters
+    ----------
+    profile : {"default", "low-memory", "gpu"}
+        Profile name to render.
+
+    Returns
+    -------
+    dict[str, object]
+        Complete config mapping including first-party plugin option defaults.
+    """
+
+    config = profile_config(profile)
+    plugins = cast(
+        "dict[str, object]", _require_table(config["plugins"], key="plugins")
+    )
+    plugins.update(_deep_copy_mapping(FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS))
+    return config
+
+
 def _toml_table_from_mapping(value: Mapping[str, object]) -> tomlkit.items.Table:
     """
     Convert a nested config mapping into a TOML table.
@@ -1042,6 +1130,7 @@ def write_config_file(
     *,
     profile: ProfileName = "default",
     force: bool = False,
+    full: bool = False,
 ) -> None:
     """
     Write one generated config profile to disk.
@@ -1054,6 +1143,8 @@ def write_config_file(
         Profile to render.
     force : bool, optional
         Whether to overwrite an existing file.
+    full : bool, optional
+        Whether to include all known first-party plugin defaults.
 
     Returns
     -------
@@ -1072,7 +1163,8 @@ def write_config_file(
         msg = f"Config file already exists: {path}"
         raise ConfigError(msg)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_config_toml(profile_config(profile)), encoding="utf-8")
+    payload = full_profile_config(profile) if full else profile_config(profile)
+    path.write_text(render_config_toml(payload), encoding="utf-8")
 
 
 def update_config_file(path: Path, updates: Mapping[str, object]) -> None:
