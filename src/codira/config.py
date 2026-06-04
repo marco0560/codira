@@ -925,6 +925,35 @@ def _toml_table_from_mapping(value: Mapping[str, object]) -> tomlkit.items.Table
     return table
 
 
+def _merge_toml_table(table: object, updates: Mapping[str, object]) -> None:
+    """
+    Merge nested updates into an existing TOML table-like object.
+
+    Parameters
+    ----------
+    table : object
+        TOML document or table to mutate.
+    updates : collections.abc.Mapping[str, object]
+        Validated config updates.
+
+    Returns
+    -------
+    None
+        The TOML object is updated in place.
+    """
+
+    mutable_table = cast("dict[str, object]", table)
+    for key, item in updates.items():
+        if isinstance(item, Mapping):
+            child = mutable_table.get(key)
+            if not isinstance(child, Mapping):
+                child = tomlkit.table()
+                mutable_table[key] = child
+            _merge_toml_table(child, item)
+        else:
+            mutable_table[key] = item
+
+
 def render_config_toml(value: Mapping[str, object]) -> str:
     """
     Render a config mapping as deterministic TOML.
@@ -987,6 +1016,52 @@ def write_config_file(
         raise ConfigError(msg)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_config_toml(profile_config(profile)), encoding="utf-8")
+
+
+def update_config_file(path: Path, updates: Mapping[str, object]) -> None:
+    """
+    Merge partial config updates into one TOML config file.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Target config file to create or update.
+    updates : collections.abc.Mapping[str, object]
+        Partial config mapping to merge.
+
+    Returns
+    -------
+    None
+        The target file is updated in place.
+
+    Raises
+    ------
+    ConfigError
+        If existing values, update values, or merged values are invalid.
+    OSError
+        If directory or file access fails.
+    """
+
+    validate_config_mapping(updates)
+    if path.exists():
+        document = tomlkit.parse(path.read_text(encoding="utf-8"))
+        existing = _deep_copy_mapping(document)
+        validate_config_mapping(existing)
+    else:
+        document = tomlkit.document()
+        existing = {}
+
+    merged = _deep_copy_mapping(existing)
+    _merge_config(
+        merged,
+        updates,
+        origins={},
+        origin=ConfigOrigin("update", path, str(path)),
+    )
+    validate_config_mapping(merged)
+    _merge_toml_table(document, updates)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(tomlkit.dumps(document), encoding="utf-8")
 
 
 def ensure_user_config() -> Path:

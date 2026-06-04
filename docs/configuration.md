@@ -72,6 +72,26 @@ sets conservative Torch thread counts.
 `codira config init --profile gpu` selects a GPU-oriented device and larger
 batch size. It includes GPU metadata defaults but does not auto-detect hardware.
 
+## Embedding Calibration
+
+`codira calibrate embeddings` runs a bounded offline calibration workflow and
+prints a config-compatible TOML snippet by default:
+
+```bash
+codira calibrate embeddings
+codira calibrate embeddings --print
+codira calibrate embeddings --output /tmp/codira-embeddings.toml
+codira calibrate embeddings --write
+```
+
+`--write` is the only mode that mutates the user config file. `--print` and
+`--output` do not create or update user config.
+
+Calibration benchmarks deterministic text payloads against locally available
+embedding model artifacts. It does not download models or contact external
+services. If the semantic dependency stack or local model artifact is missing,
+Codira emits safe CPU fallback values instead of failing the command.
+
 ## Environment Overrides
 
 Existing process-local environment overrides still work and take precedence

@@ -29,6 +29,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from codira.calibration import (
+    calibrate_embeddings,
+    embeddings_config_update,
+    render_embeddings_calibration_toml,
+)
 from codira.capabilities import build_capability_contract
 from codira.config import (
     ConfigError,
@@ -42,6 +47,8 @@ from codira.config import (
     load_config_level,
     load_effective_config,
     render_config_toml,
+    update_config_file,
+    user_config_path,
     validate_config_mapping,
     write_config_file,
 )
@@ -756,7 +763,7 @@ def build_parser() -> argparse.ArgumentParser:
         title="subcommands",
         metavar=(
             "{help,index,cov,sym,symlist,emb,docs,calls,refs,audit,ctx,plugins,"
-            "caps,config}"
+            "caps,config,calibrate}"
         ),
     )
 
@@ -1294,6 +1301,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
+    )
+
+    calibrate_parser = sub.add_parser(
+        "calibrate",
+        help="Calibrate hardware-aware Codira runtime settings",
+        description=(
+            "Run deterministic bounded calibration workflows and emit "
+            "configuration-compatible output."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  codira calibrate embeddings\n"
+            "  codira calibrate embeddings --print\n"
+            "  codira calibrate embeddings --write\n"
+            "  codira calibrate embeddings --output /tmp/codira-embeddings.toml"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    calibrate_sub = calibrate_parser.add_subparsers(dest="calibration_target")
+    embeddings_calibrate_parser = calibrate_sub.add_parser(
+        "embeddings",
+        help="Calibrate embedding runtime parameters",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    calibration_mode = embeddings_calibrate_parser.add_mutually_exclusive_group()
+    calibration_mode.add_argument(
+        "--print",
+        dest="print_output",
+        action="store_true",
+        help="Print the calibrated TOML snippet to stdout",
+    )
+    calibration_mode.add_argument(
+        "--write",
+        action="store_true",
+        help="Merge calibrated values into the user config file",
+    )
+    calibration_mode.add_argument(
+        "--output",
+        type=Path,
+        help="Write the calibrated TOML snippet to a file",
     )
 
     return parser
@@ -4346,6 +4393,60 @@ def _run_config_command(args: argparse.Namespace, root: Path) -> int:
     raise ConfigError(msg)
 
 
+def _run_calibrate_embeddings(args: argparse.Namespace) -> int:
+    """
+    Run embeddings calibration and emit or write config-compatible output.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed calibration command arguments.
+
+    Returns
+    -------
+    int
+        Zero after successful calibration output handling.
+    """
+
+    result = calibrate_embeddings()
+    snippet = render_embeddings_calibration_toml(result)
+    output_path = cast("Path | None", args.output)
+    if args.write:
+        path = user_config_path()
+        update_config_file(path, embeddings_config_update(result))
+        print(f"Wrote user config: {path}")
+        return 0
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(snippet, encoding="utf-8")
+        print(f"Wrote calibration output: {output_path}")
+        return 0
+    print(snippet, end="")
+    return 0
+
+
+def _run_calibrate_command(args: argparse.Namespace) -> int:
+    """
+    Dispatch one ``codira calibrate`` target command.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command-line arguments.
+
+    Returns
+    -------
+    int
+        Process exit status for the calibration target.
+    """
+
+    target = args.calibration_target
+    if target == "embeddings":
+        return _run_calibrate_embeddings(args)
+    msg = f"Unsupported calibration target: {target}"
+    raise ConfigError(msg)
+
+
 def _command_handlers(
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
@@ -4447,6 +4548,7 @@ def _command_handlers(
             prefix=prefix,
         ),
         "config": lambda: _run_config_command(args, root),
+        "calibrate": lambda: _run_calibrate_command(args),
     }
 
 
@@ -4480,7 +4582,7 @@ def main() -> int:
     prefix = _resolve_prefix_argument(parser, root, raw_prefix)
 
     try:
-        if command not in {"help", "config"}:
+        if command not in {"help", "config", "calibrate"}:
             ensure_user_config()
         with storage_context:
             handlers = _command_handlers(
