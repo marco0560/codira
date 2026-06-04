@@ -305,11 +305,17 @@ def test_calibration_toml_is_config_compatible() -> None:
     parsed = tomlkit.parse(rendered)
 
     assert "[embeddings.gpu]" in rendered
+    assert parsed["embeddings"]["model"] == "sentence-transformers/all-MiniLM-L6-v2"
+    assert parsed["embeddings"]["version"] == "1"
+    assert parsed["embeddings"]["dimension"] == 384
     assert parsed["embeddings"]["device"] == "cuda"
     assert parsed["embeddings"]["gpu"]["memory_limit_mb"] == 6144
     assert embeddings_config_update(result) == {
         "embeddings": {
             "enabled": True,
+            "model": "sentence-transformers/all-MiniLM-L6-v2",
+            "version": "1",
+            "dimension": 384,
             "device": "cuda",
             "batch_size": 64,
             "torch_num_threads": 8,
@@ -360,6 +366,8 @@ def test_calibration_cli_prints_toml_without_user_config_write(
 
     captured = capsys.readouterr()
     assert "[embeddings]" in captured.out
+    assert 'model = "sentence-transformers/all-MiniLM-L6-v2"' in captured.out
+    assert "dimension = 384" in captured.out
     assert "batch_size = 16" in captured.out
     assert not user_path.exists()
 

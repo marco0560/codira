@@ -34,8 +34,11 @@ import tomlkit
 from codira.config import (
     DEFAULT_EMBEDDING_BATCH_SIZE,
     DEFAULT_EMBEDDING_DEVICE,
+    DEFAULT_EMBEDDING_DIMENSION,
     DEFAULT_EMBEDDING_GPU_DEVICE_ID,
     DEFAULT_EMBEDDING_GPU_MEMORY_LIMIT_MB,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EMBEDDING_VERSION,
     validate_config_mapping,
 )
 from codira.semantic.embeddings import (
@@ -708,6 +711,9 @@ def embeddings_config_update(result: CalibrationResult) -> dict[str, object]:
     selected = result.selected
     update = {
         "enabled": True,
+        "model": DEFAULT_EMBEDDING_MODEL,
+        "version": DEFAULT_EMBEDDING_VERSION,
+        "dimension": DEFAULT_EMBEDDING_DIMENSION,
         "device": selected.device,
         "batch_size": selected.batch_size,
         "torch_num_threads": selected.torch_num_threads,
@@ -745,6 +751,9 @@ def render_embeddings_calibration_toml(result: CalibrationResult) -> str:
     table = tomlkit.table()
     for key in (
         "enabled",
+        "model",
+        "version",
+        "dimension",
         "device",
         "batch_size",
         "torch_num_threads",

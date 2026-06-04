@@ -19,7 +19,8 @@ ARGS ?=
 .PHONY: .help help
 .PHONY: audit benchmark-campaign benchmark-embedding-startup benchmark-index benchmark-release
 .PHONY: bootstrap-dev build-first-party-packages build-release-artifacts changelog-guard
-.PHONY: check-commit-messages clean-repo-script configure-index-backend coverage-summary demo
+.PHONY: calibrate-embeddings-config check-commit-messages clean-repo-script
+.PHONY: configure-index-backend coverage-summary demo
 .PHONY: future-repo-export generate-github-snapshot install-first-party-packages
 .PHONY: install-repo-git-config new-decision provision-embedding-model
 .PHONY: rehearse-release-installs release-audit-script release-rel-script
@@ -52,6 +53,9 @@ benchmark-index: ## Run one instrumented index benchmark; pass ARGS as needed
 
 benchmark-release: ## Run release Hyperfine benchmark plan; pass ARGS='--dry-run' to inspect
 	@$(UV) run python scripts/benchmark_release.py $(ARGS)
+
+calibrate-embeddings-config: ## Print hardware-calibrated [embeddings] config block
+	@$(UV) run codira calibrate embeddings --print $(ARGS)
 
 bootstrap-dev: ## Run repository bootstrap script
 	@$(UV) run python scripts/bootstrap_dev_environment.py $(ARGS)

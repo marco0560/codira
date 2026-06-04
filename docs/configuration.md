@@ -80,6 +80,7 @@ prints a config-compatible TOML snippet by default:
 ```bash
 codira calibrate embeddings
 codira calibrate embeddings --print
+make calibrate-embeddings-config
 codira calibrate embeddings --output /tmp/codira-embeddings.toml
 codira calibrate embeddings --write
 ```
@@ -91,6 +92,10 @@ Calibration benchmarks deterministic text payloads against locally available
 embedding model artifacts. It does not download models or contact external
 services. If the semantic dependency stack or local model artifact is missing,
 Codira emits safe CPU fallback values instead of failing the command.
+
+The printed block includes the complete `[embeddings]` section plus
+`[embeddings.gpu]`, including model identity fields and calibrated runtime
+parameters.
 
 ## Environment Overrides
 

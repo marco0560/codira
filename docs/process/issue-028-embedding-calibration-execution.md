@@ -16,6 +16,7 @@ is compatible with the Codira configuration system introduced for issue #17.
 | Calibration module and CLI | Done | Added isolated calibration logic, `codira calibrate embeddings`, `--print`, `--write`, and `--output`; `codira calibrate embeddings --print` completed with a TOML snippet in an isolated config environment. |
 | Documentation and tests | Done | Added configuration docs and `tests/test_calibration.py`; focused calibration/config/capability tests, `ruff check`, and `ruff format --check` passed. |
 | Full validation | Done | `codira index`, `pre-commit run --all-files`, full `pytest -q`, and `scripts/validate_repo.py` all passed. |
+| Complete embeddings block and Makefile target | Done | Calibration output now includes model identity fields plus runtime parameters; `make calibrate-embeddings-config` prints the calibrated config block. |
 
 ## Constraints
 
