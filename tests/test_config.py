@@ -164,6 +164,8 @@ def test_profile_rendering_includes_gpu_profile_values() -> None:
     assert "config_version = 1" in rendered
     assert 'device = "cuda"' in rendered
     assert "batch_size = 64" in rendered
+    assert "[embeddings.gpu]" in rendered
+    assert "device_id = 0" in rendered
 
 
 def test_config_cli_init_and_dump_json(
@@ -370,3 +372,24 @@ def test_config_to_mapping_round_trips_defaults(
     assert isinstance(embeddings, dict)
     assert backend == {"name": "sqlite"}
     assert embeddings["enabled"] is True
+    assert embeddings["gpu"] == {"device_id": 0, "memory_limit_mb": 0}
+
+
+def test_config_validation_rejects_negative_gpu_memory_limit() -> None:
+    """
+    Reject invalid GPU calibration metadata values.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts GPU memory limits are non-negative.
+    """
+
+    with pytest.raises(ConfigError, match="embeddings.gpu.memory_limit_mb"):
+        validate_config_mapping(
+            {"embeddings": {"gpu": {"memory_limit_mb": -1}}},
+        )

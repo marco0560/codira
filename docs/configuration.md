@@ -50,10 +50,17 @@ device = "cpu"
 batch_size = 32
 torch_num_threads = 0
 torch_num_interop_threads = 0
+
+[embeddings.gpu]
+device_id = 0
+memory_limit_mb = 0
 ```
 
 `torch_num_threads = 0` and `torch_num_interop_threads = 0` mean Codira leaves
 Torch defaults unchanged.
+
+`embeddings.gpu.memory_limit_mb = 0` means no explicit GPU memory limit is
+configured.
 
 ## Profiles
 
@@ -63,7 +70,7 @@ Torch defaults unchanged.
 sets conservative Torch thread counts.
 
 `codira config init --profile gpu` selects a GPU-oriented device and larger
-batch size. It does not auto-detect hardware.
+batch size. It includes GPU metadata defaults but does not auto-detect hardware.
 
 ## Environment Overrides
 

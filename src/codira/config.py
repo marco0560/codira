@@ -33,6 +33,8 @@ DEFAULT_EMBEDDING_VERSION = "1"
 DEFAULT_EMBEDDING_DIMENSION = 384
 DEFAULT_EMBEDDING_DEVICE = "cpu"
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
+DEFAULT_EMBEDDING_GPU_DEVICE_ID = 0
+DEFAULT_EMBEDDING_GPU_MEMORY_LIMIT_MB = 0
 LevelName = Literal["system", "user", "repo", "effective"]
 ProfileName = Literal["default", "low-memory", "gpu"]
 
@@ -80,6 +82,23 @@ class PluginsConfig:
 
 
 @dataclass(frozen=True)
+class EmbeddingsGpuConfig:
+    """
+    GPU-specific embedding runtime configuration.
+
+    Parameters
+    ----------
+    device_id : int
+        GPU device identifier selected for embedding inference.
+    memory_limit_mb : int
+        Maximum GPU memory budget in MiB, or ``0`` when no limit is configured.
+    """
+
+    device_id: int = DEFAULT_EMBEDDING_GPU_DEVICE_ID
+    memory_limit_mb: int = DEFAULT_EMBEDDING_GPU_MEMORY_LIMIT_MB
+
+
+@dataclass(frozen=True)
 class EmbeddingsConfig:
     """
     Semantic embedding runtime configuration.
@@ -102,6 +121,8 @@ class EmbeddingsConfig:
         Torch intra-op thread override, or ``0`` to leave Torch defaults.
     torch_num_interop_threads : int
         Torch inter-op thread override, or ``0`` to leave Torch defaults.
+    gpu : EmbeddingsGpuConfig
+        GPU-specific embedding runtime configuration.
     """
 
     enabled: bool = True
@@ -112,6 +133,7 @@ class EmbeddingsConfig:
     batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE
     torch_num_threads: int = 0
     torch_num_interop_threads: int = 0
+    gpu: EmbeddingsGpuConfig = EmbeddingsGpuConfig()
 
 
 @dataclass(frozen=True)
@@ -176,6 +198,10 @@ DEFAULT_CONFIG: dict[str, object] = {
         "batch_size": DEFAULT_EMBEDDING_BATCH_SIZE,
         "torch_num_threads": 0,
         "torch_num_interop_threads": 0,
+        "gpu": {
+            "device_id": DEFAULT_EMBEDDING_GPU_DEVICE_ID,
+            "memory_limit_mb": DEFAULT_EMBEDDING_GPU_MEMORY_LIMIT_MB,
+        },
     },
 }
 PROFILE_OVERRIDES: dict[ProfileName, dict[str, object]] = {
@@ -192,6 +218,10 @@ PROFILE_OVERRIDES: dict[ProfileName, dict[str, object]] = {
         "embeddings": {
             "device": "cuda",
             "batch_size": 64,
+            "gpu": {
+                "device_id": 0,
+                "memory_limit_mb": 0,
+            },
         }
     },
 }
@@ -211,6 +241,10 @@ _SCHEMA: dict[str, object] = {
         "batch_size": int,
         "torch_num_threads": int,
         "torch_num_interop_threads": int,
+        "gpu": {
+            "device_id": int,
+            "memory_limit_mb": int,
+        },
     },
 }
 
@@ -505,6 +539,46 @@ def _validate_schema_types(
             _validate_type(item, cast("type[object]", expected), key=dotted)
 
 
+def _validate_int_minimums(
+    value: Mapping[str, object],
+    keys: tuple[str, ...],
+    *,
+    prefix: str,
+    minimum: int,
+) -> None:
+    """
+    Validate integer minimum constraints for present keys.
+
+    Parameters
+    ----------
+    value : collections.abc.Mapping[str, object]
+        Config table to inspect.
+    keys : tuple[str, ...]
+        Keys whose integer values must be checked.
+    prefix : str
+        Dotted table prefix used in error messages.
+    minimum : int
+        Minimum accepted value.
+
+    Returns
+    -------
+    None
+        Values are accepted when absent or greater than or equal to
+        ``minimum``.
+
+    Raises
+    ------
+    ConfigError
+        If a present integer value is below ``minimum``.
+    """
+
+    for key in keys:
+        item = value.get(key)
+        if isinstance(item, int) and item < minimum:
+            msg = f"Configuration key {prefix}.{key} must be >= {minimum}."
+            raise ConfigError(msg)
+
+
 def _validate_semantics(value: Mapping[str, object]) -> None:
     """
     Validate semantic constraints after type validation.
@@ -556,16 +630,26 @@ def _validate_semantics(value: Mapping[str, object]) -> None:
             if isinstance(item, str) and not item.strip():
                 msg = f"Configuration key embeddings.{key} must be non-empty."
                 raise ConfigError(msg)
-        for key in ("dimension", "batch_size"):
-            item = embeddings.get(key)
-            if isinstance(item, int) and item < 1:
-                msg = f"Configuration key embeddings.{key} must be >= 1."
-                raise ConfigError(msg)
-        for key in ("torch_num_threads", "torch_num_interop_threads"):
-            item = embeddings.get(key)
-            if isinstance(item, int) and item < 0:
-                msg = f"Configuration key embeddings.{key} must be >= 0."
-                raise ConfigError(msg)
+        _validate_int_minimums(
+            embeddings,
+            ("dimension", "batch_size"),
+            prefix="embeddings",
+            minimum=1,
+        )
+        _validate_int_minimums(
+            embeddings,
+            ("torch_num_threads", "torch_num_interop_threads"),
+            prefix="embeddings",
+            minimum=0,
+        )
+        gpu = embeddings.get("gpu")
+        if isinstance(gpu, Mapping):
+            _validate_int_minimums(
+                gpu,
+                ("device_id", "memory_limit_mb"),
+                prefix="embeddings.gpu",
+                minimum=0,
+            )
 
 
 def validate_config_mapping(value: Mapping[str, object]) -> None:
@@ -817,6 +901,30 @@ def profile_config(profile: ProfileName) -> dict[str, object]:
     return config
 
 
+def _toml_table_from_mapping(value: Mapping[str, object]) -> tomlkit.items.Table:
+    """
+    Convert a nested config mapping into a TOML table.
+
+    Parameters
+    ----------
+    value : collections.abc.Mapping[str, object]
+        Config section mapping to render.
+
+    Returns
+    -------
+    tomlkit.items.Table
+        TOML table containing scalar, list, and nested table values.
+    """
+
+    table = tomlkit.table()
+    for key, item in value.items():
+        if isinstance(item, Mapping):
+            table.add(key, _toml_table_from_mapping(item))
+        else:
+            table.add(key, item)
+    return table
+
+
 def render_config_toml(value: Mapping[str, object]) -> str:
     """
     Render a config mapping as deterministic TOML.
@@ -835,11 +943,8 @@ def render_config_toml(value: Mapping[str, object]) -> str:
     document = tomlkit.document()
     document.add("config_version", value["config_version"])
     for section_name in ("backend", "plugins", "embeddings"):
-        table = tomlkit.table()
         section = _require_table(value[section_name], key=section_name)
-        for key, item in section.items():
-            table.add(key, item)
-        document.add(section_name, table)
+        document.add(section_name, _toml_table_from_mapping(section))
     text = tomlkit.dumps(document)
     if not text.endswith("\n"):
         text += "\n"
@@ -1045,6 +1150,10 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
             "batch_size": config.embeddings.batch_size,
             "torch_num_threads": config.embeddings.torch_num_threads,
             "torch_num_interop_threads": config.embeddings.torch_num_interop_threads,
+            "gpu": {
+                "device_id": config.embeddings.gpu.device_id,
+                "memory_limit_mb": config.embeddings.gpu.memory_limit_mb,
+            },
         },
     }
 
@@ -1109,6 +1218,7 @@ def _config_from_mapping(
     backend = cast("Mapping[str, object]", value["backend"])
     plugins = cast("Mapping[str, object]", value["plugins"])
     embeddings = cast("Mapping[str, object]", value["embeddings"])
+    gpu = cast("Mapping[str, object]", embeddings["gpu"])
     return CodiraConfig(
         config_version=cast("int", value["config_version"]),
         backend=BackendConfig(name=cast("str", backend["name"]).strip()),
@@ -1130,6 +1240,10 @@ def _config_from_mapping(
             torch_num_interop_threads=cast(
                 "int",
                 embeddings["torch_num_interop_threads"],
+            ),
+            gpu=EmbeddingsGpuConfig(
+                device_id=cast("int", gpu["device_id"]),
+                memory_limit_mb=cast("int", gpu["memory_limit_mb"]),
             ),
         ),
         origins=origins,
