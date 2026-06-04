@@ -17,19 +17,20 @@ ARGS ?=
 .DEFAULT_GOAL := .help
 
 .PHONY: .help help
-.PHONY: audit benchmark-campaign benchmark-embedding-startup benchmark-index benchmark-release
-.PHONY: bootstrap-dev build-first-party-packages build-release-artifacts changelog-guard
-.PHONY: calibrate-embeddings-config check-commit-messages clean-repo-script
-.PHONY: configure-index-backend coverage-summary demo
-.PHONY: future-repo-export generate-github-snapshot install-first-party-packages
-.PHONY: install-repo-git-config new-decision provision-embedding-model
-.PHONY: rehearse-release-installs release-audit-script release-rel-script
-.PHONY: release-system-selfcheck ri-fix run-manifest-baseline run-repo-tool
-.PHONY: run-with-repo-python tag-guard validate-repo validate-semgrep-rules
-.PHONY: verify-exported-split-repos
-.PHONY: st co br ci lg check fix clean-repo clean-repo-dry re-clean bootstrap
-.PHONY: new-decision-alias install-repo-config docs-build gen-issues gen-miles
-.PHONY: txz gen-zip-common release-audit release-check rel safe-push
+.PHONY: audit
+.PHONY: benchmark-campaign benchmark-embedding-startup benchmark-index benchmark-release bootstrap bootstrap-dev build-first-party-packages build-release-artifacts
+.PHONY: calibrate-embeddings-config changelog-guard check check-commit-messages clean-repo clean-repo-dry clean-repo-script configure-index-backend coverage-summary
+.PHONY: demo docs-build
+.PHONY: fix future-repo-export
+.PHONY: gen-issues gen-miles gen-zip-common generate-github-snapshot
+.PHONY: install-first-party-packages install-repo-config install-repo-git-config
+.PHONY: lg
+.PHONY: new-decision new-decision-alias
+.PHONY: provision-embedding-model
+.PHONY: re-clean rehearse-release-installs rel release-audit release-audit-script release-check release-rel-script release-system-selfcheck ri-fix run-manifest-baseline run-repo-tool run-with-repo-python
+.PHONY: safe-push
+.PHONY: tag-guard txz
+.PHONY: validate-repo validate-semgrep-rules verify-exported-split-repos
 
 .help: ## Show the list of supported Make targets
 	@echo
@@ -41,6 +42,7 @@ help: .help ## Alias for .help
 
 audit: ## Run scripts/audit.sh; pass ARGS='--deep' for deep mode
 	@bash scripts/audit.sh $(ARGS)
+	@$(UV) run codira audit
 
 benchmark-campaign: ## Run benchmark campaign; set MANIFEST and optional ARGS
 	@$(UV) run python scripts/benchmark_campaign.py $(MANIFEST) $(ARGS)
@@ -143,18 +145,6 @@ validate-semgrep-rules: ## Validate repository Semgrep fixture expectations
 
 verify-exported-split-repos: ## Verify exported split repositories; pass ARGS as needed
 	@$(UV) run python scripts/verify_exported_split_repos.py $(ARGS)
-
-st: ## Git alias: status
-	@git status $(ARGS)
-
-co: ## Git alias: checkout
-	@git checkout $(ARGS)
-
-br: ## Git alias: branch
-	@git branch $(ARGS)
-
-ci: ## Git alias: commit
-	@git commit $(ARGS)
 
 lg: ## Git alias: log --oneline --graph --decorate -50
 	@git log --oneline --graph --decorate -50 $(ARGS)
