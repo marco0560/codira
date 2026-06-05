@@ -6,7 +6,7 @@ This document is a living planning document.
 
 Unlike ADRs, this roadmap does not record immutable architectural decisions. It captures current priorities, sequencing, dependencies, and expected development milestones. The roadmap may be revised as the project evolves, new requirements emerge, ecosystem needs change, or priorities shift.
 
-The roadmap is organized around capabilities rather than issue numbers. Issue references are included for traceability but do not define the structure of the plan.
+The roadmap is organized around release-sized capability milestones rather than issue numbers. Issue references are included for traceability but do not define the structure of the plan.
 
 ---
 
@@ -27,6 +27,8 @@ The following assumptions guide roadmap decisions.
 11. Local deterministic batch indexing remains the canonical execution model.
 12. Daemons, vector databases, and shared services are optional deployment modes.
 13. Provenance must remain explicit and auditable throughout the pipeline.
+14. Public PyPI releases should land at meaningful capability boundaries.
+15. Active phases should remain close to four weeks unless a milestone is explicitly split or deferred.
 
 ---
 
@@ -49,122 +51,124 @@ The long-term goals of Codira are:
 
 ---
 
-## Phase 1 — Configuration Foundation
+## Completed Foundations — Configuration, Documentation, and Calibration
 
-**Target Window:** June 2026
+**Target Window:** completed by 04/06/2026
+**Release Boundary:** pre-1.50.0 foundation
+**Status:** Completed
 
-### Phase 1 Objectives
+### Completed Foundation Objectives
 
-Establish configuration as the primary mechanism for analyzer selection and system customization.
+Establish configuration, plugin configuration injection, documentation retrieval, signal aggregation migration, and hardware-aware embedding calibration as stable foundations for the next public release series.
 
-### Phase 1 Issues
+### Completed Foundation Issues
 
-* #17 Install-time configuration system
+* [x] #3 Documentation retrieval channel
+* [x] #17 Install-time configuration system
+* [x] #27 Configuration injection core ↔ plugin interface
+* [x] #28 Embeddings calibration
+* [x] #32 ADR-006 signal aggregation migration
 
-### Phase 1 Deliverables
+### Completed Foundation Deliverables
 
 * Configuration file format
 * Configuration discovery
 * Analyzer selection rules
-* Validation and diagnostics
-* Configuration documentation
+* Plugin configuration injection
+* Documentation indexing and retrieval
+* Signal aggregation migration
+* Hardware-aware embedding calibration
+* Configuration and retrieval documentation
+
+### Completed Foundation Exit Criteria
+
+* Analyzer ownership can be configured explicitly.
+* Plugin configuration is injected deterministically.
+* Repository documentation is queryable.
+* Embedding calibration can be generated and validated.
+
+---
+
+## Phase 1 — Contract and Analyzer Concurrency Foundation
+
+**Target Window:** 05/06/2026–03/07/2026
+**Release Milestone:** v1.50.0 - Contract and analyzer concurrency foundation
+
+### Phase 1 Objectives
+
+Stabilize the plugin and analyzer-facing contracts needed before ecosystem expansion and parallel indexing.
+
+### Phase 1 Issues
+
+* #4 Extend plugin architecture and audit conventions
+* #6 Config-first, analyzer-aware coverage roots
+* #55 Parallelize full indexing with explicit analyzer concurrency contracts
+
+### Phase 1 Deliverables
+
+* Stable plugin contract
+* Analyzer audit requirements
+* Plugin author documentation
+* Config-first coverage root policy
+* Analyzer concurrency declaration contract
+* Index analysis concurrency configuration
+* Serial-vs-parallel analyzer verification strategy
 
 ### Phase 1 Exit Criteria
 
-* Analyzer ownership can be configured explicitly.
-* Configuration validation is deterministic.
-* Core analyzer selection semantics are defined.
+* Third-party analyzers can target a stable contract.
+* Analyzer ownership and coverage roots are configuration-driven.
+* Analyzer concurrency support is explicit and fail-closed.
+* Serial and concurrent analysis results can be compared deterministically.
 
 ---
 
-## Phase 2 — Plugin Contract Stabilization
+## Phase 2 — Backend Concurrency and Staged Index Runs
 
-**Target Window:** July 2026
+**Target Window:** 06/07/2026–31/07/2026
+**Release Milestone:** v1.60.0 - Backend concurrency contract
 
 ### Phase 2 Objectives
 
-Stabilize the plugin architecture before ecosystem expansion.
+Define backend write-concurrency semantics that work for current in-process backends and future server-backed storage.
 
 ### Phase 2 Issues
 
-* #4 Extend plugin architecture and audit conventions
-* #27 Configuration injection core ↔ plugin interface
+* #56 Define backend write-concurrency contracts and staged index runs
 
 ### Phase 2 Deliverables
 
-* Stable plugin contract
-* Capability registration model
-* Configuration injection mechanism
-* Plugin audit requirements
-* Plugin author documentation
+* Backend write-concurrency declaration contract
+* Fail-closed backend concurrency configuration
+* Staged index-run contract
+* Serial backend compatibility strategy
+* Fake staged backend contract tests
+* Documentation for SQLite, DuckDB, memory, and future server DB caveats
 
 ### Phase 2 Exit Criteria
 
-* Third-party analyzers can target a stable contract.
-* Plugin configuration is fully supported.
-* Plugin registration semantics are frozen.
+* Current backends explicitly declare serial-only write support.
+* Unsupported backend concurrency modes fail before mutation.
+* Staged run semantics are documented and testable.
+* Future PostgreSQL, MySQL, and MariaDB plugins have a clear contract target.
 
 ---
 
-## August 2026
+## Phase 3 — Architecture and Findings Reporting
 
-### August 2026 Planned Status
-
-No planned roadmap work.
-
-The month is intentionally reserved for:
-
-* maintenance
-* issue refinement
-* backlog review
-* documentation updates
-* exploratory research
-
-No major roadmap commitments should be scheduled.
-
----
-
-## Phase 3 — Documentation & Context Retrieval
-
-**Target Window:** September 2026
+**Target Window:** 01/09/2026–25/09/2026
+**Release Milestone:** v1.70.0 - Architecture and findings reporting
 
 ### Phase 3 Objectives
 
-Treat repository documentation as a first-class information source.
+Transform repository intelligence into consumable artifacts and standardized findings suitable for developers, AI agents, and external code-scanning workflows.
 
 ### Phase 3 Issues
 
-* #3 Documentation retrieval channel
-* #32 ADR-006 signal aggregation migration
-
-### Phase 3 Deliverables
-
-* Documentation analyzer
-* Documentation indexing
-* Signal aggregation improvements
-* Context extraction pipeline
-
-### Phase 3 Exit Criteria
-
-* Repository documentation is queryable.
-* Context generation incorporates documentation-derived information.
-* Documentation retrieval becomes part of the standard retrieval workflow.
-
----
-
-## Phase 4 — Repository Architecture Reporting
-
-**Target Window:** October 2026
-
-### Phase 4 Objectives
-
-Transform repository intelligence into consumable architectural artifacts suitable for both human developers and AI agents.
-
-### Phase 4 Issues
-
+* #52 Add SARIF output support for findings-based commands
 * #54 Repository Architecture Report Generator
 
-### Phase 4 Deliverables
+### Phase 3 Deliverables
 
 * Repository architecture domain model
 * DOT graph generation
@@ -174,31 +178,33 @@ Transform repository intelligence into consumable architectural artifacts suitab
 * Dependency statistics
 * Cycle detection
 * Layer-violation framework
-* Architectural hotspot analysis
+* Common finding model
+* SARIF serializer
+* GitHub Code Scanning compatibility
 
-### Phase 4 Exit Criteria
+### Phase 3 Exit Criteria
 
 * A single command can generate architecture artifacts.
 * DOT output is deterministic.
-* SVG generation works when Graphviz is available.
 * Reports can be published directly as repository documentation.
-* Architecture information is analyzer-independent.
+* Findings can be exported as SARIF without changing existing JSON or Markdown outputs.
 
 ---
 
-## Phase 5 — Agent Efficiency Benchmarking
+## Phase 4 — Agent Efficiency Benchmarking
 
-**Target Window:** November 2026
+**Target Window:** 28/09/2026–23/10/2026
+**Release Milestone:** v1.80.0 - Agent efficiency benchmarks
 
-### Phase 5 Objectives
+### Phase 4 Objectives
 
 Measure and demonstrate the impact of Codira on AI-assisted repository analysis and modification workflows.
 
-### Phase 5 Issues
+### Phase 4 Issues
 
 * #53 Create Agent Efficiency Benchmark Suite
 
-### Phase 5 Deliverables
+### Phase 4 Deliverables
 
 * Benchmark schema
 * Repository benchmark corpus
@@ -208,7 +214,7 @@ Measure and demonstrate the impact of Codira on AI-assisted repository analysis 
 * Codira-assisted workflow measurements
 * Benchmark reporting and visualization
 
-### Phase 5 Benchmark Categories
+### Phase 4 Benchmark Categories
 
 * Symbol discovery
 * Impact analysis
@@ -217,7 +223,7 @@ Measure and demonstrate the impact of Codira on AI-assisted repository analysis 
 * Patch preparation
 * Documentation generation
 
-### Phase 5 Exit Criteria
+### Phase 4 Exit Criteria
 
 * Benchmarks are reproducible.
 * Token savings can be quantified.
@@ -227,353 +233,377 @@ Measure and demonstrate the impact of Codira on AI-assisted repository analysis 
 
 ---
 
-## Phase 6 — Findings Interoperability (SARIF)
+## Phase 5 — Semantic Storage and Long-Running Indexing
 
-**Target Window:** December 2026
+**Target Window:** 26/10/2026–20/11/2026
+**Release Milestone:** v1.90.0 - Semantic storage and daemon preparation
 
-### Phase 6 Objectives
+### Phase 5 Objectives
 
-Provide standards-based integration with external code-scanning ecosystems.
+Prepare optional semantic storage and long-running indexing modes while preserving deterministic batch indexing.
 
-### Phase 6 Issues
-
-* #52 Add SARIF Output Support for Findings-Based Commands
-
-### Phase 6 Deliverables
-
-* Common finding model
-* SARIF serializer
-* GitHub Code Scanning compatibility
-* Findings renderer abstraction
-* SARIF documentation
-
-### Phase 6 Exit Criteria
-
-* SARIF output validates successfully.
-* Findings can be uploaded to GitHub Code Scanning.
-* Existing JSON and Markdown outputs remain unchanged.
-* Findings-based commands support SARIF export.
-
----
-
-## Phase 7 — Embedding Evaluation & Calibration
-
-**Target Window:** January 2027
-
-### Phase 7 Objectives
-
-Understand the impact of documentation indexing and architecture reporting on retrieval quality and storage requirements before introducing new storage technologies.
-
-### Phase 7 Issues
-
-* #28 Embeddings calibration
-
-### Phase 7 Deliverables
-
-* Embedding evaluation framework
-* Retrieval benchmarking methodology
-* Embedding calibration tooling
-* Performance measurements
-* Storage-growth analysis
-
-### Phase 7 Exit Criteria
-
-* Embedding effectiveness is quantified.
-* Retrieval trade-offs are documented.
-* Storage requirements are understood.
-
----
-
-## Phase 8 — Optional Vector Backend
-
-**Target Window:** February 2027
-
-### Phase 8 Objectives
-
-Provide optional semantic retrieval infrastructure while preserving deterministic baseline workflows.
-
-### Phase 8 Issues
+### Phase 5 Issues
 
 * #20 Optional vector database backend
+* #22 Daemon mode
 
-### Phase 8 Deliverables
+### Phase 5 Deliverables
 
 * Vector backend abstraction
 * Optional vector storage implementation
-* Benchmarking suite
 * Retrieval comparison framework
+* Background indexing service design
+* Incremental refresh support
+* Repository monitoring strategy
 
-### Phase 8 Exit Criteria
+### Phase 5 Exit Criteria
 
 * Semantic retrieval remains optional.
-* SQLite-only workflows remain supported.
-* Retrieval behavior is measurable and documented.
-
----
-
-## Phase 9 — Daemon Mode
-
-**Target Window:** March 2027
-
-### Phase 9 Objectives
-
-Support incremental indexing and long-running retrieval workloads.
-
-### Phase 9 Issues
-
-* #22 Daemon mode
-
-### Phase 9 Deliverables
-
-* Background indexing service
-* Incremental refresh support
-* Repository monitoring
-* Operational tooling
-
-### Phase 9 Exit Criteria
-
-* Daemon mode remains optional.
 * Batch indexing remains canonical.
-* Incremental updates function reliably.
+* Long-running indexing has explicit operational boundaries.
+* Retrieval behavior remains measurable and documented.
 
 ---
 
-## Phase 10 — Shared Repository Index Service
+## Phase 6 — Shared Service and Multi-Repository Analysis
 
-**Target Window:** April 2027
+**Target Window:** 23/11/2026–18/12/2026
+**Release Milestone:** v2.0.0 - Shared repository service
 
-### Phase 10 Objectives
+### Phase 6 Objectives
 
 Support centralized indexing and retrieval across multiple repositories.
 
-### Phase 10 Issues
+### Phase 6 Issues
 
+* #15 Multi-repo aggregation
 * #51 Shared repository index service
 
-### Phase 10 Deliverables
+### Phase 6 Deliverables
 
 * Shared repository catalog
 * Repository registration mechanism
 * Shared retrieval infrastructure
 * Shared embedding storage
+* Cross-repository indexing
+* Cross-repository references
 * Service administration tooling
 
-### Phase 10 Exit Criteria
+### Phase 6 Exit Criteria
 
 * Multiple repositories can coexist within one service.
 * Provenance remains explicit.
 * Service mode and batch mode produce equivalent repository facts.
+* Related repositories can be indexed and queried together.
 
 ---
 
-## Phase 11 — Core Language Expansion
+## Phase 7 — First-Wave Web and Systems Analyzers
 
-**Target Window:** May–June 2027
+**Target Window:** 04/01/2027–29/01/2027
+**Release Milestone:** v2.1.0 - First-wave analyzer expansion
 
-### Phase 11 Objectives
+### Phase 7 Objectives
 
-Expand support for high-value software ecosystems.
+Expand support for high-value web, service, and systems repositories.
 
-### Phase 11 Issues
+### Phase 7 Issues
 
 * #36 JavaScript analyzer
 * #37 TypeScript analyzer
 * #38 Go analyzer
 * #43 PHP analyzer
 
-### Phase 11 Deliverables
+### Phase 7 Deliverables
 
-* First-wave language analyzers
+* JavaScript analyzer
+* TypeScript analyzer
+* Go analyzer
+* PHP analyzer
 * Expanded benchmark corpus
 * Plugin-author reference implementations
 
-### Phase 11 Exit Criteria
+### Phase 7 Exit Criteria
 
-* Representative OSS repositories can be analyzed successfully.
+* Representative OSS repositories in the first-wave language set can be analyzed successfully.
 * All analyzers comply with plugin contracts.
+* Analyzer fixtures cover symbols, relations, declarations, and failure modes.
 
 ---
 
-## August 2027
+## August 2026 Stabilization Window
 
-### August 2027 Planned Status
+### August 2026 Planned Status
 
-No planned roadmap work.
+August 2026 is intentionally reserved for:
 
-Reserved for:
+* stabilization
+* maintenance
+* issue refinement
+* backlog review
+* documentation cleanup
+* release feedback
+
+No roadmap issues should be scheduled in August.
+
+---
+
+## January 2027 Maintenance Window
+
+### January 2027 Planned Status
+
+The first week of January is reserved for:
 
 * maintenance
 * roadmap review
+* release feedback
 * issue grooming
-* ecosystem feedback
+* dependency updates
+
+No major roadmap commitments should be scheduled before 04/01/2027.
 
 ---
 
-## Phase 12 — Embedded Fragment Delegation
+## Phase 8 — Fragment Delegation and Documentation Fragments
 
-**Target Window:** September 2027
+**Target Window:** 01/02/2027–26/02/2027
+**Release Milestone:** v2.2.0 - Fragment-aware analysis
 
-### Phase 12 Objectives
+### Phase 8 Objectives
 
-Support mixed-language files without introducing nested plugin architectures.
+Support mixed-language files and documentation examples without introducing nested plugin architectures.
 
-### Phase 12 Issues
+### Phase 8 Issues
 
+* #14 TeX/LaTeX analyzer
 * #35 Fragment delegation mechanism
 
-### Phase 12 Deliverables
+### Phase 8 Deliverables
 
 * Fragment descriptor model
 * Embedded-fragment pipeline
 * Fragment provenance tracking
 * Fragment analyzer selection
+* TeX/LaTeX analyzer
 
-### Phase 12 Examples
+### Phase 8 Examples
 
-* C inline assembly
 * Markdown fenced code blocks
 * Documentation examples
 * Template fragments
+* TeX/LaTeX embedded examples
 
-### Phase 12 Exit Criteria
+### Phase 8 Exit Criteria
 
 * Primary analyzers can emit fragments.
 * Fragment analyzers are selected through configuration.
 * Provenance remains deterministic and auditable.
+* TeX/LaTeX repositories can be indexed at a useful baseline level.
+* Fragment delegation can be tested without relying on analyzers scheduled for later phases.
 
 ---
 
-## Phase 13 — Multi-Repository Analysis
+## Phase 9 — Ecosystem and Publishing Readiness
 
-**Target Window:** October 2027
+**Target Window:** 01/03/2027–26/03/2027
+**Release Milestone:** v2.3.0 - Ecosystem publishing readiness
 
-### Phase 13 Objectives
+### Phase 9 Objectives
 
-Move beyond isolated repository analysis.
+Prepare Codira for a mature plugin ecosystem and trusted public releases.
 
-### Phase 13 Issues
-
-* #15 Multi-repo aggregation
-
-### Phase 13 Deliverables
-
-* Repository aggregation model
-* Cross-repository indexing
-* Cross-repository references
-* Cross-repository retrieval
-
-### Phase 13 Exit Criteria
-
-* Related repositories can be indexed and queried together.
-* Cross-repository relationships are discoverable.
-
----
-
-## Phase 14 — Ecosystem & Publishing
-
-**Target Window:** November–December 2027
-
-### Phase 14 Objectives
-
-Prepare Codira for a mature plugin ecosystem.
-
-### Phase 14 Issues
+### Phase 9 Issues
 
 * #18 Plugin extraction readiness checklist
 * #33 Package split and publish rehearsal
 * #34 Branch protection and trusted publishing verification
 
-### Phase 14 Deliverables
+### Phase 9 Deliverables
 
+* Plugin extraction readiness checklist
 * Plugin publication guidance
 * Packaging validation
-* Release automation
+* Release automation validation
+* Branch protection verification
+* Trusted publishing verification
 * Governance documentation
 
-### Phase 14 Exit Criteria
+### Phase 9 Exit Criteria
 
 * Third-party analyzers can be published independently.
 * Publishing workflows are validated.
+* Repository protection and release automation are verified.
 
 ---
 
-## Phase 15 — Secondary Language Expansion
+## Phase 10 — Build and Infrastructure Analyzers
 
-**Target Window:** January–February 2028
+**Target Window:** 29/03/2027–23/04/2027
+**Release Milestone:** v2.4.0 - Build and infrastructure analyzers
 
-### Phase 15 Objectives
+### Phase 10 Objectives
 
-Expand support for build systems, infrastructure, and additional mainstream ecosystems.
+Expand support for build systems, scripts, and infrastructure configuration files.
 
-### Phase 15 Issues
+### Phase 10 Issues
 
 * #5 Makefile analyzer
-* #42 YAML/TOML/HCL analyzer
 * #12 Lua analyzer
-* #39 Java analyzer
-* #44 Kotlin analyzer
-* #49 Ruby analyzer
-* #40 Rust analyzer
+* #42 YAML/TOML/HCL analyzer
 
-### Phase 15 Deliverables
+### Phase 10 Deliverables
 
-* Additional first-party analyzers
+* Makefile analyzer
+* Lua analyzer
+* Infrastructure configuration analyzer
 * Expanded integration testing
-* Broader repository coverage
 
-### Phase 15 Exit Criteria
+### Phase 10 Exit Criteria
 
-* Analyzer ecosystem covers major OSS repository types.
+* Build and infrastructure repositories are covered by first-party analyzers.
 * Configuration-driven analyzer selection remains manageable.
 
 ---
 
-## Phase 16 — Engineering & Legacy Language Expansion
+## Phase 11 — JVM, Systems, and Scripting Analyzers
 
-**Target Window:** March–April 2028
+**Target Window:** 26/04/2027–21/05/2027
+**Release Milestone:** v2.5.0 - JVM, systems, and scripting analyzers
 
-### Phase 16 Objectives
+### Phase 11 Objectives
 
-Support engineering-oriented, scientific, hardware, and long-lived software ecosystems.
+Expand mainstream application and systems-language coverage.
 
-### Phase 16 Issues
+### Phase 11 Issues
 
-* #46 Fortran analyzer
-* #50 VHDL analyzer
-* #48 Ada analyzer
+* #39 Java analyzer
+* #40 Rust analyzer
+* #44 Kotlin analyzer
+* #49 Ruby analyzer
+
+### Phase 11 Deliverables
+
+* Java analyzer
+* Kotlin analyzer
+* Ruby analyzer
+* Rust analyzer
+* Expanded repository corpus
+
+### Phase 11 Exit Criteria
+
+* Representative JVM, Ruby, and Rust repositories can be analyzed successfully.
+* Analyzer behavior remains deterministic across the expanded language set.
+
+---
+
+## Phase 12 — Engineering Language Analyzers
+
+**Target Window:** 24/05/2027–18/06/2027
+**Release Milestone:** v2.6.0 - Engineering language analyzers
+
+### Phase 12 Objectives
+
+Support engineering-oriented, scientific, and hardware software ecosystems.
+
+### Phase 12 Issues
+
 * #45 Assembly analyzer
-* #41 C# analyzer
-* #14 TeX/LaTeX analyzer
-* #47 COBOL analyzer
+* #46 Fortran analyzer
+* #48 Ada analyzer
+* #50 VHDL analyzer
 
-### Phase 16 Deliverables
+### Phase 12 Deliverables
 
-* Scientific-computing support
-* Hardware-design support
-* Legacy-system support
+* Assembly analyzer
+* Fortran analyzer
+* Ada analyzer
+* VHDL analyzer
+* Hardware-design fixtures
+* Scientific-computing fixtures
 
-### Phase 16 Exit Criteria
+### Phase 12 Exit Criteria
 
 * Codira can analyze representative engineering repositories.
 * Hardware and scientific repositories are first-class citizens.
 
 ---
 
+## Phase 13 — Enterprise and Legacy Language Analyzers
+
+**Target Window:** 21/06/2027–16/07/2027
+**Release Milestone:** v2.7.0 - Enterprise and legacy analyzers
+
+### Phase 13 Objectives
+
+Round out enterprise and long-lived software ecosystem support.
+
+### Phase 13 Issues
+
+* #41 C# analyzer
+* #47 COBOL analyzer
+
+### Phase 13 Deliverables
+
+* C# analyzer
+* COBOL analyzer
+* Enterprise repository fixtures
+* Legacy-system repository fixtures
+
+### Phase 13 Exit Criteria
+
+* Representative enterprise and legacy repositories can be indexed.
+* Analyzer contracts remain stable across the mature first-party language set.
+
+---
+
+## August 2027 Stabilization Window
+
+### August 2027 Planned Status
+
+August 2027 is intentionally reserved for:
+
+* stabilization
+* maintenance
+* roadmap review
+* issue grooming
+* ecosystem feedback
+* release follow-up
+
+No roadmap issues should be scheduled in August.
+
+---
+
+## Phase 14 — Optional Fallback and Parse-Gap Handling
+
+**Target Window:** 06/09/2027–01/10/2027
+**Release Milestone:** v2.8.0 - Optional fallback analyzers
+
+### Phase 14 Objectives
+
+Revisit optional fallback analyzers after the primary analyzer ecosystem has matured.
+
+### Phase 14 Issues
+
+* #1 Optional fallback analyzers
+
+### Phase 14 Deliverables
+
+* Optional fallback analyzer policy
+* Whole-file parse-gap handling
+* Fragment-level parse-gap handling
+* Deterministic fallback diagnostics
+
+### Phase 14 Exit Criteria
+
+* Fallback behavior remains optional.
+* Fallback behavior does not weaken explicit analyzer ownership.
+* Parse gaps are reported deterministically.
+
+---
+
 ## Deferred Work
 
-The following items remain intentionally deferred until sufficient ecosystem demand exists.
-
-### Deferred Work — Issue #1 Optional Fallback Analyzers
-
-Reason:
-
-Fallback behavior introduces significant complexity and should only be considered once the analyzer ecosystem matures.
-
-### Deferred Work — Issue #6 Config-First Analyzer-Aware Coverage Roots
-
-Reason:
-
-Depends on real-world usage patterns and ecosystem growth.
+The following items remain intentionally deferred until sufficient maintenance demand exists.
 
 ### Deferred Work — Issue #29 GitHub GraphQL Snapshot Pagination Tooling
 
@@ -587,11 +617,11 @@ Maintenance-oriented work with limited architectural impact.
 
 Current first-party analyzer priority:
 
-1. Docs
-2. JavaScript
-3. TypeScript
-4. Go
-5. PHP
+1. JavaScript
+2. TypeScript
+3. Go
+4. PHP
+5. TeX/LaTeX
 6. Makefile
 7. YAML/TOML/HCL
 8. Lua
@@ -604,10 +634,9 @@ Current first-party analyzer priority:
 15. Ada
 16. Assembly
 17. C#
-18. TeX/LaTeX
-19. COBOL
+18. COBOL
 
-This ordering reflects current expectations and may change as ecosystem needs evolve.
+This ordering reflects the release milestones above and may change as ecosystem needs evolve.
 
 ---
 
