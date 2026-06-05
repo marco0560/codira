@@ -4,15 +4,29 @@
 
 For normal use, install Codira from PyPI into the virtual environment of the
 repository you want to analyze. This is the simplest path when you only need to
-use `codira` and do not need bleeding-edge plugins or unreleased features:
+use `codira` and do not need unreleased plugins or features:
 
 ```bash
 source .venv/bin/activate
 pip install codira-bundle-official
 ```
 
-That installs `codira`, the first-party Python, JSON, C, C++, and Bash
-analyzers, and the first-party SQLite and DuckDB backends.
+That installs `codira`, the first-party analyzer plugins and backends.
+
+The analyzers currently available are:
+
+- Python
+- C
+- C++
+- JSON
+- Bash
+- Markdown
+- Text
+
+the last two being used to analyze doccumentation, while the backend plugins are:
+
+- SQLite
+- DuckDB
 
 Prefer this published install path over an editable checkout unless you are
 developing Codira itself, testing unreleased first-party plugins, or validating
@@ -37,10 +51,11 @@ install the official first-party analyzer/backend bundle. Use
 
 ## Bootstrap this repository
 
-Create the local development environment and install the repo-local Git
-configuration:
+Create the local development environment cloning from github and install the
+repo-local Git configuration:
 
 ```bash
+git clone https://github.com/marco0560/codira
 python3 scripts/bootstrap_dev_environment.py
 ```
 
