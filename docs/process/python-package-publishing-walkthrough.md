@@ -129,8 +129,18 @@ Before publishing:
 
 1. verify package names are available on PyPI
 2. verify versions are the intended release versions
-3. build every distribution
-4. run `twine check` on every generated artifact
+3. verify PyPI-rendered images in `README.md` use absolute HTTPS URLs
+4. build every distribution
+5. run `twine check` on every generated artifact
+
+Relative repository paths in the README, such as
+`docs/badges/cartoon_cold-2.png`, render correctly on GitHub but break on PyPI
+because the long description is rendered outside the repository. Use an
+absolute HTTPS URL for any image that must appear on PyPI, for example:
+
+```html
+<img src="https://raw.githubusercontent.com/marco0560/codira/main/docs/badges/cartoon_cold-2.png" alt="codira badge" width="160">
+```
 
 ## Build Steps
 
@@ -222,6 +232,16 @@ codira plugins
 The extra PyPI index is needed because TestPyPI typically does not host common
 third-party dependencies such as `sentence-transformers`.
 
+Before switching to real PyPI, inspect the TestPyPI metadata for the core
+package and confirm the long description contains the absolute badge URL:
+
+```bash
+curl -L https://test.pypi.org/pypi/codira/<version>/json
+```
+
+Do not continue to real PyPI if the metadata still contains relative image
+paths such as `docs/badges/`.
+
 ## Production Upload
 
 Once TestPyPI works, upload to PyPI:
@@ -229,6 +249,12 @@ Once TestPyPI works, upload to PyPI:
 ```bash
 python -m twine upload dist/*
 ```
+
+If TestPyPI credentials were active through environment variables, clear or
+switch them before uploading to real PyPI. In the `1.40.0` release rehearsal,
+real PyPI upload was blocked until the TestPyPI-oriented `TWINE_USERNAME` and
+`TWINE_PASSWORD` environment values were removed so `twine` could use the real
+PyPI credentials from `~/.pypirc`.
 
 ## Final End-User Verification
 

@@ -18,11 +18,16 @@
 1. Verify every distribution version is the intended coordinated release
    version.
 2. Align `codira-bundle-official` pins to the coordinated package set.
-3. Confirm `codira -V` reports the core package and installed plugin
+3. Verify `README.md` uses absolute HTTPS image URLs for PyPI-rendered images;
+   relative repository paths such as `docs/badges/*.png` break on PyPI project
+   pages.
+4. Confirm `codira -V` reports the core package and installed plugin
    distribution versions.
-4. Build wheel and sdist artifacts for every distribution.
-5. Run `twine check` for every artifact.
-6. Upload to TestPyPI in dependency order.
-7. Run a fresh TestPyPI smoke test with `codira-bundle-official`.
-8. Upload to PyPI in dependency order.
-9. Run a fresh PyPI smoke test with `codira-bundle-official`.
+5. Build wheel and sdist artifacts for every distribution.
+6. Run `twine check` for every artifact.
+7. Upload to TestPyPI in dependency order.
+8. Run a fresh TestPyPI smoke test with `codira-bundle-official`.
+9. Verify TestPyPI metadata for `codira` includes the absolute badge URL in
+   the long description before uploading the same artifacts to PyPI.
+10. Upload to PyPI in dependency order.
+11. Run a fresh PyPI smoke test with `codira-bundle-official`.

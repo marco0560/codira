@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/marco0560/codira/main/docs/badges/cartoon_cold-2.png" alt="codira badge" width="120">
+
 # codira-analyzer-json
 
 First-party JSON analyzer plugin for `codira`.
