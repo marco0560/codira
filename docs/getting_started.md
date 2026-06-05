@@ -2,8 +2,9 @@
 
 ## Install the published package
 
-For normal use, install the official bundle into the virtual environment of the
-repository you want to analyze:
+For normal use, install Codira from PyPI into the virtual environment of the
+repository you want to analyze. This is the simplest path when you only need to
+use `codira` and do not need bleeding-edge plugins or unreleased features:
 
 ```bash
 source .venv/bin/activate
@@ -13,8 +14,9 @@ pip install codira-bundle-official
 That installs `codira`, the first-party Python, JSON, C, C++, and Bash
 analyzers, and the first-party SQLite and DuckDB backends.
 
-The package is published on PyPI. If you only need to use `codira`, prefer this
-published install path over an editable checkout from a development branch.
+Prefer this published install path over an editable checkout unless you are
+developing Codira itself, testing unreleased first-party plugins, or validating
+changes from a development branch.
 
 Verify the install:
 
@@ -28,6 +30,10 @@ For a core-only install:
 ```bash
 pip install codira
 ```
+
+The core-only package installs the CLI and core contracts, but it does not
+install the official first-party analyzer/backend bundle. Use
+`codira-bundle-official` for a ready-to-use end-user installation.
 
 ## Bootstrap this repository
 
@@ -58,8 +64,9 @@ the editable first-party package set.
 
 ## Install into another repository
 
-Install `codira` into the virtual environment of the repository you want to
-analyze.
+Use this source-tree install path only when you want the target repository to
+run against this checkout, for example while developing Codira, testing
+bleeding-edge plugins, or validating unreleased features.
 
 Example:
 
@@ -95,11 +102,54 @@ source .venv/bin/activate
 uv run python ../codira/scripts/provision_embedding_model.py
 ```
 
+## Initialize Codira in a repository
+
+Codira can run without a repository config file. If no explicit config exists,
+runtime commands use built-in defaults and create a default user-level config
+on first use when the platform user config directory is writable.
+
+For a project-local setup, create a repository config:
+
+```bash
+codira config init --level repo
+```
+
+This writes `.codira/config.toml`. The config file may be committed when the
+repository should share analyzer selection, backend choice, or plugin settings.
+Normal `.codira` index artifacts remain local cache data and should stay
+ignored.
+
+To generate the full first-party plugin configuration surface:
+
+```bash
+codira config init --level repo --full
+```
+
+Inspect and validate the effective configuration:
+
+```bash
+codira config dump
+codira config validate
+codira config explain embeddings.batch_size
+```
+
+Effective configuration is resolved in this order:
+
+```text
+CLI flags
+-> CODIRA_* environment variables
+-> repository config: .codira/config.toml
+-> user config
+-> system config
+-> built-in defaults
+```
+
 ## Tune embedding runtime
 
 `codira` computes semantic embeddings through the local sentence-transformers
-backend during indexing. The default settings are deterministic, and runtime
-commands create a user-level config on first use.
+backend during indexing. The default settings are deterministic, and can be
+made explicit in the repository config when a project needs repeatable runtime
+tuning.
 
 Inspect the effective config:
 
