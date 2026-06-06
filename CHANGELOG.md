@@ -1,3 +1,10 @@
+## [1.43.2](https://github.com/marco0560/codira/compare/v1.43.1...v1.43.2) (2026-06-06)
+
+
+### Bug Fixes
+
+* **backend:** make embedding writes idempotent ([7077a95](https://github.com/marco0560/codira/commit/7077a95a132bda579aa2b81ef2399e236996c0d0))
+
 ## [1.43.1](https://github.com/marco0560/codira/compare/v1.43.0...v1.43.1) (2026-06-06)
 
 
