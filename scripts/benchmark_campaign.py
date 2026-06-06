@@ -1360,7 +1360,8 @@ def resolve_repository_benchmark(
             "--output-dir",
             str(discovery_output_dir),
         )
-        print(f"--- {repo.label.upper()} calibration started ---", flush=True)
+        print(f"--- {repo.label.upper()} ---", flush=True)
+        print(f"--- {repo.label} calibration started ---", flush=True)
         discovery_index_log = discovery_log_path(repo, config, "index")
         return_code = _logged_command_result(
             discovery_index,
@@ -1966,12 +1967,7 @@ def summarize_profile(profile: Path, *, limit: int = 20) -> list[dict[str, objec
     ]
 
 
-def _run_command(
-    command: tuple[str, ...],
-    *,
-    output_log: Path,
-    mirror_to_console: bool = False,
-) -> int:
+def _run_command(command: tuple[str, ...], *, output_log: Path) -> int:
     """
     Execute one benchmark command.
 
@@ -1981,10 +1977,6 @@ def _run_command(
         Command vector to execute.
     output_log : pathlib.Path
         File that receives combined command stdout and stderr.
-    mirror_to_console : bool, optional
-        Whether combined output should also be mirrored to stdout. This is used
-        for Hyperfine so its progress display and ETA remain visible during
-        long repository runs.
 
     Returns
     -------
@@ -1992,62 +1984,38 @@ def _run_command(
         Process return code.
     """
     output_log.parent.mkdir(parents=True, exist_ok=True)
-    if not mirror_to_console:
-        with output_log.open("w", encoding="utf-8") as stream:
-            stream.write(f"$ {shlex.join(command)}\n")
-            stream.flush()
-            return subprocess.run(
-                command,
-                check=False,
-                stdout=stream,
-                stderr=subprocess.STDOUT,
-            ).returncode
-
-    with output_log.open("wb") as stream:
-        header = f"$ {shlex.join(command)}\n".encode()
-        stream.write(header)
+    with output_log.open("w", encoding="utf-8") as stream:
+        stream.write(f"$ {shlex.join(command)}\n")
         stream.flush()
-        sys.stdout.buffer.write(header)
-        sys.stdout.buffer.flush()
-        process = subprocess.Popen(
+        return subprocess.run(
             command,
-            stdout=subprocess.PIPE,
+            check=False,
+            stdout=stream,
             stderr=subprocess.STDOUT,
-        )
-        if process.stdout is None:
-            return process.wait()
-        while True:
-            chunk = process.stdout.read(4096)
-            if not chunk:
-                break
-            stream.write(chunk)
-            stream.flush()
-            sys.stdout.buffer.write(chunk)
-            sys.stdout.buffer.flush()
-        return process.wait()
+        ).returncode
 
 
-def _print_repo_step_timestamp(label: str, *, elapsed_seconds: float) -> None:
+def _print_repo_step_timestamp(
+    label: str, *, elapsed_seconds: float | None = None
+) -> None:
     """
-    Print the completion timestamp and duration for one repository step.
+    Print the completion timestamp for one benchmark repository step.
 
     Parameters
     ----------
     label : str
         Repository label associated with the completed campaign step.
-    elapsed_seconds : float
-        Elapsed wall-clock seconds for all commands executed for the repository.
+    elapsed_seconds : float | None, optional
+        Optional elapsed wall-clock duration for the repository step.
 
     Returns
     -------
     None
-        The timestamp and duration are written to stdout for interactive
-        campaign tracking.
+        The timestamp is written to stdout for interactive campaign tracking.
     """
-    print(
-        f"{label}: {utc_run_timestamp()} elapsed={_format_duration(elapsed_seconds)}",
-        flush=True,
-    )
+    print(f"{label}: {utc_run_timestamp()}", flush=True)
+    if elapsed_seconds is not None:
+        print(f"{label}: elapsed={_format_duration(elapsed_seconds)}", flush=True)
 
 
 def _write_failure_summary(
@@ -2170,15 +2138,12 @@ def main() -> int:
                 msg = "campaign command entries must be argument lists"
                 raise TypeError(msg)
             command_tuple = tuple(str(part) for part in command)
-            mirror_to_console = bool(
-                command_tuple and command_tuple[0] == config.hyperfine
-            )
-            if mirror_to_console:
+            if command_tuple and command_tuple[0] == config.hyperfine:
                 print(f"{label}: Hyperfine progress", flush=True)
+
             return_code = _run_command(
                 command_tuple,
                 output_log=Path(str(output_log)),
-                mirror_to_console=mirror_to_console,
             )
             if return_code != 0:
                 failures.append(
