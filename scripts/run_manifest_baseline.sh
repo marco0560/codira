@@ -2,7 +2,7 @@
 set -u
 set -o pipefail
 
-if [ "$#" -gt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ] || { [ "$#" -eq 1 ] && [ ! -f "$1" ]; }; then
+if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && { [ "$1" = "-h" ] || [ "$1" = "--help" ] || [ ! -f "$1" ]; }; }; then
     echo "Uso: $0 [manifest.json]"
     echo "  -h, --help    Mostra questo messaggio di aiuto"
     echo "  Nota: Se specificato, il file manifest.json deve esistere."
