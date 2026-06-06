@@ -3615,10 +3615,20 @@ def _flush_prepared_embedding_rows(
 
     import pyarrow as pa
 
+    deduplicated_rows = list(
+        {
+            (row.object_type, row.object_id, backend.name, backend.version): (
+                row,
+                content_hash,
+                stored_vector,
+            )
+            for row, content_hash, stored_vector in prepared_rows
+        }.values()
+    )
     encoded_vectors: dict[str, tuple[bytes, list[float]]] = {}
     texts_to_encode = {
         content_hash: row.text
-        for row, content_hash, stored_vector in prepared_rows
+        for row, content_hash, stored_vector in deduplicated_rows
         if stored_vector is None
     }
     if texts_to_encode:
@@ -3641,7 +3651,7 @@ def _flush_prepared_embedding_rows(
     dims: list[int] = []
     vectors: list[bytes] = []
     vector_values_rows: list[list[float]] = []
-    for row, content_hash, stored_vector in prepared_rows:
+    for row, content_hash, stored_vector in deduplicated_rows:
         resolved_blob = stored_vector
         vector_values: list[float]
         if resolved_blob is None:
@@ -3676,6 +3686,16 @@ def _flush_prepared_embedding_rows(
     view_name = "__codira_pending_embedding_rows"
     conn.register(view_name, table)
     try:
+        conn.execute(
+            """
+            DELETE FROM embeddings
+            USING __codira_pending_embedding_rows pending
+            WHERE embeddings.object_type = pending.object_type
+              AND embeddings.object_id = pending.object_id
+              AND embeddings.backend = pending.backend
+              AND embeddings.version = pending.version
+            """
+        )
         conn.execute(
             """
             INSERT INTO embeddings(

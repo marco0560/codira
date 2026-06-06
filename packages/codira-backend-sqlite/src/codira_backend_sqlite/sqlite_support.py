@@ -2070,10 +2070,20 @@ def _flush_prepared_embedding_rows(
     None
         Prepared embedding rows are inserted in place.
     """
+    deduplicated_rows = list(
+        {
+            (row.object_type, row.object_id, backend.name, backend.version): (
+                row,
+                content_hash,
+                stored_vector,
+            )
+            for row, content_hash, stored_vector in prepared_rows
+        }.values()
+    )
     encoded_vectors: dict[str, bytes] = {}
     texts_to_encode = {
         content_hash: row.text
-        for row, content_hash, stored_vector in prepared_rows
+        for row, content_hash, stored_vector in deduplicated_rows
         if stored_vector is None
     }
     if texts_to_encode:
@@ -2089,7 +2099,7 @@ def _flush_prepared_embedding_rows(
             encoded_vectors[content_hash] = serialize_vector(vector)
 
     insert_rows: list[tuple[str, int, str, str, str, int, bytes]] = []
-    for row, content_hash, stored_vector in prepared_rows:
+    for row, content_hash, stored_vector in deduplicated_rows:
         resolved_blob = stored_vector
         if resolved_blob is None:
             resolved_blob = encoded_vectors[content_hash]
@@ -2105,6 +2115,32 @@ def _flush_prepared_embedding_rows(
                 resolved_blob,
             )
         )
+    conn.executemany(
+        """
+        DELETE FROM embeddings
+        WHERE object_type = ?
+          AND object_id = ?
+          AND backend = ?
+          AND version = ?
+        """,
+        [
+            (
+                object_type,
+                object_id,
+                backend_name,
+                backend_version,
+            )
+            for (
+                object_type,
+                object_id,
+                backend_name,
+                backend_version,
+                _content_hash,
+                _dim,
+                _vector,
+            ) in insert_rows
+        ],
+    )
     conn.executemany(
         "INSERT INTO embeddings"
         "(object_type, object_id, backend, version, content_hash, dim, vector) "

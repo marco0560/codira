@@ -18,6 +18,7 @@ from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
+    PendingEmbeddingRow,
 )
 from codira.models import (
     AnalysisResult,
@@ -28,6 +29,7 @@ from codira.models import (
     ModuleArtifact,
 )
 from codira.schema import DDL, SCHEMA_VERSION
+from codira.semantic.embeddings import EmbeddingBackendSpec
 from codira_backend_duckdb import (
     DuckDBIndexBackend,
     _duckdb_db_path,
@@ -35,6 +37,7 @@ from codira_backend_duckdb import (
     build_backend,
 )
 from codira_backend_duckdb.duckdb_support import DocumentationArtifactRow
+from codira_backend_duckdb.duckdb_support import _flush_pending_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_pending_reference_scan_rows
 from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
 
@@ -440,7 +443,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.43.0"
+    assert project["project"]["version"] == "1.44.0"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -1707,6 +1710,126 @@ def test_duckdb_session_batches_embedding_generation_across_files(
 
     assert len(calls) == 1
     assert len(calls[0]) == 2
+
+
+def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Replace duplicate pending documentation embeddings by storage key.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace embedding generation with a deterministic test
+        double.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts duplicate pending documentation embedding rows are
+        collapsed and persisted with the latest payload.
+    """
+    pytest.importorskip("duckdb")
+    calls: list[list[str]] = []
+
+    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+        """
+        Record one embedding batch.
+
+        Parameters
+        ----------
+        texts : list[str]
+            Text payloads requested from the embedding backend.
+
+        Returns
+        -------
+        list[list[float]]
+            Deterministic embedding vectors matching the requested payloads.
+        """
+        calls.append(list(texts))
+        return [[float(index + 1)] + [0.0] * 383 for index, _text in enumerate(texts)]
+
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_support.embed_texts",
+        fake_embed_texts,
+    )
+
+    backend = DuckDBIndexBackend()
+    connection = backend.open_connection(tmp_path)
+    try:
+        _flush_pending_embedding_rows(
+            cast("_DuckDBPersistenceConnection", connection),
+            pending_embedding_rows=[
+                (
+                    PendingEmbeddingRow(
+                        object_type="documentation",
+                        object_id=1,
+                        stable_id="doc:existing",
+                        text="existing",
+                    ),
+                    "existing-hash",
+                    None,
+                ),
+            ],
+            backend=EmbeddingBackendSpec(
+                name="test-backend",
+                version="1",
+                dim=384,
+            ),
+        )
+        _flush_pending_embedding_rows(
+            cast("_DuckDBPersistenceConnection", connection),
+            pending_embedding_rows=[
+                (
+                    PendingEmbeddingRow(
+                        object_type="documentation",
+                        object_id=1,
+                        stable_id="doc:first",
+                        text="first",
+                    ),
+                    "first-hash",
+                    None,
+                ),
+                (
+                    PendingEmbeddingRow(
+                        object_type="documentation",
+                        object_id=1,
+                        stable_id="doc:latest",
+                        text="latest",
+                    ),
+                    "latest-hash",
+                    None,
+                ),
+            ],
+            backend=EmbeddingBackendSpec(
+                name="test-backend",
+                version="1",
+                dim=384,
+            ),
+        )
+        stored_rows = connection.execute(
+            """
+            SELECT object_type, object_id, backend, version, content_hash, vector_values
+            FROM embeddings
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert calls == [["existing"], ["latest"]]
+    assert len(stored_rows) == 1
+    assert stored_rows[0][:5] == (
+        "documentation",
+        1,
+        "test-backend",
+        "1",
+        "latest-hash",
+    )
+    assert cast("object", stored_rows[0][5]) == [1.0] + [0.0] * 383
 
 
 def test_duckdb_embedding_candidates_use_stored_vector_values(
