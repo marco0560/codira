@@ -45,12 +45,30 @@ CODIRA_EMBED_BATCH_SIZE="${CODIRA_EMBED_BATCH_SIZE:-128}"
 CODIRA_TORCH_NUM_THREADS="${CODIRA_TORCH_NUM_THREADS:-10}"
 CODIRA_TORCH_NUM_INTEROP_THREADS="${CODIRA_TORCH_NUM_INTEROP_THREADS:-1}"
 
+format_duration() {
+  local total="$1"
+  local hours=$((total / 3600))
+  local minutes=$(((total % 3600) / 60))
+  local seconds=$((total % 60))
+  if [[ "$hours" -gt 0 ]]; then
+    printf '%dh %02dm %02ds' "$hours" "$minutes" "$seconds"
+  elif [[ "$minutes" -gt 0 ]]; then
+    printf '%dm %02ds' "$minutes" "$seconds"
+  else
+    printf '%ds' "$seconds"
+  fi
+}
+
 run_backend() {
   local backend="$1"
   shift
   local run_id="${STAMP}-bk-cpp-${backend}"
   local run_dir="${ARTIFACT_ROOT}/${run_id}"
   local log_path="${run_dir}/campaign-console.log"
+  local started_at
+  local status
+  local elapsed
+  started_at="$(date +%s)"
   mkdir -p "$run_dir"
   echo "== ${backend} baseline: ${run_id} =="
   env \
@@ -68,7 +86,10 @@ run_backend() {
       --python "$PYTHON" \
       --continue-on-error \
       "$@" 2>&1 | tee "$log_path"
-  return "${PIPESTATUS[0]}"
+  status="${PIPESTATUS[0]}"
+  elapsed="$(($(date +%s) - started_at))"
+  echo "== ${backend} total: $(format_duration "$elapsed") status=${status} =="
+  return "$status"
 }
 
 status=0

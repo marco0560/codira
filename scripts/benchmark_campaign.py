@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -911,6 +912,47 @@ def _safe_label(value: str) -> str:
     return "-".join(part for part in "".join(chars).split("-") if part)
 
 
+def _format_duration(seconds: float) -> str:
+    """
+    Format an elapsed duration for terminal progress messages.
+
+    Parameters
+    ----------
+    seconds : float
+        Elapsed wall-clock seconds.
+
+    Returns
+    -------
+    str
+        Human-readable duration using compact hour, minute, and second units.
+    """
+    rounded = int(round(seconds))
+    hours, remainder = divmod(rounded, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {secs:02d}s"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
+def _elapsed_since(started_at: float) -> str:
+    """
+    Return a formatted elapsed duration from a monotonic start timestamp.
+
+    Parameters
+    ----------
+    started_at : float
+        Monotonic timestamp captured with ``time.perf_counter``.
+
+    Returns
+    -------
+    str
+        Human-readable elapsed wall-clock duration.
+    """
+    return _format_duration(time.perf_counter() - started_at)
+
+
 def run_directory(config: CampaignConfig) -> Path:
     """
     Return the artifact directory for one campaign run.
@@ -1294,6 +1336,7 @@ def resolve_repository_benchmark(
     ResolvedRepositoryBenchmark
         Repository benchmark with adaptive selections applied.
     """
+    started_at = time.perf_counter()
     selection: dict[str, object] = {
         "requested_query": repo.query,
         "requested_commands": [list(command) for command in repo.commands],
@@ -1317,7 +1360,7 @@ def resolve_repository_benchmark(
             "--output-dir",
             str(discovery_output_dir),
         )
-        print(f"--- {repo.label.upper()} ---", flush=True)
+        print(f"--- {repo.label.upper()} calibration started ---", flush=True)
         discovery_index_log = discovery_log_path(repo, config, "index")
         return_code = _logged_command_result(
             discovery_index,
@@ -1427,6 +1470,10 @@ def resolve_repository_benchmark(
             )
         selection["command_trials"] = command_trials
 
+    print(
+        f"{repo.label}: calibration completed in {_elapsed_since(started_at)}",
+        flush=True,
+    )
     return ResolvedRepositoryBenchmark(
         label=repo.label,
         category=repo.category,
@@ -1599,6 +1646,8 @@ def build_hyperfine_argv(
     )
     return (
         config.hyperfine,
+        "--style",
+        "full",
         "--warmup",
         str(config.warmup),
         "--runs",
@@ -1917,7 +1966,12 @@ def summarize_profile(profile: Path, *, limit: int = 20) -> list[dict[str, objec
     ]
 
 
-def _run_command(command: tuple[str, ...], *, output_log: Path) -> int:
+def _run_command(
+    command: tuple[str, ...],
+    *,
+    output_log: Path,
+    mirror_to_console: bool = False,
+) -> int:
     """
     Execute one benchmark command.
 
@@ -1927,6 +1981,10 @@ def _run_command(command: tuple[str, ...], *, output_log: Path) -> int:
         Command vector to execute.
     output_log : pathlib.Path
         File that receives combined command stdout and stderr.
+    mirror_to_console : bool, optional
+        Whether combined output should also be mirrored to stdout. This is used
+        for Hyperfine so its progress display and ETA remain visible during
+        long repository runs.
 
     Returns
     -------
@@ -1934,32 +1992,62 @@ def _run_command(command: tuple[str, ...], *, output_log: Path) -> int:
         Process return code.
     """
     output_log.parent.mkdir(parents=True, exist_ok=True)
-    with output_log.open("w", encoding="utf-8") as stream:
-        stream.write(f"$ {shlex.join(command)}\n")
+    if not mirror_to_console:
+        with output_log.open("w", encoding="utf-8") as stream:
+            stream.write(f"$ {shlex.join(command)}\n")
+            stream.flush()
+            return subprocess.run(
+                command,
+                check=False,
+                stdout=stream,
+                stderr=subprocess.STDOUT,
+            ).returncode
+
+    with output_log.open("wb") as stream:
+        header = f"$ {shlex.join(command)}\n".encode()
+        stream.write(header)
         stream.flush()
-        return subprocess.run(
+        sys.stdout.buffer.write(header)
+        sys.stdout.buffer.flush()
+        process = subprocess.Popen(
             command,
-            check=False,
-            stdout=stream,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-        ).returncode
+        )
+        if process.stdout is None:
+            return process.wait()
+        while True:
+            chunk = process.stdout.read(4096)
+            if not chunk:
+                break
+            stream.write(chunk)
+            stream.flush()
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+        return process.wait()
 
 
-def _print_repo_step_timestamp(label: str) -> None:
+def _print_repo_step_timestamp(label: str, *, elapsed_seconds: float) -> None:
     """
-    Print the completion timestamp for one benchmark repository step.
+    Print the completion timestamp and duration for one repository step.
 
     Parameters
     ----------
     label : str
         Repository label associated with the completed campaign step.
+    elapsed_seconds : float
+        Elapsed wall-clock seconds for all commands executed for the repository.
 
     Returns
     -------
     None
-        The timestamp is written to stdout for interactive campaign tracking.
+        The timestamp and duration are written to stdout for interactive
+        campaign tracking.
     """
-    print(f"{label}: {utc_run_timestamp()}", flush=True)
+    print(
+        f"{label}: {utc_run_timestamp()} elapsed={_format_duration(elapsed_seconds)}",
+        flush=True,
+    )
 
 
 def _write_failure_summary(
@@ -2016,6 +2104,7 @@ def main() -> int:
         If an internally generated command plan has an invalid shape.
     """
     args = build_parser().parse_args()
+    campaign_started_at = time.perf_counter()
     run_id = args.run_id or utc_run_timestamp().replace(":", "").replace("-", "")
     config = CampaignConfig(
         manifest=Path(args.manifest).resolve(),
@@ -2059,6 +2148,7 @@ def main() -> int:
     (run_directory(config) / "profiles").mkdir(parents=True, exist_ok=True)
     failures: list[dict[str, object]] = []
     for row in plan:
+        repo_started_at = time.perf_counter()
         commands = row["commands"]
         if not isinstance(commands, list):
             msg = "campaign command rows must contain a command list"
@@ -2079,9 +2169,16 @@ def main() -> int:
             if not isinstance(command, list):
                 msg = "campaign command entries must be argument lists"
                 raise TypeError(msg)
+            command_tuple = tuple(str(part) for part in command)
+            mirror_to_console = bool(
+                command_tuple and command_tuple[0] == config.hyperfine
+            )
+            if mirror_to_console:
+                print(f"{label}: Hyperfine progress", flush=True)
             return_code = _run_command(
-                tuple(str(part) for part in command),
+                command_tuple,
                 output_log=Path(str(output_log)),
+                mirror_to_console=mirror_to_console,
             )
             if return_code != 0:
                 failures.append(
@@ -2095,14 +2192,24 @@ def main() -> int:
                     }
                 )
                 if not config.continue_on_error:
-                    _print_repo_step_timestamp(label)
+                    _print_repo_step_timestamp(
+                        label,
+                        elapsed_seconds=time.perf_counter() - repo_started_at,
+                    )
                     _write_failure_summary(
                         config,
                         metadata=payload["metadata"],
                         failures=failures,
                     )
+                    print(
+                        f"{config.run_id}: total elapsed={_elapsed_since(campaign_started_at)}",
+                        flush=True,
+                    )
                     return return_code
-        _print_repo_step_timestamp(label)
+        _print_repo_step_timestamp(
+            label,
+            elapsed_seconds=time.perf_counter() - repo_started_at,
+        )
 
     profile_summaries = {
         str(profile): summarize_profile(profile)
@@ -2116,6 +2223,10 @@ def main() -> int:
         config,
         metadata=payload["metadata"],
         failures=failures,
+    )
+    print(
+        f"{config.run_id}: total elapsed={_elapsed_since(campaign_started_at)}",
+        flush=True,
     )
     if failures:
         return 1
