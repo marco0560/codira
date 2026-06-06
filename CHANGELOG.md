@@ -1,3 +1,10 @@
+## [1.43.1](https://github.com/marco0560/codira/compare/v1.43.0...v1.43.1) (2026-06-06)
+
+
+### Bug Fixes
+
+* **analyzer:** preserve unicode markdown stable IDs ([c7b10de](https://github.com/marco0560/codira/commit/c7b10de47961018f1ef39b7173ca42a78f0529b8))
+
 # [1.43.0](https://github.com/marco0560/codira/compare/v1.42.3...v1.43.0) (2026-06-04)
 
 
