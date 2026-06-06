@@ -20,6 +20,7 @@ package-local helper implementation used by the first-party DuckDB backend.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 import csv
 import hashlib
@@ -29,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
-from codira.contracts import PendingEmbeddingRow, StoredEmbeddingRow
+from codira.contracts import BackendError, PendingEmbeddingRow, StoredEmbeddingRow
 from codira.docstring import DocstringValidationRequest, validate_docstring
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.repository_scope import path_has_excluded_tree_name
@@ -2747,6 +2748,7 @@ def _flush_structural_file_rows(
     -------
     None
         Rows are inserted in place.
+
     """
     if not rows:
         return
@@ -3007,9 +3009,22 @@ def _flush_structural_documentation_rows(
     -------
     None
         Rows are inserted in place.
+
+    Raises
+    ------
+    BackendError
+        If buffered documentation rows contain duplicate stable IDs.
     """
     if not rows:
         return
+    stable_id_counts = Counter(row[2] for row in rows)
+    duplicates = sorted(
+        stable_id for stable_id, count in stable_id_counts.items() if count > 1
+    )
+    if duplicates:
+        duplicates_text = ", ".join(duplicates)
+        msg = f"duplicate documentation stable_id(s): {duplicates_text}"
+        raise BackendError(msg)
 
     import pyarrow as pa
 

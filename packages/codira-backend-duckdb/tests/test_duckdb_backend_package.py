@@ -6,7 +6,7 @@ import json
 import sys
 import tomllib
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -34,7 +34,12 @@ from codira_backend_duckdb import (
     _duckdb_schema_ddl,
     build_backend,
 )
+from codira_backend_duckdb.duckdb_support import DocumentationArtifactRow
 from codira_backend_duckdb.duckdb_support import _flush_pending_reference_scan_rows
+from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
+
+if TYPE_CHECKING:
+    from codira_backend_duckdb.duckdb_support import _DuckDBPersistenceConnection
 
 
 _UNRESOLVED_CALL_RECORDS = (
@@ -695,8 +700,8 @@ def test_duckdb_backend_persist_runtime_inventory_round_trips_inventory(
 
     assert backend.load_runtime_inventory(tmp_path) == ("duckdb", "1.5.3", 1)
     assert backend.load_analyzer_inventory(tmp_path) == [
-        ("bash", "2", json.dumps(("*.sh",))),
-        ("python", "1", json.dumps(("*.py",))),
+        ("bash", "2", json.dumps({"discovery_globs": ("*.sh",)})),
+        ("python", "1", json.dumps({"discovery_globs": ("*.py",)})),
     ]
     assert connection.committed is True
 
@@ -1967,3 +1972,58 @@ def test_duckdb_documentation_candidates_use_stored_vector_values(
             ),
         )
     ]
+
+
+def test_duckdb_documentation_bulk_flush_rejects_duplicate_stable_ids() -> None:
+    """
+    Reject duplicate buffered documentation stable IDs before DuckDB insertion.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the package emits a backend error instead of exposing
+        a raw DuckDB constraint exception.
+    """
+    duplicate_id = "doc:section:docs/guide.md:section:1:line-1"
+    rows: list[DocumentationArtifactRow] = [
+        (
+            1,
+            1,
+            duplicate_id,
+            "section",
+            "markdown_section",
+            1,
+            2,
+            "One",
+            '["One"]',
+            "One",
+            None,
+            None,
+            None,
+        ),
+        (
+            2,
+            1,
+            duplicate_id,
+            "section",
+            "markdown_section",
+            3,
+            4,
+            "Two",
+            '["Two"]',
+            "Two",
+            None,
+            None,
+            None,
+        ),
+    ]
+
+    with pytest.raises(BackendError, match="duplicate documentation stable_id"):
+        _flush_structural_documentation_rows(
+            cast("_DuckDBPersistenceConnection", _FakeDuckDBConnection()),
+            rows,
+        )

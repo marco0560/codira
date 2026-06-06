@@ -642,7 +642,7 @@ def _collect_indexed_file_analyses(
 
 def _duplicate_analysis_stable_ids(analysis: AnalysisResult) -> list[str]:
     """
-    Return duplicate symbol stable IDs emitted by one analysis result.
+    Return duplicate artifact stable IDs emitted by one analysis result.
 
     Parameters
     ----------
@@ -652,8 +652,8 @@ def _duplicate_analysis_stable_ids(analysis: AnalysisResult) -> list[str]:
     Returns
     -------
     list[str]
-        Sorted duplicate stable IDs, or an empty list when the analysis is
-        internally unique.
+        Sorted duplicate stable IDs, or an empty list when the analysis
+        artifacts are internally unique.
     """
     stable_ids = [analysis.module.stable_id]
     stable_ids.extend(cls.stable_id for cls in analysis.classes)
@@ -662,6 +662,7 @@ def _duplicate_analysis_stable_ids(analysis: AnalysisResult) -> list[str]:
     stable_ids.extend(fn.stable_id for fn in analysis.functions)
     stable_ids.extend(overload.stable_id for overload in analysis.iter_overloads())
     stable_ids.extend(decl.stable_id for decl in analysis.declarations)
+    stable_ids.extend(artifact.stable_id for artifact in analysis.documentation)
     counts = Counter(stable_ids)
     return sorted(stable_id for stable_id, count in counts.items() if count > 1)
 

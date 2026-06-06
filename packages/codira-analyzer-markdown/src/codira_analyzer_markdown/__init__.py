@@ -20,6 +20,7 @@ documentation retrieval.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -48,7 +49,7 @@ __all__ = ["MarkdownAnalyzer", "build_analyzer"]
 
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)\s*$")
 _FENCE_RE = re.compile(r"^[ \t]*(```|~~~)")
-_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_SLUG_SEPARATOR = "-"
 
 
 @dataclass(frozen=True)
@@ -164,6 +165,38 @@ def _strip_front_matter(lines: list[str]) -> tuple[list[str], int]:
     return lines, 1
 
 
+def _slug_heading_title(title: str) -> str:
+    """
+    Render one Markdown heading title as a deterministic Unicode slug.
+
+    Parameters
+    ----------
+    title : str
+        Raw heading title.
+
+    Returns
+    -------
+    str
+        Unicode-preserving slug. Separators, controls, and punctuation are
+        collapsed to hyphens; empty results fall back to ``section``.
+    """
+    normalized = unicodedata.normalize("NFKC", title).casefold()
+    pieces: list[str] = []
+    previous_was_separator = False
+    for character in normalized:
+        category = unicodedata.category(character)
+        is_separator = category[0] in {"C", "P", "Z"}
+        if is_separator:
+            if pieces and not previous_was_separator:
+                pieces.append(_SLUG_SEPARATOR)
+            previous_was_separator = True
+            continue
+        pieces.append(character)
+        previous_was_separator = False
+    slug = "".join(pieces).strip(_SLUG_SEPARATOR)
+    return slug or "section"
+
+
 def _slug_heading_path(path: tuple[str, ...]) -> str:
     """
     Render one heading path as a deterministic lowercase slug.
@@ -176,12 +209,9 @@ def _slug_heading_path(path: tuple[str, ...]) -> str:
     Returns
     -------
     str
-        Slash-separated slug path for stable documentation identities.
+        Slash-separated Unicode slug path for stable documentation identities.
     """
-    slugs: list[str] = []
-    for title in path:
-        slug = _SLUG_RE.sub("-", title.lower()).strip("-")
-        slugs.append(slug or "section")
+    slugs = [_slug_heading_title(title) for title in path]
     return "/".join(slugs) or "file"
 
 
@@ -325,6 +355,7 @@ def _documentation_artifacts(
         )
 
     artifacts: list[DocumentationArtifact] = []
+    stable_heading_path_counts: dict[str, int] = {}
     for index, heading in enumerate(headings):
         end_index = (
             headings[index + 1].index if index + 1 < len(headings) else len(lines)
@@ -333,11 +364,15 @@ def _documentation_artifacts(
         if not text:
             continue
         stable_heading_path = _slug_heading_path(heading.path)
+        stable_heading_path_counts[stable_heading_path] = (
+            stable_heading_path_counts.get(stable_heading_path, 0) + 1
+        )
+        emitted_ordinal = stable_heading_path_counts[stable_heading_path]
         artifacts.append(
             DocumentationArtifact(
                 stable_id=(
                     f"doc:section:{relative_path}:{stable_heading_path}:"
-                    f"{heading.ordinal}"
+                    f"{emitted_ordinal}:line-{heading.lineno}"
                 ),
                 kind="section",
                 source_format="markdown_section",
@@ -367,7 +402,7 @@ class MarkdownAnalyzer:
     """
 
     name = "markdown"
-    version = "1"
+    version = "2"
     discovery_globs: tuple[str, ...] = ("*.md",)
 
     def __init__(self) -> None:

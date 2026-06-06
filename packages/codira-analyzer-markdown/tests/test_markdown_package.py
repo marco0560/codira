@@ -24,7 +24,7 @@ def test_markdown_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.43.0"
+    assert project["project"]["version"] == "1.44.0"
     assert project["project"]["dependencies"] == ["codira>=1.5.0,<2.0.0"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "markdown": "codira_analyzer_markdown:build_analyzer"
@@ -156,12 +156,56 @@ def test_markdown_analyzer_emits_heading_section_documentation(
         "Setup",
     ]
     assert [artifact.stable_id for artifact in result.documentation] == [
-        "doc:section:docs/guide.md:setup:1",
-        "doc:section:docs/guide.md:setup/details:1",
-        "doc:section:docs/guide.md:setup:2",
+        "doc:section:docs/guide.md:setup:1:line-4",
+        "doc:section:docs/guide.md:setup/details:1:line-12",
+        "doc:section:docs/guide.md:setup:2:line-15",
     ]
     assert result.documentation[0].lineno == 4
     assert "# Not a heading" in result.documentation[0].text
+
+
+def test_markdown_analyzer_preserves_unicode_heading_stable_ids(
+    tmp_path: Path,
+) -> None:
+    """
+    Keep non-ASCII headings distinct in documentation stable IDs.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts Unicode headings are preserved and repeated headings
+        remain disambiguated by ordinal and line number.
+    """
+    doc_path = tmp_path / "docs" / "guide.zh-cn.md"
+    doc_path.parent.mkdir()
+    doc_path.write_text(
+        "# 简介\n"
+        "Intro.\n"
+        "\n"
+        "# 安装\n"
+        "Install.\n"
+        "\n"
+        "# 简介\n"
+        "Second intro.\n"
+        "\n"
+        "# !!!\n"
+        "Punctuation only.\n",
+        encoding="utf-8",
+    )
+
+    result = MarkdownAnalyzer().analyze_file(doc_path, tmp_path)
+
+    assert [artifact.stable_id for artifact in result.documentation] == [
+        "doc:section:docs/guide.zh-cn.md:简介:1:line-1",
+        "doc:section:docs/guide.zh-cn.md:安装:1:line-4",
+        "doc:section:docs/guide.zh-cn.md:简介:2:line-7",
+        "doc:section:docs/guide.zh-cn.md:section:1:line-10",
+    ]
 
 
 def test_markdown_analyzer_emits_file_artifact_without_headings(

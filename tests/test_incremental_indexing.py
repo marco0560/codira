@@ -56,6 +56,7 @@ from codira.models import (
     AnalysisResult,
     CallableReference,
     CallSite,
+    DocumentationArtifact,
     FileMetadataSnapshot,
     FunctionArtifact,
     ModuleArtifact,
@@ -1582,6 +1583,67 @@ def test_index_repo_reports_duplicate_stable_ids_as_file_failures(
     assert report.failed == 1
     assert report.failures[0].path == str(module)
     assert "duplicate stable_id(s)" in report.failures[0].reason
+
+
+def test_duplicate_analysis_stable_ids_include_documentation_artifacts(
+    tmp_path: Path,
+) -> None:
+    """
+    Include documentation artifacts in per-file stable-ID validation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts duplicate documentation identities are reported
+        before backend persistence.
+    """
+    document = tmp_path / "docs" / "guide.md"
+    duplicate_id = "doc:section:docs/guide.md:section:1:line-1"
+    analysis = AnalysisResult(
+        source_path=document,
+        module=ModuleArtifact(
+            name="docs.guide",
+            stable_id="markdown:module:docs/guide.md",
+            docstring=None,
+            has_docstring=0,
+        ),
+        classes=(),
+        functions=(),
+        declarations=(),
+        imports=(),
+        documentation=(
+            DocumentationArtifact(
+                stable_id=duplicate_id,
+                kind="section",
+                source_format="markdown_section",
+                source_path=document,
+                lineno=1,
+                end_lineno=2,
+                title="One",
+                heading_path=("One",),
+                text="One",
+            ),
+            DocumentationArtifact(
+                stable_id=duplicate_id,
+                kind="section",
+                source_format="markdown_section",
+                source_path=document,
+                lineno=3,
+                end_lineno=4,
+                title="Two",
+                heading_path=("Two",),
+                text="Two",
+            ),
+        ),
+        index_symbols=False,
+    )
+
+    assert indexer_module._duplicate_analysis_stable_ids(analysis) == [duplicate_id]
 
 
 def test_index_repo_indexes_python_module_file_shadowed_by_package(
