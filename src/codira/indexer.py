@@ -28,6 +28,8 @@ from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
+    EmbeddingIndexingMetrics,
+    EmbeddingIndexingPolicy,
     IndexBackend,
     PendingEmbeddingRow,
     StoredEmbeddingRow,
@@ -294,6 +296,8 @@ class PersistIndexedFileAnalysesRequest:
         Analyzed file snapshots in deterministic order.
     embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
         Active embedding backend metadata.
+    embedding_indexing : codira.contracts.EmbeddingIndexingPolicy
+        Embedding row eligibility policy for the current run.
     previous_embeddings_by_path : dict[str, dict[str, codira.indexer.StoredEmbeddingRow]]
         Stored symbol embeddings captured before indexed files were replaced.
     """
@@ -302,6 +306,7 @@ class PersistIndexedFileAnalysesRequest:
     session: IndexWriteSession
     parsed_files: list[ParsedFile]
     embedding_backend: EmbeddingBackendSpec
+    embedding_indexing: EmbeddingIndexingPolicy
     previous_embeddings_by_path: dict[str, dict[str, StoredEmbeddingRow]]
 
 
@@ -728,7 +733,7 @@ def _raise_duplicate_stable_ids(path: Path, root: Path, stable_ids: list[str]) -
 
 def _persist_indexed_file_analyses(
     request: PersistIndexedFileAnalysesRequest,
-) -> tuple[int, int, list[ParsedFile], list[IndexFailure]]:
+) -> tuple[int, int, int, list[ParsedFile], list[IndexFailure]]:
     """
     Persist analyzed file snapshots through the selected index backend.
 
@@ -739,11 +744,13 @@ def _persist_indexed_file_analyses(
 
     Returns
     -------
-    tuple[int, int, list[ParsedFile], list[IndexFailure]]
-        ``(recomputed, reused, persisted_files, failures)`` for analyzed files.
+    tuple[int, int, int, list[ParsedFile], list[IndexFailure]]
+        ``(recomputed, reused, skipped, persisted_files, failures)`` for
+        analyzed files.
     """
     embeddings_recomputed = 0
     embeddings_reused = 0
+    embedding_metrics = EmbeddingIndexingMetrics()
     persisted_files: list[ParsedFile] = []
     failures: list[IndexFailure] = []
 
@@ -762,6 +769,8 @@ def _persist_indexed_file_analyses(
                     file_metadata=file_metadata_snapshot,
                     analysis=analysis,
                     embedding_backend=request.embedding_backend,
+                    embedding_indexing=request.embedding_indexing,
+                    embedding_metrics=embedding_metrics,
                     previous_embeddings=request.previous_embeddings_by_path.get(
                         str(file_metadata_snapshot.path),
                         {},
@@ -785,8 +794,33 @@ def _persist_indexed_file_analyses(
     return (
         embeddings_recomputed,
         embeddings_reused,
+        embedding_metrics.skipped,
         persisted_files,
         failures,
+    )
+
+
+def _embedding_indexing_policy(root: Path) -> EmbeddingIndexingPolicy:
+    """
+    Build the backend-neutral embedding indexing policy for one root.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose effective config should be resolved.
+
+    Returns
+    -------
+    EmbeddingIndexingPolicy
+        Policy derived from ``embeddings.indexing`` config values.
+    """
+
+    indexing = load_effective_config(root=root).embeddings.indexing
+    return EmbeddingIndexingPolicy(
+        object_types=frozenset(indexing.object_types),
+        max_text_chars=indexing.max_text_chars,
+        include_paths=indexing.include_paths,
+        exclude_paths=indexing.exclude_paths,
     )
 
 
@@ -1119,6 +1153,7 @@ def index_repo(
     index_backend = active_index_backend()
     analyzers = _active_language_analyzers()
     backend = get_embedding_backend()
+    embedding_indexing = _embedding_indexing_policy(root)
     effective_embedding_index_mode = (
         load_effective_config(root=root).embeddings.indexing.mode
         if embedding_index_mode is None
@@ -1216,6 +1251,7 @@ def index_repo(
         (
             embeddings_recomputed,
             changed_file_embeddings_reused,
+            changed_file_embeddings_skipped,
             persisted_files,
             persistence_failures,
         ) = _persist_indexed_file_analyses(
@@ -1224,6 +1260,7 @@ def index_repo(
                 session=session,
                 parsed_files=parsed_files,
                 embedding_backend=backend,
+                embedding_indexing=embedding_indexing,
                 previous_embeddings_by_path=previous_embeddings_by_path,
             )
         )
@@ -1257,6 +1294,7 @@ def index_repo(
                 coverage_issues=coverage_issues,
                 embeddings_recomputed=embeddings_recomputed,
                 embeddings_reused=embeddings_reused,
+                embeddings_skipped=changed_file_embeddings_skipped,
                 embedding_index_mode=effective_embedding_index_mode,
             )
         )

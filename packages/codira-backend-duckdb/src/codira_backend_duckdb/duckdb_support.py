@@ -30,7 +30,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
-from codira.contracts import BackendError, PendingEmbeddingRow, StoredEmbeddingRow
+from codira.contracts import (
+    BackendError,
+    EmbeddingIndexingMetrics,
+    EmbeddingIndexingPolicy,
+    PendingEmbeddingRow,
+    StoredEmbeddingRow,
+    filter_embedding_rows_for_policy,
+)
 from codira.docstring import DocstringValidationRequest, validate_docstring
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.repository_scope import path_has_excluded_tree_name
@@ -3877,10 +3884,13 @@ def _flush_pending_reference_scan_rows(
 
 def _store_analysis(
     conn: _DuckDBPersistenceConnection,
+    root: Path,
     file_metadata: FileMetadataSnapshot,
     analysis: AnalysisResult,
     *,
     backend: EmbeddingBackendSpec,
+    embedding_indexing: EmbeddingIndexingPolicy | None = None,
+    embedding_metrics: EmbeddingIndexingMetrics | None = None,
     previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
     pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]]
     | None = None,
@@ -3899,12 +3909,18 @@ def _store_analysis(
     ----------
     conn : _DuckDBPersistenceConnection
         Open database connection.
+    root : pathlib.Path
+        Repository root used for embedding path filters.
     file_metadata : codira.models.FileMetadataSnapshot
         Stable file metadata for the analyzed file.
     analysis : codira.models.AnalysisResult
         Normalized analyzer output for the file.
     backend : EmbeddingBackendSpec
         Active embedding backend metadata.
+    embedding_indexing : codira.contracts.EmbeddingIndexingPolicy | None, optional
+        Optional embedding row eligibility policy.
+    embedding_metrics : codira.contracts.EmbeddingIndexingMetrics | None, optional
+        Optional mutable counters updated for skipped embedding rows.
     previous_embeddings : dict[str, codira.indexer.StoredEmbeddingRow] | None, optional
         Stored symbol embeddings captured before replacing file-owned rows.
     pending_embedding_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]] | None, optional
@@ -3970,6 +3986,14 @@ def _store_analysis(
     if not analysis.index_symbols:
         if owns_structural_rows:
             _flush_structural_rows(conn, structural_rows)
+        embedding_rows, skipped = filter_embedding_rows_for_policy(
+            embedding_rows,
+            embedding_indexing,
+            root=root,
+            path=file_metadata.path,
+        )
+        if embedding_metrics is not None:
+            embedding_metrics.skipped += skipped
         return _flush_embedding_rows(
             conn,
             embedding_rows=embedding_rows,
@@ -4027,6 +4051,14 @@ def _store_analysis(
         pending_call_rows=pending_call_rows,
         pending_ref_rows=pending_ref_rows,
     )
+    embedding_rows, skipped = filter_embedding_rows_for_policy(
+        embedding_rows,
+        embedding_indexing,
+        root=root,
+        path=file_metadata.path,
+    )
+    if embedding_metrics is not None:
+        embedding_metrics.skipped += skipped
     return _flush_embedding_rows(
         conn,
         embedding_rows=embedding_rows,

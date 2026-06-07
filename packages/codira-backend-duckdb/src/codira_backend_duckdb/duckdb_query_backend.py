@@ -2516,9 +2516,12 @@ class DuckDBQueryBackend:
             if owns_connection:
                 written = _store_analysis(
                     cast("_DuckDBPersistenceConnection", conn),
+                    root,
                     request.file_metadata,
                     request.analysis,
                     backend=active_backend,
+                    embedding_indexing=request.embedding_indexing,
+                    embedding_metrics=request.embedding_metrics,
                     previous_embeddings=cast(
                         "dict[str, StoredEmbeddingRow] | None",
                         request.previous_embeddings,
@@ -2529,9 +2532,12 @@ class DuckDBQueryBackend:
                 try:
                     written = _store_analysis(
                         cast("_DuckDBPersistenceConnection", conn),
+                        root,
                         request.file_metadata,
                         request.analysis,
                         backend=active_backend,
+                        embedding_indexing=request.embedding_indexing,
+                        embedding_metrics=request.embedding_metrics,
                         previous_embeddings=cast(
                             "dict[str, StoredEmbeddingRow] | None",
                             request.previous_embeddings,

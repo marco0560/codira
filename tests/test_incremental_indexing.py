@@ -3165,6 +3165,57 @@ def test_index_cli_embedding_mode_flags_do_not_override_disabled_embeddings(
     }
 
 
+def test_index_cli_reports_embedding_rows_skipped_by_volume_controls(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Report embedding candidates skipped by configured object-type controls.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture CLI output.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch argv and cwd.
+
+    Returns
+    -------
+    None
+        The test asserts structural indexing still succeeds while embedding
+        rows are filtered out by ``embeddings.indexing.object_types``.
+    """
+
+    module = tmp_path / "src" / "sample.py"
+    _write_module(
+        module,
+        'def demo():\n    """Return a constant."""\n    return 1\n',
+    )
+    config_path = tmp_path / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "[embeddings.indexing]\nobject_types = []\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["codira", "index", "--json", "--full"])
+
+    assert main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ok"
+    assert payload["summary"]["indexed"] == 1
+    assert payload["summary"]["embeddings_recomputed"] == 0
+    assert payload["summary"]["embeddings_reused"] == 0
+    assert payload["summary"]["embeddings_skipped"] == 2
+    assert payload["summary"]["embeddings_pending"] == 0
+    assert payload["summary"]["embedding_index_mode"] == "immediate"
+    assert payload["summary"]["embedding_complete"] is True
+
+
 def test_index_cli_supports_target_and_output_directory_overrides(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

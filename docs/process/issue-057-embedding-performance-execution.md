@@ -38,7 +38,7 @@ feat/issue-57-embedding-optimization
 
 - [x] Phase 0 - Benchmark harness prerequisite and execution ledger
 - [x] Phase 1 - Config and CLI contract
-- [ ] Phase 2 - Metrics and embedding volume controls
+- [x] Phase 2 - Metrics and embedding volume controls
 - [ ] Phase 3 - Persistent vector cache
 - [ ] Phase 4 - Deferred and resumable embeddings
 - [ ] Phase 5 - Documentation, versioning, validation, and benchmark evidence
@@ -80,3 +80,26 @@ feat/issue-57-embedding-optimization
   `uv run pytest -q tests/test_config.py tests/test_incremental_indexing.py -k 'config or json_for_index_summary or required_coverage_failure or unsupported_deferred_embedding_mode or embedding_mode_flags or initializes_backend_before_indexing'`.
 - `uv run pytest -q` passed with the Phase 1 contract changes.
 - `uv run pre-commit run --all-files` passed after the contract changes.
+
+### Phase 2
+
+- Added the backend-neutral `EmbeddingIndexingPolicy` contract for:
+  - object-type filtering
+  - maximum text length filtering
+  - include path filtering
+  - exclude path filtering
+- Added mutable `EmbeddingIndexingMetrics` so backends can report skipped
+  embedding candidates without changing the public `(recomputed, reused)`
+  persistence return contract.
+- Threaded the effective `embeddings.indexing` config through the indexer into
+  SQLite and DuckDB persistence requests.
+- Filtered pending embedding rows in both SQLite and DuckDB immediately before
+  embedding flushes, leaving structural rows and relationships unchanged.
+- Added an end-to-end index JSON regression for configured object-type
+  filtering and skipped-row reporting.
+- Targeted validation passed:
+  `uv run pytest -q tests/test_incremental_indexing.py -k 'embedding_rows_skipped_by_volume_controls or json_for_index_summary'`.
+- Backend embedding validation passed:
+  `uv run pytest -q tests/test_embeddings.py packages/codira-backend-sqlite/tests/test_sqlite_backend_package.py packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py -k 'embedding'`.
+- `uv run pytest -q` passed with the Phase 2 volume controls.
+- `uv run pre-commit run --all-files` passed after the Phase 2 changes.

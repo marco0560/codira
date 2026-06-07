@@ -316,9 +316,12 @@ class _SQLiteIndexWriteSession:
         try:
             return _store_analysis(
                 self._conn,
+                request.root,
                 request.file_metadata,
                 request.analysis,
                 backend=active_backend,
+                embedding_indexing=request.embedding_indexing,
+                embedding_metrics=request.embedding_metrics,
                 previous_embeddings=cast(
                     "dict[str, StoredEmbeddingRow] | None",
                     request.previous_embeddings,
@@ -2379,9 +2382,12 @@ class SQLiteIndexBackend:
             if owns_connection:
                 written = _store_analysis(
                     conn,
+                    root,
                     request.file_metadata,
                     request.analysis,
                     backend=active_backend,
+                    embedding_indexing=request.embedding_indexing,
+                    embedding_metrics=request.embedding_metrics,
                     previous_embeddings=cast(
                         "dict[str, StoredEmbeddingRow] | None",
                         request.previous_embeddings,
@@ -2392,9 +2398,12 @@ class SQLiteIndexBackend:
                 try:
                     written = _store_analysis(
                         conn,
+                        root,
                         request.file_metadata,
                         request.analysis,
                         backend=active_backend,
+                        embedding_indexing=request.embedding_indexing,
+                        embedding_metrics=request.embedding_metrics,
                         previous_embeddings=cast(
                             "dict[str, StoredEmbeddingRow] | None",
                             request.previous_embeddings,
