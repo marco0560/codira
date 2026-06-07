@@ -3579,7 +3579,7 @@ def test_benchmark_campaign_helper_expands_manifest_commands(
     hyperfine_commands = commands[1][8:]
 
     assert any("codira help" in command for command in display_commands)
-    assert "--show-output" in commands[1]
+    assert "--show-output" not in commands[1]
     assert "--ignore-failure" in commands[1]
     assert row["output_logs"] == [
         str(

@@ -1653,7 +1653,6 @@ def build_hyperfine_argv(
         str(config.warmup),
         "--runs",
         str(config.runs),
-        "--show-output",
         "--ignore-failure",
         "--export-json",
         str(output),
