@@ -1592,8 +1592,28 @@ def _run_index(request: IndexCommandRequest) -> int:
     effective_embedding_index_mode = (
         "deferred" if defer_embeddings else config.embeddings.indexing.mode
     )
-    if embeddings_only or effective_embedding_index_mode != "immediate":
-        msg = "Deferred embedding execution is not implemented in this phase."
+    if embeddings_only:
+        active_backend = active_index_backend()
+        active_backend.initialize(root)
+        recomputed, reused = active_backend.process_pending_embeddings(
+            root,
+            embedding_backend=get_embedding_backend(),
+        )
+        report = IndexReport(
+            indexed=0,
+            reused=0,
+            deleted=0,
+            failed=0,
+            embeddings_recomputed=recomputed,
+            embeddings_reused=reused,
+            decisions=[],
+            failures=[],
+            warnings=[],
+            coverage_issues=[],
+            embeddings_pending=0,
+            embedding_index_mode=effective_embedding_index_mode,
+            embedding_complete=True,
+        )
         if as_json:
             _emit_json(
                 _index_payload(
@@ -1601,8 +1621,8 @@ def _run_index(request: IndexCommandRequest) -> int:
                         full=full,
                         explain=explain,
                         require_full_coverage=require_full_coverage,
-                        status="unsupported_embedding_mode",
-                        report=None,
+                        status="ok",
+                        report=report,
                         coverage_issues=[],
                         defer_embeddings=defer_embeddings,
                         embeddings_only=embeddings_only,
@@ -1610,8 +1630,8 @@ def _run_index(request: IndexCommandRequest) -> int:
                 )
             )
         else:
-            print(f"[codira] RuntimeError: {msg}", file=sys.stderr)
-        return 2
+            _render_index_report(root, report)
+        return 0
 
     coverage_issues = audit_repo_coverage(root)
     if require_full_coverage and coverage_issues:

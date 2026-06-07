@@ -17,7 +17,7 @@ This module belongs to the **storage infrastructure layer** and anchors table de
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 DDL = [
     """
@@ -408,6 +408,19 @@ DDL = [
         content_hash TEXT NOT NULL,
         vector BLOB NOT NULL,
         PRIMARY KEY (backend, version, dim, content_hash)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS pending_embeddings (
+        object_type TEXT NOT NULL,
+        object_id INTEGER NOT NULL,
+        stable_id TEXT NOT NULL,
+        backend TEXT NOT NULL,
+        version TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        dim INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        PRIMARY KEY (object_type, object_id, backend, version)
     );
     """,
     """

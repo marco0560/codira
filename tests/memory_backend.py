@@ -1486,6 +1486,34 @@ class MemoryIndexBackend:
             previous_embeddings=request.previous_embeddings or {},
         )
 
+    def process_pending_embeddings(
+        self,
+        root: Path,
+        *,
+        embedding_backend: EmbeddingBackendSpec,
+        conn: object | None = None,
+    ) -> tuple[int, int]:
+        """
+        Process pending embedding rows for the memory backend.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose pending rows should be processed.
+        embedding_backend : EmbeddingBackendSpec
+            Active embedding backend metadata.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        tuple[int, int]
+            Zero recomputed and reused counts because the memory backend does
+            not queue deferred embeddings.
+        """
+        del root, embedding_backend, conn
+        return (0, 0)
+
     def count_reusable_embeddings(
         self,
         root: Path,

@@ -3075,13 +3075,13 @@ def test_index_cli_emits_json_for_required_coverage_failure(
     assert not get_db_path(tmp_path).exists()
 
 
-def test_index_cli_reports_unsupported_deferred_embedding_mode(
+def test_index_cli_defers_and_processes_pending_embeddings(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Report deferred embedding mode as unsupported in the contract phase.
+    Defer embedding work and process it in a later embeddings-only pass.
 
     Parameters
     ----------
@@ -3095,27 +3095,54 @@ def test_index_cli_reports_unsupported_deferred_embedding_mode(
     Returns
     -------
     None
-        The test asserts the new CLI flag is parsed and rejected
-        deterministically until deferred execution is implemented.
+        The test asserts structural indexing succeeds first and pending
+        embeddings are materialized by the follow-up command.
     """
+
+    module = tmp_path / "src" / "sample.py"
+    _write_module(
+        module,
+        'def demo():\n    """Return a constant."""\n    return 1\n',
+    )
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["codira", "index", "--json", "--defer-embeddings"],
+        ["codira", "index", "--json", "--full", "--defer-embeddings"],
     )
 
-    assert main() == 2
+    assert main() == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["status"] == "unsupported_embedding_mode"
-    assert payload["query"] == {
-        "full": False,
-        "explain": False,
-        "require_full_coverage": False,
-        "defer_embeddings": True,
-        "embeddings_only": False,
-    }
+    assert payload["status"] == "ok"
+    assert payload["summary"]["indexed"] == 1
+    assert payload["summary"]["embeddings_recomputed"] == 0
+    assert payload["summary"]["embeddings_reused"] == 0
+    assert payload["summary"]["embeddings_pending"] == 2
+    assert payload["summary"]["embedding_index_mode"] == "deferred"
+    assert payload["summary"]["embedding_complete"] is False
+
+    conn = sqlite3.connect(get_db_path(tmp_path))
+    pending_count = conn.execute("SELECT COUNT(*) FROM pending_embeddings").fetchone()
+    embedding_count = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()
+    conn.close()
+    assert pending_count == (2,)
+    assert embedding_count == (0,)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["codira", "index", "--json", "--embeddings-only"],
+    )
+
+    assert main() == 0
+    drain_payload = json.loads(capsys.readouterr().out)
+    assert drain_payload["status"] == "ok"
+    assert drain_payload["summary"]["indexed"] == 0
+    assert drain_payload["summary"]["embeddings_recomputed"] == 2
+    assert drain_payload["summary"]["embeddings_reused"] == 0
+    assert drain_payload["summary"]["embeddings_pending"] == 0
+    assert drain_payload["summary"]["embedding_complete"] is True
 
 
 def test_index_cli_embedding_mode_flags_do_not_override_disabled_embeddings(

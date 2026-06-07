@@ -55,6 +55,7 @@ from codira_backend_sqlite.sqlite_support import (
     _load_existing_file_hashes,
     _load_existing_file_ownership,
     _load_previous_embeddings_by_path,
+    _process_pending_embedding_rows,
     _prune_orphaned_embeddings,
     _purge_skipped_docstring_issues,
     _rebuild_graph_indexes,
@@ -322,6 +323,7 @@ class _SQLiteIndexWriteSession:
                 backend=active_backend,
                 embedding_indexing=request.embedding_indexing,
                 embedding_metrics=request.embedding_metrics,
+                defer_embeddings=request.defer_embeddings,
                 previous_embeddings=cast(
                     "dict[str, StoredEmbeddingRow] | None",
                     request.previous_embeddings,
@@ -2337,6 +2339,42 @@ class SQLiteIndexBackend:
             if owns_connection:
                 conn.close()
 
+    def process_pending_embeddings(
+        self,
+        root: Path,
+        *,
+        embedding_backend: EmbeddingBackendSpec,
+        conn: sqlite3.Connection | None = None,
+    ) -> tuple[int, int]:
+        """
+        Compute pending embeddings without reparsing source files.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose pending embedding rows should be processed.
+        embedding_backend : EmbeddingBackendSpec
+            Active embedding backend metadata.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        tuple[int, int]
+            ``(recomputed, reused)`` counts for processed pending rows.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            result = _process_pending_embedding_rows(conn, backend=embedding_backend)
+            if owns_connection:
+                conn.commit()
+            return result
+        finally:
+            if owns_connection:
+                conn.close()
+
     def persist_analysis(
         self,
         request: BackendPersistAnalysisRequest,
@@ -2388,6 +2426,7 @@ class SQLiteIndexBackend:
                     backend=active_backend,
                     embedding_indexing=request.embedding_indexing,
                     embedding_metrics=request.embedding_metrics,
+                    defer_embeddings=request.defer_embeddings,
                     previous_embeddings=cast(
                         "dict[str, StoredEmbeddingRow] | None",
                         request.previous_embeddings,
@@ -2404,6 +2443,7 @@ class SQLiteIndexBackend:
                         backend=active_backend,
                         embedding_indexing=request.embedding_indexing,
                         embedding_metrics=request.embedding_metrics,
+                        defer_embeddings=request.defer_embeddings,
                         previous_embeddings=cast(
                             "dict[str, StoredEmbeddingRow] | None",
                             request.previous_embeddings,

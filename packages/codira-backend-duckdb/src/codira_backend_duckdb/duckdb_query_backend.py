@@ -2522,6 +2522,7 @@ class DuckDBQueryBackend:
                     backend=active_backend,
                     embedding_indexing=request.embedding_indexing,
                     embedding_metrics=request.embedding_metrics,
+                    defer_embeddings=request.defer_embeddings,
                     previous_embeddings=cast(
                         "dict[str, StoredEmbeddingRow] | None",
                         request.previous_embeddings,
@@ -2538,6 +2539,7 @@ class DuckDBQueryBackend:
                         backend=active_backend,
                         embedding_indexing=request.embedding_indexing,
                         embedding_metrics=request.embedding_metrics,
+                        defer_embeddings=request.defer_embeddings,
                         previous_embeddings=cast(
                             "dict[str, StoredEmbeddingRow] | None",
                             request.previous_embeddings,

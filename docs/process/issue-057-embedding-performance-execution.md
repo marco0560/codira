@@ -40,7 +40,7 @@ feat/issue-57-embedding-optimization
 - [x] Phase 1 - Config and CLI contract
 - [x] Phase 2 - Metrics and embedding volume controls
 - [x] Phase 3 - Persistent vector cache
-- [ ] Phase 4 - Deferred and resumable embeddings
+- [x] Phase 4 - Deferred and resumable embeddings
 - [ ] Phase 5 - Documentation, versioning, validation, and benchmark evidence
 
 ## Phase Notes
@@ -123,3 +123,28 @@ feat/issue-57-embedding-optimization
   `uv run pytest -q packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py -k embedding`.
 - `uv run pytest -q` passed with the Phase 3 cache changes.
 - `uv run pre-commit run --all-files` passed after the Phase 3 changes.
+
+### Phase 4
+
+- Added schema version `21` with a `pending_embeddings` table for deferred
+  embedding rows.
+- Replaced the temporary deferred-mode CLI rejection with execution behavior:
+  - `codira index --defer-embeddings` indexes structural data and queues
+    eligible embedding rows.
+  - `codira index --embeddings-only` drains pending rows without reparsing
+    source files.
+- Added backend contract support for deferred queueing and pending-row
+  processing.
+- Implemented pending-row queue/drain behavior in SQLite and DuckDB.
+- Added pending-row cleanup when materialized embeddings are written or file
+  owned rows are deleted.
+- Updated fake and memory test backends to satisfy the expanded backend
+  protocol.
+- Added an end-to-end CLI regression for deferring and then processing pending
+  embeddings.
+- Targeted validation passed:
+  `uv run pytest -q tests/test_incremental_indexing.py -k 'defers_and_processes_pending_embeddings or embedding_rows_skipped_by_volume_controls or embedding_mode_flags'`.
+- Protocol validation passed:
+  `uv run pytest -q tests/test_contracts.py::test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_checkable tests/test_memory_backend.py::test_memory_backend_implements_full_contract_without_sql_dependency tests/test_memory_backend.py::test_registry_can_select_memory_backend_entry_point`.
+- `uv run pytest -q` passed with the Phase 4 deferred embedding changes.
+- `uv run pre-commit run --all-files` passed after the Phase 4 changes.

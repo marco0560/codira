@@ -298,6 +298,8 @@ class PersistIndexedFileAnalysesRequest:
         Active embedding backend metadata.
     embedding_indexing : codira.contracts.EmbeddingIndexingPolicy
         Embedding row eligibility policy for the current run.
+    defer_embeddings : bool
+        Whether eligible embedding rows should be queued for later computation.
     previous_embeddings_by_path : dict[str, dict[str, codira.indexer.StoredEmbeddingRow]]
         Stored symbol embeddings captured before indexed files were replaced.
     """
@@ -307,6 +309,7 @@ class PersistIndexedFileAnalysesRequest:
     parsed_files: list[ParsedFile]
     embedding_backend: EmbeddingBackendSpec
     embedding_indexing: EmbeddingIndexingPolicy
+    defer_embeddings: bool
     previous_embeddings_by_path: dict[str, dict[str, StoredEmbeddingRow]]
 
 
@@ -733,7 +736,7 @@ def _raise_duplicate_stable_ids(path: Path, root: Path, stable_ids: list[str]) -
 
 def _persist_indexed_file_analyses(
     request: PersistIndexedFileAnalysesRequest,
-) -> tuple[int, int, int, list[ParsedFile], list[IndexFailure]]:
+) -> tuple[int, int, int, int, list[ParsedFile], list[IndexFailure]]:
     """
     Persist analyzed file snapshots through the selected index backend.
 
@@ -744,8 +747,8 @@ def _persist_indexed_file_analyses(
 
     Returns
     -------
-    tuple[int, int, int, list[ParsedFile], list[IndexFailure]]
-        ``(recomputed, reused, skipped, persisted_files, failures)`` for
+    tuple[int, int, int, int, list[ParsedFile], list[IndexFailure]]
+        ``(recomputed, reused, skipped, pending, persisted_files, failures)`` for
         analyzed files.
     """
     embeddings_recomputed = 0
@@ -771,6 +774,7 @@ def _persist_indexed_file_analyses(
                     embedding_backend=request.embedding_backend,
                     embedding_indexing=request.embedding_indexing,
                     embedding_metrics=embedding_metrics,
+                    defer_embeddings=request.defer_embeddings,
                     previous_embeddings=request.previous_embeddings_by_path.get(
                         str(file_metadata_snapshot.path),
                         {},
@@ -795,6 +799,7 @@ def _persist_indexed_file_analyses(
         embeddings_recomputed,
         embeddings_reused,
         embedding_metrics.skipped,
+        embedding_metrics.pending,
         persisted_files,
         failures,
     )
@@ -1252,6 +1257,7 @@ def index_repo(
             embeddings_recomputed,
             changed_file_embeddings_reused,
             changed_file_embeddings_skipped,
+            changed_file_embeddings_pending,
             persisted_files,
             persistence_failures,
         ) = _persist_indexed_file_analyses(
@@ -1261,6 +1267,7 @@ def index_repo(
                 parsed_files=parsed_files,
                 embedding_backend=backend,
                 embedding_indexing=embedding_indexing,
+                defer_embeddings=effective_embedding_index_mode == "deferred",
                 previous_embeddings_by_path=previous_embeddings_by_path,
             )
         )
@@ -1295,7 +1302,9 @@ def index_repo(
                 embeddings_recomputed=embeddings_recomputed,
                 embeddings_reused=embeddings_reused,
                 embeddings_skipped=changed_file_embeddings_skipped,
+                embeddings_pending=changed_file_embeddings_pending,
                 embedding_index_mode=effective_embedding_index_mode,
+                embedding_complete=changed_file_embeddings_pending == 0,
             )
         )
     except BaseException:

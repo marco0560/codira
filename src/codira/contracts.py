@@ -110,9 +110,12 @@ class EmbeddingIndexingMetrics:
     skipped : int
         Number of candidate embedding rows skipped by embedding indexing
         controls.
+    pending : int
+        Number of candidate embedding rows queued for deferred computation.
     """
 
     skipped: int = 0
+    pending: int = 0
 
 
 def _embedding_path_matches(prefixes: tuple[str, ...], relative_path: str) -> bool:
@@ -658,6 +661,8 @@ class BackendPersistAnalysisRequest:
         Optional embedding row eligibility policy.
     embedding_metrics : codira.contracts.EmbeddingIndexingMetrics | None, optional
         Optional mutable counters updated during embedding persistence.
+    defer_embeddings : bool, optional
+        Whether eligible embedding rows should be queued for later computation.
     previous_embeddings : collections.abc.Mapping[str, object] | None, optional
         Previously persisted semantic artifacts eligible for reuse.
     conn : object | None, optional
@@ -670,6 +675,7 @@ class BackendPersistAnalysisRequest:
     embedding_backend: EmbeddingBackendSpec | None = None
     embedding_indexing: EmbeddingIndexingPolicy | None = None
     embedding_metrics: EmbeddingIndexingMetrics | None = None
+    defer_embeddings: bool = False
     previous_embeddings: Mapping[str, object] | None = None
     conn: object | None = None
 
@@ -1425,6 +1431,32 @@ class IndexBackend(Protocol):
         -------
         tuple[int, int]
             ``(recomputed, reused)`` semantic-artifact counts for the file.
+        """
+        ...
+
+    def process_pending_embeddings(
+        self,
+        root: Path,
+        *,
+        embedding_backend: EmbeddingBackendSpec,
+        conn: object | None = None,
+    ) -> tuple[int, int]:
+        """
+        Compute and persist pending embedding rows without reparsing files.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose pending embedding rows should be processed.
+        embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+            Active semantic backend metadata used to select pending rows.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        tuple[int, int]
+            ``(recomputed, reused)`` counts for processed pending rows.
         """
         ...
 

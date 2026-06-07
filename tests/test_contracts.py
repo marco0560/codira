@@ -457,6 +457,33 @@ class _FakeBackend:
         """
         return (len(request.analysis.iter_functions()), 0)
 
+    def process_pending_embeddings(
+        self,
+        root: Path,
+        *,
+        embedding_backend: object,
+        conn: object | None = None,
+    ) -> tuple[int, int]:
+        """
+        Return no pending semantic artifacts for the fake backend.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        embedding_backend : object
+            Active embedding backend placeholder.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        tuple[int, int]
+            Zero recomputed and reused pending-artifact counts.
+        """
+        del root, embedding_backend, conn
+        return (0, 0)
+
     def count_reusable_embeddings(
         self,
         root: Path,

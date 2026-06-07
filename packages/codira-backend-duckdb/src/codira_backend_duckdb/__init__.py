@@ -44,6 +44,7 @@ from .duckdb_support import (
     _flush_pending_reference_scan_rows,
     _flush_pending_relationship_rows,
     _flush_structural_rows,
+    _process_pending_embedding_rows,
     _store_analysis,
 )
 from .repo_storage import get_codira_dir, get_metadata_path
@@ -462,6 +463,7 @@ class _DuckDBIndexWriteSession:
                 backend=active_backend,
                 embedding_indexing=request.embedding_indexing,
                 embedding_metrics=request.embedding_metrics,
+                defer_embeddings=request.defer_embeddings,
                 previous_embeddings=cast(
                     "dict[str, StoredEmbeddingRow] | None",
                     request.previous_embeddings,
@@ -1658,6 +1660,45 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         raw = _duckdb_module().connect(str(_duckdb_db_path(root)))
         return cast("_BackendCompatibleConnectionAdapter", DuckDBConnection(raw))
 
+    def process_pending_embeddings(
+        self,
+        root: Path,
+        *,
+        embedding_backend: EmbeddingBackendSpec,
+        conn: _BackendCompatibleConnectionAdapter | None = None,
+    ) -> tuple[int, int]:
+        """
+        Compute pending embeddings without reparsing source files.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose pending embedding rows should be processed.
+        embedding_backend : EmbeddingBackendSpec
+            Active embedding backend metadata.
+        conn : _BackendCompatibleConnectionAdapter | None, optional
+            Existing DuckDB connection to reuse.
+
+        Returns
+        -------
+        tuple[int, int]
+            ``(recomputed, reused)`` counts for processed pending rows.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            result = _process_pending_embedding_rows(
+                cast("_DuckDBPersistenceConnection", conn),
+                backend=embedding_backend,
+            )
+            if owns_connection:
+                conn.commit()
+            return result
+        finally:
+            if owns_connection:
+                conn.close()
+
     def persist_analysis(
         self,
         request: BackendPersistAnalysisRequest,
@@ -1704,6 +1745,7 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                     backend=active_backend,
                     embedding_indexing=request.embedding_indexing,
                     embedding_metrics=request.embedding_metrics,
+                    defer_embeddings=request.defer_embeddings,
                     previous_embeddings=cast(
                         "dict[str, StoredEmbeddingRow] | None",
                         request.previous_embeddings,
@@ -1724,6 +1766,7 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                         backend=active_backend,
                         embedding_indexing=request.embedding_indexing,
                         embedding_metrics=request.embedding_metrics,
+                        defer_embeddings=request.defer_embeddings,
                         previous_embeddings=cast(
                             "dict[str, StoredEmbeddingRow] | None",
                             request.previous_embeddings,

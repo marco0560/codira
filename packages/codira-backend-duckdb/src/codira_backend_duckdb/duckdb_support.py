@@ -3532,6 +3532,7 @@ def _flush_embedding_rows(
     *,
     embedding_rows: list[PendingEmbeddingRow],
     backend: EmbeddingBackendSpec,
+    defer_embeddings: bool = False,
     previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
     pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]]
     | None = None,
@@ -3547,6 +3548,8 @@ def _flush_embedding_rows(
         Pending embedding payloads keyed by object type and identifier.
     backend : EmbeddingBackendSpec
         Active embedding backend metadata.
+    defer_embeddings : bool, optional
+        Whether rows should be queued instead of embedded immediately.
     previous_embeddings : dict[str, codira.indexer.StoredEmbeddingRow] | None, optional
         Stored symbol embeddings keyed by stable identity before the owner file
         was replaced.
@@ -3586,6 +3589,12 @@ def _flush_embedding_rows(
             prepared_rows.append((row, content_hash, None))
             recomputed += 1
 
+    if defer_embeddings:
+        _store_pending_embedding_rows(
+            conn, prepared_rows=prepared_rows, backend=backend
+        )
+        return (0, 0)
+
     missing_hashes = [
         content_hash
         for row, content_hash, stored_vector in prepared_rows
@@ -3615,6 +3624,55 @@ def _flush_embedding_rows(
 
     _flush_prepared_embedding_rows(conn, prepared_rows=prepared_rows, backend=backend)
     return (recomputed, reused)
+
+
+def _store_pending_embedding_rows(
+    conn: _DuckDBPersistenceConnection,
+    *,
+    prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
+    backend: EmbeddingBackendSpec,
+) -> None:
+    """
+    Persist deferred embedding rows for later computation.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    prepared_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
+        Prepared embedding rows as ``(row, content_hash, stored_vector)``.
+    backend : EmbeddingBackendSpec
+        Active embedding backend metadata.
+
+    Returns
+    -------
+    None
+        Pending rows are inserted or replaced in place.
+    """
+
+    if not prepared_rows:
+        return
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO pending_embeddings(
+            object_type, object_id, stable_id, backend, version, content_hash, dim, text
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                row.object_type,
+                row.object_id,
+                row.stable_id,
+                backend.name,
+                backend.version,
+                content_hash,
+                backend.dim,
+                row.text,
+            )
+            for row, content_hash, _stored_vector in prepared_rows
+        ],
+    )
 
 
 def _load_cached_embedding_vectors(
@@ -3701,6 +3759,47 @@ def _store_cached_embedding_vectors(
     )
 
 
+def _delete_pending_embedding_rows(
+    conn: _DuckDBPersistenceConnection,
+    *,
+    prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
+    backend: EmbeddingBackendSpec,
+) -> None:
+    """
+    Delete pending rows that have been materialized into embeddings.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    prepared_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
+        Prepared embedding rows as ``(row, content_hash, stored_vector)``.
+    backend : EmbeddingBackendSpec
+        Active embedding backend metadata.
+
+    Returns
+    -------
+    None
+        Matching pending rows are deleted in place.
+    """
+
+    if not prepared_rows:
+        return
+    conn.executemany(
+        """
+        DELETE FROM pending_embeddings
+        WHERE object_type = ?
+          AND object_id = ?
+          AND backend = ?
+          AND version = ?
+        """,
+        [
+            (row.object_type, row.object_id, backend.name, backend.version)
+            for row, _content_hash, _stored_vector in prepared_rows
+        ],
+    )
+
+
 def _flush_prepared_embedding_rows(
     conn: _DuckDBPersistenceConnection,
     *,
@@ -3726,6 +3825,7 @@ def _flush_prepared_embedding_rows(
     """
     if not prepared_rows:
         return
+    _delete_pending_embedding_rows(conn, prepared_rows=prepared_rows, backend=backend)
 
     import pyarrow as pa
 
@@ -3882,6 +3982,75 @@ def _flush_pending_embedding_rows(
         prepared_rows=pending_embedding_rows,
         backend=backend,
     )
+    pending_embedding_rows.clear()
+
+
+def _process_pending_embedding_rows(
+    conn: _DuckDBPersistenceConnection,
+    *,
+    backend: EmbeddingBackendSpec,
+) -> tuple[int, int]:
+    """
+    Compute all pending embeddings for one backend and version.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    backend : EmbeddingBackendSpec
+        Active embedding backend metadata.
+
+    Returns
+    -------
+    tuple[int, int]
+        ``(recomputed, reused)`` embedding counts for processed rows.
+    """
+
+    rows = conn.execute(
+        """
+        SELECT object_type, object_id, stable_id, content_hash, text
+        FROM pending_embeddings
+        WHERE backend = ?
+          AND version = ?
+          AND dim = ?
+        ORDER BY object_type, object_id, stable_id
+        """,
+        (backend.name, backend.version, backend.dim),
+    ).fetchall()
+    if not rows:
+        return (0, 0)
+
+    pending_rows = [
+        (
+            PendingEmbeddingRow(
+                object_type=str(object_type),
+                object_id=_duckdb_int(object_id),
+                stable_id=str(stable_id),
+                text=str(text),
+            ),
+            str(content_hash),
+            None,
+        )
+        for object_type, object_id, stable_id, content_hash, text in rows
+    ]
+    cached_vectors = _load_cached_embedding_vectors(
+        conn,
+        backend=backend,
+        content_hashes=[content_hash for _row, content_hash, _vector in pending_rows],
+    )
+    prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
+    recomputed = 0
+    reused = 0
+    for row, content_hash, _stored_vector in pending_rows:
+        cached_vector = cached_vectors.get(content_hash)
+        if cached_vector is None:
+            recomputed += 1
+        else:
+            reused += 1
+        prepared_rows.append((row, content_hash, cached_vector))
+
+    _flush_prepared_embedding_rows(conn, prepared_rows=prepared_rows, backend=backend)
+    return (recomputed, reused)
 
 
 def _reference_scan_rows(path: Path) -> list[ReferenceSearchRow]:
@@ -4009,6 +4178,7 @@ def _store_analysis(
     backend: EmbeddingBackendSpec,
     embedding_indexing: EmbeddingIndexingPolicy | None = None,
     embedding_metrics: EmbeddingIndexingMetrics | None = None,
+    defer_embeddings: bool = False,
     previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
     pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]]
     | None = None,
@@ -4039,6 +4209,8 @@ def _store_analysis(
         Optional embedding row eligibility policy.
     embedding_metrics : codira.contracts.EmbeddingIndexingMetrics | None, optional
         Optional mutable counters updated for skipped embedding rows.
+    defer_embeddings : bool, optional
+        Whether eligible embedding rows should be queued for later computation.
     previous_embeddings : dict[str, codira.indexer.StoredEmbeddingRow] | None, optional
         Stored symbol embeddings captured before replacing file-owned rows.
     pending_embedding_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]] | None, optional
@@ -4112,10 +4284,13 @@ def _store_analysis(
         )
         if embedding_metrics is not None:
             embedding_metrics.skipped += skipped
+            if defer_embeddings:
+                embedding_metrics.pending += len(embedding_rows)
         return _flush_embedding_rows(
             conn,
             embedding_rows=embedding_rows,
             backend=backend,
+            defer_embeddings=defer_embeddings,
             previous_embeddings=previous_embeddings,
             pending_embedding_rows=pending_embedding_rows,
         )
@@ -4177,10 +4352,13 @@ def _store_analysis(
     )
     if embedding_metrics is not None:
         embedding_metrics.skipped += skipped
+        if defer_embeddings:
+            embedding_metrics.pending += len(embedding_rows)
     return _flush_embedding_rows(
         conn,
         embedding_rows=embedding_rows,
         backend=backend,
+        defer_embeddings=defer_embeddings,
         previous_embeddings=previous_embeddings,
         pending_embedding_rows=pending_embedding_rows,
     )
@@ -4394,9 +4572,19 @@ def _delete_indexed_file_data(
                 f"AND object_id IN ({_placeholders(symbol_ids)})",
                 tuple(symbol_ids),
             )
+            conn.execute(
+                f"DELETE FROM pending_embeddings WHERE object_type = 'symbol' "
+                f"AND object_id IN ({_placeholders(symbol_ids)})",
+                tuple(symbol_ids),
+            )
         if documentation_ids:
             conn.execute(
                 f"DELETE FROM embeddings WHERE object_type = 'documentation' "
+                f"AND object_id IN ({_placeholders(documentation_ids)})",
+                tuple(documentation_ids),
+            )
+            conn.execute(
+                "DELETE FROM pending_embeddings WHERE object_type = 'documentation' "
                 f"AND object_id IN ({_placeholders(documentation_ids)})",
                 tuple(documentation_ids),
             )
