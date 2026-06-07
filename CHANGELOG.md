@@ -1,3 +1,23 @@
+# [1.44.0](https://github.com/marco0560/codira/compare/v1.43.2...v1.44.0) (2026-06-07)
+
+
+### Bug Fixes
+
+* **dev:** repair benchmark hyperfine invocation ([6e81655](https://github.com/marco0560/codira/commit/6e81655160d26fcff3bed05c5c829ed426d29d09)), closes [#57](https://github.com/marco0560/codira/issues/57)
+
+
+### Features
+
+* Add comprehensive embedding-performance roadmap and optimization plan ([efdb5c9](https://github.com/marco0560/codira/commit/efdb5c94d2345cfd1357ecf92396877f9d3c24eb))
+* **config:** add embedding indexing contract ([7eab86c](https://github.com/marco0560/codira/commit/7eab86c1e1ca8e16a35fd79506711aa1513e1e87)), closes [#57](https://github.com/marco0560/codira/issues/57)
+* **embeddings:** apply volume controls ([c4c63d8](https://github.com/marco0560/codira/commit/c4c63d8b3e6d3bba4b528086b21ab27defaec1d0)), closes [#57](https://github.com/marco0560/codira/issues/57)
+* **embeddings:** support deferred indexing ([d669853](https://github.com/marco0560/codira/commit/d6698538c7bd6e1bae4e5236d83d863b5ccebdc6)), closes [#57](https://github.com/marco0560/codira/issues/57)
+
+
+### Performance Improvements
+
+* **embeddings:** cache vectors by content hash ([8be0c79](https://github.com/marco0560/codira/commit/8be0c79c7b297483c52a6c9ab0f5b9e0d9dc1566))
+
 ## [1.43.2](https://github.com/marco0560/codira/compare/v1.43.1...v1.43.2) (2026-06-06)
 
 
