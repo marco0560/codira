@@ -55,6 +55,13 @@ torch_num_interop_threads = 0
 [embeddings.gpu]
 device_id = 0
 memory_limit_mb = 0
+
+[embeddings.indexing]
+mode = "immediate"
+object_types = ["symbol", "documentation"]
+max_text_chars = 0
+include_paths = []
+exclude_paths = []
 ```
 
 `torch_num_threads = 0` and `torch_num_interop_threads = 0` mean Codira leaves
@@ -62,6 +69,22 @@ Torch defaults unchanged.
 
 `embeddings.gpu.memory_limit_mb = 0` means no explicit GPU memory limit is
 configured.
+
+`embeddings.indexing.mode = "immediate"` computes embeddings during
+`codira index`. Set it to `"deferred"` to persist structural index rows first
+and queue embeddings for a later `codira index --embeddings-only` pass.
+
+`embeddings.indexing.object_types` limits which persisted object types receive
+embeddings. Supported values are `"symbol"` and `"documentation"`. An empty
+list skips all embedding rows while leaving structural indexing enabled.
+
+`embeddings.indexing.max_text_chars = 0` means no text-size limit. Positive
+values skip embedding payloads longer than the configured number of
+characters.
+
+`embeddings.indexing.include_paths` and `exclude_paths` are repo-root-relative
+path prefixes. Include filters are evaluated first; exclude filters remove
+matching files from embedding computation.
 
 ## Profiles
 

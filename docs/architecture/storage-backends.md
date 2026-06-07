@@ -42,6 +42,7 @@ Read-side responsibilities remain on `IndexBackend`:
 - loading file hashes and per-file analyzer ownership
 - checking embedding backend compatibility
 - counting reusable embeddings for unchanged files
+- processing pending embeddings for `codira index --embeddings-only`
 - serving normal query commands
 - reporting whether warm-index maintenance still needs mutation work
 
@@ -53,6 +54,7 @@ returned `IndexWriteSession`:
 - load reusable embeddings for paths being replaced
 - prepare full or incremental storage replacement
 - persist analyzed file snapshots
+- queue deferred embedding rows when embedding indexing is deferred
 - rebuild derived indexes
 - write runtime inventory
 - commit, abort, and close

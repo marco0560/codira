@@ -77,6 +77,156 @@ class PendingEmbeddingRow:
 
 
 @dataclass(frozen=True)
+class EmbeddingIndexingPolicy:
+    """
+    Backend-neutral embedding row eligibility policy.
+
+    Parameters
+    ----------
+    object_types : frozenset[str]
+        Persisted object types eligible for embedding.
+    max_text_chars : int
+        Maximum eligible text length, or ``0`` when text length is unlimited.
+    include_paths : tuple[str, ...]
+        Repo-root-relative path prefixes included in embedding generation.
+        An empty tuple includes every indexed path.
+    exclude_paths : tuple[str, ...]
+        Repo-root-relative path prefixes excluded from embedding generation.
+    """
+
+    object_types: frozenset[str]
+    max_text_chars: int = 0
+    include_paths: tuple[str, ...] = ()
+    exclude_paths: tuple[str, ...] = ()
+
+
+@dataclass
+class EmbeddingIndexingMetrics:
+    """
+    Mutable embedding indexing counters shared with backend persistence.
+
+    Parameters
+    ----------
+    skipped : int
+        Number of candidate embedding rows skipped by embedding indexing
+        controls.
+    pending : int
+        Number of candidate embedding rows queued for deferred computation.
+    """
+
+    skipped: int = 0
+    pending: int = 0
+
+
+def _embedding_path_matches(prefixes: tuple[str, ...], relative_path: str) -> bool:
+    """
+    Return whether a relative path matches any configured prefix.
+
+    Parameters
+    ----------
+    prefixes : tuple[str, ...]
+        Repo-root-relative path prefixes.
+    relative_path : str
+        Normalized repo-root-relative path.
+
+    Returns
+    -------
+    bool
+        ``True`` when any prefix matches the path or one of its parent
+        directories.
+    """
+
+    for prefix in prefixes:
+        normalized = prefix.strip().strip("/")
+        if not normalized:
+            continue
+        if relative_path == normalized or relative_path.startswith(f"{normalized}/"):
+            return True
+    return False
+
+
+def embedding_policy_allows_path(
+    policy: EmbeddingIndexingPolicy,
+    *,
+    root: Path,
+    path: Path,
+) -> bool:
+    """
+    Return whether embedding generation is enabled for one file path.
+
+    Parameters
+    ----------
+    policy : EmbeddingIndexingPolicy
+        Embedding indexing policy.
+    root : pathlib.Path
+        Repository root used to normalize ``path``.
+    path : pathlib.Path
+        Candidate source file path.
+
+    Returns
+    -------
+    bool
+        ``True`` when include and exclude path controls allow embeddings for
+        the file.
+    """
+
+    try:
+        relative_path = path.relative_to(root).as_posix()
+    except ValueError:
+        relative_path = path.as_posix()
+    if policy.include_paths and not _embedding_path_matches(
+        policy.include_paths,
+        relative_path,
+    ):
+        return False
+    return not _embedding_path_matches(policy.exclude_paths, relative_path)
+
+
+def filter_embedding_rows_for_policy(
+    rows: Sequence[PendingEmbeddingRow],
+    policy: EmbeddingIndexingPolicy | None,
+    *,
+    root: Path,
+    path: Path,
+) -> tuple[list[PendingEmbeddingRow], int]:
+    """
+    Filter pending embedding rows through the configured eligibility policy.
+
+    Parameters
+    ----------
+    rows : collections.abc.Sequence[PendingEmbeddingRow]
+        Candidate embedding rows collected for a file.
+    policy : EmbeddingIndexingPolicy | None
+        Optional eligibility policy. ``None`` accepts all rows.
+    root : pathlib.Path
+        Repository root used to normalize path filters.
+    path : pathlib.Path
+        Source file path that owns the rows.
+
+    Returns
+    -------
+    tuple[list[PendingEmbeddingRow], int]
+        Accepted rows and skipped-row count.
+    """
+
+    if policy is None:
+        return list(rows), 0
+    if not embedding_policy_allows_path(policy, root=root, path=path):
+        return [], len(rows)
+    accepted: list[PendingEmbeddingRow] = []
+    skipped = 0
+    for row in rows:
+        if row.object_type not in policy.object_types:
+            skipped += 1
+            continue
+        if policy.max_text_chars and len(row.text) > policy.max_text_chars:
+            skipped += 1
+            continue
+        accepted.append(row)
+    return accepted, skipped
+
+
+@dataclass(frozen=True)
 class StoredEmbeddingRow:
     """
     Persisted embedding row captured before file-owned rows are replaced.
@@ -507,6 +657,12 @@ class BackendPersistAnalysisRequest:
         Normalized analyzer output for the file.
     embedding_backend : codira.contracts.EmbeddingBackendSpec | None, optional
         Optional semantic embedding backend used during persistence.
+    embedding_indexing : codira.contracts.EmbeddingIndexingPolicy | None, optional
+        Optional embedding row eligibility policy.
+    embedding_metrics : codira.contracts.EmbeddingIndexingMetrics | None, optional
+        Optional mutable counters updated during embedding persistence.
+    defer_embeddings : bool, optional
+        Whether eligible embedding rows should be queued for later computation.
     previous_embeddings : collections.abc.Mapping[str, object] | None, optional
         Previously persisted semantic artifacts eligible for reuse.
     conn : object | None, optional
@@ -517,6 +673,9 @@ class BackendPersistAnalysisRequest:
     file_metadata: FileMetadataSnapshot
     analysis: AnalysisResult
     embedding_backend: EmbeddingBackendSpec | None = None
+    embedding_indexing: EmbeddingIndexingPolicy | None = None
+    embedding_metrics: EmbeddingIndexingMetrics | None = None
+    defer_embeddings: bool = False
     previous_embeddings: Mapping[str, object] | None = None
     conn: object | None = None
 
@@ -1272,6 +1431,32 @@ class IndexBackend(Protocol):
         -------
         tuple[int, int]
             ``(recomputed, reused)`` semantic-artifact counts for the file.
+        """
+        ...
+
+    def process_pending_embeddings(
+        self,
+        root: Path,
+        *,
+        embedding_backend: EmbeddingBackendSpec,
+        conn: object | None = None,
+    ) -> tuple[int, int]:
+        """
+        Compute and persist pending embedding rows without reparsing files.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose pending embedding rows should be processed.
+        embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+            Active semantic backend metadata used to select pending rows.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        tuple[int, int]
+            ``(recomputed, reused)`` counts for processed pending rows.
         """
         ...
 

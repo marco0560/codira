@@ -16,16 +16,23 @@ The current indexing entry point is `index_repo()` in
 5. The selected analyzer emits one normalized `AnalysisResult` per file.
 6. Normalized semantic artifacts now include analyzer-owned durable symbol
    identities for every embedding-owning unit.
-7. The same indexing pass computes persisted embeddings for indexed symbols.
-8. When a file changes, the backend compares old and new stable-id sets so
+7. The same indexing pass computes persisted embeddings for indexed symbols and
+   documentation artifacts unless embedding indexing is configured or invoked
+   in deferred mode.
+8. Deferred embedding mode queues eligible embedding rows in backend storage so
+   `codira index --embeddings-only` can compute them later without reparsing
+   source files.
+9. Embedding generation consults a backend-local vector cache keyed by backend,
+   version, dimension, and content hash before invoking model inference.
+10. When a file changes, the backend compares old and new stable-id sets so
    unchanged symbols can reuse stored vectors while disappeared symbols are
    removed deterministically.
-9. The active backend persists all artifacts under `.codira/` and rebuilds
+11. The active backend persists all artifacts under `.codira/` and rebuilds
    derived indexes.
-10. Canonical source directories are audited for uncovered tracked files so the
+12. Canonical source directories are audited for uncovered tracked files so the
    summary can report files under `src/`, `tests/`, or `scripts/` that no
    active analyzer currently covers.
-11. After a successful run, the backend persists the runtime plugin inventory
+13. After a successful run, the backend persists the runtime plugin inventory
    and per-file analyzer ownership so later phases can compare current plugin
    availability against the indexed state.
 

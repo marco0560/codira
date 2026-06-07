@@ -22,7 +22,10 @@ import types
 from typing import TYPE_CHECKING
 
 from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
-from codira_backend_sqlite.sqlite_support import _flush_embedding_rows
+from codira_backend_sqlite.sqlite_support import (
+    _embedding_content_hash,
+    _flush_embedding_rows,
+)
 
 from codira.cli import main
 from codira.indexer import (
@@ -40,6 +43,7 @@ from codira.semantic.embeddings import (
     EmbeddingBackendError,
     embed_text,
     embed_texts,
+    serialize_vector,
 )
 from codira.semantic.search import EmbeddingCandidatesRequest, embedding_candidates
 
@@ -360,6 +364,29 @@ def test_flush_embedding_rows_batches_and_reuses_identical_payloads(
             vector BLOB NOT NULL
         )
         """)
+    conn.execute("""
+        CREATE TABLE embedding_vector_cache (
+            backend TEXT NOT NULL,
+            version TEXT NOT NULL,
+            dim INTEGER NOT NULL,
+            content_hash TEXT NOT NULL,
+            vector BLOB NOT NULL,
+            PRIMARY KEY (backend, version, dim, content_hash)
+        )
+        """)
+    conn.execute("""
+        CREATE TABLE pending_embeddings (
+            object_type TEXT NOT NULL,
+            object_id INTEGER NOT NULL,
+            stable_id TEXT NOT NULL,
+            backend TEXT NOT NULL,
+            version TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            dim INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            PRIMARY KEY (object_type, object_id, backend, version)
+        )
+        """)
 
     calls: list[list[str]] = []
 
@@ -402,6 +429,107 @@ def test_flush_embedding_rows_batches_and_reuses_identical_payloads(
     assert len(stored) == 3
     assert stored[0][2] == stored[1][2]
     assert stored[0][2] != stored[2][2]
+    conn.close()
+
+
+def test_flush_embedding_rows_reuses_persistent_vector_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Reuse a cached vector for a new embedding object with matching content.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to fail the test if embedding inference is invoked.
+
+    Returns
+    -------
+    None
+        The test asserts persistent content-hash cache hits are counted as
+        reused embeddings.
+    """
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("""
+        CREATE TABLE embeddings (
+            id INTEGER PRIMARY KEY,
+            object_type TEXT NOT NULL,
+            object_id INTEGER NOT NULL,
+            backend TEXT NOT NULL,
+            version TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            dim INTEGER NOT NULL,
+            vector BLOB NOT NULL
+        )
+        """)
+    conn.execute("""
+        CREATE TABLE embedding_vector_cache (
+            backend TEXT NOT NULL,
+            version TEXT NOT NULL,
+            dim INTEGER NOT NULL,
+            content_hash TEXT NOT NULL,
+            vector BLOB NOT NULL,
+            PRIMARY KEY (backend, version, dim, content_hash)
+        )
+        """)
+    conn.execute("""
+        CREATE TABLE pending_embeddings (
+            object_type TEXT NOT NULL,
+            object_id INTEGER NOT NULL,
+            stable_id TEXT NOT NULL,
+            backend TEXT NOT NULL,
+            version TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            dim INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            PRIMARY KEY (object_type, object_id, backend, version)
+        )
+        """)
+    text = "cached payload"
+    content_hash = _embedding_content_hash(text)
+    cached_vector = serialize_vector([0.25] * EMBEDDING_DIM)
+    conn.execute(
+        """
+        INSERT INTO embedding_vector_cache(
+            backend, version, dim, content_hash, vector
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            EMBEDDING_BACKEND,
+            EMBEDDING_VERSION,
+            EMBEDDING_DIM,
+            content_hash,
+            cached_vector,
+        ),
+    )
+
+    def unexpected_embed_texts(_texts: list[str]) -> list[list[float]]:
+        msg = "cached embedding should not invoke inference"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(
+        "codira_backend_sqlite.sqlite_support.embed_texts",
+        unexpected_embed_texts,
+    )
+
+    recomputed, reused = _flush_embedding_rows(
+        conn,
+        embedding_rows=[PendingEmbeddingRow("symbol", 1, "stable-a", text)],
+        backend=embeddings_module.get_embedding_backend(),
+    )
+
+    assert recomputed == 0
+    assert reused == 1
+    row = conn.execute(
+        """
+        SELECT content_hash, vector
+        FROM embeddings
+        WHERE object_type = 'symbol' AND object_id = 1
+        """
+    ).fetchone()
+    assert row == (content_hash, cached_vector)
     conn.close()
 
 

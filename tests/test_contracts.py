@@ -457,6 +457,33 @@ class _FakeBackend:
         """
         return (len(request.analysis.iter_functions()), 0)
 
+    def process_pending_embeddings(
+        self,
+        root: Path,
+        *,
+        embedding_backend: object,
+        conn: object | None = None,
+    ) -> tuple[int, int]:
+        """
+        Return no pending semantic artifacts for the fake backend.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        embedding_backend : object
+            Active embedding backend placeholder.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        tuple[int, int]
+            Zero recomputed and reused pending-artifact counts.
+        """
+        del root, embedding_backend, conn
+        return (0, 0)
+
     def count_reusable_embeddings(
         self,
         root: Path,
@@ -2173,8 +2200,8 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-bash==1.41.0",
         "codira-analyzer-markdown==1.44.0",
         "codira-analyzer-text==1.43.0",
-        "codira-backend-sqlite==1.44.0",
-        "codira-backend-duckdb==1.44.0",
+        "codira-backend-sqlite==1.45.0",
+        "codira-backend-duckdb==1.45.0",
     ]
     assert pyproject.get("tool", {}).get("poetry") is None
 

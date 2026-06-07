@@ -190,8 +190,8 @@ Build or refresh the repository-local index:
 codira index
 ```
 
-Indexing also precomputes local deterministic embeddings for indexed symbols.
-Unchanged files are reused by default.
+Indexing also precomputes local deterministic embeddings for indexed symbols
+and documentation artifacts. Unchanged files are reused by default.
 
 Index a repository other than the current working directory and store
 `.codira` state somewhere else:
@@ -223,6 +223,17 @@ Show incremental reuse decisions:
 ```bash
 codira index --explain
 ```
+
+Defer embedding computation while still building the structural index:
+
+```bash
+codira index --defer-embeddings
+codira index --embeddings-only
+```
+
+The first command queues eligible embedding rows. The second computes queued
+rows without reparsing source files. Repository config can make deferred mode
+the default with `embeddings.indexing.mode = "deferred"`.
 
 Inspect canonical-directory analyzer coverage without building the index:
 

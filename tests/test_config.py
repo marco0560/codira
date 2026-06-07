@@ -235,6 +235,9 @@ def test_profile_rendering_includes_gpu_profile_values() -> None:
     assert "batch_size = 64" in rendered
     assert "[embeddings.gpu]" in rendered
     assert "device_id = 0" in rendered
+    assert "[embeddings.indexing]" in rendered
+    assert 'mode = "immediate"' in rendered
+    assert 'object_types = ["symbol", "documentation"]' in rendered
 
 
 def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
@@ -378,6 +381,43 @@ def test_config_cli_explain_reports_environment_origin(
     assert payload["origin"]["level"] == "environment"
 
 
+def test_config_cli_explain_reports_embedding_indexing_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Explain a default embedding indexing config key.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths and argv.
+    tmp_path : pathlib.Path
+        Temporary config directory.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture command output.
+
+    Returns
+    -------
+    None
+        The test asserts nested embedding indexing defaults are explainable.
+    """
+
+    _isolate_config_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["codira", "config", "explain", "embeddings.indexing.mode", "--json"],
+    )
+
+    assert main() == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["value"] == "immediate"
+    assert payload["origin"]["level"] == "defaults"
+
+
 def test_registry_filters_config_disabled_analyzers(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -502,6 +542,13 @@ def test_config_to_mapping_round_trips_defaults(
     assert backend == {"name": "sqlite"}
     assert embeddings["enabled"] is True
     assert embeddings["gpu"] == {"device_id": 0, "memory_limit_mb": 0}
+    assert embeddings["indexing"] == {
+        "mode": "immediate",
+        "object_types": ["symbol", "documentation"],
+        "max_text_chars": 0,
+        "include_paths": [],
+        "exclude_paths": [],
+    }
 
 
 def test_config_validation_rejects_negative_gpu_memory_limit() -> None:
@@ -521,4 +568,38 @@ def test_config_validation_rejects_negative_gpu_memory_limit() -> None:
     with pytest.raises(ConfigError, match="embeddings.gpu.memory_limit_mb"):
         validate_config_mapping(
             {"embeddings": {"gpu": {"memory_limit_mb": -1}}},
+        )
+
+
+def test_config_validation_rejects_invalid_embedding_indexing_values() -> None:
+    """
+    Reject unsupported embedding indexing controls.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts mode, object type, text length, and path validation.
+    """
+
+    with pytest.raises(ConfigError, match="embeddings.indexing.mode"):
+        validate_config_mapping({"embeddings": {"indexing": {"mode": "later"}}})
+    with pytest.raises(ConfigError, match="embeddings.indexing.object_types"):
+        validate_config_mapping(
+            {"embeddings": {"indexing": {"object_types": ["symbol", "symbol"]}}},
+        )
+    with pytest.raises(ConfigError, match="embeddings.indexing.object_types"):
+        validate_config_mapping(
+            {"embeddings": {"indexing": {"object_types": ["unknown"]}}},
+        )
+    with pytest.raises(ConfigError, match="embeddings.indexing.max_text_chars"):
+        validate_config_mapping(
+            {"embeddings": {"indexing": {"max_text_chars": -1}}},
+        )
+    with pytest.raises(ConfigError, match="embeddings.indexing.exclude_paths"):
+        validate_config_mapping(
+            {"embeddings": {"indexing": {"exclude_paths": [""]}}},
         )
