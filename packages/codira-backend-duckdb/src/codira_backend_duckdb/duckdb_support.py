@@ -3586,12 +3586,119 @@ def _flush_embedding_rows(
             prepared_rows.append((row, content_hash, None))
             recomputed += 1
 
+    missing_hashes = [
+        content_hash
+        for row, content_hash, stored_vector in prepared_rows
+        if stored_vector is None
+    ]
+    cached_vectors = _load_cached_embedding_vectors(
+        conn,
+        backend=backend,
+        content_hashes=missing_hashes,
+    )
+    if cached_vectors:
+        resolved_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
+        cached_reuses = 0
+        for row, content_hash, stored_vector in prepared_rows:
+            if stored_vector is None and content_hash in cached_vectors:
+                resolved_rows.append((row, content_hash, cached_vectors[content_hash]))
+                cached_reuses += 1
+            else:
+                resolved_rows.append((row, content_hash, stored_vector))
+        prepared_rows = resolved_rows
+        recomputed -= cached_reuses
+        reused += cached_reuses
+
     if pending_embedding_rows is not None:
         pending_embedding_rows.extend(prepared_rows)
         return (recomputed, reused)
 
     _flush_prepared_embedding_rows(conn, prepared_rows=prepared_rows, backend=backend)
     return (recomputed, reused)
+
+
+def _load_cached_embedding_vectors(
+    conn: _DuckDBPersistenceConnection,
+    *,
+    backend: EmbeddingBackendSpec,
+    content_hashes: list[str],
+) -> dict[str, bytes]:
+    """
+    Load reusable vectors from the persistent embedding vector cache.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    backend : EmbeddingBackendSpec
+        Active embedding backend metadata.
+    content_hashes : list[str]
+        Candidate content hashes to load.
+
+    Returns
+    -------
+    dict[str, bytes]
+        Cached serialized vectors keyed by content hash.
+    """
+
+    ordered_hashes = list(dict.fromkeys(content_hashes))
+    if not ordered_hashes:
+        return {}
+    placeholders = ",".join("?" for _item in ordered_hashes)
+    rows = conn.execute(
+        f"""
+        SELECT content_hash, vector
+        FROM embedding_vector_cache
+        WHERE backend = ?
+          AND version = ?
+          AND dim = ?
+          AND content_hash IN ({placeholders})
+        """,
+        (backend.name, backend.version, backend.dim, *ordered_hashes),
+    ).fetchall()
+    return {
+        str(content_hash): bytes(cast("bytes", vector)) for content_hash, vector in rows
+    }
+
+
+def _store_cached_embedding_vectors(
+    conn: _DuckDBPersistenceConnection,
+    *,
+    backend: EmbeddingBackendSpec,
+    encoded_vectors: dict[str, bytes],
+) -> None:
+    """
+    Persist newly encoded vectors in the embedding vector cache.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    backend : EmbeddingBackendSpec
+        Active embedding backend metadata.
+    encoded_vectors : dict[str, bytes]
+        Serialized vectors keyed by content hash.
+
+    Returns
+    -------
+    None
+        Cache rows are inserted or replaced in place.
+    """
+
+    if not encoded_vectors:
+        return
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO embedding_vector_cache(
+            backend, version, dim, content_hash, vector
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (backend.name, backend.version, backend.dim, content_hash, vector)
+            for content_hash, vector in sorted(encoded_vectors.items())
+        ],
+    )
 
 
 def _flush_prepared_embedding_rows(
@@ -3649,6 +3756,17 @@ def _flush_prepared_embedding_rows(
             strict=True,
         ):
             encoded_vectors[content_hash] = (serialize_vector(vector), vector)
+        _store_cached_embedding_vectors(
+            conn,
+            backend=backend,
+            encoded_vectors={
+                content_hash: vector_blob
+                for content_hash, (
+                    vector_blob,
+                    _vector_values,
+                ) in encoded_vectors.items()
+            },
+        )
 
     object_types: list[str] = []
     object_ids: list[int] = []

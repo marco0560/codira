@@ -39,7 +39,7 @@ feat/issue-57-embedding-optimization
 - [x] Phase 0 - Benchmark harness prerequisite and execution ledger
 - [x] Phase 1 - Config and CLI contract
 - [x] Phase 2 - Metrics and embedding volume controls
-- [ ] Phase 3 - Persistent vector cache
+- [x] Phase 3 - Persistent vector cache
 - [ ] Phase 4 - Deferred and resumable embeddings
 - [ ] Phase 5 - Documentation, versioning, validation, and benchmark evidence
 
@@ -103,3 +103,23 @@ feat/issue-57-embedding-optimization
   `uv run pytest -q tests/test_embeddings.py packages/codira-backend-sqlite/tests/test_sqlite_backend_package.py packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py -k 'embedding'`.
 - `uv run pytest -q` passed with the Phase 2 volume controls.
 - `uv run pre-commit run --all-files` passed after the Phase 2 changes.
+
+### Phase 3
+
+- Added schema version `20` with a backend-neutral
+  `embedding_vector_cache` table keyed by backend, version, dimension, and
+  content hash.
+- Added SQLite and DuckDB persistent vector-cache lookups before embedding
+  inference.
+- Stored newly encoded vectors in the cache during embedding flushes.
+- Counted cache hits as reused embeddings while preserving the public backend
+  persistence return contract.
+- Added a low-level SQLite regression that prepopulates the cache and verifies
+  inference is not invoked for a matching content hash.
+- Updated plugin schema-version expectations for the first-party backends.
+- Targeted validation passed:
+  `uv run pytest -q tests/test_embeddings.py -k 'flush_embedding_rows'`.
+- DuckDB embedding validation passed:
+  `uv run pytest -q packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py -k embedding`.
+- `uv run pytest -q` passed with the Phase 3 cache changes.
+- `uv run pre-commit run --all-files` passed after the Phase 3 changes.
