@@ -1,3 +1,10 @@
+## [1.44.1](https://github.com/marco0560/codira/compare/v1.44.0...v1.44.1) (2026-06-07)
+
+
+### Bug Fixes
+
+* **dev:** corrected benchmark script ([35fa38a](https://github.com/marco0560/codira/commit/35fa38a0aa81edf4b4d8776d38cc9b16788aee7e))
+
 # [1.44.0](https://github.com/marco0560/codira/compare/v1.43.2...v1.44.0) (2026-06-07)
 
 
