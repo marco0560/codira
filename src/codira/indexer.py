@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from codira.config import DEFAULT_EMBEDDING_INDEX_MODE, load_effective_config
 from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
@@ -185,6 +186,15 @@ class IndexReport:
         Deterministic per-file analysis warnings recorded during the run.
     coverage_issues : list[CoverageIssue]
         Uncovered canonical-directory files detected during the run.
+    embeddings_skipped : int
+        Number of candidate embeddings intentionally skipped by indexing
+        controls.
+    embeddings_pending : int
+        Number of candidate embeddings left pending for later computation.
+    embedding_index_mode : str
+        Effective embedding population mode used for the run.
+    embedding_complete : bool
+        Whether persisted embedding data is complete for the indexed content.
     """
 
     indexed: int
@@ -197,6 +207,10 @@ class IndexReport:
     failures: list[IndexFailure]
     warnings: list[IndexWarning]
     coverage_issues: list[CoverageIssue]
+    embeddings_skipped: int = 0
+    embeddings_pending: int = 0
+    embedding_index_mode: str = DEFAULT_EMBEDDING_INDEX_MODE
+    embedding_complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -312,6 +326,15 @@ class FinalizeIndexReportRequest:
         Number of embeddings written during persistence.
     embeddings_reused : int
         Number of existing embeddings preserved for reused files.
+    embeddings_skipped : int
+        Number of candidate embeddings intentionally skipped by indexing
+        controls.
+    embeddings_pending : int
+        Number of candidate embeddings left pending for later computation.
+    embedding_index_mode : str
+        Effective embedding population mode used for the run.
+    embedding_complete : bool
+        Whether persisted embedding data is complete for the indexed content.
     """
 
     plan: IndexPlan
@@ -321,6 +344,10 @@ class FinalizeIndexReportRequest:
     coverage_issues: list[CoverageIssue]
     embeddings_recomputed: int
     embeddings_reused: int
+    embeddings_skipped: int = 0
+    embeddings_pending: int = 0
+    embedding_index_mode: str = DEFAULT_EMBEDDING_INDEX_MODE
+    embedding_complete: bool = True
 
 
 def _is_binary_coverage_candidate(path: Path) -> bool:
@@ -1045,6 +1072,10 @@ def _finalize_index_report(request: FinalizeIndexReportRequest) -> IndexReport:
         failures=sorted_failures,
         warnings=sorted_warnings,
         coverage_issues=request.coverage_issues,
+        embeddings_skipped=request.embeddings_skipped,
+        embeddings_pending=request.embeddings_pending,
+        embedding_index_mode=request.embedding_index_mode,
+        embedding_complete=request.embedding_complete,
     )
 
 
@@ -1052,6 +1083,7 @@ def index_repo(
     root: Path,
     *,
     full: bool = False,
+    embedding_index_mode: str | None = None,
 ) -> IndexReport:
     """
     Incrementally scan repository files and update the backend-neutral index.
@@ -1063,6 +1095,9 @@ def index_repo(
         indexed.
     full : bool, optional
         When ``True``, force a full rebuild instead of reusing unchanged files.
+    embedding_index_mode : str | None, optional
+        Embedding population mode override supplied by the CLI. ``None`` uses
+        the effective configuration.
 
     Returns
     -------
@@ -1084,6 +1119,11 @@ def index_repo(
     index_backend = active_index_backend()
     analyzers = _active_language_analyzers()
     backend = get_embedding_backend()
+    effective_embedding_index_mode = (
+        load_effective_config(root=root).embeddings.indexing.mode
+        if embedding_index_mode is None
+        else embedding_index_mode
+    )
     coverage_issues = _audit_canonical_directory_coverage(root, analyzers=analyzers)
     current_state = _collect_project_scan_state(root, analyzers=analyzers)
     planning_conn = index_backend.open_connection(root)
@@ -1145,6 +1185,7 @@ def index_repo(
                 coverage_issues=coverage_issues,
                 embeddings_recomputed=0,
                 embeddings_reused=unchanged_embeddings_reused,
+                embedding_index_mode=effective_embedding_index_mode,
             )
         )
 
@@ -1216,6 +1257,7 @@ def index_repo(
                 coverage_issues=coverage_issues,
                 embeddings_recomputed=embeddings_recomputed,
                 embeddings_reused=embeddings_reused,
+                embedding_index_mode=effective_embedding_index_mode,
             )
         )
     except BaseException:

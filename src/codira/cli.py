@@ -190,6 +190,38 @@ class IndexRebuildRequest:
 
 
 @dataclass(frozen=True)
+class IndexCommandRequest:
+    """
+    Runtime request for the ``index`` CLI command.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose supported source files should be indexed.
+    full : bool
+        Whether to force a full rebuild instead of incremental reuse.
+    explain : bool
+        Whether to print per-file indexing decisions after the summary.
+    require_full_coverage : bool
+        Whether strict coverage gating is enabled.
+    defer_embeddings : bool
+        Whether eligible embedding work should be left pending.
+    embeddings_only : bool
+        Whether only pending embeddings should be computed.
+    as_json : bool
+        Whether to render structured JSON output.
+    """
+
+    root: Path
+    full: bool
+    explain: bool
+    require_full_coverage: bool
+    defer_embeddings: bool
+    embeddings_only: bool
+    as_json: bool
+
+
+@dataclass(frozen=True)
 class IndexPayloadRequest:
     """
     Structured payload request for ``codira index --json``.
@@ -202,6 +234,10 @@ class IndexPayloadRequest:
         Whether the caller requested per-file decision details.
     require_full_coverage : bool
         Whether strict coverage gating was enabled.
+    defer_embeddings : bool
+        Whether the caller requested deferred embedding computation.
+    embeddings_only : bool
+        Whether the caller requested only pending embedding computation.
     status : str
         Stable status code for the command outcome.
     report : codira.indexer.IndexReport | None
@@ -216,6 +252,8 @@ class IndexPayloadRequest:
     status: str
     report: IndexReport | None
     coverage_issues: list[CoverageIssue]
+    defer_embeddings: bool = False
+    embeddings_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -809,6 +847,16 @@ def build_parser() -> argparse.ArgumentParser:
             "Fail before indexing when canonical directories contain "
             "uncovered tracked files"
         ),
+    )
+    index_parser.add_argument(
+        "--defer-embeddings",
+        action="store_true",
+        help="Record index data now and leave eligible embeddings pending",
+    )
+    index_parser.add_argument(
+        "--embeddings-only",
+        action="store_true",
+        help="Compute pending embeddings without reparsing source files",
     )
     index_parser.add_argument(
         "--json",
@@ -1477,36 +1525,94 @@ def _run_capabilities(*, as_json: bool, strict: bool) -> int:
     return 0
 
 
-def _run_index(
-    root: Path,
-    *,
-    full: bool,
-    explain: bool,
-    require_full_coverage: bool,
-    as_json: bool = False,
-) -> int:
+def _run_index(request: IndexCommandRequest) -> int:
     """
     Build or refresh the repository index.
 
     Parameters
     ----------
-    root : pathlib.Path
-        Repository root whose supported source files should be indexed.
-    full : bool
-        Whether to force a full rebuild instead of incremental reuse.
-    explain : bool
-        Whether to print per-file indexing decisions after the summary.
-    require_full_coverage : bool
-        Whether to fail before indexing when canonical directories are not
-        fully covered by the active analyzer set.
-    as_json : bool, optional
-        Whether to render structured JSON output.
+    request : IndexCommandRequest
+        Parsed command options for the indexing run.
 
     Returns
     -------
     int
         Process exit status for a successful indexing run.
     """
+    root = request.root
+    full = request.full
+    explain = request.explain
+    require_full_coverage = request.require_full_coverage
+    defer_embeddings = request.defer_embeddings
+    embeddings_only = request.embeddings_only
+    as_json = request.as_json
+    if defer_embeddings and embeddings_only:
+        msg = "--defer-embeddings and --embeddings-only are mutually exclusive."
+        if as_json:
+            _emit_json(
+                _index_payload(
+                    IndexPayloadRequest(
+                        full=full,
+                        explain=explain,
+                        require_full_coverage=require_full_coverage,
+                        status="invalid_arguments",
+                        report=None,
+                        coverage_issues=[],
+                        defer_embeddings=defer_embeddings,
+                        embeddings_only=embeddings_only,
+                    )
+                )
+            )
+        else:
+            print(f"[codira] ValueError: {msg}", file=sys.stderr)
+        return 2
+
+    config = load_effective_config(root=root)
+    if not config.embeddings.enabled and (defer_embeddings or embeddings_only):
+        msg = "Embedding index mode flags require embeddings.enabled = true."
+        if as_json:
+            _emit_json(
+                _index_payload(
+                    IndexPayloadRequest(
+                        full=full,
+                        explain=explain,
+                        require_full_coverage=require_full_coverage,
+                        status="embeddings_disabled",
+                        report=None,
+                        coverage_issues=[],
+                        defer_embeddings=defer_embeddings,
+                        embeddings_only=embeddings_only,
+                    )
+                )
+            )
+        else:
+            print(f"[codira] ConfigError: {msg}", file=sys.stderr)
+        return 2
+
+    effective_embedding_index_mode = (
+        "deferred" if defer_embeddings else config.embeddings.indexing.mode
+    )
+    if embeddings_only or effective_embedding_index_mode != "immediate":
+        msg = "Deferred embedding execution is not implemented in this phase."
+        if as_json:
+            _emit_json(
+                _index_payload(
+                    IndexPayloadRequest(
+                        full=full,
+                        explain=explain,
+                        require_full_coverage=require_full_coverage,
+                        status="unsupported_embedding_mode",
+                        report=None,
+                        coverage_issues=[],
+                        defer_embeddings=defer_embeddings,
+                        embeddings_only=embeddings_only,
+                    )
+                )
+            )
+        else:
+            print(f"[codira] RuntimeError: {msg}", file=sys.stderr)
+        return 2
+
     coverage_issues = audit_repo_coverage(root)
     if require_full_coverage and coverage_issues:
         if as_json:
@@ -1519,6 +1625,8 @@ def _run_index(
                         status="coverage_incomplete",
                         report=None,
                         coverage_issues=coverage_issues,
+                        defer_embeddings=defer_embeddings,
+                        embeddings_only=embeddings_only,
                     )
                 )
             )
@@ -1527,7 +1635,11 @@ def _run_index(
         return 2
 
     active_index_backend().initialize(root)
-    report = index_repo(root, full=full)
+    report = index_repo(
+        root,
+        full=full,
+        embedding_index_mode=effective_embedding_index_mode,
+    )
     _write_index_head_metadata(
         root,
         indexed_file_count=report.indexed + report.reused,
@@ -1542,6 +1654,8 @@ def _run_index(
                     status="ok",
                     report=report,
                     coverage_issues=report.coverage_issues,
+                    defer_embeddings=defer_embeddings,
+                    embeddings_only=embeddings_only,
                 )
             )
         )
@@ -1583,6 +1697,8 @@ def _index_payload(
             "full": request.full,
             "explain": request.explain,
             "require_full_coverage": request.require_full_coverage,
+            "defer_embeddings": request.defer_embeddings,
+            "embeddings_only": request.embeddings_only,
         },
         "results": [],
         "summary": {
@@ -1594,6 +1710,14 @@ def _index_payload(
                 0 if report is None else report.embeddings_recomputed
             ),
             "embeddings_reused": 0 if report is None else report.embeddings_reused,
+            "embeddings_skipped": 0 if report is None else report.embeddings_skipped,
+            "embeddings_pending": 0 if report is None else report.embeddings_pending,
+            "embedding_index_mode": (
+                "unknown" if report is None else report.embedding_index_mode
+            ),
+            "embedding_complete": False
+            if report is None
+            else report.embedding_complete,
         },
         "coverage_issues": [
             {
@@ -1795,6 +1919,10 @@ def _render_index_report(root: Path, report: IndexReport) -> None:
     print(f"Failed: {report.failed}")
     print(f"Embeddings recomputed: {report.embeddings_recomputed}")
     print(f"Embeddings reused: {report.embeddings_reused}")
+    print(f"Embeddings skipped: {report.embeddings_skipped}")
+    print(f"Embeddings pending: {report.embeddings_pending}")
+    print(f"Embedding index mode: {report.embedding_index_mode}")
+    print(f"Embedding complete: {str(report.embedding_complete).lower()}")
     _render_coverage_issues(root, report.coverage_issues)
     _render_index_warnings(root, report.warnings)
     _render_index_failures(root, report.failures)
@@ -4506,11 +4634,15 @@ def _command_handlers(
     return {
         "help": lambda: _run_help(parser),
         "index": lambda: _run_index(
-            root,
-            full=args.full,
-            explain=args.explain,
-            require_full_coverage=args.require_full_coverage,
-            as_json=args.json,
+            IndexCommandRequest(
+                root=root,
+                full=args.full,
+                explain=args.explain,
+                require_full_coverage=args.require_full_coverage,
+                defer_embeddings=args.defer_embeddings,
+                embeddings_only=args.embeddings_only,
+                as_json=args.json,
+            )
         ),
         "cov": lambda: _run_coverage(root, as_json=args.json),
         "sym": lambda: _run_symbol_command(

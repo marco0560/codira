@@ -37,7 +37,7 @@ feat/issue-57-embedding-optimization
 ## Phase Ledger
 
 - [x] Phase 0 - Benchmark harness prerequisite and execution ledger
-- [ ] Phase 1 - Config and CLI contract
+- [x] Phase 1 - Config and CLI contract
 - [ ] Phase 2 - Metrics and embedding volume controls
 - [ ] Phase 3 - Persistent vector cache
 - [ ] Phase 4 - Deferred and resumable embeddings
@@ -57,3 +57,26 @@ feat/issue-57-embedding-optimization
 - Targeted validation passed:
   `uv run pytest -q tests/test_bootstrap_scripts.py -k benchmark_campaign`.
 - `uv run pre-commit run --all-files` passed after the harness fix.
+
+### Phase 1
+
+- Added the `embeddings.indexing` config table with:
+  - `mode = "immediate"`
+  - `object_types = ["symbol", "documentation"]`
+  - `max_text_chars = 0`
+  - `include_paths = []`
+  - `exclude_paths = []`
+- Added strict validation for embedding indexing mode, object types, duplicate
+  object types, text-size limits, and path-filter list values.
+- Added `codira index --defer-embeddings` and `codira index --embeddings-only`
+  parser support.
+- Preserved current default behavior by keeping immediate embedding computation
+  as the effective default.
+- Added explicit hard-gate validation so embedding execution flags cannot
+  override `embeddings.enabled = false`.
+- Added JSON and text index report fields for skipped, pending, mode, and
+  completion status.
+- Targeted validation passed:
+  `uv run pytest -q tests/test_config.py tests/test_incremental_indexing.py -k 'config or json_for_index_summary or required_coverage_failure or unsupported_deferred_embedding_mode or embedding_mode_flags or initializes_backend_before_indexing'`.
+- `uv run pytest -q` passed with the Phase 1 contract changes.
+- `uv run pre-commit run --all-files` passed after the contract changes.

@@ -35,6 +35,10 @@ DEFAULT_EMBEDDING_DEVICE = "cpu"
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
 DEFAULT_EMBEDDING_GPU_DEVICE_ID = 0
 DEFAULT_EMBEDDING_GPU_MEMORY_LIMIT_MB = 0
+DEFAULT_EMBEDDING_INDEX_MODE = "immediate"
+DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES = ("symbol", "documentation")
+KNOWN_EMBEDDING_INDEX_MODES = frozenset({"immediate", "deferred"})
+KNOWN_EMBEDDING_OBJECT_TYPES = frozenset(DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES)
 _PLUGIN_CONFIG_RESERVED_KEYS = frozenset(
     {
         "disable_third_party",
@@ -109,6 +113,36 @@ class EmbeddingsGpuConfig:
 
 
 @dataclass(frozen=True)
+class EmbeddingsIndexingConfig:
+    """
+    Embedding index population controls.
+
+    Parameters
+    ----------
+    mode : str
+        Embedding population mode. ``"immediate"`` computes embeddings during
+        ``codira index``; ``"deferred"`` records index data without computing
+        embeddings during the primary pass.
+    object_types : tuple[str, ...]
+        Persisted object types eligible for embedding computation.
+    max_text_chars : int
+        Maximum text payload length eligible for embedding, or ``0`` for no
+        configured limit.
+    include_paths : tuple[str, ...]
+        Repo-root-relative path prefixes included in embedding computation.
+        An empty tuple includes all indexed paths.
+    exclude_paths : tuple[str, ...]
+        Repo-root-relative path prefixes excluded from embedding computation.
+    """
+
+    mode: str = DEFAULT_EMBEDDING_INDEX_MODE
+    object_types: tuple[str, ...] = DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES
+    max_text_chars: int = 0
+    include_paths: tuple[str, ...] = ()
+    exclude_paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class EmbeddingsConfig:
     """
     Semantic embedding runtime configuration.
@@ -133,6 +167,8 @@ class EmbeddingsConfig:
         Torch inter-op thread override, or ``0`` to leave Torch defaults.
     gpu : EmbeddingsGpuConfig
         GPU-specific embedding runtime configuration.
+    indexing : EmbeddingsIndexingConfig
+        Embedding index population controls.
     """
 
     enabled: bool = True
@@ -144,6 +180,7 @@ class EmbeddingsConfig:
     torch_num_threads: int = 0
     torch_num_interop_threads: int = 0
     gpu: EmbeddingsGpuConfig = EmbeddingsGpuConfig()
+    indexing: EmbeddingsIndexingConfig = EmbeddingsIndexingConfig()
 
 
 @dataclass(frozen=True)
@@ -211,6 +248,13 @@ DEFAULT_CONFIG: dict[str, object] = {
         "gpu": {
             "device_id": DEFAULT_EMBEDDING_GPU_DEVICE_ID,
             "memory_limit_mb": DEFAULT_EMBEDDING_GPU_MEMORY_LIMIT_MB,
+        },
+        "indexing": {
+            "mode": DEFAULT_EMBEDDING_INDEX_MODE,
+            "object_types": list(DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES),
+            "max_text_chars": 0,
+            "include_paths": [],
+            "exclude_paths": [],
         },
     },
 }
@@ -319,6 +363,13 @@ _SCHEMA: dict[str, object] = {
         "gpu": {
             "device_id": int,
             "memory_limit_mb": int,
+        },
+        "indexing": {
+            "mode": str,
+            "object_types": list,
+            "max_text_chars": int,
+            "include_paths": list,
+            "exclude_paths": list,
         },
     },
 }
@@ -709,6 +760,109 @@ def _validate_plugin_semantics(plugins: Mapping[str, object]) -> None:
             raise ConfigError(msg)
 
 
+def _validate_string_list(
+    value: object,
+    *,
+    key: str,
+    allow_empty_items: bool,
+) -> None:
+    """
+    Validate one public config list containing strings.
+
+    Parameters
+    ----------
+    value : object
+        Candidate list value.
+    key : str
+        Dotted config key used in diagnostics.
+    allow_empty_items : bool
+        Whether empty strings are accepted as list items.
+
+    Returns
+    -------
+    None
+        The value is accepted when it is not a list or all items are strings
+        satisfying the configured emptiness rule.
+
+    Raises
+    ------
+    ConfigError
+        If any item is not an accepted string.
+    """
+
+    if not isinstance(value, list):
+        return
+    for item in value:
+        if not isinstance(item, str):
+            msg = f"Configuration key {key} must contain strings."
+            raise ConfigError(msg)
+        if not allow_empty_items and not item.strip():
+            msg = f"Configuration key {key} must contain non-empty strings."
+            raise ConfigError(msg)
+
+
+def _validate_embedding_indexing_semantics(indexing: Mapping[str, object]) -> None:
+    """
+    Validate embedding indexing control semantics.
+
+    Parameters
+    ----------
+    indexing : collections.abc.Mapping[str, object]
+        Embedding indexing configuration table.
+
+    Returns
+    -------
+    None
+        The table is accepted when all present controls are supported.
+
+    Raises
+    ------
+    ConfigError
+        If a control value is unsupported or internally inconsistent.
+    """
+
+    mode = indexing.get("mode")
+    if isinstance(mode, str) and mode not in KNOWN_EMBEDDING_INDEX_MODES:
+        allowed = ", ".join(sorted(KNOWN_EMBEDDING_INDEX_MODES))
+        msg = f"Configuration key embeddings.indexing.mode must be one of: {allowed}."
+        raise ConfigError(msg)
+
+    object_types = indexing.get("object_types")
+    if isinstance(object_types, list):
+        _validate_string_list(
+            object_types,
+            key="embeddings.indexing.object_types",
+            allow_empty_items=False,
+        )
+        seen: set[str] = set()
+        for object_type in object_types:
+            if object_type not in KNOWN_EMBEDDING_OBJECT_TYPES:
+                allowed = ", ".join(sorted(KNOWN_EMBEDDING_OBJECT_TYPES))
+                msg = (
+                    "Configuration key embeddings.indexing.object_types "
+                    f"must contain only supported values: {allowed}."
+                )
+                raise ConfigError(msg)
+            if object_type in seen:
+                msg = (
+                    "Configuration key embeddings.indexing.object_types "
+                    f"contains duplicate value: {object_type}."
+                )
+                raise ConfigError(msg)
+            seen.add(object_type)
+
+    _validate_string_list(
+        indexing.get("include_paths"),
+        key="embeddings.indexing.include_paths",
+        allow_empty_items=False,
+    )
+    _validate_string_list(
+        indexing.get("exclude_paths"),
+        key="embeddings.indexing.exclude_paths",
+        allow_empty_items=False,
+    )
+
+
 def _validate_semantics(value: Mapping[str, object]) -> None:
     """
     Validate semantic constraints after type validation.
@@ -772,6 +926,15 @@ def _validate_semantics(value: Mapping[str, object]) -> None:
                 prefix="embeddings.gpu",
                 minimum=0,
             )
+        indexing = embeddings.get("indexing")
+        if isinstance(indexing, Mapping):
+            _validate_int_minimums(
+                indexing,
+                ("max_text_chars",),
+                prefix="embeddings.indexing",
+                minimum=0,
+            )
+            _validate_embedding_indexing_semantics(indexing)
 
 
 def validate_config_mapping(value: Mapping[str, object]) -> None:
@@ -1382,6 +1545,13 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
                 "device_id": config.embeddings.gpu.device_id,
                 "memory_limit_mb": config.embeddings.gpu.memory_limit_mb,
             },
+            "indexing": {
+                "mode": config.embeddings.indexing.mode,
+                "object_types": list(config.embeddings.indexing.object_types),
+                "max_text_chars": config.embeddings.indexing.max_text_chars,
+                "include_paths": list(config.embeddings.indexing.include_paths),
+                "exclude_paths": list(config.embeddings.indexing.exclude_paths),
+            },
         },
     }
 
@@ -1454,6 +1624,7 @@ def _config_from_mapping(
         )
     embeddings = cast("Mapping[str, object]", value["embeddings"])
     gpu = cast("Mapping[str, object]", embeddings["gpu"])
+    indexing = cast("Mapping[str, object]", embeddings["indexing"])
     return CodiraConfig(
         config_version=cast("int", value["config_version"]),
         backend=BackendConfig(name=cast("str", backend["name"]).strip()),
@@ -1480,6 +1651,22 @@ def _config_from_mapping(
             gpu=EmbeddingsGpuConfig(
                 device_id=cast("int", gpu["device_id"]),
                 memory_limit_mb=cast("int", gpu["memory_limit_mb"]),
+            ),
+            indexing=EmbeddingsIndexingConfig(
+                mode=cast("str", indexing["mode"]),
+                object_types=tuple(
+                    str(item).strip()
+                    for item in cast("list[object]", indexing["object_types"])
+                ),
+                max_text_chars=cast("int", indexing["max_text_chars"]),
+                include_paths=tuple(
+                    str(item).strip()
+                    for item in cast("list[object]", indexing["include_paths"])
+                ),
+                exclude_paths=tuple(
+                    str(item).strip()
+                    for item in cast("list[object]", indexing["exclude_paths"])
+                ),
             ),
         ),
         origins=origins,

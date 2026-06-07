@@ -38,6 +38,7 @@ import codira.registry as registry_module
 import codira.storage as storage_module
 from codira.analyzers import PythonAnalyzer
 from codira.cli import (
+    IndexCommandRequest,
     IndexRebuildRequest,
     _ensure_index,
     _read_index_metadata,
@@ -1053,7 +1054,7 @@ def test_run_index_initializes_the_active_backend(
     monkeypatch.setattr(
         cli_module,
         "index_repo",
-        lambda root, full=False: types.SimpleNamespace(
+        lambda root, full=False, embedding_index_mode=None: types.SimpleNamespace(
             coverage_issues=[],
             decisions=[],
             indexed=[],
@@ -1073,10 +1074,15 @@ def test_run_index_initializes_the_active_backend(
 
     assert (
         cli_module._run_index(
-            tmp_path,
-            full=False,
-            explain=False,
-            require_full_coverage=False,
+            IndexCommandRequest(
+                root=tmp_path,
+                full=False,
+                explain=False,
+                require_full_coverage=False,
+                defer_embeddings=False,
+                embeddings_only=False,
+                as_json=False,
+            )
         )
         == 0
     )
@@ -2963,6 +2969,8 @@ def test_index_cli_emits_json(
         "full": False,
         "explain": True,
         "require_full_coverage": False,
+        "defer_embeddings": False,
+        "embeddings_only": False,
     }
     assert payload["results"] == []
     assert payload["summary"] == {
@@ -2972,6 +2980,10 @@ def test_index_cli_emits_json(
         "failed": 0,
         "embeddings_recomputed": 2,
         "embeddings_reused": 0,
+        "embeddings_skipped": 0,
+        "embeddings_pending": 0,
+        "embedding_index_mode": "immediate",
+        "embedding_complete": True,
     }
     assert payload["coverage_issues"] == [
         {
@@ -3034,6 +3046,8 @@ def test_index_cli_emits_json_for_required_coverage_failure(
         "full": False,
         "explain": False,
         "require_full_coverage": True,
+        "defer_embeddings": False,
+        "embeddings_only": False,
     }
     assert payload["summary"] == {
         "indexed": 0,
@@ -3042,6 +3056,10 @@ def test_index_cli_emits_json_for_required_coverage_failure(
         "failed": 0,
         "embeddings_recomputed": 0,
         "embeddings_reused": 0,
+        "embeddings_skipped": 0,
+        "embeddings_pending": 0,
+        "embedding_index_mode": "unknown",
+        "embedding_complete": False,
     }
     assert payload["coverage_issues"] == [
         {
@@ -3055,6 +3073,96 @@ def test_index_cli_emits_json_for_required_coverage_failure(
     assert payload["failures"] == []
     assert payload["decisions"] == []
     assert not get_db_path(tmp_path).exists()
+
+
+def test_index_cli_reports_unsupported_deferred_embedding_mode(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Report deferred embedding mode as unsupported in the contract phase.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture CLI output.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch argv and cwd.
+
+    Returns
+    -------
+    None
+        The test asserts the new CLI flag is parsed and rejected
+        deterministically until deferred execution is implemented.
+    """
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["codira", "index", "--json", "--defer-embeddings"],
+    )
+
+    assert main() == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "unsupported_embedding_mode"
+    assert payload["query"] == {
+        "full": False,
+        "explain": False,
+        "require_full_coverage": False,
+        "defer_embeddings": True,
+        "embeddings_only": False,
+    }
+
+
+def test_index_cli_embedding_mode_flags_do_not_override_disabled_embeddings(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Keep embedding mode flags blocked when embeddings are disabled.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture CLI output.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch argv and cwd.
+
+    Returns
+    -------
+    None
+        The test asserts ``embeddings.enabled = false`` is a hard gate for
+        explicit embedding execution flags.
+    """
+
+    config_path = tmp_path / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("[embeddings]\nenabled = false\n", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["codira", "index", "--json", "--embeddings-only"],
+    )
+
+    assert main() == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "embeddings_disabled"
+    assert payload["query"] == {
+        "full": False,
+        "explain": False,
+        "require_full_coverage": False,
+        "defer_embeddings": False,
+        "embeddings_only": True,
+    }
 
 
 def test_index_cli_supports_target_and_output_directory_overrides(
