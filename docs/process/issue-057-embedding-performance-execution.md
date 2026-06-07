@@ -41,7 +41,7 @@ feat/issue-57-embedding-optimization
 - [x] Phase 2 - Metrics and embedding volume controls
 - [x] Phase 3 - Persistent vector cache
 - [x] Phase 4 - Deferred and resumable embeddings
-- [ ] Phase 5 - Documentation, versioning, validation, and benchmark evidence
+- [x] Phase 5 - Documentation, versioning, validation, and benchmark evidence
 
 ## Phase Notes
 
@@ -148,3 +148,30 @@ feat/issue-57-embedding-optimization
   `uv run pytest -q tests/test_contracts.py::test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_checkable tests/test_memory_backend.py::test_memory_backend_implements_full_contract_without_sql_dependency tests/test_memory_backend.py::test_registry_can_select_memory_backend_entry_point`.
 - `uv run pytest -q` passed with the Phase 4 deferred embedding changes.
 - `uv run pre-commit run --all-files` passed after the Phase 4 changes.
+
+### Phase 5
+
+- Documented the embedding indexing controls in `docs/configuration.md`,
+  including immediate versus deferred mode, object-type filtering, text-size
+  filtering, and path-prefix filters.
+- Updated `README.md` with the default symbol and documentation embedding
+  behavior plus the two-step deferred indexing workflow.
+- Updated architecture documentation for:
+  - pending embedding rows
+  - persistent vector caching by backend, version, dimension, and content hash
+  - backend responsibilities for deferred embedding queueing and draining
+- Bumped the touched backend package versions to `1.45.0`.
+- Bumped `codira-bundle-official` to `1.47.0` and refreshed first-party backend
+  pins in the bundle and root optional dependencies.
+- Refreshed `uv.lock` after the package-version changes.
+- Focused validation passed:
+  `uv run pytest -q tests/test_incremental_indexing.py -k 'defers_and_processes_pending_embeddings or embedding_rows_skipped_by_volume_controls'`.
+- Config and plugin validation passed:
+  `uv run pytest -q tests/test_config.py tests/test_plugins.py -k 'embedding_indexing or backend_plugins_cli'`.
+- Full validation passed:
+  `uv run pytest -q`.
+- Repository validation passed:
+  `uv run pre-commit run --all-files`.
+- Codira self-checks passed:
+  `uv run codira index`, `uv run codira audit`, `uv run codira index -h`,
+  and `uv run codira caps --json`.
