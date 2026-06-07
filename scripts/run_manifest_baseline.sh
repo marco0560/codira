@@ -93,13 +93,13 @@ run_backend() {
 }
 
 status=0
-run_backend sqlite "$@"
+run_backend sqlite
 sqlite_status="$?"
 if [[ "$sqlite_status" -ne 0 ]]; then
   status="$sqlite_status"
 fi
 
-run_backend duckdb "$@"
+run_backend duckdb
 duckdb_status="$?"
 if [[ "$duckdb_status" -ne 0 && "$status" -eq 0 ]]; then
   status="$duckdb_status"
