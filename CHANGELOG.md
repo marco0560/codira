@@ -1,3 +1,10 @@
+## [1.44.2](https://github.com/marco0560/codira/compare/v1.44.1...v1.44.2) (2026-06-11)
+
+
+### Bug Fixes
+
+* **backend:** batch duckdb embedding cache writes ([a5107c6](https://github.com/marco0560/codira/commit/a5107c62ad142e2b201578f3a534090a824a829f)), closes [#57](https://github.com/marco0560/codira/issues/57) [#57](https://github.com/marco0560/codira/issues/57)
+
 ## [1.44.1](https://github.com/marco0560/codira/compare/v1.44.0...v1.44.1) (2026-06-07)
 
 
