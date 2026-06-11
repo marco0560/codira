@@ -21,14 +21,14 @@ package-local helper implementation used by the first-party DuckDB backend.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 import csv
 import hashlib
 import json
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from codira.contracts import (
     BackendError,
@@ -102,6 +102,8 @@ DocstringIssueRow = tuple[int, int | None, int | None, int | None, str, str]
 ImportRow = tuple[int, str, str | None, str, int]
 OverloadRow = tuple[int, str, str, int, str, str | None, int, int | None]
 EnumMemberRow = tuple[int, str, str, int, str, str, int, str, str, int]
+_T = TypeVar("_T")
+_DUCKDB_EMBEDDING_BATCH_ROWS = 2_048
 
 _DERIVED_GRAPH_INDEX_DROP_DDL = (
     "DROP INDEX IF EXISTS idx_call_edges_identity",
@@ -3626,6 +3628,147 @@ def _flush_embedding_rows(
     return (recomputed, reused)
 
 
+def _chunked_embedding_batches(
+    rows: Sequence[_T],
+    *,
+    chunk_size: int | None = None,
+) -> Iterator[Sequence[_T]]:
+    """
+    Yield bounded row batches for DuckDB embedding persistence.
+
+    Parameters
+    ----------
+    rows : collections.abc.Sequence[_T]
+        Ordered rows to split.
+    chunk_size : int | None, optional
+        Maximum row count per yielded batch.
+
+    Yields
+    ------
+    collections.abc.Sequence[_T]
+        Bounded slices of ``rows``.
+
+    Raises
+    ------
+    ValueError
+        Raised when ``chunk_size`` is not positive.
+    """
+    active_chunk_size = (
+        _DUCKDB_EMBEDDING_BATCH_ROWS if chunk_size is None else chunk_size
+    )
+    if active_chunk_size <= 0:
+        msg = f"chunk_size must be positive, got {active_chunk_size}"
+        raise ValueError(msg)
+    for start in range(0, len(rows), active_chunk_size):
+        yield rows[start : start + active_chunk_size]
+
+
+def _duckdb_batch_error_types() -> tuple[type[BaseException], ...]:
+    """
+    Return expected batch-write exception types for DuckDB helper operations.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    tuple[type[BaseException], ...]
+        Exception classes that should be wrapped as backend persistence
+        failures.
+    """
+    import pyarrow as pa
+
+    try:
+        import duckdb
+    except ModuleNotFoundError:
+        return (OSError, RuntimeError, ValueError, pa.ArrowException)
+    return (OSError, RuntimeError, ValueError, pa.ArrowException, duckdb.Error)
+
+
+def _embedding_batch_backend_error(
+    *,
+    operation: str,
+    row_count: int,
+    payload_bytes: int,
+) -> str:
+    """
+    Build one operator-facing DuckDB embedding batch failure message.
+
+    Parameters
+    ----------
+    operation : str
+        Logical batch operation that failed.
+    row_count : int
+        Number of rows in the failed batch.
+    payload_bytes : int
+        Approximate text or vector payload size in bytes.
+
+    Returns
+    -------
+    str
+        Diagnostic message suitable for ``BackendError``.
+    """
+    return (
+        f"DuckDB embedding batch operation failed: operation={operation} "
+        f"rows={row_count} approx_payload_bytes={payload_bytes}. "
+        "Retry with a smaller embedding batch size or disable vector cache "
+        "writes while investigating DuckDB memory pressure."
+    )
+
+
+def _pending_embedding_payload_bytes(
+    prepared_rows: Sequence[tuple[PendingEmbeddingRow, str, bytes | None]],
+    *,
+    backend: EmbeddingBackendSpec,
+) -> int:
+    """
+    Estimate pending-embedding batch payload bytes.
+
+    Parameters
+    ----------
+    prepared_rows : collections.abc.Sequence[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
+        Prepared embedding rows in the batch.
+    backend : codira.semantic.embeddings.EmbeddingBackendSpec
+        Active embedding backend metadata.
+
+    Returns
+    -------
+    int
+        Approximate payload byte count for diagnostics.
+    """
+    return sum(
+        len(row.object_type.encode("utf-8"))
+        + len(row.stable_id.encode("utf-8"))
+        + len(row.text.encode("utf-8"))
+        + len(content_hash.encode("utf-8"))
+        + len(backend.name.encode("utf-8"))
+        + len(backend.version.encode("utf-8"))
+        + (len(stored_vector) if stored_vector is not None else 0)
+        for row, content_hash, stored_vector in prepared_rows
+    )
+
+
+def _cached_vector_payload_bytes(encoded_vectors: dict[str, bytes]) -> int:
+    """
+    Estimate cached-vector batch payload bytes.
+
+    Parameters
+    ----------
+    encoded_vectors : dict[str, bytes]
+        Serialized vectors keyed by content hash.
+
+    Returns
+    -------
+    int
+        Approximate payload byte count for diagnostics.
+    """
+    return sum(
+        len(content_hash.encode("utf-8")) + len(vector)
+        for content_hash, vector in encoded_vectors.items()
+    )
+
+
 def _store_pending_embedding_rows(
     conn: _DuckDBPersistenceConnection,
     *,
@@ -3648,31 +3791,87 @@ def _store_pending_embedding_rows(
     -------
     None
         Pending rows are inserted or replaced in place.
+
+    Raises
+    ------
+    codira.contracts.BackendError
+        Raised when DuckDB or Arrow rejects one pending-row batch.
     """
 
     if not prepared_rows:
         return
-    conn.executemany(
-        """
-        INSERT OR REPLACE INTO pending_embeddings(
-            object_type, object_id, stable_id, backend, version, content_hash, dim, text
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        [
-            (
-                row.object_type,
-                row.object_id,
-                row.stable_id,
-                backend.name,
-                backend.version,
-                content_hash,
-                backend.dim,
-                row.text,
+
+    import pyarrow as pa
+
+    for batch in _chunked_embedding_batches(prepared_rows):
+        object_types: list[str] = []
+        object_ids: list[int] = []
+        stable_ids: list[str] = []
+        backends: list[str] = []
+        versions: list[str] = []
+        content_hashes: list[str] = []
+        dims: list[int] = []
+        texts: list[str] = []
+        for row, content_hash, _stored_vector in batch:
+            object_types.append(row.object_type)
+            object_ids.append(row.object_id)
+            stable_ids.append(row.stable_id)
+            backends.append(backend.name)
+            versions.append(backend.version)
+            content_hashes.append(content_hash)
+            dims.append(backend.dim)
+            texts.append(row.text)
+
+        try:
+            table = pa.table(
+                {
+                    "object_type": pa.array(object_types, type=pa.string()),
+                    "object_id": pa.array(object_ids, type=pa.int64()),
+                    "stable_id": pa.array(stable_ids, type=pa.string()),
+                    "backend": pa.array(backends, type=pa.string()),
+                    "version": pa.array(versions, type=pa.string()),
+                    "content_hash": pa.array(content_hashes, type=pa.string()),
+                    "dim": pa.array(dims, type=pa.int64()),
+                    "text": pa.array(texts, type=pa.string()),
+                }
             )
-            for row, content_hash, _stored_vector in prepared_rows
-        ],
-    )
+            _flush_registered_arrow_table(
+                conn,
+                view_name="__codira_pending_embedding_queue_rows",
+                table=table,
+                insert_sql="""
+                    INSERT OR REPLACE INTO pending_embeddings(
+                        object_type,
+                        object_id,
+                        stable_id,
+                        backend,
+                        version,
+                        content_hash,
+                        dim,
+                        text
+                    )
+                    SELECT
+                        object_type,
+                        object_id,
+                        stable_id,
+                        backend,
+                        version,
+                        content_hash,
+                        dim,
+                        text
+                    FROM __codira_pending_embedding_queue_rows
+                    """,
+            )
+        except _duckdb_batch_error_types() as exc:
+            msg = _embedding_batch_backend_error(
+                operation="pending_embeddings_insert",
+                row_count=len(batch),
+                payload_bytes=_pending_embedding_payload_bytes(
+                    batch,
+                    backend=backend,
+                ),
+            )
+            raise BackendError(msg) from exc
 
 
 def _load_cached_embedding_vectors(
@@ -3741,22 +3940,70 @@ def _store_cached_embedding_vectors(
     -------
     None
         Cache rows are inserted or replaced in place.
+
+    Raises
+    ------
+    codira.contracts.BackendError
+        Raised when DuckDB or Arrow rejects one vector-cache batch.
     """
 
     if not encoded_vectors:
         return
-    conn.executemany(
-        """
-        INSERT OR REPLACE INTO embedding_vector_cache(
-            backend, version, dim, content_hash, vector
-        )
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        [
-            (backend.name, backend.version, backend.dim, content_hash, vector)
-            for content_hash, vector in sorted(encoded_vectors.items())
-        ],
-    )
+
+    import pyarrow as pa
+
+    ordered_vectors = sorted(encoded_vectors.items())
+    for batch in _chunked_embedding_batches(ordered_vectors):
+        backends: list[str] = []
+        versions: list[str] = []
+        dims: list[int] = []
+        content_hashes: list[str] = []
+        vectors: list[bytes] = []
+        for content_hash, vector in batch:
+            backends.append(backend.name)
+            versions.append(backend.version)
+            dims.append(backend.dim)
+            content_hashes.append(content_hash)
+            vectors.append(vector)
+
+        try:
+            table = pa.table(
+                {
+                    "backend": pa.array(backends, type=pa.string()),
+                    "version": pa.array(versions, type=pa.string()),
+                    "dim": pa.array(dims, type=pa.int64()),
+                    "content_hash": pa.array(content_hashes, type=pa.string()),
+                    "vector": pa.array(vectors, type=pa.binary()),
+                }
+            )
+            _flush_registered_arrow_table(
+                conn,
+                view_name="__codira_embedding_vector_cache_rows",
+                table=table,
+                insert_sql="""
+                    INSERT OR REPLACE INTO embedding_vector_cache(
+                        backend,
+                        version,
+                        dim,
+                        content_hash,
+                        vector
+                    )
+                    SELECT
+                        backend,
+                        version,
+                        dim,
+                        content_hash,
+                        vector
+                    FROM __codira_embedding_vector_cache_rows
+                    """,
+            )
+        except _duckdb_batch_error_types() as exc:
+            msg = _embedding_batch_backend_error(
+                operation="embedding_vector_cache_insert",
+                row_count=len(batch),
+                payload_bytes=_cached_vector_payload_bytes(dict(batch)),
+            )
+            raise BackendError(msg) from exc
 
 
 def _delete_pending_embedding_rows(
@@ -3781,23 +4028,61 @@ def _delete_pending_embedding_rows(
     -------
     None
         Matching pending rows are deleted in place.
+
+    Raises
+    ------
+    codira.contracts.BackendError
+        Raised when DuckDB or Arrow rejects one pending-row deletion batch.
     """
 
     if not prepared_rows:
         return
-    conn.executemany(
-        """
-        DELETE FROM pending_embeddings
-        WHERE object_type = ?
-          AND object_id = ?
-          AND backend = ?
-          AND version = ?
-        """,
-        [
-            (row.object_type, row.object_id, backend.name, backend.version)
-            for row, _content_hash, _stored_vector in prepared_rows
-        ],
-    )
+
+    import pyarrow as pa
+
+    for batch in _chunked_embedding_batches(prepared_rows):
+        object_types: list[str] = []
+        object_ids: list[int] = []
+        backends: list[str] = []
+        versions: list[str] = []
+        for row, _content_hash, _stored_vector in batch:
+            object_types.append(row.object_type)
+            object_ids.append(row.object_id)
+            backends.append(backend.name)
+            versions.append(backend.version)
+
+        try:
+            table = pa.table(
+                {
+                    "object_type": pa.array(object_types, type=pa.string()),
+                    "object_id": pa.array(object_ids, type=pa.int64()),
+                    "backend": pa.array(backends, type=pa.string()),
+                    "version": pa.array(versions, type=pa.string()),
+                }
+            )
+            _flush_registered_arrow_table(
+                conn,
+                view_name="__codira_pending_embedding_delete_rows",
+                table=table,
+                insert_sql="""
+                    DELETE FROM pending_embeddings
+                    USING __codira_pending_embedding_delete_rows pending
+                    WHERE pending_embeddings.object_type = pending.object_type
+                      AND pending_embeddings.object_id = pending.object_id
+                      AND pending_embeddings.backend = pending.backend
+                      AND pending_embeddings.version = pending.version
+                    """,
+            )
+        except _duckdb_batch_error_types() as exc:
+            msg = _embedding_batch_backend_error(
+                operation="pending_embeddings_delete",
+                row_count=len(batch),
+                payload_bytes=_pending_embedding_payload_bytes(
+                    batch,
+                    backend=backend,
+                ),
+            )
+            raise BackendError(msg) from exc
 
 
 def _flush_prepared_embedding_rows(

@@ -37,9 +37,13 @@ from codira_backend_duckdb import (
     build_backend,
 )
 from codira_backend_duckdb.duckdb_support import DocumentationArtifactRow
+from codira_backend_duckdb.duckdb_support import _delete_pending_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_pending_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_pending_reference_scan_rows
 from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
+from codira_backend_duckdb.duckdb_support import _store_cached_embedding_vectors
+from codira_backend_duckdb.duckdb_support import _store_pending_embedding_rows
+from codira_backend_duckdb import duckdb_support as duckdb_support_module
 
 if TYPE_CHECKING:
     from codira_backend_duckdb.duckdb_support import _DuckDBPersistenceConnection
@@ -201,6 +205,69 @@ class _FakeDuckDBConnection:
             The closed flag is updated in place.
         """
         self.closed = True
+
+
+class _RejectingExecutemanyDuckDBConnection(_FakeDuckDBConnection):
+    """Fake DuckDB connection that rejects row-wise batch execution."""
+
+    def executemany(
+        self,
+        query: str,
+        parameters: list[tuple[object, ...]],
+    ) -> object:
+        """
+        Reject row-wise DuckDB batch execution.
+
+        Parameters
+        ----------
+        query : str
+            SQL statement text.
+        parameters : list[tuple[object, ...]]
+            Bound parameter rows.
+
+        Returns
+        -------
+        object
+            Never returned because the method always fails.
+
+        Raises
+        ------
+        AssertionError
+            Raised whenever a helper attempts row-wise execution.
+        """
+        raise AssertionError("executemany must not be used for DuckDB batches")
+
+
+class _FailingExecuteDuckDBConnection(_RejectingExecutemanyDuckDBConnection):
+    """Fake DuckDB connection that fails registered batch execution."""
+
+    def execute(
+        self,
+        query: str,
+        parameters: tuple[object, ...] | None = None,
+    ) -> object:
+        """
+        Fail non-registration SQL execution.
+
+        Parameters
+        ----------
+        query : str
+            SQL statement text.
+        parameters : tuple[object, ...] | None, optional
+            Bound parameters.
+
+        Returns
+        -------
+        object
+            The fake connection itself for registration statements.
+
+        Raises
+        ------
+        RuntimeError
+            Raised for the statement executed against a registered table.
+        """
+        self.executed.append((query, parameters))
+        raise RuntimeError("synthetic DuckDB batch failure")
 
 
 class _FakeDuckDBModule:
@@ -443,7 +510,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.45.0"
+    assert project["project"]["version"] == "1.46.0"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -1830,6 +1897,165 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
         "latest-hash",
     )
     assert cast("object", stored_rows[0][5]) == [1.0] + [0.0] * 383
+
+
+def test_duckdb_embedding_queue_helpers_use_registered_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Persist DuckDB embedding queue rows through registered batch tables.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to force small batch chunks.
+
+    Returns
+    -------
+    None
+        The test asserts pending queue insert, vector-cache insert, and pending
+        queue delete helpers avoid row-wise execution.
+    """
+    monkeypatch.setattr(
+        duckdb_support_module,
+        "_DUCKDB_EMBEDDING_BATCH_ROWS",
+        2,
+    )
+    conn = _RejectingExecutemanyDuckDBConnection()
+    backend = EmbeddingBackendSpec(name="test-backend", version="1", dim=2)
+    prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = [
+        (
+            PendingEmbeddingRow(
+                object_type="symbol",
+                object_id=index,
+                stable_id=f"symbol:{index}",
+                text=f"text {index}",
+            ),
+            f"hash-{index}",
+            None,
+        )
+        for index in range(5)
+    ]
+
+    _store_pending_embedding_rows(
+        cast("_DuckDBPersistenceConnection", conn),
+        prepared_rows=prepared_rows,
+        backend=backend,
+    )
+    _store_cached_embedding_vectors(
+        cast("_DuckDBPersistenceConnection", conn),
+        backend=backend,
+        encoded_vectors={
+            f"hash-{index}": bytes([index, index + 1]) for index in range(5)
+        },
+    )
+    _delete_pending_embedding_rows(
+        cast("_DuckDBPersistenceConnection", conn),
+        prepared_rows=prepared_rows,
+        backend=backend,
+    )
+
+    register_calls = [
+        query for query, _parameters in conn.executed if query.startswith("REGISTER ")
+    ]
+    assert register_calls == [
+        "REGISTER __codira_pending_embedding_queue_rows",
+        "REGISTER __codira_pending_embedding_queue_rows",
+        "REGISTER __codira_pending_embedding_queue_rows",
+        "REGISTER __codira_embedding_vector_cache_rows",
+        "REGISTER __codira_embedding_vector_cache_rows",
+        "REGISTER __codira_embedding_vector_cache_rows",
+        "REGISTER __codira_pending_embedding_delete_rows",
+        "REGISTER __codira_pending_embedding_delete_rows",
+        "REGISTER __codira_pending_embedding_delete_rows",
+    ]
+
+
+def test_duckdb_embedding_batch_failures_raise_backend_error() -> None:
+    """
+    Wrap DuckDB embedding batch failures with operator diagnostics.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts batch operation failures expose operation, row-count,
+        and payload-size context.
+    """
+    conn = _FailingExecuteDuckDBConnection()
+    backend = EmbeddingBackendSpec(name="test-backend", version="1", dim=2)
+
+    with pytest.raises(BackendError) as exc_info:
+        _store_cached_embedding_vectors(
+            cast("_DuckDBPersistenceConnection", conn),
+            backend=backend,
+            encoded_vectors={"hash": b"\x00\x01"},
+        )
+
+    message = str(exc_info.value)
+    assert "operation=embedding_vector_cache_insert" in message
+    assert "rows=1" in message
+    assert "approx_payload_bytes=" in message
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert ("UNREGISTER __codira_embedding_vector_cache_rows", None) in conn.executed
+
+
+def test_duckdb_cached_embedding_vectors_persist_with_chunking(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Persist cached DuckDB embedding vectors through chunked Arrow batches.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to force multiple vector-cache chunks.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts vector-cache rows are written once across multiple
+        chunks.
+    """
+    pytest.importorskip("duckdb")
+    monkeypatch.setattr(
+        duckdb_support_module,
+        "_DUCKDB_EMBEDDING_BATCH_ROWS",
+        3,
+    )
+    backend = DuckDBIndexBackend()
+    connection = backend.open_connection(tmp_path)
+    try:
+        _store_cached_embedding_vectors(
+            cast("_DuckDBPersistenceConnection", connection),
+            backend=EmbeddingBackendSpec(
+                name="test-backend",
+                version="1",
+                dim=2,
+            ),
+            encoded_vectors={
+                f"hash-{index}": bytes([index, index + 1]) for index in range(7)
+            },
+        )
+        rows = connection.execute(
+            """
+            SELECT content_hash, vector
+            FROM embedding_vector_cache
+            ORDER BY content_hash
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert len(rows) == 7
+    assert rows[0] == ("hash-0", b"\x00\x01")
+    assert rows[-1] == ("hash-6", b"\x06\x07")
 
 
 def test_duckdb_embedding_candidates_use_stored_vector_values(

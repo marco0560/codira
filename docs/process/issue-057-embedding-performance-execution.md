@@ -175,3 +175,30 @@ feat/issue-57-embedding-optimization
 - Codira self-checks passed:
   `uv run codira index`, `uv run codira audit`, `uv run codira index -h`,
   and `uv run codira caps --json`.
+
+### Phase 6
+
+- Replaced DuckDB row-wise embedding queue and vector-cache writes with chunked
+  Arrow replacement-scan batches.
+- Added typed `BackendError` diagnostics for DuckDB embedding batch failures,
+  including operation, row count, and approximate payload size.
+- Added regression tests for:
+  - avoiding `executemany()` in DuckDB embedding queue/cache helpers
+  - chunked cached-vector persistence
+  - batch failure diagnostics
+- Bumped `codira-backend-duckdb` to `1.46.0`.
+- Bumped `codira-bundle-official` to `1.48.0` and refreshed the DuckDB backend
+  pin in the bundle and root optional dependencies.
+- Validation passed:
+  - `uv run pytest -q packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py packages/codira-bundle-official/tests/test_bundle_package.py tests/test_contracts.py::test_root_optional_dependencies_support_monorepo_bundle_install`
+  - `uv run python scripts/validate_repo.py`
+  - `uv run pre-commit run --all-files`
+  - `uv run pytest -q`
+  - `.venv/bin/codira index`
+  - `.venv/bin/codira audit --json`
+  - `.venv/bin/codira caps --json`
+- DuckDB full-index smoke checks passed without vector-cache OOM or batch
+  failures:
+  - small: Codira repository, 4,004 embeddings recomputed
+  - medium: Redis, 12,528 embeddings recomputed
+  - large: Postgres, 33,539 embeddings recomputed
