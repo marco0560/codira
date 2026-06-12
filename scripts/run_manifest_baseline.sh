@@ -2,13 +2,60 @@
 set -u
 set -o pipefail
 
-if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && { [ "$1" = "-h" ] || [ "$1" = "--help" ] || [ ! -f "$1" ]; }; }; then
-    echo "Uso: $0 [manifest.json]"
-    echo "  -h, --help    Mostra questo messaggio di aiuto"
-    echo "  Nota: Se specificato, il file manifest.json deve esistere."
-    echo "        Il suo valore per default è benchmarks/bk-cpp.local.json."
-    echo "Esempio: $0 benchmarks/bk-llvm.local.json"
-    exit 1
+show_help() {
+    echo "Usage: $0 [--sqlite-only | --duckdb-only] [manifest.json]"
+    echo "  --sqlite-only  Run only the SQLite campaign"
+    echo "  --duckdb-only  Run only the DuckDB campaign"
+    echo "  -h, --help     Show this help message"
+    echo "  Note: If specified, manifest.json must exist."
+    echo "        Default: benchmarks/bk-cpp.local.json."
+}
+
+sqlite_only=0
+duckdb_only=0
+manifest_arg=""
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      show_help
+      exit 0
+      ;;
+    --sqlite-only)
+      sqlite_only=1
+      shift
+      ;;
+    --duckdb-only)
+      duckdb_only=1
+      shift
+      ;;
+    -*)
+      echo "ERROR: unknown option: $1" >&2
+      show_help >&2
+      exit 1
+      ;;
+    *)
+      if [[ -n "$manifest_arg" ]]; then
+        echo "ERROR: too many positional arguments" >&2
+        show_help >&2
+        exit 1
+      fi
+      manifest_arg="$1"
+      shift
+      ;;
+  esac
+done
+
+if [[ "$sqlite_only" -eq 1 && "$duckdb_only" -eq 1 ]]; then
+  echo "ERROR: --sqlite-only and --duckdb-only are mutually exclusive" >&2
+  show_help >&2
+  exit 1
+fi
+
+if [[ -n "$manifest_arg" && ! -f "$manifest_arg" ]]; then
+  echo "ERROR: manifest file does not exist: $manifest_arg" >&2
+  show_help >&2
+  exit 1
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,7 +82,7 @@ if [[ ! -x "$CODIRA" ]]; then
   exit 2
 fi
 
-MANIFEST="${MANIFEST:-${1:-benchmarks/bk-cpp.local.json}}"
+MANIFEST="${MANIFEST:-${manifest_arg:-benchmarks/bk-cpp.local.json}}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-.artifacts}"
 STAMP="${STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 RUNS="${RUNS:-5}"
@@ -93,21 +140,32 @@ run_backend() {
 }
 
 status=0
-run_backend sqlite
-sqlite_status="$?"
-if [[ "$sqlite_status" -ne 0 ]]; then
-  status="$sqlite_status"
+sqlite_status="skipped"
+duckdb_status="skipped"
+
+if [[ "$duckdb_only" -eq 0 ]]; then
+  run_backend sqlite
+  sqlite_status="$?"
+  if [[ "$sqlite_status" -ne 0 ]]; then
+    status="$sqlite_status"
+  fi
 fi
 
-run_backend duckdb
-duckdb_status="$?"
-if [[ "$duckdb_status" -ne 0 && "$status" -eq 0 ]]; then
-  status="$duckdb_status"
+if [[ "$sqlite_only" -eq 0 ]]; then
+  run_backend duckdb
+  duckdb_status="$?"
+  if [[ "$duckdb_status" -ne 0 && "$status" -eq 0 ]]; then
+    status="$duckdb_status"
+  fi
 fi
 
 echo "SQLite status: $sqlite_status"
 echo "DuckDB status: $duckdb_status"
 echo "Artifacts:"
-echo "  ${ARTIFACT_ROOT}/${STAMP}-bk-cpp-sqlite"
-echo "  ${ARTIFACT_ROOT}/${STAMP}-bk-cpp-duckdb"
+if [[ "$duckdb_only" -eq 0 ]]; then
+  echo "  ${ARTIFACT_ROOT}/${STAMP}-bk-cpp-sqlite"
+fi
+if [[ "$sqlite_only" -eq 0 ]]; then
+  echo "  ${ARTIFACT_ROOT}/${STAMP}-bk-cpp-duckdb"
+fi
 exit "$status"
