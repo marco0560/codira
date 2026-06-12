@@ -1,3 +1,10 @@
+## [1.44.3](https://github.com/marco0560/codira/compare/v1.44.2...v1.44.3) (2026-06-12)
+
+
+### Performance Improvements
+
+* **backend:** fix repeated full index regression for DuckDB backend ([dbbd471](https://github.com/marco0560/codira/commit/dbbd47149b59e552ac3a3a67a68dd0284fe08891))
+
 ## [1.44.2](https://github.com/marco0560/codira/compare/v1.44.1...v1.44.2) (2026-06-11)
 
 
