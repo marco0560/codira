@@ -510,7 +510,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.46.0"
+    assert project["project"]["version"] == "1.47.0"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -1237,7 +1237,7 @@ def test_duckdb_backend_full_prepare_clears_populated_database_in_session(
     tmp_path: Path,
 ) -> None:
     """
-    Clear a populated DuckDB index during a full rebuild session.
+    Clear indexed DuckDB rows while preserving semantic cache rows.
 
     Parameters
     ----------
@@ -1247,8 +1247,8 @@ def test_duckdb_backend_full_prepare_clears_populated_database_in_session(
     Returns
     -------
     None
-        The test asserts a second full rebuild can clear previously indexed
-        rows without tripping DuckDB foreign-key enforcement.
+        The test asserts a full rebuild clears indexed tables, preserves the
+        embedding vector cache, and recreates deferred schema indexes.
     """
     duckdb = pytest.importorskip("duckdb")
     db_path = _duckdb_db_path(tmp_path)
@@ -1307,6 +1307,18 @@ def test_duckdb_backend_full_prepare_clears_populated_database_in_session(
             ) VALUES (1, 1, 1, 'method', 1, 1, NULL, NULL, 0, 1, 1)
             """
         )
+        raw.execute(
+            """
+            INSERT INTO embedding_vector_cache(
+                backend,
+                version,
+                dim,
+                content_hash,
+                vector
+            ) VALUES ('test-backend', '1', 384, 'stable-hash', ?)
+            """,
+            (b"stable-vector",),
+        )
         raw.commit()
     finally:
         raw.close()
@@ -1325,6 +1337,23 @@ def test_duckdb_backend_full_prepare_clears_populated_database_in_session(
         assert reopened.execute("SELECT COUNT(*) FROM modules").fetchone() == (0,)
         assert reopened.execute("SELECT COUNT(*) FROM classes").fetchone() == (0,)
         assert reopened.execute("SELECT COUNT(*) FROM functions").fetchone() == (0,)
+        assert reopened.execute(
+            "SELECT COUNT(*) FROM embedding_vector_cache"
+        ).fetchone() == (1,)
+        assert reopened.execute(
+            """
+                SELECT vector
+                FROM embedding_vector_cache
+                WHERE content_hash = 'stable-hash'
+                """
+        ).fetchone() == (b"stable-vector",)
+        assert reopened.execute(
+            """
+                SELECT COUNT(*)
+                FROM duckdb_indexes()
+                WHERE index_name = 'idx_embeddings_object_backend_version'
+                """
+        ).fetchone() == (1,)
     finally:
         reopened.close()
 

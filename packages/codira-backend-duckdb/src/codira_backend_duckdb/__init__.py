@@ -63,7 +63,7 @@ if TYPE_CHECKING:
 
     from codira.contracts import IndexBackend, IndexWriteSession
 
-PACKAGE_VERSION = "1.46.0"
+PACKAGE_VERSION = "1.47.0"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -388,23 +388,16 @@ class _DuckDBIndexWriteSession:
             Matching persisted rows are removed in place.
         """
         if full:
-            if self._transaction_open:
-                self._conn.execute("ROLLBACK")
-                self._transaction_open = False
-            self._conn.close()
-            db_path = _duckdb_db_path(self._root)
-            for path in (db_path, db_path.with_name(f"{db_path.name}.wal")):
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
-            self._backend.initialize(self._root)
-            self._conn = self._backend.open_connection(self._root)
-            self._conn.execute("BEGIN TRANSACTION")
-            self._transaction_open = True
+            self._backend.clear_index(self._root, conn=self._conn)
             persistence_conn = cast("_DuckDBPersistenceConnection", self._conn)
             self._id_allocator = DuckDBIdAllocator(persistence_conn)
             self._structural_rows = DuckDBStructuralRowBuffers()
+            self._pending_embedding_rows = []
+            self._pending_reference_scan_rows = []
+            self._pending_call_rows = []
+            self._pending_ref_rows = []
+            self._pending_import_rows = []
+            self._pending_docstring_issue_rows = []
             _drop_duckdb_schema_indexes(self._conn)
             self._deferred_schema_indexes = True
             return
