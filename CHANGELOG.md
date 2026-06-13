@@ -1,3 +1,10 @@
+## [1.44.4](https://github.com/marco0560/codira/compare/v1.44.3...v1.44.4) (2026-06-13)
+
+
+### Bug Fixes
+
+* **backend:** implement DuckDB warm full-reindex fix ([3cbce4a](https://github.com/marco0560/codira/commit/3cbce4a22075edbec86dd4e4362e00b4eee9304e))
+
 ## [1.44.3](https://github.com/marco0560/codira/compare/v1.44.2...v1.44.3) (2026-06-12)
 
 
