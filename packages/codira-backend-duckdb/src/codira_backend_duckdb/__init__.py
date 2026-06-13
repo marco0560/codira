@@ -63,7 +63,7 @@ if TYPE_CHECKING:
 
     from codira.contracts import IndexBackend, IndexWriteSession
 
-PACKAGE_VERSION = "1.47.0"
+PACKAGE_VERSION = "1.48.0"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -85,6 +85,24 @@ _SEQUENCED_TABLES: tuple[str, ...] = (
 _TABLE_ID_SEQUENCE: dict[str, str] = {
     table: f"{table}_id_seq" for table in _SEQUENCED_TABLES
 }
+_INDEX_DATA_TABLES: tuple[str, ...] = (
+    "docstring_issues",
+    "call_edges",
+    "callable_refs",
+    "call_records",
+    "callable_ref_records",
+    "reference_scan_lines",
+    "overloads",
+    "enum_members",
+    "embeddings",
+    "documentation_artifacts",
+    "symbol_index",
+    "imports",
+    "functions",
+    "classes",
+    "modules",
+    "files",
+)
 _SEQUENCE_REWRITE_PREFIXES: tuple[str, ...] = tuple(
     f"CREATE TABLE IF NOT EXISTS {table} (" for table in _SEQUENCED_TABLES
 )
@@ -388,7 +406,8 @@ class _DuckDBIndexWriteSession:
             Matching persisted rows are removed in place.
         """
         if full:
-            self._backend.clear_index(self._root, conn=self._conn)
+            _drop_duckdb_schema_indexes(self._conn)
+            _recreate_duckdb_index_tables(self._conn)
             persistence_conn = cast("_DuckDBPersistenceConnection", self._conn)
             self._id_allocator = DuckDBIdAllocator(persistence_conn)
             self._structural_rows = DuckDBStructuralRowBuffers()
@@ -398,7 +417,6 @@ class _DuckDBIndexWriteSession:
             self._pending_ref_rows = []
             self._pending_import_rows = []
             self._pending_docstring_issue_rows = []
-            _drop_duckdb_schema_indexes(self._conn)
             self._deferred_schema_indexes = True
             return
         self._backend.delete_paths(
@@ -1339,6 +1357,36 @@ def _create_duckdb_schema_indexes(conn: _BackendCompatibleConnectionAdapter) -> 
     """
     for statement in _duckdb_schema_index_ddl():
         conn.execute(statement)
+
+
+def _recreate_duckdb_index_tables(conn: _BackendCompatibleConnectionAdapter) -> None:
+    """
+    Recreate indexed-data tables for one transactional full rebuild.
+
+    Parameters
+    ----------
+    conn : _BackendCompatibleConnectionAdapter
+        Open backend-compatible DuckDB connection.
+
+    Returns
+    -------
+    None
+        Indexed tables are dropped and recreated while cache/runtime tables are
+        preserved.
+    """
+    for table_name in _INDEX_DATA_TABLES:
+        safe_table_name = _validated_sql_identifier(table_name, kind="table")
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        conn.execute(f"DROP TABLE IF EXISTS {safe_table_name}")
+
+    table_prefixes = tuple(
+        f"CREATE TABLE IF NOT EXISTS {table_name} ("
+        for table_name in _INDEX_DATA_TABLES
+    )
+    for statement in _duckdb_schema_ddl():
+        if statement.lstrip().startswith(table_prefixes):
+            conn.execute(statement)
 
 
 def _table_info_notnull_by_name(

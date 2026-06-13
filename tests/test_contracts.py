@@ -2201,7 +2201,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-markdown==1.44.0",
         "codira-analyzer-text==1.43.0",
         "codira-backend-sqlite==1.45.0",
-        "codira-backend-duckdb==1.47.0",
+        "codira-backend-duckdb==1.48.0",
     ]
     assert pyproject.get("tool", {}).get("poetry") is None
 

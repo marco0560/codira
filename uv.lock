@@ -506,7 +506,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-duckdb"
-version = "1.47.0"
+version = "1.48.0"
 source = { editable = "packages/codira-backend-duckdb" }
 dependencies = [
     { name = "codira" },

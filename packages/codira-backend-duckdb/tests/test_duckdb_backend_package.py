@@ -28,8 +28,10 @@ from codira.models import (
     FunctionArtifact,
     ModuleArtifact,
 )
+from codira.indexer import index_repo
 from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendSpec
+from codira.storage import override_storage_root
 from codira_backend_duckdb import (
     DuckDBIndexBackend,
     _duckdb_db_path,
@@ -510,7 +512,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.47.0"
+    assert project["project"]["version"] == "1.48.0"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -1356,6 +1358,124 @@ def test_duckdb_backend_full_prepare_clears_populated_database_in_session(
         ).fetchone() == (1,)
     finally:
         reopened.close()
+
+
+def test_duckdb_full_prepare_rolls_back_table_recreation(tmp_path: Path) -> None:
+    """
+    Roll back transactional DuckDB full-rebuild table recreation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts aborting after full prepare restores indexed rows and
+        schema indexes.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    raw = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            raw.execute(statement)
+        raw.execute(
+            """
+            INSERT INTO files(
+                id,
+                path,
+                hash,
+                mtime,
+                size,
+                analyzer_name,
+                analyzer_version
+            ) VALUES (1, ?, 'seed-hash', 1.0, 1, 'python', '1.0')
+            """,
+            (str(tmp_path / "pkg" / "sample.py"),),
+        )
+        raw.execute(
+            """
+            INSERT INTO symbol_index(
+                id,
+                name,
+                stable_id,
+                type,
+                module_name,
+                file_id,
+                lineno
+            ) VALUES (
+                1,
+                'sample',
+                'python:module:pkg.sample',
+                'module',
+                'pkg.sample',
+                1,
+                1
+            )
+            """
+        )
+        raw.commit()
+    finally:
+        raw.close()
+
+    backend = DuckDBIndexBackend()
+    session = backend.begin_index_session(tmp_path)
+    try:
+        session.prepare(full=True, indexed_paths=(), deleted_paths=())
+        session.abort()
+    finally:
+        session.close()
+
+    reopened = duckdb.connect(str(db_path))
+    try:
+        assert reopened.execute("SELECT COUNT(*) FROM symbol_index").fetchone() == (1,)
+        assert reopened.execute(
+            """
+            SELECT COUNT(*)
+            FROM duckdb_indexes()
+            WHERE index_name = 'idx_symbol_stable_id'
+            """
+        ).fetchone() == (1,)
+    finally:
+        reopened.close()
+
+
+def test_duckdb_warm_full_reindex_reuses_output_dir_without_duplicate_symbols(
+    tmp_path: Path,
+) -> None:
+    """
+    Rebuild an existing DuckDB full index without duplicate symbol failures.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace containing a source root and isolated output root.
+
+    Returns
+    -------
+    None
+        The test asserts a second full rebuild into the same DuckDB output
+        directory succeeds.
+    """
+    pytest.importorskip("duckdb")
+    source_root = tmp_path / "repo"
+    output_root = tmp_path / "out"
+    source_root.mkdir()
+    (source_root / "sample.py").write_text(
+        "def demo() -> int:\n    return 1\n",
+        encoding="utf-8",
+    )
+
+    with override_storage_root(source_root, output_root):
+        first_report = index_repo(source_root, full=True)
+        second_report = index_repo(source_root, full=True)
+
+    assert first_report.failed == 0
+    assert second_report.failed == 0
+    assert second_report.indexed == 1
 
 
 def test_duckdb_backend_rebuild_keeps_distinct_unresolved_call_edges(
