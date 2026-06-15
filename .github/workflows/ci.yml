@@ -40,8 +40,8 @@ jobs:
             done
           }
 
-          retry uv sync --frozen --extra dev --extra docs --extra semantic
-          retry uv run python scripts/install_first_party_packages.py --include-core --core-extra dev --core-extra docs --core-extra semantic
+          retry uv sync --frozen --group dev --extra docs --extra semantic
+          retry uv run python scripts/install_first_party_packages.py --include-core --core-extra docs --core-extra semantic
 
       - name: Install repo-local Git configuration
         run: uv run python scripts/install_repo_git_config.py

@@ -68,7 +68,6 @@ The repository-local first-party package set is owned by:
 ```bash
 uv run python scripts/install_first_party_packages.py \
   --include-core \
-  --core-extra dev \
   --core-extra docs \
   --core-extra semantic
 ```

@@ -4499,7 +4499,7 @@ def test_build_bootstrap_commands_reuses_shared_first_party_install_command() ->
         "uv",
         "sync",
         "--frozen",
-        "--extra",
+        "--group",
         "dev",
         "--extra",
         "docs",
@@ -4524,8 +4524,6 @@ def test_build_bootstrap_commands_reuses_shared_first_party_install_command() ->
         "python",
         "scripts/install_first_party_packages.py",
         "--include-core",
-        "--core-extra",
-        "dev",
         "--core-extra",
         "docs",
         "--core-extra",
@@ -4612,9 +4610,9 @@ def test_ci_workflow_retries_dependency_installation() -> None:
 
     assert "retry() {\n            for attempt in 1 2 3; do" in workflow
     assert (
-        "retry uv sync --frozen --extra dev --extra docs --extra semantic" in workflow
+        "retry uv sync --frozen --group dev --extra docs --extra semantic" in workflow
     )
     assert (
         "retry uv run python scripts/install_first_party_packages.py --include-core "
-        "--core-extra dev --core-extra docs --core-extra semantic"
+        "--core-extra docs --core-extra semantic"
     ) in workflow

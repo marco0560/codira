@@ -405,6 +405,9 @@ def test_config_cli_explain_reports_embedding_indexing_origin(
     """
 
     _isolate_config_paths(monkeypatch, tmp_path)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.chdir(repo_root)
     monkeypatch.setattr(
         sys,
         "argv",

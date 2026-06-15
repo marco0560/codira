@@ -303,6 +303,17 @@ bundle-official = [
     { name = "codira-backend-sqlite" },
     { name = "sentence-transformers" },
 ]
+docs = [
+    { name = "mkdocs" },
+    { name = "mkdocs-awesome-pages-plugin" },
+    { name = "mkdocs-material" },
+    { name = "mkdocstrings", extra = ["python"] },
+]
+semantic = [
+    { name = "sentence-transformers" },
+]
+
+[package.dev-dependencies]
 dev = [
     { name = "build" },
     { name = "mypy" },
@@ -319,19 +330,9 @@ dev = [
     { name = "twine" },
     { name = "wheel" },
 ]
-docs = [
-    { name = "mkdocs" },
-    { name = "mkdocs-awesome-pages-plugin" },
-    { name = "mkdocs-material" },
-    { name = "mkdocstrings", extra = ["python"] },
-]
-semantic = [
-    { name = "sentence-transformers" },
-]
 
 [package.metadata]
 requires-dist = [
-    { name = "build", marker = "extra == 'dev'" },
     { name = "codira-analyzer-bash", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-bash" },
     { name = "codira-analyzer-c", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-c" },
     { name = "codira-analyzer-cpp", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-cpp" },
@@ -346,25 +347,30 @@ requires-dist = [
     { name = "mkdocs-awesome-pages-plugin", marker = "extra == 'docs'", specifier = ">=2.10,<3.0" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.7,<10.0" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=1.0,<2.0" },
-    { name = "mypy", marker = "extra == 'dev'" },
-    { name = "packaging", marker = "extra == 'dev'" },
     { name = "platformdirs", specifier = ">=4.9.6" },
-    { name = "pre-commit", marker = "extra == 'dev'" },
-    { name = "pyinstrument", marker = "extra == 'dev'" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "ruff", marker = "extra == 'dev'" },
-    { name = "semgrep", marker = "extra == 'dev'" },
     { name = "sentence-transformers", marker = "extra == 'bundle-official'", specifier = ">=5.4,<6.0" },
     { name = "sentence-transformers", marker = "extra == 'semantic'", specifier = ">=5.4,<6.0" },
-    { name = "setuptools", marker = "extra == 'dev'", specifier = ">=68" },
-    { name = "setuptools-scm", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "snakeviz", marker = "extra == 'dev'" },
     { name = "tomlkit", specifier = ">=0.15.0" },
-    { name = "twine", marker = "extra == 'dev'", specifier = ">=6.2,<7.0" },
-    { name = "wheel", marker = "extra == 'dev'" },
 ]
-provides-extras = ["semantic", "bundle-official", "dev", "docs"]
+provides-extras = ["semantic", "bundle-official", "docs"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "build" },
+    { name = "mypy" },
+    { name = "packaging" },
+    { name = "pre-commit" },
+    { name = "pyinstrument" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "semgrep" },
+    { name = "setuptools", specifier = ">=68" },
+    { name = "setuptools-scm", specifier = ">=8" },
+    { name = "snakeviz" },
+    { name = "twine", specifier = ">=6.2,<7.0" },
+    { name = "wheel" },
+]
 
 [[package]]
 name = "codira-analyzer-bash"

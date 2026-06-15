@@ -35,7 +35,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install documentation dependencies
-        run: uv sync --frozen --extra dev --extra docs --extra semantic
+        run: uv sync --frozen --group dev --extra docs --extra semantic
 
       - name: Build documentation
         run: uv run mkdocs build --strict
