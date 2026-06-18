@@ -1496,13 +1496,14 @@ class _EmbeddingStartupBenchmarkModule(Protocol):
 class _BenchmarkIndexModule(Protocol):
     """Protocol for the standalone index phase benchmark helper."""
 
-    def active_backend_class(self) -> type[object]:
+    def active_backend_class(self, root: Path) -> type[object]:
         """
         Return the active backend class selected for the benchmark run.
 
         Parameters
         ----------
-        None
+        root : pathlib.Path
+            Repository root whose repo-local config selects the backend.
 
         Returns
         -------
@@ -1511,13 +1512,14 @@ class _BenchmarkIndexModule(Protocol):
         """
         ...
 
-    def active_backend_support_module(self) -> ModuleType:
+    def active_backend_support_module(self, root: Path) -> ModuleType:
         """
         Return the support module selected for benchmark instrumentation.
 
         Parameters
         ----------
-        None
+        root : pathlib.Path
+            Repository root whose repo-local config selects the backend.
 
         Returns
         -------
@@ -3090,6 +3092,7 @@ def test_release_benchmark_helper_builds_hyperfine_plan() -> None:
 
 def test_benchmark_index_helper_uses_the_active_backend_class(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """
     Resolve phase benchmark instrumentation against the configured backend class.
@@ -3098,6 +3101,8 @@ def test_benchmark_index_helper_uses_the_active_backend_class(
     ----------
     monkeypatch : pytest.MonkeyPatch
         Fixture used to override backend selection deterministically.
+    tmp_path : pathlib.Path
+        Temporary repository root supplied to the helper.
 
     Returns
     -------
@@ -3116,13 +3121,18 @@ def test_benchmark_index_helper_uses_the_active_backend_class(
         ) -> None:
             del root, conn
 
-    monkeypatch.setattr(helper, "active_index_backend", lambda: _FakeDuckBackend())
+    monkeypatch.setattr(
+        helper,
+        "active_index_backend",
+        lambda *, root=None: _FakeDuckBackend(),
+    )
 
-    assert helper.active_backend_class() is _FakeDuckBackend
+    assert helper.active_backend_class(tmp_path) is _FakeDuckBackend
 
 
 def test_benchmark_index_helper_uses_the_active_backend_support_module(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """
     Resolve benchmark helper patching against the active backend support module.
@@ -3131,6 +3141,8 @@ def test_benchmark_index_helper_uses_the_active_backend_support_module(
     ----------
     monkeypatch : pytest.MonkeyPatch
         Fixture used to override backend selection deterministically.
+    tmp_path : pathlib.Path
+        Temporary repository root supplied to the helper.
 
     Returns
     -------
@@ -3144,12 +3156,20 @@ def test_benchmark_index_helper_uses_the_active_backend_support_module(
         def __init__(self, name: str) -> None:
             self.name = name
 
-    monkeypatch.setattr(helper, "active_index_backend", lambda: _FakeBackend("sqlite"))
-    sqlite_support = helper.active_backend_support_module()
+    monkeypatch.setattr(
+        helper,
+        "active_index_backend",
+        lambda *, root=None: _FakeBackend("sqlite"),
+    )
+    sqlite_support = helper.active_backend_support_module(tmp_path)
     assert sqlite_support.__name__ == "codira_backend_sqlite.sqlite_support"
 
-    monkeypatch.setattr(helper, "active_index_backend", lambda: _FakeBackend("duckdb"))
-    duckdb_support = helper.active_backend_support_module()
+    monkeypatch.setattr(
+        helper,
+        "active_index_backend",
+        lambda *, root=None: _FakeBackend("duckdb"),
+    )
+    duckdb_support = helper.active_backend_support_module(tmp_path)
     assert duckdb_support.__name__ == "codira_backend_duckdb.duckdb_support"
 
 

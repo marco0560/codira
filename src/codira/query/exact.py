@@ -198,7 +198,7 @@ def find_symbol(
     list[SymbolRow]
         Matching symbol rows ordered deterministically.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     return backend.find_symbol(root, name, prefix=prefix, conn=conn)
 
 
@@ -232,7 +232,7 @@ def symbol_inventory(
     list[codira.contracts.BackendSymbolInventoryItem]
         Symbol inventory rows ordered deterministically.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     return backend.symbol_inventory(
         root,
         prefix=prefix,
@@ -271,7 +271,7 @@ def docstring_issues(
         Issue rows with issue text, stable identity, and defining location
         metadata.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     return backend.docstring_issues(
         root,
         prefix=prefix,
@@ -304,7 +304,7 @@ def find_symbol_overloads(
     list[codira.types.OverloadRow]
         Ordered overload metadata rows for the symbol.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     return backend.find_symbol_overloads(root, symbol, conn=conn)
 
 
@@ -332,7 +332,7 @@ def find_symbol_enum_members(
     list[codira.types.EnumMemberRow]
         Ordered enum-member metadata rows for the symbol.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     return backend.find_symbol_enum_members(root, symbol, conn=conn)
 
 
@@ -352,7 +352,7 @@ def find_call_edges(
     list[CallEdgeRow]
         Matching call-edge rows ordered deterministically.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=request.root)
     return backend.find_call_edges(request)
 
 
@@ -570,7 +570,7 @@ def find_callable_refs(
     list[CallableRefRow]
         Matching callable-reference rows ordered deterministically.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=request.root)
     return backend.find_callable_refs(request)
 
 
@@ -789,7 +789,7 @@ def find_include_edges(
         Matching include-edge rows ordered deterministically as
         ``(owner_module, target_name, kind, lineno)`` tuples.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=request.root)
     return backend.find_include_edges(request)
 
 
@@ -823,7 +823,7 @@ def find_logical_symbols(
     list[codira.types.SymbolRow]
         Matching indexed symbol rows ordered deterministically.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     return backend.find_logical_symbols(
         root,
         module_name,
@@ -857,7 +857,7 @@ def logical_symbol_name(
     str
         Logical symbol identity used by call edges and callable references.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     return backend.logical_symbol_name(root, symbol, conn=conn)
 
 
@@ -882,5 +882,5 @@ def embedding_inventory(
     list[EmbeddingInventoryRow]
         Rows as ``(backend, version, dim, count)`` ordered deterministically.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     return backend.embedding_inventory(root, conn=conn)

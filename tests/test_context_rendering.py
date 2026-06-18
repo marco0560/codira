@@ -435,7 +435,7 @@ def test_retrieve_documentation_candidates_renders_explicit_provenance(
 
     monkeypatch.setattr(
         "codira.query.context.active_index_backend",
-        lambda: _FakeBackend(),
+        lambda *, root=None: _FakeBackend(),
     )
 
     results = _retrieve_documentation_candidates(

@@ -235,7 +235,7 @@ class EmbeddingRetrievalProducer(QueryProducerSpec):
         codira.types.ChannelResults
             Ranked symbol candidates ordered by backend similarity semantics.
         """
-        backend = active_index_backend()
+        backend = active_index_backend(root=request.root)
         return backend.embedding_candidates(
             BackendEmbeddingCandidatesRequest(
                 root=request.root,

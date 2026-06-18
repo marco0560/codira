@@ -96,29 +96,31 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def active_backend_class() -> type[_BenchmarkRebuildCapable]:
+def active_backend_class(root: Path) -> type[_BenchmarkRebuildCapable]:
     """
     Return the active backend class for benchmark instrumentation.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path
+        Repository root whose repo-local config selects the backend.
 
     Returns
     -------
     type[_BenchmarkRebuildCapable]
         Concrete backend class selected for the current process.
     """
-    return cast("type[_BenchmarkRebuildCapable]", type(active_index_backend()))
+    return cast("type[_BenchmarkRebuildCapable]", type(active_index_backend(root=root)))
 
 
-def active_backend_support_module() -> _BenchmarkBackendSupportModule:
+def active_backend_support_module(root: Path) -> _BenchmarkBackendSupportModule:
     """
     Return the package-local support module for the active backend.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path
+        Repository root whose repo-local config selects the backend.
 
     Returns
     -------
@@ -132,7 +134,7 @@ def active_backend_support_module() -> _BenchmarkBackendSupportModule:
         Raised when the configured backend does not expose a supported helper
         module mapping for the benchmark helper.
     """
-    backend_name = active_index_backend().name
+    backend_name = active_index_backend(root=root).name
     support_module_by_backend = {
         "sqlite": "codira_backend_sqlite.sqlite_support",
         "duckdb": "codira_backend_duckdb.duckdb_support",
@@ -183,8 +185,8 @@ def main() -> int:
         "Callable[..., object]",
         indexer.file_metadata,  # type: ignore[attr-defined]
     )
-    backend_class = active_backend_class()
-    backend_support = active_backend_support_module()
+    backend_class = active_backend_class(root)
+    backend_support = active_backend_support_module(root)
     original_flush_rows = backend_support._flush_embedding_rows
     original_rebuild_indexes = backend_class.rebuild_derived_indexes
     original_embed_texts = embeddings_module.embed_texts
@@ -284,11 +286,11 @@ def main() -> int:
     total_start = perf_counter()
     try:
         if output_dir is None:
-            active_index_backend().initialize(root)
+            active_index_backend(root=root).initialize(root)
             report = index_repo(root, full=args.full)
         else:
             with override_storage_root(root, output_dir):
-                active_index_backend().initialize(root)
+                active_index_backend(root=root).initialize(root)
                 report = index_repo(root, full=args.full)
     finally:
         total_elapsed = perf_counter() - total_start

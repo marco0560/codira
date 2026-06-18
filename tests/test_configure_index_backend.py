@@ -149,7 +149,11 @@ def test_help_reports_the_current_backend(
     """
 
     helper = _load_configure_index_backend_helper()
-    monkeypatch.setattr(helper, "configured_index_backend_name", lambda: "duckdb")
+    monkeypatch.setattr(
+        helper,
+        "configured_index_backend_name",
+        lambda *, root=None: "duckdb",
+    )
 
     assert helper.main(["help"]) == 0
 
@@ -182,7 +186,11 @@ def test_main_reindexes_only_when_backend_name_changes(
 
     helper = _load_configure_index_backend_helper()
     reindexed: list[tuple[Path, str]] = []
-    monkeypatch.setattr(helper, "configured_index_backend_name", lambda: "sqlite")
+    monkeypatch.setattr(
+        helper,
+        "configured_index_backend_name",
+        lambda *, root=None: "sqlite",
+    )
     monkeypatch.setattr(
         helper,
         "run_backend_reindex",
@@ -219,7 +227,11 @@ def test_main_skips_reindex_when_backend_name_is_unchanged(
     """
 
     helper = _load_configure_index_backend_helper()
-    monkeypatch.setattr(helper, "configured_index_backend_name", lambda: "sqlite")
+    monkeypatch.setattr(
+        helper,
+        "configured_index_backend_name",
+        lambda *, root=None: "sqlite",
+    )
 
     def _unexpected_reindex(repo_root: Path, backend_name: str) -> None:
         del repo_root, backend_name

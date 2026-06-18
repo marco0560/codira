@@ -570,13 +570,17 @@ def _python_constant_json_detail(
     return None
 
 
-def _current_analyzer_inventory() -> list[tuple[str, str, str]]:
+def _current_analyzer_inventory(
+    *, root: Path | None = None
+) -> list[tuple[str, str, str]]:
     """
     Return the active analyzer inventory in persisted comparison form.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should participate in analyzer
+        selection.
 
     Returns
     -------
@@ -586,7 +590,7 @@ def _current_analyzer_inventory() -> list[tuple[str, str, str]]:
     """
     rows: list[tuple[str, str, str]] = []
     for analyzer in sorted(
-        active_language_analyzers(),
+        active_language_analyzers(root=root),
         key=lambda item: str(item.name),
     ):
         rows.append(
@@ -599,13 +603,18 @@ def _current_analyzer_inventory() -> list[tuple[str, str, str]]:
     return rows
 
 
-def _loaded_plugin_registrations() -> list[tuple[str, str, str, str]]:
+def _loaded_plugin_registrations(
+    *,
+    root: Path | None = None,
+) -> list[tuple[str, str, str, str]]:
     """
     Return loaded plugin registrations in deterministic display order.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should participate in plugin
+        diagnostics.
 
     Returns
     -------
@@ -624,7 +633,7 @@ def _loaded_plugin_registrations() -> list[tuple[str, str, str, str]]:
                 installed_distribution_version(registration.provider)
                 or registration.version,
             )
-            for registration in plugin_registrations()
+            for registration in plugin_registrations(root=root)
             if registration.status == "loaded"
         ],
         key=lambda item: (
@@ -636,7 +645,12 @@ def _loaded_plugin_registrations() -> list[tuple[str, str, str, str]]:
     )
 
 
-def _plugin_is_active_backend(family: str, name: str) -> bool:
+def _plugin_is_active_backend(
+    family: str,
+    name: str,
+    *,
+    root: Path | None = None,
+) -> bool:
     """
     Return whether one plugin row is the configured active backend.
 
@@ -646,6 +660,9 @@ def _plugin_is_active_backend(family: str, name: str) -> bool:
         Plugin family name.
     name : str
         Plugin display name.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should participate in backend
+        selection.
 
     Returns
     -------
@@ -653,16 +670,17 @@ def _plugin_is_active_backend(family: str, name: str) -> bool:
         ``True`` when the row represents the currently configured backend.
     """
 
-    return family == "backend" and name == configured_index_backend_name()
+    return family == "backend" and name == configured_index_backend_name(root=root)
 
 
-def _render_version_report() -> str:
+def _render_version_report(*, root: Path | None = None) -> str:
     """
     Return the multi-line CLI version report.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should mark the active backend.
 
     Returns
     -------
@@ -672,7 +690,7 @@ def _render_version_report() -> str:
     """
     lines = [f"codira {__version__}"]
     bundle_version = installed_distribution_version("codira-bundle-official")
-    registrations = _loaded_plugin_registrations()
+    registrations = _loaded_plugin_registrations(root=root)
     first_party_plugins = [
         registration
         for registration in registrations
@@ -688,14 +706,18 @@ def _render_version_report() -> str:
         lines.append(f"bundle-official {bundle_version}")
         for _origin, family, name, version in first_party_plugins:
             active_suffix = (
-                " [active]" if _plugin_is_active_backend(family, name) else ""
+                " [active]"
+                if _plugin_is_active_backend(family, name, root=root)
+                else ""
             )
             lines.append(f"  {family} {name} {version}{active_suffix}")
     elif first_party_plugins:
         lines.append("first-party plugins:")
         for _origin, family, name, version in first_party_plugins:
             active_suffix = (
-                " [active]" if _plugin_is_active_backend(family, name) else ""
+                " [active]"
+                if _plugin_is_active_backend(family, name, root=root)
+                else ""
             )
             lines.append(f"  {family} {name} {version}{active_suffix}")
 
@@ -703,7 +725,9 @@ def _render_version_report() -> str:
         lines.append("third-party plugins:")
         for _origin, family, name, version in third_party_plugins:
             active_suffix = (
-                " [active]" if _plugin_is_active_backend(family, name) else ""
+                " [active]"
+                if _plugin_is_active_backend(family, name, root=root)
+                else ""
             )
             lines.append(f"  {family} {name} {version}{active_suffix}")
 
@@ -1593,7 +1617,7 @@ def _run_index(request: IndexCommandRequest) -> int:
         "deferred" if defer_embeddings else config.embeddings.indexing.mode
     )
     if embeddings_only:
-        active_backend = active_index_backend()
+        active_backend = active_index_backend(root=root)
         active_backend.initialize(root)
         recomputed, reused = active_backend.process_pending_embeddings(
             root,
@@ -1654,7 +1678,7 @@ def _run_index(request: IndexCommandRequest) -> int:
             _render_required_coverage_failure(root, coverage_issues)
         return 2
 
-    active_index_backend().initialize(root)
+    active_index_backend(root=root).initialize(root)
     report = index_repo(
         root,
         full=full,
@@ -2054,7 +2078,10 @@ def _run_coverage(root: Path, *, as_json: bool = False) -> int:
         Zero when coverage is complete. JSON output also returns zero for
         incomplete coverage so automation can consume the structured findings.
     """
-    analyzers = sorted(active_language_analyzers(), key=lambda item: str(item.name))
+    analyzers = sorted(
+        active_language_analyzers(root=root),
+        key=lambda item: str(item.name),
+    )
     issues = audit_repo_coverage(root)
 
     if as_json:
@@ -2124,7 +2151,7 @@ def _run_symbol(
     int
         Zero when at least one symbol is found, otherwise one.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     conn = backend.open_connection(root)
     try:
         rows = find_symbol(root, name, prefix=prefix, conn=conn)
@@ -3529,11 +3556,11 @@ def _build_index_metadata(
     commit = _get_head_commit(root)
     if commit:
         metadata["commit"] = commit
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     metadata[INDEX_METADATA_BACKEND_NAME] = str(backend.name)
     metadata[INDEX_METADATA_BACKEND_VERSION] = str(backend.version)
     metadata[INDEX_METADATA_ANALYZER_INVENTORY] = json.dumps(
-        _current_analyzer_inventory()
+        _current_analyzer_inventory(root=root)
     )
     if indexed_file_count is not None:
         metadata[INDEX_METADATA_FILE_COUNT] = str(indexed_file_count)
@@ -3603,7 +3630,7 @@ def _inspect_index_metadata_freshness(
     ):
         return (False, None)
 
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     current_runtime = (str(backend.name), str(backend.version))
     if (metadata_backend_name, metadata_backend_version) != current_runtime:
         return (
@@ -3615,7 +3642,7 @@ def _inspect_index_metadata_freshness(
             ),
         )
 
-    current_analyzers = _current_analyzer_inventory()
+    current_analyzers = _current_analyzer_inventory(root=root)
     if metadata_analyzers != json.dumps(current_analyzers):
         return (
             True,
@@ -3639,7 +3666,7 @@ def _inspect_index_metadata_freshness(
             ),
         )
     current_files = len(
-        list(iter_project_files(root, analyzers=active_language_analyzers()))
+        list(iter_project_files(root, analyzers=active_language_analyzers(root=root)))
     )
     if indexed_files != current_files:
         return (
@@ -3711,7 +3738,7 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
     if metadata_decided:
         return metadata_request
 
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     conn = backend.open_connection(root)
     try:
         runtime_inventory = backend.load_runtime_inventory(root, conn=conn)
@@ -3732,7 +3759,7 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
             )
 
         persisted_analyzers = backend.load_analyzer_inventory(root, conn=conn)
-        current_analyzers = _current_analyzer_inventory()
+        current_analyzers = _current_analyzer_inventory(root=root)
         if persisted_analyzers != current_analyzers:
             return IndexRebuildRequest(
                 message="[codira] Index stale "
@@ -3747,7 +3774,9 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
             conn=conn,
         )
         current_files = len(
-            list(iter_project_files(root, analyzers=active_language_analyzers()))
+            list(
+                iter_project_files(root, analyzers=active_language_analyzers(root=root))
+            )
         )
 
         if indexed_files != current_files:
@@ -3784,7 +3813,7 @@ def _run_locked_index_refresh(
         print(request.message, file=sys.stderr)
     else:
         print(request.message)
-    active_index_backend().initialize(root)
+    active_index_backend(root=root).initialize(root)
     report = index_repo(root)
     _write_index_metadata(
         root,
@@ -3930,7 +3959,7 @@ def _ensure_index(root: Path) -> None:
         _fail_unreadable_index(error)
 
 
-def _run_plugins(*, as_json: bool = False) -> int:
+def _run_plugins(*, root: Path | None = None, as_json: bool = False) -> int:
     """
     Print built-in and entry-point plugin registrations.
 
@@ -3938,13 +3967,15 @@ def _run_plugins(*, as_json: bool = False) -> int:
     ----------
     as_json : bool, optional
         Whether to render structured JSON output.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should mark the active backend.
 
     Returns
     -------
     int
         Zero after printing deterministic plugin diagnostics.
     """
-    registrations = plugin_registrations()
+    registrations = plugin_registrations(root=root)
 
     if as_json:
         _emit_json(
@@ -3959,6 +3990,7 @@ def _run_plugins(*, as_json: bool = False) -> int:
                         "active": _plugin_is_active_backend(
                             registration.family,
                             registration.name,
+                            root=root,
                         ),
                         "provider": registration.provider,
                         "origin": registration.origin,
@@ -3976,7 +4008,11 @@ def _run_plugins(*, as_json: bool = False) -> int:
 
     for registration in registrations:
         status_tokens: list[str] = [registration.status]
-        if _plugin_is_active_backend(registration.family, registration.name):
+        if _plugin_is_active_backend(
+            registration.family,
+            registration.name,
+            root=root,
+        ):
             status_tokens.insert(0, "active")
         line = (
             f"{registration.family}: {registration.name} "
@@ -4462,10 +4498,10 @@ def _run_config_validate(args: argparse.Namespace, root: Path) -> int:
     if level == "effective":
         config = load_effective_config(root=root)
         validate_config_mapping(config_to_mapping(config))
-        _validate_config_runtime_plugins(config.backend.name)
+        _validate_config_runtime_plugins(config.backend.name, root=root)
         warnings = [
             {"key": warning.key, "reason": warning.reason}
-            for warning in validate_plugin_configuration()
+            for warning in validate_plugin_configuration(root=root)
         ]
         path: str | None = None
     else:
@@ -4491,7 +4527,11 @@ def _run_config_validate(args: argparse.Namespace, root: Path) -> int:
     return 0
 
 
-def _validate_config_runtime_plugins(backend_name: str) -> None:
+def _validate_config_runtime_plugins(
+    backend_name: str,
+    *,
+    root: Path | None = None,
+) -> None:
     """
     Validate plugin names that require registry discovery.
 
@@ -4499,6 +4539,9 @@ def _validate_config_runtime_plugins(backend_name: str) -> None:
     ----------
     backend_name : str
         Effective backend name to validate.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should participate in plugin
+        diagnostics.
 
     Returns
     -------
@@ -4513,7 +4556,7 @@ def _validate_config_runtime_plugins(backend_name: str) -> None:
         If registry-level analyzer validation fails.
     """
 
-    registrations = plugin_registrations()
+    registrations = plugin_registrations(root=root)
     loaded_backends = {
         registration.name
         for registration in registrations
@@ -4715,7 +4758,7 @@ def _command_handlers(
             prefix=prefix,
             raw_prefix=raw_prefix,
         ),
-        "plugins": lambda: _run_plugins(as_json=args.json),
+        "plugins": lambda: _run_plugins(root=root, as_json=args.json),
         "caps": lambda: _run_capabilities(as_json=args.json, strict=args.strict),
         "capabilities": lambda: _run_capabilities(
             as_json=args.json,

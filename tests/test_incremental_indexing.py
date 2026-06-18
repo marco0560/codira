@@ -1049,7 +1049,9 @@ def test_run_index_initializes_the_active_backend(
     backend = _RecordingBackend()
     cli_module = _load_workspace_cli_module()
 
-    monkeypatch.setattr(cli_module, "active_index_backend", lambda: backend)
+    monkeypatch.setattr(
+        cli_module, "active_index_backend", lambda *, root=None: backend
+    )
     monkeypatch.setattr(cli_module, "audit_repo_coverage", lambda root: [])
     monkeypatch.setattr(
         cli_module,
@@ -1128,11 +1130,13 @@ def test_inspect_index_rebuild_request_uses_backend_connection_contract(
     )
 
     monkeypatch.setattr(cli_module, "_get_head_commit", lambda root: None)
-    monkeypatch.setattr(cli_module, "active_index_backend", lambda: backend)
+    monkeypatch.setattr(
+        cli_module, "active_index_backend", lambda *, root=None: backend
+    )
     monkeypatch.setattr(
         cli_module,
         "active_language_analyzers",
-        lambda: [PythonAnalyzer()],
+        lambda *, root=None: [PythonAnalyzer()],
     )
 
     assert cli_module._inspect_index_rebuild_request(tmp_path) is None
@@ -1185,11 +1189,13 @@ def test_inspect_index_rebuild_request_uses_complete_metadata_fast_path(
     )
 
     monkeypatch.setattr(cli_module, "_get_head_commit", lambda root: None)
-    monkeypatch.setattr(cli_module, "active_index_backend", lambda: backend)
+    monkeypatch.setattr(
+        cli_module, "active_index_backend", lambda *, root=None: backend
+    )
     monkeypatch.setattr(
         cli_module,
         "active_language_analyzers",
-        lambda: [PythonAnalyzer()],
+        lambda *, root=None: [PythonAnalyzer()],
     )
 
     assert cli_module._inspect_index_rebuild_request(tmp_path) is None
@@ -1446,7 +1452,11 @@ def test_index_repo_skips_write_session_for_unchanged_repository(
         "    return 1\n",
     )
     backend = _TrackingSQLiteBackend()
-    monkeypatch.setattr(indexer_module, "active_index_backend", lambda: backend)
+    monkeypatch.setattr(
+        indexer_module,
+        "active_index_backend",
+        lambda *, root=None: backend,
+    )
 
     first = index_repo(tmp_path)
     assert first.indexed == 1
@@ -2210,7 +2220,7 @@ def test_index_repo_reindexes_unchanged_files_when_analyzer_changes(
 
     monkeypatch.setattr(
         "codira.indexer.active_language_analyzers",
-        lambda: [_PythonAnalyzerV7()],
+        lambda *, root=None: [_PythonAnalyzerV7()],
     )
     report = index_repo(tmp_path)
 
@@ -2349,7 +2359,11 @@ def test_index_repo_skips_rebuild_for_new_failed_files(
     )
 
     backend = _TrackingSQLiteBackend()
-    monkeypatch.setattr(indexer_module, "active_index_backend", lambda: backend)
+    monkeypatch.setattr(
+        indexer_module,
+        "active_index_backend",
+        lambda *, root=None: backend,
+    )
     first = index_repo(tmp_path)
     assert first.indexed == 1
     assert backend.rebuild_derived_indexes_calls == 1
@@ -3243,6 +3257,54 @@ def test_index_cli_reports_embedding_rows_skipped_by_volume_controls(
     assert payload["summary"]["embedding_complete"] is True
 
 
+def test_index_cli_uses_repo_configured_duckdb_backend(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Select DuckDB from repo-local config when running the index CLI.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture CLI output.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch argv and cwd.
+
+    Returns
+    -------
+    None
+        The test asserts repo-local backend config creates a DuckDB database
+        artifact instead of falling back to SQLite.
+    """
+    pytest.importorskip("duckdb")
+    from codira_backend_duckdb import _duckdb_db_path
+
+    module = tmp_path / "src" / "sample.py"
+    _write_module(module, "def demo() -> int:\n    return 1\n")
+    config_path = tmp_path / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '[backend]\nname = "duckdb"\n\n[embeddings]\nenabled = false\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["codira", "index", "--json", "--full"])
+
+    assert main() == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "ok"
+    assert payload["summary"]["indexed"] == 1
+    assert _duckdb_db_path(tmp_path).exists()
+    assert not get_db_path(tmp_path).exists()
+    assert _read_index_metadata(tmp_path)["backend_name"] == "duckdb"
+
+
 def test_index_cli_supports_target_and_output_directory_overrides(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -3545,11 +3607,11 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(
         "codira.cli.active_language_analyzers",
-        lambda: [_PythonAnalyzerV7()],
+        lambda *, root=None: [_PythonAnalyzerV7()],
     )
     monkeypatch.setattr(
         "codira.indexer.active_language_analyzers",
-        lambda: [_PythonAnalyzerV7()],
+        lambda *, root=None: [_PythonAnalyzerV7()],
     )
 
     _ensure_index(tmp_path)
@@ -3597,11 +3659,11 @@ def test_ensure_index_rebuilds_when_backend_inventory_changes(
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(
         "codira.cli.active_index_backend",
-        lambda: _SQLiteBackendVNext(),
+        lambda *, root=None: _SQLiteBackendVNext(),
     )
     monkeypatch.setattr(
         "codira.indexer.active_index_backend",
-        lambda: _SQLiteBackendVNext(),
+        lambda *, root=None: _SQLiteBackendVNext(),
     )
 
     _ensure_index(tmp_path)

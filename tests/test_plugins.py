@@ -960,7 +960,10 @@ def test_plugins_cli_emits_json_registration_diagnostics(
         ],
         backends=[],
     )
-    monkeypatch.setattr("codira.cli.configured_index_backend_name", lambda: "sqlite")
+    monkeypatch.setattr(
+        "codira.cli.configured_index_backend_name",
+        lambda *, root=None: "sqlite",
+    )
     monkeypatch.setattr(sys, "argv", ["codira", "plugins", "--json"])
 
     assert main() == 0
@@ -1021,7 +1024,10 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
             ),
         ],
     )
-    monkeypatch.setattr("codira.cli.configured_index_backend_name", lambda: "sqlite")
+    monkeypatch.setattr(
+        "codira.cli.configured_index_backend_name",
+        lambda *, root=None: "sqlite",
+    )
 
     monkeypatch.setattr(sys, "argv", ["codira", "plugins"])
     assert main() == 0
@@ -1204,7 +1210,7 @@ def test_version_cli_groups_curated_bundle_plugins(
     )
     monkeypatch.setattr(
         "codira.cli.plugin_registrations",
-        lambda: [
+        lambda *, root=None: [
             registry.PluginRegistration(
                 family="analyzer",
                 name="python",
@@ -1225,7 +1231,10 @@ def test_version_cli_groups_curated_bundle_plugins(
             ),
         ],
     )
-    monkeypatch.setattr("codira.cli.configured_index_backend_name", lambda: "sqlite")
+    monkeypatch.setattr(
+        "codira.cli.configured_index_backend_name",
+        lambda *, root=None: "sqlite",
+    )
     monkeypatch.setattr(sys, "argv", ["codira", "-V"])
 
     assert main() == 0
@@ -1264,7 +1273,7 @@ def test_version_cli_lists_third_party_plugins_when_bundle_is_absent(
     )
     monkeypatch.setattr(
         "codira.cli.plugin_registrations",
-        lambda: [
+        lambda *, root=None: [
             registry.PluginRegistration(
                 family="analyzer",
                 name="demo",

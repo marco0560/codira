@@ -322,7 +322,11 @@ def _index_with_backend(
     None
         The repository is indexed through ``backend``.
     """
-    monkeypatch.setattr(indexer_module, "active_index_backend", lambda: backend)
+    monkeypatch.setattr(
+        indexer_module,
+        "active_index_backend",
+        lambda *, root=None: backend,
+    )
     monkeypatch.setattr(
         "codira_backend_sqlite.sqlite_support.embed_texts",
         _fake_embed_texts,
@@ -497,7 +501,11 @@ def test_memory_backend_supports_incremental_reuse_and_deletion(
     """
     _write_fixture(tmp_path)
     backend = MemoryIndexBackend()
-    monkeypatch.setattr(indexer_module, "active_index_backend", lambda: backend)
+    monkeypatch.setattr(
+        indexer_module,
+        "active_index_backend",
+        lambda *, root=None: backend,
+    )
 
     first = index_repo(tmp_path)
     second = index_repo(tmp_path)

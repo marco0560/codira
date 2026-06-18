@@ -174,7 +174,7 @@ def print_help_with_current_backend(parser: argparse.ArgumentParser) -> None:
 
     parser.print_help()
     print()
-    print(f"Current backend: {configured_index_backend_name()}")
+    print(f"Current backend: {configured_index_backend_name(root=REPO_ROOT)}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -198,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
         print_help_with_current_backend(parser)
         return 0
 
-    current_backend = configured_index_backend_name()
+    current_backend = configured_index_backend_name(root=REPO_ROOT)
     target_backend = args.backend
     if current_backend != target_backend:
         run_backend_reindex(REPO_ROOT, target_backend)

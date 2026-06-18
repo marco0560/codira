@@ -465,7 +465,7 @@ def audit_repo_coverage(root: Path) -> list[CoverageIssue]:
     """
     return _audit_canonical_directory_coverage(
         root,
-        analyzers=_active_language_analyzers(),
+        analyzers=_active_language_analyzers(root=root),
     )
 
 
@@ -522,20 +522,22 @@ def _snapshot_with_analyzer(
     )
 
 
-def _active_language_analyzers() -> list[LanguageAnalyzer]:
+def _active_language_analyzers(*, root: Path | None = None) -> list[LanguageAnalyzer]:
     """
     Return the language analyzers participating in the current indexing run.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should participate in analyzer
+        selection.
 
     Returns
     -------
     list[codira.contracts.LanguageAnalyzer]
         Analyzer instances consulted in deterministic order.
     """
-    return active_language_analyzers()
+    return active_language_analyzers(root=root)
 
 
 def _current_analyzer_inventory_rows(
@@ -1155,8 +1157,8 @@ def index_repo(
     ValueError
         If validated indexing inputs are semantically inconsistent.
     """
-    index_backend = active_index_backend()
-    analyzers = _active_language_analyzers()
+    index_backend = active_index_backend(root=root)
+    analyzers = _active_language_analyzers(root=root)
     backend = get_embedding_backend()
     embedding_indexing = _embedding_indexing_policy(root)
     effective_embedding_index_mode = (

@@ -1447,7 +1447,7 @@ def _symbols_in_module(
     list[codira.types.SymbolRow]
         Up to twenty indexed symbols from the requested module.
     """
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     return backend.list_symbols_in_module(
         root,
         module,
@@ -4160,7 +4160,7 @@ def _retrieve_documentation_candidates(
         Ranked documentation candidates converted to top-match rows.
     """
     del intent
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     rows = backend.documentation_candidates(
         BackendDocumentationCandidatesRequest(
             root=root,
@@ -4829,7 +4829,7 @@ def _collect_reference_rows(
     if not include_references:
         return []
 
-    backend = active_index_backend()
+    backend = active_index_backend(root=root)
     code_matches = [
         symbol for symbol in top_matches if not _is_documentation_symbol(symbol)
     ]
@@ -6459,7 +6459,7 @@ def context_for(
     """
     conn = cast(
         "BackendQueryConnection",
-        active_index_backend().open_connection(request.root),
+        active_index_backend(root=request.root).open_connection(request.root),
     )
     try:
         state = _initial_context_state(request, conn)

@@ -52,7 +52,7 @@ def embedding_candidates(
     """
     if not embeddings_enabled():
         return []
-    backend = active_index_backend()
+    backend = active_index_backend(root=request.root)
     return backend.embedding_candidates(request)
 
 
@@ -75,5 +75,5 @@ def documentation_candidates(
     """
     if not embeddings_enabled():
         return []
-    backend = active_index_backend()
+    backend = active_index_backend(root=request.root)
     return backend.documentation_candidates(request)

@@ -491,7 +491,8 @@ def test_embedding_candidates_are_hidden_when_embeddings_are_disabled(
         encoding="utf-8",
     )
 
-    def _unexpected_backend() -> object:
+    def _unexpected_backend(*, root: Path | None = None) -> object:
+        del root
         msg = "backend should not be queried when embeddings are disabled"
         raise AssertionError(msg)
 

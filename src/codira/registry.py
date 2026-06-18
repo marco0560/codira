@@ -229,13 +229,15 @@ def _plugin_origin(*, provider: str, source: PluginSource) -> PluginOrigin:
     return "third_party"
 
 
-def _third_party_plugins_disabled() -> bool:
+def _third_party_plugins_disabled(*, root: Path | None = None) -> bool:
     """
     Return whether third-party entry-point plugins are disabled.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should participate in plugin
+        selection.
 
     Returns
     -------
@@ -243,16 +245,18 @@ def _third_party_plugins_disabled() -> bool:
         ``True`` when effective configuration disables third-party plugins.
     """
 
-    return load_effective_config().plugins.disable_third_party
+    return load_effective_config(root=root).plugins.disable_third_party
 
 
-def _configured_disabled_analyzers() -> tuple[str, ...]:
+def _configured_disabled_analyzers(*, root: Path | None = None) -> tuple[str, ...]:
     """
     Return analyzer names disabled by effective configuration.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should participate in analyzer
+        selection.
 
     Returns
     -------
@@ -260,16 +264,20 @@ def _configured_disabled_analyzers() -> tuple[str, ...]:
         Analyzer names removed from the active analyzer set.
     """
 
-    return load_effective_config().plugins.disabled_analyzers
+    return load_effective_config(root=root).plugins.disabled_analyzers
 
 
-def _configured_plugin_tables() -> dict[str, dict[str, object]]:
+def _configured_plugin_tables(
+    *, root: Path | None = None
+) -> dict[str, dict[str, object]]:
     """
     Return namespaced plugin configuration tables.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should contribute plugin
+        tables.
 
     Returns
     -------
@@ -278,7 +286,7 @@ def _configured_plugin_tables() -> dict[str, dict[str, object]]:
         ``backend-*`` table name.
     """
 
-    return dict(load_effective_config().plugins.configs or {})
+    return dict(load_effective_config(root=root).plugins.configs or {})
 
 
 def plugin_config_key(*, family: PluginFamily, name: str) -> str:
@@ -301,7 +309,12 @@ def plugin_config_key(*, family: PluginFamily, name: str) -> str:
     return f"{family}-{name}"
 
 
-def _plugin_config_for(*, family: PluginFamily, name: str) -> dict[str, object]:
+def _plugin_config_for(
+    *,
+    family: PluginFamily,
+    name: str,
+    root: Path | None = None,
+) -> dict[str, object]:
     """
     Return the configured table for one plugin.
 
@@ -311,6 +324,9 @@ def _plugin_config_for(*, family: PluginFamily, name: str) -> dict[str, object]:
         Plugin family.
     name : str
         Stable plugin name.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should contribute plugin
+        tables.
 
     Returns
     -------
@@ -318,7 +334,7 @@ def _plugin_config_for(*, family: PluginFamily, name: str) -> dict[str, object]:
         Plugin configuration table, or an empty table when absent.
     """
 
-    return _configured_plugin_tables().get(
+    return _configured_plugin_tables(root=root).get(
         plugin_config_key(family=family, name=name),
         {},
     )
@@ -398,6 +414,7 @@ def _configure_plugin_instance(
     *,
     plugin: _LoadedPlugin,
     instance: object,
+    root: Path | None = None,
 ) -> object:
     """
     Inject namespaced configuration into one plugin instance.
@@ -408,6 +425,8 @@ def _configure_plugin_instance(
         Loaded plugin metadata.
     instance : object
         Fresh plugin instance.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should configure the plugin.
 
     Returns
     -------
@@ -415,7 +434,7 @@ def _configure_plugin_instance(
         The configured plugin instance.
     """
 
-    config = _plugin_config_for(family=plugin.family, name=plugin.name)
+    config = _plugin_config_for(family=plugin.family, name=plugin.name, root=root)
     key = plugin_config_key(family=plugin.family, name=plugin.name)
     _validate_plugin_config_schema(key=key, instance=instance, config=config)
     if isinstance(instance, ConfigurablePlugin):
@@ -791,6 +810,7 @@ def _discover_entry_point_plugins(
     *,
     family: PluginFamily,
     group: str,
+    third_party_disabled: bool,
 ) -> tuple[list[_LoadedPlugin], list[PluginRegistration]]:
     """
     Discover entry-point plugins for one extension family.
@@ -801,6 +821,8 @@ def _discover_entry_point_plugins(
         Plugin extension family.
     group : str
         Entry-point group to inspect.
+    third_party_disabled : bool
+        Whether third-party entry points are disabled for this snapshot.
 
     Returns
     -------
@@ -813,7 +835,6 @@ def _discover_entry_point_plugins(
     loaded: list[_LoadedPlugin] = []
     registrations: list[PluginRegistration] = []
 
-    third_party_disabled = _third_party_plugins_disabled()
     for entry_point in _entry_points_for_group(group):
         provider = _entry_point_provider(entry_point)
         if (
@@ -933,6 +954,8 @@ def _resolve_plugins(
 
 def _plugin_snapshot(
     family: PluginFamily,
+    *,
+    root: Path | None = None,
 ) -> tuple[list[_LoadedPlugin], list[PluginRegistration]]:
     """
     Build the registry snapshot for one plugin family.
@@ -941,6 +964,9 @@ def _plugin_snapshot(
     ----------
     family : {"analyzer", "backend"}
         Plugin extension family.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should participate in plugin
+        selection.
 
     Returns
     -------
@@ -950,17 +976,18 @@ def _plugin_snapshot(
     ]
         Resolved plugins plus diagnostic registrations.
     """
+    configured_tables = _configured_plugin_tables(root=root)
     resolved, registrations = _cached_plugin_snapshot(
         family,
-        _third_party_plugins_disabled(),
-        _configured_disabled_analyzers(),
+        _third_party_plugins_disabled(root=root),
+        _configured_disabled_analyzers(root=root),
         tuple(
             sorted(
                 (
                     key,
                     bool(value.get("enabled", True)),
                 )
-                for key, value in _configured_plugin_tables().items()
+                for key, value in configured_tables.items()
             )
         ),
         (_entry_points_for_group, _builtin_analyzer_plugins, _builtin_backend_plugins),
@@ -1001,22 +1028,20 @@ def _cached_plugin_snapshot(
     ]
         Immutable resolved plugins plus diagnostic registrations.
     """
-    del (
-        third_party_disabled,
-        configured_enabled_plugins,
-        cache_tokens,
-    )
+    del cache_tokens
     if family == "analyzer":
         builtins = _builtin_analyzer_plugins()
         externals, external_registrations = _discover_entry_point_plugins(
             family="analyzer",
             group=ANALYZER_ENTRY_POINT_GROUP,
+            third_party_disabled=third_party_disabled,
         )
     else:
         builtins = _builtin_backend_plugins()
         externals, external_registrations = _discover_entry_point_plugins(
             family="backend",
             group=BACKEND_ENTRY_POINT_GROUP,
+            third_party_disabled=third_party_disabled,
         )
 
     resolved, registrations = _resolve_plugins(
@@ -1042,6 +1067,7 @@ def _cached_plugin_snapshot(
         resolved,
         registrations,
         family=family,
+        configured_enabled_plugins=dict(configured_enabled_plugins),
     )
     return tuple(resolved), tuple(registrations)
 
@@ -1051,6 +1077,7 @@ def _apply_enabled_plugin_config(
     registrations: list[PluginRegistration],
     *,
     family: PluginFamily,
+    configured_enabled_plugins: dict[str, bool],
 ) -> tuple[list[_LoadedPlugin], list[PluginRegistration]]:
     """
     Remove plugins disabled by namespaced plugin configuration.
@@ -1063,6 +1090,8 @@ def _apply_enabled_plugin_config(
         Registration diagnostics to update.
     family : {"analyzer", "backend"}
         Plugin family being filtered.
+    configured_enabled_plugins : dict[str, bool]
+        Enabled flags keyed by namespaced plugin config table.
 
     Returns
     -------
@@ -1071,14 +1100,12 @@ def _apply_enabled_plugin_config(
         skipped.
     """
 
-    configured_tables = _configured_plugin_tables()
     disabled = {
         plugin.name
         for plugin in plugins
-        if not plugin_enabled(
-            configured_tables.get(
-                plugin_config_key(family=family, name=plugin.name), {}
-            )
+        if not configured_enabled_plugins.get(
+            plugin_config_key(family=family, name=plugin.name),
+            True,
         )
     }
     if not disabled:
@@ -1194,32 +1221,38 @@ def reset_plugin_registry_caches() -> None:
     _cached_plugin_snapshot.cache_clear()
 
 
-def plugin_registrations() -> list[PluginRegistration]:
+def plugin_registrations(*, root: Path | None = None) -> list[PluginRegistration]:
     """
     Return deterministic plugin registration diagnostics.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should participate in plugin
+        diagnostics.
 
     Returns
     -------
     list[codira.registry.PluginRegistration]
         Built-in and external plugin registrations for analyzers and backends.
     """
-    analyzer_plugins, analyzer_registrations = _plugin_snapshot("analyzer")
-    backend_plugins, backend_registrations = _plugin_snapshot("backend")
+    analyzer_plugins, analyzer_registrations = _plugin_snapshot("analyzer", root=root)
+    backend_plugins, backend_registrations = _plugin_snapshot("backend", root=root)
     del analyzer_plugins, backend_plugins
     return analyzer_registrations + backend_registrations
 
 
-def validate_plugin_configuration() -> list[PluginConfigWarning]:
+def validate_plugin_configuration(
+    *,
+    root: Path | None = None,
+) -> list[PluginConfigWarning]:
     """
     Validate configured plugin tables against discovered plugin contracts.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should be validated.
 
     Returns
     -------
@@ -1236,9 +1269,10 @@ def validate_plugin_configuration() -> list[PluginConfigWarning]:
     """
 
     warnings: list[PluginConfigWarning] = []
-    configured_tables = _configured_plugin_tables()
-    analyzer_plugins, analyzer_registrations = _plugin_snapshot("analyzer")
-    backend_plugins, backend_registrations = _plugin_snapshot("backend")
+    config = load_effective_config(root=root)
+    configured_tables = _configured_plugin_tables(root=root)
+    analyzer_plugins, analyzer_registrations = _plugin_snapshot("analyzer", root=root)
+    backend_plugins, backend_registrations = _plugin_snapshot("backend", root=root)
     all_plugins = {
         plugin_config_key(family=plugin.family, name=plugin.name): plugin
         for plugin in [*analyzer_plugins, *backend_plugins]
@@ -1277,7 +1311,7 @@ def validate_plugin_configuration() -> list[PluginConfigWarning]:
                 )
             )
 
-    configured_backend = configured_index_backend_name()
+    configured_backend = config.backend.name.strip() or DEFAULT_INDEX_BACKEND
     backend_config_key = plugin_config_key(family="backend", name=configured_backend)
     if backend_config_key in configured_tables and not plugin_enabled(
         configured_tables[backend_config_key]
@@ -1387,13 +1421,15 @@ def missing_language_analyzer_hint(path: Path) -> str | None:
     return None
 
 
-def configured_index_backend_name() -> str:
+def configured_index_backend_name(*, root: Path | None = None) -> str:
     """
     Return the configured backend name for the current process.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should participate in backend
+        selection.
 
     Returns
     -------
@@ -1405,19 +1441,21 @@ def configured_index_backend_name() -> str:
     The default is a backend selection policy for compatibility. It does not
     make core own SQLite schema, connection, or query behavior.
     """
-    configured_name = load_effective_config().backend.name.strip()
+    configured_name = load_effective_config(root=root).backend.name.strip()
     if configured_name:
         return configured_name
     return DEFAULT_INDEX_BACKEND
 
 
-def active_index_backend() -> IndexBackend:
+def active_index_backend(*, root: Path | None = None) -> IndexBackend:
     """
     Instantiate the configured index backend.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should participate in backend
+        selection.
 
     Returns
     -------
@@ -1429,8 +1467,8 @@ def active_index_backend() -> IndexBackend:
     ValueError
         If the configured backend name is not registered.
     """
-    configured_name = configured_index_backend_name()
-    plugins, _registrations = _plugin_snapshot("backend")
+    configured_name = configured_index_backend_name(root=root)
+    plugins, _registrations = _plugin_snapshot("backend", root=root)
     registry = {
         plugin.name: cast("Callable[[], IndexBackend]", plugin.factory)
         for plugin in plugins
@@ -1458,12 +1496,14 @@ def active_index_backend() -> IndexBackend:
     plugin = next(item for item in plugins if item.name == configured_name)
     return cast(
         "IndexBackend",
-        _configure_plugin_instance(plugin=plugin, instance=instance),
+        _configure_plugin_instance(plugin=plugin, instance=instance, root=root),
     )
 
 
 def _instantiate_language_analyzers(
     analyzer_plugins: Sequence[_LoadedPlugin],
+    *,
+    root: Path | None = None,
 ) -> list[LanguageAnalyzer]:
     """
     Instantiate registered analyzers in deterministic routing order.
@@ -1472,6 +1512,8 @@ def _instantiate_language_analyzers(
     ----------
     analyzer_plugins : collections.abc.Sequence[codira.registry._LoadedPlugin]
         Analyzer plugins in deterministic routing order.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should configure analyzers.
 
     Returns
     -------
@@ -1486,7 +1528,11 @@ def _instantiate_language_analyzers(
     analyzers = [
         cast(
             "LanguageAnalyzer",
-            _configure_plugin_instance(plugin=plugin, instance=plugin.factory()),
+            _configure_plugin_instance(
+                plugin=plugin,
+                instance=plugin.factory(),
+                root=root,
+            ),
         )
         for plugin in analyzer_plugins
     ]
@@ -1497,18 +1543,20 @@ def _instantiate_language_analyzers(
     raise ValueError(msg)
 
 
-def active_language_analyzers() -> list[LanguageAnalyzer]:
+def active_language_analyzers(*, root: Path | None = None) -> list[LanguageAnalyzer]:
     """
     Instantiate the active language analyzers for one indexing run.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should participate in analyzer
+        selection and configuration.
 
     Returns
     -------
     list[codira.contracts.LanguageAnalyzer]
         Active analyzers in deterministic first-match routing order.
     """
-    plugins, _registrations = _plugin_snapshot("analyzer")
-    return _instantiate_language_analyzers(plugins)
+    plugins, _registrations = _plugin_snapshot("analyzer", root=root)
+    return _instantiate_language_analyzers(plugins, root=root)
