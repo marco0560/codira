@@ -1,7 +1,7 @@
 config_version = 1
 
 [backend]
-name = "duckdb"
+name = "sqlite"
 
 [plugins]
 disable_third_party = false
