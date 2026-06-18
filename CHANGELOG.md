@@ -1,3 +1,10 @@
+## [1.44.6](https://github.com/marco0560/codira/compare/v1.44.5...v1.44.6) (2026-06-18)
+
+
+### Bug Fixes
+
+* **backend:** honor repo backend config ([8d66b3c](https://github.com/marco0560/codira/commit/8d66b3c55936d876490469a02d47898b13e58412))
+
 ## [1.44.5](https://github.com/marco0560/codira/compare/v1.44.4...v1.44.5) (2026-06-18)
 
 
