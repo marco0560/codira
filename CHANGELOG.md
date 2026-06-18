@@ -1,3 +1,10 @@
+## [1.44.5](https://github.com/marco0560/codira/compare/v1.44.4...v1.44.5) (2026-06-18)
+
+
+### Bug Fixes
+
+* **backend:** bound DuckDB deferred embedding writes ([530e80f](https://github.com/marco0560/codira/commit/530e80f885521a7aaea1d80b6224b6269b25d13e))
+
 ## [1.44.4](https://github.com/marco0560/codira/compare/v1.44.3...v1.44.4) (2026-06-13)
 
 
