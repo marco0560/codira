@@ -32,6 +32,7 @@ from codira.indexer import index_repo
 from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendSpec
 from codira.storage import override_storage_root
+import codira_backend_duckdb as duckdb_backend_module
 from codira_backend_duckdb import (
     DuckDBIndexBackend,
     _duckdb_db_path,
@@ -512,7 +513,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.48.0"
+    assert project["project"]["version"] == "1.49.0"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -1476,6 +1477,108 @@ def test_duckdb_warm_full_reindex_reuses_output_dir_without_duplicate_symbols(
     assert first_report.failed == 0
     assert second_report.failed == 0
     assert second_report.indexed == 1
+
+
+def test_duckdb_deferred_session_flushes_pending_rows_after_structural_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Flush deferred pending embeddings after the structural full-index commit.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to wrap the pending-row flush helper.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts pending rows are flushed only after structural rows
+        are visible from a separate DuckDB connection.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    module_path = tmp_path / "pkg" / "sample.py"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text("", encoding="utf-8")
+    observed_file_counts: list[int] = []
+
+    def wrapped_store_pending(
+        conn: _DuckDBPersistenceConnection,
+        *,
+        prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
+        backend: EmbeddingBackendSpec,
+    ) -> None:
+        raw = duckdb.connect(str(_duckdb_db_path(tmp_path)))
+        try:
+            row = raw.execute("SELECT COUNT(*) FROM files").fetchone()
+        finally:
+            raw.close()
+        assert row is not None
+        observed_file_counts.append(int(row[0]))
+        _store_pending_embedding_rows(
+            conn,
+            prepared_rows=prepared_rows,
+            backend=backend,
+        )
+
+    monkeypatch.setattr(
+        duckdb_backend_module,
+        "_store_pending_embedding_rows",
+        wrapped_store_pending,
+    )
+
+    backend = DuckDBIndexBackend()
+    session = backend.begin_index_session(tmp_path)
+    try:
+        session.prepare(full=True, indexed_paths=(str(module_path),), deleted_paths=())
+        session.persist_analysis(
+            BackendPersistAnalysisRequest(
+                root=tmp_path,
+                file_metadata=FileMetadataSnapshot(
+                    path=module_path,
+                    sha256="duckdb-deferred-session",
+                    mtime=1.0,
+                    size=0,
+                ),
+                analysis=AnalysisResult(
+                    source_path=module_path,
+                    module=ModuleArtifact(
+                        name="pkg.sample",
+                        stable_id="python:module:pkg.sample",
+                        docstring=None,
+                        has_docstring=0,
+                    ),
+                    classes=(),
+                    functions=(),
+                    declarations=(),
+                    imports=(),
+                ),
+                embedding_backend=EmbeddingBackendSpec(
+                    name="test-backend",
+                    version="1",
+                    dim=384,
+                ),
+                defer_embeddings=True,
+            )
+        )
+        session.rebuild_derived_indexes()
+        session.commit()
+    finally:
+        session.close()
+
+    raw = duckdb.connect(str(_duckdb_db_path(tmp_path)))
+    try:
+        pending_count = raw.execute(
+            "SELECT COUNT(*) FROM pending_embeddings"
+        ).fetchone()
+    finally:
+        raw.close()
+
+    assert observed_file_counts == [1]
+    assert pending_count == (1,)
 
 
 def test_duckdb_backend_rebuild_keeps_distinct_unresolved_call_edges(

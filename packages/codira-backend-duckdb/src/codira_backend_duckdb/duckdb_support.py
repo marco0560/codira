@@ -3591,6 +3591,10 @@ def _flush_embedding_rows(
             prepared_rows.append((row, content_hash, None))
             recomputed += 1
 
+    if defer_embeddings and pending_embedding_rows is not None:
+        pending_embedding_rows.extend(prepared_rows)
+        return (0, 0)
+
     if defer_embeddings:
         _store_pending_embedding_rows(
             conn, prepared_rows=prepared_rows, backend=backend
@@ -3712,8 +3716,9 @@ def _embedding_batch_backend_error(
     return (
         f"DuckDB embedding batch operation failed: operation={operation} "
         f"rows={row_count} approx_payload_bytes={payload_bytes}. "
-        "Retry with a smaller embedding batch size or disable vector cache "
-        "writes while investigating DuckDB memory pressure."
+        "Inspect the underlying DuckDB exception for memory pressure. If the "
+        "failed row count is already small, reduce transaction scope or "
+        "available embedding volume before changing embedding batch size."
     )
 
 

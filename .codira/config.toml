@@ -1,11 +1,78 @@
 config_version = 1
 
 [backend]
-name = "sqlite"
+name = "duckdb"
 
 [plugins]
 disable_third_party = false
 disabled_analyzers = []
+
+[plugins.analyzer-python]
+enabled = true
+include_paths = []
+exclude_paths = []
+emit_module_documentation = true
+emit_imports = true
+emit_constants = true
+emit_type_aliases = true
+
+[plugins.analyzer-json]
+enabled = true
+include_paths = []
+exclude_paths = []
+enabled_families = ["schema", "package", "release"]
+emit_dependencies = true
+emit_scripts = true
+emit_schema_properties = true
+
+[plugins.analyzer-c]
+enabled = true
+include_paths = []
+exclude_paths = []
+use_leading_comments = true
+emit_doxygen_documentation = true
+include_system_includes = true
+emit_macros = true
+
+[plugins.analyzer-cpp]
+enabled = true
+include_paths = []
+exclude_paths = []
+use_leading_comments = true
+emit_doxygen_documentation = true
+include_system_includes = true
+emit_namespaces = true
+emit_macros = true
+
+[plugins.analyzer-bash]
+enabled = true
+include_paths = []
+exclude_paths = []
+emit_functions = true
+
+[plugins.analyzer-markdown]
+enabled = true
+include_paths = []
+exclude_paths = []
+strip_front_matter = true
+emit_file_artifact_without_headings = true
+min_heading_level = 1
+max_heading_level = 6
+
+[plugins.analyzer-text]
+enabled = true
+include_paths = []
+exclude_paths = []
+include_root_files = true
+include_docs_directories = true
+exclude_generated = true
+exclude_fixtures_logs = true
+
+[plugins.backend-sqlite]
+enabled = true
+
+[plugins.backend-duckdb]
+enabled = true
 
 [embeddings]
 enabled = true
@@ -20,3 +87,10 @@ torch_num_interop_threads = 0
 [embeddings.gpu]
 device_id = 0
 memory_limit_mb = 0
+
+[embeddings.indexing]
+mode = "immediate"
+object_types = ["symbol", "documentation"]
+max_text_chars = 0
+include_paths = []
+exclude_paths = []

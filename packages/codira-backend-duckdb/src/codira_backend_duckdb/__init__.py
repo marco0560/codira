@@ -46,6 +46,7 @@ from .duckdb_support import (
     _flush_structural_rows,
     _process_pending_embedding_rows,
     _store_analysis,
+    _store_pending_embedding_rows,
 )
 from .repo_storage import get_codira_dir, get_metadata_path
 from .duckdb_query_backend import (
@@ -63,7 +64,7 @@ if TYPE_CHECKING:
 
     from codira.contracts import IndexBackend, IndexWriteSession
 
-PACKAGE_VERSION = "1.48.0"
+PACKAGE_VERSION = "1.49.0"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -241,6 +242,7 @@ class _DuckDBIndexWriteSession:
         self._pending_embedding_rows: list[
             tuple[PendingEmbeddingRow, str, bytes | None]
         ] = []
+        self._pending_embedding_rows_deferred = False
         self._embedding_backend: EmbeddingBackendSpec | None = None
         self._pending_reference_scan_rows: list[tuple[int, int, str]] = []
         self._pending_call_rows: list[CallRow] = []
@@ -412,6 +414,7 @@ class _DuckDBIndexWriteSession:
             self._id_allocator = DuckDBIdAllocator(persistence_conn)
             self._structural_rows = DuckDBStructuralRowBuffers()
             self._pending_embedding_rows = []
+            self._pending_embedding_rows_deferred = False
             self._pending_reference_scan_rows = []
             self._pending_call_rows = []
             self._pending_ref_rows = []
@@ -460,9 +463,13 @@ class _DuckDBIndexWriteSession:
         )
         if self._embedding_backend is None:
             self._embedding_backend = active_backend
-        elif self._embedding_backend != active_backend:
+        elif (
+            self._embedding_backend != active_backend
+            or self._pending_embedding_rows_deferred != request.defer_embeddings
+        ):
             self._flush_pending_embeddings()
             self._embedding_backend = active_backend
+        self._pending_embedding_rows_deferred = request.defer_embeddings
 
         duckdb_error = _duckdb_module().Error
         try:
@@ -521,11 +528,18 @@ class _DuckDBIndexWriteSession:
         if backend is None:
             backend = get_embedding_backend()
             self._embedding_backend = backend
-        _flush_pending_embedding_rows(
-            cast("_DuckDBPersistenceConnection", self._conn),
-            pending_embedding_rows=self._pending_embedding_rows,
-            backend=backend,
-        )
+        if self._pending_embedding_rows_deferred:
+            _store_pending_embedding_rows(
+                cast("_DuckDBPersistenceConnection", self._conn),
+                prepared_rows=self._pending_embedding_rows,
+                backend=backend,
+            )
+        else:
+            _flush_pending_embedding_rows(
+                cast("_DuckDBPersistenceConnection", self._conn),
+                pending_embedding_rows=self._pending_embedding_rows,
+                backend=backend,
+            )
         self._pending_embedding_rows = []
 
     def _flush_structural_rows(self) -> None:
@@ -588,6 +602,85 @@ class _DuckDBIndexWriteSession:
         )
         self._pending_docstring_issue_rows = []
 
+    def _flush_non_embedding_buffers(self) -> None:
+        """
+        Flush session-level buffers that are independent of embedding rows.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Structural, import, diagnostic, reference-scan, and relationship
+            buffers are inserted in dependency order.
+        """
+        self._flush_structural_rows()
+        self._flush_pending_imports()
+        self._flush_pending_docstring_issues()
+        _flush_pending_reference_scan_rows(
+            cast("_DuckDBPersistenceConnection", self._conn),
+            self._pending_reference_scan_rows,
+        )
+        self._pending_reference_scan_rows = []
+        _flush_pending_relationship_rows(
+            cast("_DuckDBPersistenceConnection", self._conn),
+            pending_call_rows=self._pending_call_rows,
+            pending_ref_rows=self._pending_ref_rows,
+        )
+        self._pending_call_rows = []
+        self._pending_ref_rows = []
+
+    def _begin_transaction(self) -> None:
+        """
+        Open a fresh DuckDB transaction for the session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The session transaction state is marked open after `BEGIN`.
+        """
+        self._conn.execute("BEGIN TRANSACTION")
+        self._transaction_open = True
+
+    def _commit_transaction(self) -> None:
+        """
+        Commit the active DuckDB transaction for the session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Pending writes are committed and the session transaction state is
+            marked closed.
+        """
+        self._backend.commit(self._root, conn=self._conn)
+        self._transaction_open = False
+
+    def _rollback_transaction(self) -> None:
+        """
+        Roll back the active DuckDB transaction for the session.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The session transaction state is marked closed after rollback.
+        """
+        self._conn.execute("ROLLBACK")
+        self._transaction_open = False
+
     def rebuild_derived_indexes(self) -> None:
         """
         Refresh derived backend tables after file persistence.
@@ -601,22 +694,7 @@ class _DuckDBIndexWriteSession:
         None
             Derived backend state is refreshed in place.
         """
-        self._flush_structural_rows()
-        self._flush_pending_imports()
-        self._flush_pending_docstring_issues()
-        self._flush_pending_embeddings()
-        _flush_pending_reference_scan_rows(
-            cast("_DuckDBPersistenceConnection", self._conn),
-            self._pending_reference_scan_rows,
-        )
-        self._pending_reference_scan_rows = []
-        _flush_pending_relationship_rows(
-            cast("_DuckDBPersistenceConnection", self._conn),
-            pending_call_rows=self._pending_call_rows,
-            pending_ref_rows=self._pending_ref_rows,
-        )
-        self._pending_call_rows = []
-        self._pending_ref_rows = []
+        self._flush_non_embedding_buffers()
         self._backend.rebuild_derived_indexes(self._root, conn=self._conn)
 
     def persist_runtime_inventory(
@@ -659,25 +737,35 @@ class _DuckDBIndexWriteSession:
         -------
         None
             Pending writes are committed once per session.
+
+        Raises
+        ------
+        BaseException
+            Propagates DuckDB or helper failures after rolling back the active
+            split transaction when possible.
         """
         if not self._completed and self._transaction_open:
-            self._flush_structural_rows()
-            self._flush_pending_imports()
-            self._flush_pending_docstring_issues()
-            self._flush_pending_embeddings()
-            _flush_pending_reference_scan_rows(
-                cast("_DuckDBPersistenceConnection", self._conn),
-                self._pending_reference_scan_rows,
-            )
-            self._pending_reference_scan_rows = []
             if self._deferred_schema_indexes:
-                self._backend.commit(self._root, conn=self._conn)
-                self._transaction_open = False
-                _create_duckdb_schema_indexes(self._conn)
-                self._deferred_schema_indexes = False
+                self._flush_non_embedding_buffers()
+                self._commit_transaction()
+                self._begin_transaction()
+                try:
+                    self._flush_pending_embeddings()
+                except BaseException:
+                    self._rollback_transaction()
+                    raise
+                self._commit_transaction()
+                try:
+                    _create_duckdb_schema_indexes(self._conn)
+                except BaseException:
+                    self._begin_transaction()
+                    raise
+                else:
+                    self._deferred_schema_indexes = False
             else:
-                self._backend.commit(self._root, conn=self._conn)
-                self._transaction_open = False
+                self._flush_non_embedding_buffers()
+                self._flush_pending_embeddings()
+                self._commit_transaction()
             self._completed = True
 
     def abort(self) -> None:
@@ -695,8 +783,7 @@ class _DuckDBIndexWriteSession:
         """
         if self._completed or self._closed or not self._transaction_open:
             return
-        self._conn.execute("ROLLBACK")
-        self._transaction_open = False
+        self._rollback_transaction()
 
     def close(self) -> None:
         """

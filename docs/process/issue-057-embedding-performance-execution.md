@@ -202,3 +202,21 @@ feat/issue-57-embedding-optimization
   - small: Codira repository, 4,004 embeddings recomputed
   - medium: Redis, 12,528 embeddings recomputed
   - large: Postgres, 33,539 embeddings recomputed
+
+### Phase 7
+
+- Analyzed the completed Issue #57 embedding matrix, including the
+  power-outage-interrupted first part, the resumed finishing DuckDB campaign,
+  and the previous SQLite/DuckDB bk-cpp baseline.
+- Recorded the final analysis under
+  `.artifacts/analysis/2026-06-18-issue-057-embedding-matrix-analysis.md`.
+- Kept the repository performance profile on DuckDB with immediate symbol and
+  documentation embeddings enabled.
+- Removed the local documentation text cap from the committed repo config
+  because the matrix showed capped documentation embeddings do not materially
+  reduce total runtime.
+- Fixed the DuckDB deferred full-index write path by buffering session-level
+  deferred pending rows and flushing them only after structural full-index rows
+  have committed.
+- Documented that the embedding matrix should be re-run after meaningful
+  hardware changes because it is hardware-sensitive and long-running.

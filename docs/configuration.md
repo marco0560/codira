@@ -86,6 +86,33 @@ characters.
 path prefixes. Include filters are evaluated first; exclude filters remove
 matching files from embedding computation.
 
+## Repository Performance Profile
+
+This repository commits an explicit `.codira/config.toml` tuned from the
+Issue #57 backend and embedding matrix:
+
+- `backend.name = "duckdb"` selects the backend with the strongest measured
+  read/query performance on the bk-cpp benchmark set.
+- `embeddings.indexing.mode = "immediate"` keeps the clean matrix path as the
+  default indexing mode. Deferred mode remains available for operators who
+  explicitly want a two-step structural/indexing workflow.
+- `embeddings.indexing.object_types = ["symbol", "documentation"]` keeps both
+  retrieval channels active. The matrix showed symbol embeddings dominate
+  runtime, while documentation embeddings are comparatively cheap.
+- `embeddings.indexing.max_text_chars = 0` keeps documentation embeddings
+  uncapped. The capped-docs matrix did not show enough total-runtime benefit
+  to justify reducing retrieval coverage by default.
+- `embeddings.batch_size = 32` and zero Torch thread overrides preserve the
+  current portable defaults. Host-local calibration can still override them
+  through config, CLI flags, or environment variables.
+
+The embedding matrix is hardware-sensitive because embedding throughput,
+DuckDB memory pressure, and Torch scheduling depend on CPU, RAM, GPU, and
+local model state. Re-run the matrix after a meaningful hardware change before
+treating these values as tuned for the new host. The matrix is a long
+operation; run it only when the expected hardware or backend signal justifies
+the elapsed time.
+
 ## Profiles
 
 `codira config init --profile default` writes conservative defaults.
