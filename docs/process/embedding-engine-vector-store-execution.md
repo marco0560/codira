@@ -73,7 +73,7 @@ only run fast smoke checks locally.
 ## Phase Ledger
 
 - [x] Phase 0 - Execution ledger and ADR
-- [ ] Phase 1 - Core contracts for embedding engines and vector stores
+- [x] Phase 1 - Core contracts for embedding engines and vector stores
 - [ ] Phase 2 - Registry, configuration, and capability reporting
 - [ ] Phase 3 - SentenceTransformers engine package migration
 - [ ] Phase 4 - Separated SQLite and DuckDB vector-store packages
@@ -90,3 +90,16 @@ only run fast smoke checks locally.
 - Recorded the implementation decisions for the dedicated branch.
 - Added ADR-022 for embedding engine and vector-store plugin boundaries.
 - Added ADR-022 to the ADR index.
+
+### Phase 1
+
+- Added engine-neutral `EmbeddingEngineSpec`, `VectorStoreSpec`, and
+  `VectorSetIdentity` identity dataclasses.
+- Added runtime-checkable `EmbeddingEngine` and `VectorStore` protocols.
+- Added engine-neutral `EmbeddingEngineError` and `VectorStoreError`.
+- Extended the contract runtime-check test with fake embedding engine and vector
+  store implementations.
+- Focused validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_contracts.py::test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_checkable`.
+- Targeted hooks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files src/codira/contracts.py tests/test_contracts.py`.
