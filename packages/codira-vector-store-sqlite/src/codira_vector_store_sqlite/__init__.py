@@ -17,6 +17,7 @@ import sqlite3
 from typing import TYPE_CHECKING
 
 from codira.contracts import VectorStoreSpec
+from codira.storage import get_codira_dir
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -49,7 +50,7 @@ def get_vector_store_path(root: Path) -> Path:
     pathlib.Path
         Path to `.codira/embeddings.db`.
     """
-    return root / ".codira" / "embeddings.db"
+    return get_codira_dir(root) / "embeddings.db"
 
 
 class SQLiteVectorStore:

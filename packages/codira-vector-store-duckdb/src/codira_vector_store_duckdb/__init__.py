@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, cast
 import duckdb
 
 from codira.contracts import VectorStoreSpec
+from codira.storage import get_codira_dir
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -39,7 +40,7 @@ def get_vector_store_path(root: Path) -> Path:
     pathlib.Path
         Path to `.codira/embeddings.duckdb`.
     """
-    return root / ".codira" / "embeddings.duckdb"
+    return get_codira_dir(root) / "embeddings.duckdb"
 
 
 class DuckDBVectorStore:

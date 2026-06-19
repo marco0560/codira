@@ -3567,6 +3567,8 @@ def test_index_cli_supports_read_only_target_with_separate_output_directory(
         assert payload["status"] == "ok"
         assert get_db_path(output).exists()
         assert not get_db_path(target).exists()
+        assert (output / ".codira" / "embeddings.db").exists()
+        assert not (target / ".codira" / "embeddings.db").exists()
     finally:
         module.chmod(0o644)
         src_dir.chmod(0o755)
