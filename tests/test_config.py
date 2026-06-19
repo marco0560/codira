@@ -178,6 +178,12 @@ include_paths = ["src"]
 
 [plugins.backend-sqlite]
 enabled = true
+
+[plugins.embedding-sentence-transformers]
+enabled = true
+
+[plugins.vector-store-sqlite]
+enabled = true
 """.strip(),
         encoding="utf-8",
     )
@@ -194,11 +200,13 @@ enabled = true
         "include_paths": ["src"],
     }
     assert plugins["backend-sqlite"] == {"enabled": True}
+    assert plugins["embedding-sentence-transformers"] == {"enabled": True}
+    assert plugins["vector-store-sqlite"] == {"enabled": True}
 
 
 def test_config_validation_rejects_invalid_plugin_table_names() -> None:
     """
-    Reject plugin tables without analyzer or backend namespace prefixes.
+    Reject plugin tables without supported namespace prefixes.
 
     Parameters
     ----------
@@ -266,6 +274,10 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
     assert "emit_namespaces = true" in rendered
     assert "[plugins.backend-sqlite]" in rendered
     assert "[plugins.backend-duckdb]" in rendered
+    assert "[plugins.embedding-sentence-transformers]" in rendered
+    assert "[plugins.embedding-onnx]" in rendered
+    assert "[plugins.vector-store-sqlite]" in rendered
+    assert "[plugins.vector-store-duckdb]" in rendered
 
 
 def test_config_cli_init_and_dump_json(

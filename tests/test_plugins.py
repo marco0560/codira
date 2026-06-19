@@ -1094,6 +1094,8 @@ def test_plugin_snapshot_cache_reuses_entry_point_discovery(
     call_counts = {
         registry.ANALYZER_ENTRY_POINT_GROUP: 0,
         registry.BACKEND_ENTRY_POINT_GROUP: 0,
+        registry.EMBEDDING_ENGINE_ENTRY_POINT_GROUP: 0,
+        registry.VECTOR_STORE_ENTRY_POINT_GROUP: 0,
     }
 
     def fake_group_loader(group: str) -> list[_FakeEntryPoint]:
@@ -1128,6 +1130,8 @@ def test_plugin_snapshot_cache_reuses_entry_point_discovery(
     assert call_counts == {
         registry.ANALYZER_ENTRY_POINT_GROUP: 1,
         registry.BACKEND_ENTRY_POINT_GROUP: 1,
+        registry.EMBEDDING_ENGINE_ENTRY_POINT_GROUP: 1,
+        registry.VECTOR_STORE_ENTRY_POINT_GROUP: 1,
     }
 
 
