@@ -50,10 +50,14 @@ from codira.contracts import (
     BackendRelationQueryRequest,
     BackendRuntimeInventoryRequest,
     BackendSymbolInventoryItem,
+    EmbeddingEngine,
+    EmbeddingEngineSpec,
     IndexBackend,
     LanguageAnalyzer,
     RetrievalProducer,
     RetrievalProducerInfo,
+    VectorStore,
+    VectorStoreSpec,
     split_declared_retrieval_capabilities,
 )
 from codira.indexer import (
@@ -179,6 +183,151 @@ class _FakeAnalyzer:
         """
         parsed = parse_file(path, root)
         return analysis_result_from_parsed(path, parsed)
+
+
+class _FakeEmbeddingEngine:
+    """Small embedding-engine stub used to validate the protocol surface."""
+
+    name = "fake-engine"
+    version = "1"
+
+    def spec(self, config: dict[str, object]) -> EmbeddingEngineSpec:
+        """
+        Return deterministic fake engine identity metadata.
+
+        Parameters
+        ----------
+        config : dict[str, object]
+            Engine-specific configuration table.
+
+        Returns
+        -------
+        codira.contracts.EmbeddingEngineSpec
+            Stable fake engine identity.
+        """
+        del config
+        return EmbeddingEngineSpec(
+            engine=self.name,
+            engine_version=self.version,
+            model="fake-model",
+            model_version="1",
+            dimension=3,
+        )
+
+    def provision(self, config: dict[str, object], *, quiet: bool = False) -> None:
+        """
+        Perform no-op local artifact provisioning.
+
+        Parameters
+        ----------
+        config : dict[str, object]
+            Engine-specific configuration table.
+        quiet : bool, optional
+            Whether operator-facing output should be suppressed.
+
+        Returns
+        -------
+        None
+            The fake engine has no external artifacts.
+        """
+        del config, quiet
+
+    def embed_texts(
+        self,
+        texts: Sequence[str],
+        config: dict[str, object],
+    ) -> list[list[float]]:
+        """
+        Return deterministic fake vectors for protocol validation.
+
+        Parameters
+        ----------
+        texts : collections.abc.Sequence[str]
+            Text payloads to embed.
+        config : dict[str, object]
+            Engine-specific configuration table.
+
+        Returns
+        -------
+        list[list[float]]
+            One fixed-size vector per input payload.
+        """
+        del config
+        return [[float(index), 0.0, 0.0] for index, _text in enumerate(texts)]
+
+    def reset_runtime_caches(self) -> None:
+        """
+        Perform no-op runtime cache reset.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The fake engine has no process-local caches.
+        """
+
+
+class _FakeVectorStore:
+    """Small vector-store stub used to validate the protocol surface."""
+
+    name = "fake-vector-store"
+    version = "1"
+
+    def spec(self, config: dict[str, object]) -> VectorStoreSpec:
+        """
+        Return deterministic fake vector-store identity metadata.
+
+        Parameters
+        ----------
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        codira.contracts.VectorStoreSpec
+            Stable fake vector-store identity.
+        """
+        del config
+        return VectorStoreSpec(
+            store=self.name,
+            store_version=self.version,
+            format_version="1",
+        )
+
+    def initialize(self, root: Path, config: dict[str, object]) -> None:
+        """
+        Perform no-op vector-store initialization.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            The fake vector store has no persisted state.
+        """
+        del root, config
+
+    def reset_runtime_caches(self) -> None:
+        """
+        Perform no-op vector-store cache reset.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The fake vector store has no process-local caches.
+        """
 
 
 class _FakeBackend:
@@ -2102,6 +2251,8 @@ def test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_che
     assert isinstance(CAnalyzer(), LanguageAnalyzer)
     assert isinstance(CppAnalyzer(), LanguageAnalyzer)
     assert isinstance(_FakeAnalyzer(), LanguageAnalyzer)
+    assert isinstance(_FakeEmbeddingEngine(), EmbeddingEngine)
+    assert isinstance(_FakeVectorStore(), VectorStore)
     assert isinstance(_FakeBackend(), IndexBackend)
     assert isinstance(_FakeRetrievalProducer(), RetrievalProducer)
     assert isinstance(EMBEDDING_RETRIEVAL_PRODUCER, RetrievalProducer)

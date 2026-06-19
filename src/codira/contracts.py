@@ -53,6 +53,104 @@ class BackendError(RuntimeError):
     """
 
 
+class EmbeddingEngineError(RuntimeError):
+    """
+    Engine-neutral embedding generation failure.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances carry the embedding engine failure message through
+        ``RuntimeError``.
+    """
+
+
+class VectorStoreError(RuntimeError):
+    """
+    Vector-store-neutral persistence or retrieval failure.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances carry the vector-store failure message through
+        ``RuntimeError``.
+    """
+
+
+@dataclass(frozen=True)
+class EmbeddingEngineSpec:
+    """
+    Stable identity for one embedding engine vector contract.
+
+    Parameters
+    ----------
+    engine : str
+        Stable embedding engine name.
+    engine_version : str
+        Engine implementation version.
+    model : str
+        Model identifier used by the engine.
+    model_version : str
+        Explicit model revision or operator-managed version.
+    dimension : int
+        Fixed vector dimensionality.
+    precision : str
+        Vector precision or quantization label.
+    """
+
+    engine: str
+    engine_version: str
+    model: str
+    model_version: str
+    dimension: int
+    precision: str = "float32"
+
+
+@dataclass(frozen=True)
+class VectorStoreSpec:
+    """
+    Stable identity for one vector-store serialization contract.
+
+    Parameters
+    ----------
+    store : str
+        Stable vector-store plugin name.
+    store_version : str
+        Vector-store implementation version.
+    format_version : str
+        Serialization and schema format version for persisted vectors.
+    """
+
+    store: str
+    store_version: str
+    format_version: str
+
+
+@dataclass(frozen=True)
+class VectorSetIdentity:
+    """
+    Complete identity for one persisted vector set.
+
+    Parameters
+    ----------
+    engine : EmbeddingEngineSpec
+        Embedding engine and model identity.
+    vector_store : VectorStoreSpec
+        Vector-store and serialization identity.
+    """
+
+    engine: EmbeddingEngineSpec
+    vector_store: VectorStoreSpec
+
+
 @dataclass(frozen=True)
 class PendingEmbeddingRow:
     """
@@ -247,6 +345,159 @@ class StoredEmbeddingRow:
     content_hash: str
     dim: int
     vector: bytes
+
+
+@runtime_checkable
+class EmbeddingEngine(Protocol):
+    """
+    Contract for pluggable embedding engines.
+
+    Implementations own text-to-vector inference and engine-specific local
+    provisioning. They must not own structural index persistence or vector-store
+    lifecycle policy.
+    """
+
+    name: str
+    version: str
+
+    def spec(self, config: Mapping[str, object]) -> EmbeddingEngineSpec:
+        """
+        Return the active embedding engine identity.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Engine-specific configuration table.
+
+        Returns
+        -------
+        EmbeddingEngineSpec
+            Stable vector-generation identity used for invalidation.
+        """
+        ...
+
+    def provision(
+        self,
+        config: Mapping[str, object],
+        *,
+        quiet: bool = False,
+    ) -> None:
+        """
+        Ensure local model artifacts are available for inference.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Engine-specific configuration table.
+        quiet : bool, optional
+            Whether operator-facing provisioning output should be suppressed.
+
+        Returns
+        -------
+        None
+            Required local artifacts are present or an engine error is raised.
+        """
+        ...
+
+    def embed_texts(
+        self,
+        texts: Sequence[str],
+        config: Mapping[str, object],
+    ) -> list[list[float]]:
+        """
+        Embed text payloads in deterministic input order.
+
+        Parameters
+        ----------
+        texts : collections.abc.Sequence[str]
+            Text payloads to embed.
+        config : collections.abc.Mapping[str, object]
+            Engine-specific configuration table.
+
+        Returns
+        -------
+        list[list[float]]
+            One vector per input payload, in the same order as ``texts``.
+        """
+        ...
+
+    def reset_runtime_caches(self) -> None:
+        """
+        Clear process-local engine caches.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Cached engine state is discarded.
+        """
+        ...
+
+
+@runtime_checkable
+class VectorStore(Protocol):
+    """
+    Contract for pluggable embedding vector stores.
+
+    Implementations own vector persistence, reusable vector-cache persistence,
+    deferred embedding queue persistence, and similarity lookup. They must not
+    own language analysis or text-to-vector inference.
+    """
+
+    name: str
+    version: str
+
+    def spec(self, config: Mapping[str, object]) -> VectorStoreSpec:
+        """
+        Return the active vector-store identity.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        VectorStoreSpec
+            Stable vector persistence identity used for invalidation.
+        """
+        ...
+
+    def initialize(self, root: Path, config: Mapping[str, object]) -> None:
+        """
+        Initialize vector-store state for one repository.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be initialized.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Vector-store storage is ready for reads and writes.
+        """
+        ...
+
+    def reset_runtime_caches(self) -> None:
+        """
+        Clear process-local vector-store caches.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Cached vector-store state is discarded.
+        """
+        ...
 
 
 @dataclass(frozen=True)
