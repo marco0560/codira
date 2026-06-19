@@ -1,7 +1,7 @@
 config_version = 1
 
 [backend]
-name = "sqlite"
+name = "duckdb"
 
 [plugins]
 disable_third_party = false
@@ -74,8 +74,31 @@ enabled = true
 [plugins.backend-duckdb]
 enabled = true
 
+[plugins.embedding-sentence-transformers]
+enabled = true
+precision = "float32"
+trust_remote_code = false
+
+[plugins.embedding-onnx]
+enabled = true
+precision = "float32"
+model_path = ""
+tokenizer_path = ""
+provider = "CPUExecutionProvider"
+normalize = true
+intra_op_num_threads = 0
+inter_op_num_threads = 0
+
+[plugins.vector-store-sqlite]
+enabled = true
+
+[plugins.vector-store-duckdb]
+enabled = true
+
 [embeddings]
 enabled = true
+engine = "sentence-transformers"
+vector_store = "duckdb"
 model = "sentence-transformers/all-MiniLM-L6-v2"
 version = "1"
 dimension = 384

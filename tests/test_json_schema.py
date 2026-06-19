@@ -18,13 +18,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from codira_backend_sqlite.sqlite_storage import init_db
 from jsonschema import validate  # type: ignore[import-untyped]
 
 from codira.indexer import index_repo
 from codira.query.context import ContextRequest, context_for
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _load_schema(root: Path) -> dict[str, object]:
@@ -48,7 +51,10 @@ def _load_schema(root: Path) -> dict[str, object]:
     )
 
 
-def test_context_output_matches_schema(tmp_path: Path) -> None:
+def test_context_output_matches_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Validate that JSON output of context_for conforms to the JSON schema.
 
@@ -57,6 +63,9 @@ def test_context_output_matches_schema(tmp_path: Path) -> None:
     tmp_path : pathlib.Path
         Temporary directory provided by pytest. The fixture is unused but
         retained for symmetry with the companion schema test.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to pin the storage backend used by this SQLite schema
+        contract test.
 
     Returns
     -------
@@ -70,6 +79,7 @@ def test_context_output_matches_schema(tmp_path: Path) -> None:
     """
     root = Path.cwd()
 
+    monkeypatch.setenv("CODIRA_INDEX_BACKEND", "sqlite")
     schema = _load_schema(root)
     init_db(root)
     index_repo(root)
@@ -107,7 +117,10 @@ def test_context_output_matches_schema(tmp_path: Path) -> None:
     assert "include_graph" in expansion
 
 
-def test_context_no_matches_schema(tmp_path: Path) -> None:
+def test_context_no_matches_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Validate schema compliance for the 'no_matches' case.
 
@@ -116,6 +129,9 @@ def test_context_no_matches_schema(tmp_path: Path) -> None:
     tmp_path : pathlib.Path
         Temporary directory provided by pytest. The fixture is unused but
         retained for interface consistency with the companion test.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to pin the storage backend used by this SQLite schema
+        contract test.
 
     Returns
     -------
@@ -123,6 +139,7 @@ def test_context_no_matches_schema(tmp_path: Path) -> None:
         The test asserts schema conformance for the no-match case.
     """
     root = Path.cwd()
+    monkeypatch.setenv("CODIRA_INDEX_BACKEND", "sqlite")
     schema = _load_schema(root)
     init_db(root)
     index_repo(root)

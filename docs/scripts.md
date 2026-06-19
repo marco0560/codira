@@ -91,6 +91,27 @@ model candidate manifest and the selected repository benchmark manifest. It is
 safe to run before the long campaign because it only validates manifests and
 prints planned runs.
 
+## `scripts/run_final_embedding_model_campaign.sh`
+
+Run the final engine/model measuring campaign against a previous embedding
+matrix artifact directory:
+
+```bash
+RUNS=5 WARMUP=1 scripts/run_final_embedding_model_campaign.sh \
+  --baseline .artifacts/analysis/<previous-embedding-matrix-artifacts> \
+  --manifest benchmarks/uv-backed-repos.local.json \
+  --model-manifest benchmarks/embedding-model-candidates.json \
+  --backend duckdb
+```
+
+The wrapper writes artifacts under
+`.artifacts/final-embedding-model-campaign/<timestamp>/`, records the baseline
+path and manifests, applies one generated `.codira/config.toml` per model to
+the repositories listed in the manifest, and restores the original repository
+configs when it exits. Use `--backend both` only when the campaign must compare
+SQLite and DuckDB structural backends as well as PyTorch and ONNX Runtime
+embedding engines.
+
 ## `scripts/benchmark_index.py`
 
 Run one instrumented index pass and emit structured JSON with phase timings,

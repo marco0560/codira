@@ -79,12 +79,12 @@ only run fast smoke checks locally.
 - [x] Phase 3a - SentenceTransformers engine package boundary
 - [x] Phase 3b - SentenceTransformers runtime dispatcher migration
 - [x] Phase 4a - Separated SQLite and DuckDB vector-store packages
-- [ ] Phase 4b - Move backend embedding persistence to vector stores
+- [x] Phase 4b - Move backend embedding persistence to vector stores
 - [x] Phase 5 - Native ONNX Runtime engine package
 - [x] Phase 6 - Model manifests and provisioning scripts
 - [x] Phase 7 - Bundle, user docs, developer docs, and ADR alignment
 - [x] Phase 8 - Benchmark harness, smoke measurements, and campaign manifest
-- [ ] Phase 9 - Full validation and merge handoff
+- [x] Phase 9 - Full validation and merge handoff
 
 ## Phase Notes
 
@@ -221,8 +221,12 @@ only run fast smoke checks locally.
   back to symbol and documentation result rows with prefix filtering.
 - Kept structural backends responsible for metadata resolution while vector
   stores own similarity scoring.
-- Remaining Phase 4b work: remove legacy structural embedding-table dependency
-  where compatibility no longer requires it.
+- Legacy structural embedding tables remain as compatibility shadows during
+  this transition. New writes, deferred pending rows, cache rows, materialized
+  vectors, and query-time similarity scoring are mirrored to or read from the
+  configured separated vector store. Removing the compatibility shadow should
+  be handled by a later schema/deprecation slice once downstream compatibility
+  no longer requires it.
 - Focused validation passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_incremental_indexing.py::test_index_cli_defers_and_processes_pending_embeddings`.
 - Focused vector-store validation passed:
@@ -239,6 +243,8 @@ only run fast smoke checks locally.
   `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/validate_repo.py`.
 - Targeted hooks passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files src/codira/indexer.py src/codira/cli.py tests/test_incremental_indexing.py`.
+- Full validation passed after query-time vector-store retrieval:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/validate_repo.py`.
 
 ### Phase 5
 
@@ -333,5 +339,19 @@ only run fast smoke checks locally.
   `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/validate_repo.py`.
 - Push hook validation also passed while pushing `feat/embedding-plugins`:
   `397 passed`.
-- Phase 9 remains open until Phase 4b wiring is complete and the final
-  merge-handoff validation is run.
+- Phase 9 is complete after Phase 4b wiring and final merge-handoff validation.
+- Added `scripts/run_final_embedding_model_campaign.sh` as the final
+  PyTorch/ONNX Runtime model-campaign wrapper. It records the previous
+  embedding matrix baseline, generates per-model configs from
+  `benchmarks/embedding-model-candidates.json`, runs the repository manifest
+  campaign, and restores repo-local configs after exit.
+- Updated the committed `.codira/config.toml` with the embedding engine,
+  vector-store, first-party embedding plugin, and first-party vector-store
+  default parameters. The Codira repository profile uses `duckdb` for both the
+  structural backend and separated vector store.
+- Pinned the JSON schema contract tests to SQLite because they explicitly
+  initialize SQLite storage. This keeps those tests independent from the
+  repository `.codira/config.toml` backend profile.
+- Final branch validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/validate_repo.py`
+  with `398 passed`.
