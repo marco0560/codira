@@ -195,10 +195,20 @@ only run fast smoke checks locally.
 - Added regression coverage that deferred indexing creates the separated
   `.codira/embeddings.db` vector-store file independently from the structural
   index database.
+- Added row-level vector-store APIs for vector-set identity creation, reusable
+  vector cache reads/writes, pending-vector queue writes/deletes, and
+  materialized vector writes.
+- Implemented the row-level APIs in both first-party separated vector stores.
+- Added package-local SQLite and DuckDB tests covering vector-set reuse, cache
+  round-trip, pending row deletion, and materialized vector persistence.
 - Remaining Phase 4b work: move pending/vector/cache row writes and query-time
   similarity reads out of structural backends and into vector-store plugins.
 - Focused validation passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_incremental_indexing.py::test_index_cli_defers_and_processes_pending_embeddings`.
+- Focused vector-store validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_contracts.py packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py packages/codira-vector-store-duckdb/tests/test_duckdb_vector_store_package.py`.
+- Full validation passed after the row-level API slice:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/validate_repo.py`.
 - Targeted hooks passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files src/codira/indexer.py src/codira/cli.py tests/test_incremental_indexing.py`.
 
@@ -289,8 +299,11 @@ only run fast smoke checks locally.
 - Semgrep-excluded test suite passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q --ignore=tests/test_semgrep_rules.py`
   with `394 passed`.
-- Full-suite blocker: `test_semgrep_rule_files_are_valid_yaml` waits on a
-  semgrep subprocess. A bounded repro timed out:
-  `timeout 30s env UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_semgrep_rules.py::test_semgrep_rule_files_are_valid_yaml`.
-- Phase 9 remains open until the semgrep subprocess hang is resolved and the
-  complete suite passes.
+- Semgrep was updated and now runs successfully under the repository `uv`
+  environment.
+- Full validation passed after Semgrep recovery:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/validate_repo.py`.
+- Push hook validation also passed while pushing `feat/embedding-plugins`:
+  `397 passed`.
+- Phase 9 remains open until Phase 4b wiring is complete and the final
+  merge-handoff validation is run.
