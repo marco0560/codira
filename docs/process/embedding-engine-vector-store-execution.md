@@ -173,3 +173,33 @@ only run fast smoke checks locally.
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py packages/codira-vector-store-duckdb/tests/test_duckdb_vector_store_package.py`.
 - Targeted hooks passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files pyproject.toml uv.lock packages/codira-vector-store-sqlite/pyproject.toml packages/codira-vector-store-sqlite/README.md packages/codira-vector-store-sqlite/src/codira_vector_store_sqlite/__init__.py packages/codira-vector-store-sqlite/src/codira_vector_store_sqlite/py.typed packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py packages/codira-vector-store-duckdb/pyproject.toml packages/codira-vector-store-duckdb/README.md packages/codira-vector-store-duckdb/src/codira_vector_store_duckdb/__init__.py packages/codira-vector-store-duckdb/src/codira_vector_store_duckdb/py.typed packages/codira-vector-store-duckdb/tests/test_duckdb_vector_store_package.py`.
+
+### Phase 5
+
+- Added `packages/codira-embedding-onnx`.
+- Published the `onnx` engine through the `codira.embedding_engines` entry-point
+  group.
+- Added local runtime configuration for:
+  - `model_path`
+  - `tokenizer_path`
+  - `provider`
+  - `precision`
+  - `normalize`
+  - `intra_op_num_threads`
+  - `inter_op_num_threads`
+- Implemented lazy ONNX Runtime and tokenizer loading so missing optional engine
+  dependencies fail through `EmbeddingEngineError`.
+- Added package-local tests for entry-point metadata, factory shape, and missing
+  model configuration.
+- Added the package to root development metadata, the `semantic` extra, the
+  official bundle extra, and `uv.lock`.
+- Bumped `codira-bundle-official` to `1.52.0` and aligned its dependency
+  contract with the new official embedding/vector package set.
+- Focused validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_contracts.py::test_root_optional_dependencies_support_monorepo_bundle_install packages/codira-bundle-official/tests/test_bundle_package.py packages/codira-embedding-onnx/tests/test_onnx_package.py`.
+- Targeted hooks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files pyproject.toml uv.lock tests/test_contracts.py packages/codira-bundle-official/pyproject.toml packages/codira-bundle-official/tests/test_bundle_package.py packages/codira-embedding-onnx/pyproject.toml packages/codira-embedding-onnx/README.md packages/codira-embedding-onnx/src/codira_embedding_onnx/__init__.py packages/codira-embedding-onnx/src/codira_embedding_onnx/py.typed packages/codira-embedding-onnx/tests/test_onnx_package.py`.
+- Full-suite validation note: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q`
+  passed the previously failing bundle contract test, then was interrupted
+  after `test_semgrep_rule_files_are_valid_yaml` waited several minutes on a
+  semgrep subprocess.
