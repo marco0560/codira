@@ -160,10 +160,10 @@ CLI flags
 
 ## Tune embedding runtime
 
-`codira` computes semantic embeddings through the local sentence-transformers
-backend during indexing. The default settings are deterministic, and can be
-made explicit in the repository config when a project needs repeatable runtime
-tuning.
+`codira` computes semantic embeddings through the configured local embedding
+engine during indexing. The default engine is `sentence-transformers`; an ONNX
+Runtime engine is also available when local ONNX model and tokenizer artifacts
+are configured explicitly.
 
 Inspect the effective config:
 
@@ -177,6 +177,15 @@ Create an explicit profile:
 ```bash
 codira config init --profile low-memory
 codira config init --level repo --profile gpu
+```
+
+Inspect candidate model/engine entries and print a config snippet:
+
+```bash
+uv run python ../codira/scripts/embedding_model_manifest.py --list
+uv run python ../codira/scripts/embedding_model_manifest.py \
+  --id bge-small-en-v1.5-onnx \
+  --print-config
 ```
 
 Operators can still tune one process with environment variables. These values

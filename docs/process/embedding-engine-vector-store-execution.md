@@ -82,7 +82,7 @@ only run fast smoke checks locally.
 - [ ] Phase 4b - Move backend embedding persistence to vector stores
 - [x] Phase 5 - Native ONNX Runtime engine package
 - [x] Phase 6 - Model manifests and provisioning scripts
-- [ ] Phase 7 - Bundle, user docs, developer docs, and ADR alignment
+- [x] Phase 7 - Bundle, user docs, developer docs, and ADR alignment
 - [ ] Phase 8 - Benchmark harness, smoke measurements, and campaign manifest
 - [ ] Phase 9 - Full validation and merge handoff
 
@@ -253,3 +253,17 @@ only run fast smoke checks locally.
   `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/embedding_model_manifest.py --list`.
 - Config-render smoke passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/embedding_model_manifest.py --id bge-small-en-v1.5-onnx --print-config`.
+
+### Phase 7
+
+- Updated configuration docs with `embeddings.engine`,
+  `embeddings.vector_store`, separated vector-store files, and the model
+  candidate manifest.
+- Updated getting-started docs to describe embedding engines and manifest
+  config rendering.
+- Updated script reference docs for `scripts/embedding_model_manifest.py` and
+  active-engine provisioning.
+- Updated plugin architecture docs with the embedding engine and vector-store
+  plugin families and entry-point groups.
+- Targeted hooks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files docs/configuration.md docs/getting_started.md docs/scripts.md docs/architecture/plugin-model.md`.

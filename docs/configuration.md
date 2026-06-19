@@ -44,6 +44,8 @@ disabled_analyzers = []
 
 [embeddings]
 enabled = true
+engine = "sentence-transformers"
+vector_store = "sqlite"
 model = "sentence-transformers/all-MiniLM-L6-v2"
 version = "1"
 dimension = 384
@@ -69,6 +71,13 @@ Torch defaults unchanged.
 
 `embeddings.gpu.memory_limit_mb = 0` means no explicit GPU memory limit is
 configured.
+
+`embeddings.engine` selects the active embedding engine plugin. The first-party
+engines are `"sentence-transformers"` and `"onnx"`.
+
+`embeddings.vector_store` selects the active vector-store plugin. The
+first-party local stores are `"sqlite"` and `"duckdb"` and use separated files
+under `.codira/embeddings.db` or `.codira/embeddings.duckdb`.
 
 `embeddings.indexing.mode = "immediate"` computes embeddings during
 `codira index`. Set it to `"deferred"` to persist structural index rows first
@@ -150,6 +159,27 @@ Codira emits safe CPU fallback values instead of failing the command.
 The printed block includes the complete `[embeddings]` section plus
 `[embeddings.gpu]`, including model identity fields and calibrated runtime
 parameters.
+
+## Model Candidate Manifest
+
+`benchmarks/embedding-model-candidates.json` records the model/engine
+combinations used for embedding-engine campaigns. It includes the current
+MiniLM default, `BAAI/bge-small-en-v1.5`,
+`nomic-ai/nomic-embed-text-v1.5`, and
+`jinaai/jina-embeddings-v2-code-en`.
+
+Inspect the manifest and render a config snippet for one entry:
+
+```bash
+uv run python scripts/embedding_model_manifest.py --list
+uv run python scripts/embedding_model_manifest.py \
+  --id bge-small-en-v1.5-onnx \
+  --print-config
+```
+
+The manifest does not contain model weights. ONNX entries point to expected
+local artifact paths under `.codira/models/`; exporting or downloading those
+artifacts remains an explicit operator step.
 
 ## Environment Overrides
 

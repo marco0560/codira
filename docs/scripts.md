@@ -57,11 +57,25 @@ Create a new ADR file under `docs/adr/` and append it to the ADR index.
 
 ## `scripts/provision_embedding_model.py`
 
-Prefetch or verify the local sentence-transformers model artifact required by
-the real semantic embedding backend.
+Prefetch or verify the local model artifact required by the active embedding
+engine.
 
 Normal CLI indexing now provisions the model automatically on first use. This
 script remains available when operators want to pre-warm the cache explicitly.
+
+## `scripts/embedding_model_manifest.py`
+
+Validate and inspect the committed embedding model candidate manifest:
+
+```bash
+uv run python scripts/embedding_model_manifest.py --list
+uv run python scripts/embedding_model_manifest.py \
+  --id bge-small-en-v1.5-onnx \
+  --print-config
+```
+
+The script does not download model weights. It renders repository configuration
+snippets for the selected embedding engine/model entry.
 
 ## `scripts/benchmark_index.py`
 
