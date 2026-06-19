@@ -10,6 +10,7 @@
     "channels",
     "retrieval_capabilities",
     "retrieval_producers",
+    "plugins",
     "analyzers",
     "validation"
   ],
@@ -105,6 +106,49 @@
     "retrieval_producers": {
       "type": "array",
       "items": { "type": "object" }
+    },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "family",
+          "name",
+          "active",
+          "provider",
+          "origin",
+          "source",
+          "status",
+          "version",
+          "entry_point",
+          "detail"
+        ],
+        "properties": {
+          "family": {
+            "enum": ["analyzer", "backend", "embedding", "vector-store"]
+          },
+          "name": { "type": "string", "minLength": 1 },
+          "active": { "type": "boolean" },
+          "provider": { "type": "string", "minLength": 1 },
+          "origin": {
+            "enum": ["core", "first_party", "third_party"]
+          },
+          "source": {
+            "enum": ["builtin", "entry_point"]
+          },
+          "status": {
+            "enum": ["loaded", "skipped", "duplicate"]
+          },
+          "version": { "type": "string", "minLength": 1 },
+          "entry_point": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }]
+          },
+          "detail": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }]
+          }
+        },
+        "additionalProperties": false
+      }
     },
     "analyzers": {
       "type": "array",

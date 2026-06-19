@@ -75,7 +75,7 @@ only run fast smoke checks locally.
 - [x] Phase 0 - Execution ledger and ADR
 - [x] Phase 1 - Core contracts for embedding engines and vector stores
 - [x] Phase 2 - Registry and configuration selection
-- [ ] Phase 2b - Capability reporting
+- [x] Phase 2b - Capability reporting
 - [x] Phase 3a - SentenceTransformers engine package boundary
 - [x] Phase 3b - SentenceTransformers runtime dispatcher migration
 - [x] Phase 4a - Separated SQLite and DuckDB vector-store packages
@@ -125,6 +125,19 @@ only run fast smoke checks locally.
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_config.py -k 'plugin_tables or full_profile or unknown_keys or embedding_indexing_origin' tests/test_plugins.py -k 'plugin'`.
 - Targeted hooks passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files src/codira/config.py src/codira/registry.py tests/test_config.py tests/test_plugins.py`.
+
+### Phase 2b
+
+- Added plugin-family metadata to `codira caps --json`.
+- Extended the capability schema with deterministic plugin registration rows.
+- Marked loaded analyzer plugins active, and marked the configured backend,
+  embedding engine, and vector store active.
+- Focused validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_capabilities.py`.
+- Targeted hooks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files src/codira/capabilities.py src/codira/schema/capabilities.schema.json tests/test_capabilities.py`.
+- CLI smoke passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run codira caps --json`.
 
 ### Phase 3a
 

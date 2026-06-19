@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
+from codira.config import load_effective_config
 from codira.contracts import (
     CANONICAL_ONTOLOGY_TYPES,
     KNOWN_RETRIEVAL_CAPABILITIES,
@@ -36,7 +37,12 @@ from codira.query.producers import (
     ENRICHMENT_PRODUCER_SPECS,
     QueryProducerSpec,
 )
-from codira.registry import active_language_analyzers
+from codira.registry import (
+    PluginRegistration,
+    active_language_analyzers,
+    configured_index_backend_name,
+    plugin_registrations,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -415,6 +421,63 @@ def _analyzer_declarations(
     return payloads, sorted(issues)
 
 
+def _plugin_is_active(registration: PluginRegistration) -> bool:
+    """
+    Return whether one plugin registration is active in the current config.
+
+    Parameters
+    ----------
+    registration : codira.registry.PluginRegistration
+        Plugin registration diagnostic row.
+
+    Returns
+    -------
+    bool
+        ``True`` when the row represents an active configured plugin.
+    """
+    if registration.status != "loaded":
+        return False
+    if registration.family == "analyzer":
+        return True
+    if registration.family == "backend":
+        return registration.name == configured_index_backend_name()
+
+    config = load_effective_config()
+    if registration.family == "embedding":
+        return registration.name == config.embeddings.engine
+    return registration.name == config.embeddings.vector_store
+
+
+def _plugin_payloads() -> list[dict[str, object]]:
+    """
+    Return deterministic plugin-family capability metadata.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Registration diagnostics for all plugin families.
+    """
+    return [
+        {
+            "family": registration.family,
+            "name": registration.name,
+            "active": _plugin_is_active(registration),
+            "provider": registration.provider,
+            "origin": registration.origin,
+            "source": registration.source,
+            "status": registration.status,
+            "version": registration.version,
+            "entry_point": registration.entry_point,
+            "detail": registration.detail,
+        }
+        for registration in plugin_registrations()
+    ]
+
+
 def build_capability_contract(
     analyzers: Sequence[LanguageAnalyzer] | None = None,
     *,
@@ -494,6 +557,7 @@ def build_capability_contract(
         },
         "retrieval_capabilities": list(KNOWN_RETRIEVAL_CAPABILITIES),
         "retrieval_producers": _retrieval_producer_payloads(),
+        "plugins": _plugin_payloads(),
         "analyzers": analyzer_payloads,
         "validation": {
             "status": validation_status,

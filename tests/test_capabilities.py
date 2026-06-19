@@ -201,6 +201,7 @@ def test_capability_contract_validates_against_schema() -> None:
     analyzers = cast("list[Mapping[str, object]]", payload["analyzers"])
     channels = cast("dict[str, object]", payload["channels"])
     commands = cast("dict[str, object]", payload["commands"])
+    plugins = cast("list[Mapping[str, object]]", payload["plugins"])
     retrieval_capabilities = cast("list[str]", payload["retrieval_capabilities"])
     assert [item["analyzer_name"] for item in analyzers] == ["python"]
     assert [item["declaration_status"] for item in analyzers] == ["declared"]
@@ -225,6 +226,21 @@ def test_capability_contract_validates_against_schema() -> None:
     assert symlist_command["intent"] == "symbol_inventory"
     docs_command = cast("Mapping[str, object]", commands["docs"])
     assert docs_command["channels"] == ["docs"]
+    assert {
+        (item["family"], item["name"])
+        for item in plugins
+        if item["family"] in {"embedding", "vector-store"}
+    } >= {
+        ("embedding", "sentence-transformers"),
+        ("embedding", "onnx"),
+        ("vector-store", "sqlite"),
+        ("vector-store", "duckdb"),
+    }
+    assert {(item["family"], item["name"]) for item in plugins if item["active"]} >= {
+        ("backend", "sqlite"),
+        ("embedding", "sentence-transformers"),
+        ("vector-store", "sqlite"),
+    }
     assert "symbol_lookup" in retrieval_capabilities
 
 
