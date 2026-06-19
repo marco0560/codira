@@ -42,6 +42,7 @@ from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.registry import (
     active_index_backend,
     active_language_analyzers,
+    active_vector_store,
     missing_language_analyzer_hint,
 )
 from codira.scanner import (
@@ -1158,6 +1159,8 @@ def index_repo(
         If validated indexing inputs are semantically inconsistent.
     """
     index_backend = active_index_backend(root=root)
+    vector_store = active_vector_store(root=root)
+    vector_store.initialize(root, {})
     analyzers = _active_language_analyzers(root=root)
     backend = get_embedding_backend()
     embedding_indexing = _embedding_indexing_policy(root)

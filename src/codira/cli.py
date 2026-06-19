@@ -88,6 +88,7 @@ from codira.query.exact import (
 from codira.registry import (
     active_index_backend,
     active_language_analyzers,
+    active_vector_store,
     configured_index_backend_name,
     plugin_registrations,
     validate_plugin_configuration,
@@ -1617,6 +1618,8 @@ def _run_index(request: IndexCommandRequest) -> int:
         "deferred" if defer_embeddings else config.embeddings.indexing.mode
     )
     if embeddings_only:
+        vector_store = active_vector_store(root=root)
+        vector_store.initialize(root, {})
         active_backend = active_index_backend(root=root)
         active_backend.initialize(root)
         recomputed, reused = active_backend.process_pending_embeddings(

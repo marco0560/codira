@@ -187,6 +187,21 @@ only run fast smoke checks locally.
 - Targeted hooks passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files pyproject.toml uv.lock packages/codira-vector-store-sqlite/pyproject.toml packages/codira-vector-store-sqlite/README.md packages/codira-vector-store-sqlite/src/codira_vector_store_sqlite/__init__.py packages/codira-vector-store-sqlite/src/codira_vector_store_sqlite/py.typed packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py packages/codira-vector-store-duckdb/pyproject.toml packages/codira-vector-store-duckdb/README.md packages/codira-vector-store-duckdb/src/codira_vector_store_duckdb/__init__.py packages/codira-vector-store-duckdb/src/codira_vector_store_duckdb/py.typed packages/codira-vector-store-duckdb/tests/test_duckdb_vector_store_package.py`.
 
+### Phase 4b
+
+- Initialized the configured vector store during normal indexing.
+- Initialized the configured vector store during `codira index
+  --embeddings-only`.
+- Added regression coverage that deferred indexing creates the separated
+  `.codira/embeddings.db` vector-store file independently from the structural
+  index database.
+- Remaining Phase 4b work: move pending/vector/cache row writes and query-time
+  similarity reads out of structural backends and into vector-store plugins.
+- Focused validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_incremental_indexing.py::test_index_cli_defers_and_processes_pending_embeddings`.
+- Targeted hooks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files src/codira/indexer.py src/codira/cli.py tests/test_incremental_indexing.py`.
+
 ### Phase 5
 
 - Added `packages/codira-embedding-onnx`.

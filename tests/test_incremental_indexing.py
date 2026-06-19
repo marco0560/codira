@@ -3142,6 +3142,7 @@ def test_index_cli_defers_and_processes_pending_embeddings(
     conn.close()
     assert pending_count == (2,)
     assert embedding_count == (0,)
+    assert (tmp_path / ".codira" / "embeddings.db").exists()
 
     monkeypatch.setattr(
         sys,
