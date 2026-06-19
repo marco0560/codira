@@ -76,7 +76,8 @@ only run fast smoke checks locally.
 - [x] Phase 1 - Core contracts for embedding engines and vector stores
 - [x] Phase 2 - Registry and configuration selection
 - [ ] Phase 2b - Capability reporting
-- [ ] Phase 3 - SentenceTransformers engine package migration
+- [x] Phase 3a - SentenceTransformers engine package boundary
+- [ ] Phase 3b - SentenceTransformers runtime dispatcher migration
 - [ ] Phase 4 - Separated SQLite and DuckDB vector-store packages
 - [ ] Phase 5 - Native ONNX Runtime engine package
 - [ ] Phase 6 - Model manifests and provisioning scripts
@@ -123,3 +124,16 @@ only run fast smoke checks locally.
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_config.py -k 'plugin_tables or full_profile or unknown_keys or embedding_indexing_origin' tests/test_plugins.py -k 'plugin'`.
 - Targeted hooks passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files src/codira/config.py src/codira/registry.py tests/test_config.py tests/test_plugins.py`.
+
+### Phase 3a
+
+- Added `packages/codira-embedding-sentence-transformers`.
+- Published the `sentence-transformers` engine through the
+  `codira.embedding_engines` entry-point group.
+- Added package-local tests for entry-point metadata and factory shape.
+- Added the package to root development metadata, the `semantic` extra, the
+  official bundle extra, and `uv.lock`.
+- Focused validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q packages/codira-embedding-sentence-transformers/tests/test_sentence_transformers_package.py`.
+- Targeted hooks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files pyproject.toml uv.lock packages/codira-embedding-sentence-transformers/pyproject.toml packages/codira-embedding-sentence-transformers/README.md packages/codira-embedding-sentence-transformers/src/codira_embedding_sentence_transformers/__init__.py packages/codira-embedding-sentence-transformers/src/codira_embedding_sentence_transformers/py.typed packages/codira-embedding-sentence-transformers/tests/test_sentence_transformers_package.py`.
