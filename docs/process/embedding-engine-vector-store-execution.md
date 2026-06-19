@@ -78,7 +78,8 @@ only run fast smoke checks locally.
 - [ ] Phase 2b - Capability reporting
 - [x] Phase 3a - SentenceTransformers engine package boundary
 - [x] Phase 3b - SentenceTransformers runtime dispatcher migration
-- [ ] Phase 4 - Separated SQLite and DuckDB vector-store packages
+- [x] Phase 4a - Separated SQLite and DuckDB vector-store packages
+- [ ] Phase 4b - Move backend embedding persistence to vector stores
 - [ ] Phase 5 - Native ONNX Runtime engine package
 - [ ] Phase 6 - Model manifests and provisioning scripts
 - [ ] Phase 7 - Bundle, user docs, developer docs, and ADR alignment
@@ -152,3 +153,23 @@ only run fast smoke checks locally.
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_embeddings.py -k 'embed_texts or load_model or sentence_transformer_factory' packages/codira-embedding-sentence-transformers/tests/test_sentence_transformers_package.py`.
 - Targeted hooks passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files src/codira/registry.py src/codira/semantic/embeddings.py packages/codira-embedding-sentence-transformers/src/codira_embedding_sentence_transformers/__init__.py`.
+
+### Phase 4a
+
+- Added `packages/codira-vector-store-sqlite`.
+- Added `packages/codira-vector-store-duckdb`.
+- Published `sqlite` and `duckdb` vector stores through the
+  `codira.vector_stores` entry-point group.
+- Added separated local vector-store files:
+  - `.codira/embeddings.db`
+  - `.codira/embeddings.duckdb`
+- Added initial vector-store schemas for vector sets, vectors, vector cache, and
+  pending vectors.
+- Added package-local tests for metadata, factories, protocol compatibility, and
+  schema initialization.
+- Added the packages to root development metadata, the `semantic` extra, the
+  official bundle extra, and `uv.lock`.
+- Focused validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py packages/codira-vector-store-duckdb/tests/test_duckdb_vector_store_package.py`.
+- Targeted hooks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files pyproject.toml uv.lock packages/codira-vector-store-sqlite/pyproject.toml packages/codira-vector-store-sqlite/README.md packages/codira-vector-store-sqlite/src/codira_vector_store_sqlite/__init__.py packages/codira-vector-store-sqlite/src/codira_vector_store_sqlite/py.typed packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py packages/codira-vector-store-duckdb/pyproject.toml packages/codira-vector-store-duckdb/README.md packages/codira-vector-store-duckdb/src/codira_vector_store_duckdb/__init__.py packages/codira-vector-store-duckdb/src/codira_vector_store_duckdb/py.typed packages/codira-vector-store-duckdb/tests/test_duckdb_vector_store_package.py`.
