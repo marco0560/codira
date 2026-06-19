@@ -35,6 +35,7 @@ from codira.config import (
     DEFAULT_EMBEDDING_VERSION,
     load_effective_config,
 )
+from codira.registry import active_embedding_engine
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -397,7 +398,7 @@ def _load_sentence_transformer(
         )
 
 
-def provision_embedding_model(*, quiet: bool = False) -> None:
+def _sentence_transformer_provision_embedding_model(*, quiet: bool = False) -> None:
     """
     Ensure the configured local embedding model artifact is available.
 
@@ -479,7 +480,7 @@ def _load_model() -> _EmbeddingModel:
     return model
 
 
-def reset_embedding_runtime_caches() -> None:
+def _sentence_transformer_reset_runtime_caches() -> None:
     """
     Clear cached embedding startup state for the current process.
 
@@ -498,7 +499,45 @@ def reset_embedding_runtime_caches() -> None:
     _load_model.cache_clear()
 
 
-def embed_texts(texts: Sequence[str]) -> list[list[float]]:
+def reset_embedding_runtime_caches() -> None:
+    """
+    Clear cached embedding startup state for the active engine.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Cached embedding runtime state is discarded.
+    """
+    active_embedding_engine().reset_runtime_caches()
+
+
+def provision_embedding_model(*, quiet: bool = False) -> None:
+    """
+    Ensure the configured local embedding model artifact is available.
+
+    Parameters
+    ----------
+    quiet : bool, optional
+        Whether to suppress operator-facing provisioning output.
+
+    Returns
+    -------
+    None
+        The active engine verifies or provisions required local artifacts.
+    """
+    config = load_effective_config()
+    engine_config = (config.plugins.configs or {}).get(
+        f"embedding-{config.embeddings.engine}",
+        {},
+    )
+    active_embedding_engine().provision(engine_config, quiet=quiet)
+
+
+def _sentence_transformer_embed_texts(texts: Sequence[str]) -> list[list[float]]:
     """
     Embed text payloads in deterministic batches.
 
@@ -557,6 +596,33 @@ def embed_texts(texts: Sequence[str]) -> list[list[float]]:
             vectors[position] = vector
 
     return vectors
+
+
+def embed_texts(texts: Sequence[str]) -> list[list[float]]:
+    """
+    Embed text payloads through the active embedding engine.
+
+    Parameters
+    ----------
+    texts : collections.abc.Sequence[str]
+        Text payloads to embed.
+
+    Returns
+    -------
+    list[list[float]]
+        One L2-normalized embedding vector per input payload.
+
+    Raises
+    ------
+    EmbeddingBackendError
+        Raised when the active semantic engine cannot be loaded.
+    """
+    config = load_effective_config()
+    engine_config = (config.plugins.configs or {}).get(
+        f"embedding-{config.embeddings.engine}",
+        {},
+    )
+    return active_embedding_engine().embed_texts(texts, engine_config)
 
 
 def embed_text(text: str) -> list[float]:

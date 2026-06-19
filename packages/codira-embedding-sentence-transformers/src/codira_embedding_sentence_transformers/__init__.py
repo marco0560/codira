@@ -98,7 +98,9 @@ class SentenceTransformersEmbeddingEngine:
             The current core provisioning routine performs the artifact check.
         """
         del config
-        _legacy_embeddings.provision_embedding_model(quiet=quiet)
+        _legacy_embeddings._sentence_transformer_provision_embedding_model(
+            quiet=quiet,
+        )
 
     def embed_texts(
         self,
@@ -121,7 +123,7 @@ class SentenceTransformersEmbeddingEngine:
             One vector per input payload.
         """
         del config
-        return _legacy_embeddings.embed_texts(texts)
+        return _legacy_embeddings._sentence_transformer_embed_texts(texts)
 
     def reset_runtime_caches(self) -> None:
         """
@@ -136,7 +138,7 @@ class SentenceTransformersEmbeddingEngine:
         None
             The current core runtime caches are cleared.
         """
-        _legacy_embeddings.reset_embedding_runtime_caches()
+        _legacy_embeddings._sentence_transformer_reset_runtime_caches()
 
 
 def build_engine() -> EmbeddingEngine:

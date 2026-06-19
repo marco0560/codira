@@ -40,6 +40,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from pathlib import Path
 
+    from codira.contracts import (
+        EmbeddingEngine as EmbeddingEngineProtocol,
+        VectorStore as VectorStoreProtocol,
+    )
+
 DEFAULT_INDEX_BACKEND = DEFAULT_BACKEND_NAME
 INDEX_BACKEND_ENV_VAR = "CODIRA_INDEX_BACKEND"
 DISABLE_THIRD_PARTY_PLUGINS_ENV_VAR = "CODIRA_DISABLE_THIRD_PARTY_PLUGINS"
@@ -1468,6 +1473,97 @@ def validate_plugin_configuration(
         raise ConfigError(msg)
 
     return warnings
+
+
+def _active_plugin(
+    *,
+    family: PluginFamily,
+    name: str,
+    root: Path | None = None,
+) -> object:
+    """
+    Instantiate the active plugin for one singleton plugin family.
+
+    Parameters
+    ----------
+    family : {"analyzer", "backend", "embedding", "vector-store"}
+        Plugin family to inspect.
+    name : str
+        Configured plugin name.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should configure the plugin.
+
+    Returns
+    -------
+    object
+        Configured plugin instance.
+
+    Raises
+    ------
+    ValueError
+        If the configured plugin is unavailable.
+    """
+
+    plugins, _registrations = _plugin_snapshot(family, root=root)
+    for plugin in plugins:
+        if plugin.name == name:
+            instance = plugin.factory()
+            return _configure_plugin_instance(
+                plugin=plugin,
+                instance=instance,
+                root=root,
+            )
+    available = ", ".join(sorted(plugin.name for plugin in plugins)) or "<none>"
+    msg = f"Unsupported {family} plugin '{name}'. Available plugins: {available}"
+    raise ValueError(msg)
+
+
+def active_embedding_engine(*, root: Path | None = None) -> EmbeddingEngineProtocol:
+    """
+    Return the configured active embedding engine.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should select the engine.
+
+    Returns
+    -------
+    codira.contracts.EmbeddingEngine
+        Configured embedding engine plugin instance.
+    """
+
+    config = load_effective_config(root=root)
+    engine = _active_plugin(
+        family="embedding",
+        name=config.embeddings.engine.strip(),
+        root=root,
+    )
+    return cast("EmbeddingEngineProtocol", engine)
+
+
+def active_vector_store(*, root: Path | None = None) -> VectorStoreProtocol:
+    """
+    Return the configured active vector store.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should select the vector store.
+
+    Returns
+    -------
+    codira.contracts.VectorStore
+        Configured vector-store plugin instance.
+    """
+
+    config = load_effective_config(root=root)
+    vector_store = _active_plugin(
+        family="vector-store",
+        name=config.embeddings.vector_store.strip(),
+        root=root,
+    )
+    return cast("VectorStoreProtocol", vector_store)
 
 
 def missing_language_analyzer_hint(path: Path) -> str | None:
