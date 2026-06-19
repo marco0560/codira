@@ -77,7 +77,7 @@ only run fast smoke checks locally.
 - [x] Phase 2 - Registry and configuration selection
 - [ ] Phase 2b - Capability reporting
 - [x] Phase 3a - SentenceTransformers engine package boundary
-- [ ] Phase 3b - SentenceTransformers runtime dispatcher migration
+- [x] Phase 3b - SentenceTransformers runtime dispatcher migration
 - [ ] Phase 4 - Separated SQLite and DuckDB vector-store packages
 - [ ] Phase 5 - Native ONNX Runtime engine package
 - [ ] Phase 6 - Model manifests and provisioning scripts
@@ -137,3 +137,18 @@ only run fast smoke checks locally.
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q packages/codira-embedding-sentence-transformers/tests/test_sentence_transformers_package.py`.
 - Targeted hooks passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files pyproject.toml uv.lock packages/codira-embedding-sentence-transformers/pyproject.toml packages/codira-embedding-sentence-transformers/README.md packages/codira-embedding-sentence-transformers/src/codira_embedding_sentence_transformers/__init__.py packages/codira-embedding-sentence-transformers/src/codira_embedding_sentence_transformers/py.typed packages/codira-embedding-sentence-transformers/tests/test_sentence_transformers_package.py`.
+
+### Phase 3b
+
+- Added registry helpers for active embedding engine and active vector-store
+  singleton selection.
+- Routed public embedding generation and provisioning through the configured
+  embedding engine.
+- Preserved the current SentenceTransformers implementation as an internal
+  compatibility path used by the first-party engine package.
+- Preserved existing test monkeypatch points around model loading and
+  provisioning.
+- Focused validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_embeddings.py -k 'embed_texts or load_model or sentence_transformer_factory' packages/codira-embedding-sentence-transformers/tests/test_sentence_transformers_package.py`.
+- Targeted hooks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files src/codira/registry.py src/codira/semantic/embeddings.py packages/codira-embedding-sentence-transformers/src/codira_embedding_sentence_transformers/__init__.py`.
