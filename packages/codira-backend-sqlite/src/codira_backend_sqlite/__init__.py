@@ -347,6 +347,9 @@ class _SQLiteIndexWriteSession:
                     request.previous_embeddings,
                 ),
                 pending_embedding_rows=self._pending_embedding_rows,
+                vector_store=request.vector_store,
+                vector_set_identity=request.vector_set_identity,
+                vector_store_config=request.vector_store_config,
             )
         except sqlite3.Error as exc:
             _delete_indexed_file_data(self._conn, str(request.file_metadata.path))
@@ -385,8 +388,12 @@ class _SQLiteIndexWriteSession:
         else:
             _flush_pending_embedding_rows(
                 self._conn,
+                self._root,
                 pending_embedding_rows=self._pending_embedding_rows,
                 backend=backend,
+                vector_store=self._vector_store,
+                vector_set_identity=self._vector_set_identity,
+                vector_store_config=self._vector_store_config,
             )
         self._pending_embedding_rows = []
 
@@ -2403,6 +2410,9 @@ class SQLiteIndexBackend:
         root: Path,
         *,
         embedding_backend: EmbeddingBackendSpec,
+        vector_store: VectorStore | None = None,
+        vector_set_identity: VectorSetIdentity | None = None,
+        vector_store_config: Mapping[str, object] | None = None,
         conn: sqlite3.Connection | None = None,
     ) -> tuple[int, int]:
         """
@@ -2426,7 +2436,16 @@ class SQLiteIndexBackend:
         if conn is None:
             conn = self.open_connection(root)
         try:
-            result = _process_pending_embedding_rows(conn, backend=embedding_backend)
+            result = _process_pending_embedding_rows(
+                conn,
+                root,
+                backend=embedding_backend,
+                vector_store=vector_store,
+                vector_set_identity=vector_set_identity,
+                vector_store_config={}
+                if vector_store_config is None
+                else vector_store_config,
+            )
             if owns_connection:
                 conn.commit()
             return result
@@ -2490,6 +2509,9 @@ class SQLiteIndexBackend:
                         "dict[str, StoredEmbeddingRow] | None",
                         request.previous_embeddings,
                     ),
+                    vector_store=request.vector_store,
+                    vector_set_identity=request.vector_set_identity,
+                    vector_store_config=request.vector_store_config,
                 )
             else:
                 conn.execute("SAVEPOINT persist_analysis")
@@ -2507,6 +2529,9 @@ class SQLiteIndexBackend:
                             "dict[str, StoredEmbeddingRow] | None",
                             request.previous_embeddings,
                         ),
+                        vector_store=request.vector_store,
+                        vector_set_identity=request.vector_set_identity,
+                        vector_store_config=request.vector_store_config,
                     )
                 except (OSError, sqlite3.Error, RuntimeError, ValueError):
                     conn.execute("ROLLBACK TO SAVEPOINT persist_analysis")

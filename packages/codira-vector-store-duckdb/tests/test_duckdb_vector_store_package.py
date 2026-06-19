@@ -14,6 +14,7 @@ from codira.contracts import (
     VectorSetIdentity,
     VectorStore,
 )
+from codira.semantic.embeddings import serialize_vector
 from codira_vector_store_duckdb import (
     DuckDBVectorStore,
     build_vector_store,
@@ -69,7 +70,7 @@ def _prepared_rows() -> list[PreparedVectorRow]:
                 text="symbol text",
             ),
             content_hash="hash-one",
-            vector=b"vector-one",
+            vector=serialize_vector([1.0, 0.0, 0.0]),
         ),
         PreparedVectorRow(
             row=PendingEmbeddingRow(
@@ -79,7 +80,7 @@ def _prepared_rows() -> list[PreparedVectorRow]:
                 text="doc text",
             ),
             content_hash="hash-two",
-            vector=b"vector-two",
+            vector=serialize_vector([0.0, 1.0, 0.0]),
         ),
     ]
 
@@ -163,7 +164,10 @@ def test_duckdb_vector_store_persists_vector_rows(tmp_path: Path) -> None:
     store.store_cached_vectors(
         tmp_path,
         identity,
-        {"hash-one": b"cached-one", "hash-two": b"cached-two"},
+        {
+            "hash-one": serialize_vector([1.0, 0.0, 0.0]),
+            "hash-two": serialize_vector([0.0, 1.0, 0.0]),
+        },
         {},
     )
     assert store.load_cached_vectors(
@@ -171,7 +175,10 @@ def test_duckdb_vector_store_persists_vector_rows(tmp_path: Path) -> None:
         identity,
         ["hash-two", "hash-one", "hash-one"],
         {},
-    ) == {"hash-one": b"cached-one", "hash-two": b"cached-two"}
+    ) == {
+        "hash-one": serialize_vector([1.0, 0.0, 0.0]),
+        "hash-two": serialize_vector([0.0, 1.0, 0.0]),
+    }
 
     store.store_pending_vectors(tmp_path, identity, rows, {})
     store.store_vectors(tmp_path, identity, rows, {})
@@ -195,8 +202,8 @@ def test_duckdb_vector_store_persists_vector_rows(tmp_path: Path) -> None:
 
     assert pending_rows == [("documentation", 2, "doc:two", "hash-two", "doc text")]
     assert vector_rows == [
-        ("documentation", "doc:two", "hash-two", b"vector-two"),
-        ("symbol", "symbol:one", "hash-one", b"vector-one"),
+        ("documentation", "doc:two", "hash-two", serialize_vector([0.0, 1.0, 0.0])),
+        ("symbol", "symbol:one", "hash-one", serialize_vector([1.0, 0.0, 0.0])),
     ]
 
     store.clear_pending_vectors(tmp_path, identity, {})

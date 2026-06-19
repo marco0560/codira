@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, cast
 import duckdb
 
 from codira.contracts import PreparedVectorRow, VectorSetIdentity, VectorStoreSpec
+from codira.semantic.embeddings import deserialize_vector
 from codira.storage import get_codira_dir
 
 if TYPE_CHECKING:
@@ -347,12 +348,17 @@ class DuckDBVectorStore:
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO vector_cache(
-                    vector_set_id, content_hash, vector
+                    vector_set_id, content_hash, vector, vector_values
                 )
-                VALUES (?, ?, ?)
+                VALUES (?, ?, ?, ?)
                 """,
                 [
-                    (vector_set_id, content_hash, vector)
+                    (
+                        vector_set_id,
+                        content_hash,
+                        vector,
+                        deserialize_vector(vector, dim=identity.engine.dimension),
+                    )
                     for content_hash, vector in sorted(vectors.items())
                 ],
             )
@@ -529,7 +535,11 @@ class DuckDBVectorStore:
         None
             Vector rows are inserted or replaced in place.
         """
-        materialized = [prepared for prepared in rows if prepared.vector is not None]
+        materialized = [
+            (prepared, prepared.vector)
+            for prepared in rows
+            if prepared.vector is not None
+        ]
         if not materialized:
             return
         vector_set_id = self.ensure_vector_set(root, identity, config)
@@ -542,9 +552,10 @@ class DuckDBVectorStore:
                     object_type,
                     stable_id,
                     content_hash,
-                    vector
+                    vector,
+                    vector_values
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -552,9 +563,13 @@ class DuckDBVectorStore:
                         prepared.row.object_type,
                         prepared.row.stable_id,
                         prepared.content_hash,
-                        prepared.vector,
+                        vector,
+                        deserialize_vector(
+                            vector,
+                            dim=identity.engine.dimension,
+                        ),
                     )
-                    for prepared in materialized
+                    for prepared, vector in materialized
                 ],
             )
         finally:

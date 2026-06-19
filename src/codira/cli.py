@@ -1624,6 +1624,9 @@ def _run_index(request: IndexCommandRequest) -> int:
         recomputed, reused = active_backend.process_pending_embeddings(
             root,
             embedding_backend=get_embedding_backend(),
+            vector_store=vector_store_context.store,
+            vector_set_identity=vector_store_context.identity,
+            vector_store_config=vector_store_context.config,
         )
         vector_store_context.store.clear_pending_vectors(
             root,

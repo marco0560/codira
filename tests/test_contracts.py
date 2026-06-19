@@ -805,6 +805,9 @@ class _FakeBackend:
         root: Path,
         *,
         embedding_backend: object,
+        vector_store: VectorStore | None = None,
+        vector_set_identity: VectorSetIdentity | None = None,
+        vector_store_config: Mapping[str, object] | None = None,
         conn: object | None = None,
     ) -> tuple[int, int]:
         """
@@ -816,6 +819,12 @@ class _FakeBackend:
             Repository root.
         embedding_backend : object
             Active embedding backend placeholder.
+        vector_store : codira.contracts.VectorStore | None, optional
+            Ignored separated vector store.
+        vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+            Ignored active vector-set identity.
+        vector_store_config : collections.abc.Mapping[str, object] | None, optional
+            Ignored vector-store-specific configuration.
         conn : object | None, optional
             Optional backend connection.
 
@@ -824,7 +833,8 @@ class _FakeBackend:
         tuple[int, int]
             Zero recomputed and reused pending-artifact counts.
         """
-        del root, embedding_backend, conn
+        del root, embedding_backend, vector_store, vector_set_identity
+        del vector_store_config, conn
         return (0, 0)
 
     def count_reusable_embeddings(

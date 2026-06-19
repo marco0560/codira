@@ -3169,8 +3169,51 @@ def test_index_cli_defers_and_processes_pending_embeddings(
     vector_pending_count = vector_conn.execute(
         "SELECT COUNT(*) FROM pending_vectors"
     ).fetchone()
+    vector_count = vector_conn.execute("SELECT COUNT(*) FROM vectors").fetchone()
     vector_conn.close()
     assert vector_pending_count == (0,)
+    assert vector_count == (2,)
+
+
+def test_index_repo_stores_immediate_vectors_in_vector_store(tmp_path: Path) -> None:
+    """
+    Store immediate embedding rows in the separated vector store.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts immediate indexing materializes separated vectors.
+    """
+    module = tmp_path / "src" / "sample.py"
+    _write_module(
+        module,
+        'def demo():\n    """Return a constant."""\n    return 1\n',
+    )
+
+    report = index_repo(tmp_path)
+
+    vector_db_path = tmp_path / ".codira" / "embeddings.db"
+    vector_conn = sqlite3.connect(vector_db_path)
+    try:
+        vector_count = vector_conn.execute("SELECT COUNT(*) FROM vectors").fetchone()
+        cache_count = vector_conn.execute(
+            "SELECT COUNT(*) FROM vector_cache"
+        ).fetchone()
+        pending_count = vector_conn.execute(
+            "SELECT COUNT(*) FROM pending_vectors"
+        ).fetchone()
+    finally:
+        vector_conn.close()
+
+    assert report.embeddings_recomputed == 2
+    assert vector_count == (2,)
+    assert cache_count == (2,)
+    assert pending_count == (0,)
 
 
 def test_index_cli_embedding_mode_flags_do_not_override_disabled_embeddings(

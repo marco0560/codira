@@ -47,6 +47,8 @@ if TYPE_CHECKING:
     from codira.contracts import (
         BackendDocumentationCandidatesRequest,
         BackendEmbeddingCandidatesRequest,
+        VectorSetIdentity,
+        VectorStore,
     )
     from codira.models import (
         CallableReference,
@@ -1491,6 +1493,9 @@ class MemoryIndexBackend:
         root: Path,
         *,
         embedding_backend: EmbeddingBackendSpec,
+        vector_store: VectorStore | None = None,
+        vector_set_identity: VectorSetIdentity | None = None,
+        vector_store_config: Mapping[str, object] | None = None,
         conn: object | None = None,
     ) -> tuple[int, int]:
         """
@@ -1502,6 +1507,12 @@ class MemoryIndexBackend:
             Repository root whose pending rows should be processed.
         embedding_backend : EmbeddingBackendSpec
             Active embedding backend metadata.
+        vector_store : codira.contracts.VectorStore | None, optional
+            Ignored separated vector store.
+        vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+            Ignored active vector-set identity.
+        vector_store_config : collections.abc.Mapping[str, object] | None, optional
+            Ignored vector-store-specific configuration.
         conn : object | None, optional
             Optional backend connection.
 
@@ -1511,7 +1522,8 @@ class MemoryIndexBackend:
             Zero recomputed and reused counts because the memory backend does
             not queue deferred embeddings.
         """
-        del root, embedding_backend, conn
+        del root, embedding_backend, vector_store, vector_set_identity
+        del vector_store_config, conn
         return (0, 0)
 
     def count_reusable_embeddings(

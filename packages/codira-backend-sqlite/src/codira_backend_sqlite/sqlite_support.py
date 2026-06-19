@@ -29,6 +29,7 @@ from codira.contracts import (
     EmbeddingIndexingMetrics,
     EmbeddingIndexingPolicy,
     PendingEmbeddingRow,
+    PreparedVectorRow,
     StoredEmbeddingRow,
     filter_embedding_rows_for_policy,
 )
@@ -43,9 +44,10 @@ from codira.semantic.embeddings import (
 
 if TYPE_CHECKING:
     import sqlite3
+    from collections.abc import Mapping
     from pathlib import Path
 
-    from codira.contracts import LanguageAnalyzer
+    from codira.contracts import LanguageAnalyzer, VectorSetIdentity, VectorStore
     from codira.models import (
         AnalysisResult,
         CallableReference,
@@ -1988,6 +1990,7 @@ def _flush_persisted_relationship_rows(
 
 def _flush_embedding_rows(
     conn: sqlite3.Connection,
+    root: Path | None = None,
     *,
     embedding_rows: list[PendingEmbeddingRow],
     backend: EmbeddingBackendSpec,
@@ -1995,6 +1998,9 @@ def _flush_embedding_rows(
     previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
     pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]]
     | None = None,
+    vector_store: VectorStore | None = None,
+    vector_set_identity: VectorSetIdentity | None = None,
+    vector_store_config: Mapping[str, object] | None = None,
 ) -> tuple[int, int]:
     """
     Persist pending embedding payloads for one analyzed file.
@@ -2084,7 +2090,15 @@ def _flush_embedding_rows(
         pending_embedding_rows.extend(prepared_rows)
         return (recomputed, reused)
 
-    _flush_prepared_embedding_rows(conn, prepared_rows=prepared_rows, backend=backend)
+    _flush_prepared_embedding_rows(
+        conn,
+        root,
+        prepared_rows=prepared_rows,
+        backend=backend,
+        vector_store=vector_store,
+        vector_set_identity=vector_set_identity,
+        vector_store_config={} if vector_store_config is None else vector_store_config,
+    )
     return (recomputed, reused)
 
 
@@ -2219,6 +2233,61 @@ def _store_cached_embedding_vectors(
     )
 
 
+def _store_vector_store_materialized_rows(
+    *,
+    vector_store: VectorStore | None,
+    vector_set_identity: VectorSetIdentity | None,
+    vector_store_config: Mapping[str, object],
+    root: Path | None,
+    prepared_rows: list[PreparedVectorRow],
+    encoded_vectors: dict[str, bytes],
+) -> None:
+    """
+    Mirror materialized embedding rows into the separated vector store.
+
+    Parameters
+    ----------
+    vector_store : codira.contracts.VectorStore | None
+        Active vector-store plugin, when configured by the caller.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None
+        Active vector-set identity, when configured by the caller.
+    vector_store_config : collections.abc.Mapping[str, object]
+        Vector-store-specific configuration table.
+    root : pathlib.Path
+        Repository root whose vector store should be updated.
+    prepared_rows : list[codira.contracts.PreparedVectorRow]
+        Materialized vector rows to persist.
+    encoded_vectors : dict[str, bytes]
+        Newly encoded vectors keyed by content hash.
+
+    Returns
+    -------
+    None
+        Vector-store cache and materialized rows are persisted when available.
+    """
+    if vector_store is None or vector_set_identity is None or root is None:
+        return
+    if encoded_vectors:
+        vector_store.store_cached_vectors(
+            root,
+            vector_set_identity,
+            encoded_vectors,
+            vector_store_config,
+        )
+    vector_store.store_vectors(
+        root,
+        vector_set_identity,
+        prepared_rows,
+        vector_store_config,
+    )
+    vector_store.delete_pending_vectors(
+        root,
+        vector_set_identity,
+        prepared_rows,
+        vector_store_config,
+    )
+
+
 def _delete_pending_embedding_rows(
     conn: sqlite3.Connection,
     *,
@@ -2262,9 +2331,13 @@ def _delete_pending_embedding_rows(
 
 def _flush_prepared_embedding_rows(
     conn: sqlite3.Connection,
+    root: Path | None = None,
     *,
     prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
     backend: EmbeddingBackendSpec,
+    vector_store: VectorStore | None = None,
+    vector_set_identity: VectorSetIdentity | None = None,
+    vector_store_config: Mapping[str, object] | None = None,
 ) -> None:
     """
     Flush prepared embedding rows to SQLite.
@@ -2320,11 +2393,19 @@ def _flush_prepared_embedding_rows(
         )
 
     insert_rows: list[tuple[str, int, str, str, str, int, bytes]] = []
+    materialized_rows: list[PreparedVectorRow] = []
     for row, content_hash, stored_vector in deduplicated_rows:
         resolved_blob = stored_vector
         if resolved_blob is None:
             resolved_blob = encoded_vectors[content_hash]
 
+        materialized_rows.append(
+            PreparedVectorRow(
+                row=row,
+                content_hash=content_hash,
+                vector=resolved_blob,
+            )
+        )
         insert_rows.append(
             (
                 row.object_type,
@@ -2368,13 +2449,25 @@ def _flush_prepared_embedding_rows(
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         insert_rows,
     )
+    _store_vector_store_materialized_rows(
+        vector_store=vector_store,
+        vector_set_identity=vector_set_identity,
+        vector_store_config={} if vector_store_config is None else vector_store_config,
+        root=root,
+        prepared_rows=materialized_rows,
+        encoded_vectors=encoded_vectors,
+    )
 
 
 def _flush_pending_embedding_rows(
     conn: sqlite3.Connection,
+    root: Path | None = None,
     *,
     pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
     backend: EmbeddingBackendSpec,
+    vector_store: VectorStore | None = None,
+    vector_set_identity: VectorSetIdentity | None = None,
+    vector_store_config: Mapping[str, object] | None = None,
 ) -> None:
     """
     Flush session-level embedding rows to SQLite.
@@ -2400,16 +2493,24 @@ def _flush_pending_embedding_rows(
         return
     _flush_prepared_embedding_rows(
         conn,
+        root,
         prepared_rows=pending_embedding_rows,
         backend=backend,
+        vector_store=vector_store,
+        vector_set_identity=vector_set_identity,
+        vector_store_config={} if vector_store_config is None else vector_store_config,
     )
     pending_embedding_rows.clear()
 
 
 def _process_pending_embedding_rows(
     conn: sqlite3.Connection,
+    root: Path,
     *,
     backend: EmbeddingBackendSpec,
+    vector_store: VectorStore | None = None,
+    vector_set_identity: VectorSetIdentity | None = None,
+    vector_store_config: Mapping[str, object] | None = None,
 ) -> tuple[int, int]:
     """
     Compute all pending embeddings for one backend and version.
@@ -2470,7 +2571,15 @@ def _process_pending_embedding_rows(
             reused += 1
         prepared_rows.append((row, content_hash, cached_vector))
 
-    _flush_prepared_embedding_rows(conn, prepared_rows=prepared_rows, backend=backend)
+    _flush_prepared_embedding_rows(
+        conn,
+        root,
+        prepared_rows=prepared_rows,
+        backend=backend,
+        vector_store=vector_store,
+        vector_set_identity=vector_set_identity,
+        vector_store_config={} if vector_store_config is None else vector_store_config,
+    )
     return (recomputed, reused)
 
 
@@ -2550,6 +2659,9 @@ def _store_analysis(
     previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
     pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]]
     | None = None,
+    vector_store: VectorStore | None = None,
+    vector_set_identity: VectorSetIdentity | None = None,
+    vector_store_config: Mapping[str, object] | None = None,
 ) -> tuple[int, int]:
     """
     Persist one parsed file snapshot into the index.
@@ -2620,11 +2732,15 @@ def _store_analysis(
                 embedding_metrics.pending += len(embedding_rows)
         return _flush_embedding_rows(
             conn,
+            root,
             embedding_rows=embedding_rows,
             backend=backend,
             defer_embeddings=defer_embeddings,
             previous_embeddings=previous_embeddings,
             pending_embedding_rows=pending_embedding_rows,
+            vector_store=vector_store,
+            vector_set_identity=vector_set_identity,
+            vector_store_config=vector_store_config,
         )
     module_name, module_id, c_embedding_context = _persist_module_artifacts(
         conn,
@@ -2673,11 +2789,15 @@ def _store_analysis(
             embedding_metrics.pending += len(embedding_rows)
     return _flush_embedding_rows(
         conn,
+        root,
         embedding_rows=embedding_rows,
         backend=backend,
         defer_embeddings=defer_embeddings,
         previous_embeddings=previous_embeddings,
         pending_embedding_rows=pending_embedding_rows,
+        vector_store=vector_store,
+        vector_set_identity=vector_set_identity,
+        vector_store_config=vector_store_config,
     )
 
 

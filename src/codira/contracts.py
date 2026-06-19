@@ -1904,11 +1904,14 @@ class IndexBackend(Protocol):
         """
         ...
 
-    def process_pending_embeddings(
+    def process_pending_embeddings(  # noqa: PLR0913
         self,
         root: Path,
         *,
         embedding_backend: EmbeddingBackendSpec,
+        vector_store: VectorStore | None = None,
+        vector_set_identity: VectorSetIdentity | None = None,
+        vector_store_config: Mapping[str, object] | None = None,
         conn: object | None = None,
     ) -> tuple[int, int]:
         """

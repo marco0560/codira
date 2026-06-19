@@ -499,6 +499,9 @@ class _DuckDBIndexWriteSession:
                     request.previous_embeddings,
                 ),
                 pending_embedding_rows=self._pending_embedding_rows,
+                vector_store=request.vector_store,
+                vector_set_identity=request.vector_set_identity,
+                vector_store_config=request.vector_store_config,
                 pending_reference_scan_rows=self._pending_reference_scan_rows,
                 pending_call_rows=self._pending_call_rows,
                 pending_ref_rows=self._pending_ref_rows,
@@ -550,8 +553,12 @@ class _DuckDBIndexWriteSession:
         else:
             _flush_pending_embedding_rows(
                 cast("_DuckDBPersistenceConnection", self._conn),
+                self._root,
                 pending_embedding_rows=self._pending_embedding_rows,
                 backend=backend,
+                vector_store=self._vector_store,
+                vector_set_identity=self._vector_set_identity,
+                vector_store_config=self._vector_store_config,
             )
         self._pending_embedding_rows = []
 
@@ -1839,6 +1846,9 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         root: Path,
         *,
         embedding_backend: EmbeddingBackendSpec,
+        vector_store: VectorStore | None = None,
+        vector_set_identity: VectorSetIdentity | None = None,
+        vector_store_config: Mapping[str, object] | None = None,
         conn: _BackendCompatibleConnectionAdapter | None = None,
     ) -> tuple[int, int]:
         """
@@ -1864,7 +1874,13 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         try:
             result = _process_pending_embedding_rows(
                 cast("_DuckDBPersistenceConnection", conn),
+                root,
                 backend=embedding_backend,
+                vector_store=vector_store,
+                vector_set_identity=vector_set_identity,
+                vector_store_config={}
+                if vector_store_config is None
+                else vector_store_config,
             )
             if owns_connection:
                 conn.commit()
@@ -1924,6 +1940,9 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                         "dict[str, StoredEmbeddingRow] | None",
                         request.previous_embeddings,
                     ),
+                    vector_store=request.vector_store,
+                    vector_set_identity=request.vector_set_identity,
+                    vector_store_config=request.vector_store_config,
                 )
             else:
                 # DuckDB does not support SQLite-style savepoints, so isolate
@@ -1945,6 +1964,9 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                             "dict[str, StoredEmbeddingRow] | None",
                             request.previous_embeddings,
                         ),
+                        vector_store=request.vector_store,
+                        vector_set_identity=request.vector_set_identity,
+                        vector_store_config=request.vector_store_config,
                     )
                 except (OSError, error_type, RuntimeError, ValueError):
                     conn.execute("ROLLBACK")
