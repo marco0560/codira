@@ -1,0 +1,92 @@
+# Embedding Engine And Vector Store Execution Ledger
+
+## Purpose
+
+Track implementation of the embedding runtime modularization work on branch
+`feat/embedding-plugins`.
+
+This workstream introduces two new plugin boundaries:
+
+- embedding engines, which generate vectors from text
+- vector stores, which persist vectors, cache reusable vectors, and serve
+  similarity candidates
+
+The branch also migrates the current SentenceTransformers/PyTorch runtime into
+a first-party embedding engine plugin, adds a native ONNX Runtime embedding
+engine, separates embedding storage from analyzer/index storage, and adds the
+benchmark and provisioning surfaces needed to compare engines and models.
+
+## Decisions
+
+- Scope: implement the plugin contracts, migrate the current Torch runtime,
+  add a native ONNX Runtime engine, add first-party vector-store plugins, and
+  add benchmark/provisioning harnesses. Do not run the long campaign in this
+  branch.
+- Packaging: first-party embedding engines and vector stores are separate
+  package distributions under `packages/`.
+- Configuration:
+  - `[embeddings] engine = "..."`
+  - `[embeddings] vector_store = "..."`
+  - engine options live under `[plugins.embedding-<name>]`
+  - vector-store options live under `[plugins.vector-store-<name>]`
+- Invalidation: persisted vector identity is engine-aware and vector-store
+  format-aware. Existing vectors intentionally recompute once after the storage
+  split.
+- Coexistence: vector stores may retain multiple engine/model vector sets. The
+  first implementation queries one active vector set at a time.
+- ONNX: the first ONNX implementation is native ONNX Runtime, not the
+  SentenceTransformers ONNX backend.
+- Official bundle: include both first-party embedding engines and both
+  first-party vector stores.
+- Measurement: add scripts and smoke measurements only; the long model matrix is
+  run later by the operator.
+- Commit cadence: commit after each validated implementation step.
+
+## Constraints
+
+- No model weights or exported ONNX files are committed to git.
+- Indexing remains explicit. No background service or daemon is introduced.
+- Query-time retrieval reads persisted vectors only.
+- Local model provisioning remains explicit and operator-controlled.
+- Existing structural index backends remain responsible for symbols, docs,
+  calls, references, ownership, and freshness.
+- Vector stores own embedding rows, vector cache rows, pending embedding rows,
+  and vector similarity.
+- `codira index --full` may rebuild structural data without deleting reusable
+  vector sets unless the active vector identity changes.
+- A vector-store cleanup command or script must be explicit; stale vector sets
+  are not silently dropped during ordinary indexing.
+- Every behavior change must include focused tests and documentation.
+
+## Model Campaign Set
+
+The benchmark manifest must include:
+
+- the current configured model
+- `BAAI/bge-small-en-v1.5`
+- `nomic-ai/nomic-embed-text-v1.5`
+- `jinaai/jina-embeddings-v2-code-en`
+
+The branch must provide commands and manifests for the campaign, but it must
+only run fast smoke checks locally.
+
+## Phase Ledger
+
+- [x] Phase 0 - Execution ledger and ADR
+- [ ] Phase 1 - Core contracts for embedding engines and vector stores
+- [ ] Phase 2 - Registry, configuration, and capability reporting
+- [ ] Phase 3 - SentenceTransformers engine package migration
+- [ ] Phase 4 - Separated SQLite and DuckDB vector-store packages
+- [ ] Phase 5 - Native ONNX Runtime engine package
+- [ ] Phase 6 - Model manifests and provisioning scripts
+- [ ] Phase 7 - Bundle, user docs, developer docs, and ADR alignment
+- [ ] Phase 8 - Benchmark harness, smoke measurements, and campaign manifest
+- [ ] Phase 9 - Full validation and merge handoff
+
+## Phase Notes
+
+### Phase 0
+
+- Recorded the implementation decisions for the dedicated branch.
+- Added ADR-022 for embedding engine and vector-store plugin boundaries.
+- Added ADR-022 to the ADR index.
