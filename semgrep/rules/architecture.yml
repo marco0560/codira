@@ -113,6 +113,7 @@ rules:
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_storage.py
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_support.py
+        - /packages/codira-vector-store-sqlite/src/codira_vector_store_sqlite/__init__.py
         - /packages/**/tests/**/*.py
     patterns:
       - pattern-either:

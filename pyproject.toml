@@ -271,7 +271,13 @@ exclude = """(?x)(
 )"""
 
 [[tool.mypy.overrides]]
-module = ["tree_sitter", "tree_sitter_c", "tree_sitter_cpp"]
+module = [
+    "pyarrow",
+    "tree_sitter",
+    "tree_sitter_bash",
+    "tree_sitter_c",
+    "tree_sitter_cpp",
+]
 ignore_missing_imports = true
 
 # ============================================================

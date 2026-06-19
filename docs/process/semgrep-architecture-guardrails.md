@@ -91,6 +91,15 @@ imports `sqlite3` as part of the supported production backend.
 Removal condition:
 No removal planned while SQLite remains a supported backend.
 
+#### `packages/codira-vector-store-sqlite/src/codira_vector_store_sqlite/__init__.py`
+
+Rationale:
+This is the production SQLite vector-store implementation and owns the
+separated `.codira/embeddings.db` schema.
+
+Removal condition:
+No removal planned while SQLite remains a supported vector store.
+
 ### `codira.arch.no-backend-package-import-outside-allowed-layers`
 
 #### `packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py`
