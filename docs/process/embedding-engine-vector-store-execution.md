@@ -80,7 +80,7 @@ only run fast smoke checks locally.
 - [x] Phase 3b - SentenceTransformers runtime dispatcher migration
 - [x] Phase 4a - Separated SQLite and DuckDB vector-store packages
 - [ ] Phase 4b - Move backend embedding persistence to vector stores
-- [ ] Phase 5 - Native ONNX Runtime engine package
+- [x] Phase 5 - Native ONNX Runtime engine package
 - [ ] Phase 6 - Model manifests and provisioning scripts
 - [ ] Phase 7 - Bundle, user docs, developer docs, and ADR alignment
 - [ ] Phase 8 - Benchmark harness, smoke measurements, and campaign manifest
