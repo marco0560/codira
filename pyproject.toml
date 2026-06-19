@@ -27,10 +27,14 @@ dev = [
     "setuptools-scm>=8",
     "wheel",
     "twine>=6.2,<7.0",
+    "codira-embedding-sentence-transformers==1.0.0",
 ]
 
 [project.optional-dependencies]
-semantic = ["sentence-transformers>=5.4,<6.0"]
+semantic = [
+    "sentence-transformers>=5.4,<6.0",
+    "codira-embedding-sentence-transformers==1.0.0",
+]
 
 bundle-official = [
     "sentence-transformers>=5.4,<6.0",
@@ -43,6 +47,7 @@ bundle-official = [
     "codira-analyzer-text==1.43.0",
     "codira-backend-sqlite==1.45.0",
     "codira-backend-duckdb==1.49.0",
+    "codira-embedding-sentence-transformers==1.0.0",
 ]
 
 docs = [
@@ -83,6 +88,7 @@ codira-analyzer-markdown = { path = "packages/codira-analyzer-markdown", editabl
 codira-analyzer-text = { path = "packages/codira-analyzer-text", editable = true }
 codira-backend-sqlite = { path = "packages/codira-backend-sqlite", editable = true }
 codira-backend-duckdb = { path = "packages/codira-backend-duckdb", editable = true }
+codira-embedding-sentence-transformers = { path = "packages/codira-embedding-sentence-transformers", editable = true }
 codira-bundle-official = { path = "packages/codira-bundle-official", editable = true }
 
 # ============================================================

@@ -301,6 +301,7 @@ bundle-official = [
     { name = "codira-analyzer-text" },
     { name = "codira-backend-duckdb" },
     { name = "codira-backend-sqlite" },
+    { name = "codira-embedding-sentence-transformers" },
     { name = "sentence-transformers" },
 ]
 docs = [
@@ -310,12 +311,14 @@ docs = [
     { name = "mkdocstrings", extra = ["python"] },
 ]
 semantic = [
+    { name = "codira-embedding-sentence-transformers" },
     { name = "sentence-transformers" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "build" },
+    { name = "codira-embedding-sentence-transformers" },
     { name = "mypy" },
     { name = "packaging" },
     { name = "pre-commit" },
@@ -342,6 +345,8 @@ requires-dist = [
     { name = "codira-analyzer-text", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-text" },
     { name = "codira-backend-duckdb", marker = "extra == 'bundle-official'", editable = "packages/codira-backend-duckdb" },
     { name = "codira-backend-sqlite", marker = "extra == 'bundle-official'", editable = "packages/codira-backend-sqlite" },
+    { name = "codira-embedding-sentence-transformers", marker = "extra == 'bundle-official'", editable = "packages/codira-embedding-sentence-transformers" },
+    { name = "codira-embedding-sentence-transformers", marker = "extra == 'semantic'", editable = "packages/codira-embedding-sentence-transformers" },
     { name = "jsonschema", specifier = ">=4.0" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6,<2.0" },
     { name = "mkdocs-awesome-pages-plugin", marker = "extra == 'docs'", specifier = ">=2.10,<3.0" },
@@ -357,6 +362,7 @@ provides-extras = ["semantic", "bundle-official", "docs"]
 [package.metadata.requires-dev]
 dev = [
     { name = "build" },
+    { name = "codira-embedding-sentence-transformers", editable = "packages/codira-embedding-sentence-transformers" },
     { name = "mypy" },
     { name = "packaging" },
     { name = "pre-commit" },
@@ -547,6 +553,26 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'test'" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "codira-embedding-sentence-transformers"
+version = "1.0.0"
+source = { editable = "packages/codira-embedding-sentence-transformers" }
+dependencies = [
+    { name = "codira" },
+    { name = "sentence-transformers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "black", marker = "extra == 'test'" },
+    { name = "codira", specifier = ">=1.5.0,<2.0.0" },
+    { name = "mypy", marker = "extra == 'test'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "ruff", marker = "extra == 'test'" },
+    { name = "sentence-transformers", specifier = ">=5.4,<6.0" },
 ]
 provides-extras = ["test"]
 
