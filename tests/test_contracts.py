@@ -456,6 +456,31 @@ class _FakeVectorStore:
         """
         del root, identity, rows, config
 
+    def clear_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: dict[str, object],
+    ) -> None:
+        """
+        Perform no-op fake pending-row cleanup.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            The fake vector store has no pending queue.
+        """
+        del root, identity, config
+
     def store_vectors(
         self,
         root: Path,

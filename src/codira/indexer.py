@@ -42,12 +42,9 @@ from codira.models import (
 )
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.registry import (
-    active_embedding_engine,
     active_index_backend,
     active_language_analyzers,
-    active_vector_store,
     missing_language_analyzer_hint,
-    plugin_config_key,
 )
 from codira.scanner import (
     CANONICAL_SOURCE_DIRS,
@@ -60,6 +57,7 @@ from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
     get_embedding_backend,
 )
+from codira.vector_store import active_vector_store_context
 
 if TYPE_CHECKING:
     from codira.contracts import IndexWriteSession, LanguageAnalyzer
@@ -1175,25 +1173,8 @@ def index_repo(
         If validated indexing inputs are semantically inconsistent.
     """
     index_backend = active_index_backend(root=root)
-    vector_store = active_vector_store(root=root)
-    vector_store.initialize(root, {})
+    vector_store_context = active_vector_store_context(root)
     effective_config = load_effective_config(root=root)
-    embedding_engine = active_embedding_engine(root=root)
-    plugin_configs = effective_config.plugins.configs or {}
-    engine_config_key = plugin_config_key(
-        family="embedding",
-        name=effective_config.embeddings.engine.strip(),
-    )
-    vector_store_config_key = plugin_config_key(
-        family="vector-store",
-        name=effective_config.embeddings.vector_store.strip(),
-    )
-    engine_config = dict(plugin_configs.get(engine_config_key, {}))
-    vector_store_config = dict(plugin_configs.get(vector_store_config_key, {}))
-    vector_set_identity = VectorSetIdentity(
-        engine=embedding_engine.spec(engine_config),
-        vector_store=vector_store.spec(vector_store_config),
-    )
     analyzers = _active_language_analyzers(root=root)
     backend = get_embedding_backend()
     embedding_indexing = _embedding_indexing_policy(root)
@@ -1307,9 +1288,9 @@ def index_repo(
                 embedding_indexing=embedding_indexing,
                 defer_embeddings=effective_embedding_index_mode == "deferred",
                 previous_embeddings_by_path=previous_embeddings_by_path,
-                vector_store=vector_store,
-                vector_set_identity=vector_set_identity,
-                vector_store_config=vector_store_config,
+                vector_store=vector_store_context.store,
+                vector_set_identity=vector_store_context.identity,
+                vector_store_config=vector_store_context.config,
             )
         )
         failures.extend(persistence_failures)

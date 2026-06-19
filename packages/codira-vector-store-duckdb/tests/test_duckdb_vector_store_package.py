@@ -198,3 +198,10 @@ def test_duckdb_vector_store_persists_vector_rows(tmp_path: Path) -> None:
         ("documentation", "doc:two", "hash-two", b"vector-two"),
         ("symbol", "symbol:one", "hash-one", b"vector-one"),
     ]
+
+    store.clear_pending_vectors(tmp_path, identity, {})
+    with duckdb.connect(str(get_vector_store_path(tmp_path)), read_only=True) as conn:
+        pending_after_clear = conn.execute(
+            "SELECT COUNT(*) FROM pending_vectors"
+        ).fetchone()
+    assert pending_after_clear == (0,)

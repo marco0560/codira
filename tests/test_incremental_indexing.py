@@ -3165,6 +3165,12 @@ def test_index_cli_defers_and_processes_pending_embeddings(
     assert drain_payload["summary"]["embeddings_reused"] == 0
     assert drain_payload["summary"]["embeddings_pending"] == 0
     assert drain_payload["summary"]["embedding_complete"] is True
+    vector_conn = sqlite3.connect(vector_db_path)
+    vector_pending_count = vector_conn.execute(
+        "SELECT COUNT(*) FROM pending_vectors"
+    ).fetchone()
+    vector_conn.close()
+    assert vector_pending_count == (0,)
 
 
 def test_index_cli_embedding_mode_flags_do_not_override_disabled_embeddings(

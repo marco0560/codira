@@ -422,6 +422,39 @@ class SQLiteVectorStore:
                 ],
             )
 
+    def clear_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Delete all deferred rows for one vector set.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Matching pending rows are deleted in place.
+        """
+        vector_set_id = self.ensure_vector_set(root, identity, config)
+        with sqlite3.connect(get_vector_store_path(root)) as conn:
+            conn.execute(
+                """
+                DELETE FROM pending_vectors
+                WHERE vector_set_id = ?
+                """,
+                (vector_set_id,),
+            )
+
     def store_vectors(
         self,
         root: Path,

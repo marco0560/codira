@@ -641,6 +641,31 @@ class VectorStore(Protocol):
         """
         ...
 
+    def clear_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Delete all deferred rows for one vector set.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be updated.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Matching pending rows are deleted in place.
+        """
+        ...
+
     def store_vectors(
         self,
         root: Path,

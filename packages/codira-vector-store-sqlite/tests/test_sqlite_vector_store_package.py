@@ -197,3 +197,10 @@ def test_sqlite_vector_store_persists_vector_rows(tmp_path: Path) -> None:
         ("documentation", "doc:two", "hash-two", b"vector-two"),
         ("symbol", "symbol:one", "hash-one", b"vector-one"),
     ]
+
+    store.clear_pending_vectors(tmp_path, identity, {})
+    with sqlite3.connect(get_vector_store_path(tmp_path)) as conn:
+        pending_after_clear = conn.execute(
+            "SELECT COUNT(*) FROM pending_vectors"
+        ).fetchone()
+    assert pending_after_clear == (0,)
