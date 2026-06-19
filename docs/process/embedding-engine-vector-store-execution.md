@@ -81,7 +81,7 @@ only run fast smoke checks locally.
 - [x] Phase 4a - Separated SQLite and DuckDB vector-store packages
 - [ ] Phase 4b - Move backend embedding persistence to vector stores
 - [x] Phase 5 - Native ONNX Runtime engine package
-- [ ] Phase 6 - Model manifests and provisioning scripts
+- [x] Phase 6 - Model manifests and provisioning scripts
 - [ ] Phase 7 - Bundle, user docs, developer docs, and ADR alignment
 - [ ] Phase 8 - Benchmark harness, smoke measurements, and campaign manifest
 - [ ] Phase 9 - Full validation and merge handoff
@@ -231,3 +231,25 @@ only run fast smoke checks locally.
   passed the previously failing bundle contract test, then was interrupted
   after `test_semgrep_rule_files_are_valid_yaml` waited several minutes on a
   semgrep subprocess.
+
+### Phase 6
+
+- Added `benchmarks/embedding-model-candidates.json`.
+- Added `scripts/embedding_model_manifest.py` to validate/list manifest entries
+  and render repository configuration snippets for selected engine/model
+  entries.
+- Covered the accepted campaign model set:
+  - current `sentence-transformers/all-MiniLM-L6-v2`
+  - `BAAI/bge-small-en-v1.5`
+  - `nomic-ai/nomic-embed-text-v1.5`
+  - `jinaai/jina-embeddings-v2-code-en`
+- Included both `sentence-transformers` and `onnx` entries where local ONNX
+  artifact paths are needed.
+- Focused validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_embedding_model_manifest.py`.
+- Targeted hooks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files benchmarks/embedding-model-candidates.json scripts/embedding_model_manifest.py tests/test_embedding_model_manifest.py`.
+- Script smoke checks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/embedding_model_manifest.py --list`.
+- Config-render smoke passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/embedding_model_manifest.py --id bge-small-en-v1.5-onnx --print-config`.
