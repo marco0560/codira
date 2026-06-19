@@ -201,12 +201,20 @@ only run fast smoke checks locally.
 - Implemented the row-level APIs in both first-party separated vector stores.
 - Added package-local SQLite and DuckDB tests covering vector-set reuse, cache
   round-trip, pending row deletion, and materialized vector persistence.
+- Added request plumbing for vector-store context and active vector-set
+  identity during indexing.
+- Mirrored deferred pending embedding rows into the separated vector store for
+  both SQLite and DuckDB backend sessions.
+- Extended the deferred CLI regression to assert `.codira/embeddings.db`
+  contains the expected `pending_vectors` rows after deferred indexing.
 - Remaining Phase 4b work: move pending/vector/cache row writes and query-time
   similarity reads out of structural backends and into vector-store plugins.
 - Focused validation passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_incremental_indexing.py::test_index_cli_defers_and_processes_pending_embeddings`.
 - Focused vector-store validation passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_contracts.py packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py packages/codira-vector-store-duckdb/tests/test_duckdb_vector_store_package.py`.
+- Focused deferred mirror validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_incremental_indexing.py::test_index_cli_defers_and_processes_pending_embeddings packages/codira-backend-sqlite/tests/test_sqlite_backend_package.py packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py`.
 - Full validation passed after the row-level API slice:
   `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/validate_repo.py`.
 - Targeted hooks passed:

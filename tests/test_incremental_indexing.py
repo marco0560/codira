@@ -3142,7 +3142,14 @@ def test_index_cli_defers_and_processes_pending_embeddings(
     conn.close()
     assert pending_count == (2,)
     assert embedding_count == (0,)
-    assert (tmp_path / ".codira" / "embeddings.db").exists()
+    vector_db_path = tmp_path / ".codira" / "embeddings.db"
+    assert vector_db_path.exists()
+    vector_conn = sqlite3.connect(vector_db_path)
+    vector_pending_count = vector_conn.execute(
+        "SELECT COUNT(*) FROM pending_vectors"
+    ).fetchone()
+    vector_conn.close()
+    assert vector_pending_count == (2,)
 
     monkeypatch.setattr(
         sys,

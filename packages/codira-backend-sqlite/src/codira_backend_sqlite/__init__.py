@@ -33,6 +33,7 @@ from codira.contracts import (
     BackendRuntimeInventoryRequest,
     BackendSymbolInventoryItem,
     PendingEmbeddingRow,
+    PreparedVectorRow,
     StoredEmbeddingRow,
 )
 from codira.prefix import normalize_prefix, prefix_clause
@@ -60,6 +61,7 @@ from codira_backend_sqlite.sqlite_support import (
     _purge_skipped_docstring_issues,
     _rebuild_graph_indexes,
     _store_analysis,
+    _store_pending_embedding_rows,
 )
 from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
 
@@ -68,7 +70,12 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-    from codira.contracts import IndexBackend, IndexWriteSession
+    from codira.contracts import (
+        IndexBackend,
+        IndexWriteSession,
+        VectorSetIdentity,
+        VectorStore,
+    )
     from codira.types import (
         ChannelResults,
         DocumentationChannelResults,
@@ -109,7 +116,11 @@ class _SQLiteIndexWriteSession:
         self._pending_embedding_rows: list[
             tuple[PendingEmbeddingRow, str, bytes | None]
         ] = []
+        self._pending_embedding_rows_deferred = False
         self._embedding_backend: EmbeddingBackendSpec | None = None
+        self._vector_store: VectorStore | None = None
+        self._vector_set_identity: VectorSetIdentity | None = None
+        self._vector_store_config: Mapping[str, object] = {}
 
     def purge_skipped_docstring_issues(self) -> None:
         """
@@ -310,9 +321,16 @@ class _SQLiteIndexWriteSession:
         )
         if self._embedding_backend is None:
             self._embedding_backend = active_backend
-        elif self._embedding_backend != active_backend:
+        elif (
+            self._embedding_backend != active_backend
+            or self._pending_embedding_rows_deferred != request.defer_embeddings
+        ):
             self._flush_pending_embeddings()
             self._embedding_backend = active_backend
+        self._pending_embedding_rows_deferred = request.defer_embeddings
+        self._vector_store = request.vector_store
+        self._vector_set_identity = request.vector_set_identity
+        self._vector_store_config = request.vector_store_config
 
         try:
             return _store_analysis(
@@ -357,12 +375,53 @@ class _SQLiteIndexWriteSession:
         if backend is None:
             backend = get_embedding_backend()
             self._embedding_backend = backend
-        _flush_pending_embedding_rows(
-            self._conn,
-            pending_embedding_rows=self._pending_embedding_rows,
-            backend=backend,
-        )
+        if self._pending_embedding_rows_deferred:
+            self._store_deferred_vector_rows()
+            _store_pending_embedding_rows(
+                self._conn,
+                prepared_rows=self._pending_embedding_rows,
+                backend=backend,
+            )
+        else:
+            _flush_pending_embedding_rows(
+                self._conn,
+                pending_embedding_rows=self._pending_embedding_rows,
+                backend=backend,
+            )
         self._pending_embedding_rows = []
+
+    def _store_deferred_vector_rows(self) -> None:
+        """
+        Mirror buffered deferred embedding rows into the separated vector store.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Pending vector rows are persisted when vector-store context exists.
+        """
+        if (
+            self._vector_store is None
+            or self._vector_set_identity is None
+            or not self._pending_embedding_rows
+        ):
+            return
+        self._vector_store.store_pending_vectors(
+            self._root,
+            self._vector_set_identity,
+            [
+                PreparedVectorRow(
+                    row=row,
+                    content_hash=content_hash,
+                    vector=stored_vector,
+                )
+                for row, content_hash, stored_vector in self._pending_embedding_rows
+            ],
+            self._vector_store_config,
+        )
 
     def rebuild_derived_indexes(self) -> None:
         """

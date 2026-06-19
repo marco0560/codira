@@ -2049,6 +2049,9 @@ def _flush_embedding_rows(
             recomputed += 1
 
     if defer_embeddings:
+        if pending_embedding_rows is not None:
+            pending_embedding_rows.extend(prepared_rows)
+            return (0, 0)
         _store_pending_embedding_rows(
             conn, prepared_rows=prepared_rows, backend=backend
         )

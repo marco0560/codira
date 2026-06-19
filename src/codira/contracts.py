@@ -18,7 +18,7 @@ This module belongs to the **contract definition layer** that governs pluggable 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -1101,6 +1101,12 @@ class BackendPersistAnalysisRequest:
         Whether eligible embedding rows should be queued for later computation.
     previous_embeddings : collections.abc.Mapping[str, object] | None, optional
         Previously persisted semantic artifacts eligible for reuse.
+    vector_store : codira.contracts.VectorStore | None, optional
+        Active separated vector store used for embedding row persistence.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : collections.abc.Mapping[str, object], optional
+        Vector-store-specific configuration table.
     conn : object | None, optional
         Existing backend connection to reuse.
     """
@@ -1113,6 +1119,9 @@ class BackendPersistAnalysisRequest:
     embedding_metrics: EmbeddingIndexingMetrics | None = None
     defer_embeddings: bool = False
     previous_embeddings: Mapping[str, object] | None = None
+    vector_store: VectorStore | None = None
+    vector_set_identity: VectorSetIdentity | None = None
+    vector_store_config: Mapping[str, object] = dataclass_field(default_factory=dict)
     conn: object | None = None
 
 

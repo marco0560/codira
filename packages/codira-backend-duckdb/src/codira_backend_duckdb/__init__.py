@@ -29,6 +29,7 @@ from codira.contracts import (
     BackendPersistAnalysisRequest,
     BackendRuntimeInventoryRequest,
     PendingEmbeddingRow,
+    PreparedVectorRow,
     StoredEmbeddingRow,
 )
 from .duckdb_support import (
@@ -62,7 +63,12 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-    from codira.contracts import IndexBackend, IndexWriteSession
+    from codira.contracts import (
+        IndexBackend,
+        IndexWriteSession,
+        VectorSetIdentity,
+        VectorStore,
+    )
 
 PACKAGE_VERSION = "1.49.0"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
@@ -244,6 +250,9 @@ class _DuckDBIndexWriteSession:
         ] = []
         self._pending_embedding_rows_deferred = False
         self._embedding_backend: EmbeddingBackendSpec | None = None
+        self._vector_store: VectorStore | None = None
+        self._vector_set_identity: VectorSetIdentity | None = None
+        self._vector_store_config: Mapping[str, object] = {}
         self._pending_reference_scan_rows: list[tuple[int, int, str]] = []
         self._pending_call_rows: list[CallRow] = []
         self._pending_ref_rows: list[RefRow] = []
@@ -470,6 +479,9 @@ class _DuckDBIndexWriteSession:
             self._flush_pending_embeddings()
             self._embedding_backend = active_backend
         self._pending_embedding_rows_deferred = request.defer_embeddings
+        self._vector_store = request.vector_store
+        self._vector_set_identity = request.vector_set_identity
+        self._vector_store_config = request.vector_store_config
 
         duckdb_error = _duckdb_module().Error
         try:
@@ -529,6 +541,7 @@ class _DuckDBIndexWriteSession:
             backend = get_embedding_backend()
             self._embedding_backend = backend
         if self._pending_embedding_rows_deferred:
+            self._store_deferred_vector_rows()
             _store_pending_embedding_rows(
                 cast("_DuckDBPersistenceConnection", self._conn),
                 prepared_rows=self._pending_embedding_rows,
@@ -541,6 +554,39 @@ class _DuckDBIndexWriteSession:
                 backend=backend,
             )
         self._pending_embedding_rows = []
+
+    def _store_deferred_vector_rows(self) -> None:
+        """
+        Mirror buffered deferred embedding rows into the separated vector store.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Pending vector rows are persisted when vector-store context exists.
+        """
+        if (
+            self._vector_store is None
+            or self._vector_set_identity is None
+            or not self._pending_embedding_rows
+        ):
+            return
+        self._vector_store.store_pending_vectors(
+            self._root,
+            self._vector_set_identity,
+            [
+                PreparedVectorRow(
+                    row=row,
+                    content_hash=content_hash,
+                    vector=stored_vector,
+                )
+                for row, content_hash, stored_vector in self._pending_embedding_rows
+            ],
+            self._vector_store_config,
+        )
 
     def _flush_structural_rows(self) -> None:
         """

@@ -33,6 +33,8 @@ from codira.contracts import (
     IndexBackend,
     PendingEmbeddingRow,
     StoredEmbeddingRow,
+    VectorSetIdentity,
+    VectorStore,
 )
 from codira.models import (
     AnalysisResult,
@@ -40,10 +42,12 @@ from codira.models import (
 )
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.registry import (
+    active_embedding_engine,
     active_index_backend,
     active_language_analyzers,
     active_vector_store,
     missing_language_analyzer_hint,
+    plugin_config_key,
 )
 from codira.scanner import (
     CANONICAL_SOURCE_DIRS,
@@ -303,6 +307,12 @@ class PersistIndexedFileAnalysesRequest:
         Whether eligible embedding rows should be queued for later computation.
     previous_embeddings_by_path : dict[str, dict[str, codira.indexer.StoredEmbeddingRow]]
         Stored symbol embeddings captured before indexed files were replaced.
+    vector_store : codira.contracts.VectorStore
+        Active separated vector store used for embedding row persistence.
+    vector_set_identity : codira.contracts.VectorSetIdentity
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : dict[str, object]
+        Vector-store-specific configuration table.
     """
 
     root: Path
@@ -312,6 +322,9 @@ class PersistIndexedFileAnalysesRequest:
     embedding_indexing: EmbeddingIndexingPolicy
     defer_embeddings: bool
     previous_embeddings_by_path: dict[str, dict[str, StoredEmbeddingRow]]
+    vector_store: VectorStore
+    vector_set_identity: VectorSetIdentity
+    vector_store_config: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -782,6 +795,9 @@ def _persist_indexed_file_analyses(
                         str(file_metadata_snapshot.path),
                         {},
                     ),
+                    vector_store=request.vector_store,
+                    vector_set_identity=request.vector_set_identity,
+                    vector_store_config=request.vector_store_config,
                 )
             )
         except (OSError, BackendError, RuntimeError, ValueError) as exc:
@@ -1161,11 +1177,28 @@ def index_repo(
     index_backend = active_index_backend(root=root)
     vector_store = active_vector_store(root=root)
     vector_store.initialize(root, {})
+    effective_config = load_effective_config(root=root)
+    embedding_engine = active_embedding_engine(root=root)
+    plugin_configs = effective_config.plugins.configs or {}
+    engine_config_key = plugin_config_key(
+        family="embedding",
+        name=effective_config.embeddings.engine.strip(),
+    )
+    vector_store_config_key = plugin_config_key(
+        family="vector-store",
+        name=effective_config.embeddings.vector_store.strip(),
+    )
+    engine_config = dict(plugin_configs.get(engine_config_key, {}))
+    vector_store_config = dict(plugin_configs.get(vector_store_config_key, {}))
+    vector_set_identity = VectorSetIdentity(
+        engine=embedding_engine.spec(engine_config),
+        vector_store=vector_store.spec(vector_store_config),
+    )
     analyzers = _active_language_analyzers(root=root)
     backend = get_embedding_backend()
     embedding_indexing = _embedding_indexing_policy(root)
     effective_embedding_index_mode = (
-        load_effective_config(root=root).embeddings.indexing.mode
+        effective_config.embeddings.indexing.mode
         if embedding_index_mode is None
         else embedding_index_mode
     )
@@ -1274,6 +1307,9 @@ def index_repo(
                 embedding_indexing=embedding_indexing,
                 defer_embeddings=effective_embedding_index_mode == "deferred",
                 previous_embeddings_by_path=previous_embeddings_by_path,
+                vector_store=vector_store,
+                vector_set_identity=vector_set_identity,
+                vector_store_config=vector_store_config,
             )
         )
         failures.extend(persistence_failures)
