@@ -281,3 +281,16 @@ only run fast smoke checks locally.
   `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files benchmarks/embedding-engine-matrix.json scripts/embedding_engine_matrix_plan.py tests/test_embedding_engine_matrix_plan.py`.
 - Script smoke passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/embedding_engine_matrix_plan.py`.
+
+### Phase 9
+
+- Broad hooks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --all-files`.
+- Semgrep-excluded test suite passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q --ignore=tests/test_semgrep_rules.py`
+  with `394 passed`.
+- Full-suite blocker: `test_semgrep_rule_files_are_valid_yaml` waits on a
+  semgrep subprocess. A bounded repro timed out:
+  `timeout 30s env UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_semgrep_rules.py::test_semgrep_rule_files_are_valid_yaml`.
+- Phase 9 remains open until the semgrep subprocess hang is resolved and the
+  complete suite passes.
