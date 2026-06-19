@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING, cast
 
 import duckdb
 
-from codira.contracts import VectorStoreSpec
+from codira.contracts import PreparedVectorRow, VectorSetIdentity, VectorStoreSpec
 from codira.storage import get_codira_dir
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
     from pathlib import Path
 
     from codira.contracts import VectorStore
@@ -166,6 +166,360 @@ class DuckDBVectorStore:
                     PRIMARY KEY (vector_set_id, object_type, stable_id)
                 )
                 """
+            )
+        finally:
+            conn.close()
+
+    def ensure_vector_set(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: Mapping[str, object],
+    ) -> int:
+        """
+        Return the DuckDB identifier for a vector-set identity.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        int
+            Persistent vector-set identifier.
+        """
+        del config
+        self.initialize(root, {})
+        values = (
+            identity.engine.engine,
+            identity.engine.engine_version,
+            identity.engine.model,
+            identity.engine.model_version,
+            identity.engine.dimension,
+            identity.engine.precision,
+            identity.vector_store.store,
+            identity.vector_store.store_version,
+            identity.vector_store.format_version,
+        )
+        conn = duckdb.connect(str(get_vector_store_path(root)))
+        try:
+            row = conn.execute(
+                """
+                SELECT id
+                FROM vector_sets
+                WHERE engine = ?
+                  AND engine_version = ?
+                  AND model = ?
+                  AND model_version = ?
+                  AND dimension = ?
+                  AND precision = ?
+                  AND store = ?
+                  AND store_version = ?
+                  AND format_version = ?
+                """,
+                values,
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO vector_sets(
+                        id,
+                        engine,
+                        engine_version,
+                        model,
+                        model_version,
+                        dimension,
+                        precision,
+                        store,
+                        store_version,
+                        format_version
+                    )
+                    VALUES (
+                        nextval('vector_sets_id_seq'),
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    values,
+                )
+                row = conn.execute(
+                    """
+                    SELECT id
+                    FROM vector_sets
+                    WHERE engine = ?
+                      AND engine_version = ?
+                      AND model = ?
+                      AND model_version = ?
+                      AND dimension = ?
+                      AND precision = ?
+                      AND store = ?
+                      AND store_version = ?
+                      AND format_version = ?
+                    """,
+                    values,
+                ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None
+        return int(row[0])
+
+    def load_cached_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        content_hashes: Sequence[str],
+        config: Mapping[str, object],
+    ) -> dict[str, bytes]:
+        """
+        Load cached vectors keyed by content hash.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        content_hashes : collections.abc.Sequence[str]
+            Candidate content hashes.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        dict[str, bytes]
+            Serialized vectors keyed by content hash.
+        """
+        ordered_hashes = list(dict.fromkeys(content_hashes))
+        if not ordered_hashes:
+            return {}
+        vector_set_id = self.ensure_vector_set(root, identity, config)
+        placeholders = ",".join("?" for _item in ordered_hashes)
+        conn = duckdb.connect(str(get_vector_store_path(root)), read_only=True)
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT content_hash, vector
+                FROM vector_cache
+                WHERE vector_set_id = ?
+                  AND content_hash IN ({placeholders})
+                """,
+                (vector_set_id, *ordered_hashes),
+            ).fetchall()
+        finally:
+            conn.close()
+        return {str(content_hash): bytes(vector) for content_hash, vector in rows}
+
+    def store_cached_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        vectors: Mapping[str, bytes],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Store cached vectors keyed by content hash.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        vectors : collections.abc.Mapping[str, bytes]
+            Serialized vectors keyed by content hash.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Cache rows are inserted or replaced in place.
+        """
+        if not vectors:
+            return
+        vector_set_id = self.ensure_vector_set(root, identity, config)
+        conn = duckdb.connect(str(get_vector_store_path(root)))
+        try:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO vector_cache(
+                    vector_set_id, content_hash, vector
+                )
+                VALUES (?, ?, ?)
+                """,
+                [
+                    (vector_set_id, content_hash, vector)
+                    for content_hash, vector in sorted(vectors.items())
+                ],
+            )
+        finally:
+            conn.close()
+
+    def store_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Store deferred vector rows.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows to persist as pending.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Pending rows are inserted or replaced in place.
+        """
+        if not rows:
+            return
+        vector_set_id = self.ensure_vector_set(root, identity, config)
+        conn = duckdb.connect(str(get_vector_store_path(root)))
+        try:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO pending_vectors(
+                    vector_set_id,
+                    object_type,
+                    object_id,
+                    stable_id,
+                    content_hash,
+                    text
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        vector_set_id,
+                        prepared.row.object_type,
+                        prepared.row.object_id,
+                        prepared.row.stable_id,
+                        prepared.content_hash,
+                        prepared.row.text,
+                    )
+                    for prepared in rows
+                ],
+            )
+        finally:
+            conn.close()
+
+    def delete_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Delete deferred vector rows.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows identifying pending entries.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Matching pending rows are deleted in place.
+        """
+        if not rows:
+            return
+        vector_set_id = self.ensure_vector_set(root, identity, config)
+        conn = duckdb.connect(str(get_vector_store_path(root)))
+        try:
+            conn.executemany(
+                """
+                DELETE FROM pending_vectors
+                WHERE vector_set_id = ?
+                  AND object_type = ?
+                  AND object_id = ?
+                """,
+                [
+                    (
+                        vector_set_id,
+                        prepared.row.object_type,
+                        prepared.row.object_id,
+                    )
+                    for prepared in rows
+                ],
+            )
+        finally:
+            conn.close()
+
+    def store_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Store materialized vector rows.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows carrying serialized vectors.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Vector rows are inserted or replaced in place.
+        """
+        materialized = [prepared for prepared in rows if prepared.vector is not None]
+        if not materialized:
+            return
+        vector_set_id = self.ensure_vector_set(root, identity, config)
+        conn = duckdb.connect(str(get_vector_store_path(root)))
+        try:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO vectors(
+                    vector_set_id,
+                    object_type,
+                    stable_id,
+                    content_hash,
+                    vector
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        vector_set_id,
+                        prepared.row.object_type,
+                        prepared.row.stable_id,
+                        prepared.content_hash,
+                        prepared.vector,
+                    )
+                    for prepared in materialized
+                ],
             )
         finally:
             conn.close()

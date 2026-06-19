@@ -175,6 +175,26 @@ class PendingEmbeddingRow:
 
 
 @dataclass(frozen=True)
+class PreparedVectorRow:
+    """
+    Vector-store row prepared for deferred or materialized persistence.
+
+    Parameters
+    ----------
+    row : codira.contracts.PendingEmbeddingRow
+        Stable object identity and source text payload.
+    content_hash : str
+        Hash of the exact text payload used for vector reuse decisions.
+    vector : bytes | None, optional
+        Serialized vector payload when already available.
+    """
+
+    row: PendingEmbeddingRow
+    content_hash: str
+    vector: bytes | None = None
+
+
+@dataclass(frozen=True)
 class EmbeddingIndexingPolicy:
     """
     Backend-neutral embedding row eligibility policy.
@@ -481,6 +501,171 @@ class VectorStore(Protocol):
         -------
         None
             Vector-store storage is ready for reads and writes.
+        """
+        ...
+
+    def ensure_vector_set(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: Mapping[str, object],
+    ) -> int:
+        """
+        Return the persistent identifier for one vector-set identity.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be queried.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        int
+            Stable store-local vector-set identifier.
+        """
+        ...
+
+    def load_cached_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        content_hashes: Sequence[str],
+        config: Mapping[str, object],
+    ) -> dict[str, bytes]:
+        """
+        Load cached vectors keyed by content hash.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be queried.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        content_hashes : collections.abc.Sequence[str]
+            Candidate content hashes to load.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        dict[str, bytes]
+            Serialized vectors keyed by content hash.
+        """
+        ...
+
+    def store_cached_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        vectors: Mapping[str, bytes],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Persist reusable vectors keyed by content hash.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be updated.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        vectors : collections.abc.Mapping[str, bytes]
+            Serialized vectors keyed by content hash.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Cache rows are inserted or replaced in place.
+        """
+        ...
+
+    def store_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Persist deferred embedding rows for later computation.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be updated.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows whose source text should remain pending.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Pending rows are inserted or replaced in place.
+        """
+        ...
+
+    def delete_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Delete deferred rows that have been materialized.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be updated.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows identifying pending entries to delete.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Matching pending rows are deleted in place.
+        """
+        ...
+
+    def store_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Persist materialized vectors for indexed objects.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be updated.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows carrying serialized vector payloads.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Vector rows are inserted or replaced in place.
         """
         ...
 

@@ -54,8 +54,10 @@ from codira.contracts import (
     EmbeddingEngineSpec,
     IndexBackend,
     LanguageAnalyzer,
+    PreparedVectorRow,
     RetrievalProducer,
     RetrievalProducerInfo,
+    VectorSetIdentity,
     VectorStore,
     VectorStoreSpec,
     split_declared_retrieval_capabilities,
@@ -104,7 +106,7 @@ from codira.semantic.embeddings import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
     from types import ModuleType
 
     from pytest import CaptureFixture, MonkeyPatch
@@ -314,6 +316,173 @@ class _FakeVectorStore:
             The fake vector store has no persisted state.
         """
         del root, config
+
+    def ensure_vector_set(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: dict[str, object],
+    ) -> int:
+        """
+        Return a deterministic fake vector-set identifier.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        int
+            Fixed vector-set identifier.
+        """
+        del root, identity, config
+        return 1
+
+    def load_cached_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        content_hashes: Sequence[str],
+        config: dict[str, object],
+    ) -> dict[str, bytes]:
+        """
+        Return no cached fake vectors.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        content_hashes : collections.abc.Sequence[str]
+            Candidate content hashes.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        dict[str, bytes]
+            Empty cache result.
+        """
+        del root, identity, content_hashes, config
+        return {}
+
+    def store_cached_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        vectors: Mapping[str, bytes],
+        config: dict[str, object],
+    ) -> None:
+        """
+        Perform no-op fake cache persistence.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        vectors : collections.abc.Mapping[str, bytes]
+            Serialized vectors keyed by content hash.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            The fake vector store has no persisted cache.
+        """
+        del root, identity, vectors, config
+
+    def store_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: dict[str, object],
+    ) -> None:
+        """
+        Perform no-op fake pending-row persistence.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows to persist.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            The fake vector store has no pending queue.
+        """
+        del root, identity, rows, config
+
+    def delete_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: dict[str, object],
+    ) -> None:
+        """
+        Perform no-op fake pending-row deletion.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows identifying pending entries.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            The fake vector store has no pending queue.
+        """
+        del root, identity, rows, config
+
+    def store_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: dict[str, object],
+    ) -> None:
+        """
+        Perform no-op fake materialized-vector persistence.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows carrying serialized vectors.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            The fake vector store has no materialized vectors.
+        """
+        del root, identity, rows, config
 
     def reset_runtime_caches(self) -> None:
         """
