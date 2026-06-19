@@ -74,7 +74,8 @@ only run fast smoke checks locally.
 
 - [x] Phase 0 - Execution ledger and ADR
 - [x] Phase 1 - Core contracts for embedding engines and vector stores
-- [ ] Phase 2 - Registry, configuration, and capability reporting
+- [x] Phase 2 - Registry and configuration selection
+- [ ] Phase 2b - Capability reporting
 - [ ] Phase 3 - SentenceTransformers engine package migration
 - [ ] Phase 4 - Separated SQLite and DuckDB vector-store packages
 - [ ] Phase 5 - Native ONNX Runtime engine package
@@ -103,3 +104,22 @@ only run fast smoke checks locally.
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_contracts.py::test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_checkable`.
 - Targeted hooks passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files src/codira/contracts.py tests/test_contracts.py`.
+
+### Phase 2
+
+- Added `[embeddings] engine` and `[embeddings] vector_store` selectors.
+- Added default first-party plugin config tables for:
+  - `plugins.embedding-sentence-transformers`
+  - `plugins.embedding-onnx`
+  - `plugins.vector-store-sqlite`
+  - `plugins.vector-store-duckdb`
+- Extended plugin table validation to accept `embedding-*` and
+  `vector-store-*` namespaces.
+- Extended registry discovery with `codira.embedding_engines` and
+  `codira.vector_stores` entry-point groups.
+- Extended plugin registration and configuration validation to include the new
+  plugin families.
+- Focused validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_config.py -k 'plugin_tables or full_profile or unknown_keys or embedding_indexing_origin' tests/test_plugins.py -k 'plugin'`.
+- Targeted hooks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files src/codira/config.py src/codira/registry.py tests/test_config.py tests/test_plugins.py`.
