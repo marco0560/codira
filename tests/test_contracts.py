@@ -48,6 +48,8 @@ from codira.contracts import (
     BackendEmbeddingCandidatesRequest,
     BackendPersistAnalysisRequest,
     BackendRelationQueryRequest,
+    BackendResolveDocumentationScoresRequest,
+    BackendResolveEmbeddingScoresRequest,
     BackendRuntimeInventoryRequest,
     BackendSymbolInventoryItem,
     EmbeddingEngine,
@@ -58,6 +60,8 @@ from codira.contracts import (
     RetrievalProducer,
     RetrievalProducerInfo,
     VectorSetIdentity,
+    VectorSimilarityRequest,
+    VectorSimilarityScore,
     VectorStore,
     VectorStoreSpec,
     split_declared_retrieval_capabilities,
@@ -110,6 +114,8 @@ if TYPE_CHECKING:
     from types import ModuleType
 
     from pytest import CaptureFixture, MonkeyPatch
+
+    from codira.types import ChannelResults, DocumentationChannelResults
 
 
 def _load_workspace_registry_module() -> ModuleType:
@@ -508,6 +514,26 @@ class _FakeVectorStore:
             The fake vector store has no materialized vectors.
         """
         del root, identity, rows, config
+
+    def similarity_scores(
+        self,
+        request: VectorSimilarityRequest,
+    ) -> list[VectorSimilarityScore]:
+        """
+        Return no fake vector-store similarity scores.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorSimilarityRequest
+            Vector-store similarity request.
+
+        Returns
+        -------
+        list[codira.contracts.VectorSimilarityScore]
+            Empty score list.
+        """
+        del request
+        return []
 
     def reset_runtime_caches(self) -> None:
         """
@@ -1282,6 +1308,46 @@ class _FakeBackend:
         -------
         list[tuple[float, tuple[str, str, str, str, int, int | None, str, tuple[str, ...], str]]]
             Empty candidate rows for protocol validation.
+        """
+        del request
+        return []
+
+    def resolve_embedding_scores(
+        self,
+        request: BackendResolveEmbeddingScoresRequest,
+    ) -> ChannelResults:
+        """
+        Return no resolved symbol scores for the fake backend.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveEmbeddingScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.ChannelResults
+            Empty resolved result set.
+        """
+        del request
+        return []
+
+    def resolve_documentation_scores(
+        self,
+        request: BackendResolveDocumentationScoresRequest,
+    ) -> DocumentationChannelResults:
+        """
+        Return no resolved documentation scores for the fake backend.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveDocumentationScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.DocumentationChannelResults
+            Empty resolved result set.
         """
         del request
         return []

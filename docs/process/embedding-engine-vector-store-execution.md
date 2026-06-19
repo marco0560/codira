@@ -216,8 +216,13 @@ only run fast smoke checks locally.
 - Mirrored materialized vectors during `codira index --embeddings-only` drains
   without running an extra embedding pass.
 - Added regression coverage for immediate vector-store materialization.
-- Remaining Phase 4b work: move pending/vector/cache row writes and query-time
-  similarity reads out of structural backends and into vector-store plugins.
+- Moved query-time vector similarity reads to vector-store plugins.
+- Added structural backend resolvers that map scored vector-store stable IDs
+  back to symbol and documentation result rows with prefix filtering.
+- Kept structural backends responsible for metadata resolution while vector
+  stores own similarity scoring.
+- Remaining Phase 4b work: remove legacy structural embedding-table dependency
+  where compatibility no longer requires it.
 - Focused validation passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_incremental_indexing.py::test_index_cli_defers_and_processes_pending_embeddings`.
 - Focused vector-store validation passed:
@@ -228,6 +233,8 @@ only run fast smoke checks locally.
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_contracts.py::test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_checkable tests/test_incremental_indexing.py::test_index_cli_defers_and_processes_pending_embeddings packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py packages/codira-vector-store-duckdb/tests/test_duckdb_vector_store_package.py`.
 - Focused materialized-vector validation passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_incremental_indexing.py::test_index_cli_defers_and_processes_pending_embeddings tests/test_incremental_indexing.py::test_index_repo_stores_immediate_vectors_in_vector_store tests/test_contracts.py::test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_checkable packages/codira-backend-sqlite/tests/test_sqlite_backend_package.py packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py packages/codira-vector-store-duckdb/tests/test_duckdb_vector_store_package.py`.
+- Focused retrieval migration validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_contracts.py::test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_checkable tests/test_prefix_filtering.py::test_embedding_candidates_respect_prefix tests/test_call_graph.py::test_docs_cli_json_returns_documentation_matches tests/test_context_rendering.py::test_retrieve_documentation_candidates_renders_explicit_provenance packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py packages/codira-vector-store-duckdb/tests/test_duckdb_vector_store_package.py`.
 - Full validation passed after the row-level API slice:
   `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/validate_repo.py`.
 - Targeted hooks passed:

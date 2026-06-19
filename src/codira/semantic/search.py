@@ -22,9 +22,13 @@ from typing import TYPE_CHECKING
 from codira.contracts import (
     BackendDocumentationCandidatesRequest,
     BackendEmbeddingCandidatesRequest,
+    BackendResolveDocumentationScoresRequest,
+    BackendResolveEmbeddingScoresRequest,
+    VectorSimilarityRequest,
 )
 from codira.registry import active_index_backend
-from codira.semantic.embeddings import embeddings_enabled
+from codira.semantic.embeddings import embed_text, embeddings_enabled
+from codira.vector_store import active_vector_store_context
 
 if TYPE_CHECKING:
     from codira.types import ChannelResults, DocumentationChannelResults
@@ -52,8 +56,30 @@ def embedding_candidates(
     """
     if not embeddings_enabled():
         return []
+    query_vector = embed_text(request.query)
+    if not any(query_vector):
+        return []
+    vector_store_context = active_vector_store_context(request.root)
+    scores = vector_store_context.store.similarity_scores(
+        VectorSimilarityRequest(
+            root=request.root,
+            identity=vector_store_context.identity,
+            object_type="symbol",
+            query_vector=query_vector,
+            min_score=request.min_score,
+            config=vector_store_context.config,
+        )
+    )
     backend = active_index_backend(root=request.root)
-    return backend.embedding_candidates(request)
+    return backend.resolve_embedding_scores(
+        BackendResolveEmbeddingScoresRequest(
+            root=request.root,
+            scores=scores,
+            limit=request.limit,
+            prefix=request.prefix,
+            conn=request.conn,
+        )
+    )
 
 
 def documentation_candidates(
@@ -75,5 +101,27 @@ def documentation_candidates(
     """
     if not embeddings_enabled():
         return []
+    query_vector = embed_text(request.query)
+    if not any(query_vector):
+        return []
+    vector_store_context = active_vector_store_context(request.root)
+    scores = vector_store_context.store.similarity_scores(
+        VectorSimilarityRequest(
+            root=request.root,
+            identity=vector_store_context.identity,
+            object_type="documentation",
+            query_vector=query_vector,
+            min_score=request.min_score,
+            config=vector_store_context.config,
+        )
+    )
     backend = active_index_backend(root=request.root)
-    return backend.documentation_candidates(request)
+    return backend.resolve_documentation_scores(
+        BackendResolveDocumentationScoresRequest(
+            root=request.root,
+            scores=scores,
+            limit=request.limit,
+            prefix=request.prefix,
+            conn=request.conn,
+        )
+    )

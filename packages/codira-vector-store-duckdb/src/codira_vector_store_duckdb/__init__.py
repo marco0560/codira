@@ -6,7 +6,13 @@ from typing import TYPE_CHECKING, cast
 
 import duckdb
 
-from codira.contracts import PreparedVectorRow, VectorSetIdentity, VectorStoreSpec
+from codira.contracts import (
+    PreparedVectorRow,
+    VectorSetIdentity,
+    VectorSimilarityRequest,
+    VectorSimilarityScore,
+    VectorStoreSpec,
+)
 from codira.semantic.embeddings import deserialize_vector
 from codira.storage import get_codira_dir
 
@@ -574,6 +580,87 @@ class DuckDBVectorStore:
             )
         finally:
             conn.close()
+
+    def similarity_scores(
+        self,
+        request: VectorSimilarityRequest,
+    ) -> list[VectorSimilarityScore]:
+        """
+        Return DuckDB-backed vector similarity scores.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorSimilarityRequest
+            Vector-store similarity request.
+
+        Returns
+        -------
+        list[codira.contracts.VectorSimilarityScore]
+            Scores ordered by descending score and stable identity.
+        """
+        vector_set_id = self.ensure_vector_set(
+            request.root,
+            request.identity,
+            request.config,
+        )
+        conn = duckdb.connect(str(get_vector_store_path(request.root)), read_only=True)
+        try:
+            scored_rows = conn.execute(
+                """
+                SELECT stable_id, list_dot_product(vector_values, ?) AS score
+                FROM vectors
+                WHERE vector_set_id = ?
+                  AND object_type = ?
+                  AND vector_values IS NOT NULL
+                  AND list_dot_product(vector_values, ?) >= ?
+                ORDER BY score DESC, stable_id
+                """,
+                (
+                    list(request.query_vector),
+                    vector_set_id,
+                    request.object_type,
+                    list(request.query_vector),
+                    request.min_score,
+                ),
+            ).fetchall()
+            legacy_rows = conn.execute(
+                """
+                SELECT stable_id, vector
+                FROM vectors
+                WHERE vector_set_id = ?
+                  AND object_type = ?
+                  AND vector_values IS NULL
+                ORDER BY stable_id
+                """,
+                (vector_set_id, request.object_type),
+            ).fetchall()
+        finally:
+            conn.close()
+        scores = [
+            VectorSimilarityScore(stable_id=str(stable_id), score=float(score))
+            for stable_id, score in scored_rows
+        ]
+        scores.extend(
+            VectorSimilarityScore(
+                stable_id=str(stable_id),
+                score=sum(
+                    left * right
+                    for left, right in zip(
+                        request.query_vector,
+                        deserialize_vector(
+                            bytes(vector),
+                            dim=request.identity.engine.dimension,
+                        ),
+                        strict=True,
+                    )
+                ),
+            )
+            for stable_id, vector in legacy_rows
+        )
+        return sorted(
+            (score for score in scores if score.score >= request.min_score),
+            key=lambda item: (-item.score, item.stable_id),
+        )
 
     def reset_runtime_caches(self) -> None:
         """

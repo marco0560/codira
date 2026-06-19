@@ -16,7 +16,14 @@ from __future__ import annotations
 import sqlite3
 from typing import TYPE_CHECKING
 
-from codira.contracts import PreparedVectorRow, VectorSetIdentity, VectorStoreSpec
+from codira.contracts import (
+    PreparedVectorRow,
+    VectorSetIdentity,
+    VectorSimilarityRequest,
+    VectorSimilarityScore,
+    VectorStoreSpec,
+)
+from codira.semantic.embeddings import deserialize_vector
 from codira.storage import get_codira_dir
 
 if TYPE_CHECKING:
@@ -508,6 +515,61 @@ class SQLiteVectorStore:
                     for prepared in materialized
                 ],
             )
+
+    def similarity_scores(
+        self,
+        request: VectorSimilarityRequest,
+    ) -> list[VectorSimilarityScore]:
+        """
+        Return SQLite-backed vector similarity scores.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorSimilarityRequest
+            Vector-store similarity request.
+
+        Returns
+        -------
+        list[codira.contracts.VectorSimilarityScore]
+            Scores ordered by descending score and stable identity.
+        """
+        vector_set_id = self.ensure_vector_set(
+            request.root,
+            request.identity,
+            request.config,
+        )
+        with sqlite3.connect(get_vector_store_path(request.root)) as conn:
+            rows = conn.execute(
+                """
+                SELECT stable_id, vector
+                FROM vectors
+                WHERE vector_set_id = ?
+                  AND object_type = ?
+                ORDER BY stable_id
+                """,
+                (vector_set_id, request.object_type),
+            ).fetchall()
+        scores = [
+            VectorSimilarityScore(
+                stable_id=str(stable_id),
+                score=sum(
+                    left * right
+                    for left, right in zip(
+                        request.query_vector,
+                        deserialize_vector(
+                            bytes(vector),
+                            dim=request.identity.engine.dimension,
+                        ),
+                        strict=True,
+                    )
+                ),
+            )
+            for stable_id, vector in rows
+        ]
+        return sorted(
+            (score for score in scores if score.score >= request.min_score),
+            key=lambda item: (-item.score, item.stable_id),
+        )
 
     def reset_runtime_caches(self) -> None:
         """

@@ -47,6 +47,8 @@ if TYPE_CHECKING:
     from codira.contracts import (
         BackendDocumentationCandidatesRequest,
         BackendEmbeddingCandidatesRequest,
+        BackendResolveDocumentationScoresRequest,
+        BackendResolveEmbeddingScoresRequest,
         VectorSetIdentity,
         VectorStore,
     )
@@ -1996,6 +1998,46 @@ class MemoryIndexBackend:
             )
         )
         return results[: request.limit]
+
+    def resolve_embedding_scores(
+        self,
+        request: BackendResolveEmbeddingScoresRequest,
+    ) -> ChannelResults:
+        """
+        Resolve scored symbol stable IDs for the memory backend.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveEmbeddingScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.ChannelResults
+            Empty result set for this test backend.
+        """
+        del request
+        return []
+
+    def resolve_documentation_scores(
+        self,
+        request: BackendResolveDocumentationScoresRequest,
+    ) -> DocumentationChannelResults:
+        """
+        Resolve scored documentation stable IDs for the memory backend.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveDocumentationScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.DocumentationChannelResults
+            Empty result set for this test backend.
+        """
+        del request
+        return []
 
     def prune_orphaned_embeddings(
         self,

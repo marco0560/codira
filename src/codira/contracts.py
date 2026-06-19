@@ -367,6 +367,52 @@ class StoredEmbeddingRow:
     vector: bytes
 
 
+@dataclass(frozen=True)
+class VectorSimilarityScore:
+    """
+    Similarity score for one vector-store object identity.
+
+    Parameters
+    ----------
+    stable_id : str
+        Durable analyzer-owned object identity.
+    score : float
+        Similarity score computed by the vector store.
+    """
+
+    stable_id: str
+    score: float
+
+
+@dataclass(frozen=True)
+class VectorSimilarityRequest:
+    """
+    Vector-store request for similarity scoring.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose vector store should be queried.
+    identity : codira.contracts.VectorSetIdentity
+        Active vector-set identity to query.
+    object_type : str
+        Persisted object type, such as ``"symbol"`` or ``"documentation"``.
+    query_vector : collections.abc.Sequence[float]
+        Query vector produced by the active embedding engine.
+    min_score : float
+        Minimum score to return.
+    config : collections.abc.Mapping[str, object]
+        Vector-store-specific configuration table.
+    """
+
+    root: Path
+    identity: VectorSetIdentity
+    object_type: str
+    query_vector: Sequence[float]
+    min_score: float
+    config: Mapping[str, object]
+
+
 @runtime_checkable
 class EmbeddingEngine(Protocol):
     """
@@ -691,6 +737,25 @@ class VectorStore(Protocol):
         -------
         None
             Vector rows are inserted or replaced in place.
+        """
+        ...
+
+    def similarity_scores(
+        self,
+        request: VectorSimilarityRequest,
+    ) -> list[VectorSimilarityScore]:
+        """
+        Return vector similarity scores keyed by stable object identity.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorSimilarityRequest
+            Vector-store similarity request.
+
+        Returns
+        -------
+        list[codira.contracts.VectorSimilarityScore]
+            Scores ordered by descending score and stable identity.
         """
         ...
 
@@ -1070,6 +1135,58 @@ class BackendDocumentationCandidatesRequest:
     query: str
     limit: int
     min_score: float
+    prefix: str | None = None
+    conn: object | None = None
+
+
+@dataclass(frozen=True)
+class BackendResolveEmbeddingScoresRequest:
+    """
+    Backend request for resolving scored symbol stable IDs.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose structural index should be queried.
+    scores : collections.abc.Sequence[codira.contracts.VectorSimilarityScore]
+        Vector-store scores keyed by symbol stable ID.
+    limit : int
+        Maximum number of resolved candidates to return.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict matched symbol files.
+    conn : object | None, optional
+        Existing backend connection to reuse.
+    """
+
+    root: Path
+    scores: Sequence[VectorSimilarityScore]
+    limit: int
+    prefix: str | None = None
+    conn: object | None = None
+
+
+@dataclass(frozen=True)
+class BackendResolveDocumentationScoresRequest:
+    """
+    Backend request for resolving scored documentation stable IDs.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose structural index should be queried.
+    scores : collections.abc.Sequence[codira.contracts.VectorSimilarityScore]
+        Vector-store scores keyed by documentation stable ID.
+    limit : int
+        Maximum number of resolved candidates to return.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict matched document files.
+    conn : object | None, optional
+        Existing backend connection to reuse.
+    """
+
+    root: Path
+    scores: Sequence[VectorSimilarityScore]
+    limit: int
     prefix: str | None = None
     conn: object | None = None
 
@@ -2310,6 +2427,44 @@ class IndexBackend(Protocol):
         -------
         list[codira.types.SymbolRow]
             Matching symbol rows ordered deterministically.
+        """
+        ...
+
+    def resolve_embedding_scores(
+        self,
+        request: BackendResolveEmbeddingScoresRequest,
+    ) -> ChannelResults:
+        """
+        Resolve scored symbol stable IDs to structural candidate rows.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveEmbeddingScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.ChannelResults
+            Ranked symbol candidates ordered deterministically.
+        """
+        ...
+
+    def resolve_documentation_scores(
+        self,
+        request: BackendResolveDocumentationScoresRequest,
+    ) -> DocumentationChannelResults:
+        """
+        Resolve scored documentation stable IDs to documentation rows.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveDocumentationScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.DocumentationChannelResults
+            Ranked documentation candidates ordered deterministically.
         """
         ...
 
