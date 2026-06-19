@@ -77,6 +77,20 @@ uv run python scripts/embedding_model_manifest.py \
 The script does not download model weights. It renders repository configuration
 snippets for the selected embedding engine/model entry.
 
+## `scripts/embedding_engine_matrix_plan.py`
+
+Build a deterministic dry-run JSON plan for the long embedding engine/model
+matrix:
+
+```bash
+uv run python scripts/embedding_engine_matrix_plan.py
+```
+
+The plan combines `benchmarks/embedding-engine-matrix.json` with the embedding
+model candidate manifest and the selected repository benchmark manifest. It is
+safe to run before the long campaign because it only validates manifests and
+prints planned runs.
+
 ## `scripts/benchmark_index.py`
 
 Run one instrumented index pass and emit structured JSON with phase timings,

@@ -83,7 +83,7 @@ only run fast smoke checks locally.
 - [x] Phase 5 - Native ONNX Runtime engine package
 - [x] Phase 6 - Model manifests and provisioning scripts
 - [x] Phase 7 - Bundle, user docs, developer docs, and ADR alignment
-- [ ] Phase 8 - Benchmark harness, smoke measurements, and campaign manifest
+- [x] Phase 8 - Benchmark harness, smoke measurements, and campaign manifest
 - [ ] Phase 9 - Full validation and merge handoff
 
 ## Phase Notes
@@ -267,3 +267,17 @@ only run fast smoke checks locally.
   plugin families and entry-point groups.
 - Targeted hooks passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files docs/configuration.md docs/getting_started.md docs/scripts.md docs/architecture/plugin-model.md`.
+
+### Phase 8
+
+- Added `benchmarks/embedding-engine-matrix.json` as the long matrix descriptor.
+- Added `scripts/embedding_engine_matrix_plan.py` to build deterministic dry-run
+  JSON plans from the matrix, model, and repository manifests.
+- Added tests for matrix-plan construction and direct CLI JSON output.
+- Documented the matrix-plan script.
+- Focused validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_embedding_engine_matrix_plan.py`.
+- Targeted hooks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pre-commit run --files benchmarks/embedding-engine-matrix.json scripts/embedding_engine_matrix_plan.py tests/test_embedding_engine_matrix_plan.py`.
+- Script smoke passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/embedding_engine_matrix_plan.py`.
