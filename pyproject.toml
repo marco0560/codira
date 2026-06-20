@@ -45,6 +45,7 @@ dev = [
 [project.optional-dependencies]
 semantic = [
     "sentence-transformers>=5.4,<6.0",
+    "einops>=0.8,<1.0",
     "codira-embedding-sentence-transformers==1.0.0",
     "codira-embedding-onnx==1.0.0",
     "codira-vector-store-sqlite==1.0.0",
@@ -53,6 +54,7 @@ semantic = [
 
 bundle-official = [
     "sentence-transformers>=5.4,<6.0",
+    "einops>=0.8,<1.0",
     "codira-analyzer-python==1.43.0",
     "codira-analyzer-json==1.41.0",
     "codira-analyzer-c==1.43.0",

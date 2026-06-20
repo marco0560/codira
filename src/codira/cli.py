@@ -1623,7 +1623,7 @@ def _run_index(request: IndexCommandRequest) -> int:
         active_backend.initialize(root)
         recomputed, reused = active_backend.process_pending_embeddings(
             root,
-            embedding_backend=get_embedding_backend(),
+            embedding_backend=get_embedding_backend(root=root),
             vector_store=vector_store_context.store,
             vector_set_identity=vector_store_context.identity,
             vector_store_config=vector_store_context.config,
@@ -2542,7 +2542,7 @@ def _run_embeddings(
         Zero when embedding inventory exists, otherwise one.
     """
     root = request.root
-    backend = get_embedding_backend()
+    backend = get_embedding_backend(root=root)
     inventory = embedding_inventory(root)
 
     if not inventory:
@@ -2661,7 +2661,7 @@ def _run_documentation_lookup(
         stored embeddings exist.
     """
     root = request.root
-    backend = get_embedding_backend()
+    backend = get_embedding_backend(root=root)
     inventory = embedding_inventory(root)
 
     if not inventory:

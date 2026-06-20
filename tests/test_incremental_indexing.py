@@ -2167,7 +2167,7 @@ def test_index_repo_recomputes_embeddings_when_backend_changes(
 
     monkeypatch.setattr(
         "codira.indexer.get_embedding_backend",
-        lambda: EmbeddingBackendSpec(
+        lambda root=None: EmbeddingBackendSpec(
             name=EMBEDDING_BACKEND,
             version="2",
             dim=EMBEDDING_DIM,

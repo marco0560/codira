@@ -317,7 +317,7 @@ class _SQLiteIndexWriteSession:
             If validated persistence inputs are semantically inconsistent.
         """
         active_backend = (
-            get_embedding_backend()
+            get_embedding_backend(root=request.root)
             if request.embedding_backend is None
             else request.embedding_backend
         )
@@ -378,7 +378,7 @@ class _SQLiteIndexWriteSession:
             return
         backend = self._embedding_backend
         if backend is None:
-            backend = get_embedding_backend()
+            backend = get_embedding_backend(root=self._root)
             self._embedding_backend = backend
         if self._pending_embedding_rows_deferred:
             self._store_deferred_vector_rows()
@@ -1908,8 +1908,8 @@ class SQLiteIndexBackend:
         if conn is None:
             conn = self.open_connection(root)
 
-        backend = get_embedding_backend()
-        query_vector = embed_text(query)
+        backend = get_embedding_backend(root=root)
+        query_vector = embed_text(query, root=root)
         if not any(query_vector):
             return []
 
@@ -2006,8 +2006,8 @@ class SQLiteIndexBackend:
         if conn is None:
             conn = self.open_connection(root)
 
-        backend = get_embedding_backend()
-        query_vector = embed_text(query)
+        backend = get_embedding_backend(root=root)
+        query_vector = embed_text(query, root=root)
         if not any(query_vector):
             return []
 
@@ -2655,7 +2655,7 @@ class SQLiteIndexBackend:
         if conn is None:
             conn = self.open_connection(root)
         active_backend = (
-            get_embedding_backend()
+            get_embedding_backend(root=root)
             if request.embedding_backend is None
             else request.embedding_backend
         )

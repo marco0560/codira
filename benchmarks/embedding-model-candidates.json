@@ -57,26 +57,15 @@
       }
     },
     {
-      "id": "jina-embeddings-v2-code-en-sentence-transformers",
-      "engine": "sentence-transformers",
-      "model": "jinaai/jina-embeddings-v2-code-en",
-      "version": "1",
-      "dimension": 768,
-      "precision": "float32",
-      "config": {
-        "trust_remote_code": true
-      }
-    },
-    {
-      "id": "jina-embeddings-v2-code-en-onnx",
+      "id": "jina-embeddings-v2-base-code-onnx",
       "engine": "onnx",
-      "model": "jinaai/jina-embeddings-v2-code-en",
+      "model": "jinaai/jina-embeddings-v2-base-code",
       "version": "1",
       "dimension": 768,
       "precision": "float32",
       "config": {
-        "model_path": ".codira/models/jina-embeddings-v2-code-en/model.onnx",
-        "tokenizer_path": ".codira/models/jina-embeddings-v2-code-en/tokenizer.json",
+        "model_path": ".codira/models/jina-embeddings-v2-base-code/model.onnx",
+        "tokenizer_path": ".codira/models/jina-embeddings-v2-base-code/tokenizer.json",
         "provider": "CPUExecutionProvider"
       }
     }

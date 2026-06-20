@@ -28,9 +28,13 @@ def test_embedding_engine_matrix_plan_combines_manifests() -> None:
 
     assert plan["schema_version"] == 1
     assert isinstance(runs, list)
-    assert len(runs) == 7
+    assert len(runs) == 6
     assert {row["engine"] for row in runs} == {"sentence-transformers", "onnx"}
     assert any(row["model_id"] == "bge-small-en-v1.5-onnx" for row in runs)
+    assert not any(
+        row["model_id"] == "jina-embeddings-v2-base-code-sentence-transformers"
+        for row in runs
+    )
     assert all("[embeddings]" in row["config_toml"] for row in runs)
 
 
@@ -57,4 +61,4 @@ def test_embedding_engine_matrix_plan_cli_outputs_json() -> None:
     payload = json.loads(result.stdout)
 
     assert payload["schema_version"] == 1
-    assert len(payload["runs"]) == 7
+    assert len(payload["runs"]) == 6

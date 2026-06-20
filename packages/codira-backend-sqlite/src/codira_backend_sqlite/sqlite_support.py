@@ -2027,7 +2027,7 @@ def _flush_embedding_rows(
     tuple[int, int]
         ``(recomputed, reused)`` embedding counts for the file.
     """
-    if not embeddings_enabled():
+    if not embeddings_enabled(root=root):
         return (0, 0)
 
     recomputed = 0
@@ -2378,7 +2378,8 @@ def _flush_prepared_embedding_rows(
     if texts_to_encode:
         ordered_content_hashes = list(dict.fromkeys(texts_to_encode))
         encoded_rows = embed_texts(
-            [texts_to_encode[content_hash] for content_hash in ordered_content_hashes]
+            [texts_to_encode[content_hash] for content_hash in ordered_content_hashes],
+            root=root,
         )
         for content_hash, vector in zip(
             ordered_content_hashes,
@@ -2488,7 +2489,7 @@ def _flush_pending_embedding_rows(
     """
     if not pending_embedding_rows:
         return
-    if not embeddings_enabled():
+    if not embeddings_enabled(root=root):
         pending_embedding_rows.clear()
         return
     _flush_prepared_embedding_rows(

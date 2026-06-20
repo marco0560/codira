@@ -77,6 +77,33 @@ uv run python scripts/embedding_model_manifest.py \
 The script does not download model weights. It renders repository configuration
 snippets for the selected embedding engine/model entry.
 
+## `scripts/download_embedding_model.py`
+
+Download and smoke-test model artifacts named in
+`benchmarks/embedding-model-candidates.json`:
+
+```bash
+uv run python scripts/download_embedding_model.py \
+  --manifest benchmarks/embedding-model-candidates.json
+```
+
+The script sources `$HOME/.hf_token` in a Bash subprocess and reads the
+resulting `HF_TOKEN` environment variable. This keeps the token value in one
+operator-owned file and avoids copying it into commands.
+
+For ONNX entries, the script downloads `onnx/model.onnx` and `tokenizer.json`
+from Hugging Face, installs them under the manifest's `.codira/models/...`
+paths, and smoke-tests the artifacts with the first-party ONNX engine. For
+SentenceTransformers entries, it downloads the model snapshot into the
+Hugging Face cache and runs a local smoke encode.
+
+Select one candidate with `--model-id`:
+
+```bash
+uv run python scripts/download_embedding_model.py \
+  --model-id bge-small-en-v1.5-onnx
+```
+
 ## `scripts/embedding_engine_matrix_plan.py`
 
 Build a deterministic dry-run JSON plan for the long embedding engine/model
@@ -93,24 +120,25 @@ prints planned runs.
 
 ## `scripts/run_final_embedding_model_campaign.sh`
 
-Run the final engine/model measuring campaign against a previous embedding
-matrix artifact directory:
+Run the final engine/model measuring campaign:
 
 ```bash
 RUNS=5 WARMUP=1 scripts/run_final_embedding_model_campaign.sh \
-  --baseline .artifacts/analysis/<previous-embedding-matrix-artifacts> \
   --manifest benchmarks/uv-backed-repos.local.json \
   --model-manifest benchmarks/embedding-model-candidates.json \
   --backend duckdb
 ```
 
 The wrapper writes artifacts under
-`.artifacts/final-embedding-model-campaign/<timestamp>/`, records the baseline
-path and manifests, applies one generated `.codira/config.toml` per model to
-the repositories listed in the manifest, and restores the original repository
-configs when it exits. Use `--backend both` only when the campaign must compare
-SQLite and DuckDB structural backends as well as PyTorch and ONNX Runtime
-embedding engines.
+`.artifacts/final-embedding-model-campaign/<timestamp>/`, first runs
+`scripts/download_embedding_model.py` against the model manifest, records the
+optional baseline path and manifests, applies one generated `.codira/config.toml`
+per model to the repositories listed in the manifest, and restores the
+original repository configs when it exits. Use `--baseline PATH` only to record
+which previous matrix should be used later during analysis. Use
+`--preflight-only` to stop after download and smoke tests. Use `--backend both`
+only when the campaign must compare SQLite and DuckDB structural backends as
+well as PyTorch and ONNX Runtime embedding engines.
 
 ## `scripts/benchmark_index.py`
 

@@ -355,3 +355,42 @@ only run fast smoke checks locally.
 - Final branch validation passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/validate_repo.py`
   with `398 passed`.
+
+### Phase 3.1 Follow-up
+
+- Added `scripts/download_embedding_model.py`.
+- The script sources `$HOME/.hf_token` in Bash and reads `HF_TOKEN` from the
+  executed token file.
+- The script downloads model artifacts from Hugging Face, installs ONNX files
+  under the manifest's `.codira/models/...` paths, and smoke-tests each
+  selected candidate through the engine used by Codira.
+- The final campaign wrapper now runs this downloader as a preflight before
+  mutating repository configs or launching benchmarks.
+
+### Phase 4 Follow-up
+
+- Corrected the Jina candidate to
+  `jinaai/jina-embeddings-v2-base-code`.
+- Kept Jina as an ONNX-only candidate because its SentenceTransformers
+  remote-code path fails against the repository's pinned Transformers API.
+- Fixed ONNX input-feed construction so models declaring `token_type_ids`
+  receive that tensor.
+- Added root-aware embedding backend resolution for indexing, query, context
+  explain output, and backend persistence paths.
+- Added a DuckDB insert guard that keeps one embedding row per
+  `(object_type, object_id, backend, version)` key inside a registered Arrow
+  batch.
+
+### Phase 9 Follow-up
+
+- Documented `scripts/download_embedding_model.py`.
+- Updated campaign documentation to explain that `--baseline` is optional
+  launch metadata and can be selected during later analysis.
+- The complete out-of-sandbox campaign command is:
+
+```bash
+RUNS=5 WARMUP=1 scripts/run_final_embedding_model_campaign.sh \
+  --manifest benchmarks/uv-backed-repos.local.json \
+  --model-manifest benchmarks/embedding-model-candidates.json \
+  --backend duckdb
+```

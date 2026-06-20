@@ -70,14 +70,28 @@ class SentenceTransformersEmbeddingEngine:
         codira.contracts.EmbeddingEngineSpec
             Engine-aware embedding identity.
         """
-        del config
         embeddings = load_effective_config().embeddings
+        model = config.get("_codira_model", embeddings.model)
+        model_version = config.get("_codira_model_version", embeddings.version)
+        dimension = config.get("_codira_dimension", embeddings.dimension)
+        if not isinstance(model, str):
+            msg = "plugins.embedding-sentence-transformers._codira_model must be a string."
+            raise TypeError(msg)
+        if not isinstance(model_version, str):
+            msg = (
+                "plugins.embedding-sentence-transformers._codira_model_version "
+                "must be a string."
+            )
+            raise TypeError(msg)
+        if not isinstance(dimension, int):
+            msg = "plugins.embedding-sentence-transformers._codira_dimension must be an integer."
+            raise TypeError(msg)
         return EmbeddingEngineSpec(
             engine=self.name,
             engine_version=self.version,
-            model=embeddings.model,
-            model_version=embeddings.version,
-            dimension=embeddings.dimension,
+            model=model,
+            model_version=model_version,
+            dimension=dimension,
             precision="float32",
         )
 

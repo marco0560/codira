@@ -1176,7 +1176,7 @@ def index_repo(
     vector_store_context = active_vector_store_context(root)
     effective_config = load_effective_config(root=root)
     analyzers = _active_language_analyzers(root=root)
-    backend = get_embedding_backend()
+    backend = get_embedding_backend(root=root)
     embedding_indexing = _embedding_indexing_policy(root)
     effective_embedding_index_mode = (
         effective_config.embeddings.indexing.mode

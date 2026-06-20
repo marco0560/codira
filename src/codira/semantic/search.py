@@ -54,9 +54,9 @@ def embedding_candidates(
         Ranked symbol candidates ordered by descending similarity and stable
         symbol identity.
     """
-    if not embeddings_enabled():
+    if not embeddings_enabled(root=request.root):
         return []
-    query_vector = embed_text(request.query)
+    query_vector = embed_text(request.query, root=request.root)
     if not any(query_vector):
         return []
     vector_store_context = active_vector_store_context(request.root)
@@ -99,9 +99,9 @@ def documentation_candidates(
         Ranked documentation candidates ordered by descending similarity and
         stable documentation identity.
     """
-    if not embeddings_enabled():
+    if not embeddings_enabled(root=request.root):
         return []
-    query_vector = embed_text(request.query)
+    query_vector = embed_text(request.query, root=request.root)
     if not any(query_vector):
         return []
     vector_store_context = active_vector_store_context(request.root)

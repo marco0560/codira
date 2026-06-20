@@ -166,7 +166,7 @@ parameters.
 combinations used for embedding-engine campaigns. It includes the current
 MiniLM default, `BAAI/bge-small-en-v1.5`,
 `nomic-ai/nomic-embed-text-v1.5`, and
-`jinaai/jina-embeddings-v2-code-en`.
+`jinaai/jina-embeddings-v2-base-code`.
 
 Inspect the manifest and render a config snippet for one entry:
 
@@ -177,9 +177,15 @@ uv run python scripts/embedding_model_manifest.py \
   --print-config
 ```
 
-The manifest does not contain model weights. ONNX entries point to expected
-local artifact paths under `.codira/models/`; exporting or downloading those
-artifacts remains an explicit operator step.
+The manifest does not contain model weights. Use
+`scripts/download_embedding_model.py` to source `$HOME/.hf_token`, download the
+required Hugging Face artifacts, install ONNX files under the manifest's
+`.codira/models/...` paths, and smoke-test each candidate before launching the
+long campaign.
+
+The current Jina candidate is ONNX-only because the
+`jinaai/jina-embeddings-v2-base-code` SentenceTransformers remote-code path is
+not compatible with the pinned Transformers API used by this repository.
 
 ## Environment Overrides
 

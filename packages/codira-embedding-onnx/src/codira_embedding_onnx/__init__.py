@@ -198,6 +198,69 @@ def _l2_normalize(vector: list[float]) -> list[float]:
     return [value / norm for value in vector]
 
 
+def _runtime_input_feed(
+    session: object, encoded: Sequence[object]
+) -> Mapping[str, object]:
+    """
+    Build the ONNX input feed required by one session.
+
+    Parameters
+    ----------
+    session : object
+        Loaded ONNX Runtime inference session.
+    encoded : collections.abc.Sequence[object]
+        Tokenizer encodings for one batch.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, object]
+        Input arrays keyed by ONNX graph input name.
+
+    Raises
+    ------
+    EmbeddingEngineError
+        Raised when the model requires an unsupported input tensor.
+    """
+    try:
+        import numpy as np
+    except ImportError as exc:
+        msg = "Install codira with the ONNX embedding engine dependencies."
+        raise EmbeddingEngineError(msg) from exc
+
+    input_ids = [list(cast("Any", item).ids) for item in encoded]
+    max_tokens = max((len(ids) for ids in input_ids), default=0)
+    input_ids = [ids + [0] * (max_tokens - len(ids)) for ids in input_ids]
+    attention_mask = [
+        list(cast("Any", item).attention_mask)
+        + [0] * (max_tokens - len(cast("Any", item).attention_mask))
+        for item in encoded
+    ]
+    type_ids = []
+    for item in encoded:
+        item_type_ids = list(
+            getattr(item, "type_ids", None) or [0] * len(cast("Any", item).ids)
+        )
+        type_ids.append(item_type_ids + [0] * (max_tokens - len(item_type_ids)))
+    available_inputs = {
+        cast("Any", input_info).name for input_info in cast("Any", session).get_inputs()
+    }
+    prepared_inputs: dict[str, object] = {
+        "input_ids": np.asarray(input_ids, dtype=np.int64),
+        "attention_mask": np.asarray(attention_mask, dtype=np.int64),
+        "token_type_ids": np.asarray(type_ids, dtype=np.int64),
+    }
+    unsupported_inputs = sorted(available_inputs.difference(prepared_inputs))
+    if unsupported_inputs:
+        joined = ", ".join(unsupported_inputs)
+        msg = f"Unsupported ONNX embedding model inputs: {joined}"
+        raise EmbeddingEngineError(msg)
+    return {
+        name: value
+        for name, value in prepared_inputs.items()
+        if name in available_inputs
+    }
+
+
 class OnnxEmbeddingEngine:
     """
     Native ONNX Runtime embedding engine.
@@ -226,12 +289,24 @@ class OnnxEmbeddingEngine:
         """
         onnx_config = _engine_config(config)
         embeddings = load_effective_config().embeddings
+        model = config.get("_codira_model", embeddings.model)
+        model_version = config.get("_codira_model_version", embeddings.version)
+        dimension = config.get("_codira_dimension", embeddings.dimension)
+        if not isinstance(model, str):
+            msg = "plugins.embedding-onnx._codira_model must be a string."
+            raise TypeError(msg)
+        if not isinstance(model_version, str):
+            msg = "plugins.embedding-onnx._codira_model_version must be a string."
+            raise TypeError(msg)
+        if not isinstance(dimension, int):
+            msg = "plugins.embedding-onnx._codira_dimension must be an integer."
+            raise TypeError(msg)
         return EmbeddingEngineSpec(
             engine=self.name,
             engine_version=self.version,
-            model=embeddings.model,
-            model_version=embeddings.version,
-            dimension=embeddings.dimension,
+            model=model,
+            model_version=model_version,
+            dimension=dimension,
             precision=onnx_config.precision,
         )
 
@@ -288,15 +363,9 @@ class OnnxEmbeddingEngine:
             return []
         session, tokenizer = _load_runtime(onnx_config)
         encoded = tokenizer.encode_batch(list(texts))
-        input_ids = [item.ids for item in encoded]
-        attention_mask = [item.attention_mask for item in encoded]
-        outputs = session.run(
-            None,
-            {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-            },
-        )
+        input_feed = _runtime_input_feed(session, encoded)
+        attention_mask = cast("Any", input_feed["attention_mask"]).tolist()
+        outputs = session.run(None, input_feed)
         return _pool_outputs(
             outputs[0],
             attention_mask=attention_mask,

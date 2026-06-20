@@ -3569,7 +3569,7 @@ def _flush_embedding_rows(
     tuple[int, int]
         ``(recomputed, reused)`` embedding counts for the file.
     """
-    if not embeddings_enabled():
+    if not embeddings_enabled(root=root):
         return (0, 0)
 
     recomputed = 0
@@ -4210,7 +4210,8 @@ def _flush_prepared_embedding_rows(
     if texts_to_encode:
         ordered_content_hashes = list(dict.fromkeys(texts_to_encode))
         encoded_rows = embed_texts(
-            [texts_to_encode[content_hash] for content_hash in ordered_content_hashes]
+            [texts_to_encode[content_hash] for content_hash in ordered_content_hashes],
+            root=root,
         )
         for content_hash, vector in zip(
             ordered_content_hashes,
@@ -4238,8 +4239,9 @@ def _flush_prepared_embedding_rows(
     dims: list[int] = []
     vectors: list[bytes] = []
     vector_values_rows: list[list[float]] = []
+    row_ordinals: list[int] = []
     materialized_rows: list[PreparedVectorRow] = []
-    for row, content_hash, stored_vector in deduplicated_rows:
+    for row_ordinal, (row, content_hash, stored_vector) in enumerate(deduplicated_rows):
         resolved_blob = stored_vector
         vector_values: list[float]
         if resolved_blob is None:
@@ -4255,6 +4257,7 @@ def _flush_prepared_embedding_rows(
         dims.append(backend.dim)
         vectors.append(resolved_blob)
         vector_values_rows.append(vector_values)
+        row_ordinals.append(row_ordinal)
         materialized_rows.append(
             PreparedVectorRow(
                 row=row,
@@ -4276,6 +4279,7 @@ def _flush_prepared_embedding_rows(
                 vector_values_rows,
                 type=pa.list_(pa.float64()),
             ),
+            "row_ordinal": pa.array(row_ordinals, type=pa.int64()),
         }
     )
     view_name = "__codira_pending_embedding_rows"
@@ -4312,7 +4316,23 @@ def _flush_prepared_embedding_rows(
                 dim,
                 vector,
                 vector_values
-            FROM __codira_pending_embedding_rows
+            FROM (
+                SELECT
+                    object_type,
+                    object_id,
+                    backend,
+                    version,
+                    content_hash,
+                    dim,
+                    vector,
+                    vector_values,
+                    row_number() OVER (
+                        PARTITION BY object_type, object_id, backend, version
+                        ORDER BY row_ordinal DESC
+                    ) AS codira_row_rank
+                FROM __codira_pending_embedding_rows
+            )
+            WHERE codira_row_rank = 1
             """
         )
     finally:
@@ -4362,7 +4382,7 @@ def _flush_pending_embedding_rows(
     """
     if not pending_embedding_rows:
         return
-    if not embeddings_enabled():
+    if not embeddings_enabled(root=root):
         pending_embedding_rows.clear()
         return
     _flush_prepared_embedding_rows(

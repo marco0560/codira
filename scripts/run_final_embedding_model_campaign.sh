@@ -4,13 +4,15 @@ set -o pipefail
 
 show_help() {
   cat <<'EOF'
-Usage: scripts/run_final_embedding_model_campaign.sh --baseline PATH [options]
+Usage: scripts/run_final_embedding_model_campaign.sh [options]
 
 Options:
-  --baseline PATH          Previous embedding matrix artifact directory.
+  --baseline PATH          Optional previous embedding matrix artifact directory
+                           recorded for analysis metadata.
   --manifest PATH          Repository manifest. Default: benchmarks/uv-backed-repos.local.json
   --model-manifest PATH    Model manifest. Default: benchmarks/embedding-model-candidates.json
   --backend MODE           duckdb, sqlite, or both. Default: duckdb
+  --preflight-only         Download and smoke-test models, then stop.
   -h, --help               Show this help message.
 
 Environment:
@@ -26,6 +28,7 @@ BASELINE_PATH=""
 MANIFEST_PATH="benchmarks/uv-backed-repos.local.json"
 MODEL_MANIFEST_PATH="benchmarks/embedding-model-candidates.json"
 BACKEND_MODE="${BACKEND_MODE:-duckdb}"
+PREFLIGHT_ONLY=0
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -61,6 +64,10 @@ while [[ "$#" -gt 0 ]]; do
       BACKEND_MODE="$2"
       shift 2
       ;;
+    --preflight-only)
+      PREFLIGHT_ONLY=1
+      shift
+      ;;
     -h|--help)
       show_help
       exit 0
@@ -73,12 +80,7 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$BASELINE_PATH" ]]; then
-  echo "ERROR: --baseline is required" >&2
-  show_help >&2
-  exit 2
-fi
-if [[ ! -e "$BASELINE_PATH" ]]; then
+if [[ -n "$BASELINE_PATH" && ! -e "$BASELINE_PATH" ]]; then
   echo "ERROR: baseline path does not exist: $BASELINE_PATH" >&2
   exit 2
 fi
@@ -129,7 +131,11 @@ LOG_ROOT="${MATRIX_ROOT}/logs"
 
 mkdir -p "$CONFIG_ROOT" "$METADATA_ROOT" "$BACKUP_ROOT" "$CAMPAIGN_ROOT" "$LOG_ROOT"
 
-realpath "$BASELINE_PATH" > "${METADATA_ROOT}/baseline-path.txt"
+if [[ -n "$BASELINE_PATH" ]]; then
+  realpath "$BASELINE_PATH" > "${METADATA_ROOT}/baseline-path.txt"
+else
+  printf 'not provided\n' > "${METADATA_ROOT}/baseline-path.txt"
+fi
 cp "$MANIFEST_PATH" "${METADATA_ROOT}/repository-manifest.json"
 cp "$MODEL_MANIFEST_PATH" "${METADATA_ROOT}/model-manifest.json"
 git rev-parse HEAD > "${METADATA_ROOT}/git-head.txt" 2>/dev/null || true
@@ -147,6 +153,16 @@ git status --short > "${METADATA_ROOT}/git-status-short.txt" 2>/dev/null || true
   printf 'STAMP=%s\n' "$STAMP"
   printf 'WARMUP=%s\n' "${WARMUP:-}"
 } > "${METADATA_ROOT}/environment.txt"
+
+echo "== Preflight: download and smoke-test embedding models =="
+"$PYTHON" scripts/download_embedding_model.py \
+  --manifest "$MODEL_MANIFEST_PATH" \
+  > "${LOG_ROOT}/model-download-preflight.log" 2>&1
+
+if [[ "$PREFLIGHT_ONLY" -eq 1 ]]; then
+  echo "Preflight artifacts: ${MATRIX_ROOT}"
+  exit 0
+fi
 
 read_manifest_repos() {
   "$PYTHON" - "$MANIFEST_PATH" <<'PY'
@@ -194,14 +210,17 @@ restore_repo_configs() {
 }
 
 write_model_configs() {
-  "$PYTHON" - "$MODEL_MANIFEST_PATH" "$CONFIG_ROOT" <<'PY'
+  "$PYTHON" - "$MODEL_MANIFEST_PATH" "$CONFIG_ROOT" "$BACKEND_MODE" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 manifest = Path(sys.argv[1])
 config_root = Path(sys.argv[2])
+backend_mode = sys.argv[3]
 payload = json.loads(manifest.read_text(encoding="utf-8"))
+backend_name = "duckdb" if backend_mode in {"duckdb", "both"} else "sqlite"
+vector_store_name = backend_name
 
 for entry in payload["models"]:
     config = entry.get("config", {})
@@ -209,7 +228,7 @@ for entry in payload["models"]:
         "config_version = 1",
         "",
         "[backend]",
-        'name = "duckdb"',
+        f'name = "{backend_name}"',
         "",
         "[plugins]",
         "disable_third_party = false",
@@ -218,7 +237,7 @@ for entry in payload["models"]:
         "[embeddings]",
         "enabled = true",
         f'engine = "{entry["engine"]}"',
-        'vector_store = "duckdb"',
+        f'vector_store = "{vector_store_name}"',
         f'model = "{entry["model"]}"',
         f'version = "{entry["version"]}"',
         f"dimension = {int(entry['dimension'])}",

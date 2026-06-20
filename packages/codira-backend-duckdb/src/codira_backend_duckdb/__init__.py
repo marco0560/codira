@@ -466,7 +466,7 @@ class _DuckDBIndexWriteSession:
             If validated persistence inputs are semantically inconsistent.
         """
         active_backend = (
-            get_embedding_backend()
+            get_embedding_backend(root=request.root)
             if request.embedding_backend is None
             else request.embedding_backend
         )
@@ -541,7 +541,7 @@ class _DuckDBIndexWriteSession:
             return
         backend = self._embedding_backend
         if backend is None:
-            backend = get_embedding_backend()
+            backend = get_embedding_backend(root=self._root)
             self._embedding_backend = backend
         if self._pending_embedding_rows_deferred:
             self._store_deferred_vector_rows()
@@ -1921,7 +1921,7 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
             conn = self.open_connection(root)
         assert conn is not None
         active_backend = (
-            get_embedding_backend()
+            get_embedding_backend(root=root)
             if request.embedding_backend is None
             else request.embedding_backend
         )

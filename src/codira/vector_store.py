@@ -75,6 +75,9 @@ def active_vector_store_context(root: Path) -> ActiveVectorStoreContext:
         name=effective_config.embeddings.vector_store.strip(),
     )
     engine_config = dict(plugin_configs.get(engine_config_key, {}))
+    engine_config["_codira_model"] = effective_config.embeddings.model
+    engine_config["_codira_model_version"] = effective_config.embeddings.version
+    engine_config["_codira_dimension"] = effective_config.embeddings.dimension
     vector_store_config = dict(plugin_configs.get(vector_store_config_key, {}))
     store.initialize(root, vector_store_config)
     return ActiveVectorStoreContext(

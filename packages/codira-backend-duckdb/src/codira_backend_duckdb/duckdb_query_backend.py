@@ -1792,8 +1792,8 @@ class DuckDBQueryBackend:
         if conn is None:
             conn = self.open_connection(root)
 
-        backend = get_embedding_backend()
-        query_vector = embed_text(query)
+        backend = get_embedding_backend(root=root)
+        query_vector = embed_text(query, root=root)
         if not any(query_vector):
             return []
 
@@ -1945,8 +1945,8 @@ class DuckDBQueryBackend:
         if conn is None:
             conn = self.open_connection(root)
 
-        backend = get_embedding_backend()
-        query_vector = embed_text(query)
+        backend = get_embedding_backend(root=root)
+        query_vector = embed_text(query, root=root)
         if not any(query_vector):
             return []
 
@@ -2672,7 +2672,7 @@ class DuckDBQueryBackend:
         if conn is None:
             conn = self.open_connection(root)
         active_backend = (
-            get_embedding_backend()
+            get_embedding_backend(root=root)
             if request.embedding_backend is None
             else request.embedding_backend
         )

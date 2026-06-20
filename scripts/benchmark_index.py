@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 
     class _BenchmarkBackendSupportModule(Protocol):
         _flush_embedding_rows: Callable[..., object]
-        embed_texts: Callable[[Sequence[str]], list[list[float]]]
+        embed_texts: Callable[..., list[list[float]]]
 
 
 from benchmark_timing import (  # type: ignore[import-not-found]
@@ -261,7 +261,11 @@ def main() -> int:
             conn=conn,
         )
 
-    def benchmark_embed_texts(texts: Sequence[str]) -> list[list[float]]:
+    def benchmark_embed_texts(
+        texts: Sequence[str],
+        *,
+        root: Path | None = None,
+    ) -> list[list[float]]:
         batch = list(texts)
         embedding_batch_sizes.append(len(batch))
         embedding_unique_batch_sizes.append(len(set(batch)))
@@ -269,6 +273,7 @@ def main() -> int:
             "embeddings",
             original_embed_texts,
             batch,
+            root=root,
         )
         return cast("list[list[float]]", result)
 

@@ -1969,7 +1969,9 @@ def test_duckdb_session_batches_embedding_generation_across_files(
     pytest.importorskip("duckdb")
     calls: list[list[str]] = []
 
-    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+    def fake_embed_texts(
+        texts: list[str], *, root: Path | None = None
+    ) -> list[list[float]]:
         """
         Record one embedding batch.
 
@@ -1977,12 +1979,15 @@ def test_duckdb_session_batches_embedding_generation_across_files(
         ----------
         texts : list[str]
             Text payloads requested from the embedding backend.
+        root : pathlib.Path | None, optional
+            Repository root passed by backend persistence.
 
         Returns
         -------
         list[list[float]]
             Deterministic embedding vectors matching the requested payloads.
         """
+        assert root == tmp_path
         calls.append(list(texts))
         return [[0.0] * 384 for _text in texts]
 
@@ -2055,7 +2060,9 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
     pytest.importorskip("duckdb")
     calls: list[list[str]] = []
 
-    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+    def fake_embed_texts(
+        texts: list[str], *, root: Path | None = None
+    ) -> list[list[float]]:
         """
         Record one embedding batch.
 
@@ -2063,12 +2070,15 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
         ----------
         texts : list[str]
             Text payloads requested from the embedding backend.
+        root : pathlib.Path | None, optional
+            Repository root passed by backend persistence.
 
         Returns
         -------
         list[list[float]]
             Deterministic embedding vectors matching the requested payloads.
         """
+        assert root == tmp_path
         calls.append(list(texts))
         return [[float(index + 1)] + [0.0] * 383 for index, _text in enumerate(texts)]
 
@@ -2082,6 +2092,7 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
     try:
         _flush_pending_embedding_rows(
             cast("_DuckDBPersistenceConnection", connection),
+            tmp_path,
             pending_embedding_rows=[
                 (
                     PendingEmbeddingRow(
@@ -2102,6 +2113,7 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
         )
         _flush_pending_embedding_rows(
             cast("_DuckDBPersistenceConnection", connection),
+            tmp_path,
             pending_embedding_rows=[
                 (
                     PendingEmbeddingRow(

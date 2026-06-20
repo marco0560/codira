@@ -39,7 +39,7 @@ def test_default_embedding_model_manifest_covers_campaign_models() -> None:
         "sentence-transformers/all-MiniLM-L6-v2",
         "BAAI/bge-small-en-v1.5",
         "nomic-ai/nomic-embed-text-v1.5",
-        "jinaai/jina-embeddings-v2-code-en",
+        "jinaai/jina-embeddings-v2-base-code",
     } <= models
     assert {"sentence-transformers", "onnx"} <= engines
     assert all(entry.dimension > 0 for entry in entries)
