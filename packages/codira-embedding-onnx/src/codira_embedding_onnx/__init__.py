@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from codira.config import load_effective_config
+from codira.config import DEFAULT_EMBEDDING_BATCH_SIZE, load_effective_config
 from codira.contracts import EmbeddingEngineError, EmbeddingEngineSpec
 
 if TYPE_CHECKING:
@@ -22,6 +22,7 @@ __all__ = ["OnnxEmbeddingEngine", "build_engine"]
 PACKAGE_VERSION = "1.0.0"
 DEFAULT_PROVIDER = "CPUExecutionProvider"
 DEFAULT_PRECISION = "float32"
+DEFAULT_MAX_TOKENS = 512
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,10 @@ class _OnnxEngineConfig:
         Vector precision or quantization label.
     normalize : bool
         Whether returned vectors are L2-normalized.
+    max_tokens : int
+        Maximum tokenizer sequence length, or ``0`` to disable truncation.
+    batch_size : int
+        Maximum number of texts to pass to one ONNX Runtime invocation.
     intra_op_num_threads : int
         ONNX Runtime intra-op thread count, or ``0`` for default.
     inter_op_num_threads : int
@@ -52,6 +57,8 @@ class _OnnxEngineConfig:
     provider: str = DEFAULT_PROVIDER
     precision: str = DEFAULT_PRECISION
     normalize: bool = True
+    max_tokens: int = DEFAULT_MAX_TOKENS
+    batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE
     intra_op_num_threads: int = 0
     inter_op_num_threads: int = 0
 
@@ -123,6 +130,27 @@ def _int_config(
     return value
 
 
+def _runtime_batch_size(config: Mapping[str, object]) -> int:
+    """
+    Return the effective ONNX runtime batch size.
+
+    Parameters
+    ----------
+    config : collections.abc.Mapping[str, object]
+        Plugin configuration table enriched by core runtime metadata.
+
+    Returns
+    -------
+    int
+        Positive runtime batch size.
+    """
+    value = config.get("_codira_batch_size", DEFAULT_EMBEDDING_BATCH_SIZE)
+    if not isinstance(value, int) or value <= 0:
+        msg = "plugins.embedding-onnx._codira_batch_size must be a positive integer."
+        raise EmbeddingEngineError(msg)
+    return value
+
+
 def _bool_config(
     config: Mapping[str, object],
     key: str,
@@ -173,6 +201,8 @@ def _engine_config(config: Mapping[str, object]) -> _OnnxEngineConfig:
         provider=_string_config(config, "provider", default=DEFAULT_PROVIDER),
         precision=_string_config(config, "precision", default=DEFAULT_PRECISION),
         normalize=_bool_config(config, "normalize", default=True),
+        max_tokens=_int_config(config, "max_tokens", default=DEFAULT_MAX_TOKENS),
+        batch_size=_runtime_batch_size(config),
         intra_op_num_threads=_int_config(config, "intra_op_num_threads"),
         inter_op_num_threads=_int_config(config, "inter_op_num_threads"),
     )
@@ -196,6 +226,120 @@ def _l2_normalize(vector: list[float]) -> list[float]:
     if norm == 0.0:
         return vector
     return [value / norm for value in vector]
+
+
+def _enable_tokenizer_truncation(tokenizer: object, max_tokens: int) -> None:
+    """
+    Enable tokenizer-side truncation when supported.
+
+    Parameters
+    ----------
+    tokenizer : object
+        Tokenizers tokenizer instance.
+    max_tokens : int
+        Maximum sequence length accepted by the ONNX model.
+
+    Returns
+    -------
+    None
+        The tokenizer is configured in place.
+    """
+    if max_tokens <= 0:
+        return
+    try:
+        cast("Any", tokenizer).enable_truncation(max_length=max_tokens)
+    except TypeError:
+        cast("Any", tokenizer).enable_truncation(max_tokens)
+    except AttributeError as exc:
+        msg = "The configured ONNX tokenizer does not support truncation."
+        raise EmbeddingEngineError(msg) from exc
+
+
+def _truncate_encoding(encoding: object, max_tokens: int) -> object:
+    """
+    Truncate one encoded sequence when tokenizer-side truncation was insufficient.
+
+    Parameters
+    ----------
+    encoding : object
+        Tokenizers encoding object.
+    max_tokens : int
+        Maximum sequence length accepted by the ONNX model.
+
+    Returns
+    -------
+    object
+        The original encoding, possibly truncated in place.
+    """
+    if max_tokens <= 0:
+        return encoding
+    token_count = len(cast("Any", encoding).ids)
+    if token_count <= max_tokens:
+        return encoding
+    try:
+        cast("Any", encoding).truncate(max_tokens)
+    except TypeError:
+        cast("Any", encoding).truncate(max_tokens, 0)
+    except AttributeError as exc:
+        msg = (
+            "The configured ONNX tokenizer produced "
+            f"{token_count} tokens, exceeding max_tokens={max_tokens}, "
+            "but its encoding object does not support truncation."
+        )
+        raise EmbeddingEngineError(msg) from exc
+    return encoding
+
+
+def _encode_texts(
+    tokenizer: object,
+    texts: Sequence[str],
+    *,
+    max_tokens: int,
+) -> Sequence[object]:
+    """
+    Encode texts with an explicit sequence-length cap.
+
+    Parameters
+    ----------
+    tokenizer : object
+        Tokenizers tokenizer instance.
+    texts : collections.abc.Sequence[str]
+        Text payloads to encode.
+    max_tokens : int
+        Maximum sequence length accepted by the ONNX model, or ``0`` to disable
+        truncation.
+
+    Returns
+    -------
+    collections.abc.Sequence[object]
+        Tokenizer encodings safe to pass to ONNX Runtime.
+    """
+    _enable_tokenizer_truncation(tokenizer, max_tokens)
+    encoded = cast("Sequence[object]", cast("Any", tokenizer).encode_batch(list(texts)))
+    if max_tokens <= 0:
+        return encoded
+    return [_truncate_encoding(item, max_tokens) for item in encoded]
+
+
+def _chunked_texts(texts: Sequence[str], batch_size: int) -> list[Sequence[str]]:
+    """
+    Split text payloads into bounded ONNX Runtime batches.
+
+    Parameters
+    ----------
+    texts : collections.abc.Sequence[str]
+        Text payloads to embed.
+    batch_size : int
+        Maximum number of texts per runtime invocation.
+
+    Returns
+    -------
+    list[collections.abc.Sequence[str]]
+        Ordered text batches.
+    """
+    return [
+        texts[index : index + batch_size] for index in range(0, len(texts), batch_size)
+    ]
 
 
 def _runtime_input_feed(
@@ -362,15 +506,24 @@ class OnnxEmbeddingEngine:
         if not texts:
             return []
         session, tokenizer = _load_runtime(onnx_config)
-        encoded = tokenizer.encode_batch(list(texts))
-        input_feed = _runtime_input_feed(session, encoded)
-        attention_mask = cast("Any", input_feed["attention_mask"]).tolist()
-        outputs = session.run(None, input_feed)
-        return _pool_outputs(
-            outputs[0],
-            attention_mask=attention_mask,
-            normalize=onnx_config.normalize,
-        )
+        vectors: list[list[float]] = []
+        for batch in _chunked_texts(texts, onnx_config.batch_size):
+            encoded = _encode_texts(
+                tokenizer,
+                batch,
+                max_tokens=onnx_config.max_tokens,
+            )
+            input_feed = _runtime_input_feed(session, encoded)
+            attention_mask = cast("Any", input_feed["attention_mask"]).tolist()
+            outputs = session.run(None, input_feed)
+            vectors.extend(
+                _pool_outputs(
+                    outputs[0],
+                    attention_mask=attention_mask,
+                    normalize=onnx_config.normalize,
+                )
+            )
+        return vectors
 
     def reset_runtime_caches(self) -> None:
         """

@@ -338,6 +338,7 @@ FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
         "provider": "CPUExecutionProvider",
         "precision": "float32",
         "normalize": True,
+        "max_tokens": 512,
         "intra_op_num_threads": 0,
         "inter_op_num_threads": 0,
     },

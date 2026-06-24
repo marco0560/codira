@@ -160,3 +160,90 @@ def test_onnx_runtime_input_feed_supplies_token_type_ids() -> None:
     assert cast(Any, feed["input_ids"]).tolist() == [[101, 102], [101, 0]]
     assert cast(Any, feed["attention_mask"]).tolist() == [[1, 1], [1, 0]]
     assert cast(Any, feed["token_type_ids"]).tolist() == [[0, 0], [0, 0]]
+
+
+def test_onnx_engine_batches_runtime_invocations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Keep native ONNX inference bounded by the configured embedding batch size.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace the expensive ONNX Runtime session.
+
+    Returns
+    -------
+    None
+        The test asserts a large text list is split before session execution.
+    """
+    import numpy as np
+    import codira_embedding_onnx as onnx_module
+
+    class _Input:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    class _Session:
+        def __init__(self) -> None:
+            self.batch_sizes: list[int] = []
+
+        def get_inputs(self) -> list[_Input]:
+            return [_Input("input_ids"), _Input("attention_mask")]
+
+        def run(
+            self,
+            output_names: object,
+            input_feed: dict[str, object],
+        ) -> list[object]:
+            del output_names
+            input_ids = cast(Any, input_feed["input_ids"])
+            batch_size = int(input_ids.shape[0])
+            token_count = int(input_ids.shape[1])
+            self.batch_sizes.append(batch_size)
+            assert batch_size <= 2
+            return [np.ones((batch_size, token_count, 3), dtype=np.float32)]
+
+    class _Encoding:
+        def __init__(self, token_count: int) -> None:
+            self.ids = list(range(token_count))
+            self.attention_mask = [1] * token_count
+            self.type_ids = [0] * token_count
+
+        def truncate(self, max_tokens: int, stride: int = 0) -> None:
+            del stride
+            self.ids = self.ids[:max_tokens]
+            self.attention_mask = self.attention_mask[:max_tokens]
+            self.type_ids = self.type_ids[:max_tokens]
+
+    class _Tokenizer:
+        def enable_truncation(self, max_length: int) -> None:
+            self.max_length = max_length
+
+        def encode_batch(self, texts: list[str]) -> list[_Encoding]:
+            return [_Encoding(len(text.split())) for text in texts]
+
+    session = _Session()
+    tokenizer = _Tokenizer()
+    monkeypatch.setattr(
+        onnx_module,
+        "_load_runtime",
+        lambda config: (session, tokenizer),
+    )
+
+    engine = OnnxEmbeddingEngine()
+    vectors = engine.embed_texts(
+        ["one two three"] * 5,
+        {
+            "model_path": "model.onnx",
+            "tokenizer_path": "tokenizer.json",
+            "normalize": False,
+            "max_tokens": 512,
+            "_codira_batch_size": 2,
+        },
+    )
+
+    assert session.batch_sizes == [2, 2, 1]
+    assert len(vectors) == 5
+    assert all(vector == [1.0, 1.0, 1.0] for vector in vectors)

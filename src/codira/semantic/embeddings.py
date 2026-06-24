@@ -642,10 +642,13 @@ def provision_embedding_model(
     """
     effective_root = _effective_root(root)
     config = load_effective_config(root=effective_root)
-    engine_config = (config.plugins.configs or {}).get(
-        f"embedding-{config.embeddings.engine}",
-        {},
+    engine_config = dict(
+        (config.plugins.configs or {}).get(
+            f"embedding-{config.embeddings.engine}",
+            {},
+        )
     )
+    engine_config["_codira_batch_size"] = config.embeddings.batch_size
     token = _ACTIVE_EMBEDDING_ROOT.set(effective_root)
     try:
         active_embedding_engine(root=effective_root).provision(
@@ -753,10 +756,13 @@ def embed_texts(
     """
     effective_root = _effective_root(root)
     config = load_effective_config(root=effective_root)
-    engine_config = (config.plugins.configs or {}).get(
-        f"embedding-{config.embeddings.engine}",
-        {},
+    engine_config = dict(
+        (config.plugins.configs or {}).get(
+            f"embedding-{config.embeddings.engine}",
+            {},
+        )
     )
+    engine_config["_codira_batch_size"] = config.embeddings.batch_size
     token = _ACTIVE_EMBEDDING_ROOT.set(effective_root)
     try:
         return active_embedding_engine(root=effective_root).embed_texts(

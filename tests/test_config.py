@@ -276,6 +276,7 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
     assert "[plugins.backend-duckdb]" in rendered
     assert "[plugins.embedding-sentence-transformers]" in rendered
     assert "[plugins.embedding-onnx]" in rendered
+    assert "max_tokens = 512" in rendered
     assert "[plugins.vector-store-sqlite]" in rendered
     assert "[plugins.vector-store-duckdb]" in rendered
 

@@ -375,6 +375,11 @@ only run fast smoke checks locally.
   remote-code path fails against the repository's pinned Transformers API.
 - Fixed ONNX input-feed construction so models declaring `token_type_ids`
   receive that tensor.
+- Fixed ONNX tokenizer handling so overlong inputs are truncated before runtime
+  inference; `plugins.embedding-onnx.max_tokens` defaults to `512` and can be
+  set to `0` for known dynamic-shape exports. Changing the value requires a
+  corresponding `[embeddings].version` bump because it can change vectors for
+  over-limit texts.
 - Added root-aware embedding backend resolution for indexing, query, context
   explain output, and backend persistence paths.
 - Added a DuckDB insert guard that keeps one embedding row per

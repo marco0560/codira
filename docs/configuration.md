@@ -187,6 +187,13 @@ The current Jina candidate is ONNX-only because the
 `jinaai/jina-embeddings-v2-base-code` SentenceTransformers remote-code path is
 not compatible with the pinned Transformers API used by this repository.
 
+ONNX embedding inputs are truncated before inference. The default
+`plugins.embedding-onnx.max_tokens = 512` protects fixed-length exports from
+runtime shape errors. Set `max_tokens = 0` only for dynamic-shape exports that
+are known to accept arbitrary sequence lengths. Changing `max_tokens` changes
+vectors for over-limit texts, so bump `[embeddings].version` when changing it
+for an existing index.
+
 ## Environment Overrides
 
 Existing process-local environment overrides still work and take precedence
