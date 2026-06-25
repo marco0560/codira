@@ -5,6 +5,18 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/release_rel.py [-h|--help]\n\n"
+        "Run the guarded release push path used by git rel."
+    )
+    raise SystemExit(0)
 
 from scripts.scriptlib import output, resolve_python, run
 

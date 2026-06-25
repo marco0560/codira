@@ -8,9 +8,13 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.scriptlib import (
     RepoConfigRestore,
@@ -726,6 +730,11 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     -------
     int
         Process exit status.
+
+    Raises
+    ------
+    SystemExit
+        Raised when required manifest paths or restart metadata are invalid.
     """
 
     args = parse_args(argv)

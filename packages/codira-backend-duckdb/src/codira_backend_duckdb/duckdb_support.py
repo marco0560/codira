@@ -3551,6 +3551,8 @@ def _flush_embedding_rows(
     ----------
     conn : _DuckDBPersistenceConnection
         Open database connection.
+    root : pathlib.Path | None, optional
+        Repository root used for embedding configuration and vector-store paths.
     embedding_rows : list[codira.indexer.PendingEmbeddingRow]
         Pending embedding payloads keyed by object type and identifier.
     backend : EmbeddingBackendSpec
@@ -3563,6 +3565,12 @@ def _flush_embedding_rows(
     pending_embedding_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]] | None, optional
         Session-level embedding buffer. When supplied, prepared rows are
         appended for one later backend batch.
+    vector_store : codira.contracts.VectorStore | None, optional
+        Active separated vector-store plugin used for materialized vectors.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : collections.abc.Mapping[str, object] | None, optional
+        Vector-store-specific configuration table.
 
     Returns
     -------
@@ -3800,10 +3808,18 @@ def _store_pending_embedding_rows(
     ----------
     conn : _DuckDBPersistenceConnection
         Open database connection.
+    root : pathlib.Path | None, optional
+        Repository root used for embedding configuration and vector-store paths.
     prepared_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
         Prepared embedding rows as ``(row, content_hash, stored_vector)``.
     backend : EmbeddingBackendSpec
         Active embedding backend metadata.
+    vector_store : codira.contracts.VectorStore | None, optional
+        Active separated vector-store plugin used for materialized vectors.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : collections.abc.Mapping[str, object] | None, optional
+        Vector-store-specific configuration table.
 
     Returns
     -------
@@ -4092,10 +4108,18 @@ def _delete_pending_embedding_rows(
     ----------
     conn : _DuckDBPersistenceConnection
         Open database connection.
+    root : pathlib.Path | None, optional
+        Repository root used for embedding configuration and vector-store paths.
     prepared_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
         Prepared embedding rows as ``(row, content_hash, stored_vector)``.
     backend : EmbeddingBackendSpec
         Active embedding backend metadata.
+    vector_store : codira.contracts.VectorStore | None, optional
+        Active separated vector-store plugin used for materialized vectors.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : collections.abc.Mapping[str, object] | None, optional
+        Vector-store-specific configuration table.
 
     Returns
     -------
@@ -4175,10 +4199,18 @@ def _flush_prepared_embedding_rows(
     ----------
     conn : _DuckDBPersistenceConnection
         Open database connection.
+    root : pathlib.Path | None, optional
+        Repository root used for embedding configuration and vector-store paths.
     prepared_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
         Prepared embedding rows as ``(row, content_hash, stored_vector)``.
     backend : EmbeddingBackendSpec
         Active embedding backend metadata.
+    vector_store : codira.contracts.VectorStore | None, optional
+        Active separated vector-store plugin used for materialized vectors.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : collections.abc.Mapping[str, object] | None, optional
+        Vector-store-specific configuration table.
 
     Returns
     -------
@@ -4370,10 +4402,18 @@ def _flush_pending_embedding_rows(
     ----------
     conn : _DuckDBPersistenceConnection
         Open database connection.
+    root : pathlib.Path | None, optional
+        Repository root used for embedding configuration and vector-store paths.
     pending_embedding_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
         Session-level prepared embedding rows.
     backend : EmbeddingBackendSpec
         Active embedding backend metadata.
+    vector_store : codira.contracts.VectorStore | None, optional
+        Active separated vector-store plugin used for materialized vectors.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : collections.abc.Mapping[str, object] | None, optional
+        Vector-store-specific configuration table.
 
     Returns
     -------
@@ -4413,8 +4453,16 @@ def _process_pending_embedding_rows(
     ----------
     conn : _DuckDBPersistenceConnection
         Open database connection.
+    root : pathlib.Path
+        Repository root used for embedding configuration and vector-store paths.
     backend : EmbeddingBackendSpec
         Active embedding backend metadata.
+    vector_store : codira.contracts.VectorStore | None, optional
+        Active separated vector-store plugin used for materialized vectors.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : collections.abc.Mapping[str, object] | None, optional
+        Vector-store-specific configuration table.
 
     Returns
     -------
@@ -4642,6 +4690,12 @@ def _store_analysis(
         Stored symbol embeddings captured before replacing file-owned rows.
     pending_embedding_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]] | None, optional
         Session-level buffer used to batch embedding generation across files.
+    vector_store : codira.contracts.VectorStore | None, optional
+        Active separated vector-store plugin used for materialized vectors.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : collections.abc.Mapping[str, object] | None, optional
+        Vector-store-specific configuration table.
     pending_reference_scan_rows : list[tuple[int, int, str]] | None, optional
         Session-level buffer used to batch reference-search rows across files.
     pending_call_rows : list[CallRow] | None, optional

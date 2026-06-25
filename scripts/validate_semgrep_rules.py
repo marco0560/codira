@@ -27,6 +27,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUN_REPO_TOOL = REPO_ROOT / "scripts" / "run_repo_tool.py"
 
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/validate_semgrep_rules.py [-h|--help]\n\n"
+        "Validate repository-owned Semgrep fixture expectations."
+    )
+    raise SystemExit(0)
+
 FIXTURES = (
     (
         "architecture",

@@ -21,10 +21,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from importlib import import_module
 from pathlib import Path
 from time import perf_counter
 from typing import Protocol, cast
+
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/benchmark_embedding_startup.py [options]\n\n"
+        "Measure same-process semantic startup and embedding costs.\n"
+        "Use `uv run python scripts/benchmark_embedding_startup.py --help` "
+        "for the environment-backed full option list."
+    )
+    raise SystemExit(0)
 
 from benchmark_timing import (  # type: ignore[import-not-found]
     benchmark_metadata,

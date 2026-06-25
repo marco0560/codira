@@ -206,6 +206,12 @@ def render_config(entry: EmbeddingModelEntry) -> str:
     -------
     str
         TOML snippet for repository configuration.
+
+    Raises
+    ------
+    TypeError
+        Raised when an entry contains a config value that cannot be rendered
+        as TOML.
     """
     lines = [
         "[embeddings]",

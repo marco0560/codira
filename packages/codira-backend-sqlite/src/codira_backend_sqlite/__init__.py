@@ -2380,6 +2380,12 @@ class SQLiteIndexBackend:
             Repository root whose index should be queried.
         embedding_backend : EmbeddingBackendSpec
             Active embedding backend metadata.
+        vector_store : codira.contracts.VectorStore | None, optional
+            Active separated vector-store plugin used for materialized vectors.
+        vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+            Active vector-set identity for separated vector-store writes.
+        vector_store_config : collections.abc.Mapping[str, object] | None, optional
+            Vector-store-specific configuration table.
         conn : sqlite3.Connection | None, optional
             Existing SQLite connection to reuse.
 
@@ -2516,6 +2522,12 @@ class SQLiteIndexBackend:
             Absolute file paths selected for replacement.
         embedding_backend : EmbeddingBackendSpec
             Active embedding backend metadata.
+        vector_store : codira.contracts.VectorStore | None, optional
+            Active separated vector-store plugin used for materialized vectors.
+        vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+            Active vector-set identity for separated vector-store writes.
+        vector_store_config : collections.abc.Mapping[str, object] | None, optional
+            Vector-store-specific configuration table.
         conn : sqlite3.Connection | None, optional
             Existing SQLite connection to reuse.
 
@@ -2589,6 +2601,12 @@ class SQLiteIndexBackend:
             Repository root whose pending embedding rows should be processed.
         embedding_backend : EmbeddingBackendSpec
             Active embedding backend metadata.
+        vector_store : codira.contracts.VectorStore | None, optional
+            Active separated vector-store plugin used for materialized vectors.
+        vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+            Active vector-set identity for separated vector-store writes.
+        vector_store_config : collections.abc.Mapping[str, object] | None, optional
+            Vector-store-specific configuration table.
         conn : sqlite3.Connection | None, optional
             Existing SQLite connection to reuse.
 

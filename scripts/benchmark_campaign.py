@@ -33,6 +33,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/benchmark_campaign.py [options] manifest\n\n"
+        "Run Codira benchmark campaigns from a repository manifest.\n"
+        "Use `uv run python scripts/benchmark_campaign.py --help` for the "
+        "environment-backed full option list."
+    )
+    raise SystemExit(0)
+
 from benchmark_timing import (  # type: ignore[import-not-found]
     benchmark_metadata,
     utc_run_timestamp,

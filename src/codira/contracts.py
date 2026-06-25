@@ -2040,6 +2040,12 @@ class IndexBackend(Protocol):
             Repository root whose pending embedding rows should be processed.
         embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
             Active semantic backend metadata used to select pending rows.
+        vector_store : codira.contracts.VectorStore | None, optional
+            Active separated vector-store plugin used for materialized vectors.
+        vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+            Active vector-set identity for separated vector-store writes.
+        vector_store_config : collections.abc.Mapping[str, object] | None, optional
+            Vector-store-specific configuration table.
         conn : object | None, optional
             Existing backend connection to reuse.
 

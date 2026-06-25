@@ -93,6 +93,11 @@ class SentenceTransformersEmbeddingEngine:
         -------
         codira.contracts.EmbeddingEngineSpec
             Engine-aware embedding identity.
+
+        Raises
+        ------
+        TypeError
+            Raised when core-injected identity metadata has an invalid type.
         """
         embeddings = load_effective_config().embeddings
         model = config.get("_codira_model", embeddings.model)

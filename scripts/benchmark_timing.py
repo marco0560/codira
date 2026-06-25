@@ -24,12 +24,25 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING
+
+if __package__ in {None, ""}:
+    repo_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(repo_root))
+    sys.path.insert(0, str(repo_root / "src"))
+
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/benchmark_timing.py [-h|--help]\n\n"
+        "Shared benchmark timing helper imported by benchmark scripts."
+    )
+    raise SystemExit(0)
 
 from codira.registry import plugin_registrations
 from codira.semantic.embeddings import (

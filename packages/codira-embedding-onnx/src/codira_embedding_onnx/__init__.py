@@ -89,6 +89,12 @@ def _string_config(
     -------
     str
         Normalized string value.
+
+    Raises
+    ------
+    codira.contracts.EmbeddingEngineError
+        Raised when the configured value is not a string or a required value
+        is empty.
     """
     value = config.get(key, default)
     if not isinstance(value, str):
@@ -123,6 +129,11 @@ def _int_config(
     -------
     int
         Non-negative integer value.
+
+    Raises
+    ------
+    codira.contracts.EmbeddingEngineError
+        Raised when the configured value is not a non-negative integer.
     """
     value = config.get(key, default)
     if not isinstance(value, int) or value < 0:
@@ -144,6 +155,11 @@ def _runtime_batch_size(config: Mapping[str, object]) -> int:
     -------
     int
         Positive runtime batch size.
+
+    Raises
+    ------
+    codira.contracts.EmbeddingEngineError
+        Raised when the injected runtime batch size is not positive.
     """
     value = config.get("_codira_batch_size", DEFAULT_EMBEDDING_BATCH_SIZE)
     if not isinstance(value, int) or value <= 0:
@@ -174,6 +190,11 @@ def _bool_config(
     -------
     bool
         Boolean value.
+
+    Raises
+    ------
+    codira.contracts.EmbeddingEngineError
+        Raised when the configured value is not boolean.
     """
     value = config.get(key, default)
     if not isinstance(value, bool):
@@ -244,6 +265,11 @@ def _enable_tokenizer_truncation(tokenizer: object, max_tokens: int) -> None:
     -------
     None
         The tokenizer is configured in place.
+
+    Raises
+    ------
+    codira.contracts.EmbeddingEngineError
+        Raised when the tokenizer cannot be configured for truncation.
     """
     if max_tokens <= 0:
         return
@@ -271,6 +297,11 @@ def _truncate_encoding(encoding: object, max_tokens: int) -> object:
     -------
     object
         The original encoding, possibly truncated in place.
+
+    Raises
+    ------
+    codira.contracts.EmbeddingEngineError
+        Raised when an over-limit encoding cannot be truncated.
     """
     if max_tokens <= 0:
         return encoding
@@ -492,6 +523,11 @@ class OnnxEmbeddingEngine:
         -------
         codira.contracts.EmbeddingEngineSpec
             ONNX engine vector identity.
+
+        Raises
+        ------
+        TypeError
+            Raised when core-injected identity metadata has an invalid type.
         """
         onnx_config = _engine_config(config)
         embeddings = load_effective_config().embeddings
@@ -531,6 +567,11 @@ class OnnxEmbeddingEngine:
         -------
         None
             Artifact paths exist or an engine error is raised.
+
+        Raises
+        ------
+        codira.contracts.EmbeddingEngineError
+            Raised when configured ONNX artifacts are missing.
         """
         del quiet
         onnx_config = _engine_config(config)
@@ -617,6 +658,11 @@ def _load_runtime(config: _OnnxEngineConfig) -> tuple[Any, Any]:
     -------
     tuple[typing.Any, typing.Any]
         ONNX Runtime session and tokenizer.
+
+    Raises
+    ------
+    codira.contracts.EmbeddingEngineError
+        Raised when ONNX Runtime or tokenizer dependencies are missing.
     """
     try:
         onnxruntime = import_module("onnxruntime")
@@ -662,6 +708,11 @@ def _pool_outputs(
     -------
     list[list[float]]
         One pooled vector per input text.
+
+    Raises
+    ------
+    codira.contracts.EmbeddingEngineError
+        Raised when NumPy is unavailable.
     """
     try:
         import numpy as np

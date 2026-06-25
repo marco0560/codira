@@ -22,9 +22,19 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import sys
 from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, cast
+
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/benchmark_index.py [options]\n\n"
+        "Run one instrumented Codira index pass.\n"
+        "Use `uv run python scripts/benchmark_index.py --help` for the "
+        "environment-backed full option list."
+    )
+    raise SystemExit(0)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence

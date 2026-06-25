@@ -26,6 +26,14 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
+
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/install_repo_git_config.py [-h|--help]\n\n"
+        "Install deterministic repo-local Git configuration and aliases."
+    )
+    raise SystemExit(0)
 
 GIT_EXE = shutil.which("git") or "git"
 

@@ -11,6 +11,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/download_embedding_model.py [options]\n\n"
+        "Download and smoke-test Codira embedding model artifacts.\n"
+        "Use `uv run python scripts/download_embedding_model.py --help` for "
+        "the environment-backed full option list."
+    )
+    raise SystemExit(0)
+
 from codira.contracts import EmbeddingEngineError
 
 DEFAULT_MANIFEST = Path("benchmarks/embedding-model-candidates.json")
@@ -238,6 +250,11 @@ def download_entry(entry: ModelEntry, token: str, install_root: Path) -> None:
     -------
     None
         Required model files are available locally.
+
+    Raises
+    ------
+    ValueError
+        Raised when the manifest entry uses an unsupported embedding engine.
     """
     if entry.engine == "onnx":
         _download_onnx_entry(entry, token, install_root)
@@ -263,6 +280,13 @@ def smoke_test_entry(entry: ModelEntry) -> None:
     None
         Raises when the model cannot produce vectors with the expected
         dimension.
+
+    Raises
+    ------
+    ValueError
+        Raised when the manifest entry uses an unsupported embedding engine.
+    codira.contracts.EmbeddingEngineError
+        Raised when the smoke test output shape is invalid.
     """
     if entry.engine == "onnx":
         from codira_embedding_onnx import OnnxEmbeddingEngine
@@ -320,6 +344,12 @@ def _selected_entries(
     -------
     list[ModelEntry]
         Selected entries in manifest order.
+
+    Raises
+    ------
+    SystemExit
+        Raised when one or more requested model identifiers are absent from
+        the manifest.
     """
     if not selected_ids:
         return entries
