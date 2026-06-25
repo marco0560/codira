@@ -37,7 +37,7 @@ echo "▶ Running test suite"
 
 echo "▶ Running release audit"
 if [ -z "${SKIP_RELEASE_AUDIT:-}" ]; then
-    exec "$REPO_ROOT/scripts/release_audit.sh"
+    exec "$PYTHON_BIN" -m scripts.release_audit
 fi
 
 echo "ℹ Skipping release_audit (already executed)"
