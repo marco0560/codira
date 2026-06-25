@@ -513,7 +513,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.49.0"
+    assert project["project"]["version"] == "1.49.1"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -564,6 +564,38 @@ def test_duckdb_backend_exposes_configuration_schema() -> None:
 
     assert schema["additionalProperties"] is False
     assert sorted(properties) == ["enabled"]
+
+
+def test_duckdb_backend_disables_python_replacements(tmp_path: Path) -> None:
+    """
+    Disable DuckDB Python replacement scans on backend-owned connections.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts bootstrap and normal backend connections avoid Python
+        frame scans for replacement values.
+    """
+    backend = DuckDBIndexBackend()
+    backend.initialize(tmp_path)
+    conn = backend.open_connection(tmp_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT value
+            FROM duckdb_settings()
+            WHERE name = 'python_enable_replacements'
+            """
+        ).fetchone()
+    finally:
+        backend.close_connection(conn)
+
+    assert row == ("false",)
 
 
 def test_duckdb_schema_ddl_declares_sequences_and_defaults() -> None:
@@ -812,7 +844,7 @@ def test_duckdb_backend_persist_analysis_translates_driver_errors(
     )
     monkeypatch.setattr(
         "codira_backend_duckdb.get_embedding_backend",
-        lambda: object(),
+        lambda root=None: object(),
     )
 
     def _raise_driver_error(*args: object, **kwargs: object) -> tuple[int, int]:
@@ -1899,7 +1931,7 @@ def test_duckdb_backend_persist_analysis_with_shared_connection_uses_real_driver
     connection = backend.open_connection(tmp_path)
     monkeypatch.setattr(
         "codira_backend_duckdb.duckdb_support.embed_texts",
-        lambda texts: [[0.0] * 384 for _text in texts],
+        lambda texts, root=None: [[0.0] * 384 for _text in texts],
     )
 
     recomputed, reused = backend.persist_analysis(
@@ -2346,11 +2378,11 @@ def test_duckdb_embedding_candidates_use_stored_vector_values(
     backend = DuckDBIndexBackend()
     monkeypatch.setattr(
         "codira_backend_duckdb.duckdb_support.embed_texts",
-        lambda texts: [[1.0] + [0.0] * 383 for _text in texts],
+        lambda texts, root=None: [[1.0] + [0.0] * 383 for _text in texts],
     )
     monkeypatch.setattr(
         "codira_backend_duckdb.duckdb_query_backend.embed_text",
-        lambda text: [1.0] + [0.0] * 383,
+        lambda text, root=None: [1.0] + [0.0] * 383,
     )
 
     backend.persist_analysis(
@@ -2454,11 +2486,11 @@ def test_duckdb_documentation_candidates_use_stored_vector_values(
     backend = DuckDBIndexBackend()
     monkeypatch.setattr(
         "codira_backend_duckdb.duckdb_support.embed_texts",
-        lambda texts: [[1.0] + [0.0] * 383 for _text in texts],
+        lambda texts, root=None: [[1.0] + [0.0] * 383 for _text in texts],
     )
     monkeypatch.setattr(
         "codira_backend_duckdb.duckdb_query_backend.embed_text",
-        lambda text: [1.0] + [0.0] * 383,
+        lambda text, root=None: [1.0] + [0.0] * 383,
     )
     document = tmp_path / "docs" / "architecture.md"
     artifact = DocumentationArtifact(

@@ -59,7 +59,10 @@ FIXTURES = (
     (
         "plugins",
         "fixtures/packages",
-        ("codira.plugins.no-broad-except-exception",),
+        (
+            "codira.plugins.no-broad-except-exception",
+            "codira.plugins.require-shared-plugin-json-schema-helper",
+        ),
     ),
     (
         "determinism",

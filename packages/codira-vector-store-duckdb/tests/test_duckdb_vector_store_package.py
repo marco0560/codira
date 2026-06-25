@@ -20,6 +20,7 @@ from codira_vector_store_duckdb import (
     build_vector_store,
     get_vector_store_path,
 )
+import codira_vector_store_duckdb as duckdb_vector_store_module
 
 
 def _vector_identity(store: DuckDBVectorStore) -> VectorSetIdentity:
@@ -101,10 +102,64 @@ def test_duckdb_vector_store_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.0.0"
+    assert project["project"]["version"] == "1.0.1"
     assert project["project"]["entry-points"]["codira.vector_stores"] == {
         "duckdb": "codira_vector_store_duckdb:build_vector_store"
     }
+
+
+def test_duckdb_vector_store_exposes_configuration_schema() -> None:
+    """
+    Expose a strict first-party vector-store configuration schema.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB currently accepts only common plugin options.
+    """
+    schema = DuckDBVectorStore().configuration_json_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+
+    assert schema["additionalProperties"] is False
+    assert sorted(properties) == ["enabled"]
+
+
+def test_duckdb_vector_store_disables_python_replacements(tmp_path: Path) -> None:
+    """
+    Disable DuckDB Python replacement scans on vector-store connections.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts vector-store-owned connections do not scan Python
+        frames for replacement values.
+    """
+    path = tmp_path / ".codira" / "embeddings.duckdb"
+    path.parent.mkdir(parents=True)
+
+    conn = duckdb_vector_store_module._connect(path)
+    try:
+        row = conn.execute(
+            """
+            SELECT value
+            FROM duckdb_settings()
+            WHERE name = 'python_enable_replacements'
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row == ("false",)
 
 
 def test_duckdb_vector_store_initializes_separated_database(tmp_path: Path) -> None:

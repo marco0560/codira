@@ -13,6 +13,7 @@ from codira.contracts import (
     VectorSimilarityScore,
     VectorStoreSpec,
 )
+from codira.plugin_config import plugin_json_schema
 from codira.semantic.embeddings import deserialize_vector
 from codira.storage import get_codira_dir
 
@@ -29,8 +30,29 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.0"
+PACKAGE_VERSION = "1.0.1"
 FORMAT_VERSION = "1"
+
+
+def _connect(path: Path, *, read_only: bool = False) -> duckdb.DuckDBPyConnection:
+    """
+    Open a configured DuckDB vector-store connection.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        DuckDB database path.
+    read_only : bool, optional
+        Whether the connection should open the database read-only.
+
+    Returns
+    -------
+    object
+        DuckDB connection with Python replacement scans disabled.
+    """
+    conn = duckdb.connect(str(path), read_only=read_only)
+    conn.execute("SET python_enable_replacements = false")
+    return conn
 
 
 def get_vector_store_path(root: Path) -> Path:
@@ -61,6 +83,21 @@ class DuckDBVectorStore:
 
     name = "duckdb"
     version = PACKAGE_VERSION
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the DuckDB vector-store plugin configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for vector-store options.
+        """
+        return plugin_json_schema({})
 
     def spec(self, config: Mapping[str, object]) -> VectorStoreSpec:
         """
@@ -102,7 +139,7 @@ class DuckDBVectorStore:
         del config
         path = get_vector_store_path(root)
         path.parent.mkdir(parents=True, exist_ok=True)
-        conn = duckdb.connect(str(path))
+        conn = _connect(path)
         try:
             conn.execute(
                 """
@@ -213,7 +250,7 @@ class DuckDBVectorStore:
             identity.vector_store.store_version,
             identity.vector_store.format_version,
         )
-        conn = duckdb.connect(str(get_vector_store_path(root)))
+        conn = _connect(get_vector_store_path(root))
         try:
             row = conn.execute(
                 """
@@ -305,7 +342,7 @@ class DuckDBVectorStore:
             return {}
         vector_set_id = self.ensure_vector_set(root, identity, config)
         placeholders = ",".join("?" for _item in ordered_hashes)
-        conn = duckdb.connect(str(get_vector_store_path(root)), read_only=True)
+        conn = _connect(get_vector_store_path(root), read_only=True)
         try:
             rows = conn.execute(
                 f"""
@@ -349,7 +386,7 @@ class DuckDBVectorStore:
         if not vectors:
             return
         vector_set_id = self.ensure_vector_set(root, identity, config)
-        conn = duckdb.connect(str(get_vector_store_path(root)))
+        conn = _connect(get_vector_store_path(root))
         try:
             conn.executemany(
                 """
@@ -400,7 +437,7 @@ class DuckDBVectorStore:
         if not rows:
             return
         vector_set_id = self.ensure_vector_set(root, identity, config)
-        conn = duckdb.connect(str(get_vector_store_path(root)))
+        conn = _connect(get_vector_store_path(root))
         try:
             conn.executemany(
                 """
@@ -458,7 +495,7 @@ class DuckDBVectorStore:
         if not rows:
             return
         vector_set_id = self.ensure_vector_set(root, identity, config)
-        conn = duckdb.connect(str(get_vector_store_path(root)))
+        conn = _connect(get_vector_store_path(root))
         try:
             conn.executemany(
                 """
@@ -503,7 +540,7 @@ class DuckDBVectorStore:
             Matching pending rows are deleted in place.
         """
         vector_set_id = self.ensure_vector_set(root, identity, config)
-        conn = duckdb.connect(str(get_vector_store_path(root)))
+        conn = _connect(get_vector_store_path(root))
         try:
             conn.execute(
                 """
@@ -549,7 +586,7 @@ class DuckDBVectorStore:
         if not materialized:
             return
         vector_set_id = self.ensure_vector_set(root, identity, config)
-        conn = duckdb.connect(str(get_vector_store_path(root)))
+        conn = _connect(get_vector_store_path(root))
         try:
             conn.executemany(
                 """
@@ -603,7 +640,7 @@ class DuckDBVectorStore:
             request.identity,
             request.config,
         )
-        conn = duckdb.connect(str(get_vector_store_path(request.root)), read_only=True)
+        conn = _connect(get_vector_store_path(request.root), read_only=True)
         try:
             scored_rows = conn.execute(
                 """

@@ -99,10 +99,31 @@ def test_sqlite_vector_store_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.0.0"
+    assert project["project"]["version"] == "1.0.1"
     assert project["project"]["entry-points"]["codira.vector_stores"] == {
         "sqlite": "codira_vector_store_sqlite:build_vector_store"
     }
+
+
+def test_sqlite_vector_store_exposes_configuration_schema() -> None:
+    """
+    Expose a strict first-party vector-store configuration schema.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts SQLite currently accepts only common plugin options.
+    """
+    schema = SQLiteVectorStore().configuration_json_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+
+    assert schema["additionalProperties"] is False
+    assert sorted(properties) == ["enabled"]
 
 
 def test_sqlite_vector_store_initializes_separated_database(tmp_path: Path) -> None:

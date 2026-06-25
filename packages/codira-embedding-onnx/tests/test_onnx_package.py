@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 from codira.contracts import EmbeddingEngine, EmbeddingEngineError
 from codira_embedding_onnx import OnnxEmbeddingEngine, _runtime_input_feed, build_engine
@@ -28,7 +29,7 @@ def test_onnx_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.0.0"
+    assert project["project"]["version"] == "1.0.1"
     assert project["project"]["entry-points"]["codira.embedding_engines"] == {
         "onnx": "codira_embedding_onnx:build_engine"
     }
@@ -52,6 +53,54 @@ def test_onnx_package_builds_expected_engine() -> None:
     assert isinstance(engine, OnnxEmbeddingEngine)
     assert isinstance(engine, EmbeddingEngine)
     assert engine.name == "onnx"
+
+
+def test_onnx_engine_exposes_configuration_schema() -> None:
+    """
+    Expose strict JSON Schema validation for ONNX plugin options.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts known ONNX knobs are typed and unknown keys fail.
+    """
+    schema = OnnxEmbeddingEngine().configuration_json_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+
+    assert schema["additionalProperties"] is False
+    assert properties["model_path"]["type"] == "string"
+    assert properties["tokenizer_path"]["type"] == "string"
+    assert properties["max_tokens"]["minimum"] == 0
+    assert properties["intra_op_num_threads"]["minimum"] == 0
+
+    validator = Draft202012Validator(schema)
+    assert (
+        list(
+            validator.iter_errors(
+                {
+                    "enabled": True,
+                    "model_path": ".codira/models/demo/model.onnx",
+                    "tokenizer_path": ".codira/models/demo/tokenizer.json",
+                    "provider": "CPUExecutionProvider",
+                    "precision": "float32",
+                    "normalize": True,
+                    "max_tokens": 512,
+                    "intra_op_num_threads": 4,
+                    "inter_op_num_threads": 1,
+                }
+            )
+        )
+        == []
+    )
+    assert list(validator.iter_errors({"typo": True}))
+    assert list(validator.iter_errors({"model_path": 1}))
+    assert list(validator.iter_errors({"max_tokens": -1}))
+    assert list(validator.iter_errors({"intra_op_num_threads": "4"}))
 
 
 def test_onnx_engine_requires_explicit_artifact_paths() -> None:

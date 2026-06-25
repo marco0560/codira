@@ -1286,6 +1286,24 @@ def _duckdb_module() -> _DuckDBModule:
     return cast("_DuckDBModule", module)
 
 
+def _configure_duckdb_connection(raw: _DuckDBRawConnection) -> _DuckDBRawConnection:
+    """
+    Apply Codira-owned DuckDB connection settings.
+
+    Parameters
+    ----------
+    raw : _DuckDBRawConnection
+        Newly opened raw DuckDB connection.
+
+    Returns
+    -------
+    _DuckDBRawConnection
+        The configured DuckDB connection.
+    """
+    raw.execute("SET python_enable_replacements = false")
+    return raw
+
+
 def _validated_sql_identifier(identifier: str, *, kind: str) -> str:
     """
     Validate one internal DuckDB identifier before SQL interpolation.
@@ -1807,7 +1825,7 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         db_path = _duckdb_db_path(root)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         module = _duckdb_module()
-        raw = module.connect(str(db_path))
+        raw = _configure_duckdb_connection(module.connect(str(db_path)))
         try:
             schema_statements = _duckdb_schema_ddl()
             for statement in schema_statements:
@@ -1838,7 +1856,9 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         """
         if not _duckdb_db_path(root).exists():
             self.initialize(root)
-        raw = _duckdb_module().connect(str(_duckdb_db_path(root)))
+        raw = _configure_duckdb_connection(
+            _duckdb_module().connect(str(_duckdb_db_path(root)))
+        )
         return cast("_BackendCompatibleConnectionAdapter", DuckDBConnection(raw))
 
     def process_pending_embeddings(

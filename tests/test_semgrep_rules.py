@@ -71,6 +71,12 @@ FIXTURE_FILES = (
     / "codira-analyzer-test"
     / "src"
     / "plugin_broad_except_exception_violation.py",
+    REPO_ROOT
+    / "fixtures"
+    / "packages"
+    / "codira-embedding-test"
+    / "src"
+    / "plugin_manual_schema_violation.py",
     REPO_ROOT / "fixtures" / "src" / "core_backend_import_violation.py",
     REPO_ROOT / "fixtures" / "src" / "core_sqlite_outside_allowlist_violation.py",
     REPO_ROOT / "fixtures" / "src" / "random_violation.py",
@@ -94,6 +100,7 @@ EXPECTED_FIXTURE_RULE_IDS = {
     "codira.det.no-random-without-explicit-seed",
     "codira.plugins.no-broad-except-exception",
     "codira.plugins.no-core-storage-import",
+    "codira.plugins.require-shared-plugin-json-schema-helper",
 }
 
 

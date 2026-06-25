@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from codira.config import load_effective_config
 from codira.contracts import EmbeddingEngineSpec
+from codira.plugin_config import plugin_json_schema
 from codira.semantic import embeddings as _legacy_embeddings
 
 if TYPE_CHECKING:
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 
 __all__ = ["SentenceTransformersEmbeddingEngine", "build_engine"]
 
-PACKAGE_VERSION = "1.0.0"
+PACKAGE_VERSION = "1.0.1"
 
 
 class SentenceTransformersEmbeddingEngine:
@@ -53,6 +54,29 @@ class SentenceTransformersEmbeddingEngine:
 
     name = "sentence-transformers"
     version = PACKAGE_VERSION
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the SentenceTransformers plugin configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for plugin-specific options.
+        """
+        return plugin_json_schema(
+            {
+                "trust_remote_code": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Allow SentenceTransformers to execute model-defined code.",
+                }
+            }
+        )
 
     def spec(self, config: Mapping[str, object]) -> EmbeddingEngineSpec:
         """

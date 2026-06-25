@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from codira.config import DEFAULT_EMBEDDING_BATCH_SIZE, load_effective_config
 from codira.contracts import EmbeddingEngineError, EmbeddingEngineSpec
+from codira.plugin_config import plugin_json_schema
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 
 __all__ = ["OnnxEmbeddingEngine", "build_engine"]
 
-PACKAGE_VERSION = "1.0.0"
+PACKAGE_VERSION = "1.0.1"
 DEFAULT_PROVIDER = "CPUExecutionProvider"
 DEFAULT_PRECISION = "float32"
 DEFAULT_MAX_TOKENS = 512
@@ -416,6 +417,67 @@ class OnnxEmbeddingEngine:
 
     name = "onnx"
     version = PACKAGE_VERSION
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the ONNX embedding plugin configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for plugin-specific ONNX Runtime options.
+        """
+        return plugin_json_schema(
+            {
+                "model_path": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to the local ONNX model artifact.",
+                },
+                "tokenizer_path": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to the local tokenizer JSON artifact.",
+                },
+                "provider": {
+                    "type": "string",
+                    "default": DEFAULT_PROVIDER,
+                    "description": "ONNX Runtime execution provider name.",
+                },
+                "precision": {
+                    "type": "string",
+                    "default": DEFAULT_PRECISION,
+                    "description": "Vector precision label used in embedding identity.",
+                },
+                "normalize": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Whether pooled vectors should be L2-normalized.",
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": DEFAULT_MAX_TOKENS,
+                    "description": "Tokenizer truncation limit; zero disables truncation.",
+                },
+                "intra_op_num_threads": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "ONNX Runtime intra-op thread override; zero leaves default.",
+                },
+                "inter_op_num_threads": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "ONNX Runtime inter-op thread override; zero leaves default.",
+                },
+            }
+        )
 
     def spec(self, config: Mapping[str, object]) -> EmbeddingEngineSpec:
         """

@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from codira_backend_sqlite import SQLiteIndexBackend
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 import codira.config as config_module
 import codira.registry as registry
@@ -139,6 +140,23 @@ class _FakeEntryPoint:
         if isinstance(self.loaded, Exception):
             raise self.loaded
         return self.loaded
+
+
+FIRST_PARTY_PLUGIN_FACTORIES = (
+    ("codira_analyzer_bash", "build_analyzer"),
+    ("codira_analyzer_c", "build_analyzer"),
+    ("codira_analyzer_cpp", "build_analyzer"),
+    ("codira_analyzer_json", "build_analyzer"),
+    ("codira_analyzer_markdown", "build_analyzer"),
+    ("codira_analyzer_python", "build_analyzer"),
+    ("codira_analyzer_text", "build_analyzer"),
+    ("codira_backend_duckdb", "build_backend"),
+    ("codira_backend_sqlite", "build_backend"),
+    ("codira_embedding_onnx", "build_engine"),
+    ("codira_embedding_sentence_transformers", "build_engine"),
+    ("codira_vector_store_duckdb", "build_vector_store"),
+    ("codira_vector_store_sqlite", "build_vector_store"),
+)
 
 
 class _DemoAnalyzer:
@@ -354,6 +372,40 @@ def _build_json_analyzer() -> LanguageAnalyzer:
         Deterministic JSON analyzer stub for registry tests.
     """
     return _build_optional_first_party_analyzer("json")
+
+
+def test_first_party_plugins_expose_configuration_json_schema() -> None:
+    """
+    Keep first-party plugin factories covered by strict config schemas.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts every first-party runtime plugin exposes a strict JSON
+        Schema through the common plugin configuration interface.
+    """
+    missing: list[str] = []
+    non_strict: list[str] = []
+
+    for module_name, factory_name in FIRST_PARTY_PLUGIN_FACTORIES:
+        module = importlib.import_module(module_name)
+        factory = getattr(module, factory_name)
+        plugin = factory()
+        schema_method = getattr(plugin, "configuration_json_schema", None)
+        if schema_method is None:
+            missing.append(f"{module_name}:{factory_name}")
+            continue
+        schema = schema_method()
+        Draft202012Validator.check_schema(schema)
+        if schema.get("additionalProperties") is not False:
+            non_strict.append(f"{module_name}:{factory_name}")
+
+    assert missing == []
+    assert non_strict == []
 
 
 class _DemoBackend(SQLiteIndexBackend):
@@ -766,6 +818,73 @@ def test_plugin_configuration_schema_validation_rejects_invalid_values(
 
     with pytest.raises(ConfigError, match="Invalid plugin configuration"):
         registry.validate_plugin_configuration()
+
+
+def test_embedding_onnx_config_validation_rejects_unknown_keys(tmp_path: Path) -> None:
+    """
+    Reject typoed ONNX embedding plugin options before indexing starts.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing repo-local config.
+
+    Returns
+    -------
+    None
+        The test asserts registry validation applies the ONNX plugin schema.
+    """
+    config_path = tmp_path / ".codira" / "config.toml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        """
+        [embeddings]
+        engine = "onnx"
+
+        [plugins.embedding-onnx]
+        model_path = ".codira/models/demo/model.onnx"
+        tokenizer_path = ".codira/models/demo/tokenizer.json"
+        max_toknes = 512
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="plugins.embedding-onnx"):
+        registry.validate_plugin_configuration(root=tmp_path)
+
+
+def test_sentence_transformers_config_validation_rejects_invalid_trust_remote_code(
+    tmp_path: Path,
+) -> None:
+    """
+    Reject wrongly typed SentenceTransformers plugin options.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing repo-local config.
+
+    Returns
+    -------
+    None
+        The test asserts registry validation applies the SentenceTransformers
+        plugin schema.
+    """
+    config_path = tmp_path / ".codira" / "config.toml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        """
+        [embeddings]
+        engine = "sentence-transformers"
+
+        [plugins.embedding-sentence-transformers]
+        trust_remote_code = "true"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="plugins.embedding-sentence-transformers"):
+        registry.validate_plugin_configuration(root=tmp_path)
 
 
 def test_plugin_configuration_validation_warns_for_missing_plugin(

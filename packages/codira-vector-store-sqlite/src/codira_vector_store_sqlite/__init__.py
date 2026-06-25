@@ -23,6 +23,7 @@ from codira.contracts import (
     VectorSimilarityScore,
     VectorStoreSpec,
 )
+from codira.plugin_config import plugin_json_schema
 from codira.semantic.embeddings import deserialize_vector
 from codira.storage import get_codira_dir
 
@@ -39,7 +40,7 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.0"
+PACKAGE_VERSION = "1.0.1"
 FORMAT_VERSION = "1"
 
 
@@ -71,6 +72,21 @@ class SQLiteVectorStore:
 
     name = "sqlite"
     version = PACKAGE_VERSION
+
+    def configuration_json_schema(self) -> Mapping[str, object]:
+        """
+        Return the SQLite vector-store plugin configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Strict JSON Schema for vector-store options.
+        """
+        return plugin_json_schema({})
 
     def spec(self, config: Mapping[str, object]) -> VectorStoreSpec:
         """

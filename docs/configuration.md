@@ -273,3 +273,35 @@ enabled = true
 
 Disabling the configured active backend is invalid. Disable an inactive backend
 only, or change `[backend].name` first.
+
+First-party embedding tables are also schema-validated:
+
+```toml
+[plugins.embedding-sentence-transformers]
+enabled = true
+trust_remote_code = false
+
+[plugins.embedding-onnx]
+enabled = true
+model_path = ".codira/models/example/model.onnx"
+tokenizer_path = ".codira/models/example/tokenizer.json"
+provider = "CPUExecutionProvider"
+precision = "float32"
+normalize = true
+max_tokens = 512
+intra_op_num_threads = 0
+inter_op_num_threads = 0
+```
+
+ONNX batching is controlled by the shared `[embeddings].batch_size` key, not by
+a plugin-local option.
+
+First-party vector-store tables currently accept only common plugin keys:
+
+```toml
+[plugins.vector-store-sqlite]
+enabled = true
+
+[plugins.vector-store-duckdb]
+enabled = true
+```
