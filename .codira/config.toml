@@ -1,7 +1,7 @@
 config_version = 1
 
 [backend]
-name = "duckdb"
+name = "sqlite"
 
 [plugins]
 disable_third_party = false
@@ -76,7 +76,6 @@ enabled = true
 
 [plugins.embedding-sentence-transformers]
 enabled = true
-precision = "float32"
 trust_remote_code = false
 
 [plugins.embedding-onnx]
@@ -98,7 +97,7 @@ enabled = true
 [embeddings]
 enabled = true
 engine = "sentence-transformers"
-vector_store = "duckdb"
+vector_store = "sqlite"
 model = "sentence-transformers/all-MiniLM-L6-v2"
 version = "1"
 dimension = 384

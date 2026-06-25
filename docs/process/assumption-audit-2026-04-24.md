@@ -19,7 +19,7 @@ Tracked tree focus:
 docs/adr/{ADR-001..ADR-014,ADR-016,index.md}
 docs/architecture/* docs/process/* docs/release/*
 packages/{codira-analyzer-bash,codira-analyzer-c,codira-analyzer-json,codira-analyzer-python,codira-backend-sqlite,codira-bundle-official}
-scripts/*.py scripts/*.sh
+scripts/*.py
 src/codira/{cli.py,contracts.py,indexer.py,models.py,prefix.py,registry.py,schema.py,storage.py,...}
 tests/{test_*.py,memory_backend.py}
 ```

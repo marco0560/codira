@@ -1,4 +1,4 @@
-# Deferred Fix Plan: DuckDB Index Slowdown
+# DuckDB Slowdown Fix — 2026-06-25
 
 ## Status
 

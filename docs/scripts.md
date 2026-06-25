@@ -20,7 +20,7 @@ The installer mirrors repository-local aliases only. It does not configure
 `user.name`, `user.email`, remote URLs, tokens, or credential helpers. Aliases
 that contact GitHub use the operator's own Git or `gh` authentication.
 
-## `scripts/run_with_repo_python.sh`
+## `scripts/run_with_repo_python.py`
 
 Resolve the repository Python interpreter deterministically and execute Python
 arguments through it.
@@ -118,12 +118,12 @@ model candidate manifest and the selected repository benchmark manifest. It is
 safe to run before the long campaign because it only validates manifests and
 prints planned runs.
 
-## `scripts/run_final_embedding_model_campaign.sh`
+## `scripts/run_final_embedding_model_campaign.py`
 
 Run the final engine/model measuring campaign:
 
 ```bash
-RUNS=5 WARMUP=1 scripts/run_final_embedding_model_campaign.sh \
+RUNS=5 WARMUP=1 uv run python -m scripts.run_final_embedding_model_campaign \
   --manifest benchmarks/uv-backed-repos.local.json \
   --model-manifest benchmarks/embedding-model-candidates.json \
   --backend duckdb
@@ -139,6 +139,13 @@ which previous matrix should be used later during analysis. Use
 `--preflight-only` to stop after download and smoke tests. Use `--backend both`
 only when the campaign must compare SQLite and DuckDB structural backends as
 well as PyTorch and ONNX Runtime embedding engines.
+
+The wrapper applies conservative benchmark defaults for large embedding models:
+768-dimensional candidates use `batch_size = 1`,
+`[embeddings.indexing].max_text_chars = 2000`, Torch threads `4/1`, and ONNX
+thread limits `intra_op_num_threads = 4` plus `inter_op_num_threads = 1`.
+384-dimensional ONNX candidates use `batch_size = 8`; 384-dimensional
+SentenceTransformers candidates use `batch_size = 32`.
 
 ## `scripts/benchmark_index.py`
 
@@ -223,14 +230,14 @@ python scripts/benchmark_campaign.py benchmarks.json --dry-run
 python scripts/benchmark_campaign.py benchmarks.json --runs 10
 ```
 
-## `scripts/run_bk_cpp_baseline.sh`
+## `scripts/run_manifest_baseline.py`
 
 Run the paired SQLite and DuckDB `benchmarks/bk-cpp.local.json` torture
 baseline with fixed runtime environment defaults, `--artifact-root .artifacts`,
 and `--continue-on-error`.
 
 ```bash
-scripts/run_bk_cpp_baseline.sh
+uv run python -m scripts.run_manifest_baseline
 ```
 
 See `docs/process/performance-benchmarking.md` for the manifest format,
@@ -245,25 +252,25 @@ The default result file is
 `.artifacts/benchmarks/release-hyperfine.json`. Use `--dry-run` to inspect the
 exact Hyperfine invocation before measuring.
 
-## `scripts/release_audit.sh`
+## `scripts/release_audit.py`
 
 Run conservative release-readiness checks for the current branch and repository
 state.
 
-## `scripts/release_rel.sh`
+## `scripts/release_rel.py`
 
 Run the guarded release push path used by `git rel`.
 
-## `scripts/tag_guard.sh`
+## `scripts/tag_guard.py`
 
 Validate that a proposed release tag matches the expected `vX.Y.Z` pattern.
 
-## `scripts/changelog_guard.sh`
+## `scripts/changelog_guard.py`
 
 Validate that `CHANGELOG.md` is structurally consistent with the latest
 reachable release tag.
 
-## `scripts/release_system_selfcheck.sh`
+## `scripts/release_system_selfcheck.py`
 
 Run a read-only consistency check of the installed local release tooling.
 

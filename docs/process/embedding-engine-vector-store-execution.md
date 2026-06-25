@@ -340,7 +340,7 @@ only run fast smoke checks locally.
 - Push hook validation also passed while pushing `feat/embedding-plugins`:
   `397 passed`.
 - Phase 9 is complete after Phase 4b wiring and final merge-handoff validation.
-- Added `scripts/run_final_embedding_model_campaign.sh` as the final
+- Added `scripts/run_final_embedding_model_campaign.py` as the final
   PyTorch/ONNX Runtime model-campaign wrapper. It records the previous
   embedding matrix baseline, generates per-model configs from
   `benchmarks/embedding-model-candidates.json`, runs the repository manifest
@@ -394,7 +394,7 @@ only run fast smoke checks locally.
 - The complete out-of-sandbox campaign command is:
 
 ```bash
-RUNS=5 WARMUP=1 scripts/run_final_embedding_model_campaign.sh \
+RUNS=5 WARMUP=1 uv run python -m scripts.run_final_embedding_model_campaign \
   --manifest benchmarks/uv-backed-repos.local.json \
   --model-manifest benchmarks/embedding-model-candidates.json \
   --backend duckdb
