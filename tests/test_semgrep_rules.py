@@ -86,6 +86,12 @@ FIXTURE_FILES = (
     / "codira-backend-duckdb"
     / "src"
     / "duckdb_support_batch_violation.py",
+    REPO_ROOT
+    / "fixtures"
+    / "packages"
+    / "codira-vector-store-duckdb"
+    / "src"
+    / "vector_store_batch_violation.py",
 )
 EXPECTED_FIXTURE_RULE_IDS = {
     "codira.arch.no-backend-import-in-analyzers",

@@ -30,8 +30,41 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.1"
+PACKAGE_VERSION = "1.0.2"
 FORMAT_VERSION = "1"
+
+
+def _flush_registered_arrow_table(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    view_name: str,
+    table: object,
+    sql: str,
+) -> None:
+    """
+    Execute one DuckDB statement against a registered Arrow table.
+
+    Parameters
+    ----------
+    conn : duckdb.DuckDBPyConnection
+        Open DuckDB vector-store connection.
+    view_name : str
+        Temporary relation name to register.
+    table : object
+        PyArrow table carrying columnar batch rows.
+    sql : str
+        DuckDB statement that reads from ``view_name``.
+
+    Returns
+    -------
+    None
+        The statement is executed and the temporary relation is unregistered.
+    """
+    conn.register(view_name, table)
+    try:
+        conn.execute(sql)
+    finally:
+        conn.unregister(view_name)
 
 
 def _connect(path: Path, *, read_only: bool = False) -> duckdb.DuckDBPyConnection:
@@ -385,25 +418,46 @@ class DuckDBVectorStore:
         """
         if not vectors:
             return
+        import pyarrow as pa
+
         vector_set_id = self.ensure_vector_set(root, identity, config)
+        ordered_vectors = sorted(vectors.items())
+        table = pa.table(
+            {
+                "vector_set_id": pa.array(
+                    [vector_set_id for _content_hash, _vector in ordered_vectors],
+                    type=pa.uint64(),
+                ),
+                "content_hash": pa.array(
+                    [content_hash for content_hash, _vector in ordered_vectors],
+                    type=pa.string(),
+                ),
+                "vector": pa.array(
+                    [vector for _content_hash, vector in ordered_vectors],
+                    type=pa.binary(),
+                ),
+                "vector_values": pa.array(
+                    [
+                        deserialize_vector(vector, dim=identity.engine.dimension)
+                        for _content_hash, vector in ordered_vectors
+                    ],
+                    type=pa.list_(pa.float64()),
+                ),
+            }
+        )
         conn = _connect(get_vector_store_path(root))
         try:
-            conn.executemany(
-                """
+            _flush_registered_arrow_table(
+                conn,
+                view_name="__codira_vector_cache_rows",
+                table=table,
+                sql="""
                 INSERT OR REPLACE INTO vector_cache(
                     vector_set_id, content_hash, vector, vector_values
                 )
-                VALUES (?, ?, ?, ?)
+                SELECT vector_set_id, content_hash, vector, vector_values
+                FROM __codira_vector_cache_rows
                 """,
-                [
-                    (
-                        vector_set_id,
-                        content_hash,
-                        vector,
-                        deserialize_vector(vector, dim=identity.engine.dimension),
-                    )
-                    for content_hash, vector in sorted(vectors.items())
-                ],
             )
         finally:
             conn.close()
@@ -436,11 +490,44 @@ class DuckDBVectorStore:
         """
         if not rows:
             return
+        import pyarrow as pa
+
         vector_set_id = self.ensure_vector_set(root, identity, config)
+        table = pa.table(
+            {
+                "vector_set_id": pa.array(
+                    [vector_set_id for _prepared in rows],
+                    type=pa.uint64(),
+                ),
+                "object_type": pa.array(
+                    [prepared.row.object_type for prepared in rows],
+                    type=pa.string(),
+                ),
+                "object_id": pa.array(
+                    [prepared.row.object_id for prepared in rows],
+                    type=pa.int64(),
+                ),
+                "stable_id": pa.array(
+                    [prepared.row.stable_id for prepared in rows],
+                    type=pa.string(),
+                ),
+                "content_hash": pa.array(
+                    [prepared.content_hash for prepared in rows],
+                    type=pa.string(),
+                ),
+                "text": pa.array(
+                    [prepared.row.text for prepared in rows],
+                    type=pa.string(),
+                ),
+            }
+        )
         conn = _connect(get_vector_store_path(root))
         try:
-            conn.executemany(
-                """
+            _flush_registered_arrow_table(
+                conn,
+                view_name="__codira_pending_vector_rows",
+                table=table,
+                sql="""
                 INSERT OR REPLACE INTO pending_vectors(
                     vector_set_id,
                     object_type,
@@ -449,19 +536,15 @@ class DuckDBVectorStore:
                     content_hash,
                     text
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                SELECT
+                    vector_set_id,
+                    object_type,
+                    object_id,
+                    stable_id,
+                    content_hash,
+                    text
+                FROM __codira_pending_vector_rows
                 """,
-                [
-                    (
-                        vector_set_id,
-                        prepared.row.object_type,
-                        prepared.row.object_id,
-                        prepared.row.stable_id,
-                        prepared.content_hash,
-                        prepared.row.text,
-                    )
-                    for prepared in rows
-                ],
             )
         finally:
             conn.close()
@@ -494,24 +577,38 @@ class DuckDBVectorStore:
         """
         if not rows:
             return
+        import pyarrow as pa
+
         vector_set_id = self.ensure_vector_set(root, identity, config)
+        table = pa.table(
+            {
+                "vector_set_id": pa.array(
+                    [vector_set_id for _prepared in rows],
+                    type=pa.uint64(),
+                ),
+                "object_type": pa.array(
+                    [prepared.row.object_type for prepared in rows],
+                    type=pa.string(),
+                ),
+                "object_id": pa.array(
+                    [prepared.row.object_id for prepared in rows],
+                    type=pa.int64(),
+                ),
+            }
+        )
         conn = _connect(get_vector_store_path(root))
         try:
-            conn.executemany(
-                """
+            _flush_registered_arrow_table(
+                conn,
+                view_name="__codira_pending_vector_delete_rows",
+                table=table,
+                sql="""
                 DELETE FROM pending_vectors
-                WHERE vector_set_id = ?
-                  AND object_type = ?
-                  AND object_id = ?
+                USING __codira_pending_vector_delete_rows delete_rows
+                WHERE pending_vectors.vector_set_id = delete_rows.vector_set_id
+                  AND pending_vectors.object_type = delete_rows.object_type
+                  AND pending_vectors.object_id = delete_rows.object_id
                 """,
-                [
-                    (
-                        vector_set_id,
-                        prepared.row.object_type,
-                        prepared.row.object_id,
-                    )
-                    for prepared in rows
-                ],
             )
         finally:
             conn.close()
@@ -585,11 +682,47 @@ class DuckDBVectorStore:
         ]
         if not materialized:
             return
+        import pyarrow as pa
+
         vector_set_id = self.ensure_vector_set(root, identity, config)
+        table = pa.table(
+            {
+                "vector_set_id": pa.array(
+                    [vector_set_id for _prepared, _vector in materialized],
+                    type=pa.uint64(),
+                ),
+                "object_type": pa.array(
+                    [prepared.row.object_type for prepared, _vector in materialized],
+                    type=pa.string(),
+                ),
+                "stable_id": pa.array(
+                    [prepared.row.stable_id for prepared, _vector in materialized],
+                    type=pa.string(),
+                ),
+                "content_hash": pa.array(
+                    [prepared.content_hash for prepared, _vector in materialized],
+                    type=pa.string(),
+                ),
+                "vector": pa.array(
+                    [vector for _prepared, vector in materialized],
+                    type=pa.binary(),
+                ),
+                "vector_values": pa.array(
+                    [
+                        deserialize_vector(vector, dim=identity.engine.dimension)
+                        for _prepared, vector in materialized
+                    ],
+                    type=pa.list_(pa.float64()),
+                ),
+            }
+        )
         conn = _connect(get_vector_store_path(root))
         try:
-            conn.executemany(
-                """
+            _flush_registered_arrow_table(
+                conn,
+                view_name="__codira_vector_rows",
+                table=table,
+                sql="""
                 INSERT OR REPLACE INTO vectors(
                     vector_set_id,
                     object_type,
@@ -598,22 +731,15 @@ class DuckDBVectorStore:
                     vector,
                     vector_values
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                SELECT
+                    vector_set_id,
+                    object_type,
+                    stable_id,
+                    content_hash,
+                    vector,
+                    vector_values
+                FROM __codira_vector_rows
                 """,
-                [
-                    (
-                        vector_set_id,
-                        prepared.row.object_type,
-                        prepared.row.stable_id,
-                        prepared.content_hash,
-                        vector,
-                        deserialize_vector(
-                            vector,
-                            dim=identity.engine.dimension,
-                        ),
-                    )
-                    for prepared, vector in materialized
-                ],
             )
         finally:
             conn.close()

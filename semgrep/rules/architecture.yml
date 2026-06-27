@@ -147,15 +147,17 @@ rules:
 
   - id: codira.arch.no-duckdb-executemany-in-support
     message: >
-      DuckDB support persistence must use columnar batch loading instead of
-      row-wise executemany calls.
+      DuckDB persistence must use columnar batch loading instead of row-wise
+      executemany calls.
     severity: ERROR
     languages:
       - python
     paths:
       include:
         - /packages/codira-backend-duckdb/src/codira_backend_duckdb/duckdb_support.py
+        - /packages/codira-vector-store-duckdb/src/**/*.py
         - /fixtures/packages/codira-backend-duckdb/src/**/*.py
+        - /fixtures/packages/codira-vector-store-duckdb/src/**/*.py
     patterns:
       - pattern: $CONN.executemany(...)
 
