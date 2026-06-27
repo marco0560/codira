@@ -394,8 +394,10 @@ only run fast smoke checks locally.
 - The complete out-of-sandbox campaign command is:
 
 ```bash
-RUNS=5 WARMUP=1 uv run python -m scripts.run_final_embedding_model_campaign \
+uv run python -m scripts.run_final_embedding_model_campaign \
   --manifest benchmarks/uv-backed-repos.local.json \
   --model-manifest benchmarks/embedding-model-candidates.json \
-  --backend duckdb
+  --backend duckdb \
+  --runs 5 \
+  --warmup 1
 ```

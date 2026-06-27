@@ -123,10 +123,12 @@ prints planned runs.
 Run the final engine/model measuring campaign:
 
 ```bash
-RUNS=5 WARMUP=1 uv run python -m scripts.run_final_embedding_model_campaign \
+uv run python -m scripts.run_final_embedding_model_campaign \
   --manifest benchmarks/uv-backed-repos.local.json \
   --model-manifest benchmarks/embedding-model-candidates.json \
-  --backend duckdb
+  --backend duckdb \
+  --runs 5 \
+  --warmup 1
 ```
 
 The wrapper writes artifacts under
@@ -237,7 +239,7 @@ baseline with fixed runtime environment defaults, `--artifact-root .artifacts`,
 and `--continue-on-error`.
 
 ```bash
-uv run python -m scripts.run_manifest_baseline
+uv run python -m scripts.run_manifest_baseline --runs 5 --warmup 1
 ```
 
 See `docs/process/performance-benchmarking.md` for the manifest format,

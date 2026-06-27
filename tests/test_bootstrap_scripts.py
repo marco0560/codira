@@ -764,6 +764,45 @@ class _BenchmarkCampaignModule(Protocol):
         ...
 
 
+class _ManifestBaselineModule(Protocol):
+    """Protocol for the paired backend benchmark baseline helper."""
+
+    def build_parser(self) -> argparse.ArgumentParser:
+        """
+        Build the manifest baseline parser.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        argparse.ArgumentParser
+            Parser for baseline campaign options.
+        """
+        ...
+
+
+class _FinalEmbeddingCampaignModule(Protocol):
+    """Protocol for the final embedding model campaign helper."""
+
+    def parse_args(self, argv: list[str] | None = None) -> argparse.Namespace:
+        """
+        Parse final campaign arguments.
+
+        Parameters
+        ----------
+        argv : list[str] | None, optional
+            Explicit command-line arguments.
+
+        Returns
+        -------
+        argparse.Namespace
+            Parsed campaign arguments.
+        """
+        ...
+
+
 class _ResolvedBenchmarkRepository(Protocol):
     """Protocol for one adaptively resolved benchmark repository."""
 
@@ -1553,6 +1592,63 @@ def _load_benchmark_campaign_helper() -> _BenchmarkCampaignModule:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return cast("_BenchmarkCampaignModule", module)
+
+
+def _load_manifest_baseline_helper() -> _ManifestBaselineModule:
+    """
+    Load the paired backend baseline helper from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the paired backend baseline helper.
+    """
+    helper_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "run_manifest_baseline.py"
+    )
+    sys.path.insert(0, str(helper_path.parent))
+    spec = importlib.util.spec_from_file_location("run_manifest_baseline", helper_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_ManifestBaselineModule", module)
+
+
+def _load_final_embedding_campaign_helper() -> _FinalEmbeddingCampaignModule:
+    """
+    Load the final embedding model campaign helper from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the final embedding campaign helper.
+    """
+    helper_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_final_embedding_model_campaign.py"
+    )
+    sys.path.insert(0, str(helper_path.parent))
+    spec = importlib.util.spec_from_file_location(
+        "run_final_embedding_model_campaign",
+        helper_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_FinalEmbeddingCampaignModule", module)
 
 
 def _load_embedding_startup_benchmark_helper() -> _EmbeddingStartupBenchmarkModule:
@@ -3088,6 +3184,105 @@ def test_release_benchmark_helper_builds_hyperfine_plan() -> None:
         "/tmp/codira/.venv/bin/codira ctx --json 'plugin registry'",
         "/tmp/codira/.venv/bin/codira audit --json",
     )
+
+
+def test_manifest_baseline_uses_explicit_runs_and_warmup_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Keep paired backend baseline measurement counts on the CLI surface.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to prove old environment variables are ignored.
+
+    Returns
+    -------
+    None
+        The test asserts explicit flags and parser defaults drive run counts.
+    """
+    helper = _load_manifest_baseline_helper()
+    parser = helper.build_parser()
+
+    monkeypatch.setenv("RUNS", "99")
+    monkeypatch.setenv("WARMUP", "99")
+
+    explicit = parser.parse_args(["--runs", "7", "--warmup", "2"])
+    defaults = parser.parse_args([])
+
+    assert explicit.runs == 7
+    assert explicit.warmup == 2
+    assert defaults.runs == 5
+    assert defaults.warmup == 1
+
+
+def test_final_embedding_campaign_uses_explicit_runs_and_warmup_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Keep final embedding campaign measurement counts on the CLI surface.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to prove old environment variables are ignored.
+
+    Returns
+    -------
+    None
+        The test asserts explicit flags and parser defaults drive run counts.
+    """
+    helper = _load_final_embedding_campaign_helper()
+
+    monkeypatch.setenv("RUNS", "99")
+    monkeypatch.setenv("WARMUP", "99")
+
+    explicit = helper.parse_args(["--runs", "7", "--warmup", "2"])
+    defaults = helper.parse_args([])
+
+    assert explicit.runs == 7
+    assert explicit.warmup == 2
+    assert defaults.runs == 5
+    assert defaults.warmup == 1
+
+
+@pytest.mark.parametrize(
+    ("script_name", "argv"),
+    (
+        ("baseline", ["--runs", "0"]),
+        ("baseline", ["--warmup", "0"]),
+        ("final", ["--runs", "0"]),
+        ("final", ["--warmup", "0"]),
+    ),
+)
+def test_campaign_wrappers_reject_non_positive_run_counts(
+    script_name: str,
+    argv: list[str],
+) -> None:
+    """
+    Reject invalid benchmark run counts before launching campaigns.
+
+    Parameters
+    ----------
+    script_name : str
+        Script helper under test.
+    argv : list[str]
+        Invalid command-line arguments.
+
+    Returns
+    -------
+    None
+        The test asserts argparse rejects non-positive values.
+    """
+    if script_name == "baseline":
+        parser = _load_manifest_baseline_helper().build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(argv)
+    else:
+        helper = _load_final_embedding_campaign_helper()
+        with pytest.raises(SystemExit):
+            helper.parse_args(argv)
 
 
 def test_benchmark_index_helper_uses_the_active_backend_class(

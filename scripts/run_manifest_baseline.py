@@ -20,6 +20,40 @@ from scripts.scriptlib import (
     tee_run,
 )
 
+DEFAULT_RUNS = 5
+DEFAULT_WARMUP = 1
+
+
+def positive_int(value: str) -> int:
+    """
+    Parse a positive integer CLI value.
+
+    Parameters
+    ----------
+    value : str
+        Raw command-line value.
+
+    Returns
+    -------
+    int
+        Parsed positive integer.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        Raised when the value is not a positive integer.
+    """
+
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        msg = "value must be an integer"
+        raise argparse.ArgumentTypeError(msg) from exc
+    if parsed < 1:
+        msg = "value must be >= 1"
+        raise argparse.ArgumentTypeError(msg)
+    return parsed
+
 
 def build_parser() -> argparse.ArgumentParser:
     """
@@ -42,6 +76,18 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--sqlite-only", action="store_true", help="Run only SQLite.")
     mode.add_argument("--duckdb-only", action="store_true", help="Run only DuckDB.")
     parser.add_argument(
+        "--runs",
+        type=positive_int,
+        default=DEFAULT_RUNS,
+        help="Measured Hyperfine runs per command.",
+    )
+    parser.add_argument(
+        "--warmup",
+        type=positive_int,
+        default=DEFAULT_WARMUP,
+        help="Hyperfine warmup runs per command.",
+    )
+    parser.add_argument(
         "manifest",
         nargs="?",
         default="benchmarks/bk-cpp.local.json",
@@ -59,8 +105,8 @@ def run_backend(  # noqa: PLR0913
     stamp: str,
     python: str,
     codira: str,
-    runs: str,
-    warmup: str,
+    runs: int,
+    warmup: int,
     extra_args: list[str],
 ) -> int:
     """
@@ -80,9 +126,9 @@ def run_backend(  # noqa: PLR0913
         Python executable.
     codira : str
         Codira executable.
-    runs : str
+    runs : int
         Hyperfine run count.
-    warmup : str
+    warmup : int
         Hyperfine warmup count.
     extra_args : list[str]
         Extra campaign arguments.
@@ -125,9 +171,9 @@ def run_backend(  # noqa: PLR0913
             "--run-id",
             run_id,
             "--runs",
-            runs,
+            str(runs),
             "--warmup",
-            warmup,
+            str(warmup),
             "--codira",
             codira,
             "--python",
@@ -168,8 +214,8 @@ def main(argv: list[str] | None = None) -> int:
     codira = resolve_codira()
     artifact_root = Path(os.environ.get("ARTIFACT_ROOT", ".artifacts"))
     stamp = os.environ.get("STAMP", datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"))
-    runs = os.environ.get("RUNS", "5")
-    warmup = os.environ.get("WARMUP", "1")
+    runs = args.runs
+    warmup = args.warmup
     status = 0
     sqlite_status: int | str = "skipped"
     duckdb_status: int | str = "skipped"

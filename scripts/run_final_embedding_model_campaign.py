@@ -23,6 +23,9 @@ from scripts.scriptlib import (
     safe_slug,
 )
 
+DEFAULT_RUNS = 5
+DEFAULT_WARMUP = 1
+
 
 @dataclass(frozen=True)
 class RepositoryEntry:
@@ -44,6 +47,37 @@ class ModelEntry:
     dimension: int
     precision: str
     config: dict[str, object]
+
+
+def positive_int(value: str) -> int:
+    """
+    Parse a positive integer CLI value.
+
+    Parameters
+    ----------
+    value : str
+        Raw command-line value.
+
+    Returns
+    -------
+    int
+        Parsed positive integer.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        Raised when the value is not a positive integer.
+    """
+
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        msg = "value must be an integer"
+        raise argparse.ArgumentTypeError(msg) from exc
+    if parsed < 1:
+        msg = "value must be >= 1"
+        raise argparse.ArgumentTypeError(msg)
+    return parsed
 
 
 def local_stamp() -> str:
@@ -108,6 +142,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--backend",
         choices=("duckdb", "sqlite", "both"),
         default=os.environ.get("BACKEND_MODE", "duckdb"),
+    )
+    parser.add_argument(
+        "--runs",
+        type=positive_int,
+        default=DEFAULT_RUNS,
+        help="Measured Hyperfine runs per command.",
+    )
+    parser.add_argument(
+        "--warmup",
+        type=positive_int,
+        default=DEFAULT_WARMUP,
+        help="Hyperfine warmup runs per command.",
     )
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--restart-from", default=os.environ.get("RESTART_FROM", ""))
@@ -325,6 +371,8 @@ def write_run_metadata(  # noqa: PLR0913
     matrix_root: Path,
     python: str,
     codira: str,
+    runs: int,
+    warmup: int,
 ) -> None:
     """
     Write campaign metadata files.
@@ -349,6 +397,10 @@ def write_run_metadata(  # noqa: PLR0913
         Python executable.
     codira : str
         Codira executable.
+    runs : int
+        Measured Hyperfine runs per command.
+    warmup : int
+        Hyperfine warmup runs per command.
 
     Returns
     -------
@@ -372,9 +424,9 @@ def write_run_metadata(  # noqa: PLR0913
                 f"CODIRA={codira}",
                 f"CODIRA_EMBED_BATCH_SIZE={os.environ.get('CODIRA_EMBED_BATCH_SIZE', '')}",
                 f"PYTHON={python}",
-                f"RUNS={os.environ.get('RUNS', '')}",
+                f"RUNS={runs}",
                 f"STAMP={stamp}",
-                f"WARMUP={os.environ.get('WARMUP', '')}",
+                f"WARMUP={warmup}",
             ]
         )
         + "\n",
@@ -391,6 +443,8 @@ def write_run_metadata(  # noqa: PLR0913
                 f"ARTIFACT_ROOT={matrix_root.parent.resolve()}",
                 f"PYTHON={python}",
                 f"CODIRA={codira}",
+                f"RUNS={runs}",
+                f"WARMUP={warmup}",
             ]
         )
         + "\n",
@@ -533,6 +587,8 @@ def run_repo_campaign(  # noqa: PLR0913
     checkpoint_index: Path,
     restart_from: str,
     restart_seen: bool,
+    runs: int,
+    warmup: int,
 ) -> tuple[int, bool]:
     """
     Run one model/repository campaign phase.
@@ -569,6 +625,10 @@ def run_repo_campaign(  # noqa: PLR0913
         Restart label.
     restart_seen : bool
         Whether the restart point has been reached.
+    runs : int
+        Measured Hyperfine runs per command.
+    warmup : int
+        Hyperfine warmup runs per command.
 
     Returns
     -------
@@ -629,6 +689,10 @@ def run_repo_campaign(  # noqa: PLR0913
                 "-m",
                 "scripts.run_manifest_baseline",
                 *backend_args,
+                "--runs",
+                str(runs),
+                "--warmup",
+                str(warmup),
                 str(repo_manifest),
             ],
             stdout=log_file,
@@ -668,6 +732,8 @@ def write_readme(  # noqa: PLR0913
     manifest_path: Path,
     model_manifest_path: Path,
     backend_mode: str,
+    runs: int,
+    warmup: int,
 ) -> None:
     """
     Write campaign README.
@@ -688,6 +754,10 @@ def write_readme(  # noqa: PLR0913
         Model manifest.
     backend_mode : str
         Backend mode.
+    runs : int
+        Measured Hyperfine runs per command.
+    warmup : int
+        Hyperfine warmup runs per command.
 
     Returns
     -------
@@ -703,6 +773,8 @@ def write_readme(  # noqa: PLR0913
         f"- Repository manifest: {manifest_path}",
         f"- Model manifest: {model_manifest_path}",
         f"- Backend mode: {backend_mode}",
+        f"- Runs: {runs}",
+        f"- Warmup: {warmup}",
         f"- Checkpoint labels: {labels_path}",
         f"- Checkpoint metadata: {checkpoint_index}",
         "",
@@ -711,7 +783,7 @@ def write_readme(  # noqa: PLR0913
         "Restart from the last completed phase with:",
         "",
         "```bash",
-        f"RESTART_FROM='{last_label[0]}' uv run python -m scripts.run_final_embedding_model_campaign",
+        f"uv run python -m scripts.run_final_embedding_model_campaign --restart-from '{last_label[0]}'",
         "```",
     ]
     (matrix_root / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -767,12 +839,16 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         model_manifest_path = Path(run_state["MODEL_MANIFEST_PATH"])
         backend_mode = run_state["BACKEND_MODE"]
         stamp = run_state["STAMP"]
+        runs = int(run_state["RUNS"])
+        warmup = int(run_state["WARMUP"])
         log(f"Restart requested from checkpoint label: {restart_from}")
         log(f"Restart artifacts: {matrix_root}")
     else:
         manifest_path = Path(args.manifest)
         model_manifest_path = Path(args.model_manifest)
         backend_mode = args.backend
+        runs = args.runs
+        warmup = args.warmup
         stamp = os.environ.get("STAMP", local_stamp())
         matrix_root = artifact_root / stamp
 
@@ -822,6 +898,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
             matrix_root=matrix_root,
             python=python,
             codira=codira,
+            runs=runs,
+            warmup=warmup,
         )
 
     log(f"Campaign artifacts: {matrix_root}")
@@ -897,6 +975,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
                     checkpoint_index=checkpoint_index,
                     restart_from=restart_from,
                     restart_seen=restart_seen,
+                    runs=runs,
+                    warmup=warmup,
                 )
                 if rc and not status:
                     status = rc
@@ -916,6 +996,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         manifest_path=manifest_path,
         model_manifest_path=model_manifest_path,
         backend_mode=backend_mode,
+        runs=runs,
+        warmup=warmup,
     )
     log(f"Final campaign artifacts: {matrix_root}")
     log(f"Checkpoint labels: {labels_path}")
