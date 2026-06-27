@@ -25,6 +25,8 @@ from scripts.scriptlib import (
 
 DEFAULT_RUNS = 5
 DEFAULT_WARMUP = 1
+BACKEND_MODES = ("duckdb", "sqlite", "both")
+CONCRETE_BACKENDS = ("sqlite", "duckdb")
 
 
 @dataclass(frozen=True)
@@ -140,7 +142,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--backend",
-        choices=("duckdb", "sqlite", "both"),
+        choices=BACKEND_MODES,
         default=os.environ.get("BACKEND_MODE", "duckdb"),
     )
     parser.add_argument(
@@ -273,6 +275,34 @@ def safe_onnx_threads(model: ModelEntry) -> tuple[int, int]:
     return (0, 0)
 
 
+def concrete_backends(backend_mode: str) -> tuple[str, ...]:
+    """
+    Return concrete backend phases for a requested backend mode.
+
+    Parameters
+    ----------
+    backend_mode : str
+        Requested backend mode.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Concrete backend names to run.
+
+    Raises
+    ------
+    ValueError
+        Raised when the backend mode is unknown.
+    """
+
+    if backend_mode == "both":
+        return CONCRETE_BACKENDS
+    if backend_mode in CONCRETE_BACKENDS:
+        return (backend_mode,)
+    msg = f"unknown backend mode: {backend_mode}"
+    raise ValueError(msg)
+
+
 def render_model_config(model: ModelEntry, backend_mode: str) -> str:
     """
     Render one model-specific Codira config.
@@ -290,7 +320,7 @@ def render_model_config(model: ModelEntry, backend_mode: str) -> str:
         TOML configuration text.
     """
 
-    backend_name = "duckdb" if backend_mode in {"duckdb", "both"} else "sqlite"
+    backend_name = backend_mode
     vector_store_name = backend_name
     trust_remote_code = str(model.config.get("trust_remote_code", False)).lower()
     max_tokens = model.config.get("max_tokens", 512)
@@ -574,7 +604,7 @@ def run_repo_campaign(  # noqa: PLR0913
     *,
     model: ModelEntry,
     repo: RepositoryEntry,
-    backend_mode: str,
+    backend: str,
     config_root: Path,
     metadata_root: Path,
     campaign_root: Path,
@@ -599,8 +629,8 @@ def run_repo_campaign(  # noqa: PLR0913
         Model entry.
     repo : RepositoryEntry
         Repository entry.
-    backend_mode : str
-        Backend mode.
+    backend : str
+        Concrete backend name.
     config_root : pathlib.Path
         Generated config root.
     metadata_root : pathlib.Path
@@ -638,7 +668,7 @@ def run_repo_campaign(  # noqa: PLR0913
 
     repo_slug = safe_slug(f"{repo.index}-{repo.label}")
     model_slug = safe_slug(model.id)
-    label = f"ckpt_{stamp}_{model_slug}_{backend_mode}_{repo_slug}"
+    label = f"ckpt_{stamp}_{model_slug}_{backend}_{repo_slug}"
     if restart_from and not restart_seen:
         if label == restart_from:
             log(f"Restart point reached; skipping completed checkpoint: {label}")
@@ -650,19 +680,18 @@ def run_repo_campaign(  # noqa: PLR0913
         log(f"Skipping already checkpointed phase: {label}")
         return (0, restart_seen)
 
-    config_file = config_root / f"{model.id}.toml"
+    config_file = config_root / f"{model.id}-{backend}.toml"
     target_config = repo.path / ".codira" / "config.toml"
     target_config.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(config_file, target_config)
     repo_manifest = metadata_root / "single-repo-manifests" / f"{repo_slug}.json"
     write_single_repo_manifest(manifest_path, repo, repo_manifest)
-    log_path = log_root / f"{model_slug}-{repo_slug}.log"
-    repo_stamp = f"{stamp}-{model_slug}-{repo_slug}"
+    log_path = log_root / f"{model_slug}-{backend}-{repo_slug}.log"
+    repo_stamp = f"{stamp}-{model_slug}-{backend}-{repo_slug}"
     backend_args = {
         "duckdb": ["--duckdb-only"],
         "sqlite": ["--sqlite-only"],
-        "both": [],
-    }[backend_mode]
+    }[backend]
     env = dict(os.environ)
     env.update(
         {
@@ -680,7 +709,7 @@ def run_repo_campaign(  # noqa: PLR0913
         }
     )
     log(
-        f"Phase started: model={model.id} backend={backend_mode} repo={repo.label} path={repo.path}"
+        f"Phase started: model={model.id} backend={backend} repo={repo.label} path={repo.path}"
     )
     with log_path.open("w", encoding="utf-8") as log_file:
         status = subprocess.call(
@@ -699,11 +728,11 @@ def run_repo_campaign(  # noqa: PLR0913
             stderr=subprocess.STDOUT,
             env=env,
         )
-    (metadata_root / f"{model_slug}-{repo_slug}.status").write_text(
+    (metadata_root / f"{model_slug}-{backend}-{repo_slug}.status").write_text(
         f"{status}\n", encoding="utf-8"
     )
     log(
-        f"Phase completed: model={model.id} repo={repo.label} status={status}; log={log_path}"
+        f"Phase completed: model={model.id} backend={backend} repo={repo.label} status={status}; log={log_path}"
     )
     if status == 0:
         append_checkpoint(
@@ -711,14 +740,14 @@ def run_repo_campaign(  # noqa: PLR0913
             labels_path,
             label=label,
             model=model,
-            backend_mode=backend_mode,
+            backend_mode=backend,
             repo=repo,
             status=status,
             log_path=log_path,
         )
     else:
         log(
-            f"No checkpoint written for failed phase: model={model.id} repo={repo.label} status={status}"
+            f"No checkpoint written for failed phase: model={model.id} backend={backend} repo={repo.label} status={status}"
         )
     return (status, restart_seen)
 
@@ -773,6 +802,7 @@ def write_readme(  # noqa: PLR0913
         f"- Repository manifest: {manifest_path}",
         f"- Model manifest: {model_manifest_path}",
         f"- Backend mode: {backend_mode}",
+        f"- Concrete backends: {', '.join(concrete_backends(backend_mode))}",
         f"- Runs: {runs}",
         f"- Warmup: {warmup}",
         f"- Checkpoint labels: {labels_path}",
@@ -789,7 +819,7 @@ def write_readme(  # noqa: PLR0913
     (matrix_root / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def main(argv: list[str] | None = None) -> int:  # noqa: C901
+def main(argv: list[str] | None = None) -> int:  # noqa: C901, PLR0912
     """
     Run the final embedding model campaign.
 
@@ -948,38 +978,44 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
         encoding="utf-8",
     )
     for model in models:
-        (config_root / f"{model.id}.toml").write_text(
-            render_model_config(model, backend_mode),
-            encoding="utf-8",
-        )
+        for backend in concrete_backends(backend_mode):
+            (config_root / f"{model.id}-{backend}.toml").write_text(
+                render_model_config(model, backend),
+                encoding="utf-8",
+            )
 
     status = 0
     restart_seen = not bool(restart_from)
     with RepoConfigRestore(tuple(repo.path for repo in repos), backup_root):
         for model in models:
             log(f"Model campaign started: {model.id} backend={backend_mode}")
-            for repo in repos:
-                rc, restart_seen = run_repo_campaign(
-                    model=model,
-                    repo=repo,
-                    backend_mode=backend_mode,
-                    config_root=config_root,
-                    metadata_root=metadata_root,
-                    campaign_root=campaign_root,
-                    log_root=log_root,
-                    stamp=stamp,
-                    manifest_path=manifest_path,
-                    python=python,
-                    codira=codira,
-                    labels_path=labels_path,
-                    checkpoint_index=checkpoint_index,
-                    restart_from=restart_from,
-                    restart_seen=restart_seen,
-                    runs=runs,
-                    warmup=warmup,
+            for backend in concrete_backends(backend_mode):
+                log(f"Backend campaign started: model={model.id} backend={backend}")
+                for repo in repos:
+                    rc, restart_seen = run_repo_campaign(
+                        model=model,
+                        repo=repo,
+                        backend=backend,
+                        config_root=config_root,
+                        metadata_root=metadata_root,
+                        campaign_root=campaign_root,
+                        log_root=log_root,
+                        stamp=stamp,
+                        manifest_path=manifest_path,
+                        python=python,
+                        codira=codira,
+                        labels_path=labels_path,
+                        checkpoint_index=checkpoint_index,
+                        restart_from=restart_from,
+                        restart_seen=restart_seen,
+                        runs=runs,
+                        warmup=warmup,
+                    )
+                    if rc and not status:
+                        status = rc
+                log(
+                    f"Backend campaign completed: model={model.id} backend={backend} current_status={status}"
                 )
-                if rc and not status:
-                    status = rc
             log(f"Model campaign completed: {model.id} current_status={status}")
 
     if restart_from and not restart_seen:

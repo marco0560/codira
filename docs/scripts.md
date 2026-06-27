@@ -139,8 +139,9 @@ per model to the repositories listed in the manifest, and restores the
 original repository configs when it exits. Use `--baseline PATH` only to record
 which previous matrix should be used later during analysis. Use
 `--preflight-only` to stop after download and smoke tests. Use `--backend both`
-only when the campaign must compare SQLite and DuckDB structural backends as
-well as PyTorch and ONNX Runtime embedding engines.
+only when the campaign must run separate SQLite and DuckDB backend phases for
+each model/repository pair as well as PyTorch and ONNX Runtime embedding
+engines.
 
 The wrapper applies conservative benchmark defaults for large embedding models:
 768-dimensional candidates use `batch_size = 1`,

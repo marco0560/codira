@@ -802,6 +802,56 @@ class _FinalEmbeddingCampaignModule(Protocol):
         """
         ...
 
+    def concrete_backends(self, backend_mode: str) -> tuple[str, ...]:
+        """
+        Return concrete backend phases for a requested backend mode.
+
+        Parameters
+        ----------
+        backend_mode : str
+            Requested backend mode.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Concrete backend names.
+        """
+        ...
+
+    def read_models(self, model_manifest_path: Path) -> tuple[object, ...]:
+        """
+        Read model entries from a manifest.
+
+        Parameters
+        ----------
+        model_manifest_path : pathlib.Path
+            Model manifest path.
+
+        Returns
+        -------
+        tuple[object, ...]
+            Model entries.
+        """
+        ...
+
+    def render_model_config(self, model: object, backend_mode: str) -> str:
+        """
+        Render one model-specific Codira config.
+
+        Parameters
+        ----------
+        model : object
+            Model entry.
+        backend_mode : str
+            Concrete backend name.
+
+        Returns
+        -------
+        str
+            TOML configuration text.
+        """
+        ...
+
 
 class _ResolvedBenchmarkRepository(Protocol):
     """Protocol for one adaptively resolved benchmark repository."""
@@ -3245,6 +3295,56 @@ def test_final_embedding_campaign_uses_explicit_runs_and_warmup_cli(
     assert explicit.warmup == 2
     assert defaults.runs == 5
     assert defaults.warmup == 1
+
+
+def test_final_embedding_campaign_expands_both_to_concrete_backend_configs(
+    tmp_path: Path,
+) -> None:
+    """
+    Expand ``--backend both`` into visible backend-specific campaign phases.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory used for the model manifest fixture.
+
+    Returns
+    -------
+    None
+        The test asserts both mode has concrete backend order and matching
+        generated backend/vector-store config.
+    """
+    helper = _load_final_embedding_campaign_helper()
+    model_manifest = tmp_path / "models.json"
+    model_manifest.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "id": "example-model",
+                        "engine": "sentence-transformers",
+                        "model": "sentence-transformers/all-MiniLM-L6-v2",
+                        "version": "1",
+                        "dimension": 384,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    model = helper.read_models(model_manifest)[0]
+
+    assert helper.concrete_backends("both") == ("sqlite", "duckdb")
+    assert helper.concrete_backends("sqlite") == ("sqlite",)
+    assert helper.concrete_backends("duckdb") == ("duckdb",)
+
+    sqlite_config = helper.render_model_config(model, "sqlite")
+    duckdb_config = helper.render_model_config(model, "duckdb")
+
+    assert 'name = "sqlite"' in sqlite_config
+    assert 'vector_store = "sqlite"' in sqlite_config
+    assert 'name = "duckdb"' in duckdb_config
+    assert 'vector_store = "duckdb"' in duckdb_config
 
 
 @pytest.mark.parametrize(
