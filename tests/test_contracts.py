@@ -27,20 +27,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import codira_analyzer_json as json_analyzer_module
+from codira_analyzer_bash import BashAnalyzer
+from codira_analyzer_c import CAnalyzer, _disambiguate_function_stable_ids
 from codira_analyzer_cpp import CppAnalyzer
+from codira_analyzer_json import JsonAnalyzer
+from codira_analyzer_python import PythonAnalyzer
 from codira_backend_sqlite import SQLiteIndexBackend
 from codira_backend_sqlite.sqlite_storage import get_db_path
 
 import codira.indexer as indexer_module
 import codira.registry as registry_module
-from codira.analyzers import (
-    BashAnalyzer,
-    CAnalyzer,
-    CppAnalyzer as ShimCppAnalyzer,
-    JsonAnalyzer,
-    PythonAnalyzer,
-)
-from codira.analyzers.c import _disambiguate_function_stable_ids
 from codira.cli import _run_symbol
 from codira.contracts import (
     KNOWN_RETRIEVAL_CAPABILITIES,
@@ -2532,9 +2528,9 @@ def test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_che
     )
 
 
-def test_cpp_analyzer_shim_reexports_package_analyzer() -> None:
+def test_graph_retrieval_producers_implement_contracts() -> None:
     """
-    Keep the historical C++ analyzer import wired to the package analyzer.
+    Keep graph retrieval producers aligned with the retrieval contract.
 
     Parameters
     ----------
@@ -2543,9 +2539,8 @@ def test_cpp_analyzer_shim_reexports_package_analyzer() -> None:
     Returns
     -------
     None
-        The test asserts the compatibility shim re-exports the package class.
+        The test asserts graph producer singletons satisfy the protocol.
     """
-    assert ShimCppAnalyzer is CppAnalyzer
     assert isinstance(CALL_GRAPH_RETRIEVAL_PRODUCER, RetrievalProducer)
     assert isinstance(REFERENCE_RETRIEVAL_PRODUCER, RetrievalProducer)
     assert isinstance(INCLUDE_GRAPH_RETRIEVAL_PRODUCER, RetrievalProducer)
@@ -4137,7 +4132,7 @@ def test_discovery_file_globs_follow_analyzer_registration_order() -> None:
         The test asserts analyzer-registration order is preserved while
         duplicate globs are removed.
     """
-    analyzers = [PythonAnalyzer(), CAnalyzer(), _FakeAnalyzer()]
+    analyzers: list[LanguageAnalyzer] = [PythonAnalyzer(), CAnalyzer(), _FakeAnalyzer()]
 
     assert discovery_file_globs(analyzers) == ("*.py", "*.c", "*.h")
 

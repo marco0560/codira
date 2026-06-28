@@ -87,16 +87,6 @@ The core implementation resides under `src/codira/`.
 | `cli.py`     | CLI command entry point |
 | `indexer.py` | Index orchestration     |
 
-#### Built-In Compatibility Analyzers (`src/codira/analyzers/`)
-
-| Path        | Responsibility                |
-|-------------|-------------------------------|
-| `bash.py`   | Bash analysis compatibility   |
-| `c.py`      | C analysis compatibility      |
-| `json.py`   | JSON analysis compatibility   |
-| `python.py` | Python analysis compatibility |
-| `text.py`   | Plain-text analysis utilities |
-
 #### First-Party Plugin Packages (`packages/`)
 
 | Path                                      | Responsibility                        |

@@ -167,11 +167,9 @@ def test_core_manifest_keeps_root_files_needed_by_retained_workflows() -> None:
     assert required_paths.issubset(set(core_manifest.owned_paths))
 
 
-def test_package_manifests_keep_package_paths_and_compatibility_surfaces_explicit() -> (
-    None
-):
+def test_package_manifests_keep_package_paths_and_core_surfaces_explicit() -> None:
     """
-    Keep package-owned files and residual core compatibility paths explicit.
+    Keep package-owned files and residual core-owned paths explicit.
 
     Parameters
     ----------
@@ -181,7 +179,7 @@ def test_package_manifests_keep_package_paths_and_compatibility_surfaces_explici
     -------
     None
         The test asserts each non-core manifest owns package-local paths and
-        records the remaining core-side compatibility surfaces that matter after split.
+        records only remaining core-side surfaces that matter after split.
     """
     manifests = _load_future_repo_split_manifest_helper().future_repo_split_manifests()[
         1:
@@ -199,4 +197,9 @@ def test_package_manifests_keep_package_paths_and_compatibility_surfaces_explici
         manifest.repository == "codira-backend-sqlite"
         and "src/codira/indexer.py" in manifest.stays_in_core
         for manifest in manifests
+    )
+    assert not any(
+        path.startswith("src/codira/analyzers/")
+        for manifest in manifests
+        for path in manifest.stays_in_core
     )

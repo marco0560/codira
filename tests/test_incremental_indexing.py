@@ -30,13 +30,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from codira_analyzer_python import PythonAnalyzer
 from codira_backend_sqlite import SQLiteIndexBackend
 from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
 
 import codira.indexer as indexer_module
 import codira.registry as registry_module
 import codira.storage as storage_module
-from codira.analyzers import PythonAnalyzer
 from codira.cli import (
     IndexCommandRequest,
     IndexRebuildRequest,
