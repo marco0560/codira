@@ -107,4 +107,11 @@ feat/batch-embedding-indexing
   measured the default PyTorch runtime with `CODIRA_EMBED_BATCH_SIZE=32` as the
   fastest tested profile. Keep `CODIRA_TORCH_*` unset for general campaign
   commands unless a fresh host-local Hyperfine matrix proves otherwise.
+* [x] Added a read-only engine compatibility helper for the post-plugin
+  benchmark workstream:
+  `scripts/compare_embedding_engines.py`. Use it to compare fixed-corpus
+  vectors for paired manifest entries before considering any mixed
+  Torch-index/ONNX-query configuration. The helper records pass/fail gates for
+  model identity, dimensions, and cosine similarity; it does not enable mixed
+  production mode.
 * [x] Create the final branch commit.

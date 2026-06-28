@@ -104,6 +104,23 @@ uv run python scripts/download_embedding_model.py \
   --model-id bge-small-en-v1.5-onnx
 ```
 
+## `scripts/compare_embedding_engines.py`
+
+Compare two embedding model manifest entries on a fixed local corpus and report
+whether their vectors are compatible enough to justify experimental mixed
+engine use:
+
+```bash
+uv run python scripts/compare_embedding_engines.py \
+  --left bge-small-en-v1.5-sentence-transformers \
+  --right bge-small-en-v1.5-onnx
+```
+
+The script is read-only. It does not modify indexes or configuration. It emits
+a human-readable summary plus JSON by default; use `--json` for JSON only. A
+non-zero exit status means the compared engines failed at least one gate:
+matching model identity, matching dimensions, or minimum cosine similarity.
+
 ## `scripts/embedding_engine_matrix_plan.py`
 
 Build a deterministic dry-run JSON plan for the long embedding engine/model
