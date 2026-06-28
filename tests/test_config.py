@@ -29,6 +29,7 @@ from codira.cli import main
 from codira.config import (
     ConfigError,
     config_to_mapping,
+    effective_config_cache,
     full_profile_config,
     load_effective_config,
     profile_config,
@@ -127,6 +128,94 @@ def test_effective_config_merges_with_env_precedence(
     assert config.plugins.disabled_analyzers == ("json",)
     assert config.origins["backend.name"].level == "environment"
     assert config.origins["plugins.disabled_analyzers"].path == repo_path
+
+
+def test_effective_config_cache_reuses_file_backed_loads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Reuse merged file-backed config within one command-scoped cache.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths and count file reads.
+    tmp_path : pathlib.Path
+        Temporary repository and config root.
+
+    Returns
+    -------
+    None
+        The test asserts repeated default-environment loads read TOML once.
+    """
+
+    user_dir, _system_dir = _isolate_config_paths(monkeypatch, tmp_path)
+    root = tmp_path / "repo"
+    root.mkdir()
+    user_path = user_dir / "config.toml"
+    user_path.parent.mkdir(parents=True)
+    user_path.write_text("[embeddings]\nbatch_size = 16\n", encoding="utf-8")
+
+    original_read_config_file = config_module._read_config_file
+    read_paths: list[Path] = []
+
+    def counting_read_config_file(path: Path) -> dict[str, object]:
+        read_paths.append(path)
+        return original_read_config_file(path)
+
+    monkeypatch.setattr(
+        config_module,
+        "_read_config_file",
+        counting_read_config_file,
+    )
+
+    with effective_config_cache():
+        first = load_effective_config(root=root)
+        second = load_effective_config(root=root)
+
+    assert first is second
+    assert first.embeddings.batch_size == 16
+    assert read_paths == [user_path]
+
+
+def test_effective_config_cache_does_not_cache_explicit_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Keep explicit environment mappings outside the command-scoped cache.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths.
+    tmp_path : pathlib.Path
+        Temporary repository and config root.
+
+    Returns
+    -------
+    None
+        The test asserts explicit ``env`` values are evaluated independently.
+    """
+
+    _isolate_config_paths(monkeypatch, tmp_path)
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    with effective_config_cache():
+        first = load_effective_config(
+            root=root,
+            env={"CODIRA_EMBED_BATCH_SIZE": "3"},
+        )
+        second = load_effective_config(
+            root=root,
+            env={"CODIRA_EMBED_BATCH_SIZE": "7"},
+        )
+
+    assert first.embeddings.batch_size == 3
+    assert second.embeddings.batch_size == 7
+    assert first is not second
 
 
 def test_config_validation_rejects_unknown_keys() -> None:

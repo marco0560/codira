@@ -25,6 +25,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
+from codira.config import with_effective_config_cache
 from codira.contracts import (
     BackendDocumentationCandidatesRequest,
     BackendQueryConnection,
@@ -6434,6 +6435,7 @@ def _finalize_signal_diagnostics(
     )
 
 
+@with_effective_config_cache
 def context_for(
     request: ContextRequest,
 ) -> str:

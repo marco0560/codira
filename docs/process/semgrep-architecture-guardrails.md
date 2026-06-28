@@ -22,6 +22,7 @@ It exists to:
 - `codira.arch.require-analyzer-capability-declaration`
 - `codira.arch.no-duckdb-executemany-in-support`
 - `codira.arch.no-duckdb-returning-id-in-support`
+- `codira.arch.no-direct-config-load-in-query-hot-path`
 - `codira.plugins.no-broad-except-exception`
 
 ### Enforced with allowlist
@@ -34,9 +35,23 @@ It exists to:
 
 - forbid `codira.registry` imports outside the current core query/indexing
   entry points
+- forbid direct backend/vector-store/embedding-engine resolution in query hot
+  paths once those paths are fully migrated to the command-scoped runtime
+  context
 
 This broader rule is not enforced yet because the current core implementation
 still owns transitional responsibilities that would produce noisy findings.
+
+### `codira.arch.no-direct-config-load-in-query-hot-path`
+
+Rationale:
+Benchmark campaign `20260627T201446` showed repeated effective-config loading
+and TOML parsing as a measurable `ctx` overhead. Query hot paths should receive
+configuration through command-scoped runtime state instead of parsing config
+files directly.
+
+Removal condition:
+No removal planned while query commands remain performance-sensitive.
 
 ## Allowlisted Exceptions
 

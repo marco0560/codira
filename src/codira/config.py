@@ -16,8 +16,11 @@ can consume configuration without circular imports.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Literal, cast
 
@@ -49,6 +52,9 @@ _PLUGIN_CONFIG_RESERVED_KEYS = frozenset(
 )
 LevelName = Literal["system", "user", "repo", "effective"]
 ProfileName = Literal["default", "low-memory", "gpu"]
+_EFFECTIVE_CONFIG_CACHE: ContextVar[
+    dict[tuple[str | None, bool], CodiraConfig] | None
+] = ContextVar("codira_effective_config_cache", default=None)
 
 
 class ConfigError(ValueError):
@@ -1431,6 +1437,80 @@ def ensure_user_config() -> Path:
     return path
 
 
+@contextmanager
+def effective_config_cache() -> Iterator[None]:
+    """
+    Cache effective configuration loads within one command scope.
+
+    Parameters
+    ----------
+    None
+
+    Yields
+    ------
+    None
+        The active context caches default-environment effective config loads
+        until the context exits.
+
+    Notes
+    -----
+    Explicit ``env`` mappings are intentionally excluded so tests and callers
+    that model alternate environments always receive freshly merged values.
+    """
+
+    if _EFFECTIVE_CONFIG_CACHE.get() is not None:
+        yield
+        return
+
+    token = _EFFECTIVE_CONFIG_CACHE.set({})
+    try:
+        yield
+    finally:
+        _EFFECTIVE_CONFIG_CACHE.reset(token)
+
+
+def with_effective_config_cache[**P, R](
+    func: Callable[P, R],
+) -> Callable[P, R]:
+    """
+    Run one callable inside a command-scoped effective-config cache.
+
+    Parameters
+    ----------
+    func : collections.abc.Callable
+        Callable whose nested default-environment config loads should share
+        one command-local cache.
+
+    Returns
+    -------
+    collections.abc.Callable
+        Wrapper preserving the original call signature for type checkers.
+    """
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        """
+        Execute the wrapped callable with scoped config caching.
+
+        Parameters
+        ----------
+        *args : object
+            Positional arguments forwarded to the wrapped callable.
+        **kwargs : object
+            Keyword arguments forwarded to the wrapped callable.
+
+        Returns
+        -------
+        object
+            Return value from the wrapped callable.
+        """
+
+        with effective_config_cache():
+            return func(*args, **kwargs)
+
+    return wrapper
+
+
 def load_effective_config(
     *,
     root: Path | None = None,
@@ -1459,6 +1539,14 @@ def load_effective_config(
     ConfigError
         If any present config source is invalid.
     """
+
+    cache = _EFFECTIVE_CONFIG_CACHE.get()
+    cache_key: tuple[str | None, bool] | None = None
+    if env is None and cache is not None:
+        cache_key = (None if root is None else str(root.resolve()), auto_create_user)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
 
     if auto_create_user:
         ensure_user_config()
@@ -1496,7 +1584,10 @@ def load_effective_config(
         )
 
     validate_config_mapping(merged)
-    return _config_from_mapping(merged, origins=origins)
+    config = _config_from_mapping(merged, origins=origins)
+    if cache_key is not None and cache is not None:
+        cache[cache_key] = config
+    return config
 
 
 def load_config_level(

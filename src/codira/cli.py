@@ -42,6 +42,7 @@ from codira.config import (
     ProfileName,
     config_path,
     config_to_mapping,
+    effective_config_cache,
     ensure_user_config,
     explain_key,
     load_config_level,
@@ -4816,7 +4817,7 @@ def main() -> int:
     try:
         if command not in {"help", "config", "calibrate"}:
             ensure_user_config()
-        with storage_context:
+        with storage_context, effective_config_cache():
             handlers = _command_handlers(
                 args,
                 parser,

@@ -79,6 +79,7 @@ FIXTURE_FILES = (
     / "plugin_manual_schema_violation.py",
     REPO_ROOT / "fixtures" / "src" / "core_backend_import_violation.py",
     REPO_ROOT / "fixtures" / "src" / "core_sqlite_outside_allowlist_violation.py",
+    REPO_ROOT / "fixtures" / "src" / "query_config_resolution_violation.py",
     REPO_ROOT / "fixtures" / "src" / "random_violation.py",
     REPO_ROOT
     / "fixtures"
@@ -96,6 +97,7 @@ FIXTURE_FILES = (
 EXPECTED_FIXTURE_RULE_IDS = {
     "codira.arch.no-backend-import-in-analyzers",
     "codira.arch.no-backend-package-import-outside-allowed-layers",
+    "codira.arch.no-direct-config-load-in-query-hot-path",
     "codira.arch.no-duckdb-executemany-in-support",
     "codira.arch.no-duckdb-returning-id-in-support",
     "codira.arch.no-registry-import-in-analyzers",

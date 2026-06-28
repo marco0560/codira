@@ -23,7 +23,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from codira.config import DEFAULT_EMBEDDING_INDEX_MODE, load_effective_config
+from codira.config import (
+    DEFAULT_EMBEDDING_INDEX_MODE,
+    load_effective_config,
+    with_effective_config_cache,
+)
 from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
@@ -1135,6 +1139,7 @@ def _finalize_index_report(request: FinalizeIndexReportRequest) -> IndexReport:
     )
 
 
+@with_effective_config_cache
 def index_repo(
     root: Path,
     *,

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from codira.config import with_effective_config_cache
 from codira.contracts import (
     BackendDocumentationCandidatesRequest,
     BackendEmbeddingCandidatesRequest,
@@ -37,6 +38,7 @@ EmbeddingCandidatesRequest = BackendEmbeddingCandidatesRequest
 DocumentationCandidatesRequest = BackendDocumentationCandidatesRequest
 
 
+@with_effective_config_cache
 def embedding_candidates(
     request: EmbeddingCandidatesRequest,
 ) -> ChannelResults:
@@ -82,6 +84,7 @@ def embedding_candidates(
     )
 
 
+@with_effective_config_cache
 def documentation_candidates(
     request: DocumentationCandidatesRequest,
 ) -> DocumentationChannelResults:
