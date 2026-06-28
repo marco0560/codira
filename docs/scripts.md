@@ -121,6 +121,52 @@ a human-readable summary plus JSON by default; use `--json` for JSON only. A
 non-zero exit status means the compared engines failed at least one gate:
 matching model identity, matching dimensions, or minimum cosine similarity.
 
+## `scripts/run_split_embedding_engine_experiment.py`
+
+Run an experimental split-engine check where indexing uses a
+SentenceTransformers manifest entry and query-time `emb`/`ctx` use the paired
+ONNX manifest entry:
+
+```bash
+uv run python -m scripts.run_split_embedding_engine_experiment \
+  --pair-manifest benchmarks/split-embedding-engine-pairs.json \
+  --model-manifest benchmarks/embedding-model-candidates.json \
+  --repo-manifest benchmarks/uv-backed-repos.local.json \
+  --backend sqlite
+```
+
+The script first runs `scripts/compare_embedding_engines.py` logic as a
+compatibility gate. If the gate passes, it indexes with the
+SentenceTransformers config, creates an experimental vector-store identity
+alias for the ONNX engine over the same materialized vectors, then runs `emb`
+and `ctx` with the ONNX config. Artifacts and JSONL results are written under
+`.artifacts/split-embedding-engine-experiment/<timestamp>/`.
+
+This is deliberately not production behavior. Codira's normal vector-store
+identity includes the embedding engine, so simply switching config from
+SentenceTransformers to ONNX after indexing will not reuse vectors without the
+script's explicit experimental aliasing step.
+
+## `scripts/run_onnx_parameter_sweep.py`
+
+Run isolated ONNX Runtime parameter experiments from
+`benchmarks/onnx-parameter-sweep.json`:
+
+```bash
+uv run python -m scripts.run_onnx_parameter_sweep \
+  --sweep-manifest benchmarks/onnx-parameter-sweep.json \
+  --model-manifest benchmarks/embedding-model-candidates.json \
+  --repo-manifest benchmarks/uv-backed-repos.local.json \
+  --backend sqlite
+```
+
+Each variant writes a generated `.codira/config.toml`, runs an isolated
+`codira index`, then times `emb` and `ctx` queries. Results are written under
+`.artifacts/onnx-parameter-sweep/<timestamp>/`. Use `--sweep-id` or
+`--variant-id` to narrow a run while tuning `batch_size`, `max_tokens`,
+`intra_op_num_threads`, `inter_op_num_threads`, and optional
+`max_text_chars`.
+
 ## `scripts/embedding_engine_matrix_plan.py`
 
 Build a deterministic dry-run JSON plan for the long embedding engine/model

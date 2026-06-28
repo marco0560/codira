@@ -139,6 +139,11 @@ def load_corpus(path: Path | None) -> list[str]:
     -------
     list[str]
         Non-empty comparison texts.
+
+    Raises
+    ------
+    ValueError
+        Raised when a supplied corpus file contains no non-blank lines.
     """
 
     if path is None:
