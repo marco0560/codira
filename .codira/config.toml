@@ -73,6 +73,7 @@ enabled = true
 
 [plugins.backend-duckdb]
 enabled = true
+profiling_enabled = true
 
 [plugins.embedding-sentence-transformers]
 enabled = true

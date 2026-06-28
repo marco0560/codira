@@ -520,7 +520,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.49.2"
+    assert project["project"]["version"] == "1.49.3"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -952,6 +952,50 @@ def test_duckdb_backend_open_connection_initializes_missing_database(
     assert calls == [tmp_path]
     assert fake_module.paths == [str(_duckdb_db_path(tmp_path))]
     assert connection is not None
+
+
+def test_duckdb_backend_reuses_native_connection_until_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Keep full-index DuckDB runs from paying native close/reopen churn.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace the initializer and optional DuckDB import.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts logical close calls keep the cached native connection
+        available until explicit backend cleanup.
+    """
+    fake_module = _FakeDuckDBModule()
+
+    def fake_initialize(self: DuckDBIndexBackend, root: Path) -> None:
+        del self
+        _duckdb_db_path(root).parent.mkdir(parents=True, exist_ok=True)
+        _duckdb_db_path(root).touch()
+
+    monkeypatch.setattr("codira_backend_duckdb._duckdb_module", lambda: fake_module)
+    monkeypatch.setattr(DuckDBIndexBackend, "initialize", fake_initialize)
+
+    backend = DuckDBIndexBackend()
+    first = backend.open_connection(tmp_path)
+    backend.close_connection(first)
+    second = backend.open_connection(tmp_path)
+
+    assert first is second
+    assert len(fake_module.connections) == 1
+    assert fake_module.connections[0].closed is False
+
+    backend._close_cached_connections()
+
+    assert fake_module.connections[0].closed is True
 
 
 def test_duckdb_backend_persist_runtime_inventory_round_trips_inventory(

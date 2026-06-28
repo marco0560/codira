@@ -19,6 +19,7 @@ the production DuckDB backend introduced by issue `#10`.
 
 from __future__ import annotations
 
+import atexit
 import importlib
 import json
 import re
@@ -75,7 +76,7 @@ if TYPE_CHECKING:
         VectorStore,
     )
 
-PACKAGE_VERSION = "1.49.2"
+PACKAGE_VERSION = "1.49.3"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -937,6 +938,8 @@ class _DuckDBIndexWriteSession:
         """
         if self._closed:
             return
+        duckdb_conn = cast("DuckDBConnection", self._conn)
+        duckdb_conn.reset_profile_recorder()
         self._backend.close_connection(self._conn)
         self._closed = True
 
@@ -1205,9 +1208,16 @@ class _DuckDBCursorCompatibilityAdapter:
 class DuckDBConnection:
     """Connection adapter exposing the subset used by codira helpers."""
 
-    def __init__(self, raw: _DuckDBRawConnection) -> None:
+    def __init__(
+        self,
+        raw: _DuckDBRawConnection,
+        *,
+        defer_close: bool = False,
+    ) -> None:
         self._raw = raw
         self._profiler = DuckDBProfileRecorder(enabled=False)
+        self._defer_close = defer_close
+        self._closed = False
 
     def set_profile_recorder(self, profiler: DuckDBProfileRecorder) -> None:
         """
@@ -1224,6 +1234,37 @@ class DuckDBConnection:
             Future connection calls record aggregate timings.
         """
         self._profiler = profiler
+
+    def reset_profile_recorder(self) -> None:
+        """
+        Restore the inert default profile recorder.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Future connection calls stop recording write-session timings.
+        """
+        self._profiler = DuckDBProfileRecorder(enabled=False)
+
+    @property
+    def is_closed(self) -> bool:
+        """
+        Report whether the native DuckDB connection is closed.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        bool
+            ``True`` after the raw DuckDB connection has been closed.
+        """
+        return self._closed
 
     def execute(
         self,
@@ -1363,7 +1404,28 @@ class DuckDBConnection:
         None
             The wrapped connection is closed.
         """
+        if self._defer_close:
+            with self._profiler.span("duckdb.deferred_close"):
+                return
+        self.force_close()
+
+    def force_close(self) -> None:
+        """
+        Close the wrapped DuckDB connection immediately.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The native connection is closed at most once.
+        """
+        if self._closed:
+            return
         self._raw.close()
+        self._closed = True
 
 
 def _duckdb_module() -> _DuckDBModule:
@@ -1882,6 +1944,8 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
             Profiling starts disabled unless plugin configuration enables it.
         """
         self._profiling_enabled = False
+        self._connection_cache: dict[Path, DuckDBConnection] = {}
+        self._atexit_registered = False
 
     @property
     def profiling_enabled(self) -> bool:
@@ -1942,6 +2006,42 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         """
 
         self._profiling_enabled = bool(config.get("profiling_enabled", False))
+
+    def _close_cached_connections(self) -> None:
+        """
+        Close process-local DuckDB connections owned by this backend.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Cached native DuckDB handles are closed and removed.
+        """
+        cached = tuple(self._connection_cache.values())
+        self._connection_cache.clear()
+        for connection in cached:
+            connection.force_close()
+
+    def _register_cached_connection_cleanup(self) -> None:
+        """
+        Register process-exit cleanup for cached DuckDB connections.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Cleanup is registered at most once per backend instance.
+        """
+        if self._atexit_registered:
+            return
+        atexit.register(self._close_cached_connections)
+        self._atexit_registered = True
 
     def begin_index_session(self, root: Path) -> IndexWriteSession:
         """
@@ -2005,12 +2105,20 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         _BackendCompatibleConnectionAdapter
             Open DuckDB connection adapter.
         """
-        if not _duckdb_db_path(root).exists():
+        db_path = _duckdb_db_path(root)
+        if not db_path.exists():
             self.initialize(root)
-        raw = _configure_duckdb_connection(
-            _duckdb_module().connect(str(_duckdb_db_path(root)))
+        cached = self._connection_cache.get(db_path)
+        if cached is not None and not cached.is_closed:
+            return cast("_BackendCompatibleConnectionAdapter", cached)
+        self._register_cached_connection_cleanup()
+        raw = _configure_duckdb_connection(_duckdb_module().connect(str(db_path)))
+        connection = DuckDBConnection(
+            raw,
+            defer_close=True,
         )
-        return cast("_BackendCompatibleConnectionAdapter", DuckDBConnection(raw))
+        self._connection_cache[db_path] = connection
+        return cast("_BackendCompatibleConnectionAdapter", connection)
 
     def process_pending_embeddings(
         self,

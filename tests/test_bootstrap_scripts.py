@@ -3344,8 +3344,12 @@ def test_final_embedding_campaign_expands_both_to_concrete_backend_configs(
 
     assert 'name = "sqlite"' in sqlite_config
     assert 'vector_store = "sqlite"' in sqlite_config
+    assert "[plugins.backend-duckdb]" in sqlite_config
+    assert "profiling_enabled = false" in sqlite_config
     assert 'name = "duckdb"' in duckdb_config
     assert 'vector_store = "duckdb"' in duckdb_config
+    assert "[plugins.backend-duckdb]" in duckdb_config
+    assert "profiling_enabled = true" in duckdb_config
 
 
 @pytest.mark.parametrize(

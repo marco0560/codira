@@ -338,6 +338,12 @@ def render_model_config(model: ModelEntry, backend_mode: str) -> str:
             "disable_third_party = false",
             "disabled_analyzers = []",
             "",
+            "[plugins.backend-duckdb]",
+            "enabled = true",
+            "profiling_enabled = true"
+            if backend_name == "duckdb"
+            else "profiling_enabled = false",
+            "",
             "[embeddings]",
             "enabled = true",
             f'engine = "{model.engine}"',
