@@ -60,8 +60,9 @@ from benchmark_timing import (  # type: ignore[import-not-found]
 )
 
 from codira import indexer
+from codira.config import with_effective_config_cache
 from codira.indexer import index_repo
-from codira.registry import active_index_backend
+from codira.registry import active_index_backend, with_active_plugin_instance_cache
 from codira.semantic import embeddings as embeddings_module
 from codira.storage import override_storage_root
 
@@ -163,6 +164,8 @@ def active_backend_support_module(root: Path) -> _BenchmarkBackendSupportModule:
     )
 
 
+@with_effective_config_cache
+@with_active_plugin_instance_cache
 def main() -> int:
     """
     Run the benchmark and print one JSON report.

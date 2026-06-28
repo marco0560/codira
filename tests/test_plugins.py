@@ -685,6 +685,53 @@ def test_active_registry_uses_loaded_entry_point_plugins(
     assert backend.name == "demo-backend"
 
 
+def test_active_plugin_instance_cache_reuses_backend_within_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Reuse configured active backend instances only inside one cache scope.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry-point discovery and backend config.
+
+    Returns
+    -------
+    None
+        The test asserts the command-scoped plugin cache reuses backend
+        instances without leaking them across scopes.
+    """
+    registry.reset_plugin_registry_caches()
+    _patch_entry_points(
+        monkeypatch,
+        analyzers=[],
+        backends=[
+            _FakeEntryPoint(
+                name="demo-backend",
+                value="demo:backend",
+                dist=_FakeDistribution("demo-backend"),
+                loaded=_DemoBackend,
+            )
+        ],
+    )
+    monkeypatch.setenv(registry.INDEX_BACKEND_ENV_VAR, "demo-backend")
+
+    first_uncached = registry.active_index_backend()
+    second_uncached = registry.active_index_backend()
+
+    with registry.active_plugin_instance_cache():
+        first_cached = registry.active_index_backend()
+        second_cached = registry.active_index_backend()
+
+    with registry.active_plugin_instance_cache():
+        next_scope = registry.active_index_backend()
+
+    assert first_uncached is not second_uncached
+    assert first_cached is second_cached
+    assert next_scope is not first_cached
+
+
 def test_active_registry_injects_namespaced_plugin_configuration(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -49,6 +49,7 @@ from codira.registry import (
     active_index_backend,
     active_language_analyzers,
     missing_language_analyzer_hint,
+    with_active_plugin_instance_cache,
 )
 from codira.scanner import (
     CANONICAL_SOURCE_DIRS,
@@ -1140,6 +1141,7 @@ def _finalize_index_report(request: FinalizeIndexReportRequest) -> IndexReport:
 
 
 @with_effective_config_cache
+@with_active_plugin_instance_cache
 def index_repo(
     root: Path,
     *,

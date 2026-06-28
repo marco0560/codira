@@ -27,7 +27,7 @@ from codira.contracts import (
     BackendResolveEmbeddingScoresRequest,
     VectorSimilarityRequest,
 )
-from codira.registry import active_index_backend
+from codira.registry import active_index_backend, with_active_plugin_instance_cache
 from codira.semantic.embeddings import embed_text, embeddings_enabled
 from codira.vector_store import active_vector_store_context
 
@@ -39,6 +39,7 @@ DocumentationCandidatesRequest = BackendDocumentationCandidatesRequest
 
 
 @with_effective_config_cache
+@with_active_plugin_instance_cache
 def embedding_candidates(
     request: EmbeddingCandidatesRequest,
 ) -> ChannelResults:
@@ -85,6 +86,7 @@ def embedding_candidates(
 
 
 @with_effective_config_cache
+@with_active_plugin_instance_cache
 def documentation_candidates(
     request: DocumentationCandidatesRequest,
 ) -> DocumentationChannelResults:

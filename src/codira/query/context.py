@@ -67,7 +67,7 @@ from codira.query.signals import (
     RetrievalSignalKind,
     signal_sort_key,
 )
-from codira.registry import active_index_backend
+from codira.registry import active_index_backend, with_active_plugin_instance_cache
 from codira.semantic.embeddings import get_embedding_backend
 from codira.types import (
     ChannelBundle,
@@ -6436,6 +6436,7 @@ def _finalize_signal_diagnostics(
 
 
 @with_effective_config_cache
+@with_active_plugin_instance_cache
 def context_for(
     request: ContextRequest,
 ) -> str:

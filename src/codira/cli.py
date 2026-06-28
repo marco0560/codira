@@ -89,6 +89,7 @@ from codira.query.exact import (
 from codira.registry import (
     active_index_backend,
     active_language_analyzers,
+    active_plugin_instance_cache,
     configured_index_backend_name,
     plugin_registrations,
     validate_plugin_configuration,
@@ -4817,7 +4818,7 @@ def main() -> int:
     try:
         if command not in {"help", "config", "calibrate"}:
             ensure_user_config()
-        with storage_context, effective_config_cache():
+        with storage_context, effective_config_cache(), active_plugin_instance_cache():
             handlers = _command_handlers(
                 args,
                 parser,

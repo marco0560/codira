@@ -114,4 +114,8 @@ feat/batch-embedding-indexing
   Torch-index/ONNX-query configuration. The helper records pass/fail gates for
   model identity, dimensions, and cosine similarity; it does not enable mixed
   production mode.
+* [x] Added command-scoped effective-config and active-plugin instance caches
+  around CLI, indexing, context retrieval, and embedding candidate hot paths.
+  The cache avoids repeated TOML parsing and repeated backend/vector/embedding
+  plugin instantiation during one command while resetting at command exit.
 * [x] Create the final branch commit.

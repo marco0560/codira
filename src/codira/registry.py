@@ -17,8 +17,10 @@ This module belongs to the **plugin registration layer** powering ADR-004 analyz
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, wraps
 from importlib import metadata
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -37,7 +39,7 @@ from codira.contracts import (
 from codira.plugin_config import plugin_configuration_fingerprint, plugin_enabled
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterator, Sequence
     from pathlib import Path
 
     from codira.contracts import (
@@ -110,6 +112,9 @@ PluginFamily = Literal["analyzer", "backend", "embedding", "vector-store"]
 PluginSource = Literal["builtin", "entry_point"]
 PluginStatus = Literal["loaded", "skipped", "duplicate"]
 PluginOrigin = Literal["core", "first_party", "third_party"]
+_ACTIVE_PLUGIN_INSTANCE_CACHE: ContextVar[
+    dict[tuple[PluginFamily, str, str | None], object] | None
+] = ContextVar("codira_active_plugin_instance_cache", default=None)
 
 
 @dataclass(frozen=True)
@@ -197,6 +202,165 @@ class _LoadedPlugin:
     version: str
     factory: Callable[[], object]
     entry_point: str | None = None
+
+
+@contextmanager
+def active_plugin_instance_cache() -> Iterator[None]:
+    """
+    Cache singleton plugin instances within one command scope.
+
+    Parameters
+    ----------
+    None
+
+    Yields
+    ------
+    None
+        The active context reuses configured backend, embedding, and vector
+        store instances until the context exits.
+    """
+
+    if _ACTIVE_PLUGIN_INSTANCE_CACHE.get() is not None:
+        yield
+        return
+
+    token = _ACTIVE_PLUGIN_INSTANCE_CACHE.set({})
+    try:
+        yield
+    finally:
+        _ACTIVE_PLUGIN_INSTANCE_CACHE.reset(token)
+
+
+def with_active_plugin_instance_cache[**P, R](
+    func: Callable[P, R],
+) -> Callable[P, R]:
+    """
+    Run one callable inside a command-scoped active-plugin cache.
+
+    Parameters
+    ----------
+    func : collections.abc.Callable
+        Callable whose nested active-plugin lookups should share one
+        command-local cache.
+
+    Returns
+    -------
+    collections.abc.Callable
+        Wrapper preserving the original call signature for type checkers.
+    """
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        """
+        Execute the wrapped callable with scoped active-plugin caching.
+
+        Parameters
+        ----------
+        *args : object
+            Positional arguments forwarded to the wrapped callable.
+        **kwargs : object
+            Keyword arguments forwarded to the wrapped callable.
+
+        Returns
+        -------
+        object
+            Return value from the wrapped callable.
+        """
+
+        with active_plugin_instance_cache():
+            return func(*args, **kwargs)
+
+    return wrapper
+
+
+def _active_plugin_cache_key(
+    *,
+    family: PluginFamily,
+    name: str,
+    root: Path | None,
+) -> tuple[PluginFamily, str, str | None]:
+    """
+    Return the command-scoped cache key for one active plugin.
+
+    Parameters
+    ----------
+    family : {"analyzer", "backend", "embedding", "vector-store"}
+        Plugin family.
+    name : str
+        Active plugin name.
+    root : pathlib.Path | None
+        Repository root participating in plugin configuration.
+
+    Returns
+    -------
+    tuple[str, str, str | None]
+        Stable cache key.
+    """
+
+    return (family, name, None if root is None else str(root.resolve()))
+
+
+def _cached_active_plugin(
+    *,
+    family: PluginFamily,
+    name: str,
+    root: Path | None,
+) -> object | None:
+    """
+    Return a cached active plugin instance when a command cache is active.
+
+    Parameters
+    ----------
+    family : {"analyzer", "backend", "embedding", "vector-store"}
+        Plugin family.
+    name : str
+        Active plugin name.
+    root : pathlib.Path | None
+        Repository root participating in plugin configuration.
+
+    Returns
+    -------
+    object | None
+        Cached plugin instance, or ``None`` when absent.
+    """
+
+    cache = _ACTIVE_PLUGIN_INSTANCE_CACHE.get()
+    if cache is None:
+        return None
+    return cache.get(_active_plugin_cache_key(family=family, name=name, root=root))
+
+
+def _store_active_plugin(
+    *,
+    family: PluginFamily,
+    name: str,
+    root: Path | None,
+    instance: object,
+) -> None:
+    """
+    Store one active plugin instance when a command cache is active.
+
+    Parameters
+    ----------
+    family : {"analyzer", "backend", "embedding", "vector-store"}
+        Plugin family.
+    name : str
+        Active plugin name.
+    root : pathlib.Path | None
+        Repository root participating in plugin configuration.
+    instance : object
+        Configured active plugin instance.
+
+    Returns
+    -------
+    None
+        The active command cache is updated when present.
+    """
+
+    cache = _ACTIVE_PLUGIN_INSTANCE_CACHE.get()
+    if cache is None:
+        return
+    cache[_active_plugin_cache_key(family=family, name=name, root=root)] = instance
 
 
 def _registered_index_backends() -> dict[str, type[IndexBackend]]:
@@ -1504,15 +1668,26 @@ def _active_plugin(
         If the configured plugin is unavailable.
     """
 
+    cached = _cached_active_plugin(family=family, name=name, root=root)
+    if cached is not None:
+        return cached
+
     plugins, _registrations = _plugin_snapshot(family, root=root)
     for plugin in plugins:
         if plugin.name == name:
             instance = plugin.factory()
-            return _configure_plugin_instance(
+            configured = _configure_plugin_instance(
                 plugin=plugin,
                 instance=instance,
                 root=root,
             )
+            _store_active_plugin(
+                family=family,
+                name=name,
+                root=root,
+                instance=configured,
+            )
+            return configured
     available = ", ".join(sorted(plugin.name for plugin in plugins)) or "<none>"
     msg = f"Unsupported {family} plugin '{name}'. Available plugins: {available}"
     raise ValueError(msg)
@@ -1709,6 +1884,14 @@ def active_index_backend(*, root: Path | None = None) -> IndexBackend:
         If the configured backend name is not registered.
     """
     configured_name = configured_index_backend_name(root=root)
+    cached = _cached_active_plugin(
+        family="backend",
+        name=configured_name,
+        root=root,
+    )
+    if cached is not None:
+        return cast("IndexBackend", cached)
+
     plugins, _registrations = _plugin_snapshot("backend", root=root)
     registry = {
         plugin.name: cast("Callable[[], IndexBackend]", plugin.factory)
@@ -1735,10 +1918,17 @@ def active_index_backend(*, root: Path | None = None) -> IndexBackend:
 
     instance = factory()
     plugin = next(item for item in plugins if item.name == configured_name)
-    return cast(
+    configured = cast(
         "IndexBackend",
         _configure_plugin_instance(plugin=plugin, instance=instance, root=root),
     )
+    _store_active_plugin(
+        family="backend",
+        name=configured_name,
+        root=root,
+        instance=configured,
+    )
+    return configured
 
 
 def _instantiate_language_analyzers(
