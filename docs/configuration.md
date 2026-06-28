@@ -261,7 +261,7 @@ First-party analyzer options:
 | `[plugins.analyzer-markdown]` | `strip_front_matter`, `emit_file_artifact_without_headings`, `min_heading_level`, `max_heading_level` |
 | `[plugins.analyzer-text]` | `include_root_files`, `include_docs_directories`, `exclude_generated`, `exclude_fixtures_logs` |
 
-First-party backend tables currently accept only common plugin keys:
+First-party backend tables are schema-validated:
 
 ```toml
 [plugins.backend-sqlite]
@@ -269,10 +269,16 @@ enabled = true
 
 [plugins.backend-duckdb]
 enabled = true
+profiling_enabled = false
 ```
 
 Disabling the configured active backend is invalid. Disable an inactive backend
 only, or change `[backend].name` first.
+
+When `plugins.backend-duckdb.profiling_enabled = true`, DuckDB index runs emit
+`.codira/duckdb-profile.json` with aggregate write-path timings. Leave it
+disabled for normal usage; enable it only when investigating backend
+performance.
 
 First-party embedding tables are also schema-validated:
 

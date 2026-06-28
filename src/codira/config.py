@@ -337,7 +337,7 @@ FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
         "exclude_fixtures_logs": True,
     },
     "backend-sqlite": {"enabled": True},
-    "backend-duckdb": {"enabled": True},
+    "backend-duckdb": {"enabled": True, "profiling_enabled": False},
     "embedding-sentence-transformers": {"enabled": True},
     "embedding-onnx": {
         "enabled": True,

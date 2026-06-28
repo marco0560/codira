@@ -113,3 +113,6 @@ DuckDB-specific guidance:
 - ordinary `open_connection()` calls must stay read-oriented
 - schema repair or migration work must not run during normal query opens
 - writer setup belongs in the write session, not in the query path
+- set `plugins.backend-duckdb.profiling_enabled = true` only when diagnosing
+  backend performance; enabled runs emit `.codira/duckdb-profile.json` with
+  aggregate SQL, flush, embedding, vector-store, and transaction timings

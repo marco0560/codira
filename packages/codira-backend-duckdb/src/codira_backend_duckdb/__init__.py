@@ -50,6 +50,11 @@ from .duckdb_support import (
     _store_pending_embedding_rows,
 )
 from .repo_storage import get_codira_dir, get_metadata_path
+from .profiling import (
+    DuckDBProfileRecorder,
+    classify_sql_statement,
+    duckdb_profile_path,
+)
 from .duckdb_query_backend import (
     _BackendCompatibleConnectionAdapter,
     DuckDBQueryBackend,
@@ -70,7 +75,7 @@ if TYPE_CHECKING:
         VectorStore,
     )
 
-PACKAGE_VERSION = "1.49.0"
+PACKAGE_VERSION = "1.49.2"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -234,10 +239,17 @@ class _DuckDBIndexWriteSession:
         self._root = root
         if not _duckdb_db_path(root).exists():
             backend.initialize(root)
+        self._profiler = DuckDBProfileRecorder(
+            enabled=backend.profiling_enabled,
+        )
         self._conn = backend.open_connection(root)
-        raw = cast("DuckDBConnection", self._conn)._raw
-        _repair_nullable_edge_tables(raw)
-        self._conn.execute("BEGIN TRANSACTION")
+        duckdb_conn = cast("DuckDBConnection", self._conn)
+        duckdb_conn.set_profile_recorder(self._profiler)
+        raw = duckdb_conn._raw
+        with self._profiler.span("session.repair_nullable_edge_tables"):
+            _repair_nullable_edge_tables(raw)
+        with self._profiler.span("session.begin_transaction"):
+            self._conn.execute("BEGIN TRANSACTION")
         persistence_conn = cast("_DuckDBPersistenceConnection", self._conn)
         self._transaction_open = True
         self._closed = False
@@ -417,8 +429,10 @@ class _DuckDBIndexWriteSession:
             Matching persisted rows are removed in place.
         """
         if full:
-            _drop_duckdb_schema_indexes(self._conn)
-            _recreate_duckdb_index_tables(self._conn)
+            with self._profiler.span("prepare.drop_schema_indexes"):
+                _drop_duckdb_schema_indexes(self._conn)
+            with self._profiler.span("prepare.recreate_index_tables"):
+                _recreate_duckdb_index_tables(self._conn)
             persistence_conn = cast("_DuckDBPersistenceConnection", self._conn)
             self._id_allocator = DuckDBIdAllocator(persistence_conn)
             self._structural_rows = DuckDBStructuralRowBuffers()
@@ -485,31 +499,32 @@ class _DuckDBIndexWriteSession:
 
         duckdb_error = _duckdb_module().Error
         try:
-            return _store_analysis(
-                cast("_DuckDBPersistenceConnection", self._conn),
-                request.root,
-                request.file_metadata,
-                request.analysis,
-                backend=active_backend,
-                embedding_indexing=request.embedding_indexing,
-                embedding_metrics=request.embedding_metrics,
-                defer_embeddings=request.defer_embeddings,
-                previous_embeddings=cast(
-                    "dict[str, StoredEmbeddingRow] | None",
-                    request.previous_embeddings,
-                ),
-                pending_embedding_rows=self._pending_embedding_rows,
-                vector_store=request.vector_store,
-                vector_set_identity=request.vector_set_identity,
-                vector_store_config=request.vector_store_config,
-                pending_reference_scan_rows=self._pending_reference_scan_rows,
-                pending_call_rows=self._pending_call_rows,
-                pending_ref_rows=self._pending_ref_rows,
-                pending_import_rows=self._pending_import_rows,
-                pending_docstring_issue_rows=self._pending_docstring_issue_rows,
-                structural_rows=self._structural_rows,
-                id_allocator=self._id_allocator,
-            )
+            with self._profiler.span("persist.store_analysis", rows=1):
+                return _store_analysis(
+                    cast("_DuckDBPersistenceConnection", self._conn),
+                    request.root,
+                    request.file_metadata,
+                    request.analysis,
+                    backend=active_backend,
+                    embedding_indexing=request.embedding_indexing,
+                    embedding_metrics=request.embedding_metrics,
+                    defer_embeddings=request.defer_embeddings,
+                    previous_embeddings=cast(
+                        "dict[str, StoredEmbeddingRow] | None",
+                        request.previous_embeddings,
+                    ),
+                    pending_embedding_rows=self._pending_embedding_rows,
+                    vector_store=request.vector_store,
+                    vector_set_identity=request.vector_set_identity,
+                    vector_store_config=request.vector_store_config,
+                    pending_reference_scan_rows=self._pending_reference_scan_rows,
+                    pending_call_rows=self._pending_call_rows,
+                    pending_ref_rows=self._pending_ref_rows,
+                    pending_import_rows=self._pending_import_rows,
+                    pending_docstring_issue_rows=self._pending_docstring_issue_rows,
+                    structural_rows=self._structural_rows,
+                    id_allocator=self._id_allocator,
+                )
         except duckdb_error as exc:
             _delete_indexed_file_data(
                 cast("_DuckDBPersistenceConnection", self._conn),
@@ -545,21 +560,31 @@ class _DuckDBIndexWriteSession:
             self._embedding_backend = backend
         if self._pending_embedding_rows_deferred:
             self._store_deferred_vector_rows()
-            _store_pending_embedding_rows(
-                cast("_DuckDBPersistenceConnection", self._conn),
-                prepared_rows=self._pending_embedding_rows,
-                backend=backend,
-            )
+            with self._profiler.span(
+                "embeddings.store_pending_rows",
+                rows=len(self._pending_embedding_rows),
+            ):
+                _store_pending_embedding_rows(
+                    cast("_DuckDBPersistenceConnection", self._conn),
+                    prepared_rows=self._pending_embedding_rows,
+                    backend=backend,
+                    profiler=self._profiler,
+                )
         else:
-            _flush_pending_embedding_rows(
-                cast("_DuckDBPersistenceConnection", self._conn),
-                self._root,
-                pending_embedding_rows=self._pending_embedding_rows,
-                backend=backend,
-                vector_store=self._vector_store,
-                vector_set_identity=self._vector_set_identity,
-                vector_store_config=self._vector_store_config,
-            )
+            with self._profiler.span(
+                "embeddings.flush_pending_rows",
+                rows=len(self._pending_embedding_rows),
+            ):
+                _flush_pending_embedding_rows(
+                    cast("_DuckDBPersistenceConnection", self._conn),
+                    self._root,
+                    pending_embedding_rows=self._pending_embedding_rows,
+                    backend=backend,
+                    vector_store=self._vector_store,
+                    vector_set_identity=self._vector_set_identity,
+                    vector_store_config=self._vector_store_config,
+                    profiler=self._profiler,
+                )
         self._pending_embedding_rows = []
 
     def _store_deferred_vector_rows(self) -> None:
@@ -581,18 +606,44 @@ class _DuckDBIndexWriteSession:
             or not self._pending_embedding_rows
         ):
             return
-        self._vector_store.store_pending_vectors(
-            self._root,
-            self._vector_set_identity,
-            [
-                PreparedVectorRow(
-                    row=row,
-                    content_hash=content_hash,
-                    vector=stored_vector,
-                )
-                for row, content_hash, stored_vector in self._pending_embedding_rows
-            ],
-            self._vector_store_config,
+        rows = [
+            PreparedVectorRow(
+                row=row,
+                content_hash=content_hash,
+                vector=stored_vector,
+            )
+            for row, content_hash, stored_vector in self._pending_embedding_rows
+        ]
+        with self._profiler.span("vector_store.store_pending_vectors", rows=len(rows)):
+            self._vector_store.store_pending_vectors(
+                self._root,
+                self._vector_set_identity,
+                rows,
+                self._vector_store_config,
+            )
+
+    def _structural_row_count(self) -> int:
+        """
+        Return the number of buffered structural rows.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        int
+            Total rows currently buffered across structural tables.
+        """
+        return (
+            len(self._structural_rows.files)
+            + len(self._structural_rows.modules)
+            + len(self._structural_rows.classes)
+            + len(self._structural_rows.functions)
+            + len(self._structural_rows.symbol_index)
+            + len(self._structural_rows.documentation_artifacts)
+            + len(self._structural_rows.overloads)
+            + len(self._structural_rows.enum_members)
         )
 
     def _flush_structural_rows(self) -> None:
@@ -608,10 +659,14 @@ class _DuckDBIndexWriteSession:
         None
             Buffered structural rows are inserted in dependency order.
         """
-        _flush_structural_rows(
-            cast("_DuckDBPersistenceConnection", self._conn),
-            self._structural_rows,
-        )
+        with self._profiler.span(
+            "flush.structural_rows",
+            rows=self._structural_row_count(),
+        ):
+            _flush_structural_rows(
+                cast("_DuckDBPersistenceConnection", self._conn),
+                self._structural_rows,
+            )
 
     def _flush_pending_imports(self) -> None:
         """
@@ -628,10 +683,14 @@ class _DuckDBIndexWriteSession:
         """
         if not self._pending_import_rows:
             return
-        _flush_import_rows(
-            cast("_DuckDBPersistenceConnection", self._conn),
-            self._pending_import_rows,
-        )
+        with self._profiler.span(
+            "flush.import_rows",
+            rows=len(self._pending_import_rows),
+        ):
+            _flush_import_rows(
+                cast("_DuckDBPersistenceConnection", self._conn),
+                self._pending_import_rows,
+            )
         self._pending_import_rows = []
 
     def _flush_pending_docstring_issues(self) -> None:
@@ -649,10 +708,14 @@ class _DuckDBIndexWriteSession:
         """
         if not self._pending_docstring_issue_rows:
             return
-        _flush_docstring_issue_rows(
-            cast("_DuckDBPersistenceConnection", self._conn),
-            self._pending_docstring_issue_rows,
-        )
+        with self._profiler.span(
+            "flush.docstring_issue_rows",
+            rows=len(self._pending_docstring_issue_rows),
+        ):
+            _flush_docstring_issue_rows(
+                cast("_DuckDBPersistenceConnection", self._conn),
+                self._pending_docstring_issue_rows,
+            )
         self._pending_docstring_issue_rows = []
 
     def _flush_non_embedding_buffers(self) -> None:
@@ -669,19 +732,30 @@ class _DuckDBIndexWriteSession:
             Structural, import, diagnostic, reference-scan, and relationship
             buffers are inserted in dependency order.
         """
-        self._flush_structural_rows()
-        self._flush_pending_imports()
-        self._flush_pending_docstring_issues()
-        _flush_pending_reference_scan_rows(
-            cast("_DuckDBPersistenceConnection", self._conn),
-            self._pending_reference_scan_rows,
-        )
+        with self._profiler.span("flush.non_embedding_buffers"):
+            self._flush_structural_rows()
+            self._flush_pending_imports()
+            self._flush_pending_docstring_issues()
+        with self._profiler.span(
+            "flush.reference_scan_rows",
+            rows=len(self._pending_reference_scan_rows),
+        ):
+            _flush_pending_reference_scan_rows(
+                cast("_DuckDBPersistenceConnection", self._conn),
+                self._pending_reference_scan_rows,
+                profiler=self._profiler,
+            )
         self._pending_reference_scan_rows = []
-        _flush_pending_relationship_rows(
-            cast("_DuckDBPersistenceConnection", self._conn),
-            pending_call_rows=self._pending_call_rows,
-            pending_ref_rows=self._pending_ref_rows,
-        )
+        with self._profiler.span(
+            "flush.relationship_rows",
+            rows=len(self._pending_call_rows) + len(self._pending_ref_rows),
+        ):
+            _flush_pending_relationship_rows(
+                cast("_DuckDBPersistenceConnection", self._conn),
+                pending_call_rows=self._pending_call_rows,
+                pending_ref_rows=self._pending_ref_rows,
+                profiler=self._profiler,
+            )
         self._pending_call_rows = []
         self._pending_ref_rows = []
 
@@ -698,7 +772,8 @@ class _DuckDBIndexWriteSession:
         None
             The session transaction state is marked open after `BEGIN`.
         """
-        self._conn.execute("BEGIN TRANSACTION")
+        with self._profiler.span("session.begin_transaction"):
+            self._conn.execute("BEGIN TRANSACTION")
         self._transaction_open = True
 
     def _commit_transaction(self) -> None:
@@ -715,7 +790,8 @@ class _DuckDBIndexWriteSession:
             Pending writes are committed and the session transaction state is
             marked closed.
         """
-        self._backend.commit(self._root, conn=self._conn)
+        with self._profiler.span("session.commit_transaction"):
+            self._backend.commit(self._root, conn=self._conn)
         self._transaction_open = False
 
     def _rollback_transaction(self) -> None:
@@ -731,7 +807,8 @@ class _DuckDBIndexWriteSession:
         None
             The session transaction state is marked closed after rollback.
         """
-        self._conn.execute("ROLLBACK")
+        with self._profiler.span("session.rollback_transaction"):
+            self._conn.execute("ROLLBACK")
         self._transaction_open = False
 
     def rebuild_derived_indexes(self) -> None:
@@ -748,7 +825,8 @@ class _DuckDBIndexWriteSession:
             Derived backend state is refreshed in place.
         """
         self._flush_non_embedding_buffers()
-        self._backend.rebuild_derived_indexes(self._root, conn=self._conn)
+        with self._profiler.span("rebuild.derived_indexes"):
+            self._backend.rebuild_derived_indexes(self._root, conn=self._conn)
 
     def persist_runtime_inventory(
         self,
@@ -809,7 +887,8 @@ class _DuckDBIndexWriteSession:
                     raise
                 self._commit_transaction()
                 try:
-                    _create_duckdb_schema_indexes(self._conn)
+                    with self._profiler.span("prepare.create_schema_indexes"):
+                        _create_duckdb_schema_indexes(self._conn)
                 except BaseException:
                     self._begin_transaction()
                     raise
@@ -820,6 +899,11 @@ class _DuckDBIndexWriteSession:
                 self._flush_pending_embeddings()
                 self._commit_transaction()
             self._completed = True
+            self._profiler.write(
+                duckdb_profile_path(get_codira_dir(self._root)),
+                backend_name=str(self._backend.name),
+                backend_version=str(self._backend.version),
+            )
 
     def abort(self) -> None:
         """
@@ -1123,6 +1207,23 @@ class DuckDBConnection:
 
     def __init__(self, raw: _DuckDBRawConnection) -> None:
         self._raw = raw
+        self._profiler = DuckDBProfileRecorder(enabled=False)
+
+    def set_profile_recorder(self, profiler: DuckDBProfileRecorder) -> None:
+        """
+        Attach one optional profile recorder to this connection.
+
+        Parameters
+        ----------
+        profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder
+            Recorder owned by the active write session.
+
+        Returns
+        -------
+        None
+            Future connection calls record aggregate timings.
+        """
+        self._profiler = profiler
 
     def execute(
         self,
@@ -1145,10 +1246,11 @@ class DuckDBConnection:
             Cursor wrapper exposing fetch methods and `lastrowid` when
             applicable.
         """
-        if parameters is None:
-            self._raw.execute(query)
-        else:
-            self._raw.execute(query, parameters)
+        with self._profiler.span(classify_sql_statement(query)):
+            if parameters is None:
+                self._raw.execute(query)
+            else:
+                self._raw.execute(query, parameters)
         return _DuckDBCursorWrapper(self._raw)
 
     def executemany(
@@ -1171,7 +1273,11 @@ class DuckDBConnection:
         _DuckDBCursorWrapper
             Cursor wrapper over the most recent execution.
         """
-        self._raw.executemany(query, parameters)
+        with self._profiler.span(
+            "sql.executemany",
+            rows=len(parameters),
+        ):
+            self._raw.executemany(query, parameters)
         return _DuckDBCursorWrapper(self._raw)
 
     def register(self, view_name: str, python_object: object) -> _DuckDBCursorWrapper:
@@ -1190,7 +1296,8 @@ class DuckDBConnection:
         _DuckDBCursorWrapper
             Cursor wrapper over the most recent driver state.
         """
-        self._raw.register(view_name, python_object)
+        with self._profiler.span(f"duckdb.register.{view_name}"):
+            self._raw.register(view_name, python_object)
         return _DuckDBCursorWrapper(self._raw)
 
     def unregister(self, view_name: str) -> _DuckDBCursorWrapper:
@@ -1207,7 +1314,8 @@ class DuckDBConnection:
         _DuckDBCursorWrapper
             Cursor wrapper over the most recent driver state.
         """
-        self._raw.unregister(view_name)
+        with self._profiler.span(f"duckdb.unregister.{view_name}"):
+            self._raw.unregister(view_name)
         return _DuckDBCursorWrapper(self._raw)
 
     def cursor(self) -> _DuckDBCursorCompatibilityAdapter:
@@ -1239,7 +1347,8 @@ class DuckDBConnection:
         None
             Pending writes are committed.
         """
-        self._raw.commit()
+        with self._profiler.span("duckdb.raw_commit"):
+            self._raw.commit()
 
     def close(self) -> None:
         """
@@ -1759,6 +1868,37 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
     name = "duckdb"
     version = SCHEMA_VERSION
 
+    def __init__(self) -> None:
+        """
+        Initialize backend-local runtime settings.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Profiling starts disabled unless plugin configuration enables it.
+        """
+        self._profiling_enabled = False
+
+    @property
+    def profiling_enabled(self) -> bool:
+        """
+        Report whether DuckDB profiling is enabled.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        bool
+            ``True`` when write sessions emit `.codira/duckdb-profile.json`.
+        """
+        return self._profiling_enabled
+
     def configuration_json_schema(self) -> Mapping[str, object]:
         """
         Return the DuckDB backend configuration schema.
@@ -1773,7 +1913,18 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
             Strict JSON Schema for DuckDB backend options.
         """
 
-        return plugin_json_schema({})
+        return plugin_json_schema(
+            {
+                "profiling_enabled": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Emit `.codira/duckdb-profile.json` with aggregate "
+                        "DuckDB write-path timings during index runs."
+                    ),
+                }
+            }
+        )
 
     def configure(self, config: Mapping[str, object]) -> None:
         """
@@ -1790,7 +1941,7 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
             DuckDB currently has no backend-specific settings.
         """
 
-        del config
+        self._profiling_enabled = bool(config.get("profiling_enabled", False))
 
     def begin_index_session(self, root: Path) -> IndexWriteSession:
         """

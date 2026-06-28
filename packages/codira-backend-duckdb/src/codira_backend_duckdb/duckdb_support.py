@@ -48,6 +48,7 @@ from codira.semantic.embeddings import (
     embeddings_enabled,
     serialize_vector,
 )
+from .profiling import DuckDBProfileRecorder
 
 if TYPE_CHECKING:
     from codira.contracts import LanguageAnalyzer, VectorSetIdentity, VectorStore
@@ -2653,6 +2654,7 @@ def _flush_pending_relationship_rows(
     *,
     pending_call_rows: list[CallRow],
     pending_ref_rows: list[RefRow],
+    profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
     Flush session-level relationship rows to DuckDB.
@@ -2672,9 +2674,17 @@ def _flush_pending_relationship_rows(
         Pending relationship rows are inserted in deterministic order.
     """
     if pending_call_rows:
-        _flush_call_record_rows(conn, sorted(set(pending_call_rows)))
+        _flush_call_record_rows(
+            conn,
+            sorted(set(pending_call_rows)),
+            profiler=profiler,
+        )
     if pending_ref_rows:
-        _flush_callable_ref_record_rows(conn, sorted(set(pending_ref_rows)))
+        _flush_callable_ref_record_rows(
+            conn,
+            sorted(set(pending_ref_rows)),
+            profiler=profiler,
+        )
 
 
 def _temporary_csv_path_for_rows(
@@ -3399,6 +3409,8 @@ def _flush_import_rows(
 def _flush_call_record_rows(
     conn: _DuckDBPersistenceConnection,
     rows: list[CallRow],
+    *,
+    profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
     Flush raw call records to DuckDB.
@@ -3418,43 +3430,48 @@ def _flush_call_record_rows(
     if not rows:
         return
 
-    csv_path = _temporary_csv_path_for_rows(rows)
+    active_profiler = (
+        DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
+    )
+    with active_profiler.span("csv.write.call_records", rows=len(rows)):
+        csv_path = _temporary_csv_path_for_rows(rows)
     try:
-        conn.execute(
-            """
-            INSERT INTO call_records(
-                file_id,
-                owner_module,
-                owner_name,
-                kind,
-                base,
-                target,
-                external_target_kind,
-                external_target_name,
-                lineno,
-                col_offset
+        with active_profiler.span("csv.read_csv.call_records", rows=len(rows)):
+            conn.execute(
+                """
+                INSERT INTO call_records(
+                    file_id,
+                    owner_module,
+                    owner_name,
+                    kind,
+                    base,
+                    target,
+                    external_target_kind,
+                    external_target_name,
+                    lineno,
+                    col_offset
+                )
+                SELECT *
+                FROM read_csv(
+                    ?,
+                    header=false,
+                    nullstr='__CODIRA_NULL_SENTINEL__',
+                    columns={
+                        'file_id': 'INTEGER',
+                        'owner_module': 'VARCHAR',
+                        'owner_name': 'VARCHAR',
+                        'kind': 'VARCHAR',
+                        'base': 'VARCHAR',
+                        'target': 'VARCHAR',
+                        'external_target_kind': 'VARCHAR',
+                        'external_target_name': 'VARCHAR',
+                        'lineno': 'INTEGER',
+                        'col_offset': 'INTEGER'
+                    }
+                )
+                """,
+                (str(csv_path),),
             )
-            SELECT *
-            FROM read_csv(
-                ?,
-                header=false,
-                nullstr='__CODIRA_NULL_SENTINEL__',
-                columns={
-                    'file_id': 'INTEGER',
-                    'owner_module': 'VARCHAR',
-                    'owner_name': 'VARCHAR',
-                    'kind': 'VARCHAR',
-                    'base': 'VARCHAR',
-                    'target': 'VARCHAR',
-                    'external_target_kind': 'VARCHAR',
-                    'external_target_name': 'VARCHAR',
-                    'lineno': 'INTEGER',
-                    'col_offset': 'INTEGER'
-                }
-            )
-            """,
-            (str(csv_path),),
-        )
     finally:
         try:
             csv_path.unlink()
@@ -3465,6 +3482,8 @@ def _flush_call_record_rows(
 def _flush_callable_ref_record_rows(
     conn: _DuckDBPersistenceConnection,
     rows: list[RefRow],
+    *,
+    profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
     Flush raw callable-reference records to DuckDB.
@@ -3484,45 +3503,50 @@ def _flush_callable_ref_record_rows(
     if not rows:
         return
 
-    csv_path = _temporary_csv_path_for_rows(rows)
+    active_profiler = (
+        DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
+    )
+    with active_profiler.span("csv.write.callable_ref_records", rows=len(rows)):
+        csv_path = _temporary_csv_path_for_rows(rows)
     try:
-        conn.execute(
-            """
-            INSERT INTO callable_ref_records(
-                file_id,
-                owner_module,
-                owner_name,
-                kind,
-                ref_kind,
-                base,
-                target,
-                external_target_kind,
-                external_target_name,
-                lineno,
-                col_offset
+        with active_profiler.span("csv.read_csv.callable_ref_records", rows=len(rows)):
+            conn.execute(
+                """
+                INSERT INTO callable_ref_records(
+                    file_id,
+                    owner_module,
+                    owner_name,
+                    kind,
+                    ref_kind,
+                    base,
+                    target,
+                    external_target_kind,
+                    external_target_name,
+                    lineno,
+                    col_offset
+                )
+                SELECT *
+                FROM read_csv(
+                    ?,
+                    header=false,
+                    nullstr='__CODIRA_NULL_SENTINEL__',
+                    columns={
+                        'file_id': 'INTEGER',
+                        'owner_module': 'VARCHAR',
+                        'owner_name': 'VARCHAR',
+                        'kind': 'VARCHAR',
+                        'ref_kind': 'VARCHAR',
+                        'base': 'VARCHAR',
+                        'target': 'VARCHAR',
+                        'external_target_kind': 'VARCHAR',
+                        'external_target_name': 'VARCHAR',
+                        'lineno': 'INTEGER',
+                        'col_offset': 'INTEGER'
+                    }
+                )
+                """,
+                (str(csv_path),),
             )
-            SELECT *
-            FROM read_csv(
-                ?,
-                header=false,
-                nullstr='__CODIRA_NULL_SENTINEL__',
-                columns={
-                    'file_id': 'INTEGER',
-                    'owner_module': 'VARCHAR',
-                    'owner_name': 'VARCHAR',
-                    'kind': 'VARCHAR',
-                    'ref_kind': 'VARCHAR',
-                    'base': 'VARCHAR',
-                    'target': 'VARCHAR',
-                    'external_target_kind': 'VARCHAR',
-                    'external_target_name': 'VARCHAR',
-                    'lineno': 'INTEGER',
-                    'col_offset': 'INTEGER'
-                }
-            )
-            """,
-            (str(csv_path),),
-        )
     finally:
         try:
             csv_path.unlink()
@@ -3800,6 +3824,7 @@ def _store_pending_embedding_rows(
     *,
     prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
     backend: EmbeddingBackendSpec,
+    profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
     Persist deferred embedding rows for later computation.
@@ -3837,6 +3862,9 @@ def _store_pending_embedding_rows(
 
     import pyarrow as pa
 
+    active_profiler = (
+        DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
+    )
     for batch in _chunked_embedding_batches(prepared_rows):
         object_types: list[str] = []
         object_ids: list[int] = []
@@ -3857,45 +3885,53 @@ def _store_pending_embedding_rows(
             texts.append(row.text)
 
         try:
-            table = pa.table(
-                {
-                    "object_type": pa.array(object_types, type=pa.string()),
-                    "object_id": pa.array(object_ids, type=pa.int64()),
-                    "stable_id": pa.array(stable_ids, type=pa.string()),
-                    "backend": pa.array(backends, type=pa.string()),
-                    "version": pa.array(versions, type=pa.string()),
-                    "content_hash": pa.array(content_hashes, type=pa.string()),
-                    "dim": pa.array(dims, type=pa.int64()),
-                    "text": pa.array(texts, type=pa.string()),
-                }
-            )
-            _flush_registered_arrow_table(
-                conn,
-                view_name="__codira_pending_embedding_queue_rows",
-                table=table,
-                insert_sql="""
-                    INSERT OR REPLACE INTO pending_embeddings(
-                        object_type,
-                        object_id,
-                        stable_id,
-                        backend,
-                        version,
-                        content_hash,
-                        dim,
-                        text
-                    )
-                    SELECT
-                        object_type,
-                        object_id,
-                        stable_id,
-                        backend,
-                        version,
-                        content_hash,
-                        dim,
-                        text
-                    FROM __codira_pending_embedding_queue_rows
-                    """,
-            )
+            with active_profiler.span(
+                "arrow.build.pending_embeddings",
+                rows=len(batch),
+            ):
+                table = pa.table(
+                    {
+                        "object_type": pa.array(object_types, type=pa.string()),
+                        "object_id": pa.array(object_ids, type=pa.int64()),
+                        "stable_id": pa.array(stable_ids, type=pa.string()),
+                        "backend": pa.array(backends, type=pa.string()),
+                        "version": pa.array(versions, type=pa.string()),
+                        "content_hash": pa.array(content_hashes, type=pa.string()),
+                        "dim": pa.array(dims, type=pa.int64()),
+                        "text": pa.array(texts, type=pa.string()),
+                    }
+                )
+            with active_profiler.span(
+                "arrow.flush.pending_embeddings",
+                rows=len(batch),
+            ):
+                _flush_registered_arrow_table(
+                    conn,
+                    view_name="__codira_pending_embedding_queue_rows",
+                    table=table,
+                    insert_sql="""
+                        INSERT OR REPLACE INTO pending_embeddings(
+                            object_type,
+                            object_id,
+                            stable_id,
+                            backend,
+                            version,
+                            content_hash,
+                            dim,
+                            text
+                        )
+                        SELECT
+                            object_type,
+                            object_id,
+                            stable_id,
+                            backend,
+                            version,
+                            content_hash,
+                            dim,
+                            text
+                        FROM __codira_pending_embedding_queue_rows
+                        """,
+                )
         except _duckdb_batch_error_types() as exc:
             msg = _embedding_batch_backend_error(
                 operation="pending_embeddings_insert",
@@ -3957,6 +3993,7 @@ def _store_cached_embedding_vectors(
     *,
     backend: EmbeddingBackendSpec,
     encoded_vectors: dict[str, bytes],
+    profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
     Persist newly encoded vectors in the embedding vector cache.
@@ -3986,6 +4023,9 @@ def _store_cached_embedding_vectors(
 
     import pyarrow as pa
 
+    active_profiler = (
+        DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
+    )
     ordered_vectors = sorted(encoded_vectors.items())
     for batch in _chunked_embedding_batches(ordered_vectors):
         backends: list[str] = []
@@ -4001,36 +4041,46 @@ def _store_cached_embedding_vectors(
             vectors.append(vector)
 
         try:
-            table = pa.table(
-                {
-                    "backend": pa.array(backends, type=pa.string()),
-                    "version": pa.array(versions, type=pa.string()),
-                    "dim": pa.array(dims, type=pa.int64()),
-                    "content_hash": pa.array(content_hashes, type=pa.string()),
-                    "vector": pa.array(vectors, type=pa.binary()),
-                }
-            )
-            _flush_registered_arrow_table(
-                conn,
-                view_name="__codira_embedding_vector_cache_rows",
-                table=table,
-                insert_sql="""
-                    INSERT OR REPLACE INTO embedding_vector_cache(
-                        backend,
-                        version,
-                        dim,
-                        content_hash,
-                        vector
-                    )
-                    SELECT
-                        backend,
-                        version,
-                        dim,
-                        content_hash,
-                        vector
-                    FROM __codira_embedding_vector_cache_rows
-                    """,
-            )
+            with active_profiler.span(
+                "arrow.build.embedding_vector_cache",
+                rows=len(batch),
+                payload_bytes=_cached_vector_payload_bytes(dict(batch)),
+            ):
+                table = pa.table(
+                    {
+                        "backend": pa.array(backends, type=pa.string()),
+                        "version": pa.array(versions, type=pa.string()),
+                        "dim": pa.array(dims, type=pa.int64()),
+                        "content_hash": pa.array(content_hashes, type=pa.string()),
+                        "vector": pa.array(vectors, type=pa.binary()),
+                    }
+                )
+            with active_profiler.span(
+                "arrow.flush.embedding_vector_cache",
+                rows=len(batch),
+                payload_bytes=_cached_vector_payload_bytes(dict(batch)),
+            ):
+                _flush_registered_arrow_table(
+                    conn,
+                    view_name="__codira_embedding_vector_cache_rows",
+                    table=table,
+                    insert_sql="""
+                        INSERT OR REPLACE INTO embedding_vector_cache(
+                            backend,
+                            version,
+                            dim,
+                            content_hash,
+                            vector
+                        )
+                        SELECT
+                            backend,
+                            version,
+                            dim,
+                            content_hash,
+                            vector
+                        FROM __codira_embedding_vector_cache_rows
+                        """,
+                )
         except _duckdb_batch_error_types() as exc:
             msg = _embedding_batch_backend_error(
                 operation="embedding_vector_cache_insert",
@@ -4048,6 +4098,7 @@ def _store_vector_store_materialized_rows(
     root: Path | None,
     prepared_rows: list[PreparedVectorRow],
     encoded_vectors: dict[str, bytes],
+    profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
     Mirror materialized embedding rows into the separated vector store.
@@ -4074,25 +4125,38 @@ def _store_vector_store_materialized_rows(
     """
     if vector_store is None or vector_set_identity is None or root is None:
         return
+    active_profiler = (
+        DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
+    )
     if encoded_vectors:
-        vector_store.store_cached_vectors(
+        with active_profiler.span(
+            "vector_store.store_cached_vectors",
+            rows=len(encoded_vectors),
+            payload_bytes=_cached_vector_payload_bytes(encoded_vectors),
+        ):
+            vector_store.store_cached_vectors(
+                root,
+                vector_set_identity,
+                encoded_vectors,
+                vector_store_config,
+            )
+    with active_profiler.span("vector_store.store_vectors", rows=len(prepared_rows)):
+        vector_store.store_vectors(
             root,
             vector_set_identity,
-            encoded_vectors,
+            prepared_rows,
             vector_store_config,
         )
-    vector_store.store_vectors(
-        root,
-        vector_set_identity,
-        prepared_rows,
-        vector_store_config,
-    )
-    vector_store.delete_pending_vectors(
-        root,
-        vector_set_identity,
-        prepared_rows,
-        vector_store_config,
-    )
+    with active_profiler.span(
+        "vector_store.delete_pending_vectors",
+        rows=len(prepared_rows),
+    ):
+        vector_store.delete_pending_vectors(
+            root,
+            vector_set_identity,
+            prepared_rows,
+            vector_store_config,
+        )
 
 
 def _delete_pending_embedding_rows(
@@ -4100,6 +4164,7 @@ def _delete_pending_embedding_rows(
     *,
     prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
     backend: EmbeddingBackendSpec,
+    profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
     Delete pending rows that have been materialized into embeddings.
@@ -4137,6 +4202,9 @@ def _delete_pending_embedding_rows(
 
     import pyarrow as pa
 
+    active_profiler = (
+        DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
+    )
     for batch in _chunked_embedding_batches(prepared_rows):
         object_types: list[str] = []
         object_ids: list[int] = []
@@ -4149,27 +4217,35 @@ def _delete_pending_embedding_rows(
             versions.append(backend.version)
 
         try:
-            table = pa.table(
-                {
-                    "object_type": pa.array(object_types, type=pa.string()),
-                    "object_id": pa.array(object_ids, type=pa.int64()),
-                    "backend": pa.array(backends, type=pa.string()),
-                    "version": pa.array(versions, type=pa.string()),
-                }
-            )
-            _flush_registered_arrow_table(
-                conn,
-                view_name="__codira_pending_embedding_delete_rows",
-                table=table,
-                insert_sql="""
-                    DELETE FROM pending_embeddings
-                    USING __codira_pending_embedding_delete_rows pending
-                    WHERE pending_embeddings.object_type = pending.object_type
-                      AND pending_embeddings.object_id = pending.object_id
-                      AND pending_embeddings.backend = pending.backend
-                      AND pending_embeddings.version = pending.version
-                    """,
-            )
+            with active_profiler.span(
+                "arrow.build.pending_embedding_delete",
+                rows=len(batch),
+            ):
+                table = pa.table(
+                    {
+                        "object_type": pa.array(object_types, type=pa.string()),
+                        "object_id": pa.array(object_ids, type=pa.int64()),
+                        "backend": pa.array(backends, type=pa.string()),
+                        "version": pa.array(versions, type=pa.string()),
+                    }
+                )
+            with active_profiler.span(
+                "arrow.flush.pending_embedding_delete",
+                rows=len(batch),
+            ):
+                _flush_registered_arrow_table(
+                    conn,
+                    view_name="__codira_pending_embedding_delete_rows",
+                    table=table,
+                    insert_sql="""
+                        DELETE FROM pending_embeddings
+                        USING __codira_pending_embedding_delete_rows pending
+                        WHERE pending_embeddings.object_type = pending.object_type
+                          AND pending_embeddings.object_id = pending.object_id
+                          AND pending_embeddings.backend = pending.backend
+                          AND pending_embeddings.version = pending.version
+                        """,
+                )
         except _duckdb_batch_error_types() as exc:
             msg = _embedding_batch_backend_error(
                 operation="pending_embeddings_delete",
@@ -4191,6 +4267,7 @@ def _flush_prepared_embedding_rows(
     vector_store: VectorStore | None = None,
     vector_set_identity: VectorSetIdentity | None = None,
     vector_store_config: Mapping[str, object] | None = None,
+    profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
     Flush prepared embedding rows to DuckDB.
@@ -4219,7 +4296,15 @@ def _flush_prepared_embedding_rows(
     """
     if not prepared_rows:
         return
-    _delete_pending_embedding_rows(conn, prepared_rows=prepared_rows, backend=backend)
+    active_profiler = (
+        DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
+    )
+    _delete_pending_embedding_rows(
+        conn,
+        prepared_rows=prepared_rows,
+        backend=backend,
+        profiler=active_profiler,
+    )
 
     import pyarrow as pa
 
@@ -4241,10 +4326,14 @@ def _flush_prepared_embedding_rows(
     }
     if texts_to_encode:
         ordered_content_hashes = list(dict.fromkeys(texts_to_encode))
-        encoded_rows = embed_texts(
-            [texts_to_encode[content_hash] for content_hash in ordered_content_hashes],
-            root=root,
-        )
+        with active_profiler.span("embeddings.embed_texts", rows=len(texts_to_encode)):
+            encoded_rows = embed_texts(
+                [
+                    texts_to_encode[content_hash]
+                    for content_hash in ordered_content_hashes
+                ],
+                root=root,
+            )
         for content_hash, vector in zip(
             ordered_content_hashes,
             encoded_rows,
@@ -4261,6 +4350,7 @@ def _flush_prepared_embedding_rows(
                     _vector_values,
                 ) in encoded_vectors.items()
             },
+            profiler=active_profiler,
         )
 
     object_types: list[str] = []
@@ -4298,57 +4388,58 @@ def _flush_prepared_embedding_rows(
             )
         )
 
-    table = pa.table(
-        {
-            "object_type": pa.array(object_types, type=pa.string()),
-            "object_id": pa.array(object_ids, type=pa.int64()),
-            "backend": pa.array(backends, type=pa.string()),
-            "version": pa.array(versions, type=pa.string()),
-            "content_hash": pa.array(content_hashes, type=pa.string()),
-            "dim": pa.array(dims, type=pa.int64()),
-            "vector": pa.array(vectors, type=pa.binary()),
-            "vector_values": pa.array(
-                vector_values_rows,
-                type=pa.list_(pa.float64()),
-            ),
-            "row_ordinal": pa.array(row_ordinals, type=pa.int64()),
-        }
-    )
+    with active_profiler.span(
+        "arrow.build.embeddings",
+        rows=len(deduplicated_rows),
+        payload_bytes=sum(len(vector) for vector in vectors),
+    ):
+        table = pa.table(
+            {
+                "object_type": pa.array(object_types, type=pa.string()),
+                "object_id": pa.array(object_ids, type=pa.int64()),
+                "backend": pa.array(backends, type=pa.string()),
+                "version": pa.array(versions, type=pa.string()),
+                "content_hash": pa.array(content_hashes, type=pa.string()),
+                "dim": pa.array(dims, type=pa.int64()),
+                "vector": pa.array(vectors, type=pa.binary()),
+                "vector_values": pa.array(
+                    vector_values_rows,
+                    type=pa.list_(pa.float64()),
+                ),
+                "row_ordinal": pa.array(row_ordinals, type=pa.int64()),
+            }
+        )
     view_name = "__codira_pending_embedding_rows"
     conn.register(view_name, table)
     try:
-        conn.execute(
-            """
-            DELETE FROM embeddings
-            USING __codira_pending_embedding_rows pending
-            WHERE embeddings.object_type = pending.object_type
-              AND embeddings.object_id = pending.object_id
-              AND embeddings.backend = pending.backend
-              AND embeddings.version = pending.version
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO embeddings(
-                object_type,
-                object_id,
-                backend,
-                version,
-                content_hash,
-                dim,
-                vector,
-                vector_values
+        with active_profiler.span(
+            "embeddings.delete_existing", rows=len(deduplicated_rows)
+        ):
+            conn.execute(
+                """
+                DELETE FROM embeddings
+                USING __codira_pending_embedding_rows pending
+                WHERE embeddings.object_type = pending.object_type
+                  AND embeddings.object_id = pending.object_id
+                  AND embeddings.backend = pending.backend
+                  AND embeddings.version = pending.version
+                """
             )
-            SELECT
-                object_type,
-                object_id,
-                backend,
-                version,
-                content_hash,
-                dim,
-                vector,
-                vector_values
-            FROM (
+        with active_profiler.span(
+            "embeddings.insert_rows", rows=len(deduplicated_rows)
+        ):
+            conn.execute(
+                """
+                INSERT INTO embeddings(
+                    object_type,
+                    object_id,
+                    backend,
+                    version,
+                    content_hash,
+                    dim,
+                    vector,
+                    vector_values
+                )
                 SELECT
                     object_type,
                     object_id,
@@ -4357,16 +4448,26 @@ def _flush_prepared_embedding_rows(
                     content_hash,
                     dim,
                     vector,
-                    vector_values,
-                    row_number() OVER (
-                        PARTITION BY object_type, object_id, backend, version
-                        ORDER BY row_ordinal DESC
-                    ) AS codira_row_rank
-                FROM __codira_pending_embedding_rows
+                    vector_values
+                FROM (
+                    SELECT
+                        object_type,
+                        object_id,
+                        backend,
+                        version,
+                        content_hash,
+                        dim,
+                        vector,
+                        vector_values,
+                        row_number() OVER (
+                            PARTITION BY object_type, object_id, backend, version
+                            ORDER BY row_ordinal DESC
+                        ) AS codira_row_rank
+                    FROM __codira_pending_embedding_rows
+                )
+                WHERE codira_row_rank = 1
+                """
             )
-            WHERE codira_row_rank = 1
-            """
-        )
     finally:
         conn.unregister(view_name)
     _store_vector_store_materialized_rows(
@@ -4382,6 +4483,7 @@ def _flush_prepared_embedding_rows(
                 _vector_values,
             ) in encoded_vectors.items()
         },
+        profiler=active_profiler,
     )
 
 
@@ -4394,6 +4496,7 @@ def _flush_pending_embedding_rows(
     vector_store: VectorStore | None = None,
     vector_set_identity: VectorSetIdentity | None = None,
     vector_store_config: Mapping[str, object] | None = None,
+    profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
     Flush session-level embedding rows to DuckDB.
@@ -4433,6 +4536,7 @@ def _flush_pending_embedding_rows(
         vector_store=vector_store,
         vector_set_identity=vector_set_identity,
         vector_store_config={} if vector_store_config is None else vector_store_config,
+        profiler=profiler,
     )
     pending_embedding_rows.clear()
 
@@ -4596,6 +4700,8 @@ def _flush_reference_scan_rows(
 def _flush_pending_reference_scan_rows(
     conn: _DuckDBPersistenceConnection,
     rows: list[tuple[int, int, str]],
+    *,
+    profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
     Flush pending reference-search rows to DuckDB in one batch.
@@ -4615,25 +4721,30 @@ def _flush_pending_reference_scan_rows(
     if not rows:
         return
 
-    csv_path = _temporary_csv_path_for_rows(rows)
+    active_profiler = (
+        DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
+    )
+    with active_profiler.span("csv.write.reference_scan_lines", rows=len(rows)):
+        csv_path = _temporary_csv_path_for_rows(rows)
     try:
-        conn.execute(
-            """
-            INSERT INTO reference_scan_lines(file_id, lineno, line_text)
-            SELECT *
-            FROM read_csv(
-                ?,
-                header=false,
-                nullstr='__CODIRA_NULL_SENTINEL__',
-                columns={
-                    'file_id': 'INTEGER',
-                    'lineno': 'INTEGER',
-                    'line_text': 'VARCHAR'
-                }
+        with active_profiler.span("csv.read_csv.reference_scan_lines", rows=len(rows)):
+            conn.execute(
+                """
+                INSERT INTO reference_scan_lines(file_id, lineno, line_text)
+                SELECT *
+                FROM read_csv(
+                    ?,
+                    header=false,
+                    nullstr='__CODIRA_NULL_SENTINEL__',
+                    columns={
+                        'file_id': 'INTEGER',
+                        'lineno': 'INTEGER',
+                        'line_text': 'VARCHAR'
+                    }
+                )
+                """,
+                (str(csv_path),),
             )
-            """,
-            (str(csv_path),),
-        )
     finally:
         try:
             csv_path.unlink()

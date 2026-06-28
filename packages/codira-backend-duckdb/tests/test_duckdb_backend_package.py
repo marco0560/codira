@@ -34,6 +34,7 @@ from codira.semantic.embeddings import EmbeddingBackendSpec
 from codira.storage import override_storage_root
 import codira_backend_duckdb as duckdb_backend_module
 from codira_backend_duckdb import (
+    DuckDBConnection,
     DuckDBIndexBackend,
     _duckdb_db_path,
     _duckdb_schema_ddl,
@@ -46,10 +47,16 @@ from codira_backend_duckdb.duckdb_support import _flush_pending_reference_scan_r
 from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
 from codira_backend_duckdb.duckdb_support import _store_cached_embedding_vectors
 from codira_backend_duckdb.duckdb_support import _store_pending_embedding_rows
+from codira_backend_duckdb.profiling import (
+    DuckDBProfileRecorder,
+    classify_sql_statement,
+    duckdb_profile_path,
+)
 from codira_backend_duckdb import duckdb_support as duckdb_support_module
 
 if TYPE_CHECKING:
     from codira_backend_duckdb.duckdb_support import _DuckDBPersistenceConnection
+    from codira_backend_duckdb import _DuckDBRawConnection
 
 
 _UNRESOLVED_CALL_RECORDS = (
@@ -513,7 +520,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.49.1"
+    assert project["project"]["version"] == "1.49.2"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -555,7 +562,7 @@ def test_duckdb_backend_exposes_configuration_schema() -> None:
     Returns
     -------
     None
-        The test asserts DuckDB currently accepts only common plugin options.
+        The test asserts DuckDB exposes its opt-in profiling switch.
     """
 
     schema = DuckDBIndexBackend().configuration_json_schema()
@@ -563,7 +570,197 @@ def test_duckdb_backend_exposes_configuration_schema() -> None:
     assert isinstance(properties, dict)
 
     assert schema["additionalProperties"] is False
-    assert sorted(properties) == ["enabled"]
+    assert sorted(properties) == ["enabled", "profiling_enabled"]
+    assert properties["profiling_enabled"] == {
+        "type": "boolean",
+        "default": False,
+        "description": (
+            "Emit `.codira/duckdb-profile.json` with aggregate DuckDB "
+            "write-path timings during index runs."
+        ),
+    }
+
+
+def test_duckdb_backend_configures_profiling_flag() -> None:
+    """
+    Apply the opt-in DuckDB profiling plugin configuration.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts profiling is disabled by default and enabled only by
+        explicit plugin configuration.
+    """
+    backend = DuckDBIndexBackend()
+
+    assert backend.profiling_enabled is False
+
+    backend.configure({"profiling_enabled": True})
+
+    assert backend.profiling_enabled is True
+
+
+def test_duckdb_write_session_emits_profile_only_when_enabled(tmp_path: Path) -> None:
+    """
+    Emit DuckDB write-session profiling only when explicitly configured.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts default DuckDB sessions stay silent and enabled
+        sessions write a profile with expected lifecycle spans.
+    """
+    pytest.importorskip("duckdb")
+
+    disabled_root = tmp_path / "disabled"
+    disabled_backend = DuckDBIndexBackend()
+    disabled_session = disabled_backend.begin_index_session(disabled_root)
+    try:
+        disabled_session.prepare(full=True, indexed_paths=(), deleted_paths=())
+        disabled_session.commit()
+    finally:
+        disabled_session.close()
+
+    assert not (disabled_root / ".codira" / "duckdb-profile.json").exists()
+
+    enabled_root = tmp_path / "enabled"
+    enabled_backend = DuckDBIndexBackend()
+    enabled_backend.configure({"profiling_enabled": True})
+    enabled_session = enabled_backend.begin_index_session(enabled_root)
+    try:
+        enabled_session.prepare(full=True, indexed_paths=(), deleted_paths=())
+        enabled_session.commit()
+    finally:
+        enabled_session.close()
+
+    profile_path = enabled_root / ".codira" / "duckdb-profile.json"
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    span_names = {str(span["name"]) for span in payload["spans"]}
+
+    assert payload["schema_version"] == "1"
+    assert payload["backend"] == {
+        "name": "duckdb",
+        "version": str(SCHEMA_VERSION),
+    }
+    assert {
+        "prepare.drop_schema_indexes",
+        "prepare.recreate_index_tables",
+        "session.commit_transaction",
+    } <= span_names
+
+
+def test_duckdb_profile_recorder_writes_stable_json(tmp_path: Path) -> None:
+    """
+    Write the opt-in DuckDB profile JSON payload.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository state directory.
+
+    Returns
+    -------
+    None
+        The test asserts disabled recorders are silent and enabled recorders
+        emit the stable aggregate schema.
+    """
+    disabled = DuckDBProfileRecorder(enabled=False)
+    disabled.record("ignored", seconds=1.0, rows=1)
+    disabled.write(
+        duckdb_profile_path(tmp_path),
+        backend_name="duckdb",
+        backend_version="1",
+    )
+
+    assert not duckdb_profile_path(tmp_path).exists()
+
+    enabled = DuckDBProfileRecorder(enabled=True)
+    enabled.record("sql.select", seconds=0.25, rows=2)
+    enabled.record("sql.select", seconds=0.75, rows=3)
+    enabled.write(
+        duckdb_profile_path(tmp_path),
+        backend_name="duckdb",
+        backend_version="1",
+    )
+
+    payload = json.loads(duckdb_profile_path(tmp_path).read_text(encoding="utf-8"))
+    assert payload == {
+        "backend": {"name": "duckdb", "version": "1"},
+        "schema_version": "1",
+        "spans": [
+            {
+                "calls": 2,
+                "name": "sql.select",
+                "payload_bytes_total": 0,
+                "rows_total": 5,
+                "seconds_avg": 0.5,
+                "seconds_max": 0.75,
+                "seconds_total": 1.0,
+            }
+        ],
+    }
+
+
+def test_duckdb_connection_records_profiled_sql() -> None:
+    """
+    Profile SQL execution through the DuckDB connection wrapper.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the wrapper records aggregate SQL labels without
+        changing cursor behavior.
+    """
+    raw = _FakeDuckDBConnection()
+    conn = DuckDBConnection(cast("_DuckDBRawConnection", raw))
+    profiler = DuckDBProfileRecorder(enabled=True)
+    conn.set_profile_recorder(profiler)
+
+    cursor = conn.execute("SELECT 1")
+    conn.executemany("INSERT INTO files VALUES (?)", [(1,), (2,)])
+
+    assert cursor.fetchall() == []
+    assert raw.executed[0][0] == "SELECT 1"
+    assert profiler.spans["sql.select"].calls == 1
+    assert profiler.spans["sql.executemany"].rows_total == 2
+
+
+def test_duckdb_sql_classifier_names_hotspot_tables() -> None:
+    """
+    Keep DuckDB SQL profile labels compact and stable.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts representative write-path SQL maps to useful labels.
+    """
+    assert classify_sql_statement("SELECT * FROM files") == "sql.select"
+    assert (
+        classify_sql_statement("INSERT INTO call_records(file_id) SELECT 1")
+        == "sql.insert.call_records"
+    )
+    assert (
+        classify_sql_statement("INSERT OR REPLACE INTO embedding_vector_cache")
+        == "sql.insert_or_replace.embedding_vector_cache"
+    )
+    assert classify_sql_statement("SELECT * FROM read_csv(?)") == "sql.read_csv"
 
 
 def test_duckdb_backend_disables_python_replacements(tmp_path: Path) -> None:
@@ -1542,6 +1739,7 @@ def test_duckdb_deferred_session_flushes_pending_rows_after_structural_commit(
         *,
         prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
         backend: EmbeddingBackendSpec,
+        profiler: DuckDBProfileRecorder | None = None,
     ) -> None:
         raw = duckdb.connect(str(_duckdb_db_path(tmp_path)))
         try:
@@ -1554,6 +1752,7 @@ def test_duckdb_deferred_session_flushes_pending_rows_after_structural_commit(
             conn,
             prepared_rows=prepared_rows,
             backend=backend,
+            profiler=profiler,
         )
 
     monkeypatch.setattr(

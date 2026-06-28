@@ -363,6 +363,7 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
     assert "emit_namespaces = true" in rendered
     assert "[plugins.backend-sqlite]" in rendered
     assert "[plugins.backend-duckdb]" in rendered
+    assert "profiling_enabled = false" in rendered
     assert "[plugins.embedding-sentence-transformers]" in rendered
     assert "[plugins.embedding-onnx]" in rendered
     assert "max_tokens = 512" in rendered

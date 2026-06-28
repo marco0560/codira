@@ -36,6 +36,17 @@ CODIRA_INDEX_BACKEND=duckdb codira plugins
 CODIRA_INDEX_BACKEND=duckdb codira sym helper --json
 ```
 
+Optional profiling for backend-performance investigations:
+
+```toml
+[plugins.backend-duckdb]
+profiling_enabled = true
+```
+
+Enabled index runs emit `.codira/duckdb-profile.json` with aggregate timings for
+DuckDB SQL, flush, embedding, vector-store, and transaction spans. Keep this
+disabled during normal use.
+
 Operator model:
 
 * one backend is active for one repository instance
