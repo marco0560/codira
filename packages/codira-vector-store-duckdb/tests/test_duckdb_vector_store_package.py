@@ -13,6 +13,7 @@ from codira.contracts import (
     EmbeddingEngineSpec,
     PendingEmbeddingRow,
     PreparedVectorRow,
+    VectorSimilarityRequest,
     VectorSetIdentity,
     VectorStore,
 )
@@ -325,3 +326,62 @@ def test_duckdb_vector_store_caches_vector_set_identity(
 
     assert first == second == third
     assert initialize_calls == 2
+
+
+def test_duckdb_vector_store_scores_native_and_legacy_vectors(
+    tmp_path: Path,
+) -> None:
+    """
+    Score native vector-value rows and legacy blob-only rows together.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB returns deterministic similarity scores for
+        both current and legacy vector encodings.
+    """
+    store = DuckDBVectorStore()
+    identity = _vector_identity(store)
+    vector_set_id = store.ensure_vector_set(tmp_path, identity, {})
+    store.store_vectors(tmp_path, identity, _prepared_rows(), {})
+
+    with duckdb.connect(str(get_vector_store_path(tmp_path))) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO vectors(
+                vector_set_id,
+                object_type,
+                stable_id,
+                content_hash,
+                vector,
+                vector_values
+            )
+            VALUES (?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                vector_set_id,
+                "symbol",
+                "symbol:legacy",
+                "hash-legacy",
+                serialize_vector([0.5, 0.5, 0.0]),
+            ),
+        )
+
+    scores = store.similarity_scores(
+        VectorSimilarityRequest(
+            root=tmp_path,
+            identity=identity,
+            object_type="symbol",
+            query_vector=[1.0, 0.0, 0.0],
+            min_score=0.4,
+            config={},
+        )
+    )
+
+    assert [score.stable_id for score in scores] == ["symbol:one", "symbol:legacy"]
+    assert [score.score for score in scores] == pytest.approx([1.0, 0.5])

@@ -2154,6 +2154,7 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
             "pytest",
             "-q",
             "tests",
+            "packages",
         ),
         (
             "python",

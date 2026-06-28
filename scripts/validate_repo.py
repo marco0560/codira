@@ -66,7 +66,11 @@ VALIDATION_STEPS: tuple[ValidationStep, ...] = (
             ".",
         ),
     ),
-    ValidationStep("coverage", "coverage", ("run", "-m", "pytest", "-q", "tests")),
+    ValidationStep(
+        "coverage",
+        "coverage",
+        ("run", "-m", "pytest", "-q", "tests", "packages"),
+    ),
     ValidationStep(
         "coverage-json",
         "coverage",

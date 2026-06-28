@@ -10,7 +10,13 @@ import pytest
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 from codira.contracts import EmbeddingEngine, EmbeddingEngineError
-from codira_embedding_onnx import OnnxEmbeddingEngine, _runtime_input_feed, build_engine
+from codira_embedding_onnx import (
+    OnnxEmbeddingEngine,
+    _engine_config,
+    _pool_outputs,
+    _runtime_input_feed,
+    build_engine,
+)
 
 
 def test_onnx_package_declares_expected_entry_point() -> None:
@@ -122,6 +128,106 @@ def test_onnx_engine_requires_explicit_artifact_paths() -> None:
         engine.provision({})
 
 
+def test_onnx_engine_config_reads_runtime_knobs() -> None:
+    """
+    Normalize all ONNX runtime knobs from plugin configuration.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts user-facing ONNX knobs are read into runtime config.
+    """
+    config = _engine_config(
+        {
+            "model_path": "models/demo/model.onnx",
+            "tokenizer_path": "models/demo/tokenizer.json",
+            "provider": "CUDAExecutionProvider",
+            "precision": "int8",
+            "normalize": False,
+            "max_tokens": 256,
+            "intra_op_num_threads": 4,
+            "inter_op_num_threads": 1,
+            "_codira_batch_size": 8,
+        }
+    )
+
+    assert config.model_path == Path("models/demo/model.onnx")
+    assert config.tokenizer_path == Path("models/demo/tokenizer.json")
+    assert config.provider == "CUDAExecutionProvider"
+    assert config.precision == "int8"
+    assert config.normalize is False
+    assert config.max_tokens == 256
+    assert config.batch_size == 8
+    assert config.intra_op_num_threads == 4
+    assert config.inter_op_num_threads == 1
+
+
+def test_onnx_engine_config_rejects_invalid_runtime_knobs() -> None:
+    """
+    Reject invalid ONNX runtime knob values before model loading.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts invalid config values fail with specific engine
+        errors.
+    """
+    base_config = {
+        "model_path": "model.onnx",
+        "tokenizer_path": "tokenizer.json",
+    }
+
+    with pytest.raises(EmbeddingEngineError, match="provider"):
+        _engine_config({**base_config, "provider": 1})
+    with pytest.raises(EmbeddingEngineError, match="normalize"):
+        _engine_config({**base_config, "normalize": "yes"})
+    with pytest.raises(EmbeddingEngineError, match="max_tokens"):
+        _engine_config({**base_config, "max_tokens": -1})
+    with pytest.raises(EmbeddingEngineError, match="_codira_batch_size"):
+        _engine_config({**base_config, "_codira_batch_size": 0})
+
+
+def test_onnx_engine_spec_uses_core_injected_identity() -> None:
+    """
+    Build ONNX embedding identity from core-injected model metadata.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts plugin config and core metadata combine into a stable
+        embedding identity.
+    """
+    spec = OnnxEmbeddingEngine().spec(
+        {
+            "model_path": "model.onnx",
+            "tokenizer_path": "tokenizer.json",
+            "precision": "int8",
+            "_codira_model": "demo/model",
+            "_codira_model_version": "revision-1",
+            "_codira_dimension": 768,
+        }
+    )
+
+    assert spec.engine == "onnx"
+    assert spec.engine_version == "1.0.1"
+    assert spec.model == "demo/model"
+    assert spec.model_version == "revision-1"
+    assert spec.dimension == 768
+    assert spec.precision == "int8"
+
+
 def test_onnx_runtime_input_feed_supplies_token_type_ids() -> None:
     """
     Supply token type IDs when an ONNX graph declares that input.
@@ -209,6 +315,48 @@ def test_onnx_runtime_input_feed_supplies_token_type_ids() -> None:
     assert cast(Any, feed["input_ids"]).tolist() == [[101, 102], [101, 0]]
     assert cast(Any, feed["attention_mask"]).tolist() == [[1, 1], [1, 0]]
     assert cast(Any, feed["token_type_ids"]).tolist() == [[0, 0], [0, 0]]
+
+
+def test_onnx_pool_outputs_respects_attention_mask_and_normalization() -> None:
+    """
+    Mean-pool ONNX token embeddings with masking and optional normalization.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts masked tokens do not contribute and zero masks stay
+        numerically stable.
+    """
+    import numpy as np
+
+    token_embeddings = np.asarray(
+        [
+            [[2.0, 0.0], [0.0, 2.0], [8.0, 8.0]],
+            [[4.0, 0.0], [0.0, 4.0], [2.0, 2.0]],
+            [[9.0, 9.0], [9.0, 9.0], [9.0, 9.0]],
+        ],
+        dtype=np.float32,
+    )
+
+    raw_vectors = _pool_outputs(
+        token_embeddings,
+        attention_mask=[[1, 1, 0], [1, 0, 0], [0, 0, 0]],
+        normalize=False,
+    )
+    normalized_vectors = _pool_outputs(
+        token_embeddings,
+        attention_mask=[[1, 1, 0], [1, 0, 0], [0, 0, 0]],
+        normalize=True,
+    )
+
+    assert raw_vectors == [[1.0, 1.0], [4.0, 0.0], [0.0, 0.0]]
+    assert normalized_vectors[0] == pytest.approx([0.70710678, 0.70710678])
+    assert normalized_vectors[1] == pytest.approx([1.0, 0.0])
+    assert normalized_vectors[2] == pytest.approx([0.0, 0.0])
 
 
 def test_onnx_engine_batches_runtime_invocations(
