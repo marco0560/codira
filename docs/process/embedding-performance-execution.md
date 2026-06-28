@@ -118,4 +118,8 @@ feat/batch-embedding-indexing
   around CLI, indexing, context retrieval, and embedding candidate hot paths.
   The cache avoids repeated TOML parsing and repeated backend/vector/embedding
   plugin instantiation during one command while resetting at command exit.
+* [x] Added a DuckDB vector-store vector-set identity cache now that plugin
+  instances are command-scoped. This removes repeated vector-set
+  initialization and lookup work across cache/materialized/pending vector-store
+  writes during one command.
 * [x] Create the final branch commit.

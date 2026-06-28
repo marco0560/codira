@@ -39,7 +39,7 @@ dev = [
     "codira-embedding-sentence-transformers==1.0.1",
     "codira-embedding-onnx==1.0.1",
     "codira-vector-store-sqlite==1.0.1",
-    "codira-vector-store-duckdb==1.0.2",
+    "codira-vector-store-duckdb==1.0.3",
 ]
 
 [project.optional-dependencies]
@@ -49,7 +49,7 @@ semantic = [
     "codira-embedding-sentence-transformers==1.0.1",
     "codira-embedding-onnx==1.0.1",
     "codira-vector-store-sqlite==1.0.1",
-    "codira-vector-store-duckdb==1.0.2",
+    "codira-vector-store-duckdb==1.0.3",
 ]
 
 bundle-official = [
@@ -67,7 +67,7 @@ bundle-official = [
     "codira-embedding-sentence-transformers==1.0.1",
     "codira-embedding-onnx==1.0.1",
     "codira-vector-store-sqlite==1.0.1",
-    "codira-vector-store-duckdb==1.0.2",
+    "codira-vector-store-duckdb==1.0.3",
 ]
 
 docs = [

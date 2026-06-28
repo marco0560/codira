@@ -30,7 +30,7 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.2"
+PACKAGE_VERSION = "1.0.3"
 FORMAT_VERSION = "1"
 
 
@@ -116,6 +116,21 @@ class DuckDBVectorStore:
 
     name = "duckdb"
     version = PACKAGE_VERSION
+
+    def __init__(self) -> None:
+        """
+        Initialize process-local DuckDB vector-store caches.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Cache storage starts empty for the vector-store instance.
+        """
+        self._vector_set_ids: dict[tuple[str, VectorSetIdentity], int] = {}
 
     def configuration_json_schema(self) -> Mapping[str, object]:
         """
@@ -271,6 +286,11 @@ class DuckDBVectorStore:
             Persistent vector-set identifier.
         """
         del config
+        cache_key = (str(root.resolve()), identity)
+        cached_id = self._vector_set_ids.get(cache_key)
+        if cached_id is not None:
+            return cached_id
+
         self.initialize(root, {})
         values = (
             identity.engine.engine,
@@ -342,7 +362,9 @@ class DuckDBVectorStore:
         finally:
             conn.close()
         assert row is not None
-        return int(row[0])
+        vector_set_id = int(row[0])
+        self._vector_set_ids[cache_key] = vector_set_id
+        return vector_set_id
 
     def load_cached_vectors(
         self,
@@ -836,8 +858,9 @@ class DuckDBVectorStore:
         Returns
         -------
         None
-            The DuckDB vector store has no process-local cache yet.
+            Process-local vector-set identity cache entries are cleared.
         """
+        self._vector_set_ids.clear()
 
 
 def build_vector_store() -> VectorStore:

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 
 import duckdb
+import pytest
 
 from codira.contracts import (
     EmbeddingEngineSpec,
@@ -102,7 +104,7 @@ def test_duckdb_vector_store_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.0.2"
+    assert project["project"]["version"] == "1.0.3"
     assert project["project"]["entry-points"]["codira.vector_stores"] == {
         "duckdb": "codira_vector_store_duckdb:build_vector_store"
     }
@@ -267,3 +269,59 @@ def test_duckdb_vector_store_persists_vector_rows(tmp_path: Path) -> None:
             "SELECT COUNT(*) FROM pending_vectors"
         ).fetchone()
     assert pending_after_clear == (0,)
+
+
+def test_duckdb_vector_store_caches_vector_set_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Cache vector-set identity lookups inside one vector-store instance.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to count schema initialization calls.
+
+    Returns
+    -------
+    None
+        The test asserts repeated lookups reuse the process-local cache until
+        runtime caches are reset.
+    """
+    store = DuckDBVectorStore()
+    identity = _vector_identity(store)
+    initialize_calls = 0
+    original_initialize = store.initialize
+
+    def counted_initialize(root: Path, config: Mapping[str, object]) -> None:
+        """
+        Count vector-store initialization calls before delegating.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        config : collections.abc.Mapping[str, object]
+            Vector-store configuration mapping.
+
+        Returns
+        -------
+        None
+            Initialization is delegated to the original method.
+        """
+        nonlocal initialize_calls
+        initialize_calls += 1
+        original_initialize(root, config)
+
+    monkeypatch.setattr(store, "initialize", counted_initialize)
+
+    first = store.ensure_vector_set(tmp_path, identity, {})
+    second = store.ensure_vector_set(tmp_path, identity, {})
+    store.reset_runtime_caches()
+    third = store.ensure_vector_set(tmp_path, identity, {})
+
+    assert first == second == third
+    assert initialize_calls == 2
