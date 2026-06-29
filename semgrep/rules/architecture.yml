@@ -207,3 +207,20 @@ rules:
           def persist_full_index(...):
               ...
       - pattern: _store_analysis(...)
+
+  - id: codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk
+    message: >
+      DuckDB vector-store full-index bulk persistence must not route through
+      the normal per-batch store_vectors path.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-vector-store-duckdb/src/**/*.py
+        - /fixtures/packages/codira-vector-store-duckdb/src/**/*.py
+    patterns:
+      - pattern-inside: |
+          def store_vectors_for_full_index(...):
+              ...
+      - pattern: self.store_vectors(...)

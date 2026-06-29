@@ -3575,6 +3575,7 @@ def _flush_embedding_rows(
     vector_store: VectorStore | None = None,
     vector_set_identity: VectorSetIdentity | None = None,
     vector_store_config: Mapping[str, object] | None = None,
+    defer_cache_lookup: bool = False,
 ) -> tuple[int, int]:
     """
     Persist pending embedding payloads for one analyzed file.
@@ -3603,6 +3604,8 @@ def _flush_embedding_rows(
         Active vector-set identity for separated vector-store writes.
     vector_store_config : collections.abc.Mapping[str, object] | None, optional
         Vector-store-specific configuration table.
+    defer_cache_lookup : bool, optional
+        Whether cache reuse should be resolved later by a bulk caller.
 
     Returns
     -------
@@ -3644,6 +3647,10 @@ def _flush_embedding_rows(
         _store_pending_embedding_rows(
             conn, prepared_rows=prepared_rows, backend=backend
         )
+        return (0, 0)
+
+    if pending_embedding_rows is not None and defer_cache_lookup:
+        pending_embedding_rows.extend(prepared_rows)
         return (0, 0)
 
     missing_hashes = [
@@ -4511,6 +4518,70 @@ def _flush_prepared_embedding_rows(
     )
 
 
+def _resolve_cached_prepared_embedding_rows(
+    conn: _DuckDBPersistenceConnection,
+    *,
+    prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
+    backend: EmbeddingBackendSpec,
+    profiler: DuckDBProfileRecorder | None = None,
+) -> tuple[list[tuple[PendingEmbeddingRow, str, bytes | None]], int, int]:
+    """
+    Resolve vector-cache reuse for a prepared embedding batch.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    prepared_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
+        Prepared embedding rows as ``(row, content_hash, stored_vector)``.
+    backend : codira.semantic.embeddings.EmbeddingBackendSpec
+        Active embedding backend metadata.
+    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
+        Optional recorder for cache lookup spans.
+
+    Returns
+    -------
+    tuple[list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]], int, int]
+        Resolved rows and ``(recomputed, reused)`` counters.
+    """
+    if not prepared_rows:
+        return ([], 0, 0)
+
+    missing_hashes = list(
+        dict.fromkeys(
+            content_hash
+            for _row, content_hash, stored_vector in prepared_rows
+            if stored_vector is None
+        )
+    )
+    active_profiler = (
+        DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
+    )
+    with active_profiler.span(
+        "embeddings.load_cached_vectors",
+        rows=len(missing_hashes),
+    ):
+        cached_vectors = _load_cached_embedding_vectors(
+            conn,
+            backend=backend,
+            content_hashes=missing_hashes,
+        )
+
+    resolved_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
+    recomputed = 0
+    reused = 0
+    for row, content_hash, stored_vector in prepared_rows:
+        resolved_vector = stored_vector
+        if resolved_vector is None:
+            resolved_vector = cached_vectors.get(content_hash)
+        if resolved_vector is None:
+            recomputed += 1
+        else:
+            reused += 1
+        resolved_rows.append((row, content_hash, resolved_vector))
+    return (resolved_rows, recomputed, reused)
+
+
 def _flush_pending_embedding_rows(
     conn: _DuckDBPersistenceConnection,
     root: Path | None = None,
@@ -4807,6 +4878,7 @@ def _append_analysis_rows(
     pending_docstring_issue_rows: list[DocstringIssueRow] | None = None,
     structural_rows: DuckDBStructuralRowBuffers | None = None,
     id_allocator: DuckDBIdAllocator | None = None,
+    defer_embedding_cache_lookup: bool = False,
 ) -> tuple[int, int]:
     """
     Append one parsed file snapshot to DuckDB persistence buffers.
@@ -4856,6 +4928,8 @@ def _append_analysis_rows(
     id_allocator : DuckDBIdAllocator | None, optional
         Session-level explicit-ID allocator. A local allocator is used when not
         supplied.
+    defer_embedding_cache_lookup : bool, optional
+        Whether cache reuse should be resolved later by a bulk caller.
 
     Returns
     -------
@@ -4921,6 +4995,7 @@ def _append_analysis_rows(
             vector_store=vector_store,
             vector_set_identity=vector_set_identity,
             vector_store_config=vector_store_config,
+            defer_cache_lookup=defer_embedding_cache_lookup,
         )
     module_name, module_id, c_embedding_context = _persist_module_artifacts(
         conn,
@@ -4993,6 +5068,7 @@ def _append_analysis_rows(
         vector_store=vector_store,
         vector_set_identity=vector_set_identity,
         vector_store_config=vector_store_config,
+        defer_cache_lookup=defer_embedding_cache_lookup,
     )
 
 

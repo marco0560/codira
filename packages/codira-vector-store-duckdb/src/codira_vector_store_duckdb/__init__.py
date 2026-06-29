@@ -31,7 +31,7 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.4"
+PACKAGE_VERSION = "1.0.5"
 FORMAT_VERSION = "1"
 
 
@@ -784,14 +784,114 @@ class DuckDBVectorStore:
         Returns
         -------
         None
-            Vector rows are inserted or replaced in the separated vector store.
+            Vector rows replace the materialized contents for the vector set.
+
+        Raises
+        ------
+        BaseException
+            Propagates DuckDB or Arrow failures after rolling back the active
+            transaction when possible.
         """
-        self.store_vectors(
+        materialized = [
+            (prepared, prepared.vector)
+            for prepared in request.rows
+            if prepared.vector is not None
+        ]
+        vector_set_id = self.ensure_vector_set(
             request.root,
             request.identity,
-            request.rows,
             request.config,
         )
+        conn = _connect(get_vector_store_path(request.root))
+        transaction_open = False
+        try:
+            conn.execute("BEGIN TRANSACTION")
+            transaction_open = True
+            conn.execute(
+                "DELETE FROM vectors WHERE vector_set_id = ?",
+                (vector_set_id,),
+            )
+            conn.execute(
+                "DELETE FROM pending_vectors WHERE vector_set_id = ?",
+                (vector_set_id,),
+            )
+            if materialized:
+                import pyarrow as pa
+
+                table = pa.table(
+                    {
+                        "vector_set_id": pa.array(
+                            [vector_set_id for _prepared, _vector in materialized],
+                            type=pa.uint64(),
+                        ),
+                        "object_type": pa.array(
+                            [
+                                prepared.row.object_type
+                                for prepared, _vector in materialized
+                            ],
+                            type=pa.string(),
+                        ),
+                        "stable_id": pa.array(
+                            [
+                                prepared.row.stable_id
+                                for prepared, _vector in materialized
+                            ],
+                            type=pa.string(),
+                        ),
+                        "content_hash": pa.array(
+                            [
+                                prepared.content_hash
+                                for prepared, _vector in materialized
+                            ],
+                            type=pa.string(),
+                        ),
+                        "vector": pa.array(
+                            [vector for _prepared, vector in materialized],
+                            type=pa.binary(),
+                        ),
+                        "vector_values": pa.array(
+                            [
+                                deserialize_vector(
+                                    vector,
+                                    dim=request.identity.engine.dimension,
+                                )
+                                for _prepared, vector in materialized
+                            ],
+                            type=pa.list_(pa.float64()),
+                        ),
+                    }
+                )
+                _flush_registered_arrow_table(
+                    conn,
+                    view_name="__codira_full_index_vector_rows",
+                    table=table,
+                    sql="""
+                    INSERT INTO vectors(
+                        vector_set_id,
+                        object_type,
+                        stable_id,
+                        content_hash,
+                        vector,
+                        vector_values
+                    )
+                    SELECT
+                        vector_set_id,
+                        object_type,
+                        stable_id,
+                        content_hash,
+                        vector,
+                        vector_values
+                    FROM __codira_full_index_vector_rows
+                    """,
+                )
+            conn.execute("COMMIT")
+            transaction_open = False
+        except BaseException:
+            if transaction_open:
+                conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.close()
 
     def similarity_scores(
         self,

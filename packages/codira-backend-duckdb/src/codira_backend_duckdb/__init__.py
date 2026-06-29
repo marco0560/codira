@@ -54,6 +54,7 @@ from .duckdb_support import (
     _flush_structural_rows,
     _process_pending_embedding_rows,
     _persist_runtime_inventory,
+    _resolve_cached_prepared_embedding_rows,
     _store_analysis,
     _store_pending_embedding_rows,
 )
@@ -83,7 +84,7 @@ if TYPE_CHECKING:
         VectorStore,
     )
 
-PACKAGE_VERSION = "1.49.4"
+PACKAGE_VERSION = "1.49.5"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -2139,6 +2140,7 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                         pending_docstring_issue_rows=pending_docstring_issue_rows,
                         structural_rows=structural_rows,
                         id_allocator=id_allocator,
+                        defer_embedding_cache_lookup=True,
                     )
                     embeddings_recomputed += recomputed
                     embeddings_reused += reused
@@ -2210,6 +2212,16 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                         profiler=profiler,
                     )
                 else:
+                    (
+                        pending_embedding_rows,
+                        embeddings_recomputed,
+                        embeddings_reused,
+                    ) = _resolve_cached_prepared_embedding_rows(
+                        persistence_conn,
+                        prepared_rows=pending_embedding_rows,
+                        backend=request.embedding_backend,
+                        profiler=profiler,
+                    )
                     _flush_pending_embedding_rows(
                         persistence_conn,
                         request.root,

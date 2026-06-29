@@ -63,6 +63,7 @@ FIXTURES = (
             "codira.arch.no-duckdb-executemany-in-support",
             "codira.arch.no-duckdb-returning-id-in-support",
             "codira.arch.no-store-analysis-in-duckdb-full-index-bulk",
+            "codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk",
         ),
     ),
     (

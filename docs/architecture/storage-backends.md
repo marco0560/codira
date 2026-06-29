@@ -92,6 +92,9 @@ that boundary.
 Vector stores may optionally implement `VectorStoreBulkWriter` for full-index
 materialized vector writes. The DuckDB vector store implements the contract
 while preserving the current separated `.codira/embeddings.duckdb` storage file.
+Its full-index implementation replaces the complete materialized vector set in
+one transaction and clears stale pending rows for that vector set instead of
+delegating to the normal incremental `store_vectors` path.
 
 ## Current Constraints
 

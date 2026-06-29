@@ -23,6 +23,7 @@ It exists to:
 - `codira.arch.no-duckdb-executemany-in-support`
 - `codira.arch.no-duckdb-returning-id-in-support`
 - `codira.arch.no-store-analysis-in-duckdb-full-index-bulk`
+- `codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk`
 - `codira.arch.no-direct-config-load-in-query-hot-path`
 - `codira.plugins.no-broad-except-exception`
 
@@ -64,6 +65,17 @@ the DuckDB full-index bottleneck.
 
 Removal condition:
 No removal planned while DuckDB remains a supported full-index backend.
+
+### `codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk`
+
+Rationale:
+DuckDB vector-store full-index persistence must replace a complete materialized
+vector set through a native bulk path. Delegating to the normal `store_vectors`
+method would preserve stale rows and reintroduce the slower per-batch write
+shape in full rebuilds.
+
+Removal condition:
+No removal planned while DuckDB remains a supported vector-store backend.
 
 ## Allowlisted Exceptions
 
