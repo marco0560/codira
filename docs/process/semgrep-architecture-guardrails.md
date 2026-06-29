@@ -22,6 +22,7 @@ It exists to:
 - `codira.arch.require-analyzer-capability-declaration`
 - `codira.arch.no-duckdb-executemany-in-support`
 - `codira.arch.no-duckdb-returning-id-in-support`
+- `codira.arch.no-store-analysis-in-duckdb-full-index-bulk`
 - `codira.arch.no-direct-config-load-in-query-hot-path`
 - `codira.plugins.no-broad-except-exception`
 
@@ -52,6 +53,17 @@ files directly.
 
 Removal condition:
 No removal planned while query commands remain performance-sensitive.
+
+### `codira.arch.no-store-analysis-in-duckdb-full-index-bulk`
+
+Rationale:
+DuckDB full-index persistence must stay on the backend-native bulk path. Calling
+the legacy per-file `_store_analysis` helper from `persist_full_index` would
+reintroduce the row-oriented write shape that benchmark profiling identified as
+the DuckDB full-index bottleneck.
+
+Removal condition:
+No removal planned while DuckDB remains a supported full-index backend.
 
 ## Allowlisted Exceptions
 

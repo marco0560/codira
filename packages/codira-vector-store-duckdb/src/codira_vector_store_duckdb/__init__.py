@@ -9,6 +9,7 @@ import duckdb
 from codira.contracts import (
     PreparedVectorRow,
     VectorSetIdentity,
+    VectorStoreFullIndexRequest,
     VectorSimilarityRequest,
     VectorSimilarityScore,
     VectorStoreSpec,
@@ -30,7 +31,7 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.3"
+PACKAGE_VERSION = "1.0.4"
 FORMAT_VERSION = "1"
 
 
@@ -765,6 +766,32 @@ class DuckDBVectorStore:
             )
         finally:
             conn.close()
+
+    def store_vectors_for_full_index(
+        self,
+        request: VectorStoreFullIndexRequest,
+    ) -> None:
+        """
+        Persist materialized vectors for one full-index bulk run.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStoreFullIndexRequest
+            Bulk vector persistence request. DuckDB vector storage currently
+            remains separated from the structural backend database, so the
+            optional backend connection is intentionally ignored.
+
+        Returns
+        -------
+        None
+            Vector rows are inserted or replaced in the separated vector store.
+        """
+        self.store_vectors(
+            request.root,
+            request.identity,
+            request.rows,
+            request.config,
+        )
 
     def similarity_scores(
         self,

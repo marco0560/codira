@@ -86,6 +86,12 @@ FIXTURE_FILES = (
     / "packages"
     / "codira-backend-duckdb"
     / "src"
+    / "full_index_bulk_violation.py",
+    REPO_ROOT
+    / "fixtures"
+    / "packages"
+    / "codira-backend-duckdb"
+    / "src"
     / "duckdb_support_batch_violation.py",
     REPO_ROOT
     / "fixtures"
@@ -100,6 +106,7 @@ EXPECTED_FIXTURE_RULE_IDS = {
     "codira.arch.no-direct-config-load-in-query-hot-path",
     "codira.arch.no-duckdb-executemany-in-support",
     "codira.arch.no-duckdb-returning-id-in-support",
+    "codira.arch.no-store-analysis-in-duckdb-full-index-bulk",
     "codira.arch.no-registry-import-in-analyzers",
     "codira.arch.no-sqlite3-in-analyzers",
     "codira.arch.no-sqlite3-outside-allowed-layers",

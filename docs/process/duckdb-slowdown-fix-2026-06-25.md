@@ -5,6 +5,18 @@
 Implemented on `feat/embedding-plugins` after the current benchmark campaign
 was stopped.
 
+Follow-up full-index work added an optional DuckDB `FullIndexBulkBackend` path.
+The core indexer now dispatches `index --full` to that path only for backends
+that explicitly implement it; SQLite remains on the existing session path and
+continues to serve as the benchmark baseline.
+
+The DuckDB bulk path is intentionally not another incremental tuning layer. It
+owns the full-rebuild lifecycle, emits `bulk_full_index.*` profile spans, seeds
+full-rebuild ID allocation from empty tables, and avoids the legacy
+`persist.store_analysis` profile span. The acceptance gate for keeping DuckDB
+as a production indexing backend is a full-index median no worse than `1.15x`
+SQLite on the same complete backend-comparison campaign.
+
 This is a deferred implementation plan for the DuckDB slowdown observed after
 the embedding architecture changes. It records the comparison evidence, the
 proposed code change, and the configuration-knob audit needed before applying

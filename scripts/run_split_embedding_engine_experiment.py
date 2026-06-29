@@ -288,6 +288,11 @@ def alias_sqlite_vector_set(
     -------
     int
         Number of materialized vector rows aliased.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the source vector set does not exist.
     """
 
     from codira_embedding_onnx import PACKAGE_VERSION as onnx_version
@@ -413,6 +418,11 @@ def alias_duckdb_vector_set(
     -------
     int
         Number of materialized vector rows aliased.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the source vector set does not exist.
     """
 
     import duckdb
@@ -698,6 +708,13 @@ def main(argv: list[str] | None = None) -> int:
     -------
     int
         Zero when all experiment phases pass.
+
+    Raises
+    ------
+    OSError
+        Propagates filesystem failures while writing artifacts or configs.
+    ValueError
+        Propagates invalid manifest, model, or backend values.
     """
 
     args = build_parser().parse_args(argv)

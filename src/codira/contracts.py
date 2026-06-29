@@ -1267,6 +1267,144 @@ class BackendPersistAnalysisRequest:
     conn: object | None = None
 
 
+@dataclass(frozen=True)
+class BackendPersistFullIndexFile:
+    """
+    Backend request item for one analyzed file in a full-index bulk run.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Source path selected by the index planner.
+    file_metadata : codira.models.FileMetadataSnapshot
+        Stable file metadata captured during scanning.
+    analysis : codira.models.AnalysisResult
+        Normalized analyzer output for the file.
+    """
+
+    path: Path
+    file_metadata: FileMetadataSnapshot
+    analysis: AnalysisResult
+
+
+@dataclass(frozen=True)
+class BackendPersistFullIndexRequest:
+    """
+    Backend request for persisting an entire full-index snapshot in one batch.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose backend state should be replaced.
+    files : collections.abc.Sequence[codira.contracts.BackendPersistFullIndexFile]
+        Successfully analyzed file snapshots in deterministic order.
+    embedding_backend : codira.contracts.EmbeddingBackendSpec
+        Active embedding backend metadata.
+    embedding_indexing : codira.contracts.EmbeddingIndexingPolicy
+        Embedding row eligibility policy.
+    defer_embeddings : bool
+        Whether eligible embedding rows should be queued for later computation.
+    vector_store : codira.contracts.VectorStore | None
+        Active separated vector store used for embedding row persistence.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : collections.abc.Mapping[str, object]
+        Vector-store-specific configuration table.
+    coverage_complete : bool
+        Whether canonical-directory coverage had no gaps.
+    analyzers : collections.abc.Sequence[codira.contracts.LanguageAnalyzer]
+        Active analyzers for the run.
+    """
+
+    root: Path
+    files: Sequence[BackendPersistFullIndexFile]
+    embedding_backend: EmbeddingBackendSpec
+    embedding_indexing: EmbeddingIndexingPolicy
+    defer_embeddings: bool
+    vector_store: VectorStore | None
+    vector_set_identity: VectorSetIdentity | None
+    vector_store_config: Mapping[str, object]
+    coverage_complete: bool
+    analyzers: Sequence[LanguageAnalyzer]
+
+
+@dataclass(frozen=True)
+class BackendPersistFullIndexResult:
+    """
+    Backend result for one full-index bulk persistence run.
+
+    Parameters
+    ----------
+    embeddings_recomputed : int
+        Number of embedding rows requiring new vectors.
+    embeddings_reused : int
+        Number of embedding rows reused from persisted cache data.
+    embeddings_skipped : int
+        Number of candidate embedding rows skipped by indexing policy.
+    embeddings_pending : int
+        Number of embedding rows queued for deferred computation.
+    """
+
+    embeddings_recomputed: int
+    embeddings_reused: int
+    embeddings_skipped: int
+    embeddings_pending: int
+
+
+@dataclass(frozen=True)
+class VectorStoreFullIndexRequest:
+    """
+    Vector-store request for full-index bulk vector persistence.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose vector store should be updated.
+    identity : codira.contracts.VectorSetIdentity
+        Active vector-set identity.
+    rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+        Prepared rows carrying serialized vector payloads.
+    config : collections.abc.Mapping[str, object]
+        Vector-store-specific configuration table.
+    backend_connection : object | None, optional
+        Backend-owned connection that compatible vector stores may reuse.
+    """
+
+    root: Path
+    identity: VectorSetIdentity
+    rows: Sequence[PreparedVectorRow]
+    config: Mapping[str, object]
+    backend_connection: object | None = None
+
+
+@runtime_checkable
+class VectorStoreBulkWriter(Protocol):
+    """
+    Optional vector-store contract for full-index bulk vector writes.
+
+    Implementations may reuse a backend-owned connection when compatible.
+    """
+
+    def store_vectors_for_full_index(
+        self,
+        request: VectorStoreFullIndexRequest,
+    ) -> None:
+        """
+        Persist materialized vectors for one full-index bulk run.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStoreFullIndexRequest
+            Bulk vector persistence request.
+
+        Returns
+        -------
+        None
+            Vector rows are persisted in store-defined batches.
+        """
+        ...
+
+
 KNOWN_RETRIEVAL_CAPABILITIES: tuple[RetrievalCapabilityName, ...] = (
     "symbol_lookup",
     "semantic_text",
@@ -1750,6 +1888,35 @@ class IndexWriteSession(Protocol):
         -------
         None
             Session-owned resources are closed in place.
+        """
+        ...
+
+
+@runtime_checkable
+class FullIndexBulkBackend(Protocol):
+    """
+    Optional backend contract for replacing a full index in one bulk operation.
+
+    Implementations own the full transaction, derived index rebuild, runtime
+    inventory persistence, and backend-specific profile emission.
+    """
+
+    def persist_full_index(
+        self,
+        request: BackendPersistFullIndexRequest,
+    ) -> BackendPersistFullIndexResult:
+        """
+        Persist an entire full-index snapshot in one backend-native batch.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendPersistFullIndexRequest
+            Full-index snapshot and runtime metadata.
+
+        Returns
+        -------
+        BackendPersistFullIndexResult
+            Embedding counters for the completed persistence run.
         """
         ...
 

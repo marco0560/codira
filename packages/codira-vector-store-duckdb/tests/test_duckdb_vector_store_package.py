@@ -16,6 +16,7 @@ from codira.contracts import (
     VectorSimilarityRequest,
     VectorSetIdentity,
     VectorStore,
+    VectorStoreFullIndexRequest,
 )
 from codira.semantic.embeddings import serialize_vector
 from codira_vector_store_duckdb import (
@@ -105,7 +106,7 @@ def test_duckdb_vector_store_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.0.3"
+    assert project["project"]["version"] == "1.0.4"
     assert project["project"]["entry-points"]["codira.vector_stores"] == {
         "duckdb": "codira_vector_store_duckdb:build_vector_store"
     }
@@ -270,6 +271,51 @@ def test_duckdb_vector_store_persists_vector_rows(tmp_path: Path) -> None:
             "SELECT COUNT(*) FROM pending_vectors"
         ).fetchone()
     assert pending_after_clear == (0,)
+
+
+def test_duckdb_vector_store_bulk_full_index_writer_persists_rows(
+    tmp_path: Path,
+) -> None:
+    """
+    Persist materialized rows through the full-index bulk writer contract.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The optional bulk writer stores rows in the separated DuckDB vector
+        store.
+    """
+    store = DuckDBVectorStore()
+    identity = _vector_identity(store)
+
+    store.store_vectors_for_full_index(
+        VectorStoreFullIndexRequest(
+            root=tmp_path,
+            identity=identity,
+            rows=_prepared_rows(),
+            config={},
+            backend_connection=object(),
+        )
+    )
+
+    with duckdb.connect(str(get_vector_store_path(tmp_path)), read_only=True) as conn:
+        vector_rows = conn.execute(
+            """
+            SELECT object_type, stable_id, content_hash, vector
+            FROM vectors
+            ORDER BY object_type, stable_id
+            """
+        ).fetchall()
+
+    assert vector_rows == [
+        ("documentation", "doc:two", "hash-two", serialize_vector([0.0, 1.0, 0.0])),
+        ("symbol", "symbol:one", "hash-one", serialize_vector([1.0, 0.0, 0.0])),
+    ]
 
 
 def test_duckdb_vector_store_caches_vector_set_identity(

@@ -62,6 +62,37 @@ returned `IndexWriteSession`:
 This contract exists to make warm read-heavy command paths cheap while keeping
 mutation ownership explicit and backend-local.
 
+## Full-Index Bulk Contract
+
+DuckDB also implements the optional `FullIndexBulkBackend` contract for
+`codira index --full`. The core indexer uses it only when both conditions hold:
+
+- the active backend implements `FullIndexBulkBackend`
+- the current run is a full rebuild
+
+SQLite intentionally remains on the `IndexWriteSession` path and is the
+control backend for performance comparisons.
+
+The DuckDB bulk path owns the complete full-rebuild lifecycle:
+
+- collect successful analyzer output in the core indexer
+- validate duplicate stable IDs before backend mutation
+- rebuild index-owned DuckDB tables in one backend-native lifecycle
+- assign full-rebuild row IDs without per-file `SELECT MAX(id)` allocation
+- flush structural, relationship, reference-scan, and embedding rows in
+  backend batches
+- rebuild derived indexes, persist runtime inventory, and emit DuckDB profile
+  spans named `bulk_full_index.*`
+
+The legacy `_store_analysis` helper remains available for incremental and
+session-based writes. DuckDB full-index bulk code must call the lower-level row
+appending helper instead of routing through `_store_analysis`; Semgrep enforces
+that boundary.
+
+Vector stores may optionally implement `VectorStoreBulkWriter` for full-index
+materialized vector writes. The DuckDB vector store implements the contract
+while preserving the current separated `.codira/embeddings.duckdb` storage file.
+
 ## Current Constraints
 
 The accepted backend model is still constrained:

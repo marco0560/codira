@@ -28,17 +28,23 @@ from typing import TYPE_CHECKING, Protocol, cast
 from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
+    BackendPersistFullIndexRequest,
+    BackendPersistFullIndexResult,
     BackendRuntimeInventoryRequest,
+    EmbeddingIndexingMetrics,
     PendingEmbeddingRow,
     PreparedVectorRow,
     StoredEmbeddingRow,
 )
 from .duckdb_support import (
     CallRow,
+    DocstringIssueRow,
     DuckDBIdAllocator,
     DuckDBStructuralRowBuffers,
+    ImportRow,
     RefRow,
     _DuckDBPersistenceConnection,
+    _append_analysis_rows,
     _delete_indexed_file_data,
     _flush_docstring_issue_rows,
     _flush_import_rows,
@@ -47,6 +53,7 @@ from .duckdb_support import (
     _flush_pending_relationship_rows,
     _flush_structural_rows,
     _process_pending_embedding_rows,
+    _persist_runtime_inventory,
     _store_analysis,
     _store_pending_embedding_rows,
 )
@@ -76,7 +83,7 @@ if TYPE_CHECKING:
         VectorStore,
     )
 
-PACKAGE_VERSION = "1.49.3"
+PACKAGE_VERSION = "1.49.4"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -2058,6 +2065,184 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
             Mutable session object used only by indexing flows.
         """
         return _DuckDBIndexWriteSession(self, root)
+
+    def persist_full_index(
+        self,
+        request: BackendPersistFullIndexRequest,
+    ) -> BackendPersistFullIndexResult:
+        """
+        Persist a full index through a DuckDB-native bulk lifecycle.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendPersistFullIndexRequest
+            Full-index snapshot and runtime metadata.
+
+        Returns
+        -------
+        codira.contracts.BackendPersistFullIndexResult
+            Embedding counters for the completed persistence run.
+
+        Raises
+        ------
+        BaseException
+            Propagates DuckDB, embedding, vector-store, or filesystem failures
+            after rolling back the active transaction when possible.
+        """
+        conn = self.open_connection(request.root)
+        duckdb_conn = cast("DuckDBConnection", conn)
+        profiler = DuckDBProfileRecorder(enabled=self._profiling_enabled)
+        duckdb_conn.set_profile_recorder(profiler)
+        persistence_conn = cast("_DuckDBPersistenceConnection", conn)
+        structural_rows = DuckDBStructuralRowBuffers()
+        pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
+        pending_reference_scan_rows: list[tuple[int, int, str]] = []
+        pending_call_rows: list[CallRow] = []
+        pending_ref_rows: list[RefRow] = []
+        pending_import_rows: list[ImportRow] = []
+        pending_docstring_issue_rows: list[DocstringIssueRow] = []
+        id_allocator = DuckDBIdAllocator(
+            persistence_conn,
+            {table_name: 1 for table_name in _SEQUENCED_TABLES},
+        )
+        embedding_metrics = EmbeddingIndexingMetrics()
+        embeddings_recomputed = 0
+        embeddings_reused = 0
+        transaction_open = False
+        try:
+            with profiler.span("bulk_full_index.begin"):
+                conn.execute("BEGIN TRANSACTION")
+            transaction_open = True
+            with profiler.span("bulk_full_index.recreate_tables"):
+                _drop_duckdb_schema_indexes(conn)
+                _recreate_duckdb_index_tables(conn)
+            with profiler.span("bulk_full_index.plan_rows", rows=len(request.files)):
+                for item in request.files:
+                    recomputed, reused = _append_analysis_rows(
+                        persistence_conn,
+                        request.root,
+                        item.file_metadata,
+                        item.analysis,
+                        backend=request.embedding_backend,
+                        embedding_indexing=request.embedding_indexing,
+                        embedding_metrics=embedding_metrics,
+                        defer_embeddings=request.defer_embeddings,
+                        previous_embeddings={},
+                        pending_embedding_rows=pending_embedding_rows,
+                        vector_store=request.vector_store,
+                        vector_set_identity=request.vector_set_identity,
+                        vector_store_config=request.vector_store_config,
+                        pending_reference_scan_rows=pending_reference_scan_rows,
+                        pending_call_rows=pending_call_rows,
+                        pending_ref_rows=pending_ref_rows,
+                        pending_import_rows=pending_import_rows,
+                        pending_docstring_issue_rows=pending_docstring_issue_rows,
+                        structural_rows=structural_rows,
+                        id_allocator=id_allocator,
+                    )
+                    embeddings_recomputed += recomputed
+                    embeddings_reused += reused
+            with profiler.span("bulk_full_index.load_structural_tables"):
+                _flush_structural_rows(persistence_conn, structural_rows)
+                _flush_import_rows(persistence_conn, pending_import_rows)
+                _flush_docstring_issue_rows(
+                    persistence_conn,
+                    pending_docstring_issue_rows,
+                )
+            with profiler.span(
+                "bulk_full_index.load_reference_scan_rows",
+                rows=len(pending_reference_scan_rows),
+            ):
+                _flush_pending_reference_scan_rows(
+                    persistence_conn,
+                    pending_reference_scan_rows,
+                    profiler=profiler,
+                )
+            with profiler.span(
+                "bulk_full_index.load_relationship_tables",
+                rows=len(pending_call_rows) + len(pending_ref_rows),
+            ):
+                _flush_pending_relationship_rows(
+                    persistence_conn,
+                    pending_call_rows=pending_call_rows,
+                    pending_ref_rows=pending_ref_rows,
+                    profiler=profiler,
+                )
+            with profiler.span("bulk_full_index.rebuild_derived_indexes"):
+                self.rebuild_derived_indexes(request.root, conn=conn)
+            _persist_runtime_inventory(
+                persistence_conn,
+                backend_name=str(self.name),
+                backend_version=str(self.version),
+                coverage_complete=request.coverage_complete,
+                analyzers=list(request.analyzers),
+            )
+            with profiler.span("bulk_full_index.commit_structural"):
+                self.commit(request.root, conn=conn)
+            transaction_open = False
+            with profiler.span(
+                "bulk_full_index.load_embeddings",
+                rows=len(pending_embedding_rows),
+            ):
+                if request.defer_embeddings:
+                    if (
+                        request.vector_store is not None
+                        and request.vector_set_identity is not None
+                    ):
+                        prepared_rows = [
+                            PreparedVectorRow(
+                                row=row,
+                                content_hash=content_hash,
+                                vector=stored_vector,
+                            )
+                            for row, content_hash, stored_vector in pending_embedding_rows
+                        ]
+                        request.vector_store.store_pending_vectors(
+                            request.root,
+                            request.vector_set_identity,
+                            prepared_rows,
+                            request.vector_store_config,
+                        )
+                    _store_pending_embedding_rows(
+                        persistence_conn,
+                        prepared_rows=pending_embedding_rows,
+                        backend=request.embedding_backend,
+                        profiler=profiler,
+                    )
+                else:
+                    _flush_pending_embedding_rows(
+                        persistence_conn,
+                        request.root,
+                        pending_embedding_rows=pending_embedding_rows,
+                        backend=request.embedding_backend,
+                        vector_store=request.vector_store,
+                        vector_set_identity=request.vector_set_identity,
+                        vector_store_config=request.vector_store_config,
+                        backend_connection=conn,
+                        profiler=profiler,
+                    )
+            with profiler.span("bulk_full_index.commit_embeddings"):
+                self.commit(request.root, conn=conn)
+            with profiler.span("bulk_full_index.create_indexes"):
+                _create_duckdb_schema_indexes(conn)
+            profiler.write(
+                duckdb_profile_path(get_codira_dir(request.root)),
+                backend_name=str(self.name),
+                backend_version=str(self.version),
+            )
+        except BaseException:
+            if transaction_open:
+                conn.execute("ROLLBACK")
+            raise
+        finally:
+            duckdb_conn.reset_profile_recorder()
+            self.close_connection(conn)
+        return BackendPersistFullIndexResult(
+            embeddings_recomputed=embeddings_recomputed,
+            embeddings_reused=embeddings_reused,
+            embeddings_skipped=embedding_metrics.skipped,
+            embeddings_pending=embedding_metrics.pending,
+        )
 
     def initialize(self, root: Path) -> None:
         """

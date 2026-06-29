@@ -520,7 +520,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.49.3"
+    assert project["project"]["version"] == "1.49.4"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -1750,6 +1750,62 @@ def test_duckdb_warm_full_reindex_reuses_output_dir_without_duplicate_symbols(
     assert first_report.failed == 0
     assert second_report.failed == 0
     assert second_report.indexed == 1
+
+
+def test_duckdb_full_index_uses_bulk_profile_path(tmp_path: Path) -> None:
+    """
+    Route configured DuckDB full indexing through the bulk persistence path.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The emitted profile contains full-index bulk spans and omits the legacy
+        per-file persistence span.
+    """
+    pytest.importorskip("duckdb")
+    source_root = tmp_path / "repo"
+    output_root = tmp_path / "out"
+    source_root.mkdir()
+    config_path = source_root / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "\n".join(
+            (
+                "[backend]",
+                'name = "duckdb"',
+                "",
+                "[embeddings]",
+                "enabled = false",
+                "",
+                "[plugins.backend-duckdb]",
+                "profiling_enabled = true",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    (source_root / "sample.py").write_text(
+        "def demo() -> int:\n    return 1\n",
+        encoding="utf-8",
+    )
+
+    with override_storage_root(source_root, output_root):
+        report = index_repo(source_root, full=True)
+
+    profile_path = output_root / ".codira" / "duckdb-profile.json"
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    span_names = {str(span["name"]) for span in payload["spans"]}
+
+    assert report.failed == 0
+    assert report.indexed == 1
+    assert "bulk_full_index.plan_rows" in span_names
+    assert "bulk_full_index.load_structural_tables" in span_names
+    assert "persist.store_analysis" not in span_names
 
 
 def test_duckdb_deferred_session_flushes_pending_rows_after_structural_commit(

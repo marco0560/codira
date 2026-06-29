@@ -519,6 +519,13 @@ def main(argv: list[str] | None = None) -> int:
     -------
     int
         Zero when all phases pass.
+
+    Raises
+    ------
+    OSError
+        Propagates filesystem failures while writing artifacts or configs.
+    ValueError
+        Propagates invalid manifest or configuration values.
     """
 
     args = build_parser().parse_args(argv)

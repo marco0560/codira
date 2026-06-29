@@ -31,9 +31,12 @@ from codira.config import (
 from codira.contracts import (
     BackendError,
     BackendPersistAnalysisRequest,
+    BackendPersistFullIndexFile,
+    BackendPersistFullIndexRequest,
     BackendRuntimeInventoryRequest,
     EmbeddingIndexingMetrics,
     EmbeddingIndexingPolicy,
+    FullIndexBulkBackend,
     IndexBackend,
     PendingEmbeddingRow,
     StoredEmbeddingRow,
@@ -827,6 +830,123 @@ def _persist_indexed_file_analyses(
     )
 
 
+def _persist_full_index_bulk(  # noqa: PLR0913
+    *,
+    root: Path,
+    backend: FullIndexBulkBackend,
+    parsed_files: list[ParsedFile],
+    embedding_backend: EmbeddingBackendSpec,
+    embedding_indexing: EmbeddingIndexingPolicy,
+    defer_embeddings: bool,
+    vector_store: VectorStore,
+    vector_set_identity: VectorSetIdentity,
+    vector_store_config: dict[str, object],
+    coverage_complete: bool,
+    analyzers: list[LanguageAnalyzer],
+) -> tuple[int, int, int, int, list[ParsedFile], list[IndexFailure]]:
+    """
+    Persist a full index through an optional backend-native bulk contract.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root being indexed.
+    backend : codira.contracts.FullIndexBulkBackend
+        Backend implementing the optional full-index bulk contract.
+    parsed_files : list[ParsedFile]
+        Analyzed file snapshots in deterministic order.
+    embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
+        Active embedding backend metadata.
+    embedding_indexing : codira.contracts.EmbeddingIndexingPolicy
+        Embedding row eligibility policy for the current run.
+    defer_embeddings : bool
+        Whether eligible embedding rows should be queued for later computation.
+    vector_store : codira.contracts.VectorStore
+        Active separated vector store used for embedding row persistence.
+    vector_set_identity : codira.contracts.VectorSetIdentity
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : dict[str, object]
+        Vector-store-specific configuration table.
+    coverage_complete : bool
+        Whether canonical-directory coverage had no gaps.
+    analyzers : list[codira.contracts.LanguageAnalyzer]
+        Active analyzers for the current run.
+
+    Returns
+    -------
+    tuple[int, int, int, int, list[ParsedFile], list[IndexFailure]]
+        ``(recomputed, reused, skipped, pending, persisted_files, failures)`` for
+        analyzed files.
+    """
+    persisted_files: list[ParsedFile] = []
+    failures: list[IndexFailure] = []
+    request_files: list[BackendPersistFullIndexFile] = []
+
+    for path, file_metadata_snapshot, analysis in parsed_files:
+        duplicate_stable_ids = _duplicate_analysis_stable_ids(analysis)
+        if duplicate_stable_ids:
+            try:
+                _raise_duplicate_stable_ids(
+                    file_metadata_snapshot.path,
+                    root,
+                    duplicate_stable_ids,
+                )
+            except ValueError as exc:
+                failures.append(
+                    IndexFailure(
+                        path=str(path),
+                        analyzer_name=file_metadata_snapshot.analyzer_name,
+                        error_type=type(exc).__name__,
+                        reason=str(exc),
+                    )
+                )
+                continue
+        persisted_files.append((path, file_metadata_snapshot, analysis))
+        request_files.append(
+            BackendPersistFullIndexFile(
+                path=path,
+                file_metadata=file_metadata_snapshot,
+                analysis=analysis,
+            )
+        )
+
+    try:
+        result = backend.persist_full_index(
+            BackendPersistFullIndexRequest(
+                root=root,
+                files=request_files,
+                embedding_backend=embedding_backend,
+                embedding_indexing=embedding_indexing,
+                defer_embeddings=defer_embeddings,
+                vector_store=vector_store,
+                vector_set_identity=vector_set_identity,
+                vector_store_config=vector_store_config,
+                coverage_complete=coverage_complete,
+                analyzers=analyzers,
+            )
+        )
+    except (OSError, BackendError, RuntimeError, ValueError) as exc:
+        failures.extend(
+            IndexFailure(
+                path=str(path),
+                analyzer_name=file_metadata_snapshot.analyzer_name,
+                error_type=type(exc).__name__,
+                reason=str(exc),
+            )
+            for path, file_metadata_snapshot, _analysis in persisted_files
+        )
+        return (0, 0, 0, 0, [], failures)
+
+    return (
+        result.embeddings_recomputed,
+        result.embeddings_reused,
+        result.embeddings_skipped,
+        result.embeddings_pending,
+        persisted_files,
+        failures,
+    )
+
+
 def _embedding_indexing_policy(root: Path) -> EmbeddingIndexingPolicy:
     """
     Build the backend-neutral embedding indexing policy for one root.
@@ -1255,6 +1375,51 @@ def index_repo(
             )
         )
 
+    parsed_files, failures, collected_warnings = _collect_indexed_file_analyses(
+        root,
+        plan.indexed_paths,
+        current_state.metadata_by_path,
+        analyzers,
+    )
+    if full and isinstance(index_backend, FullIndexBulkBackend):
+        (
+            embeddings_recomputed,
+            changed_file_embeddings_reused,
+            changed_file_embeddings_skipped,
+            changed_file_embeddings_pending,
+            persisted_files,
+            persistence_failures,
+        ) = _persist_full_index_bulk(
+            root=root,
+            backend=index_backend,
+            parsed_files=parsed_files,
+            embedding_backend=backend,
+            embedding_indexing=embedding_indexing,
+            defer_embeddings=effective_embedding_index_mode == "deferred",
+            vector_store=vector_store_context.store,
+            vector_set_identity=vector_store_context.identity,
+            vector_store_config=vector_store_context.config,
+            coverage_complete=not coverage_issues,
+            analyzers=analyzers,
+        )
+        failures.extend(persistence_failures)
+        embeddings_reused = unchanged_embeddings_reused + changed_file_embeddings_reused
+        return _finalize_index_report(
+            FinalizeIndexReportRequest(
+                plan=plan,
+                parsed_files=persisted_files,
+                failures=failures,
+                warnings=collected_warnings,
+                coverage_issues=coverage_issues,
+                embeddings_recomputed=embeddings_recomputed,
+                embeddings_reused=embeddings_reused,
+                embeddings_skipped=changed_file_embeddings_skipped,
+                embeddings_pending=changed_file_embeddings_pending,
+                embedding_index_mode=effective_embedding_index_mode,
+                embedding_complete=changed_file_embeddings_pending == 0,
+            )
+        )
+
     session = index_backend.begin_index_session(root)
     try:
         session.purge_skipped_docstring_issues()
@@ -1273,12 +1438,6 @@ def index_repo(
             session=session,
         )
 
-        parsed_files, failures, collected_warnings = _collect_indexed_file_analyses(
-            root,
-            plan.indexed_paths,
-            current_state.metadata_by_path,
-            analyzers,
-        )
         (
             embeddings_recomputed,
             changed_file_embeddings_reused,

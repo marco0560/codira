@@ -37,6 +37,8 @@ from codira.contracts import (
     PendingEmbeddingRow,
     PreparedVectorRow,
     StoredEmbeddingRow,
+    VectorStoreBulkWriter,
+    VectorStoreFullIndexRequest,
     filter_embedding_rows_for_policy,
 )
 from codira.docstring import DocstringValidationRequest, validate_docstring
@@ -2667,6 +2669,8 @@ def _flush_pending_relationship_rows(
         Session-level normalized call rows.
     pending_ref_rows : list[RefRow]
         Session-level normalized callable-reference rows.
+    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
+        Optional recorder for batch write spans.
 
     Returns
     -------
@@ -3421,6 +3425,8 @@ def _flush_call_record_rows(
         Open database connection.
     rows : list[CallRow]
         Normalized call rows.
+    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
+        Optional recorder for CSV staging spans.
 
     Returns
     -------
@@ -3494,6 +3500,8 @@ def _flush_callable_ref_record_rows(
         Open database connection.
     rows : list[RefRow]
         Normalized callable-reference rows.
+    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
+        Optional recorder for CSV staging spans.
 
     Returns
     -------
@@ -3839,12 +3847,8 @@ def _store_pending_embedding_rows(
         Prepared embedding rows as ``(row, content_hash, stored_vector)``.
     backend : EmbeddingBackendSpec
         Active embedding backend metadata.
-    vector_store : codira.contracts.VectorStore | None, optional
-        Active separated vector-store plugin used for materialized vectors.
-    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
-        Active vector-set identity for separated vector-store writes.
-    vector_store_config : collections.abc.Mapping[str, object] | None, optional
-        Vector-store-specific configuration table.
+    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
+        Optional recorder for Arrow batch spans.
 
     Returns
     -------
@@ -4006,6 +4010,8 @@ def _store_cached_embedding_vectors(
         Active embedding backend metadata.
     encoded_vectors : dict[str, bytes]
         Serialized vectors keyed by content hash.
+    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
+        Optional recorder for Arrow batch spans.
 
     Returns
     -------
@@ -4098,6 +4104,7 @@ def _store_vector_store_materialized_rows(
     root: Path | None,
     prepared_rows: list[PreparedVectorRow],
     encoded_vectors: dict[str, bytes],
+    backend_connection: object | None = None,
     profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
@@ -4117,6 +4124,10 @@ def _store_vector_store_materialized_rows(
         Materialized vector rows to persist.
     encoded_vectors : dict[str, bytes]
         Newly encoded vectors keyed by content hash.
+    backend_connection : object | None, optional
+        Backend-owned connection that compatible vector stores may reuse.
+    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
+        Optional recorder for separated vector-store spans.
 
     Returns
     -------
@@ -4141,12 +4152,23 @@ def _store_vector_store_materialized_rows(
                 vector_store_config,
             )
     with active_profiler.span("vector_store.store_vectors", rows=len(prepared_rows)):
-        vector_store.store_vectors(
-            root,
-            vector_set_identity,
-            prepared_rows,
-            vector_store_config,
-        )
+        if isinstance(vector_store, VectorStoreBulkWriter):
+            vector_store.store_vectors_for_full_index(
+                VectorStoreFullIndexRequest(
+                    root=root,
+                    identity=vector_set_identity,
+                    rows=prepared_rows,
+                    config=vector_store_config,
+                    backend_connection=backend_connection,
+                )
+            )
+        else:
+            vector_store.store_vectors(
+                root,
+                vector_set_identity,
+                prepared_rows,
+                vector_store_config,
+            )
     with active_profiler.span(
         "vector_store.delete_pending_vectors",
         rows=len(prepared_rows),
@@ -4179,12 +4201,8 @@ def _delete_pending_embedding_rows(
         Prepared embedding rows as ``(row, content_hash, stored_vector)``.
     backend : EmbeddingBackendSpec
         Active embedding backend metadata.
-    vector_store : codira.contracts.VectorStore | None, optional
-        Active separated vector-store plugin used for materialized vectors.
-    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
-        Active vector-set identity for separated vector-store writes.
-    vector_store_config : collections.abc.Mapping[str, object] | None, optional
-        Vector-store-specific configuration table.
+    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
+        Optional recorder for pending-row delete spans.
 
     Returns
     -------
@@ -4267,6 +4285,7 @@ def _flush_prepared_embedding_rows(
     vector_store: VectorStore | None = None,
     vector_set_identity: VectorSetIdentity | None = None,
     vector_store_config: Mapping[str, object] | None = None,
+    backend_connection: object | None = None,
     profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
@@ -4288,6 +4307,10 @@ def _flush_prepared_embedding_rows(
         Active vector-set identity for separated vector-store writes.
     vector_store_config : collections.abc.Mapping[str, object] | None, optional
         Vector-store-specific configuration table.
+    backend_connection : object | None, optional
+        Backend-owned connection that compatible vector stores may reuse.
+    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
+        Optional recorder for embedding persistence spans.
 
     Returns
     -------
@@ -4483,6 +4506,7 @@ def _flush_prepared_embedding_rows(
                 _vector_values,
             ) in encoded_vectors.items()
         },
+        backend_connection=backend_connection,
         profiler=active_profiler,
     )
 
@@ -4496,6 +4520,7 @@ def _flush_pending_embedding_rows(
     vector_store: VectorStore | None = None,
     vector_set_identity: VectorSetIdentity | None = None,
     vector_store_config: Mapping[str, object] | None = None,
+    backend_connection: object | None = None,
     profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
@@ -4517,6 +4542,10 @@ def _flush_pending_embedding_rows(
         Active vector-set identity for separated vector-store writes.
     vector_store_config : collections.abc.Mapping[str, object] | None, optional
         Vector-store-specific configuration table.
+    backend_connection : object | None, optional
+        Backend-owned connection that compatible vector stores may reuse.
+    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
+        Optional recorder for embedding persistence spans.
 
     Returns
     -------
@@ -4536,6 +4565,7 @@ def _flush_pending_embedding_rows(
         vector_store=vector_store,
         vector_set_identity=vector_set_identity,
         vector_store_config={} if vector_store_config is None else vector_store_config,
+        backend_connection=backend_connection,
         profiler=profiler,
     )
     pending_embedding_rows.clear()
@@ -4712,6 +4742,8 @@ def _flush_pending_reference_scan_rows(
         Open database connection.
     rows : list[tuple[int, int, str]]
         Stored reference rows as ``(file_id, lineno, line_text)``.
+    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
+        Optional recorder for CSV staging spans.
 
     Returns
     -------
@@ -4752,7 +4784,7 @@ def _flush_pending_reference_scan_rows(
             pass
 
 
-def _store_analysis(
+def _append_analysis_rows(
     conn: _DuckDBPersistenceConnection,
     root: Path,
     file_metadata: FileMetadataSnapshot,
@@ -4777,7 +4809,7 @@ def _store_analysis(
     id_allocator: DuckDBIdAllocator | None = None,
 ) -> tuple[int, int]:
     """
-    Persist one parsed file snapshot into the index.
+    Append one parsed file snapshot to DuckDB persistence buffers.
 
     Parameters
     ----------
@@ -4961,6 +4993,108 @@ def _store_analysis(
         vector_store=vector_store,
         vector_set_identity=vector_set_identity,
         vector_store_config=vector_store_config,
+    )
+
+
+def _store_analysis(
+    conn: _DuckDBPersistenceConnection,
+    root: Path,
+    file_metadata: FileMetadataSnapshot,
+    analysis: AnalysisResult,
+    *,
+    backend: EmbeddingBackendSpec,
+    embedding_indexing: EmbeddingIndexingPolicy | None = None,
+    embedding_metrics: EmbeddingIndexingMetrics | None = None,
+    defer_embeddings: bool = False,
+    previous_embeddings: dict[str, StoredEmbeddingRow] | None = None,
+    pending_embedding_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]]
+    | None = None,
+    vector_store: VectorStore | None = None,
+    vector_set_identity: VectorSetIdentity | None = None,
+    vector_store_config: Mapping[str, object] | None = None,
+    pending_reference_scan_rows: list[tuple[int, int, str]] | None = None,
+    pending_call_rows: list[CallRow] | None = None,
+    pending_ref_rows: list[RefRow] | None = None,
+    pending_import_rows: list[ImportRow] | None = None,
+    pending_docstring_issue_rows: list[DocstringIssueRow] | None = None,
+    structural_rows: DuckDBStructuralRowBuffers | None = None,
+    id_allocator: DuckDBIdAllocator | None = None,
+) -> tuple[int, int]:
+    """
+    Persist one parsed file snapshot into the index.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+    root : pathlib.Path
+        Repository root used for embedding path filters.
+    file_metadata : codira.models.FileMetadataSnapshot
+        Stable file metadata for the analyzed file.
+    analysis : codira.models.AnalysisResult
+        Normalized analyzer output for the file.
+    backend : EmbeddingBackendSpec
+        Active embedding backend metadata.
+    embedding_indexing : codira.contracts.EmbeddingIndexingPolicy | None, optional
+        Optional embedding row eligibility policy.
+    embedding_metrics : codira.contracts.EmbeddingIndexingMetrics | None, optional
+        Optional mutable counters updated for skipped embedding rows.
+    defer_embeddings : bool, optional
+        Whether eligible embedding rows should be queued for later computation.
+    previous_embeddings : dict[str, codira.indexer.StoredEmbeddingRow] | None, optional
+        Stored symbol embeddings captured before replacing file-owned rows.
+    pending_embedding_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]] | None, optional
+        Session-level buffer used to batch embedding generation across files.
+    vector_store : codira.contracts.VectorStore | None, optional
+        Active separated vector-store plugin used for materialized vectors.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : collections.abc.Mapping[str, object] | None, optional
+        Vector-store-specific configuration table.
+    pending_reference_scan_rows : list[tuple[int, int, str]] | None, optional
+        Session-level buffer used to batch reference-search rows across files.
+    pending_call_rows : list[CallRow] | None, optional
+        Session-level buffer used to batch call records across files.
+    pending_ref_rows : list[RefRow] | None, optional
+        Session-level buffer used to batch callable-reference records across
+        files.
+    pending_import_rows : list[ImportRow] | None, optional
+        Session-level buffer used to batch import rows across files.
+    pending_docstring_issue_rows : list[DocstringIssueRow] | None, optional
+        Session-level buffer used to batch docstring issues across files.
+    structural_rows : DuckDBStructuralRowBuffers | None, optional
+        Session-level structural row buffers. A local buffer is used when not
+        supplied.
+    id_allocator : DuckDBIdAllocator | None, optional
+        Session-level explicit-ID allocator. A local allocator is used when not
+        supplied.
+
+    Returns
+    -------
+    tuple[int, int]
+        ``(recomputed, reused)`` embedding counts for the file.
+    """
+    return _append_analysis_rows(
+        conn,
+        root,
+        file_metadata,
+        analysis,
+        backend=backend,
+        embedding_indexing=embedding_indexing,
+        embedding_metrics=embedding_metrics,
+        defer_embeddings=defer_embeddings,
+        previous_embeddings=previous_embeddings,
+        pending_embedding_rows=pending_embedding_rows,
+        vector_store=vector_store,
+        vector_set_identity=vector_set_identity,
+        vector_store_config=vector_store_config,
+        pending_reference_scan_rows=pending_reference_scan_rows,
+        pending_call_rows=pending_call_rows,
+        pending_ref_rows=pending_ref_rows,
+        pending_import_rows=pending_import_rows,
+        pending_docstring_issue_rows=pending_docstring_issue_rows,
+        structural_rows=structural_rows,
+        id_allocator=id_allocator,
     )
 
 
