@@ -10,6 +10,7 @@ The current repository has two concrete first-party backends:
 Backends currently own:
 
 - schema creation and refresh for their concrete storage file
+- physical schema DDL and schema-version compatibility for their backend
 - indexing-side persistence orchestration behind the `IndexBackend` contract
 - exact-query execution exposed through backend methods
 - embedding inventory reads and candidate retrieval exposed through backend
@@ -23,8 +24,11 @@ Current package-local ownership notes:
   helper implementation
 - `packages/codira-backend-sqlite/.../sqlite_storage.py` owns the SQLite
   package-local bootstrap and path entrypoints used by the production backend
+- `packages/codira-backend-sqlite/.../schema.py` owns SQLite physical DDL
 - `packages/codira-backend-duckdb/.../duckdb_support.py` owns the DuckDB
   persistence helper implementation
+- `packages/codira-backend-duckdb/.../schema.py` owns DuckDB physical DDL,
+  including DuckDB-native query lookup tables and post-load indexes
 - `packages/codira-backend-duckdb/.../repo_storage.py` owns the DuckDB-local
   seam for generic `.codira` directory and metadata path access
 - `packages/codira-backend-duckdb/.../duckdb_query_backend.py` owns the
@@ -81,6 +85,9 @@ The DuckDB bulk path owns the complete full-rebuild lifecycle:
 - assign full-rebuild row IDs without per-file `SELECT MAX(id)` allocation
 - flush structural, relationship, reference-scan, and embedding rows in
   backend batches
+- skip vector-cache reads for fresh full-index outputs
+- insert full-index embedding rows without stale-row deletes or SQL window
+  deduplication after the embedding table has been recreated
 - rebuild derived indexes, persist runtime inventory, and emit DuckDB profile
   spans named `bulk_full_index.*`
 
@@ -92,9 +99,10 @@ that boundary.
 Vector stores may optionally implement `VectorStoreBulkWriter` for full-index
 materialized vector writes. The DuckDB vector store implements the contract
 while preserving the current separated `.codira/embeddings.duckdb` storage file.
-Its full-index implementation replaces the complete materialized vector set in
-one transaction and clears stale pending rows for that vector set instead of
-delegating to the normal incremental `store_vectors` path.
+Its full-index implementation writes newly encoded cache vectors, replaces the
+complete materialized vector set, and clears stale pending rows for that vector
+set in one transaction instead of delegating to normal incremental cache,
+`store_vectors`, and pending-delete paths.
 
 ## Current Constraints
 
@@ -110,9 +118,12 @@ Its role is to provide a second production-grade backend with stronger local
 analytical behavior for larger indexes, including future documentation-heavy
 channels.
 
-The current DuckDB backend is no longer coupled to SQLite runtime types or the
-SQLite backend package. Its query and maintenance implementation is fully
-owned inside the DuckDB package boundary.
+The current DuckDB backend is no longer coupled to SQLite runtime types,
+SQLite DDL, or the SQLite backend package. Its schema, query, maintenance, and
+full-index bulk implementation are owned inside the DuckDB package boundary.
+Core metadata freshness compares the persisted index schema marker with the
+active backend version, so backend schema-version changes intentionally trigger
+a rebuild instead of in-place compatibility repair.
 
 ## Phase-8 Selection Rules
 

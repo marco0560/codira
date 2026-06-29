@@ -54,7 +54,6 @@ from .duckdb_support import (
     _flush_structural_rows,
     _process_pending_embedding_rows,
     _persist_runtime_inventory,
-    _resolve_cached_prepared_embedding_rows,
     _store_analysis,
     _store_pending_embedding_rows,
 )
@@ -68,9 +67,9 @@ from .duckdb_query_backend import (
     _BackendCompatibleConnectionAdapter,
     DuckDBQueryBackend,
 )
-from codira.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendSpec, get_embedding_backend
 from codira.plugin_config import analyzer_inventory_discovery_json, plugin_json_schema
+from .schema import DDL, INDEX_DATA_TABLES, SCHEMA_VERSION, SEQUENCED_TABLES
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -84,151 +83,14 @@ if TYPE_CHECKING:
         VectorStore,
     )
 
-PACKAGE_VERSION = "1.49.5"
+PACKAGE_VERSION = "1.50.0"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
     re.IGNORECASE,
 )
-_SEQUENCED_TABLES: tuple[str, ...] = (
-    "files",
-    "modules",
-    "classes",
-    "functions",
-    "imports",
-    "overloads",
-    "enum_members",
-    "docstring_issues",
-    "symbol_index",
-    "documentation_artifacts",
-    "embeddings",
-)
-_TABLE_ID_SEQUENCE: dict[str, str] = {
-    table: f"{table}_id_seq" for table in _SEQUENCED_TABLES
-}
-_INDEX_DATA_TABLES: tuple[str, ...] = (
-    "docstring_issues",
-    "call_edges",
-    "callable_refs",
-    "call_records",
-    "callable_ref_records",
-    "reference_scan_lines",
-    "overloads",
-    "enum_members",
-    "embeddings",
-    "documentation_artifacts",
-    "symbol_index",
-    "imports",
-    "functions",
-    "classes",
-    "modules",
-    "files",
-)
-_SEQUENCE_REWRITE_PREFIXES: tuple[str, ...] = tuple(
-    f"CREATE TABLE IF NOT EXISTS {table} (" for table in _SEQUENCED_TABLES
-)
-_CALL_EDGES_TABLE_PREFIX = "CREATE TABLE IF NOT EXISTS call_edges ("
-_CALLABLE_REFS_TABLE_PREFIX = "CREATE TABLE IF NOT EXISTS callable_refs ("
-_EMBEDDINGS_TABLE_PREFIX = "CREATE TABLE IF NOT EXISTS embeddings ("
-_DUCKDB_CALL_EDGES_DDL = """
-    CREATE TABLE IF NOT EXISTS call_edges (
-        caller_file_id INTEGER NOT NULL,
-        caller_module TEXT NOT NULL,
-        caller_name TEXT NOT NULL,
-        callee_module TEXT,
-        callee_name TEXT,
-        unresolved_identity TEXT NOT NULL DEFAULT '',
-        external_target_kind TEXT,
-        external_target_name TEXT,
-        resolved INTEGER NOT NULL,
-        FOREIGN KEY(caller_file_id) REFERENCES files(id)
-    );
-"""
-_DUCKDB_CALLABLE_REFS_DDL = """
-    CREATE TABLE IF NOT EXISTS callable_refs (
-        owner_file_id INTEGER NOT NULL,
-        owner_module TEXT NOT NULL,
-        owner_name TEXT NOT NULL,
-        target_module TEXT,
-        target_name TEXT,
-        unresolved_identity TEXT NOT NULL DEFAULT '',
-        external_target_kind TEXT,
-        external_target_name TEXT,
-        resolved INTEGER NOT NULL,
-        FOREIGN KEY(owner_file_id) REFERENCES files(id)
-    );
-"""
-_DUCKDB_EMBEDDINGS_DDL = """
-    CREATE TABLE IF NOT EXISTS embeddings (
-        id INTEGER PRIMARY KEY DEFAULT nextval('embeddings_id_seq'),
-        object_type TEXT NOT NULL,
-        object_id INTEGER NOT NULL,
-        backend TEXT NOT NULL,
-        version TEXT NOT NULL,
-        content_hash TEXT NOT NULL,
-        dim INTEGER NOT NULL,
-        vector BLOB NOT NULL,
-        vector_values DOUBLE[]
-    );
-"""
-_DUCKDB_SYMBOL_DETAIL_INDEX_DDL = (
-    """
-    CREATE INDEX IF NOT EXISTS idx_duckdb_modules_file_name
-    ON modules(file_id, name);
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_duckdb_functions_symbol_detail
-    ON functions(name, lineno, is_method, module_id);
-    """,
-)
-_NULLABLE_EDGE_TABLE_REWRITES: dict[
-    str, tuple[str, tuple[str, ...], tuple[str, ...]]
-] = {
-    "call_edges": (
-        _DUCKDB_CALL_EDGES_DDL,
-        (
-            "caller_file_id",
-            "caller_module",
-            "caller_name",
-            "callee_module",
-            "callee_name",
-            "unresolved_identity",
-            "external_target_kind",
-            "external_target_name",
-            "resolved",
-        ),
-        (
-            "idx_call_edges_identity",
-            "idx_call_edges_caller",
-            "idx_call_edges_caller_lookup",
-            "idx_call_edges_callee",
-            "idx_call_edges_callee_lookup",
-            "idx_call_edges_resolved",
-        ),
-    ),
-    "callable_refs": (
-        _DUCKDB_CALLABLE_REFS_DDL,
-        (
-            "owner_file_id",
-            "owner_module",
-            "owner_name",
-            "target_module",
-            "target_name",
-            "unresolved_identity",
-            "external_target_kind",
-            "external_target_name",
-            "resolved",
-        ),
-        (
-            "idx_callable_refs_identity",
-            "idx_callable_refs_owner",
-            "idx_callable_refs_owner_lookup",
-            "idx_callable_refs_target",
-            "idx_callable_refs_target_lookup",
-            "idx_callable_refs_resolved",
-        ),
-    ),
-}
+_SEQUENCED_TABLES: tuple[str, ...] = SEQUENCED_TABLES
+_INDEX_DATA_TABLES: tuple[str, ...] = INDEX_DATA_TABLES
 
 
 class _DuckDBIndexWriteSession:
@@ -254,9 +116,6 @@ class _DuckDBIndexWriteSession:
         self._conn = backend.open_connection(root)
         duckdb_conn = cast("DuckDBConnection", self._conn)
         duckdb_conn.set_profile_recorder(self._profiler)
-        raw = duckdb_conn._raw
-        with self._profiler.span("session.repair_nullable_edge_tables"):
-            _repair_nullable_edge_tables(raw)
         with self._profiler.span("session.begin_transaction"):
             self._conn.execute("BEGIN TRANSACTION")
         persistence_conn = cast("_DuckDBPersistenceConnection", self._conn)
@@ -1528,76 +1387,6 @@ def _duckdb_db_path(root: Path) -> Path:
     return get_codira_dir(root) / "index.duckdb"
 
 
-def _rewrite_duckdb_ddl(statement: str) -> str:
-    """
-    Rewrite one canonical schema statement for DuckDB sequence-backed IDs.
-
-    Parameters
-    ----------
-    statement : str
-        Canonical schema DDL statement.
-
-    Returns
-    -------
-    str
-        DuckDB-compatible statement.
-    """
-    if _CALL_EDGES_TABLE_PREFIX in statement:
-        return _strip_foreign_key_constraints(_DUCKDB_CALL_EDGES_DDL)
-
-    if _CALLABLE_REFS_TABLE_PREFIX in statement:
-        return _strip_foreign_key_constraints(_DUCKDB_CALLABLE_REFS_DDL)
-
-    if _EMBEDDINGS_TABLE_PREFIX in statement:
-        return _strip_foreign_key_constraints(_DUCKDB_EMBEDDINGS_DDL)
-
-    for table, prefix in zip(
-        _SEQUENCED_TABLES, _SEQUENCE_REWRITE_PREFIXES, strict=True
-    ):
-        if prefix in statement:
-            return _strip_foreign_key_constraints(
-                statement.replace(
-                    "id INTEGER PRIMARY KEY,",
-                    f"id INTEGER PRIMARY KEY DEFAULT nextval('{_TABLE_ID_SEQUENCE[table]}'),",
-                    1,
-                )
-            )
-    return _strip_foreign_key_constraints(statement)
-
-
-def _strip_foreign_key_constraints(statement: str) -> str:
-    """
-    Remove foreign-key constraints from DuckDB physical table DDL.
-
-    Parameters
-    ----------
-    statement : str
-        DuckDB table or index DDL statement.
-
-    Returns
-    -------
-    str
-        Statement without table-level foreign-key constraints.
-
-    Notes
-    -----
-    DuckDB enforces foreign keys with delete/update limitations that conflict
-    with codira's replace-file indexing workflow. The backend maintains
-    relationship consistency explicitly during persistence and deletes.
-    """
-    lines = statement.splitlines()
-    filtered = [line for line in lines if not line.strip().startswith("FOREIGN KEY(")]
-    if len(filtered) == len(lines):
-        return statement
-    for index in range(len(filtered) - 1, -1, -1):
-        stripped = filtered[index].strip()
-        if not stripped or stripped == ");":
-            continue
-        filtered[index] = filtered[index].rstrip().removesuffix(",")
-        break
-    return "\n".join(filtered)
-
-
 def _duckdb_schema_ddl() -> tuple[str, ...]:
     """
     Return DuckDB schema statements for the codira backend store.
@@ -1609,14 +1398,9 @@ def _duckdb_schema_ddl() -> tuple[str, ...]:
     Returns
     -------
     tuple[str, ...]
-        Sequence creation statements followed by rewritten table/index DDL.
+        Backend-owned DuckDB table and index DDL.
     """
-    sequence_statements = tuple(
-        f"CREATE SEQUENCE IF NOT EXISTS {sequence_name} START 1;"
-        for sequence_name in _TABLE_ID_SEQUENCE.values()
-    )
-    table_statements = tuple(_rewrite_duckdb_ddl(statement) for statement in DDL)
-    return (*sequence_statements, *table_statements, *_DUCKDB_SYMBOL_DETAIL_INDEX_DDL)
+    return DDL
 
 
 def _duckdb_schema_index_ddl() -> tuple[str, ...]:
@@ -1717,183 +1501,13 @@ def _recreate_duckdb_index_tables(conn: _BackendCompatibleConnectionAdapter) -> 
         # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         conn.execute(f"DROP TABLE IF EXISTS {safe_table_name}")
 
-    table_prefixes = tuple(
-        f"CREATE TABLE IF NOT EXISTS {table_name} ("
-        for table_name in _INDEX_DATA_TABLES
-    )
     for statement in _duckdb_schema_ddl():
-        if statement.lstrip().startswith(table_prefixes):
+        normalized = statement.lstrip()
+        if any(
+            normalized.startswith(f"CREATE TABLE IF NOT EXISTS {table_name}")
+            for table_name in _INDEX_DATA_TABLES
+        ):
             conn.execute(statement)
-
-
-def _table_info_notnull_by_name(
-    raw: _DuckDBRawConnection,
-    table_name: str,
-) -> dict[str, bool]:
-    """
-    Return per-column ``NOT NULL`` flags for one DuckDB table.
-
-    Parameters
-    ----------
-    raw : _DuckDBRawConnection
-        Active raw DuckDB connection.
-    table_name : str
-        Table whose column metadata should be inspected.
-
-    Returns
-    -------
-    dict[str, bool]
-        Mapping of column names to their ``NOT NULL`` flags.
-    """
-    safe_table_name = _validated_sql_identifier(table_name, kind="table")
-    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-    raw.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-        f"PRAGMA table_info('{safe_table_name}')"
-    )
-    rows = raw.fetchall()
-    notnull_by_name: dict[str, bool] = {}
-    for row in rows:
-        column_name = str(row[1])
-        notnull_value = row[3]
-        assert isinstance(notnull_value, (int, str, bytes, bytearray))
-        notnull_by_name[column_name] = bool(int(notnull_value))
-    return notnull_by_name
-
-
-def _repair_nullable_edge_table(
-    raw: _DuckDBRawConnection,
-    *,
-    table_name: str,
-    create_statement: str,
-    column_names: tuple[str, ...],
-    index_names: tuple[str, ...],
-) -> None:
-    """
-    Rebuild one edge table so unresolved targets remain nullable in DuckDB.
-
-    Parameters
-    ----------
-    raw : _DuckDBRawConnection
-        Active raw DuckDB connection.
-    table_name : str
-        Edge table requiring nullable-target repair.
-    create_statement : str
-        DuckDB-compatible ``CREATE TABLE`` statement for the repaired table.
-    column_names : tuple[str, ...]
-        Ordered columns copied into the replacement table.
-    index_names : tuple[str, ...]
-        Index names to drop and recreate around the rebuild.
-
-    Returns
-    -------
-    None
-        The existing table is replaced in place when repair is needed.
-
-    Raises
-    ------
-    RuntimeError
-        If the legacy table is missing columns other than supported nullable
-        edge metadata columns.
-    """
-    safe_table_name = _validated_sql_identifier(table_name, kind="table")
-    legacy_table_name = _validated_sql_identifier(
-        f"{safe_table_name}_legacy_nullable_fix",
-        kind="table",
-    )
-    current_columns = set(_table_info_notnull_by_name(raw, table_name))
-    missing_columns = set(column_names) - current_columns
-    supported_missing_columns = {
-        "unresolved_identity",
-        "external_target_kind",
-        "external_target_name",
-    }
-    unsupported_missing_columns = missing_columns - supported_missing_columns
-    if unsupported_missing_columns:
-        columns = ", ".join(sorted(unsupported_missing_columns))
-        msg = f"Cannot repair DuckDB {table_name} with missing columns: {columns}"
-        raise RuntimeError(msg)
-    column_list = ", ".join(column_names)
-    select_list = ", ".join(
-        column_name
-        if column_name in current_columns
-        else (
-            f"'' AS {column_name}"
-            if column_name == "unresolved_identity"
-            else f"NULL AS {column_name}"
-        )
-        for column_name in column_names
-    )
-    for index_name in index_names:
-        safe_index_name = _validated_sql_identifier(index_name, kind="index")
-        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-        raw.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-            f"DROP INDEX IF EXISTS {safe_index_name}"
-        )
-    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-    raw.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-        f"ALTER TABLE {safe_table_name} RENAME TO {legacy_table_name}"
-    )
-    raw.execute(create_statement)
-    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-    raw.execute(
-        f"INSERT INTO {safe_table_name} ({column_list}) "
-        f"SELECT {select_list} FROM {legacy_table_name}"
-    )
-    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-    raw.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-        f"DROP TABLE {legacy_table_name}"
-    )
-    for statement in _duckdb_schema_ddl():
-        if any(index_name in statement for index_name in index_names):
-            raw.execute(statement)
-
-
-def _repair_nullable_edge_tables(raw: _DuckDBRawConnection) -> None:
-    """
-    Repair legacy DuckDB edge tables that encoded nullable targets as primary keys.
-
-    Parameters
-    ----------
-    raw : _DuckDBRawConnection
-        Active raw DuckDB connection.
-
-    Returns
-    -------
-    None
-        Legacy edge tables are rebuilt in place when their nullable target
-        columns are incorrectly marked ``NOT NULL``.
-    """
-    for table_name, (
-        create_statement,
-        column_names,
-        index_names,
-    ) in _NULLABLE_EDGE_TABLE_REWRITES.items():
-        notnull_by_name = _table_info_notnull_by_name(raw, table_name)
-        if not notnull_by_name:
-            continue
-        current_columns = tuple(notnull_by_name)
-        nullable_columns = (
-            ("callee_module", "callee_name")
-            if table_name == "call_edges"
-            else ("target_module", "target_name")
-        )
-        needs_repair = current_columns != column_names or any(
-            notnull_by_name.get(column_name, False) for column_name in nullable_columns
-        )
-        if needs_repair:
-            _repair_nullable_edge_table(
-                raw,
-                table_name=table_name,
-                create_statement=create_statement,
-                column_names=column_names,
-                index_names=index_names,
-            )
-    raw.commit()
 
 
 def _write_schema_metadata(root: Path) -> None:
@@ -2212,15 +1826,13 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                         profiler=profiler,
                     )
                 else:
-                    (
-                        pending_embedding_rows,
-                        embeddings_recomputed,
-                        embeddings_reused,
-                    ) = _resolve_cached_prepared_embedding_rows(
-                        persistence_conn,
-                        prepared_rows=pending_embedding_rows,
-                        backend=request.embedding_backend,
-                        profiler=profiler,
+                    embeddings_recomputed = sum(
+                        1
+                        for _row, _content_hash, stored_vector in pending_embedding_rows
+                        if stored_vector is None
+                    )
+                    embeddings_reused = (
+                        len(pending_embedding_rows) - embeddings_recomputed
                     )
                     _flush_pending_embedding_rows(
                         persistence_conn,
@@ -2232,6 +1844,7 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                         vector_store_config=request.vector_store_config,
                         backend_connection=conn,
                         profiler=profiler,
+                        fresh_full_index=True,
                     )
             with profiler.span("bulk_full_index.commit_embeddings"):
                 self.commit(request.root, conn=conn)
@@ -2272,6 +1885,15 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         """
         db_path = _duckdb_db_path(root)
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata_path = get_metadata_path(root)
+        metadata: dict[str, str] = {}
+        if metadata_path.exists():
+            try:
+                metadata = dict(json.loads(metadata_path.read_text(encoding="utf-8")))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                metadata = {}
+        if db_path.exists() and metadata.get("schema_version") != str(SCHEMA_VERSION):
+            db_path.unlink()
         module = _duckdb_module()
         raw = _configure_duckdb_connection(module.connect(str(db_path)))
         try:
@@ -2279,7 +1901,6 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
             for statement in schema_statements:
                 if " INDEX " not in statement:
                     raw.execute(statement)
-            _repair_nullable_edge_tables(raw)
             for statement in schema_statements:
                 if " INDEX " in statement:
                     raw.execute(statement)

@@ -45,6 +45,7 @@ rules:
           - pattern: from codira_backend_sqlite import $IMPORT
           - pattern: import codira_backend_duckdb
           - pattern: from codira_backend_duckdb import $IMPORT
+      - pattern-not-regex: from codira_backend_(sqlite|duckdb)\.schema import
 
   - id: codira.arch.no-sqlite3-in-analyzers
     message: >
@@ -136,6 +137,9 @@ rules:
         - /fixtures/src/**/*.py
       exclude:
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py
+        - "**/packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_storage.py"
+        - "**/packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py"
+        - "**/packages/codira-backend-duckdb/src/codira_backend_duckdb/duckdb_query_backend.py"
         - /examples/plugins/codira_demo_backend/src/codira_demo_backend/__init__.py
         - /packages/**/tests/**/*.py
     patterns:
@@ -207,6 +211,37 @@ rules:
           def persist_full_index(...):
               ...
       - pattern: _store_analysis(...)
+
+  - id: codira.arch.no-core-schema-ddl-import-in-backends
+    message: >
+      Backend plugins own their physical schema and must not import core schema
+      DDL.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-backend-*/src/**/*.py
+        - /fixtures/packages/codira-backend-*/src/**/*.py
+    patterns:
+      - pattern: from codira.schema import DDL
+
+  - id: codira.arch.no-cache-resolution-in-duckdb-full-index-bulk
+    message: >
+      DuckDB fresh full-index bulk persistence must not load cached vectors
+      before embedding output is written.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-backend-duckdb/src/**/*.py
+        - /fixtures/packages/codira-backend-duckdb/src/**/*.py
+    patterns:
+      - pattern-inside: |
+          def persist_full_index(...):
+              ...
+      - pattern: _resolve_cached_prepared_embedding_rows(...)
 
   - id: codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk
     message: >

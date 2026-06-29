@@ -1364,6 +1364,8 @@ class VectorStoreFullIndexRequest:
         Active vector-set identity.
     rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
         Prepared rows carrying serialized vector payloads.
+    cached_vectors : collections.abc.Mapping[str, bytes]
+        Newly encoded vectors keyed by content hash.
     config : collections.abc.Mapping[str, object]
         Vector-store-specific configuration table.
     backend_connection : object | None, optional
@@ -1373,6 +1375,7 @@ class VectorStoreFullIndexRequest:
     root: Path
     identity: VectorSetIdentity
     rows: Sequence[PreparedVectorRow]
+    cached_vectors: Mapping[str, bytes]
     config: Mapping[str, object]
     backend_connection: object | None = None
 

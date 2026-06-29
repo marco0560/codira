@@ -53,6 +53,13 @@ Operator model:
 * DuckDB uses `.codira/index.duckdb` under the repository storage root
 * core `codira` remains backend-neutral; this package owns DuckDB bootstrap and
   storage behavior
+* DuckDB physical schema DDL is package-local in `codira_backend_duckdb.schema`
+* full-index rebuilds use a DuckDB-native bulk path that recreates index tables,
+  skips fresh-output cache reads, and writes embeddings without stale-row
+  deletes or SQL window deduplication
+* when paired with the DuckDB vector store, full-index vector persistence fuses
+  cache writes, materialized vector replacement, and pending cleanup into one
+  vector-store transaction
 
 Good fit:
 

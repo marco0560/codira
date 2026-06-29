@@ -29,7 +29,7 @@ from codira.models import (
     ModuleArtifact,
 )
 from codira.indexer import index_repo
-from codira.schema import DDL, SCHEMA_VERSION
+from codira_backend_duckdb.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendSpec
 from codira.storage import override_storage_root
 import codira_backend_duckdb as duckdb_backend_module
@@ -520,7 +520,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.49.5"
+    assert project["project"]["version"] == "1.50.0"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -1212,10 +1212,10 @@ def test_duckdb_backend_index_session_repairs_legacy_nullable_edge_schema(
     finally:
         unrepaired.close()
 
-    assert unrepaired_call_edges_info["callee_module"] is True
-    assert unrepaired_call_edges_info["callee_name"] is True
-    assert unrepaired_callable_refs_info["target_module"] is True
-    assert unrepaired_callable_refs_info["target_name"] is True
+    assert unrepaired_call_edges_info["callee_module"] is False
+    assert unrepaired_call_edges_info["callee_name"] is False
+    assert unrepaired_callable_refs_info["target_module"] is False
+    assert unrepaired_callable_refs_info["target_name"] is False
 
     session = backend.begin_index_session(tmp_path)
     session.close()
@@ -1380,11 +1380,11 @@ def test_duckdb_write_session_flushes_relationship_rows_before_rebuild(
         connection.close()
 
 
-def test_duckdb_backend_initialize_repairs_legacy_edge_identity_schema(
+def test_duckdb_backend_initialize_rebuilds_legacy_edge_identity_schema(
     tmp_path: Path,
 ) -> None:
     """
-    Repair legacy DuckDB edge tables that predate unresolved-target identity.
+    Rebuild legacy DuckDB edge tables that predate current schema metadata.
 
     Parameters
     ----------
@@ -1394,8 +1394,8 @@ def test_duckdb_backend_initialize_repairs_legacy_edge_identity_schema(
     Returns
     -------
     None
-        The test asserts backend initialization adds the discriminator
-        column while preserving existing rows.
+        The test asserts backend initialization discards a stale physical
+        schema and creates current columns.
     """
     duckdb = pytest.importorskip("duckdb")
     db_path = _duckdb_db_path(tmp_path)
@@ -1505,8 +1505,8 @@ def test_duckdb_backend_initialize_repairs_legacy_edge_identity_schema(
 
     assert "unresolved_identity" in call_edges_columns
     assert "unresolved_identity" in callable_refs_columns
-    assert call_edge_row == ("",)
-    assert callable_ref_row == ("",)
+    assert call_edge_row is None
+    assert callable_ref_row is None
 
 
 def test_duckdb_backend_full_prepare_clears_populated_database_in_session(

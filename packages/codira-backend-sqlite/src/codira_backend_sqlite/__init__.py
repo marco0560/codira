@@ -40,13 +40,13 @@ from codira.contracts import (
 )
 from codira.prefix import normalize_prefix, prefix_clause
 from codira.plugin_config import analyzer_inventory_discovery_json, plugin_json_schema
-from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
     deserialize_vector,
     embed_text,
     get_embedding_backend,
 )
+from codira_backend_sqlite.schema import SCHEMA_VERSION
 from codira_backend_sqlite.sqlite_support import (
     _clear_index_tables,
     _count_indexed_files,

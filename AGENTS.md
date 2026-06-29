@@ -98,8 +98,8 @@ The core implementation resides under `src/codira/`.
 | `codira-analyzer-markdown/`               | Markdown analyzer distribution        |
 | `codira-analyzer-python/`                 | Python analyzer distribution          |
 | `codira-analyzer-text/`                   | Plain-text analyzer distribution      |
-| `codira-backend-duckdb/`                  | DuckDB structural backend             |
-| `codira-backend-sqlite/`                  | SQLite structural backend             |
+| `codira-backend-duckdb/`                  | DuckDB structural backend and DuckDB-owned physical schema |
+| `codira-backend-sqlite/`                  | SQLite structural backend and SQLite-owned physical schema |
 | `codira-vector-store-duckdb/`             | DuckDB vector-store backend           |
 | `codira-vector-store-sqlite/`             | SQLite vector-store backend           |
 | `codira-embedding-onnx/`                  | ONNX embedding backend                |
@@ -149,8 +149,8 @@ Package internals usually follow `src/<import_package>/` plus package-local
 
 | Path            | Responsibility     |
 |-----------------|--------------------|
-| `schema.py`     | schema handling    |
-| `schema/*.json` | schema definitions |
+| `schema.py`     | logical schema metadata, not backend DDL |
+| `schema/*.json` | JSON output schemas |
 
 #### Miscellaneous
 

@@ -3,7 +3,7 @@
 Responsibilities
 ----------------
 - Resolve package-local SQLite database paths for repository indexes.
-- Initialize the SQLite schema using the shared codira DDL.
+- Initialize the SQLite schema using backend-owned DDL.
 
 Design principles
 -----------------
@@ -20,13 +20,13 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from codira.schema import DDL, SCHEMA_VERSION
 from codira.storage import (
     _read_metadata_file,
     _write_metadata_file,
     get_codira_dir,
     get_metadata_path,
 )
+from codira_backend_sqlite.schema import DDL, SCHEMA_VERSION
 
 __all__ = ["get_db_path", "init_db"]
 

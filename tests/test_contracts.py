@@ -33,6 +33,7 @@ from codira_analyzer_cpp import CppAnalyzer
 from codira_analyzer_json import JsonAnalyzer
 from codira_analyzer_python import PythonAnalyzer
 from codira_backend_sqlite import SQLiteIndexBackend
+from codira_backend_sqlite.schema import SCHEMA_VERSION
 from codira_backend_sqlite.sqlite_storage import get_db_path
 
 import codira.indexer as indexer_module
@@ -98,7 +99,6 @@ from codira.scanner import (
     iter_canonical_project_files,
     iter_project_files,
 )
-from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
     EMBEDDING_BACKEND,
     EMBEDDING_DIM,
@@ -2617,12 +2617,12 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-bash==1.41.0",
         "codira-analyzer-markdown==1.44.0",
         "codira-analyzer-text==1.43.0",
-        "codira-backend-sqlite==1.45.0",
-        "codira-backend-duckdb==1.49.5",
+        "codira-backend-sqlite==1.45.1",
+        "codira-backend-duckdb==1.50.0",
         "codira-embedding-sentence-transformers==1.0.1",
         "codira-embedding-onnx==1.0.1",
         "codira-vector-store-sqlite==1.0.1",
-        "codira-vector-store-duckdb==1.0.5",
+        "codira-vector-store-duckdb==1.0.6",
     ]
     assert pyproject.get("tool", {}).get("poetry") is None
 

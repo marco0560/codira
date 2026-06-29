@@ -42,13 +42,13 @@ from codira.contracts import (
 )
 from codira.prefix import normalize_prefix, prefix_clause
 from codira.plugin_config import analyzer_inventory_discovery_json
-from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
     deserialize_vector,
     embed_text,
     get_embedding_backend,
 )
+from .schema import SCHEMA_VERSION
 from .duckdb_support import (
     _DuckDBPersistenceConnection,
     _clear_index_tables,
@@ -656,17 +656,15 @@ class DuckDBQueryBackend:
         if conn is None:
             conn = self.open_connection(root)
         try:
-            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "s.path")
             # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
-                SELECT s.type, s.module_name, s.name, f.path, s.lineno
-                FROM symbol_index s
-                JOIN files f
-                  ON s.file_id = f.id
+                SELECT s.type, s.module_name, s.name, s.path, s.lineno
+                FROM duckdb_symbol_lookup s
                 WHERE s.name = ?
                 {prefix_sql}
-                ORDER BY s.type, s.module_name, f.path, s.lineno
+                ORDER BY s.type, s.module_name, s.path, s.lineno
                 """,
                 (name, *prefix_params),
             ).fetchall()

@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from codira_analyzer_python import PythonAnalyzer
 from codira_backend_sqlite import SQLiteIndexBackend
+from codira_backend_sqlite.schema import SCHEMA_VERSION
 from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
 
 import codira.indexer as indexer_module
@@ -65,7 +66,6 @@ from codira.models import (
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.query.exact import docstring_issues, find_symbol
 from codira.scanner import file_metadata
-from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
     EMBEDDING_BACKEND,
     EMBEDDING_DIM,
@@ -1125,7 +1125,7 @@ def test_inspect_index_rebuild_request_uses_backend_connection_contract(
     cli_module._write_index_metadata(
         tmp_path,
         {
-            "schema_version": str(SCHEMA_VERSION),
+            "schema_version": str(backend.version),
         },
     )
 
@@ -1180,9 +1180,9 @@ def test_inspect_index_rebuild_request_uses_complete_metadata_fast_path(
     cli_module._write_index_metadata(
         tmp_path,
         {
-            "schema_version": str(SCHEMA_VERSION),
+            "schema_version": str(backend.version),
             "backend_name": "duckdb",
-            "backend_version": "1.5.3",
+            "backend_version": str(backend.version),
             "analyzer_inventory": json.dumps(python_inventory),
             "indexed_file_count": "1",
         },
@@ -3661,7 +3661,10 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
 
     init_db(tmp_path)
     index_repo(tmp_path)
-    _write_index_metadata(tmp_path, {"schema_version": str(SCHEMA_VERSION)})
+    _write_index_metadata(
+        tmp_path,
+        {"schema_version": str(SCHEMA_VERSION)},
+    )
 
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(
@@ -3713,7 +3716,10 @@ def test_ensure_index_rebuilds_when_backend_inventory_changes(
 
     init_db(tmp_path)
     index_repo(tmp_path)
-    _write_index_metadata(tmp_path, {"schema_version": str(SCHEMA_VERSION)})
+    _write_index_metadata(
+        tmp_path,
+        {"schema_version": str(_SQLiteBackendVNext.version)},
+    )
 
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(

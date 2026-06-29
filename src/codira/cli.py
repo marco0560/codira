@@ -95,7 +95,6 @@ from codira.registry import (
     validate_plugin_configuration,
 )
 from codira.scanner import iter_project_files
-from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendError, get_embedding_backend
 from codira.semantic.search import (
     DocumentationCandidatesRequest,
@@ -3564,11 +3563,11 @@ def _build_index_metadata(
         Metadata payload containing schema, plugin, analyzer, file-count, and
         current commit facts when available.
     """
-    metadata = {"schema_version": str(SCHEMA_VERSION)}
+    backend = active_index_backend(root=root)
+    metadata = {"schema_version": str(backend.version)}
     commit = _get_head_commit(root)
     if commit:
         metadata["commit"] = commit
-    backend = active_index_backend(root=root)
     metadata[INDEX_METADATA_BACKEND_NAME] = str(backend.name)
     metadata[INDEX_METADATA_BACKEND_VERSION] = str(backend.version)
     metadata[INDEX_METADATA_ANALYZER_INVENTORY] = json.dumps(
@@ -3728,8 +3727,9 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
     current_commit = _get_head_commit(root)
     indexed_commit = metadata.get("commit")
     indexed_schema = metadata.get("schema_version")
+    backend = active_index_backend(root=root)
 
-    if indexed_schema != str(SCHEMA_VERSION):
+    if indexed_schema != str(backend.version):
         return IndexRebuildRequest(
             message="[codira] Index schema changed — rebuilding...",
             reset_db=True,
@@ -3750,7 +3750,6 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
     if metadata_decided:
         return metadata_request
 
-    backend = active_index_backend(root=root)
     conn = backend.open_connection(root)
     try:
         runtime_inventory = backend.load_runtime_inventory(root, conn=conn)

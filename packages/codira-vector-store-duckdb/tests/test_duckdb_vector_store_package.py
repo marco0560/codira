@@ -106,7 +106,7 @@ def test_duckdb_vector_store_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.0.5"
+    assert project["project"]["version"] == "1.0.6"
     assert project["project"]["entry-points"]["codira.vector_stores"] == {
         "duckdb": "codira_vector_store_duckdb:build_vector_store"
     }
@@ -313,6 +313,7 @@ def test_duckdb_vector_store_bulk_full_index_writer_persists_rows(
             root=tmp_path,
             identity=identity,
             rows=_prepared_rows(),
+            cached_vectors={"hash-cache": serialize_vector([0.25, 0.5, 0.75])},
             config={},
             backend_connection=object(),
         )
@@ -327,12 +328,20 @@ def test_duckdb_vector_store_bulk_full_index_writer_persists_rows(
             """
         ).fetchall()
         pending_count = conn.execute("SELECT COUNT(*) FROM pending_vectors").fetchone()
+        cache_rows = conn.execute(
+            """
+            SELECT content_hash, vector
+            FROM vector_cache
+            ORDER BY content_hash
+            """
+        ).fetchall()
 
     assert vector_rows == [
         ("documentation", "doc:two", "hash-two", serialize_vector([0.0, 1.0, 0.0])),
         ("symbol", "symbol:one", "hash-one", serialize_vector([1.0, 0.0, 0.0])),
     ]
     assert pending_count == (0,)
+    assert cache_rows == [("hash-cache", serialize_vector([0.25, 0.5, 0.75]))]
 
 
 def test_duckdb_vector_store_caches_vector_set_identity(

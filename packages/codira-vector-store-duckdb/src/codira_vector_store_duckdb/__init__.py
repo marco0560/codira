@@ -31,7 +31,7 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.5"
+PACKAGE_VERSION = "1.0.6"
 FORMAT_VERSION = "1"
 
 
@@ -815,6 +815,58 @@ class DuckDBVectorStore:
                 "DELETE FROM pending_vectors WHERE vector_set_id = ?",
                 (vector_set_id,),
             )
+            if request.cached_vectors:
+                import pyarrow as pa
+
+                ordered_vectors = sorted(request.cached_vectors.items())
+                cache_table = pa.table(
+                    {
+                        "vector_set_id": pa.array(
+                            [
+                                vector_set_id
+                                for _content_hash, _vector in ordered_vectors
+                            ],
+                            type=pa.uint64(),
+                        ),
+                        "content_hash": pa.array(
+                            [content_hash for content_hash, _vector in ordered_vectors],
+                            type=pa.string(),
+                        ),
+                        "vector": pa.array(
+                            [vector for _content_hash, vector in ordered_vectors],
+                            type=pa.binary(),
+                        ),
+                        "vector_values": pa.array(
+                            [
+                                deserialize_vector(
+                                    vector,
+                                    dim=request.identity.engine.dimension,
+                                )
+                                for _content_hash, vector in ordered_vectors
+                            ],
+                            type=pa.list_(pa.float64()),
+                        ),
+                    }
+                )
+                _flush_registered_arrow_table(
+                    conn,
+                    view_name="__codira_full_index_vector_cache_rows",
+                    table=cache_table,
+                    sql="""
+                    INSERT OR REPLACE INTO vector_cache(
+                        vector_set_id,
+                        content_hash,
+                        vector,
+                        vector_values
+                    )
+                    SELECT
+                        vector_set_id,
+                        content_hash,
+                        vector,
+                        vector_values
+                    FROM __codira_full_index_vector_cache_rows
+                    """,
+                )
             if materialized:
                 import pyarrow as pa
 
