@@ -1808,6 +1808,89 @@ def test_duckdb_full_index_uses_bulk_profile_path(tmp_path: Path) -> None:
     assert "persist.store_analysis" not in span_names
 
 
+def test_duckdb_full_index_reuses_cached_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Reuse cached vectors during DuckDB full-index embedding flushes.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace embedding generation with a counting fake.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The second full index must reuse the embedding vector cache instead of
+        invoking the embedder again.
+    """
+    pytest.importorskip("duckdb")
+    source_root = tmp_path / "repo"
+    output_root = tmp_path / "out"
+    source_root.mkdir()
+    config_path = source_root / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "\n".join(
+            (
+                "[backend]",
+                'name = "duckdb"',
+                "",
+                "[embeddings]",
+                "enabled = true",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    (source_root / "sample.py").write_text(
+        "def demo() -> int:\n    return 1\n",
+        encoding="utf-8",
+    )
+    embed_calls: list[list[str]] = []
+
+    def fake_embed_texts(
+        texts: list[str],
+        root: Path | None = None,
+    ) -> list[list[float]]:
+        """
+        Count embedding calls and return deterministic vectors.
+
+        Parameters
+        ----------
+        texts : list[str]
+            Text payloads requested by the embedding flush.
+        root : pathlib.Path | None, optional
+            Repository root supplied by the caller.
+
+        Returns
+        -------
+        list[list[float]]
+            One deterministic 384-dimensional vector per text.
+        """
+        del root
+        embed_calls.append(list(texts))
+        return [[1.0] * 384 for _text in texts]
+
+    monkeypatch.setattr(duckdb_support_module, "embed_texts", fake_embed_texts)
+
+    with override_storage_root(source_root, output_root):
+        first_report = index_repo(source_root, full=True)
+        first_call_count = len(embed_calls)
+        second_report = index_repo(source_root, full=True)
+
+    assert first_report.failed == 0
+    assert second_report.failed == 0
+    assert first_call_count > 0
+    assert len(embed_calls) == first_call_count
+    assert second_report.embeddings_reused > 0
+    assert second_report.embeddings_recomputed == 0
+
+
 def test_duckdb_deferred_session_flushes_pending_rows_after_structural_commit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

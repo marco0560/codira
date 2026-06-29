@@ -54,6 +54,7 @@ from .duckdb_support import (
     _flush_structural_rows,
     _process_pending_embedding_rows,
     _persist_runtime_inventory,
+    _resolve_cached_prepared_embedding_rows,
     _store_analysis,
     _store_pending_embedding_rows,
 )
@@ -1826,13 +1827,15 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                         profiler=profiler,
                     )
                 else:
-                    embeddings_recomputed = sum(
-                        1
-                        for _row, _content_hash, stored_vector in pending_embedding_rows
-                        if stored_vector is None
-                    )
-                    embeddings_reused = (
-                        len(pending_embedding_rows) - embeddings_recomputed
+                    (
+                        pending_embedding_rows,
+                        embeddings_recomputed,
+                        embeddings_reused,
+                    ) = _resolve_cached_prepared_embedding_rows(
+                        persistence_conn,
+                        prepared_rows=pending_embedding_rows,
+                        backend=request.embedding_backend,
+                        profiler=profiler,
                     )
                     _flush_pending_embedding_rows(
                         persistence_conn,

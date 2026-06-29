@@ -5,9 +5,9 @@ from __future__ import annotations
 from codira.schema import DDL  # type: ignore[attr-defined]
 
 
-def _resolve_cached_prepared_embedding_rows() -> None:
+def _flush_pending_embedding_rows() -> None:
     """
-    Pretend to load cached vectors during a fresh full-index run.
+    Pretend to flush embeddings without the fresh full-index flag.
 
     Parameters
     ----------
@@ -53,4 +53,4 @@ class BadDuckDBBackend:
             The fixture intentionally calls the legacy per-file helper.
         """
         _store_analysis()
-        _resolve_cached_prepared_embedding_rows()
+        _flush_pending_embedding_rows()

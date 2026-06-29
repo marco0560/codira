@@ -226,10 +226,10 @@ rules:
     patterns:
       - pattern: from codira.schema import DDL
 
-  - id: codira.arch.no-cache-resolution-in-duckdb-full-index-bulk
+  - id: codira.arch.require-fresh-full-index-embedding-flush
     message: >
-      DuckDB fresh full-index bulk persistence must not load cached vectors
-      before embedding output is written.
+      DuckDB full-index bulk embedding flushes must declare fresh_full_index=True
+      so stale pending-row cleanup is skipped without disabling vector-cache reuse.
     severity: ERROR
     languages:
       - python
@@ -241,7 +241,8 @@ rules:
       - pattern-inside: |
           def persist_full_index(...):
               ...
-      - pattern: _resolve_cached_prepared_embedding_rows(...)
+      - pattern: _flush_pending_embedding_rows(...)
+      - pattern-not: _flush_pending_embedding_rows(..., fresh_full_index=True, ...)
 
   - id: codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk
     message: >
