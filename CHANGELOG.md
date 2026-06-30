@@ -1,3 +1,53 @@
+# [1.45.0](https://github.com/marco0560/codira/compare/v1.44.6...v1.45.0) (2026-06-30)
+
+
+### Bug Fixes
+
+* **backend:** DuckDB full-index embedding flushes now reuse cached vectors ([cc0f7b2](https://github.com/marco0560/codira/commit/cc0f7b2f9e3bd7d3bad5b0c5e942282de27dc452))
+* **dev:** align validation import allowlists ([72a87e6](https://github.com/marco0560/codira/commit/72a87e60b1d45bf9abe9c12da6a348e64b577b74))
+* **dev:** corrected script in config files generation and user interface ([f40e324](https://github.com/marco0560/codira/commit/f40e324ee0aeb316b6e63409455d78e4b3e4726d))
+* **dev:** keep uv codira plugins installed ([b05c183](https://github.com/marco0560/codira/commit/b05c1835de12dd795863f30fd9f6d7b194f36885))
+* **dev:** support direct script help and clean audit ([50ce778](https://github.com/marco0560/codira/commit/50ce7784cb636c540aa7af1a2e515d865eb56a0c))
+* **embeddings:** batch DuckDB vector-store writes ([c11c0ff](https://github.com/marco0560/codira/commit/c11c0ff13cab5a381df4e642cde8b485b593f79d))
+* **embeddings:** bound ONNX embedding batches and truncate long inputs ([9d55e0e](https://github.com/marco0560/codira/commit/9d55e0ed1414434caffb64689466e363879d7a2a))
+* **embeddings:** harden plugin schemas and duckdb connections ([af02c1d](https://github.com/marco0560/codira/commit/af02c1df3527562bcbbb4806b4a16196dc3d76b1))
+* **embeddings:** honor output dir for vector stores ([4cad5d9](https://github.com/marco0560/codira/commit/4cad5d9c536e43a50edcd4be78c91580b771c6a6))
+* **embeddings:** make model campaign preflight executable ([ae3c2a2](https://github.com/marco0560/codira/commit/ae3c2a21130419744581429d7b31aac6a96f9041))
+* **hooks:** call python release audit in pre-push ([7b7feb3](https://github.com/marco0560/codira/commit/7b7feb3eb3f627ad50e565e920da516c925a86d4))
+
+
+### Features
+
+* **config:** select embedding vector plugins ([e285536](https://github.com/marco0560/codira/commit/e285536daffe69eb5453ede03a694c6b08f2a034))
+* **contracts:** add embedding vector plugin contracts ([54d076e](https://github.com/marco0560/codira/commit/54d076e2fff7d9758cdbb5546bbd6ea15854e14e))
+* **embeddings:** add local vector store packages ([a22d2c3](https://github.com/marco0560/codira/commit/a22d2c3487d39eaaf59a4937aa129b877d9cbfde))
+* **embeddings:** add matrix plan harness ([7f698b4](https://github.com/marco0560/codira/commit/7f698b469c0618125d5a499efa30a17192bf38f2))
+* **embeddings:** add model manifest tooling ([6fa3c65](https://github.com/marco0560/codira/commit/6fa3c650a1481cd9c0aa8f8f255577530e1e6e38))
+* **embeddings:** add onnx engine package ([7aa7456](https://github.com/marco0560/codira/commit/7aa7456a646474358fc27d1ca66a7eb8ed46dcc2))
+* **embeddings:** add sentence transformers engine package ([894d82a](https://github.com/marco0560/codira/commit/894d82a8a0039cd30e18011501cd17c42c9c9792))
+* **embeddings:** add split engine experiments ([20dcd14](https://github.com/marco0560/codira/commit/20dcd1405085c6ce79d41597034bd2b8c5214fef))
+* **embeddings:** add vector store row APIs ([ed2637e](https://github.com/marco0560/codira/commit/ed2637e8f61f68a54dabb10e6216c3403a068283))
+* **embeddings:** clear drained vector pending rows ([9ef50de](https://github.com/marco0560/codira/commit/9ef50de916f4dd003f72eae1473ce9c63cf90261))
+* **embeddings:** initialize vector store lifecycle ([5ae75aa](https://github.com/marco0560/codira/commit/5ae75aa037d3c0c34677006144c131436a02fe57))
+* **embeddings:** merge embedding plugin branch ([1506e3d](https://github.com/marco0560/codira/commit/1506e3d8b928699db5cb59def1413aa7aab532dd))
+* **embeddings:** mirror deferred vectors to vector store ([f8ac470](https://github.com/marco0560/codira/commit/f8ac4704a1407bbb924acf49913f809fe11f98ea))
+* **embeddings:** persist materialized vectors in stores ([c7051fc](https://github.com/marco0560/codira/commit/c7051fcabb5843e7e85593425cd4e8ee200e0698))
+* **embeddings:** read similarity from vector stores ([175a26c](https://github.com/marco0560/codira/commit/175a26ce0269c0b8c49472c5db30e817f2879d31))
+* **plugins:** report embedding families in caps ([98c6089](https://github.com/marco0560/codira/commit/98c6089f61969e90be6ce2acfdb63e1300bb1917))
+
+
+### Performance Improvements
+
+* **backend:** add duckdb full-index bulk path ([57e012f](https://github.com/marco0560/codira/commit/57e012ffe696f45850c009f71c4da128c39f027f))
+* **backend:** add duckdb write profiling ([e841a90](https://github.com/marco0560/codira/commit/e841a904208d7b7523dffe2d3ff2bde92fc3d0d0))
+* **backend:** move schema ownership to plugins ([1be3c18](https://github.com/marco0560/codira/commit/1be3c189785d7e91d9b14b92cb89564453e0255a))
+* **backend:** preserve DuckDB full-index vectors ([d4ec086](https://github.com/marco0560/codira/commit/d4ec086b33dc532007232a0692c48d83b779f412))
+* **backend:** reduce duckdb full-index lifecycle cost ([7b62216](https://github.com/marco0560/codira/commit/7b6221630a6d01ba63a2b5bea2d53c9301f69d44))
+* **backend:** reduce duckdb full-index planning cost ([1982c1a](https://github.com/marco0560/codira/commit/1982c1ae4e7292d07cc5e8a9ea3bbc8b9bb85f01))
+* **config:** cache effective config per command ([d2eab3b](https://github.com/marco0560/codira/commit/d2eab3b9a43572f2ffab6b211418aebdacaf0a1a))
+* **embeddings:** cache duckdb vector set ids ([ca40a55](https://github.com/marco0560/codira/commit/ca40a55414a94d51228df210ff60e03a5b380a78))
+* **registry:** cache active plugins per command ([bb0404b](https://github.com/marco0560/codira/commit/bb0404b9c0729a8cd1d7b4a1a59dc06905db364c))
+
 ## [1.44.6](https://github.com/marco0560/codira/compare/v1.44.5...v1.44.6) (2026-06-18)
 
 
