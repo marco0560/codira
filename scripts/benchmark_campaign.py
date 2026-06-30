@@ -55,6 +55,9 @@ DEFAULT_ARTIFACT_ROOT = Path(".artifacts") / "benchmarks"
 DEFAULT_RUNS = 5
 DEFAULT_WARMUP = 1
 DEFAULT_QUERY = "schema migration logic"
+UTILITY_QUERY_SUBCOMMANDS = frozenset(
+    {"ctx", "cov", "sym", "symlist", "emb", "calls", "audit"}
+)
 PATH_AWARE_SUBCOMMANDS = frozenset(
     {"index", "cov", "sym", "symlist", "emb", "calls", "refs", "audit", "ctx"}
 )
@@ -1674,6 +1677,123 @@ def build_hyperfine_argv(
     )
 
 
+def utility_summary_path(
+    repo: ResolvedRepositoryBenchmark,
+    config: CampaignConfig,
+) -> Path:
+    """
+    Return the utility-score summary path for one repository benchmark.
+
+    Parameters
+    ----------
+    repo : ResolvedRepositoryBenchmark
+        Repository benchmark target.
+    config : CampaignConfig
+        Campaign configuration.
+
+    Returns
+    -------
+    pathlib.Path
+        JSON artifact path beside the Hyperfine export.
+    """
+    return (
+        run_directory(config)
+        / f"{_safe_label(repo.category)}-{_safe_label(repo.label)}-utility-summary.json"
+    )
+
+
+def _codira_subcommand_from_hyperfine_command(command: str) -> str | None:
+    """
+    Extract the Codira subcommand from one Hyperfine command string.
+
+    Parameters
+    ----------
+    command : str
+        Shell command string stored by Hyperfine.
+
+    Returns
+    -------
+    str | None
+        Codira subcommand when recognized, otherwise ``None``.
+    """
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return None
+    for index, part in enumerate(parts):
+        if (part.endswith("/codira") or part == "codira") and index + 1 < len(parts):
+            return parts[index + 1]
+    return None
+
+
+def write_utility_summary(
+    repo: ResolvedRepositoryBenchmark,
+    config: CampaignConfig,
+) -> None:
+    """
+    Persist the workflow-weighted utility score for one Hyperfine export.
+
+    Parameters
+    ----------
+    repo : ResolvedRepositoryBenchmark
+        Repository benchmark target.
+    config : CampaignConfig
+        Campaign configuration.
+
+    Returns
+    -------
+    None
+        A JSON sidecar is written when the Hyperfine export exists.
+    """
+    hyperfine_path = (
+        run_directory(config)
+        / f"{_safe_label(repo.category)}-{_safe_label(repo.label)}-hyperfine.json"
+    )
+    if not hyperfine_path.exists():
+        return
+    payload = json.loads(hyperfine_path.read_text(encoding="utf-8"))
+    results = list(payload.get("results", []))
+    if len(results) < 2:
+        return
+    full_index = float(results[0].get("mean", 0.0))
+    partial_index = float(results[1].get("mean", 0.0))
+    query_results: list[dict[str, object]] = []
+    query_means: list[float] = []
+    for result in results[2:]:
+        command = str(result.get("command", ""))
+        subcommand = _codira_subcommand_from_hyperfine_command(command)
+        if subcommand in UTILITY_QUERY_SUBCOMMANDS:
+            mean_seconds = float(result.get("mean", 0.0))
+            query_means.append(mean_seconds)
+            query_results.append(
+                {
+                    "subcommand": subcommand,
+                    "mean_seconds": mean_seconds,
+                    "command": command,
+                }
+            )
+    query_mean = sum(query_means) / len(query_means) if query_means else 0.0
+    score = full_index + (3.0 * partial_index) + (20.0 * query_mean)
+    write_json_artifact(
+        utility_summary_path(repo, config),
+        {
+            "schema_version": "1.0",
+            "weights": {
+                "full_index": 1,
+                "partial_index": 3,
+                "query_mean": 20,
+            },
+            "included_query_subcommands": sorted(UTILITY_QUERY_SUBCOMMANDS),
+            "excluded_subcommands": ["help", "plugins", "caps"],
+            "full_index_mean_seconds": full_index,
+            "partial_index_mean_seconds": partial_index,
+            "query_mean_seconds": query_mean,
+            "utility_score": score,
+            "query_results": query_results,
+        },
+    )
+
+
 def command_output_log_path(
     repo: ResolvedRepositoryBenchmark,
     config: CampaignConfig,
@@ -2123,6 +2243,9 @@ def main() -> int:
 
     (run_directory(config) / "profiles").mkdir(parents=True, exist_ok=True)
     failures: list[dict[str, object]] = []
+    repositories_by_key = {
+        (repo.category, repo.label): repo for repo in resolved_repositories
+    }
     for row in plan:
         repo_started_at = time.perf_counter()
         commands = row["commands"]
@@ -2153,6 +2276,13 @@ def main() -> int:
                 command_tuple,
                 output_log=Path(str(output_log)),
             )
+            if (
+                return_code == 0
+                and command_tuple
+                and command_tuple[0] == config.hyperfine
+            ):
+                resolved_repo = repositories_by_key[(category, label)]
+                write_utility_summary(resolved_repo, config)
             if return_code != 0:
                 failures.append(
                     {

@@ -260,3 +260,18 @@ rules:
           def store_vectors_for_full_index(...):
               ...
       - pattern: self.store_vectors(...)
+
+  - id: codira.arch.require-duckdb-full-index-vector-preservation
+    message: >
+      DuckDB full-index vector-store requests must opt into preservation so
+      unchanged materialized vectors are not rewritten.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-backend-duckdb/src/**/*.py
+        - /fixtures/packages/codira-backend-duckdb/src/**/*.py
+    patterns:
+      - pattern: VectorStoreFullIndexRequest(...)
+      - pattern-not: VectorStoreFullIndexRequest(..., preserve_existing=True, ...)

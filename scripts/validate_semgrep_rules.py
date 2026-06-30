@@ -66,6 +66,7 @@ FIXTURES = (
             "codira.arch.no-core-schema-ddl-import-in-backends",
             "codira.arch.require-fresh-full-index-embedding-flush",
             "codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk",
+            "codira.arch.require-duckdb-full-index-vector-preservation",
         ),
     ),
     (

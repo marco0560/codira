@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, cast
 import duckdb
 
 from codira.contracts import (
+    PreparedVectorIdentityRow,
     PreparedVectorRow,
     VectorSetIdentity,
     VectorStoreFullIndexRequest,
@@ -31,7 +32,7 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.6"
+PACKAGE_VERSION = "1.0.7"
 FORMAT_VERSION = "1"
 
 
@@ -41,6 +42,7 @@ def _flush_registered_arrow_table(
     view_name: str,
     table: object,
     sql: str,
+    parameters: tuple[object, ...] | None = None,
 ) -> None:
     """
     Execute one DuckDB statement against a registered Arrow table.
@@ -55,6 +57,8 @@ def _flush_registered_arrow_table(
         PyArrow table carrying columnar batch rows.
     sql : str
         DuckDB statement that reads from ``view_name``.
+    parameters : tuple[object, ...] | None, optional
+        Bound parameters for ``sql``.
 
     Returns
     -------
@@ -63,7 +67,10 @@ def _flush_registered_arrow_table(
     """
     conn.register(view_name, table)
     try:
-        conn.execute(sql)
+        if parameters is None:
+            conn.execute(sql)
+        else:
+            conn.execute(sql, parameters)
     finally:
         conn.unregister(view_name)
 
@@ -87,6 +94,162 @@ def _connect(path: Path, *, read_only: bool = False) -> duckdb.DuckDBPyConnectio
     conn = duckdb.connect(str(path), read_only=read_only)
     conn.execute("SET python_enable_replacements = false")
     return conn
+
+
+def _materialized_identity_rows(
+    request: VectorStoreFullIndexRequest,
+) -> tuple[PreparedVectorIdentityRow, ...]:
+    """
+    Return complete desired materialized vector identities for a full index.
+
+    Parameters
+    ----------
+    request : codira.contracts.VectorStoreFullIndexRequest
+        Full-index vector-store request.
+
+    Returns
+    -------
+    tuple[codira.contracts.PreparedVectorIdentityRow, ...]
+        Complete identity rows when supplied by the caller, otherwise a
+        compatibility projection from payload-bearing rows.
+    """
+    if request.identity_rows:
+        return tuple(request.identity_rows)
+    return tuple(
+        PreparedVectorIdentityRow(
+            object_type=prepared.row.object_type,
+            stable_id=prepared.row.stable_id,
+            content_hash=prepared.content_hash,
+            vector=prepared.vector,
+        )
+        for prepared in request.rows
+    )
+
+
+def _matching_materialized_keys(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    vector_set_id: int,
+    identity_rows: Sequence[PreparedVectorIdentityRow],
+) -> set[tuple[str, str, str]]:
+    """
+    Return existing materialized vector keys that already match the full index.
+
+    Parameters
+    ----------
+    conn : duckdb.DuckDBPyConnection
+        Open vector-store connection.
+    vector_set_id : int
+        Persistent vector-set identifier.
+    identity_rows : collections.abc.Sequence[codira.contracts.PreparedVectorIdentityRow]
+        Desired materialized vector identities.
+
+    Returns
+    -------
+    set[tuple[str, str, str]]
+        Existing ``(object_type, stable_id, content_hash)`` keys that can be
+        preserved without rewriting vector payloads.
+    """
+    if not identity_rows:
+        return set()
+    import pyarrow as pa
+
+    table = pa.table(
+        {
+            "vector_set_id": pa.array(
+                [vector_set_id for _row in identity_rows],
+                type=pa.uint64(),
+            ),
+            "object_type": pa.array(
+                [row.object_type for row in identity_rows],
+                type=pa.string(),
+            ),
+            "stable_id": pa.array(
+                [row.stable_id for row in identity_rows],
+                type=pa.string(),
+            ),
+            "content_hash": pa.array(
+                [row.content_hash for row in identity_rows],
+                type=pa.string(),
+            ),
+        }
+    )
+    conn.register("__codira_full_index_vector_identity_rows", table)
+    try:
+        rows = conn.execute(
+            """
+            SELECT vectors.object_type, vectors.stable_id, vectors.content_hash
+            FROM vectors
+            JOIN __codira_full_index_vector_identity_rows desired
+              ON vectors.vector_set_id = desired.vector_set_id
+             AND vectors.object_type = desired.object_type
+             AND vectors.stable_id = desired.stable_id
+             AND vectors.content_hash = desired.content_hash
+            """
+        ).fetchall()
+    finally:
+        conn.unregister("__codira_full_index_vector_identity_rows")
+    return {(str(row[0]), str(row[1]), str(row[2])) for row in rows}
+
+
+def _delete_stale_materialized_vectors(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    vector_set_id: int,
+    identity_rows: Sequence[PreparedVectorIdentityRow],
+) -> None:
+    """
+    Delete materialized vector rows absent from the desired full-index set.
+
+    Parameters
+    ----------
+    conn : duckdb.DuckDBPyConnection
+        Open vector-store connection.
+    vector_set_id : int
+        Persistent vector-set identifier.
+    identity_rows : collections.abc.Sequence[codira.contracts.PreparedVectorIdentityRow]
+        Desired materialized vector identities.
+
+    Returns
+    -------
+    None
+        Stale materialized vectors for the vector set are removed in place.
+    """
+    import pyarrow as pa
+
+    table = pa.table(
+        {
+            "vector_set_id": pa.array(
+                [vector_set_id for _row in identity_rows],
+                type=pa.uint64(),
+            ),
+            "object_type": pa.array(
+                [row.object_type for row in identity_rows],
+                type=pa.string(),
+            ),
+            "stable_id": pa.array(
+                [row.stable_id for row in identity_rows],
+                type=pa.string(),
+            ),
+        }
+    )
+    _flush_registered_arrow_table(
+        conn,
+        view_name="__codira_full_index_desired_vector_rows",
+        table=table,
+        sql="""
+        DELETE FROM vectors
+        WHERE vector_set_id = ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM __codira_full_index_desired_vector_rows desired
+              WHERE desired.vector_set_id = vectors.vector_set_id
+                AND desired.object_type = vectors.object_type
+                AND desired.stable_id = vectors.stable_id
+          )
+        """,
+        parameters=(vector_set_id,),
+    )
 
 
 def get_vector_store_path(root: Path) -> Path:
@@ -797,6 +960,7 @@ class DuckDBVectorStore:
             for prepared in request.rows
             if prepared.vector is not None
         ]
+        identity_rows = _materialized_identity_rows(request)
         vector_set_id = self.ensure_vector_set(
             request.root,
             request.identity,
@@ -807,10 +971,23 @@ class DuckDBVectorStore:
         try:
             conn.execute("BEGIN TRANSACTION")
             transaction_open = True
-            conn.execute(
-                "DELETE FROM vectors WHERE vector_set_id = ?",
-                (vector_set_id,),
-            )
+            preserved_keys: set[tuple[str, str, str]] = set()
+            if request.preserve_existing:
+                preserved_keys = _matching_materialized_keys(
+                    conn,
+                    vector_set_id=vector_set_id,
+                    identity_rows=identity_rows,
+                )
+                _delete_stale_materialized_vectors(
+                    conn,
+                    vector_set_id=vector_set_id,
+                    identity_rows=identity_rows,
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM vectors WHERE vector_set_id = ?",
+                    (vector_set_id,),
+                )
             conn.execute(
                 "DELETE FROM pending_vectors WHERE vector_set_id = ?",
                 (vector_set_id,),
@@ -867,38 +1044,51 @@ class DuckDBVectorStore:
                     FROM __codira_full_index_vector_cache_rows
                     """,
                 )
-            if materialized:
+            materialized_to_write = [
+                (prepared, vector)
+                for prepared, vector in materialized
+                if (
+                    prepared.row.object_type,
+                    prepared.row.stable_id,
+                    prepared.content_hash,
+                )
+                not in preserved_keys
+            ]
+            if materialized_to_write:
                 import pyarrow as pa
 
                 table = pa.table(
                     {
                         "vector_set_id": pa.array(
-                            [vector_set_id for _prepared, _vector in materialized],
+                            [
+                                vector_set_id
+                                for _prepared, _vector in materialized_to_write
+                            ],
                             type=pa.uint64(),
                         ),
                         "object_type": pa.array(
                             [
                                 prepared.row.object_type
-                                for prepared, _vector in materialized
+                                for prepared, _vector in materialized_to_write
                             ],
                             type=pa.string(),
                         ),
                         "stable_id": pa.array(
                             [
                                 prepared.row.stable_id
-                                for prepared, _vector in materialized
+                                for prepared, _vector in materialized_to_write
                             ],
                             type=pa.string(),
                         ),
                         "content_hash": pa.array(
                             [
                                 prepared.content_hash
-                                for prepared, _vector in materialized
+                                for prepared, _vector in materialized_to_write
                             ],
                             type=pa.string(),
                         ),
                         "vector": pa.array(
-                            [vector for _prepared, vector in materialized],
+                            [vector for _prepared, vector in materialized_to_write],
                             type=pa.binary(),
                         ),
                         "vector_values": pa.array(
@@ -907,7 +1097,7 @@ class DuckDBVectorStore:
                                     vector,
                                     dim=request.identity.engine.dimension,
                                 )
-                                for _prepared, vector in materialized
+                                for _prepared, vector in materialized_to_write
                             ],
                             type=pa.list_(pa.float64()),
                         ),

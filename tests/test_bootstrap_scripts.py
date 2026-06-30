@@ -651,6 +651,7 @@ class _BenchmarkCampaignModule(Protocol):
 
     CampaignConfig: type
     RepositoryBenchmark: type
+    ResolvedRepositoryBenchmark: type
     subprocess: object
 
     def build_parser(self) -> argparse.ArgumentParser:
@@ -685,6 +686,58 @@ class _BenchmarkCampaignModule(Protocol):
         ...
 
     MANIFEST_BENCHMARK_SUBCOMMANDS: frozenset[str]
+
+    def run_directory(self, config: object) -> Path:
+        """
+        Return the campaign run directory.
+
+        Parameters
+        ----------
+        config : object
+            Campaign configuration.
+
+        Returns
+        -------
+        pathlib.Path
+            Run artifact directory.
+        """
+        ...
+
+    def utility_summary_path(self, repo: object, config: object) -> Path:
+        """
+        Return the utility-summary artifact path.
+
+        Parameters
+        ----------
+        repo : object
+            Resolved repository benchmark target.
+        config : object
+            Campaign configuration.
+
+        Returns
+        -------
+        pathlib.Path
+            Utility-summary artifact path.
+        """
+        ...
+
+    def write_utility_summary(self, repo: object, config: object) -> None:
+        """
+        Write one utility-summary artifact.
+
+        Parameters
+        ----------
+        repo : object
+            Resolved repository benchmark target.
+        config : object
+            Campaign configuration.
+
+        Returns
+        -------
+        None
+            The summary is written when Hyperfine data is present.
+        """
+        ...
 
     def command_plan(
         self,
@@ -3925,6 +3978,95 @@ def test_benchmark_campaign_helper_expands_manifest_commands(
     )
     assert any("caps --json" in command for command in display_commands)
     assert sum("codira index --full" in command for command in hyperfine_commands) == 1
+
+
+def test_benchmark_campaign_writes_utility_summary(tmp_path: Path) -> None:
+    """
+    Persist workflow-weighted utility scores from Hyperfine exports.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary artifact root.
+
+    Returns
+    -------
+    None
+        The test asserts query command inclusion and score weights stay
+        aligned with the benchmark utility contract.
+    """
+    helper = _load_benchmark_campaign_helper()
+    manifest = tmp_path / "manifest.json"
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260501T120000Z",
+        codira="/tmp/codira/.venv/bin/codira",
+        hyperfine="hyperfine",
+        python="python",
+        runs=3,
+        warmup=1,
+        dry_run=False,
+    )
+    repo = helper.ResolvedRepositoryBenchmark(
+        label="codira",
+        category="small",
+        path=tmp_path,
+        query="schema migration",
+        requested_query="schema migration",
+        modes=("benchmark",),
+        commands=(),
+        requested_commands=(),
+        skipped_commands=(),
+        selection={},
+    )
+    hyperfine_path = helper.run_directory(config) / "small-codira-hyperfine.json"
+    hyperfine_path.parent.mkdir(parents=True)
+    hyperfine_path.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira index --full",
+                        "mean": 10.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira index",
+                        "mean": 2.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira ctx --json query",
+                        "mean": 1.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira audit --json",
+                        "mean": 3.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira help",
+                        "mean": 100.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira caps --json",
+                        "mean": 100.0,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    helper.write_utility_summary(repo, config)
+
+    payload = json.loads(
+        helper.utility_summary_path(repo, config).read_text(encoding="utf-8")
+    )
+    assert payload["query_mean_seconds"] == 2.0
+    assert payload["utility_score"] == 56.0
+    assert [row["subcommand"] for row in payload["query_results"]] == [
+        "ctx",
+        "audit",
+    ]
 
 
 def test_benchmark_campaign_adaptive_resolution_picks_richer_candidates(

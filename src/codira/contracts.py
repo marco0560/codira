@@ -195,6 +195,29 @@ class PreparedVectorRow:
 
 
 @dataclass(frozen=True)
+class PreparedVectorIdentityRow:
+    """
+    Desired materialized vector identity for a full-index vector-store refresh.
+
+    Parameters
+    ----------
+    object_type : str
+        Persisted embedding owner kind.
+    stable_id : str
+        Durable analyzer-owned symbol or documentation identity.
+    content_hash : str
+        Hash of the exact text payload used for vector reuse decisions.
+    vector : bytes | None, optional
+        Serialized vector payload when newly available from the caller.
+    """
+
+    object_type: str
+    stable_id: str
+    content_hash: str
+    vector: bytes | None = None
+
+
+@dataclass(frozen=True)
 class EmbeddingIndexingPolicy:
     """
     Backend-neutral embedding row eligibility policy.
@@ -1364,12 +1387,17 @@ class VectorStoreFullIndexRequest:
         Active vector-set identity.
     rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
         Prepared rows carrying serialized vector payloads.
+    identity_rows : collections.abc.Sequence[codira.contracts.PreparedVectorIdentityRow]
+        Complete desired materialized vector identities for the full index.
     cached_vectors : collections.abc.Mapping[str, bytes]
         Newly encoded vectors keyed by content hash.
     config : collections.abc.Mapping[str, object]
         Vector-store-specific configuration table.
     backend_connection : object | None, optional
         Backend-owned connection that compatible vector stores may reuse.
+    preserve_existing : bool, optional
+        Whether compatible vector stores may preserve existing materialized
+        rows matching ``identity_rows`` without rewriting vector payloads.
     """
 
     root: Path
@@ -1377,7 +1405,9 @@ class VectorStoreFullIndexRequest:
     rows: Sequence[PreparedVectorRow]
     cached_vectors: Mapping[str, bytes]
     config: Mapping[str, object]
+    identity_rows: Sequence[PreparedVectorIdentityRow] = ()
     backend_connection: object | None = None
+    preserve_existing: bool = False
 
 
 @runtime_checkable

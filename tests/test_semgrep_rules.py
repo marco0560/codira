@@ -116,6 +116,7 @@ EXPECTED_FIXTURE_RULE_IDS = {
     "codira.arch.no-core-schema-ddl-import-in-backends",
     "codira.arch.require-fresh-full-index-embedding-flush",
     "codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk",
+    "codira.arch.require-duckdb-full-index-vector-preservation",
     "codira.arch.no-registry-import-in-analyzers",
     "codira.arch.no-sqlite3-in-analyzers",
     "codira.arch.no-sqlite3-outside-allowed-layers",

@@ -36,6 +36,21 @@ def _store_analysis() -> None:
     """
 
 
+def VectorStoreFullIndexRequest() -> None:  # noqa: N802
+    """
+    Pretend to build a vector-store full-index request without preservation.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The fixture intentionally violates repository Semgrep rules.
+    """
+
+
 class BadDuckDBBackend:
     """Small backend fixture for Semgrep full-index matching."""
 
@@ -54,3 +69,4 @@ class BadDuckDBBackend:
         """
         _store_analysis()
         _flush_pending_embedding_rows()
+        VectorStoreFullIndexRequest()

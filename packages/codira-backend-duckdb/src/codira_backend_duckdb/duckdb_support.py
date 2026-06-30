@@ -35,6 +35,7 @@ from codira.contracts import (
     EmbeddingIndexingMetrics,
     EmbeddingIndexingPolicy,
     PendingEmbeddingRow,
+    PreparedVectorIdentityRow,
     PreparedVectorRow,
     StoredEmbeddingRow,
     VectorStoreBulkWriter,
@@ -4170,6 +4171,7 @@ def _store_vector_store_materialized_rows(
     vector_store_config: Mapping[str, object],
     root: Path | None,
     prepared_rows: list[PreparedVectorRow],
+    identity_rows: list[PreparedVectorIdentityRow] | None = None,
     encoded_vectors: dict[str, bytes],
     backend_connection: object | None = None,
     profiler: DuckDBProfileRecorder | None = None,
@@ -4189,6 +4191,9 @@ def _store_vector_store_materialized_rows(
         Repository root whose vector store should be updated.
     prepared_rows : list[codira.contracts.PreparedVectorRow]
         Materialized vector rows to persist.
+    identity_rows : list[codira.contracts.PreparedVectorIdentityRow] | None, optional
+        Complete desired materialized vector identities for full-index
+        preservation.
     encoded_vectors : dict[str, bytes]
         Newly encoded vectors keyed by content hash.
     backend_connection : object | None, optional
@@ -4215,7 +4220,9 @@ def _store_vector_store_materialized_rows(
                     rows=prepared_rows,
                     cached_vectors=encoded_vectors,
                     config=vector_store_config,
+                    identity_rows=() if identity_rows is None else identity_rows,
                     backend_connection=backend_connection,
+                    preserve_existing=True,
                 )
             )
         else:
@@ -4460,6 +4467,7 @@ def _flush_prepared_embedding_rows(
     vector_values_rows: list[list[float]] = []
     row_ordinals: list[int] = []
     materialized_rows: list[PreparedVectorRow] = []
+    identity_rows: list[PreparedVectorIdentityRow] = []
     for row_ordinal, (row, content_hash, stored_vector) in enumerate(deduplicated_rows):
         resolved_blob = stored_vector
         vector_values: list[float]
@@ -4482,6 +4490,14 @@ def _flush_prepared_embedding_rows(
                 row=row,
                 content_hash=content_hash,
                 vector=resolved_blob,
+            )
+        )
+        identity_rows.append(
+            PreparedVectorIdentityRow(
+                object_type=row.object_type,
+                stable_id=row.stable_id,
+                content_hash=content_hash,
+                vector=resolved_blob if stored_vector is None else None,
             )
         )
 
@@ -4600,6 +4616,7 @@ def _flush_prepared_embedding_rows(
         vector_store_config={} if vector_store_config is None else vector_store_config,
         root=root,
         prepared_rows=materialized_rows,
+        identity_rows=identity_rows,
         encoded_vectors={
             content_hash: vector_blob
             for content_hash, (

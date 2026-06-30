@@ -12,13 +12,17 @@ import pytest
 from codira.contracts import (
     EmbeddingEngineSpec,
     PendingEmbeddingRow,
+    PreparedVectorIdentityRow,
     PreparedVectorRow,
     VectorSimilarityRequest,
     VectorSetIdentity,
     VectorStore,
     VectorStoreFullIndexRequest,
 )
-from codira.semantic.embeddings import serialize_vector
+from codira.semantic.embeddings import (
+    deserialize_vector as deserialize_embedding_vector,
+    serialize_vector,
+)
 from codira_vector_store_duckdb import (
     DuckDBVectorStore,
     build_vector_store,
@@ -106,7 +110,7 @@ def test_duckdb_vector_store_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.0.6"
+    assert project["project"]["version"] == "1.0.7"
     assert project["project"]["entry-points"]["codira.vector_stores"] == {
         "duckdb": "codira_vector_store_duckdb:build_vector_store"
     }
@@ -342,6 +346,160 @@ def test_duckdb_vector_store_bulk_full_index_writer_persists_rows(
     ]
     assert pending_count == (0,)
     assert cache_rows == [("hash-cache", serialize_vector([0.25, 0.5, 0.75]))]
+
+
+def test_duckdb_vector_store_full_index_preserves_unchanged_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Preserve unchanged materialized rows during DuckDB full-index writes.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to count vector deserialization calls.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The unchanged row keeps its existing vector payload while changed and
+        new rows are materialized from the request.
+    """
+    store = DuckDBVectorStore()
+    identity = _vector_identity(store)
+    preserved_blob = serialize_vector([0.1, 0.2, 0.3])
+    changed_blob = serialize_vector([0.0, 1.0, 0.0])
+    new_blob = serialize_vector([1.0, 0.0, 0.0])
+    stale_rows = [
+        PreparedVectorRow(
+            row=PendingEmbeddingRow(
+                object_type="symbol",
+                object_id=1,
+                stable_id="symbol:one",
+                text="old text",
+            ),
+            content_hash="hash-one",
+            vector=preserved_blob,
+        ),
+        PreparedVectorRow(
+            row=PendingEmbeddingRow(
+                object_type="symbol",
+                object_id=9,
+                stable_id="symbol:stale",
+                text="stale text",
+            ),
+            content_hash="hash-stale",
+            vector=serialize_vector([0.0, 0.0, 1.0]),
+        ),
+    ]
+    store.store_vectors(tmp_path, identity, stale_rows, {})
+    deserialize_calls = 0
+
+    def counted_deserialize(vector: bytes, *, dim: int) -> list[float]:
+        """
+        Count deserialization calls before delegating.
+
+        Parameters
+        ----------
+        vector : bytes
+            Serialized vector payload.
+        dim : int
+            Expected vector dimensionality.
+
+        Returns
+        -------
+        list[float]
+            Deserialized vector values.
+        """
+        nonlocal deserialize_calls
+        deserialize_calls += 1
+        return deserialize_embedding_vector(vector, dim=dim)
+
+    monkeypatch.setattr(
+        duckdb_vector_store_module,
+        "deserialize_vector",
+        counted_deserialize,
+    )
+
+    store.store_vectors_for_full_index(
+        VectorStoreFullIndexRequest(
+            root=tmp_path,
+            identity=identity,
+            rows=[
+                PreparedVectorRow(
+                    row=PendingEmbeddingRow(
+                        object_type="symbol",
+                        object_id=1,
+                        stable_id="symbol:one",
+                        text="new text",
+                    ),
+                    content_hash="hash-one",
+                    vector=serialize_vector([9.0, 9.0, 9.0]),
+                ),
+                PreparedVectorRow(
+                    row=PendingEmbeddingRow(
+                        object_type="documentation",
+                        object_id=2,
+                        stable_id="doc:two",
+                        text="doc text",
+                    ),
+                    content_hash="hash-two",
+                    vector=changed_blob,
+                ),
+                PreparedVectorRow(
+                    row=PendingEmbeddingRow(
+                        object_type="symbol",
+                        object_id=3,
+                        stable_id="symbol:three",
+                        text="new text",
+                    ),
+                    content_hash="hash-three",
+                    vector=new_blob,
+                ),
+            ],
+            identity_rows=[
+                PreparedVectorIdentityRow(
+                    object_type="symbol",
+                    stable_id="symbol:one",
+                    content_hash="hash-one",
+                ),
+                PreparedVectorIdentityRow(
+                    object_type="documentation",
+                    stable_id="doc:two",
+                    content_hash="hash-two",
+                    vector=changed_blob,
+                ),
+                PreparedVectorIdentityRow(
+                    object_type="symbol",
+                    stable_id="symbol:three",
+                    content_hash="hash-three",
+                    vector=new_blob,
+                ),
+            ],
+            cached_vectors={},
+            config={},
+            preserve_existing=True,
+        )
+    )
+
+    with duckdb.connect(str(get_vector_store_path(tmp_path)), read_only=True) as conn:
+        vector_rows = conn.execute(
+            """
+            SELECT object_type, stable_id, content_hash, vector
+            FROM vectors
+            ORDER BY object_type, stable_id
+            """
+        ).fetchall()
+
+    assert vector_rows == [
+        ("documentation", "doc:two", "hash-two", changed_blob),
+        ("symbol", "symbol:one", "hash-one", preserved_blob),
+        ("symbol", "symbol:three", "hash-three", new_blob),
+    ]
+    assert deserialize_calls == 2
 
 
 def test_duckdb_vector_store_caches_vector_set_identity(
