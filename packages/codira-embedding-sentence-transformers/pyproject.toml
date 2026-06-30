@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codira-embedding-sentence-transformers"
+version = "1.0.1"
+description = "First-party SentenceTransformers embedding engine plugin for codira"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "codira>=1.5.0,<2.0.0",
+    "sentence-transformers>=5.4,<6.0",
+    "einops>=0.8,<1.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "black",
+    "mypy",
+    "pytest",
+    "ruff",
+]
+
+[project.entry-points."codira.embedding_engines"]
+sentence-transformers = "codira_embedding_sentence_transformers:build_engine"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+codira_embedding_sentence_transformers = ["py.typed"]
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true

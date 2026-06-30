@@ -27,20 +27,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import codira_analyzer_json as json_analyzer_module
+from codira_analyzer_bash import BashAnalyzer
+from codira_analyzer_c import CAnalyzer, _disambiguate_function_stable_ids
 from codira_analyzer_cpp import CppAnalyzer
+from codira_analyzer_json import JsonAnalyzer
+from codira_analyzer_python import PythonAnalyzer
 from codira_backend_sqlite import SQLiteIndexBackend
+from codira_backend_sqlite.schema import SCHEMA_VERSION
 from codira_backend_sqlite.sqlite_storage import get_db_path
 
 import codira.indexer as indexer_module
 import codira.registry as registry_module
-from codira.analyzers import (
-    BashAnalyzer,
-    CAnalyzer,
-    CppAnalyzer as ShimCppAnalyzer,
-    JsonAnalyzer,
-    PythonAnalyzer,
-)
-from codira.analyzers.c import _disambiguate_function_stable_ids
 from codira.cli import _run_symbol
 from codira.contracts import (
     KNOWN_RETRIEVAL_CAPABILITIES,
@@ -48,12 +45,22 @@ from codira.contracts import (
     BackendEmbeddingCandidatesRequest,
     BackendPersistAnalysisRequest,
     BackendRelationQueryRequest,
+    BackendResolveDocumentationScoresRequest,
+    BackendResolveEmbeddingScoresRequest,
     BackendRuntimeInventoryRequest,
     BackendSymbolInventoryItem,
+    EmbeddingEngine,
+    EmbeddingEngineSpec,
     IndexBackend,
     LanguageAnalyzer,
+    PreparedVectorRow,
     RetrievalProducer,
     RetrievalProducerInfo,
+    VectorSetIdentity,
+    VectorSimilarityRequest,
+    VectorSimilarityScore,
+    VectorStore,
+    VectorStoreSpec,
     split_declared_retrieval_capabilities,
 )
 from codira.indexer import (
@@ -92,7 +99,6 @@ from codira.scanner import (
     iter_canonical_project_files,
     iter_project_files,
 )
-from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
     EMBEDDING_BACKEND,
     EMBEDDING_DIM,
@@ -100,10 +106,12 @@ from codira.semantic.embeddings import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
     from types import ModuleType
 
     from pytest import CaptureFixture, MonkeyPatch
+
+    from codira.types import ChannelResults, DocumentationChannelResults
 
 
 def _load_workspace_registry_module() -> ModuleType:
@@ -179,6 +187,363 @@ class _FakeAnalyzer:
         """
         parsed = parse_file(path, root)
         return analysis_result_from_parsed(path, parsed)
+
+
+class _FakeEmbeddingEngine:
+    """Small embedding-engine stub used to validate the protocol surface."""
+
+    name = "fake-engine"
+    version = "1"
+
+    def spec(self, config: dict[str, object]) -> EmbeddingEngineSpec:
+        """
+        Return deterministic fake engine identity metadata.
+
+        Parameters
+        ----------
+        config : dict[str, object]
+            Engine-specific configuration table.
+
+        Returns
+        -------
+        codira.contracts.EmbeddingEngineSpec
+            Stable fake engine identity.
+        """
+        del config
+        return EmbeddingEngineSpec(
+            engine=self.name,
+            engine_version=self.version,
+            model="fake-model",
+            model_version="1",
+            dimension=3,
+        )
+
+    def provision(self, config: dict[str, object], *, quiet: bool = False) -> None:
+        """
+        Perform no-op local artifact provisioning.
+
+        Parameters
+        ----------
+        config : dict[str, object]
+            Engine-specific configuration table.
+        quiet : bool, optional
+            Whether operator-facing output should be suppressed.
+
+        Returns
+        -------
+        None
+            The fake engine has no external artifacts.
+        """
+        del config, quiet
+
+    def embed_texts(
+        self,
+        texts: Sequence[str],
+        config: dict[str, object],
+    ) -> list[list[float]]:
+        """
+        Return deterministic fake vectors for protocol validation.
+
+        Parameters
+        ----------
+        texts : collections.abc.Sequence[str]
+            Text payloads to embed.
+        config : dict[str, object]
+            Engine-specific configuration table.
+
+        Returns
+        -------
+        list[list[float]]
+            One fixed-size vector per input payload.
+        """
+        del config
+        return [[float(index), 0.0, 0.0] for index, _text in enumerate(texts)]
+
+    def reset_runtime_caches(self) -> None:
+        """
+        Perform no-op runtime cache reset.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The fake engine has no process-local caches.
+        """
+
+
+class _FakeVectorStore:
+    """Small vector-store stub used to validate the protocol surface."""
+
+    name = "fake-vector-store"
+    version = "1"
+
+    def spec(self, config: dict[str, object]) -> VectorStoreSpec:
+        """
+        Return deterministic fake vector-store identity metadata.
+
+        Parameters
+        ----------
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        codira.contracts.VectorStoreSpec
+            Stable fake vector-store identity.
+        """
+        del config
+        return VectorStoreSpec(
+            store=self.name,
+            store_version=self.version,
+            format_version="1",
+        )
+
+    def initialize(self, root: Path, config: dict[str, object]) -> None:
+        """
+        Perform no-op vector-store initialization.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            The fake vector store has no persisted state.
+        """
+        del root, config
+
+    def ensure_vector_set(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: dict[str, object],
+    ) -> int:
+        """
+        Return a deterministic fake vector-set identifier.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        int
+            Fixed vector-set identifier.
+        """
+        del root, identity, config
+        return 1
+
+    def load_cached_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        content_hashes: Sequence[str],
+        config: dict[str, object],
+    ) -> dict[str, bytes]:
+        """
+        Return no cached fake vectors.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        content_hashes : collections.abc.Sequence[str]
+            Candidate content hashes.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        dict[str, bytes]
+            Empty cache result.
+        """
+        del root, identity, content_hashes, config
+        return {}
+
+    def store_cached_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        vectors: Mapping[str, bytes],
+        config: dict[str, object],
+    ) -> None:
+        """
+        Perform no-op fake cache persistence.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        vectors : collections.abc.Mapping[str, bytes]
+            Serialized vectors keyed by content hash.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            The fake vector store has no persisted cache.
+        """
+        del root, identity, vectors, config
+
+    def store_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: dict[str, object],
+    ) -> None:
+        """
+        Perform no-op fake pending-row persistence.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows to persist.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            The fake vector store has no pending queue.
+        """
+        del root, identity, rows, config
+
+    def delete_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: dict[str, object],
+    ) -> None:
+        """
+        Perform no-op fake pending-row deletion.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows identifying pending entries.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            The fake vector store has no pending queue.
+        """
+        del root, identity, rows, config
+
+    def clear_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: dict[str, object],
+    ) -> None:
+        """
+        Perform no-op fake pending-row cleanup.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            The fake vector store has no pending queue.
+        """
+        del root, identity, config
+
+    def store_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: dict[str, object],
+    ) -> None:
+        """
+        Perform no-op fake materialized-vector persistence.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Complete vector-set identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows carrying serialized vectors.
+        config : dict[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            The fake vector store has no materialized vectors.
+        """
+        del root, identity, rows, config
+
+    def similarity_scores(
+        self,
+        request: VectorSimilarityRequest,
+    ) -> list[VectorSimilarityScore]:
+        """
+        Return no fake vector-store similarity scores.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorSimilarityRequest
+            Vector-store similarity request.
+
+        Returns
+        -------
+        list[codira.contracts.VectorSimilarityScore]
+            Empty score list.
+        """
+        del request
+        return []
+
+    def reset_runtime_caches(self) -> None:
+        """
+        Perform no-op vector-store cache reset.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The fake vector store has no process-local caches.
+        """
 
 
 class _FakeBackend:
@@ -462,6 +827,9 @@ class _FakeBackend:
         root: Path,
         *,
         embedding_backend: object,
+        vector_store: VectorStore | None = None,
+        vector_set_identity: VectorSetIdentity | None = None,
+        vector_store_config: Mapping[str, object] | None = None,
         conn: object | None = None,
     ) -> tuple[int, int]:
         """
@@ -473,6 +841,12 @@ class _FakeBackend:
             Repository root.
         embedding_backend : object
             Active embedding backend placeholder.
+        vector_store : codira.contracts.VectorStore | None, optional
+            Ignored separated vector store.
+        vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+            Ignored active vector-set identity.
+        vector_store_config : collections.abc.Mapping[str, object] | None, optional
+            Ignored vector-store-specific configuration.
         conn : object | None, optional
             Optional backend connection.
 
@@ -481,7 +855,8 @@ class _FakeBackend:
         tuple[int, int]
             Zero recomputed and reused pending-artifact counts.
         """
-        del root, embedding_backend, conn
+        del root, embedding_backend, vector_store, vector_set_identity
+        del vector_store_config, conn
         return (0, 0)
 
     def count_reusable_embeddings(
@@ -929,6 +1304,46 @@ class _FakeBackend:
         -------
         list[tuple[float, tuple[str, str, str, str, int, int | None, str, tuple[str, ...], str]]]
             Empty candidate rows for protocol validation.
+        """
+        del request
+        return []
+
+    def resolve_embedding_scores(
+        self,
+        request: BackendResolveEmbeddingScoresRequest,
+    ) -> ChannelResults:
+        """
+        Return no resolved symbol scores for the fake backend.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveEmbeddingScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.ChannelResults
+            Empty resolved result set.
+        """
+        del request
+        return []
+
+    def resolve_documentation_scores(
+        self,
+        request: BackendResolveDocumentationScoresRequest,
+    ) -> DocumentationChannelResults:
+        """
+        Return no resolved documentation scores for the fake backend.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveDocumentationScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.DocumentationChannelResults
+            Empty resolved result set.
         """
         del request
         return []
@@ -2102,6 +2517,8 @@ def test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_che
     assert isinstance(CAnalyzer(), LanguageAnalyzer)
     assert isinstance(CppAnalyzer(), LanguageAnalyzer)
     assert isinstance(_FakeAnalyzer(), LanguageAnalyzer)
+    assert isinstance(_FakeEmbeddingEngine(), EmbeddingEngine)
+    assert isinstance(_FakeVectorStore(), VectorStore)
     assert isinstance(_FakeBackend(), IndexBackend)
     assert isinstance(_FakeRetrievalProducer(), RetrievalProducer)
     assert isinstance(EMBEDDING_RETRIEVAL_PRODUCER, RetrievalProducer)
@@ -2111,9 +2528,9 @@ def test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_che
     )
 
 
-def test_cpp_analyzer_shim_reexports_package_analyzer() -> None:
+def test_graph_retrieval_producers_implement_contracts() -> None:
     """
-    Keep the historical C++ analyzer import wired to the package analyzer.
+    Keep graph retrieval producers aligned with the retrieval contract.
 
     Parameters
     ----------
@@ -2122,9 +2539,8 @@ def test_cpp_analyzer_shim_reexports_package_analyzer() -> None:
     Returns
     -------
     None
-        The test asserts the compatibility shim re-exports the package class.
+        The test asserts graph producer singletons satisfy the protocol.
     """
-    assert ShimCppAnalyzer is CppAnalyzer
     assert isinstance(CALL_GRAPH_RETRIEVAL_PRODUCER, RetrievalProducer)
     assert isinstance(REFERENCE_RETRIEVAL_PRODUCER, RetrievalProducer)
     assert isinstance(INCLUDE_GRAPH_RETRIEVAL_PRODUCER, RetrievalProducer)
@@ -2193,6 +2609,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
     ]
     assert optional_dependencies["bundle-official"] == [
         "sentence-transformers>=5.4,<6.0",
+        "einops>=0.8,<1.0",
         "codira-analyzer-python==1.43.0",
         "codira-analyzer-json==1.41.0",
         "codira-analyzer-c==1.43.0",
@@ -2200,8 +2617,12 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-bash==1.41.0",
         "codira-analyzer-markdown==1.44.0",
         "codira-analyzer-text==1.43.0",
-        "codira-backend-sqlite==1.45.0",
-        "codira-backend-duckdb==1.49.0",
+        "codira-backend-sqlite==1.45.1",
+        "codira-backend-duckdb==1.50.0",
+        "codira-embedding-sentence-transformers==1.0.1",
+        "codira-embedding-onnx==1.0.1",
+        "codira-vector-store-sqlite==1.0.1",
+        "codira-vector-store-duckdb==1.0.7",
     ]
     assert pyproject.get("tool", {}).get("poetry") is None
 
@@ -3711,7 +4132,7 @@ def test_discovery_file_globs_follow_analyzer_registration_order() -> None:
         The test asserts analyzer-registration order is preserved while
         duplicate globs are removed.
     """
-    analyzers = [PythonAnalyzer(), CAnalyzer(), _FakeAnalyzer()]
+    analyzers: list[LanguageAnalyzer] = [PythonAnalyzer(), CAnalyzer(), _FakeAnalyzer()]
 
     assert discovery_file_globs(analyzers) == ("*.py", "*.c", "*.h")
 

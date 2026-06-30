@@ -18,6 +18,7 @@ This module belongs to the **semantic backend layer** that powers embedding stor
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import io
 import os
 import struct
@@ -35,9 +36,11 @@ from codira.config import (
     DEFAULT_EMBEDDING_VERSION,
     load_effective_config,
 )
+from codira.registry import active_embedding_engine
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
     class _EmbeddingVector(Protocol):
         def tolist(self) -> list[float]: ...
@@ -68,6 +71,7 @@ if TYPE_CHECKING:
             *,
             device: str,
             local_files_only: bool,
+            trust_remote_code: bool,
         ) -> _EmbeddingModel: ...
 
     class _TransformersLogging(Protocol):
@@ -87,6 +91,29 @@ _DEPENDENCY_INSTALL_HINT = (
     "For editable installs from another repository, use "
     "'pip install -e ../codira[semantic]'."
 )
+_ACTIVE_EMBEDDING_ROOT: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "codira_active_embedding_root", default=None
+)
+
+
+def _effective_root(root: Path | None = None) -> Path | None:
+    """
+    Return the explicit or context-local embedding configuration root.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Explicit repository root supplied by the caller.
+
+    Returns
+    -------
+    pathlib.Path | None
+        Repository root to use for config resolution, or ``None`` for the
+        process/default config path.
+    """
+    if root is not None:
+        return root
+    return _ACTIVE_EMBEDDING_ROOT.get()
 
 
 class EmbeddingBackendError(RuntimeError):
@@ -120,20 +147,23 @@ class EmbeddingBackendSpec:
     dim: int
 
 
-def get_embedding_backend() -> EmbeddingBackendSpec:
+def get_embedding_backend(root: Path | None = None) -> EmbeddingBackendSpec:
     """
     Return the active embedding backend specification.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local embedding configuration should be
+        used.
 
     Returns
     -------
     EmbeddingBackendSpec
         Stable backend metadata used by indexing and retrieval.
     """
-    config = load_effective_config().embeddings
+    effective_root = _effective_root(root)
+    config = load_effective_config(root=effective_root).embeddings
     return EmbeddingBackendSpec(
         name=config.model,
         version=config.version,
@@ -141,13 +171,15 @@ def get_embedding_backend() -> EmbeddingBackendSpec:
     )
 
 
-def embeddings_enabled() -> bool:
+def embeddings_enabled(root: Path | None = None) -> bool:
     """
     Return whether embedding computation and retrieval are enabled.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local embedding configuration should be
+        used.
 
     Returns
     -------
@@ -155,10 +187,14 @@ def embeddings_enabled() -> bool:
         ``True`` when effective configuration enables embeddings.
     """
 
-    return load_effective_config().embeddings.enabled
+    return load_effective_config(root=_effective_root(root)).embeddings.enabled
 
 
-def _dependency_error(message: str) -> EmbeddingBackendError:
+def _dependency_error(
+    message: str,
+    *,
+    root: Path | None = None,
+) -> EmbeddingBackendError:
     """
     Build a stable runtime error for embedding backend provisioning failures.
 
@@ -166,6 +202,8 @@ def _dependency_error(message: str) -> EmbeddingBackendError:
     ----------
     message : str
         Specific failure reason to append.
+    root : pathlib.Path | None, optional
+        Repository root whose embedding backend identity should be reported.
 
     Returns
     -------
@@ -175,11 +213,15 @@ def _dependency_error(message: str) -> EmbeddingBackendError:
     return EmbeddingBackendError(
         "The semantic embedding backend requires the optional 'semantic' "
         "dependency set and a locally available model artifact for "
-        f"{get_embedding_backend().name}. {message}"
+        f"{get_embedding_backend(root=_effective_root(root)).name}. {message}"
     )
 
 
-def _wrap_load_error(exc: OSError | RuntimeError) -> EmbeddingBackendError:
+def _wrap_load_error(
+    exc: OSError | RuntimeError,
+    *,
+    root: Path | None = None,
+) -> EmbeddingBackendError:
     """
     Convert low-level model-loading failures into a stable operator error.
 
@@ -187,6 +229,8 @@ def _wrap_load_error(exc: OSError | RuntimeError) -> EmbeddingBackendError:
     ----------
     exc : OSError | RuntimeError
         Original model-loading exception.
+    root : pathlib.Path | None, optional
+        Repository root whose embedding backend identity should be reported.
 
     Returns
     -------
@@ -197,7 +241,8 @@ def _wrap_load_error(exc: OSError | RuntimeError) -> EmbeddingBackendError:
         "Automatic model provisioning failed. "
         "Check network access or prefetch the artifact with "
         "'python ../codira/scripts/provision_embedding_model.py'. "
-        f"Loader details: {exc}"
+        f"Loader details: {exc}",
+        root=root,
     )
 
 
@@ -222,48 +267,80 @@ def _configure_embedding_environment(*, offline: bool) -> None:
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
 
-def _configured_embedding_batch_size() -> int:
+def _configured_embedding_batch_size(root: Path | None = None) -> int:
     """
     Return the configured batch size for embedding generation.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local embedding configuration should be
+        used.
 
     Returns
     -------
     int
         Batch size used for sentence-transformers encode calls.
     """
-    return load_effective_config().embeddings.batch_size
+    return load_effective_config(root=_effective_root(root)).embeddings.batch_size
 
 
-def _configured_embedding_device() -> str:
+def _configured_embedding_device(root: Path | None = None) -> str:
     """
     Return the configured sentence-transformers device string.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local embedding configuration should be
+        used.
 
     Returns
     -------
     str
         Device string passed to the model loader.
     """
-    configured = load_effective_config().embeddings.device.strip()
+    configured = load_effective_config(
+        root=_effective_root(root)
+    ).embeddings.device.strip()
     if configured:
         return configured
     return DEFAULT_EMBEDDING_DEVICE
 
 
-def _configure_torch_runtime() -> None:
+def _configured_trust_remote_code(root: Path | None = None) -> bool:
+    """
+    Return whether SentenceTransformers should trust remote model code.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local plugin configuration should be used.
+
+    Returns
+    -------
+    bool
+        Configured ``trust_remote_code`` value for the sentence-transformers
+        embedding plugin.
+    """
+    config = load_effective_config(root=_effective_root(root))
+    plugin_config = (config.plugins.configs or {}).get(
+        "embedding-sentence-transformers",
+        {},
+    )
+    value = plugin_config.get("trust_remote_code", False)
+    return bool(value) if isinstance(value, bool) else False
+
+
+def _configure_torch_runtime(root: Path | None = None) -> None:
     """
     Apply optional Torch thread overrides before model inference begins.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local Torch runtime configuration should be
+        used.
 
     Returns
     -------
@@ -280,7 +357,7 @@ def _configure_torch_runtime() -> None:
     except ImportError:
         return
 
-    config = load_effective_config().embeddings
+    config = load_effective_config(root=_effective_root(root)).embeddings
     num_threads = config.torch_num_threads or None
     num_interop_threads = config.torch_num_interop_threads or None
 
@@ -294,21 +371,23 @@ def _configure_torch_runtime() -> None:
         raise EmbeddingBackendError(msg) from exc
 
 
-@lru_cache(maxsize=1)
-def _configure_torch_runtime_once() -> None:
+@lru_cache(maxsize=16)
+def _configure_torch_runtime_once(root: Path | None = None) -> None:
     """
     Apply Torch runtime configuration at most once per process.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local Torch runtime configuration should be
+        used.
 
     Returns
     -------
     None
         Torch runtime settings are configured once and then reused.
     """
-    _configure_torch_runtime()
+    _configure_torch_runtime(root=root)
 
 
 @lru_cache(maxsize=1)
@@ -368,6 +447,7 @@ def _load_sentence_transformer(
     sentence_transformer: object,
     *,
     offline: bool,
+    root: Path | None = None,
 ) -> _EmbeddingModel:
     """
     Load the configured model with optional offline-only behavior.
@@ -378,6 +458,9 @@ def _load_sentence_transformer(
         Imported ``SentenceTransformer`` constructor or compatible callable.
     offline : bool
         Whether model loading should require a local artifact.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local embedding configuration should be
+        used.
 
     Returns
     -------
@@ -391,13 +474,18 @@ def _load_sentence_transformer(
         contextlib.redirect_stderr(io.StringIO()),
     ):
         return factory(
-            get_embedding_backend().name,
-            device=_configured_embedding_device(),
+            get_embedding_backend(root=_effective_root(root)).name,
+            device=_configured_embedding_device(root=_effective_root(root)),
             local_files_only=offline,
+            trust_remote_code=_configured_trust_remote_code(root),
         )
 
 
-def provision_embedding_model(*, quiet: bool = False) -> None:
+def _sentence_transformer_provision_embedding_model(
+    *,
+    quiet: bool = False,
+    root: Path | None = None,
+) -> None:
     """
     Ensure the configured local embedding model artifact is available.
 
@@ -405,6 +493,9 @@ def provision_embedding_model(*, quiet: bool = False) -> None:
     ----------
     quiet : bool, optional
         Whether to suppress the operator-facing provisioning message.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local embedding configuration should be
+        used.
 
     Returns
     -------
@@ -419,24 +510,30 @@ def provision_embedding_model(*, quiet: bool = False) -> None:
     """
     if not quiet:
         print(
-            f"[codira] Provisioning local embedding model {get_embedding_backend().name}...",
+            f"[codira] Provisioning local embedding model {get_embedding_backend(root=_effective_root(root)).name}...",
             file=sys.stderr,
         )
 
     try:
-        _load_sentence_transformer(_sentence_transformer_factory(), offline=False)
+        _load_sentence_transformer(
+            _sentence_transformer_factory(),
+            offline=False,
+            root=root,
+        )
     except (OSError, RuntimeError) as exc:
-        raise _wrap_load_error(exc) from exc
+        raise _wrap_load_error(exc, root=root) from exc
 
 
-@lru_cache(maxsize=1)
-def _load_model() -> _EmbeddingModel:
+@lru_cache(maxsize=16)
+def _load_model(root: Path | None = None) -> _EmbeddingModel:
     """
     Load the configured local sentence-transformers model.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local embedding configuration should be
+        used.
 
     Returns
     -------
@@ -450,24 +547,32 @@ def _load_model() -> _EmbeddingModel:
     """
     sentence_transformer = _sentence_transformer_factory()
     _configure_transformers_logging_once()
-    _configure_torch_runtime_once()
+    _configure_torch_runtime_once(root=root)
 
     try:
-        model = _load_sentence_transformer(sentence_transformer, offline=True)
+        model = _load_sentence_transformer(
+            sentence_transformer,
+            offline=True,
+            root=root,
+        )
     except OSError:
-        provision_embedding_model()
+        provision_embedding_model(root=root)
         try:
-            model = _load_sentence_transformer(sentence_transformer, offline=True)
+            model = _load_sentence_transformer(
+                sentence_transformer,
+                offline=True,
+                root=root,
+            )
         except (OSError, RuntimeError) as exc:
-            raise _wrap_load_error(exc) from exc
+            raise _wrap_load_error(exc, root=root) from exc
     except RuntimeError as exc:
-        raise _wrap_load_error(exc) from exc
+        raise _wrap_load_error(exc, root=root) from exc
 
     if hasattr(model, "get_embedding_dimension"):
         dimension = model.get_embedding_dimension()
     else:
         dimension = model.get_sentence_embedding_dimension()
-    expected_dimension = get_embedding_backend().dim
+    expected_dimension = get_embedding_backend(root=root).dim
     if dimension != expected_dimension:
         msg = (
             "Loaded embedding model dimension "
@@ -479,7 +584,7 @@ def _load_model() -> _EmbeddingModel:
     return model
 
 
-def reset_embedding_runtime_caches() -> None:
+def _sentence_transformer_reset_runtime_caches() -> None:
     """
     Clear cached embedding startup state for the current process.
 
@@ -498,7 +603,67 @@ def reset_embedding_runtime_caches() -> None:
     _load_model.cache_clear()
 
 
-def embed_texts(texts: Sequence[str]) -> list[list[float]]:
+def reset_embedding_runtime_caches() -> None:
+    """
+    Clear cached embedding startup state for the active engine.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Cached embedding runtime state is discarded.
+    """
+    active_embedding_engine().reset_runtime_caches()
+
+
+def provision_embedding_model(
+    *,
+    quiet: bool = False,
+    root: Path | None = None,
+) -> None:
+    """
+    Ensure the configured local embedding model artifact is available.
+
+    Parameters
+    ----------
+    quiet : bool, optional
+        Whether to suppress operator-facing provisioning output.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local embedding configuration should be
+        used.
+
+    Returns
+    -------
+    None
+        The active engine verifies or provisions required local artifacts.
+    """
+    effective_root = _effective_root(root)
+    config = load_effective_config(root=effective_root)
+    engine_config = dict(
+        (config.plugins.configs or {}).get(
+            f"embedding-{config.embeddings.engine}",
+            {},
+        )
+    )
+    engine_config["_codira_batch_size"] = config.embeddings.batch_size
+    token = _ACTIVE_EMBEDDING_ROOT.set(effective_root)
+    try:
+        active_embedding_engine(root=effective_root).provision(
+            engine_config,
+            quiet=quiet,
+        )
+    finally:
+        _ACTIVE_EMBEDDING_ROOT.reset(token)
+
+
+def _sentence_transformer_embed_texts(
+    texts: Sequence[str],
+    *,
+    root: Path | None = None,
+) -> list[list[float]]:
     """
     Embed text payloads in deterministic batches.
 
@@ -506,6 +671,9 @@ def embed_texts(texts: Sequence[str]) -> list[list[float]]:
     ----------
     texts : collections.abc.Sequence[str]
         Text payloads to embed.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local embedding configuration should be
+        used.
 
     Returns
     -------
@@ -518,10 +686,11 @@ def embed_texts(texts: Sequence[str]) -> list[list[float]]:
         Raised when the local semantic backend cannot be loaded.
     """
     texts_list = list(texts)
-    dimension = get_embedding_backend().dim
+    effective_root = _effective_root(root)
+    dimension = get_embedding_backend(root=effective_root).dim
     if not texts_list:
         return []
-    if not embeddings_enabled():
+    if not embeddings_enabled(root=effective_root):
         return [[0.0] * dimension for _ in texts_list]
 
     vectors: list[list[float]] = [[0.0] * dimension for _ in texts_list]
@@ -535,11 +704,11 @@ def embed_texts(texts: Sequence[str]) -> list[list[float]]:
     if not positions_by_text:
         return vectors
 
-    model = _load_model()
+    model = _load_model(root=effective_root)
     unique_texts = list(positions_by_text)
     encoded = model.encode(
         unique_texts,
-        batch_size=_configured_embedding_batch_size(),
+        batch_size=_configured_embedding_batch_size(root=effective_root),
         convert_to_numpy=True,
         normalize_embeddings=True,
         show_progress_bar=False,
@@ -559,7 +728,52 @@ def embed_texts(texts: Sequence[str]) -> list[list[float]]:
     return vectors
 
 
-def embed_text(text: str) -> list[float]:
+def embed_texts(
+    texts: Sequence[str],
+    *,
+    root: Path | None = None,
+) -> list[list[float]]:
+    """
+    Embed text payloads through the active embedding engine.
+
+    Parameters
+    ----------
+    texts : collections.abc.Sequence[str]
+        Text payloads to embed.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local embedding configuration should be
+        used.
+
+    Returns
+    -------
+    list[list[float]]
+        One L2-normalized embedding vector per input payload.
+
+    Raises
+    ------
+    EmbeddingBackendError
+        Raised when the active semantic engine cannot be loaded.
+    """
+    effective_root = _effective_root(root)
+    config = load_effective_config(root=effective_root)
+    engine_config = dict(
+        (config.plugins.configs or {}).get(
+            f"embedding-{config.embeddings.engine}",
+            {},
+        )
+    )
+    engine_config["_codira_batch_size"] = config.embeddings.batch_size
+    token = _ACTIVE_EMBEDDING_ROOT.set(effective_root)
+    try:
+        return active_embedding_engine(root=effective_root).embed_texts(
+            texts,
+            engine_config,
+        )
+    finally:
+        _ACTIVE_EMBEDDING_ROOT.reset(token)
+
+
+def embed_text(text: str, *, root: Path | None = None) -> list[float]:
     """
     Embed text using the deterministic local sentence-transformers backend.
 
@@ -567,6 +781,9 @@ def embed_text(text: str) -> list[float]:
     ----------
     text : str
         Text payload to embed.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local embedding configuration should be
+        used.
 
     Returns
     -------
@@ -578,7 +795,7 @@ def embed_text(text: str) -> list[float]:
     EmbeddingBackendError
         Raised when the local semantic backend cannot be loaded.
     """
-    return embed_texts([text])[0]
+    return embed_texts([text], root=root)[0]
 
 
 def serialize_vector(vector: list[float]) -> bytes:

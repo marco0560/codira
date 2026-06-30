@@ -34,19 +34,21 @@ from codira.contracts import (
     BackendQueryValue,
     BackendPersistAnalysisRequest,
     BackendRelationQueryRequest,
+    BackendResolveDocumentationScoresRequest,
+    BackendResolveEmbeddingScoresRequest,
     BackendRuntimeInventoryRequest,
     BackendSymbolInventoryItem,
     StoredEmbeddingRow,
 )
 from codira.prefix import normalize_prefix, prefix_clause
 from codira.plugin_config import analyzer_inventory_discovery_json
-from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
     deserialize_vector,
     embed_text,
     get_embedding_backend,
 )
+from .schema import SCHEMA_VERSION
 from .duckdb_support import (
     _DuckDBPersistenceConnection,
     _clear_index_tables,
@@ -654,17 +656,15 @@ class DuckDBQueryBackend:
         if conn is None:
             conn = self.open_connection(root)
         try:
-            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "s.path")
             # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
-                SELECT s.type, s.module_name, s.name, f.path, s.lineno
-                FROM symbol_index s
-                JOIN files f
-                  ON s.file_id = f.id
+                SELECT s.type, s.module_name, s.name, s.path, s.lineno
+                FROM duckdb_symbol_lookup s
                 WHERE s.name = ?
                 {prefix_sql}
-                ORDER BY s.type, s.module_name, f.path, s.lineno
+                ORDER BY s.type, s.module_name, s.path, s.lineno
                 """,
                 (name, *prefix_params),
             ).fetchall()
@@ -1790,8 +1790,8 @@ class DuckDBQueryBackend:
         if conn is None:
             conn = self.open_connection(root)
 
-        backend = get_embedding_backend()
-        query_vector = embed_text(query)
+        backend = get_embedding_backend(root=root)
+        query_vector = embed_text(query, root=root)
         if not any(query_vector):
             return []
 
@@ -1943,8 +1943,8 @@ class DuckDBQueryBackend:
         if conn is None:
             conn = self.open_connection(root)
 
-        backend = get_embedding_backend()
-        query_vector = embed_text(query)
+        backend = get_embedding_backend(root=root)
+        query_vector = embed_text(query, root=root)
         if not any(query_vector):
             return []
 
@@ -2125,6 +2125,169 @@ class DuckDBQueryBackend:
                 )
                 results.append((score, documentation))
             return results
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def resolve_embedding_scores(
+        self,
+        request: BackendResolveEmbeddingScoresRequest,
+    ) -> ChannelResults:
+        """
+        Resolve vector-store symbol scores to structural rows.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveEmbeddingScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.ChannelResults
+            Ranked symbol candidates ordered deterministically.
+        """
+        if not request.scores:
+            return []
+        conn = cast("_BackendCompatibleConnection | None", request.conn)
+        owns_connection = conn is None
+        normalized_prefix = normalize_prefix(request.root, request.prefix)
+        if conn is None:
+            conn = self.open_connection(request.root)
+        try:
+            stable_ids = list(
+                dict.fromkeys(score.stable_id for score in request.scores)
+            )
+            placeholders = ",".join("?" for _item in stable_ids)
+            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            rows = conn.execute(
+                f"""
+                SELECT s.stable_id, s.type, s.module_name, s.name, f.path, s.lineno
+                FROM symbol_index s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.stable_id IN ({placeholders})
+                {prefix_sql}
+                ORDER BY s.stable_id
+                """,
+                (*stable_ids, *prefix_params),
+            ).fetchall()
+            rows_by_stable_id: dict[str, SymbolRow] = {
+                str(stable_id): (
+                    str(symbol_type),
+                    str(module_name),
+                    str(symbol_name),
+                    str(file_path),
+                    _backend_int(lineno),
+                )
+                for stable_id, symbol_type, module_name, symbol_name, file_path, lineno in rows
+            }
+            resolved = [
+                (score.score, rows_by_stable_id[score.stable_id])
+                for score in request.scores
+                if score.stable_id in rows_by_stable_id
+            ]
+            resolved.sort(
+                key=lambda item: (
+                    -item[0],
+                    item[1][1],
+                    item[1][2],
+                    item[1][3],
+                    item[1][4],
+                    item[1][0],
+                )
+            )
+            return resolved[: request.limit]
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def resolve_documentation_scores(
+        self,
+        request: BackendResolveDocumentationScoresRequest,
+    ) -> DocumentationChannelResults:
+        """
+        Resolve vector-store documentation scores to structural rows.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveDocumentationScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.DocumentationChannelResults
+            Ranked documentation candidates ordered deterministically.
+        """
+        if not request.scores:
+            return []
+        conn = cast("_BackendCompatibleConnection | None", request.conn)
+        owns_connection = conn is None
+        normalized_prefix = normalize_prefix(request.root, request.prefix)
+        if conn is None:
+            conn = self.open_connection(request.root)
+        try:
+            stable_ids = list(
+                dict.fromkeys(score.stable_id for score in request.scores)
+            )
+            placeholders = ",".join("?" for _item in stable_ids)
+            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            rows = conn.execute(
+                f"""
+                SELECT
+                    d.stable_id,
+                    d.kind,
+                    d.source_format,
+                    f.path,
+                    d.lineno,
+                    d.end_lineno,
+                    d.title,
+                    d.heading_path,
+                    d.text
+                FROM documentation_artifacts d
+                JOIN files f ON d.file_id = f.id
+                WHERE d.stable_id IN ({placeholders})
+                {prefix_sql}
+                ORDER BY d.stable_id
+                """,
+                (*stable_ids, *prefix_params),
+            ).fetchall()
+            rows_by_stable_id: dict[str, DocumentationRow] = {
+                str(stable_id): (
+                    str(stable_id),
+                    str(kind),
+                    str(source_format),
+                    str(file_path),
+                    _backend_int(lineno),
+                    None if end_lineno is None else _backend_int(end_lineno),
+                    str(title),
+                    tuple(str(part) for part in json.loads(str(heading_path))),
+                    str(text),
+                )
+                for (
+                    stable_id,
+                    kind,
+                    source_format,
+                    file_path,
+                    lineno,
+                    end_lineno,
+                    title,
+                    heading_path,
+                    text,
+                ) in rows
+            }
+            resolved = [
+                (score.score, rows_by_stable_id[score.stable_id])
+                for score in request.scores
+                if score.stable_id in rows_by_stable_id
+            ]
+            resolved.sort(
+                key=lambda item: (
+                    -item[0],
+                    item[1][3],
+                    item[1][4],
+                    item[1][0],
+                )
+            )
+            return resolved[: request.limit]
         finally:
             if owns_connection:
                 conn.close()
@@ -2507,7 +2670,7 @@ class DuckDBQueryBackend:
         if conn is None:
             conn = self.open_connection(root)
         active_backend = (
-            get_embedding_backend()
+            get_embedding_backend(root=root)
             if request.embedding_backend is None
             else request.embedding_backend
         )

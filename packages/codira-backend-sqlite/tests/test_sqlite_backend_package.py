@@ -11,7 +11,7 @@ import pytest
 
 from codira.contracts import BackendPersistAnalysisRequest, PendingEmbeddingRow
 from codira.models import AnalysisResult, FileMetadataSnapshot, ModuleArtifact
-from codira.schema import DDL
+from codira_backend_sqlite.schema import DDL
 from codira.semantic.embeddings import EmbeddingBackendSpec, deserialize_vector
 from codira_backend_sqlite import SQLiteIndexBackend, build_backend
 from codira_backend_sqlite.sqlite_support import _flush_pending_embedding_rows
@@ -40,7 +40,7 @@ def test_sqlite_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.45.0"
+    assert project["project"]["version"] == "1.45.1"
     assert project["project"]["dependencies"] == ["codira>=1.5.0,<2.0.0"]
     assert project["project"]["entry-points"]["codira.backends"] == {
         "sqlite": "codira_backend_sqlite:build_backend"
@@ -474,7 +474,9 @@ def test_sqlite_session_batches_embedding_generation_across_files(
     """
     calls: list[list[str]] = []
 
-    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+    def fake_embed_texts(
+        texts: list[str], *, root: Path | None = None
+    ) -> list[list[float]]:
         """
         Record one embedding batch.
 
@@ -482,12 +484,15 @@ def test_sqlite_session_batches_embedding_generation_across_files(
         ----------
         texts : list[str]
             Text payloads requested from the embedding backend.
+        root : pathlib.Path | None, optional
+            Repository root passed by backend persistence.
 
         Returns
         -------
         list[list[float]]
             Deterministic embedding vectors matching the requested payloads.
         """
+        assert root == tmp_path
         calls.append(list(texts))
         return [[0.0] * 384 for _text in texts]
 
@@ -559,7 +564,9 @@ def test_sqlite_pending_embeddings_replace_duplicate_documentation_keys(
     """
     calls: list[list[str]] = []
 
-    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+    def fake_embed_texts(
+        texts: list[str], *, root: Path | None = None
+    ) -> list[list[float]]:
         """
         Record one embedding batch.
 
@@ -567,12 +574,15 @@ def test_sqlite_pending_embeddings_replace_duplicate_documentation_keys(
         ----------
         texts : list[str]
             Text payloads requested from the embedding backend.
+        root : pathlib.Path | None, optional
+            Repository root passed by backend persistence.
 
         Returns
         -------
         list[list[float]]
             Deterministic embedding vectors matching the requested payloads.
         """
+        assert root == tmp_path
         calls.append(list(texts))
         return [[float(index + 1)] + [0.0] * 383 for index, _text in enumerate(texts)]
 
@@ -586,6 +596,7 @@ def test_sqlite_pending_embeddings_replace_duplicate_documentation_keys(
     try:
         _flush_pending_embedding_rows(
             connection,
+            tmp_path,
             pending_embedding_rows=[
                 (
                     PendingEmbeddingRow(
@@ -606,6 +617,7 @@ def test_sqlite_pending_embeddings_replace_duplicate_documentation_keys(
         )
         _flush_pending_embedding_rows(
             connection,
+            tmp_path,
             pending_embedding_rows=[
                 (
                     PendingEmbeddingRow(

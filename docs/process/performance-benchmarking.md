@@ -33,6 +33,7 @@ Saved JSON artifacts include:
 - active analyzer/backend plugin inventory
 - manifest path when applicable
 - availability of `hyperfine`, `pyinstrument`, and `snakeviz`
+- workflow utility summaries beside each campaign Hyperfine export
 
 Profile artifacts are written under:
 
@@ -49,6 +50,16 @@ repository and written under:
 
 The campaign runner passes this directory through `--output-dir` for `index`
 and `ctx` commands.
+
+Campaign runs also write `<category-label>-utility-summary.json` beside each
+Hyperfine export. The utility score is:
+
+```text
+score = full_index + 3 * partial_index + 20 * mean(ctx, cov, sym, symlist, emb, calls, audit)
+```
+
+Lower scores are better. `help`, `plugins`, and `caps` are excluded because
+they mostly measure process, configuration, and plugin-discovery overhead.
 
 ## Manifest Format
 

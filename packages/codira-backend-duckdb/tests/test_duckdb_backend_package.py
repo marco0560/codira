@@ -29,11 +29,12 @@ from codira.models import (
     ModuleArtifact,
 )
 from codira.indexer import index_repo
-from codira.schema import DDL, SCHEMA_VERSION
+from codira_backend_duckdb.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendSpec
 from codira.storage import override_storage_root
 import codira_backend_duckdb as duckdb_backend_module
 from codira_backend_duckdb import (
+    DuckDBConnection,
     DuckDBIndexBackend,
     _duckdb_db_path,
     _duckdb_schema_ddl,
@@ -46,10 +47,16 @@ from codira_backend_duckdb.duckdb_support import _flush_pending_reference_scan_r
 from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
 from codira_backend_duckdb.duckdb_support import _store_cached_embedding_vectors
 from codira_backend_duckdb.duckdb_support import _store_pending_embedding_rows
+from codira_backend_duckdb.profiling import (
+    DuckDBProfileRecorder,
+    classify_sql_statement,
+    duckdb_profile_path,
+)
 from codira_backend_duckdb import duckdb_support as duckdb_support_module
 
 if TYPE_CHECKING:
     from codira_backend_duckdb.duckdb_support import _DuckDBPersistenceConnection
+    from codira_backend_duckdb import _DuckDBRawConnection
 
 
 _UNRESOLVED_CALL_RECORDS = (
@@ -513,7 +520,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.49.0"
+    assert project["project"]["version"] == "1.50.0"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -555,7 +562,7 @@ def test_duckdb_backend_exposes_configuration_schema() -> None:
     Returns
     -------
     None
-        The test asserts DuckDB currently accepts only common plugin options.
+        The test asserts DuckDB exposes its opt-in profiling switch.
     """
 
     schema = DuckDBIndexBackend().configuration_json_schema()
@@ -563,7 +570,229 @@ def test_duckdb_backend_exposes_configuration_schema() -> None:
     assert isinstance(properties, dict)
 
     assert schema["additionalProperties"] is False
-    assert sorted(properties) == ["enabled"]
+    assert sorted(properties) == ["enabled", "profiling_enabled"]
+    assert properties["profiling_enabled"] == {
+        "type": "boolean",
+        "default": False,
+        "description": (
+            "Emit `.codira/duckdb-profile.json` with aggregate DuckDB "
+            "write-path timings during index runs."
+        ),
+    }
+
+
+def test_duckdb_backend_configures_profiling_flag() -> None:
+    """
+    Apply the opt-in DuckDB profiling plugin configuration.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts profiling is disabled by default and enabled only by
+        explicit plugin configuration.
+    """
+    backend = DuckDBIndexBackend()
+
+    assert backend.profiling_enabled is False
+
+    backend.configure({"profiling_enabled": True})
+
+    assert backend.profiling_enabled is True
+
+
+def test_duckdb_write_session_emits_profile_only_when_enabled(tmp_path: Path) -> None:
+    """
+    Emit DuckDB write-session profiling only when explicitly configured.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts default DuckDB sessions stay silent and enabled
+        sessions write a profile with expected lifecycle spans.
+    """
+    pytest.importorskip("duckdb")
+
+    disabled_root = tmp_path / "disabled"
+    disabled_backend = DuckDBIndexBackend()
+    disabled_session = disabled_backend.begin_index_session(disabled_root)
+    try:
+        disabled_session.prepare(full=True, indexed_paths=(), deleted_paths=())
+        disabled_session.commit()
+    finally:
+        disabled_session.close()
+
+    assert not (disabled_root / ".codira" / "duckdb-profile.json").exists()
+
+    enabled_root = tmp_path / "enabled"
+    enabled_backend = DuckDBIndexBackend()
+    enabled_backend.configure({"profiling_enabled": True})
+    enabled_session = enabled_backend.begin_index_session(enabled_root)
+    try:
+        enabled_session.prepare(full=True, indexed_paths=(), deleted_paths=())
+        enabled_session.commit()
+    finally:
+        enabled_session.close()
+
+    profile_path = enabled_root / ".codira" / "duckdb-profile.json"
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    span_names = {str(span["name"]) for span in payload["spans"]}
+
+    assert payload["schema_version"] == "1"
+    assert payload["backend"] == {
+        "name": "duckdb",
+        "version": str(SCHEMA_VERSION),
+    }
+    assert {
+        "prepare.drop_schema_indexes",
+        "prepare.recreate_index_tables",
+        "session.commit_transaction",
+    } <= span_names
+
+
+def test_duckdb_profile_recorder_writes_stable_json(tmp_path: Path) -> None:
+    """
+    Write the opt-in DuckDB profile JSON payload.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository state directory.
+
+    Returns
+    -------
+    None
+        The test asserts disabled recorders are silent and enabled recorders
+        emit the stable aggregate schema.
+    """
+    disabled = DuckDBProfileRecorder(enabled=False)
+    disabled.record("ignored", seconds=1.0, rows=1)
+    disabled.write(
+        duckdb_profile_path(tmp_path),
+        backend_name="duckdb",
+        backend_version="1",
+    )
+
+    assert not duckdb_profile_path(tmp_path).exists()
+
+    enabled = DuckDBProfileRecorder(enabled=True)
+    enabled.record("sql.select", seconds=0.25, rows=2)
+    enabled.record("sql.select", seconds=0.75, rows=3)
+    enabled.write(
+        duckdb_profile_path(tmp_path),
+        backend_name="duckdb",
+        backend_version="1",
+    )
+
+    payload = json.loads(duckdb_profile_path(tmp_path).read_text(encoding="utf-8"))
+    assert payload == {
+        "backend": {"name": "duckdb", "version": "1"},
+        "schema_version": "1",
+        "spans": [
+            {
+                "calls": 2,
+                "name": "sql.select",
+                "payload_bytes_total": 0,
+                "rows_total": 5,
+                "seconds_avg": 0.5,
+                "seconds_max": 0.75,
+                "seconds_total": 1.0,
+            }
+        ],
+    }
+
+
+def test_duckdb_connection_records_profiled_sql() -> None:
+    """
+    Profile SQL execution through the DuckDB connection wrapper.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the wrapper records aggregate SQL labels without
+        changing cursor behavior.
+    """
+    raw = _FakeDuckDBConnection()
+    conn = DuckDBConnection(cast("_DuckDBRawConnection", raw))
+    profiler = DuckDBProfileRecorder(enabled=True)
+    conn.set_profile_recorder(profiler)
+
+    cursor = conn.execute("SELECT 1")
+    conn.executemany("INSERT INTO files VALUES (?)", [(1,), (2,)])
+
+    assert cursor.fetchall() == []
+    assert raw.executed[0][0] == "SELECT 1"
+    assert profiler.spans["sql.select"].calls == 1
+    assert profiler.spans["sql.executemany"].rows_total == 2
+
+
+def test_duckdb_sql_classifier_names_hotspot_tables() -> None:
+    """
+    Keep DuckDB SQL profile labels compact and stable.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts representative write-path SQL maps to useful labels.
+    """
+    assert classify_sql_statement("SELECT * FROM files") == "sql.select"
+    assert (
+        classify_sql_statement("INSERT INTO call_records(file_id) SELECT 1")
+        == "sql.insert.call_records"
+    )
+    assert (
+        classify_sql_statement("INSERT OR REPLACE INTO embedding_vector_cache")
+        == "sql.insert_or_replace.embedding_vector_cache"
+    )
+    assert classify_sql_statement("SELECT * FROM read_csv(?)") == "sql.read_csv"
+
+
+def test_duckdb_backend_disables_python_replacements(tmp_path: Path) -> None:
+    """
+    Disable DuckDB Python replacement scans on backend-owned connections.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts bootstrap and normal backend connections avoid Python
+        frame scans for replacement values.
+    """
+    backend = DuckDBIndexBackend()
+    backend.initialize(tmp_path)
+    conn = backend.open_connection(tmp_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT value
+            FROM duckdb_settings()
+            WHERE name = 'python_enable_replacements'
+            """
+        ).fetchone()
+    finally:
+        backend.close_connection(conn)
+
+    assert row == ("false",)
 
 
 def test_duckdb_schema_ddl_declares_sequences_and_defaults() -> None:
@@ -725,6 +954,50 @@ def test_duckdb_backend_open_connection_initializes_missing_database(
     assert connection is not None
 
 
+def test_duckdb_backend_reuses_native_connection_until_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Keep full-index DuckDB runs from paying native close/reopen churn.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace the initializer and optional DuckDB import.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts logical close calls keep the cached native connection
+        available until explicit backend cleanup.
+    """
+    fake_module = _FakeDuckDBModule()
+
+    def fake_initialize(self: DuckDBIndexBackend, root: Path) -> None:
+        del self
+        _duckdb_db_path(root).parent.mkdir(parents=True, exist_ok=True)
+        _duckdb_db_path(root).touch()
+
+    monkeypatch.setattr("codira_backend_duckdb._duckdb_module", lambda: fake_module)
+    monkeypatch.setattr(DuckDBIndexBackend, "initialize", fake_initialize)
+
+    backend = DuckDBIndexBackend()
+    first = backend.open_connection(tmp_path)
+    backend.close_connection(first)
+    second = backend.open_connection(tmp_path)
+
+    assert first is second
+    assert len(fake_module.connections) == 1
+    assert fake_module.connections[0].closed is False
+
+    backend._close_cached_connections()
+
+    assert fake_module.connections[0].closed is True
+
+
 def test_duckdb_backend_persist_runtime_inventory_round_trips_inventory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -812,7 +1085,7 @@ def test_duckdb_backend_persist_analysis_translates_driver_errors(
     )
     monkeypatch.setattr(
         "codira_backend_duckdb.get_embedding_backend",
-        lambda: object(),
+        lambda root=None: object(),
     )
 
     def _raise_driver_error(*args: object, **kwargs: object) -> tuple[int, int]:
@@ -939,10 +1212,10 @@ def test_duckdb_backend_index_session_repairs_legacy_nullable_edge_schema(
     finally:
         unrepaired.close()
 
-    assert unrepaired_call_edges_info["callee_module"] is True
-    assert unrepaired_call_edges_info["callee_name"] is True
-    assert unrepaired_callable_refs_info["target_module"] is True
-    assert unrepaired_callable_refs_info["target_name"] is True
+    assert unrepaired_call_edges_info["callee_module"] is False
+    assert unrepaired_call_edges_info["callee_name"] is False
+    assert unrepaired_callable_refs_info["target_module"] is False
+    assert unrepaired_callable_refs_info["target_name"] is False
 
     session = backend.begin_index_session(tmp_path)
     session.close()
@@ -1107,11 +1380,11 @@ def test_duckdb_write_session_flushes_relationship_rows_before_rebuild(
         connection.close()
 
 
-def test_duckdb_backend_initialize_repairs_legacy_edge_identity_schema(
+def test_duckdb_backend_initialize_rebuilds_legacy_edge_identity_schema(
     tmp_path: Path,
 ) -> None:
     """
-    Repair legacy DuckDB edge tables that predate unresolved-target identity.
+    Rebuild legacy DuckDB edge tables that predate current schema metadata.
 
     Parameters
     ----------
@@ -1121,8 +1394,8 @@ def test_duckdb_backend_initialize_repairs_legacy_edge_identity_schema(
     Returns
     -------
     None
-        The test asserts backend initialization adds the discriminator
-        column while preserving existing rows.
+        The test asserts backend initialization discards a stale physical
+        schema and creates current columns.
     """
     duckdb = pytest.importorskip("duckdb")
     db_path = _duckdb_db_path(tmp_path)
@@ -1232,8 +1505,8 @@ def test_duckdb_backend_initialize_repairs_legacy_edge_identity_schema(
 
     assert "unresolved_identity" in call_edges_columns
     assert "unresolved_identity" in callable_refs_columns
-    assert call_edge_row == ("",)
-    assert callable_ref_row == ("",)
+    assert call_edge_row is None
+    assert callable_ref_row is None
 
 
 def test_duckdb_backend_full_prepare_clears_populated_database_in_session(
@@ -1479,6 +1752,145 @@ def test_duckdb_warm_full_reindex_reuses_output_dir_without_duplicate_symbols(
     assert second_report.indexed == 1
 
 
+def test_duckdb_full_index_uses_bulk_profile_path(tmp_path: Path) -> None:
+    """
+    Route configured DuckDB full indexing through the bulk persistence path.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The emitted profile contains full-index bulk spans and omits the legacy
+        per-file persistence span.
+    """
+    pytest.importorskip("duckdb")
+    source_root = tmp_path / "repo"
+    output_root = tmp_path / "out"
+    source_root.mkdir()
+    config_path = source_root / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "\n".join(
+            (
+                "[backend]",
+                'name = "duckdb"',
+                "",
+                "[embeddings]",
+                "enabled = false",
+                "",
+                "[plugins.backend-duckdb]",
+                "profiling_enabled = true",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    (source_root / "sample.py").write_text(
+        "def demo() -> int:\n    return 1\n",
+        encoding="utf-8",
+    )
+
+    with override_storage_root(source_root, output_root):
+        report = index_repo(source_root, full=True)
+
+    profile_path = output_root / ".codira" / "duckdb-profile.json"
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    span_names = {str(span["name"]) for span in payload["spans"]}
+
+    assert report.failed == 0
+    assert report.indexed == 1
+    assert "bulk_full_index.plan_rows" in span_names
+    assert "bulk_full_index.load_structural_tables" in span_names
+    assert "persist.store_analysis" not in span_names
+
+
+def test_duckdb_full_index_reuses_cached_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Reuse cached vectors during DuckDB full-index embedding flushes.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace embedding generation with a counting fake.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The second full index must reuse the embedding vector cache instead of
+        invoking the embedder again.
+    """
+    pytest.importorskip("duckdb")
+    source_root = tmp_path / "repo"
+    output_root = tmp_path / "out"
+    source_root.mkdir()
+    config_path = source_root / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "\n".join(
+            (
+                "[backend]",
+                'name = "duckdb"',
+                "",
+                "[embeddings]",
+                "enabled = true",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    (source_root / "sample.py").write_text(
+        "def demo() -> int:\n    return 1\n",
+        encoding="utf-8",
+    )
+    embed_calls: list[list[str]] = []
+
+    def fake_embed_texts(
+        texts: list[str],
+        root: Path | None = None,
+    ) -> list[list[float]]:
+        """
+        Count embedding calls and return deterministic vectors.
+
+        Parameters
+        ----------
+        texts : list[str]
+            Text payloads requested by the embedding flush.
+        root : pathlib.Path | None, optional
+            Repository root supplied by the caller.
+
+        Returns
+        -------
+        list[list[float]]
+            One deterministic 384-dimensional vector per text.
+        """
+        del root
+        embed_calls.append(list(texts))
+        return [[1.0] * 384 for _text in texts]
+
+    monkeypatch.setattr(duckdb_support_module, "embed_texts", fake_embed_texts)
+
+    with override_storage_root(source_root, output_root):
+        first_report = index_repo(source_root, full=True)
+        first_call_count = len(embed_calls)
+        second_report = index_repo(source_root, full=True)
+
+    assert first_report.failed == 0
+    assert second_report.failed == 0
+    assert first_call_count > 0
+    assert len(embed_calls) == first_call_count
+    assert second_report.embeddings_reused > 0
+    assert second_report.embeddings_recomputed == 0
+
+
 def test_duckdb_deferred_session_flushes_pending_rows_after_structural_commit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1510,6 +1922,7 @@ def test_duckdb_deferred_session_flushes_pending_rows_after_structural_commit(
         *,
         prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
         backend: EmbeddingBackendSpec,
+        profiler: DuckDBProfileRecorder | None = None,
     ) -> None:
         raw = duckdb.connect(str(_duckdb_db_path(tmp_path)))
         try:
@@ -1522,6 +1935,7 @@ def test_duckdb_deferred_session_flushes_pending_rows_after_structural_commit(
             conn,
             prepared_rows=prepared_rows,
             backend=backend,
+            profiler=profiler,
         )
 
     monkeypatch.setattr(
@@ -1899,7 +2313,7 @@ def test_duckdb_backend_persist_analysis_with_shared_connection_uses_real_driver
     connection = backend.open_connection(tmp_path)
     monkeypatch.setattr(
         "codira_backend_duckdb.duckdb_support.embed_texts",
-        lambda texts: [[0.0] * 384 for _text in texts],
+        lambda texts, root=None: [[0.0] * 384 for _text in texts],
     )
 
     recomputed, reused = backend.persist_analysis(
@@ -1969,7 +2383,9 @@ def test_duckdb_session_batches_embedding_generation_across_files(
     pytest.importorskip("duckdb")
     calls: list[list[str]] = []
 
-    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+    def fake_embed_texts(
+        texts: list[str], *, root: Path | None = None
+    ) -> list[list[float]]:
         """
         Record one embedding batch.
 
@@ -1977,12 +2393,15 @@ def test_duckdb_session_batches_embedding_generation_across_files(
         ----------
         texts : list[str]
             Text payloads requested from the embedding backend.
+        root : pathlib.Path | None, optional
+            Repository root passed by backend persistence.
 
         Returns
         -------
         list[list[float]]
             Deterministic embedding vectors matching the requested payloads.
         """
+        assert root == tmp_path
         calls.append(list(texts))
         return [[0.0] * 384 for _text in texts]
 
@@ -2055,7 +2474,9 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
     pytest.importorskip("duckdb")
     calls: list[list[str]] = []
 
-    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+    def fake_embed_texts(
+        texts: list[str], *, root: Path | None = None
+    ) -> list[list[float]]:
         """
         Record one embedding batch.
 
@@ -2063,12 +2484,15 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
         ----------
         texts : list[str]
             Text payloads requested from the embedding backend.
+        root : pathlib.Path | None, optional
+            Repository root passed by backend persistence.
 
         Returns
         -------
         list[list[float]]
             Deterministic embedding vectors matching the requested payloads.
         """
+        assert root == tmp_path
         calls.append(list(texts))
         return [[float(index + 1)] + [0.0] * 383 for index, _text in enumerate(texts)]
 
@@ -2082,6 +2506,7 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
     try:
         _flush_pending_embedding_rows(
             cast("_DuckDBPersistenceConnection", connection),
+            tmp_path,
             pending_embedding_rows=[
                 (
                     PendingEmbeddingRow(
@@ -2102,6 +2527,7 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
         )
         _flush_pending_embedding_rows(
             cast("_DuckDBPersistenceConnection", connection),
+            tmp_path,
             pending_embedding_rows=[
                 (
                     PendingEmbeddingRow(
@@ -2334,11 +2760,11 @@ def test_duckdb_embedding_candidates_use_stored_vector_values(
     backend = DuckDBIndexBackend()
     monkeypatch.setattr(
         "codira_backend_duckdb.duckdb_support.embed_texts",
-        lambda texts: [[1.0] + [0.0] * 383 for _text in texts],
+        lambda texts, root=None: [[1.0] + [0.0] * 383 for _text in texts],
     )
     monkeypatch.setattr(
         "codira_backend_duckdb.duckdb_query_backend.embed_text",
-        lambda text: [1.0] + [0.0] * 383,
+        lambda text, root=None: [1.0] + [0.0] * 383,
     )
 
     backend.persist_analysis(
@@ -2442,11 +2868,11 @@ def test_duckdb_documentation_candidates_use_stored_vector_values(
     backend = DuckDBIndexBackend()
     monkeypatch.setattr(
         "codira_backend_duckdb.duckdb_support.embed_texts",
-        lambda texts: [[1.0] + [0.0] * 383 for _text in texts],
+        lambda texts, root=None: [[1.0] + [0.0] * 383 for _text in texts],
     )
     monkeypatch.setattr(
         "codira_backend_duckdb.duckdb_query_backend.embed_text",
-        lambda text: [1.0] + [0.0] * 383,
+        lambda text, root=None: [1.0] + [0.0] * 383,
     )
     document = tmp_path / "docs" / "architecture.md"
     artifact = DocumentationArtifact(

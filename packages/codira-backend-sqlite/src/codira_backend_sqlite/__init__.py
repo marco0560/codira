@@ -30,20 +30,23 @@ from codira.contracts import (
     BackendGraphMetric,
     BackendPersistAnalysisRequest,
     BackendRelationQueryRequest,
+    BackendResolveDocumentationScoresRequest,
+    BackendResolveEmbeddingScoresRequest,
     BackendRuntimeInventoryRequest,
     BackendSymbolInventoryItem,
     PendingEmbeddingRow,
+    PreparedVectorRow,
     StoredEmbeddingRow,
 )
 from codira.prefix import normalize_prefix, prefix_clause
 from codira.plugin_config import analyzer_inventory_discovery_json, plugin_json_schema
-from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
     deserialize_vector,
     embed_text,
     get_embedding_backend,
 )
+from codira_backend_sqlite.schema import SCHEMA_VERSION
 from codira_backend_sqlite.sqlite_support import (
     _clear_index_tables,
     _count_indexed_files,
@@ -60,6 +63,7 @@ from codira_backend_sqlite.sqlite_support import (
     _purge_skipped_docstring_issues,
     _rebuild_graph_indexes,
     _store_analysis,
+    _store_pending_embedding_rows,
 )
 from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
 
@@ -68,7 +72,12 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-    from codira.contracts import IndexBackend, IndexWriteSession
+    from codira.contracts import (
+        IndexBackend,
+        IndexWriteSession,
+        VectorSetIdentity,
+        VectorStore,
+    )
     from codira.types import (
         ChannelResults,
         DocumentationChannelResults,
@@ -109,7 +118,11 @@ class _SQLiteIndexWriteSession:
         self._pending_embedding_rows: list[
             tuple[PendingEmbeddingRow, str, bytes | None]
         ] = []
+        self._pending_embedding_rows_deferred = False
         self._embedding_backend: EmbeddingBackendSpec | None = None
+        self._vector_store: VectorStore | None = None
+        self._vector_set_identity: VectorSetIdentity | None = None
+        self._vector_store_config: Mapping[str, object] = {}
 
     def purge_skipped_docstring_issues(self) -> None:
         """
@@ -304,15 +317,22 @@ class _SQLiteIndexWriteSession:
             If validated persistence inputs are semantically inconsistent.
         """
         active_backend = (
-            get_embedding_backend()
+            get_embedding_backend(root=request.root)
             if request.embedding_backend is None
             else request.embedding_backend
         )
         if self._embedding_backend is None:
             self._embedding_backend = active_backend
-        elif self._embedding_backend != active_backend:
+        elif (
+            self._embedding_backend != active_backend
+            or self._pending_embedding_rows_deferred != request.defer_embeddings
+        ):
             self._flush_pending_embeddings()
             self._embedding_backend = active_backend
+        self._pending_embedding_rows_deferred = request.defer_embeddings
+        self._vector_store = request.vector_store
+        self._vector_set_identity = request.vector_set_identity
+        self._vector_store_config = request.vector_store_config
 
         try:
             return _store_analysis(
@@ -329,6 +349,9 @@ class _SQLiteIndexWriteSession:
                     request.previous_embeddings,
                 ),
                 pending_embedding_rows=self._pending_embedding_rows,
+                vector_store=request.vector_store,
+                vector_set_identity=request.vector_set_identity,
+                vector_store_config=request.vector_store_config,
             )
         except sqlite3.Error as exc:
             _delete_indexed_file_data(self._conn, str(request.file_metadata.path))
@@ -355,14 +378,59 @@ class _SQLiteIndexWriteSession:
             return
         backend = self._embedding_backend
         if backend is None:
-            backend = get_embedding_backend()
+            backend = get_embedding_backend(root=self._root)
             self._embedding_backend = backend
-        _flush_pending_embedding_rows(
-            self._conn,
-            pending_embedding_rows=self._pending_embedding_rows,
-            backend=backend,
-        )
+        if self._pending_embedding_rows_deferred:
+            self._store_deferred_vector_rows()
+            _store_pending_embedding_rows(
+                self._conn,
+                prepared_rows=self._pending_embedding_rows,
+                backend=backend,
+            )
+        else:
+            _flush_pending_embedding_rows(
+                self._conn,
+                self._root,
+                pending_embedding_rows=self._pending_embedding_rows,
+                backend=backend,
+                vector_store=self._vector_store,
+                vector_set_identity=self._vector_set_identity,
+                vector_store_config=self._vector_store_config,
+            )
         self._pending_embedding_rows = []
+
+    def _store_deferred_vector_rows(self) -> None:
+        """
+        Mirror buffered deferred embedding rows into the separated vector store.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Pending vector rows are persisted when vector-store context exists.
+        """
+        if (
+            self._vector_store is None
+            or self._vector_set_identity is None
+            or not self._pending_embedding_rows
+        ):
+            return
+        self._vector_store.store_pending_vectors(
+            self._root,
+            self._vector_set_identity,
+            [
+                PreparedVectorRow(
+                    row=row,
+                    content_hash=content_hash,
+                    vector=stored_vector,
+                )
+                for row, content_hash, stored_vector in self._pending_embedding_rows
+            ],
+            self._vector_store_config,
+        )
 
     def rebuild_derived_indexes(self) -> None:
         """
@@ -1840,8 +1908,8 @@ class SQLiteIndexBackend:
         if conn is None:
             conn = self.open_connection(root)
 
-        backend = get_embedding_backend()
-        query_vector = embed_text(query)
+        backend = get_embedding_backend(root=root)
+        query_vector = embed_text(query, root=root)
         if not any(query_vector):
             return []
 
@@ -1938,8 +2006,8 @@ class SQLiteIndexBackend:
         if conn is None:
             conn = self.open_connection(root)
 
-        backend = get_embedding_backend()
-        query_vector = embed_text(query)
+        backend = get_embedding_backend(root=root)
+        query_vector = embed_text(query, root=root)
         if not any(query_vector):
             return []
 
@@ -2007,6 +2075,169 @@ class SQLiteIndexBackend:
                 )
             )
             return results[:limit]
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def resolve_embedding_scores(
+        self,
+        request: BackendResolveEmbeddingScoresRequest,
+    ) -> ChannelResults:
+        """
+        Resolve vector-store symbol scores to structural rows.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveEmbeddingScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.ChannelResults
+            Ranked symbol candidates ordered deterministically.
+        """
+        if not request.scores:
+            return []
+        conn = cast("sqlite3.Connection | None", request.conn)
+        owns_connection = conn is None
+        normalized_prefix = normalize_prefix(request.root, request.prefix)
+        if conn is None:
+            conn = self.open_connection(request.root)
+        try:
+            stable_ids = list(
+                dict.fromkeys(score.stable_id for score in request.scores)
+            )
+            placeholders = ",".join("?" for _item in stable_ids)
+            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            rows = conn.execute(
+                f"""
+                SELECT s.stable_id, s.type, s.module_name, s.name, f.path, s.lineno
+                FROM symbol_index s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.stable_id IN ({placeholders})
+                {prefix_sql}
+                ORDER BY s.stable_id
+                """,
+                (*stable_ids, *prefix_params),
+            ).fetchall()
+            rows_by_stable_id: dict[str, SymbolRow] = {
+                str(stable_id): (
+                    str(symbol_type),
+                    str(module_name),
+                    str(symbol_name),
+                    str(file_path),
+                    int(lineno),
+                )
+                for stable_id, symbol_type, module_name, symbol_name, file_path, lineno in rows
+            }
+            resolved = [
+                (score.score, rows_by_stable_id[score.stable_id])
+                for score in request.scores
+                if score.stable_id in rows_by_stable_id
+            ]
+            resolved.sort(
+                key=lambda item: (
+                    -item[0],
+                    item[1][1],
+                    item[1][2],
+                    item[1][3],
+                    item[1][4],
+                    item[1][0],
+                )
+            )
+            return resolved[: request.limit]
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def resolve_documentation_scores(
+        self,
+        request: BackendResolveDocumentationScoresRequest,
+    ) -> DocumentationChannelResults:
+        """
+        Resolve vector-store documentation scores to structural rows.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveDocumentationScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.DocumentationChannelResults
+            Ranked documentation candidates ordered deterministically.
+        """
+        if not request.scores:
+            return []
+        conn = cast("sqlite3.Connection | None", request.conn)
+        owns_connection = conn is None
+        normalized_prefix = normalize_prefix(request.root, request.prefix)
+        if conn is None:
+            conn = self.open_connection(request.root)
+        try:
+            stable_ids = list(
+                dict.fromkeys(score.stable_id for score in request.scores)
+            )
+            placeholders = ",".join("?" for _item in stable_ids)
+            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            rows = conn.execute(
+                f"""
+                SELECT
+                    d.stable_id,
+                    d.kind,
+                    d.source_format,
+                    f.path,
+                    d.lineno,
+                    d.end_lineno,
+                    d.title,
+                    d.heading_path,
+                    d.text
+                FROM documentation_artifacts d
+                JOIN files f ON d.file_id = f.id
+                WHERE d.stable_id IN ({placeholders})
+                {prefix_sql}
+                ORDER BY d.stable_id
+                """,
+                (*stable_ids, *prefix_params),
+            ).fetchall()
+            rows_by_stable_id: dict[str, DocumentationRow] = {
+                str(stable_id): (
+                    str(stable_id),
+                    str(kind),
+                    str(source_format),
+                    str(file_path),
+                    int(lineno),
+                    None if end_lineno is None else int(end_lineno),
+                    str(title),
+                    tuple(str(part) for part in json.loads(str(heading_path))),
+                    str(text),
+                )
+                for (
+                    stable_id,
+                    kind,
+                    source_format,
+                    file_path,
+                    lineno,
+                    end_lineno,
+                    title,
+                    heading_path,
+                    text,
+                ) in rows
+            }
+            resolved = [
+                (score.score, rows_by_stable_id[score.stable_id])
+                for score in request.scores
+                if score.stable_id in rows_by_stable_id
+            ]
+            resolved.sort(
+                key=lambda item: (
+                    -item[0],
+                    item[1][3],
+                    item[1][4],
+                    item[1][0],
+                )
+            )
+            return resolved[: request.limit]
         finally:
             if owns_connection:
                 conn.close()
@@ -2149,6 +2380,12 @@ class SQLiteIndexBackend:
             Repository root whose index should be queried.
         embedding_backend : EmbeddingBackendSpec
             Active embedding backend metadata.
+        vector_store : codira.contracts.VectorStore | None, optional
+            Active separated vector-store plugin used for materialized vectors.
+        vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+            Active vector-set identity for separated vector-store writes.
+        vector_store_config : collections.abc.Mapping[str, object] | None, optional
+            Vector-store-specific configuration table.
         conn : sqlite3.Connection | None, optional
             Existing SQLite connection to reuse.
 
@@ -2285,6 +2522,12 @@ class SQLiteIndexBackend:
             Absolute file paths selected for replacement.
         embedding_backend : EmbeddingBackendSpec
             Active embedding backend metadata.
+        vector_store : codira.contracts.VectorStore | None, optional
+            Active separated vector-store plugin used for materialized vectors.
+        vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+            Active vector-set identity for separated vector-store writes.
+        vector_store_config : collections.abc.Mapping[str, object] | None, optional
+            Vector-store-specific configuration table.
         conn : sqlite3.Connection | None, optional
             Existing SQLite connection to reuse.
 
@@ -2344,6 +2587,9 @@ class SQLiteIndexBackend:
         root: Path,
         *,
         embedding_backend: EmbeddingBackendSpec,
+        vector_store: VectorStore | None = None,
+        vector_set_identity: VectorSetIdentity | None = None,
+        vector_store_config: Mapping[str, object] | None = None,
         conn: sqlite3.Connection | None = None,
     ) -> tuple[int, int]:
         """
@@ -2355,6 +2601,12 @@ class SQLiteIndexBackend:
             Repository root whose pending embedding rows should be processed.
         embedding_backend : EmbeddingBackendSpec
             Active embedding backend metadata.
+        vector_store : codira.contracts.VectorStore | None, optional
+            Active separated vector-store plugin used for materialized vectors.
+        vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+            Active vector-set identity for separated vector-store writes.
+        vector_store_config : collections.abc.Mapping[str, object] | None, optional
+            Vector-store-specific configuration table.
         conn : sqlite3.Connection | None, optional
             Existing SQLite connection to reuse.
 
@@ -2367,7 +2619,16 @@ class SQLiteIndexBackend:
         if conn is None:
             conn = self.open_connection(root)
         try:
-            result = _process_pending_embedding_rows(conn, backend=embedding_backend)
+            result = _process_pending_embedding_rows(
+                conn,
+                root,
+                backend=embedding_backend,
+                vector_store=vector_store,
+                vector_set_identity=vector_set_identity,
+                vector_store_config={}
+                if vector_store_config is None
+                else vector_store_config,
+            )
             if owns_connection:
                 conn.commit()
             return result
@@ -2412,7 +2673,7 @@ class SQLiteIndexBackend:
         if conn is None:
             conn = self.open_connection(root)
         active_backend = (
-            get_embedding_backend()
+            get_embedding_backend(root=root)
             if request.embedding_backend is None
             else request.embedding_backend
         )
@@ -2431,6 +2692,9 @@ class SQLiteIndexBackend:
                         "dict[str, StoredEmbeddingRow] | None",
                         request.previous_embeddings,
                     ),
+                    vector_store=request.vector_store,
+                    vector_set_identity=request.vector_set_identity,
+                    vector_store_config=request.vector_store_config,
                 )
             else:
                 conn.execute("SAVEPOINT persist_analysis")
@@ -2448,6 +2712,9 @@ class SQLiteIndexBackend:
                             "dict[str, StoredEmbeddingRow] | None",
                             request.previous_embeddings,
                         ),
+                        vector_store=request.vector_store,
+                        vector_set_identity=request.vector_set_identity,
+                        vector_store_config=request.vector_store_config,
                     )
                 except (OSError, sqlite3.Error, RuntimeError, ValueError):
                     conn.execute("ROLLBACK TO SAVEPOINT persist_analysis")

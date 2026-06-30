@@ -40,8 +40,8 @@ ARGS ?=
 
 help: .help ## Alias for .help
 
-audit: ## Run scripts/audit.sh; pass ARGS='--deep' for deep mode
-	@bash scripts/audit.sh $(ARGS)
+audit: ## Run scripts/audit.py; pass ARGS='--deep' for deep mode
+	@$(UV) run python -m scripts.audit $(ARGS)
 	@$(UV) run codira audit
 
 benchmark-campaign: ## Run benchmark campaign; set MANIFEST and optional ARGS
@@ -69,7 +69,7 @@ build-release-artifacts: ## Build/check release artifacts
 	@$(UV) run python scripts/build_release_artifacts.py $(ARGS)
 
 changelog-guard: ## Validate CHANGELOG.md against reachable release tag
-	@bash scripts/changelog_guard.sh
+	@$(UV) run python -m scripts.changelog_guard
 
 check-commit-messages: ## Validate commit headers; set BASE and HEAD or pass ARGS
 	@$(UV) run python scripts/check_commit_messages.py $(if $(BASE),--base $(BASE),) $(if $(HEAD),--head $(HEAD),) $(ARGS)
@@ -109,21 +109,21 @@ provision-embedding-model: ## Prefetch or verify local embedding model
 rehearse-release-installs: ## Rehearse installed-wheel release validation
 	@$(UV) run python scripts/rehearse_release_installs.py $(ARGS)
 
-release-audit-script: ## Run scripts/release_audit.sh directly
-	@bash scripts/release_audit.sh
+release-audit-script: ## Run scripts/release_audit.py directly
+	@$(UV) run python -m scripts.release_audit
 
-release-rel-script: ## Run scripts/release_rel.sh directly
-	@bash scripts/release_rel.sh
+release-rel-script: ## Run scripts/release_rel.py directly
+	@$(UV) run python -m scripts.release_rel
 
 release-system-selfcheck: ## Run release tooling self-check
-	@bash scripts/release_system_selfcheck.sh
+	@$(UV) run python -m scripts.release_system_selfcheck
 
 ri-fix: ## Build a Codex prompt from codira ctx; set QUERY='...'
 	@test -n "$(QUERY)" || { echo "QUERY is required"; exit 2; }
 	@$(UV) run python scripts/ri_fix.py "$(QUERY)"
 
 run-manifest-baseline: ## Run paired SQLite/DuckDB baseline; set MANIFEST or ARGS
-	@bash scripts/run_manifest_baseline.sh $(MANIFEST) $(ARGS)
+	@$(UV) run python -m scripts.run_manifest_baseline $(MANIFEST) $(ARGS)
 
 run-repo-tool: ## Run wrapped repo tool; set TOOL=<tool> and ARGS
 	@test -n "$(TOOL)" || { echo "TOOL is required"; exit 2; }
@@ -131,11 +131,11 @@ run-repo-tool: ## Run wrapped repo tool; set TOOL=<tool> and ARGS
 
 run-with-repo-python: ## Run Python args through repo interpreter; set ARGS
 	@test -n "$(ARGS)" || { echo "ARGS is required"; exit 2; }
-	@bash scripts/run_with_repo_python.sh $(ARGS)
+	@$(UV) run python -m scripts.run_with_repo_python $(ARGS)
 
 tag-guard: ## Validate release tag format; set TAG=vX.Y.Z
 	@test -n "$(TAG)" || { echo "TAG is required"; exit 2; }
-	@bash scripts/tag_guard.sh $(TAG)
+	@$(UV) run python -m scripts.tag_guard $(TAG)
 
 validate-repo: ## Run standard repository validation
 	@$(UV) run python scripts/validate_repo.py $(ARGS)
@@ -193,13 +193,16 @@ gen-zip-common: ## Git alias: archive shared external ChatGPT guideline files; s
 	@name="$(GUIDELINES_NAME)"; tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; mkdir -p "$$tmp/$$name"; [ -f "$$HOME/OneDrive/Documenti/Fontshow/Comuni/chatgpt_guidelines.md" ] && cp -f "$$HOME/OneDrive/Documenti/Fontshow/Comuni/chatgpt_guidelines.md" "$$tmp/$$name/" || true; [ -f "$$HOME/OneDrive/Documenti/Fontshow/Comuni/patch_discipline.md" ] && cp -f "$$HOME/OneDrive/Documenti/Fontshow/Comuni/patch_discipline.md" "$$tmp/$$name/" || true; [ -f "$$HOME/OneDrive/Documenti/Fontshow/Comuni/anti-hallucination.md" ] && cp -f "$$HOME/OneDrive/Documenti/Fontshow/Comuni/anti-hallucination.md" "$$tmp/$$name/" || true; XZ_OPT="-9e -T0" tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 --numeric-owner -C "$$tmp" -cJf "$$PWD/$$name.tar.xz" "$$name"
 
 release-audit: ## Git alias: run conservative release audit
-	@bash scripts/release_audit.sh
+	@$(UV) run python -m scripts.release_audit
 
 release-check: ## Git alias: run release system self-check
-	@bash scripts/release_system_selfcheck.sh
+	@$(UV) run python -m scripts.release_system_selfcheck
 
 rel: ## Git alias: run guarded release push path
-	@bash scripts/release_rel.sh
+	@$(UV) run python -m scripts.release_rel
 
 safe-push: ## Git alias: release audit, fetch, ff-only pull, then push
-	@bash -lc 'bash scripts/release_audit.sh && git fetch && git pull --ff-only && git push'
+	@$(UV) run python -m scripts.release_audit
+	@git fetch
+	@git pull --ff-only
+	@git push

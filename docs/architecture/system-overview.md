@@ -25,8 +25,6 @@ The current implementation centers on these modules:
   fallback
 - `src/codira/registry.py` for backend selection and analyzer activation
 - `src/codira/indexer.py` for incremental orchestration and backend dispatch
-- `src/codira/analyzers/` compatibility modules for first-party analyzer
-  imports
 - `src/codira/storage.py` for generic repository-local storage paths, metadata,
   and lock helpers
 - `src/codira/query/exact.py` for exact lookup helpers

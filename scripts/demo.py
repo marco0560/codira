@@ -29,6 +29,13 @@ from pathlib import Path
 from shutil import which
 from typing import Any
 
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/demo.py [-h|--help]\n\n"
+        "Run the interactive Codira CLI demonstration."
+    )
+    raise SystemExit(0)
+
 # --- deterministic codira resolution ---
 
 project_root = Path(__file__).resolve().parents[1]

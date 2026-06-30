@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codira-vector-store-duckdb"
+version = "1.0.7"
+description = "First-party DuckDB vector-store plugin for codira"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "codira>=1.5.0,<2.0.0",
+    "duckdb>=1.4,<2.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "black",
+    "mypy",
+    "pytest",
+    "ruff",
+]
+
+[project.entry-points."codira.vector_stores"]
+duckdb = "codira_vector_store_duckdb:build_vector_store"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+codira_vector_store_duckdb = ["py.typed"]
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true

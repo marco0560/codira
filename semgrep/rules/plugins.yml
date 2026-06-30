@@ -1,4 +1,27 @@
 rules:
+  - id: codira.plugins.require-shared-plugin-json-schema-helper
+    message: >
+      Plugin configuration schemas must be built with shared plugin_config helpers.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-*/src/**/*.py
+        - /fixtures/packages/codira-*/src/**/*.py
+      exclude:
+        - /tests/**/*.py
+    patterns:
+      - pattern-inside: |
+          def configuration_json_schema(...):
+              ...
+      - pattern: |
+          return {...}
+      - pattern-not: |
+          return plugin_json_schema(...)
+      - pattern-not: |
+          return analyzer_json_schema(...)
+
   - id: codira.plugins.no-broad-except-exception
     message: >
       Plugin packages must not catch Exception broadly.

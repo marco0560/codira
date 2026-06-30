@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "pairs": [
+    {
+      "id": "bge-small-en-v1.5-st-index-onnx-query",
+      "index_model": "bge-small-en-v1.5-sentence-transformers",
+      "query_model": "bge-small-en-v1.5-onnx",
+      "threshold": 0.99,
+      "queries": [
+        "schema migration rules",
+        "embedding vector persistence",
+        "plugin configuration validation"
+      ]
+    },
+    {
+      "id": "nomic-v1.5-st-index-onnx-query",
+      "index_model": "nomic-embed-text-v1.5-sentence-transformers",
+      "query_model": "nomic-embed-text-v1.5-onnx",
+      "threshold": 0.99,
+      "queries": [
+        "schema migration rules",
+        "embedding vector persistence",
+        "plugin configuration validation"
+      ]
+    }
+  ]
+}

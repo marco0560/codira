@@ -18,13 +18,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from codira_backend_sqlite.sqlite_storage import init_db
 from jsonschema import validate  # type: ignore[import-untyped]
 
+from codira import config as config_module
 from codira.indexer import index_repo
 from codira.query.context import ContextRequest, context_for
+from codira.registry import reset_plugin_registry_caches
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _load_schema(root: Path) -> dict[str, object]:
@@ -48,15 +53,77 @@ def _load_schema(root: Path) -> dict[str, object]:
     )
 
 
-def test_context_output_matches_schema(tmp_path: Path) -> None:
+def _write_context_fixture(root: Path) -> None:
+    """
+    Write a small repository fixture for context schema validation.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Temporary repository root to populate.
+
+    Returns
+    -------
+    None
+        The fixture files and repo-local Codira config are written.
+    """
+    config_path = root / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("[embeddings]\nenabled = false\n", encoding="utf-8")
+    package_dir = root / "pkg"
+    package_dir.mkdir()
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    (package_dir / "sample.py").write_text(
+        '"""Fixture module for context schema tests."""\n\n'
+        "def validate_docstring(value: str) -> str:\n"
+        '    """Return the provided value for schema context retrieval."""\n'
+        "    return value\n",
+        encoding="utf-8",
+    )
+
+
+def _isolate_config_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """
+    Redirect host-level Codira config paths into the pytest sandbox.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch path providers.
+    tmp_path : pathlib.Path
+        Temporary directory for test-owned config paths.
+
+    Returns
+    -------
+    None
+        Platform config path providers are patched in place.
+    """
+    monkeypatch.setattr(
+        config_module,
+        "user_config_path",
+        lambda: tmp_path / "user-config" / "config.toml",
+    )
+    monkeypatch.setattr(
+        config_module,
+        "system_config_path",
+        lambda: tmp_path / "system-config" / "config.toml",
+    )
+    reset_plugin_registry_caches()
+
+
+def test_context_output_matches_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Validate that JSON output of context_for conforms to the JSON schema.
 
     Parameters
     ----------
     tmp_path : pathlib.Path
-        Temporary directory provided by pytest. The fixture is unused but
-        retained for symmetry with the companion schema test.
+        Temporary directory used as the indexed repository fixture.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate host config and pin the storage backend.
 
     Returns
     -------
@@ -68,9 +135,13 @@ def test_context_output_matches_schema(tmp_path: Path) -> None:
     This is a structural contract test that keeps the schema and renderer in
     sync and prevents silent drift in the JSON output shape.
     """
-    root = Path.cwd()
+    schema_root = Path.cwd()
+    root = tmp_path
 
-    schema = _load_schema(root)
+    _isolate_config_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("CODIRA_INDEX_BACKEND", "sqlite")
+    schema = _load_schema(schema_root)
+    _write_context_fixture(root)
     init_db(root)
     index_repo(root)
 
@@ -107,23 +178,31 @@ def test_context_output_matches_schema(tmp_path: Path) -> None:
     assert "include_graph" in expansion
 
 
-def test_context_no_matches_schema(tmp_path: Path) -> None:
+def test_context_no_matches_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Validate schema compliance for the 'no_matches' case.
 
     Parameters
     ----------
     tmp_path : pathlib.Path
-        Temporary directory provided by pytest. The fixture is unused but
-        retained for interface consistency with the companion test.
+        Temporary directory used as the indexed repository fixture.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate host config and pin the storage backend.
 
     Returns
     -------
     None
         The test asserts schema conformance for the no-match case.
     """
-    root = Path.cwd()
-    schema = _load_schema(root)
+    schema_root = Path.cwd()
+    root = tmp_path
+    _isolate_config_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("CODIRA_INDEX_BACKEND", "sqlite")
+    schema = _load_schema(schema_root)
+    _write_context_fixture(root)
     init_db(root)
     index_repo(root)
 

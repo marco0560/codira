@@ -283,7 +283,11 @@ def _normalize_issues(
     ]
 
 
-def _fake_embed_texts(texts: list[str]) -> list[list[float]]:
+def _fake_embed_texts(
+    texts: list[str],
+    *,
+    root: Path | None = None,
+) -> list[list[float]]:
     """
     Return deterministic vectors without loading external model artifacts.
 
@@ -291,12 +295,15 @@ def _fake_embed_texts(texts: list[str]) -> list[list[float]]:
     ----------
     texts : list[str]
         Text payloads to encode.
+    root : pathlib.Path | None, optional
+        Repository root supplied by backend persistence.
 
     Returns
     -------
     list[list[float]]
         One vector per text.
     """
+    del root
     return [[float(index + 1)] * EMBEDDING_DIM for index, _text in enumerate(texts)]
 
 

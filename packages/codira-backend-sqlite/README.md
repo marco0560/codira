@@ -4,6 +4,10 @@
 
 First-party SQLite backend plugin for `codira`.
 
+The SQLite physical schema is owned by this package in
+`codira_backend_sqlite.schema`. Core `codira` uses backend contracts and the
+active backend version for freshness checks rather than importing SQLite DDL.
+
 Repository-local editable install:
 
 ```bash

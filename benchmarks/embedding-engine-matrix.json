@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "model_manifest": "benchmarks/embedding-model-candidates.json",
+  "repository_manifest": "benchmarks/uv-backed-repos.local.json",
+  "notes": [
+    "This manifest describes the long embedding engine/model matrix.",
+    "Generate a dry-run plan before launching the matrix.",
+    "Re-run the matrix after meaningful hardware changes because embedding throughput is hardware-sensitive."
+  ]
+}

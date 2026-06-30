@@ -18,7 +18,7 @@ This module belongs to the **contract definition layer** that governs pluggable 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -53,6 +53,104 @@ class BackendError(RuntimeError):
     """
 
 
+class EmbeddingEngineError(RuntimeError):
+    """
+    Engine-neutral embedding generation failure.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances carry the embedding engine failure message through
+        ``RuntimeError``.
+    """
+
+
+class VectorStoreError(RuntimeError):
+    """
+    Vector-store-neutral persistence or retrieval failure.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances carry the vector-store failure message through
+        ``RuntimeError``.
+    """
+
+
+@dataclass(frozen=True)
+class EmbeddingEngineSpec:
+    """
+    Stable identity for one embedding engine vector contract.
+
+    Parameters
+    ----------
+    engine : str
+        Stable embedding engine name.
+    engine_version : str
+        Engine implementation version.
+    model : str
+        Model identifier used by the engine.
+    model_version : str
+        Explicit model revision or operator-managed version.
+    dimension : int
+        Fixed vector dimensionality.
+    precision : str
+        Vector precision or quantization label.
+    """
+
+    engine: str
+    engine_version: str
+    model: str
+    model_version: str
+    dimension: int
+    precision: str = "float32"
+
+
+@dataclass(frozen=True)
+class VectorStoreSpec:
+    """
+    Stable identity for one vector-store serialization contract.
+
+    Parameters
+    ----------
+    store : str
+        Stable vector-store plugin name.
+    store_version : str
+        Vector-store implementation version.
+    format_version : str
+        Serialization and schema format version for persisted vectors.
+    """
+
+    store: str
+    store_version: str
+    format_version: str
+
+
+@dataclass(frozen=True)
+class VectorSetIdentity:
+    """
+    Complete identity for one persisted vector set.
+
+    Parameters
+    ----------
+    engine : EmbeddingEngineSpec
+        Embedding engine and model identity.
+    vector_store : VectorStoreSpec
+        Vector-store and serialization identity.
+    """
+
+    engine: EmbeddingEngineSpec
+    vector_store: VectorStoreSpec
+
+
 @dataclass(frozen=True)
 class PendingEmbeddingRow:
     """
@@ -74,6 +172,49 @@ class PendingEmbeddingRow:
     object_id: int
     stable_id: str
     text: str
+
+
+@dataclass(frozen=True)
+class PreparedVectorRow:
+    """
+    Vector-store row prepared for deferred or materialized persistence.
+
+    Parameters
+    ----------
+    row : codira.contracts.PendingEmbeddingRow
+        Stable object identity and source text payload.
+    content_hash : str
+        Hash of the exact text payload used for vector reuse decisions.
+    vector : bytes | None, optional
+        Serialized vector payload when already available.
+    """
+
+    row: PendingEmbeddingRow
+    content_hash: str
+    vector: bytes | None = None
+
+
+@dataclass(frozen=True)
+class PreparedVectorIdentityRow:
+    """
+    Desired materialized vector identity for a full-index vector-store refresh.
+
+    Parameters
+    ----------
+    object_type : str
+        Persisted embedding owner kind.
+    stable_id : str
+        Durable analyzer-owned symbol or documentation identity.
+    content_hash : str
+        Hash of the exact text payload used for vector reuse decisions.
+    vector : bytes | None, optional
+        Serialized vector payload when newly available from the caller.
+    """
+
+    object_type: str
+    stable_id: str
+    content_hash: str
+    vector: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -247,6 +388,414 @@ class StoredEmbeddingRow:
     content_hash: str
     dim: int
     vector: bytes
+
+
+@dataclass(frozen=True)
+class VectorSimilarityScore:
+    """
+    Similarity score for one vector-store object identity.
+
+    Parameters
+    ----------
+    stable_id : str
+        Durable analyzer-owned object identity.
+    score : float
+        Similarity score computed by the vector store.
+    """
+
+    stable_id: str
+    score: float
+
+
+@dataclass(frozen=True)
+class VectorSimilarityRequest:
+    """
+    Vector-store request for similarity scoring.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose vector store should be queried.
+    identity : codira.contracts.VectorSetIdentity
+        Active vector-set identity to query.
+    object_type : str
+        Persisted object type, such as ``"symbol"`` or ``"documentation"``.
+    query_vector : collections.abc.Sequence[float]
+        Query vector produced by the active embedding engine.
+    min_score : float
+        Minimum score to return.
+    config : collections.abc.Mapping[str, object]
+        Vector-store-specific configuration table.
+    """
+
+    root: Path
+    identity: VectorSetIdentity
+    object_type: str
+    query_vector: Sequence[float]
+    min_score: float
+    config: Mapping[str, object]
+
+
+@runtime_checkable
+class EmbeddingEngine(Protocol):
+    """
+    Contract for pluggable embedding engines.
+
+    Implementations own text-to-vector inference and engine-specific local
+    provisioning. They must not own structural index persistence or vector-store
+    lifecycle policy.
+    """
+
+    name: str
+    version: str
+
+    def spec(self, config: Mapping[str, object]) -> EmbeddingEngineSpec:
+        """
+        Return the active embedding engine identity.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Engine-specific configuration table.
+
+        Returns
+        -------
+        EmbeddingEngineSpec
+            Stable vector-generation identity used for invalidation.
+        """
+        ...
+
+    def provision(
+        self,
+        config: Mapping[str, object],
+        *,
+        quiet: bool = False,
+    ) -> None:
+        """
+        Ensure local model artifacts are available for inference.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Engine-specific configuration table.
+        quiet : bool, optional
+            Whether operator-facing provisioning output should be suppressed.
+
+        Returns
+        -------
+        None
+            Required local artifacts are present or an engine error is raised.
+        """
+        ...
+
+    def embed_texts(
+        self,
+        texts: Sequence[str],
+        config: Mapping[str, object],
+    ) -> list[list[float]]:
+        """
+        Embed text payloads in deterministic input order.
+
+        Parameters
+        ----------
+        texts : collections.abc.Sequence[str]
+            Text payloads to embed.
+        config : collections.abc.Mapping[str, object]
+            Engine-specific configuration table.
+
+        Returns
+        -------
+        list[list[float]]
+            One vector per input payload, in the same order as ``texts``.
+        """
+        ...
+
+    def reset_runtime_caches(self) -> None:
+        """
+        Clear process-local engine caches.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Cached engine state is discarded.
+        """
+        ...
+
+
+@runtime_checkable
+class VectorStore(Protocol):
+    """
+    Contract for pluggable embedding vector stores.
+
+    Implementations own vector persistence, reusable vector-cache persistence,
+    deferred embedding queue persistence, and similarity lookup. They must not
+    own language analysis or text-to-vector inference.
+    """
+
+    name: str
+    version: str
+
+    def spec(self, config: Mapping[str, object]) -> VectorStoreSpec:
+        """
+        Return the active vector-store identity.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        VectorStoreSpec
+            Stable vector persistence identity used for invalidation.
+        """
+        ...
+
+    def initialize(self, root: Path, config: Mapping[str, object]) -> None:
+        """
+        Initialize vector-store state for one repository.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be initialized.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Vector-store storage is ready for reads and writes.
+        """
+        ...
+
+    def ensure_vector_set(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: Mapping[str, object],
+    ) -> int:
+        """
+        Return the persistent identifier for one vector-set identity.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be queried.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        int
+            Stable store-local vector-set identifier.
+        """
+        ...
+
+    def load_cached_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        content_hashes: Sequence[str],
+        config: Mapping[str, object],
+    ) -> dict[str, bytes]:
+        """
+        Load cached vectors keyed by content hash.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be queried.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        content_hashes : collections.abc.Sequence[str]
+            Candidate content hashes to load.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        dict[str, bytes]
+            Serialized vectors keyed by content hash.
+        """
+        ...
+
+    def store_cached_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        vectors: Mapping[str, bytes],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Persist reusable vectors keyed by content hash.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be updated.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        vectors : collections.abc.Mapping[str, bytes]
+            Serialized vectors keyed by content hash.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Cache rows are inserted or replaced in place.
+        """
+        ...
+
+    def store_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Persist deferred embedding rows for later computation.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be updated.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows whose source text should remain pending.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Pending rows are inserted or replaced in place.
+        """
+        ...
+
+    def delete_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Delete deferred rows that have been materialized.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be updated.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows identifying pending entries to delete.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Matching pending rows are deleted in place.
+        """
+        ...
+
+    def clear_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Delete all deferred rows for one vector set.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be updated.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Matching pending rows are deleted in place.
+        """
+        ...
+
+    def store_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Persist materialized vectors for indexed objects.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose vector store should be updated.
+        identity : codira.contracts.VectorSetIdentity
+            Complete embedding engine and vector-store identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Prepared rows carrying serialized vector payloads.
+        config : collections.abc.Mapping[str, object]
+            Vector-store-specific configuration table.
+
+        Returns
+        -------
+        None
+            Vector rows are inserted or replaced in place.
+        """
+        ...
+
+    def similarity_scores(
+        self,
+        request: VectorSimilarityRequest,
+    ) -> list[VectorSimilarityScore]:
+        """
+        Return vector similarity scores keyed by stable object identity.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorSimilarityRequest
+            Vector-store similarity request.
+
+        Returns
+        -------
+        list[codira.contracts.VectorSimilarityScore]
+            Scores ordered by descending score and stable identity.
+        """
+        ...
+
+    def reset_runtime_caches(self) -> None:
+        """
+        Clear process-local vector-store caches.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Cached vector-store state is discarded.
+        """
+        ...
 
 
 @dataclass(frozen=True)
@@ -614,6 +1163,58 @@ class BackendDocumentationCandidatesRequest:
 
 
 @dataclass(frozen=True)
+class BackendResolveEmbeddingScoresRequest:
+    """
+    Backend request for resolving scored symbol stable IDs.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose structural index should be queried.
+    scores : collections.abc.Sequence[codira.contracts.VectorSimilarityScore]
+        Vector-store scores keyed by symbol stable ID.
+    limit : int
+        Maximum number of resolved candidates to return.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict matched symbol files.
+    conn : object | None, optional
+        Existing backend connection to reuse.
+    """
+
+    root: Path
+    scores: Sequence[VectorSimilarityScore]
+    limit: int
+    prefix: str | None = None
+    conn: object | None = None
+
+
+@dataclass(frozen=True)
+class BackendResolveDocumentationScoresRequest:
+    """
+    Backend request for resolving scored documentation stable IDs.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose structural index should be queried.
+    scores : collections.abc.Sequence[codira.contracts.VectorSimilarityScore]
+        Vector-store scores keyed by documentation stable ID.
+    limit : int
+        Maximum number of resolved candidates to return.
+    prefix : str | None, optional
+        Repo-root-relative path prefix used to restrict matched document files.
+    conn : object | None, optional
+        Existing backend connection to reuse.
+    """
+
+    root: Path
+    scores: Sequence[VectorSimilarityScore]
+    limit: int
+    prefix: str | None = None
+    conn: object | None = None
+
+
+@dataclass(frozen=True)
 class BackendRuntimeInventoryRequest:
     """
     Backend request for persisting runtime inventory after indexing.
@@ -665,6 +1266,12 @@ class BackendPersistAnalysisRequest:
         Whether eligible embedding rows should be queued for later computation.
     previous_embeddings : collections.abc.Mapping[str, object] | None, optional
         Previously persisted semantic artifacts eligible for reuse.
+    vector_store : codira.contracts.VectorStore | None, optional
+        Active separated vector store used for embedding row persistence.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : collections.abc.Mapping[str, object], optional
+        Vector-store-specific configuration table.
     conn : object | None, optional
         Existing backend connection to reuse.
     """
@@ -677,7 +1284,158 @@ class BackendPersistAnalysisRequest:
     embedding_metrics: EmbeddingIndexingMetrics | None = None
     defer_embeddings: bool = False
     previous_embeddings: Mapping[str, object] | None = None
+    vector_store: VectorStore | None = None
+    vector_set_identity: VectorSetIdentity | None = None
+    vector_store_config: Mapping[str, object] = dataclass_field(default_factory=dict)
     conn: object | None = None
+
+
+@dataclass(frozen=True)
+class BackendPersistFullIndexFile:
+    """
+    Backend request item for one analyzed file in a full-index bulk run.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Source path selected by the index planner.
+    file_metadata : codira.models.FileMetadataSnapshot
+        Stable file metadata captured during scanning.
+    analysis : codira.models.AnalysisResult
+        Normalized analyzer output for the file.
+    """
+
+    path: Path
+    file_metadata: FileMetadataSnapshot
+    analysis: AnalysisResult
+
+
+@dataclass(frozen=True)
+class BackendPersistFullIndexRequest:
+    """
+    Backend request for persisting an entire full-index snapshot in one batch.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose backend state should be replaced.
+    files : collections.abc.Sequence[codira.contracts.BackendPersistFullIndexFile]
+        Successfully analyzed file snapshots in deterministic order.
+    embedding_backend : codira.contracts.EmbeddingBackendSpec
+        Active embedding backend metadata.
+    embedding_indexing : codira.contracts.EmbeddingIndexingPolicy
+        Embedding row eligibility policy.
+    defer_embeddings : bool
+        Whether eligible embedding rows should be queued for later computation.
+    vector_store : codira.contracts.VectorStore | None
+        Active separated vector store used for embedding row persistence.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None
+        Active vector-set identity for separated vector-store writes.
+    vector_store_config : collections.abc.Mapping[str, object]
+        Vector-store-specific configuration table.
+    coverage_complete : bool
+        Whether canonical-directory coverage had no gaps.
+    analyzers : collections.abc.Sequence[codira.contracts.LanguageAnalyzer]
+        Active analyzers for the run.
+    """
+
+    root: Path
+    files: Sequence[BackendPersistFullIndexFile]
+    embedding_backend: EmbeddingBackendSpec
+    embedding_indexing: EmbeddingIndexingPolicy
+    defer_embeddings: bool
+    vector_store: VectorStore | None
+    vector_set_identity: VectorSetIdentity | None
+    vector_store_config: Mapping[str, object]
+    coverage_complete: bool
+    analyzers: Sequence[LanguageAnalyzer]
+
+
+@dataclass(frozen=True)
+class BackendPersistFullIndexResult:
+    """
+    Backend result for one full-index bulk persistence run.
+
+    Parameters
+    ----------
+    embeddings_recomputed : int
+        Number of embedding rows requiring new vectors.
+    embeddings_reused : int
+        Number of embedding rows reused from persisted cache data.
+    embeddings_skipped : int
+        Number of candidate embedding rows skipped by indexing policy.
+    embeddings_pending : int
+        Number of embedding rows queued for deferred computation.
+    """
+
+    embeddings_recomputed: int
+    embeddings_reused: int
+    embeddings_skipped: int
+    embeddings_pending: int
+
+
+@dataclass(frozen=True)
+class VectorStoreFullIndexRequest:
+    """
+    Vector-store request for full-index bulk vector persistence.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose vector store should be updated.
+    identity : codira.contracts.VectorSetIdentity
+        Active vector-set identity.
+    rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+        Prepared rows carrying serialized vector payloads.
+    identity_rows : collections.abc.Sequence[codira.contracts.PreparedVectorIdentityRow]
+        Complete desired materialized vector identities for the full index.
+    cached_vectors : collections.abc.Mapping[str, bytes]
+        Newly encoded vectors keyed by content hash.
+    config : collections.abc.Mapping[str, object]
+        Vector-store-specific configuration table.
+    backend_connection : object | None, optional
+        Backend-owned connection that compatible vector stores may reuse.
+    preserve_existing : bool, optional
+        Whether compatible vector stores may preserve existing materialized
+        rows matching ``identity_rows`` without rewriting vector payloads.
+    """
+
+    root: Path
+    identity: VectorSetIdentity
+    rows: Sequence[PreparedVectorRow]
+    cached_vectors: Mapping[str, bytes]
+    config: Mapping[str, object]
+    identity_rows: Sequence[PreparedVectorIdentityRow] = ()
+    backend_connection: object | None = None
+    preserve_existing: bool = False
+
+
+@runtime_checkable
+class VectorStoreBulkWriter(Protocol):
+    """
+    Optional vector-store contract for full-index bulk vector writes.
+
+    Implementations may reuse a backend-owned connection when compatible.
+    """
+
+    def store_vectors_for_full_index(
+        self,
+        request: VectorStoreFullIndexRequest,
+    ) -> None:
+        """
+        Persist materialized vectors for one full-index bulk run.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStoreFullIndexRequest
+            Bulk vector persistence request.
+
+        Returns
+        -------
+        None
+            Vector rows are persisted in store-defined batches.
+        """
+        ...
 
 
 KNOWN_RETRIEVAL_CAPABILITIES: tuple[RetrievalCapabilityName, ...] = (
@@ -1168,6 +1926,35 @@ class IndexWriteSession(Protocol):
 
 
 @runtime_checkable
+class FullIndexBulkBackend(Protocol):
+    """
+    Optional backend contract for replacing a full index in one bulk operation.
+
+    Implementations own the full transaction, derived index rebuild, runtime
+    inventory persistence, and backend-specific profile emission.
+    """
+
+    def persist_full_index(
+        self,
+        request: BackendPersistFullIndexRequest,
+    ) -> BackendPersistFullIndexResult:
+        """
+        Persist an entire full-index snapshot in one backend-native batch.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendPersistFullIndexRequest
+            Full-index snapshot and runtime metadata.
+
+        Returns
+        -------
+        BackendPersistFullIndexResult
+            Embedding counters for the completed persistence run.
+        """
+        ...
+
+
+@runtime_checkable
 class IndexBackend(Protocol):
     """
     Contract for the single active persistence backend of one repository index.
@@ -1434,11 +2221,14 @@ class IndexBackend(Protocol):
         """
         ...
 
-    def process_pending_embeddings(
+    def process_pending_embeddings(  # noqa: PLR0913
         self,
         root: Path,
         *,
         embedding_backend: EmbeddingBackendSpec,
+        vector_store: VectorStore | None = None,
+        vector_set_identity: VectorSetIdentity | None = None,
+        vector_store_config: Mapping[str, object] | None = None,
         conn: object | None = None,
     ) -> tuple[int, int]:
         """
@@ -1450,6 +2240,12 @@ class IndexBackend(Protocol):
             Repository root whose pending embedding rows should be processed.
         embedding_backend : codira.semantic.embeddings.EmbeddingBackendSpec
             Active semantic backend metadata used to select pending rows.
+        vector_store : codira.contracts.VectorStore | None, optional
+            Active separated vector-store plugin used for materialized vectors.
+        vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+            Active vector-set identity for separated vector-store writes.
+        vector_store_config : collections.abc.Mapping[str, object] | None, optional
+            Vector-store-specific configuration table.
         conn : object | None, optional
             Existing backend connection to reuse.
 
@@ -1837,6 +2633,44 @@ class IndexBackend(Protocol):
         -------
         list[codira.types.SymbolRow]
             Matching symbol rows ordered deterministically.
+        """
+        ...
+
+    def resolve_embedding_scores(
+        self,
+        request: BackendResolveEmbeddingScoresRequest,
+    ) -> ChannelResults:
+        """
+        Resolve scored symbol stable IDs to structural candidate rows.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveEmbeddingScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.ChannelResults
+            Ranked symbol candidates ordered deterministically.
+        """
+        ...
+
+    def resolve_documentation_scores(
+        self,
+        request: BackendResolveDocumentationScoresRequest,
+    ) -> DocumentationChannelResults:
+        """
+        Resolve scored documentation stable IDs to documentation rows.
+
+        Parameters
+        ----------
+        request : codira.contracts.BackendResolveDocumentationScoresRequest
+            Resolution request carrying vector-store scores.
+
+        Returns
+        -------
+        codira.types.DocumentationChannelResults
+            Ranked documentation candidates ordered deterministically.
         """
         ...
 

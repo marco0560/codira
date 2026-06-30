@@ -42,6 +42,7 @@ from codira.config import (
     ProfileName,
     config_path,
     config_to_mapping,
+    effective_config_cache,
     ensure_user_config,
     explain_key,
     load_config_level,
@@ -88,12 +89,12 @@ from codira.query.exact import (
 from codira.registry import (
     active_index_backend,
     active_language_analyzers,
+    active_plugin_instance_cache,
     configured_index_backend_name,
     plugin_registrations,
     validate_plugin_configuration,
 )
 from codira.scanner import iter_project_files
-from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendError, get_embedding_backend
 from codira.semantic.search import (
     DocumentationCandidatesRequest,
@@ -108,6 +109,7 @@ from codira.storage import (
     get_metadata_path,
     override_storage_root,
 )
+from codira.vector_store import active_vector_store_context
 from codira.version import installed_distribution_version, package_version
 
 if TYPE_CHECKING:
@@ -1617,11 +1619,20 @@ def _run_index(request: IndexCommandRequest) -> int:
         "deferred" if defer_embeddings else config.embeddings.indexing.mode
     )
     if embeddings_only:
+        vector_store_context = active_vector_store_context(root)
         active_backend = active_index_backend(root=root)
         active_backend.initialize(root)
         recomputed, reused = active_backend.process_pending_embeddings(
             root,
-            embedding_backend=get_embedding_backend(),
+            embedding_backend=get_embedding_backend(root=root),
+            vector_store=vector_store_context.store,
+            vector_set_identity=vector_store_context.identity,
+            vector_store_config=vector_store_context.config,
+        )
+        vector_store_context.store.clear_pending_vectors(
+            root,
+            vector_store_context.identity,
+            vector_store_context.config,
         )
         report = IndexReport(
             indexed=0,
@@ -2532,7 +2543,7 @@ def _run_embeddings(
         Zero when embedding inventory exists, otherwise one.
     """
     root = request.root
-    backend = get_embedding_backend()
+    backend = get_embedding_backend(root=root)
     inventory = embedding_inventory(root)
 
     if not inventory:
@@ -2651,7 +2662,7 @@ def _run_documentation_lookup(
         stored embeddings exist.
     """
     root = request.root
-    backend = get_embedding_backend()
+    backend = get_embedding_backend(root=root)
     inventory = embedding_inventory(root)
 
     if not inventory:
@@ -3552,11 +3563,11 @@ def _build_index_metadata(
         Metadata payload containing schema, plugin, analyzer, file-count, and
         current commit facts when available.
     """
-    metadata = {"schema_version": str(SCHEMA_VERSION)}
+    backend = active_index_backend(root=root)
+    metadata = {"schema_version": str(backend.version)}
     commit = _get_head_commit(root)
     if commit:
         metadata["commit"] = commit
-    backend = active_index_backend(root=root)
     metadata[INDEX_METADATA_BACKEND_NAME] = str(backend.name)
     metadata[INDEX_METADATA_BACKEND_VERSION] = str(backend.version)
     metadata[INDEX_METADATA_ANALYZER_INVENTORY] = json.dumps(
@@ -3716,8 +3727,9 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
     current_commit = _get_head_commit(root)
     indexed_commit = metadata.get("commit")
     indexed_schema = metadata.get("schema_version")
+    backend = active_index_backend(root=root)
 
-    if indexed_schema != str(SCHEMA_VERSION):
+    if indexed_schema != str(backend.version):
         return IndexRebuildRequest(
             message="[codira] Index schema changed — rebuilding...",
             reset_db=True,
@@ -3738,7 +3750,6 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
     if metadata_decided:
         return metadata_request
 
-    backend = active_index_backend(root=root)
     conn = backend.open_connection(root)
     try:
         runtime_inventory = backend.load_runtime_inventory(root, conn=conn)
@@ -4806,7 +4817,7 @@ def main() -> int:
     try:
         if command not in {"help", "config", "calibrate"}:
             ensure_user_config()
-        with storage_context:
+        with storage_context, effective_config_cache(), active_plugin_instance_cache():
             handlers = _command_handlers(
                 args,
                 parser,

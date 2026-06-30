@@ -22,6 +22,9 @@ It exists to:
 - `codira.arch.require-analyzer-capability-declaration`
 - `codira.arch.no-duckdb-executemany-in-support`
 - `codira.arch.no-duckdb-returning-id-in-support`
+- `codira.arch.no-store-analysis-in-duckdb-full-index-bulk`
+- `codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk`
+- `codira.arch.no-direct-config-load-in-query-hot-path`
 - `codira.plugins.no-broad-except-exception`
 
 ### Enforced with allowlist
@@ -34,9 +37,45 @@ It exists to:
 
 - forbid `codira.registry` imports outside the current core query/indexing
   entry points
+- forbid direct backend/vector-store/embedding-engine resolution in query hot
+  paths once those paths are fully migrated to the command-scoped runtime
+  context
 
 This broader rule is not enforced yet because the current core implementation
 still owns transitional responsibilities that would produce noisy findings.
+
+### `codira.arch.no-direct-config-load-in-query-hot-path`
+
+Rationale:
+Benchmark campaign `20260627T201446` showed repeated effective-config loading
+and TOML parsing as a measurable `ctx` overhead. Query hot paths should receive
+configuration through command-scoped runtime state instead of parsing config
+files directly.
+
+Removal condition:
+No removal planned while query commands remain performance-sensitive.
+
+### `codira.arch.no-store-analysis-in-duckdb-full-index-bulk`
+
+Rationale:
+DuckDB full-index persistence must stay on the backend-native bulk path. Calling
+the legacy per-file `_store_analysis` helper from `persist_full_index` would
+reintroduce the row-oriented write shape that benchmark profiling identified as
+the DuckDB full-index bottleneck.
+
+Removal condition:
+No removal planned while DuckDB remains a supported full-index backend.
+
+### `codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk`
+
+Rationale:
+DuckDB vector-store full-index persistence must replace a complete materialized
+vector set through a native bulk path. Delegating to the normal `store_vectors`
+method would preserve stale rows and reintroduce the slower per-batch write
+shape in full rebuilds.
+
+Removal condition:
+No removal planned while DuckDB remains a supported vector-store backend.
 
 ## Allowlisted Exceptions
 
@@ -90,6 +129,15 @@ imports `sqlite3` as part of the supported production backend.
 
 Removal condition:
 No removal planned while SQLite remains a supported backend.
+
+#### `packages/codira-vector-store-sqlite/src/codira_vector_store_sqlite/__init__.py`
+
+Rationale:
+This is the production SQLite vector-store implementation and owns the
+separated `.codira/embeddings.db` schema.
+
+Removal condition:
+No removal planned while SQLite remains a supported vector store.
 
 ### `codira.arch.no-backend-package-import-outside-allowed-layers`
 

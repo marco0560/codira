@@ -26,6 +26,14 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
+
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/install_repo_git_config.py [-h|--help]\n\n"
+        "Install deterministic repo-local Git configuration and aliases."
+    )
+    raise SystemExit(0)
 
 GIT_EXE = shutil.which("git") or "git"
 
@@ -126,14 +134,14 @@ def git_alias_entries() -> list[tuple[str, str]]:
                 '--numeric-owner -C "$tmp" -cJf "$PWD/$name.tar.xz" "$name"; }; f'
             ),
         ),
-        ("alias.release-audit", "!bash scripts/release_audit.sh"),
-        ("alias.release-check", "!bash scripts/release_system_selfcheck.sh"),
-        ("alias.rel", "!bash scripts/release_rel.sh"),
+        ("alias.release-audit", "!uv run python -m scripts.release_audit"),
+        ("alias.release-check", "!uv run python -m scripts.release_system_selfcheck"),
+        ("alias.rel", "!uv run python -m scripts.release_rel"),
         (
             "alias.safe-push",
             (
-                "!bash -lc 'bash scripts/release_audit.sh && git fetch && "
-                "git pull --ff-only && git push'"
+                "!uv run python -m scripts.release_audit && git fetch && "
+                "git pull --ff-only && git push"
             ),
         ),
     ]

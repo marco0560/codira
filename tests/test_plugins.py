@@ -26,10 +26,11 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import pytest
 from codira_backend_sqlite import SQLiteIndexBackend
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 import codira.config as config_module
 import codira.registry as registry
@@ -37,9 +38,6 @@ from codira.cli import main
 from codira.config import ConfigError
 from codira.contracts import IndexBackend, LanguageAnalyzer
 from codira.models import AnalysisResult, ModuleArtifact
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 
 def _root_build_artifact_paths(repo_root: Path) -> set[Path]:
@@ -139,6 +137,23 @@ class _FakeEntryPoint:
         if isinstance(self.loaded, Exception):
             raise self.loaded
         return self.loaded
+
+
+FIRST_PARTY_PLUGIN_FACTORIES = (
+    ("codira_analyzer_bash", "build_analyzer"),
+    ("codira_analyzer_c", "build_analyzer"),
+    ("codira_analyzer_cpp", "build_analyzer"),
+    ("codira_analyzer_json", "build_analyzer"),
+    ("codira_analyzer_markdown", "build_analyzer"),
+    ("codira_analyzer_python", "build_analyzer"),
+    ("codira_analyzer_text", "build_analyzer"),
+    ("codira_backend_duckdb", "build_backend"),
+    ("codira_backend_sqlite", "build_backend"),
+    ("codira_embedding_onnx", "build_engine"),
+    ("codira_embedding_sentence_transformers", "build_engine"),
+    ("codira_vector_store_duckdb", "build_vector_store"),
+    ("codira_vector_store_sqlite", "build_vector_store"),
+)
 
 
 class _DemoAnalyzer:
@@ -354,6 +369,40 @@ def _build_json_analyzer() -> LanguageAnalyzer:
         Deterministic JSON analyzer stub for registry tests.
     """
     return _build_optional_first_party_analyzer("json")
+
+
+def test_first_party_plugins_expose_configuration_json_schema() -> None:
+    """
+    Keep first-party plugin factories covered by strict config schemas.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts every first-party runtime plugin exposes a strict JSON
+        Schema through the common plugin configuration interface.
+    """
+    missing: list[str] = []
+    non_strict: list[str] = []
+
+    for module_name, factory_name in FIRST_PARTY_PLUGIN_FACTORIES:
+        module = importlib.import_module(module_name)
+        factory = getattr(module, factory_name)
+        plugin = factory()
+        schema_method = getattr(plugin, "configuration_json_schema", None)
+        if schema_method is None:
+            missing.append(f"{module_name}:{factory_name}")
+            continue
+        schema = schema_method()
+        Draft202012Validator.check_schema(schema)
+        if schema.get("additionalProperties") is not False:
+            non_strict.append(f"{module_name}:{factory_name}")
+
+    assert missing == []
+    assert non_strict == []
 
 
 class _DemoBackend(SQLiteIndexBackend):
@@ -633,6 +682,53 @@ def test_active_registry_uses_loaded_entry_point_plugins(
     assert backend.name == "demo-backend"
 
 
+def test_active_plugin_instance_cache_reuses_backend_within_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Reuse configured active backend instances only inside one cache scope.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry-point discovery and backend config.
+
+    Returns
+    -------
+    None
+        The test asserts the command-scoped plugin cache reuses backend
+        instances without leaking them across scopes.
+    """
+    registry.reset_plugin_registry_caches()
+    _patch_entry_points(
+        monkeypatch,
+        analyzers=[],
+        backends=[
+            _FakeEntryPoint(
+                name="demo-backend",
+                value="demo:backend",
+                dist=_FakeDistribution("demo-backend"),
+                loaded=_DemoBackend,
+            )
+        ],
+    )
+    monkeypatch.setenv(registry.INDEX_BACKEND_ENV_VAR, "demo-backend")
+
+    first_uncached = registry.active_index_backend()
+    second_uncached = registry.active_index_backend()
+
+    with registry.active_plugin_instance_cache():
+        first_cached = registry.active_index_backend()
+        second_cached = registry.active_index_backend()
+
+    with registry.active_plugin_instance_cache():
+        next_scope = registry.active_index_backend()
+
+    assert first_uncached is not second_uncached
+    assert first_cached is second_cached
+    assert next_scope is not first_cached
+
+
 def test_active_registry_injects_namespaced_plugin_configuration(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -766,6 +862,73 @@ def test_plugin_configuration_schema_validation_rejects_invalid_values(
 
     with pytest.raises(ConfigError, match="Invalid plugin configuration"):
         registry.validate_plugin_configuration()
+
+
+def test_embedding_onnx_config_validation_rejects_unknown_keys(tmp_path: Path) -> None:
+    """
+    Reject typoed ONNX embedding plugin options before indexing starts.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing repo-local config.
+
+    Returns
+    -------
+    None
+        The test asserts registry validation applies the ONNX plugin schema.
+    """
+    config_path = tmp_path / ".codira" / "config.toml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        """
+        [embeddings]
+        engine = "onnx"
+
+        [plugins.embedding-onnx]
+        model_path = ".codira/models/demo/model.onnx"
+        tokenizer_path = ".codira/models/demo/tokenizer.json"
+        max_toknes = 512
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="plugins.embedding-onnx"):
+        registry.validate_plugin_configuration(root=tmp_path)
+
+
+def test_sentence_transformers_config_validation_rejects_invalid_trust_remote_code(
+    tmp_path: Path,
+) -> None:
+    """
+    Reject wrongly typed SentenceTransformers plugin options.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing repo-local config.
+
+    Returns
+    -------
+    None
+        The test asserts registry validation applies the SentenceTransformers
+        plugin schema.
+    """
+    config_path = tmp_path / ".codira" / "config.toml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        """
+        [embeddings]
+        engine = "sentence-transformers"
+
+        [plugins.embedding-sentence-transformers]
+        trust_remote_code = "true"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="plugins.embedding-sentence-transformers"):
+        registry.validate_plugin_configuration(root=tmp_path)
 
 
 def test_plugin_configuration_validation_warns_for_missing_plugin(
@@ -1094,6 +1257,8 @@ def test_plugin_snapshot_cache_reuses_entry_point_discovery(
     call_counts = {
         registry.ANALYZER_ENTRY_POINT_GROUP: 0,
         registry.BACKEND_ENTRY_POINT_GROUP: 0,
+        registry.EMBEDDING_ENGINE_ENTRY_POINT_GROUP: 0,
+        registry.VECTOR_STORE_ENTRY_POINT_GROUP: 0,
     }
 
     def fake_group_loader(group: str) -> list[_FakeEntryPoint]:
@@ -1128,6 +1293,8 @@ def test_plugin_snapshot_cache_reuses_entry_point_discovery(
     assert call_counts == {
         registry.ANALYZER_ENTRY_POINT_GROUP: 1,
         registry.BACKEND_ENTRY_POINT_GROUP: 1,
+        registry.EMBEDDING_ENGINE_ENTRY_POINT_GROUP: 1,
+        registry.VECTOR_STORE_ENTRY_POINT_GROUP: 1,
     }
 
 
@@ -1536,97 +1703,3 @@ def test_registry_orders_first_party_analyzers_across_sources(
         and record.status == "loaded"
         for record in registrations
     )
-
-
-def test_compatibility_shims_do_not_fall_back_to_checkout_local_package_sources(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """
-    Keep analyzer compatibility imports limited to installed distributions.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to force shim imports to behave as if first-party packages
-        are not installed.
-
-    Returns
-    -------
-    None
-        The test asserts the shims raise operator-facing install hints without
-        probing monorepo-local `packages/.../src` paths.
-    """
-    repo_root = Path(__file__).resolve().parents[1]
-    shim_cases = (
-        (
-            "src/codira/analyzers/python.py",
-            "codira_analyzer_python",
-            "codira-analyzer-python",
-        ),
-        (
-            "src/codira/analyzers/json.py",
-            "codira_analyzer_json",
-            "codira-analyzer-json",
-        ),
-        (
-            "src/codira/analyzers/c.py",
-            "codira_analyzer_c",
-            "codira-analyzer-c",
-        ),
-        (
-            "src/codira/analyzers/cpp.py",
-            "codira_analyzer_cpp",
-            "codira-analyzer-cpp",
-        ),
-        (
-            "src/codira/analyzers/bash.py",
-            "codira_analyzer_bash",
-            "codira-analyzer-bash",
-        ),
-        (
-            "src/codira/analyzers/markdown.py",
-            "codira_analyzer_markdown",
-            "codira-analyzer-markdown",
-        ),
-        (
-            "src/codira/analyzers/text.py",
-            "codira_analyzer_text",
-            "codira-analyzer-text",
-        ),
-    )
-
-    for relative_path, package_module, package_distribution in shim_cases:
-        source_path = repo_root / relative_path
-        original_import_module = cast(
-            "Callable[[str, str | None], object]",
-            importlib.import_module,
-        )
-
-        def _reject_first_party_import(
-            name: str,
-            package: str | None = None,
-            *,
-            _package_module: str = package_module,
-            _original_import_module: Callable[[str, str | None], object] = (
-                original_import_module
-            ),
-        ) -> object:
-            if name == _package_module:
-                raise ModuleNotFoundError(name=name)
-            return _original_import_module(name, package)
-
-        monkeypatch.setattr(importlib, "import_module", _reject_first_party_import)
-        spec = importlib.util.spec_from_file_location(
-            f"test_{package_module}_shim",
-            source_path,
-        )
-        assert spec is not None
-        assert spec.loader is not None
-        shim_module = importlib.util.module_from_spec(spec)
-
-        with pytest.raises(ModuleNotFoundError) as exc_info:
-            spec.loader.exec_module(shim_module)
-
-        assert package_distribution in str(exc_info.value)
-        assert (repo_root / "packages" / package_distribution / "src").is_dir()
-        monkeypatch.undo()

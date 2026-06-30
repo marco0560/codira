@@ -89,10 +89,7 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
                 "packages/codira-analyzer-python/src/",
                 "packages/codira-analyzer-python/tests/",
             ),
-            stays_in_core=(
-                "src/codira/analyzers/python.py",
-                "tests/test_plugins.py",
-            ),
+            stays_in_core=(),
         ),
         FutureRepoSplitManifest(
             repository="codira-analyzer-json",
@@ -102,10 +99,7 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
                 "packages/codira-analyzer-json/src/",
                 "packages/codira-analyzer-json/tests/",
             ),
-            stays_in_core=(
-                "src/codira/analyzers/json.py",
-                "tests/test_plugins.py",
-            ),
+            stays_in_core=(),
         ),
         FutureRepoSplitManifest(
             repository="codira-analyzer-c",
@@ -115,10 +109,7 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
                 "packages/codira-analyzer-c/src/",
                 "packages/codira-analyzer-c/tests/",
             ),
-            stays_in_core=(
-                "src/codira/analyzers/c.py",
-                "tests/test_plugins.py",
-            ),
+            stays_in_core=(),
         ),
         FutureRepoSplitManifest(
             repository="codira-analyzer-cpp",
@@ -128,10 +119,7 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
                 "packages/codira-analyzer-cpp/src/",
                 "packages/codira-analyzer-cpp/tests/",
             ),
-            stays_in_core=(
-                "src/codira/analyzers/cpp.py",
-                "tests/test_plugins.py",
-            ),
+            stays_in_core=(),
         ),
         FutureRepoSplitManifest(
             repository="codira-analyzer-bash",
@@ -141,10 +129,7 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
                 "packages/codira-analyzer-bash/src/",
                 "packages/codira-analyzer-bash/tests/",
             ),
-            stays_in_core=(
-                "src/codira/analyzers/bash.py",
-                "tests/test_plugins.py",
-            ),
+            stays_in_core=(),
         ),
         FutureRepoSplitManifest(
             repository="codira-analyzer-markdown",
@@ -154,10 +139,7 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
                 "packages/codira-analyzer-markdown/src/",
                 "packages/codira-analyzer-markdown/tests/",
             ),
-            stays_in_core=(
-                "src/codira/analyzers/markdown.py",
-                "tests/test_plugins.py",
-            ),
+            stays_in_core=(),
         ),
         FutureRepoSplitManifest(
             repository="codira-analyzer-text",
@@ -167,10 +149,7 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
                 "packages/codira-analyzer-text/src/",
                 "packages/codira-analyzer-text/tests/",
             ),
-            stays_in_core=(
-                "src/codira/analyzers/text.py",
-                "tests/test_plugins.py",
-            ),
+            stays_in_core=(),
         ),
         FutureRepoSplitManifest(
             repository="codira-backend-sqlite",

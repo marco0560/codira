@@ -27,13 +27,6 @@ dev = [
     "setuptools-scm>=8",
     "wheel",
     "twine>=6.2,<7.0",
-]
-
-[project.optional-dependencies]
-semantic = ["sentence-transformers>=5.4,<6.0"]
-
-bundle-official = [
-    "sentence-transformers>=5.4,<6.0",
     "codira-analyzer-python==1.43.0",
     "codira-analyzer-json==1.41.0",
     "codira-analyzer-c==1.43.0",
@@ -41,8 +34,40 @@ bundle-official = [
     "codira-analyzer-bash==1.41.0",
     "codira-analyzer-markdown==1.44.0",
     "codira-analyzer-text==1.43.0",
-    "codira-backend-sqlite==1.45.0",
-    "codira-backend-duckdb==1.49.0",
+    "codira-backend-sqlite==1.45.1",
+    "codira-backend-duckdb==1.50.0",
+    "codira-embedding-sentence-transformers==1.0.1",
+    "codira-embedding-onnx==1.0.1",
+    "codira-vector-store-sqlite==1.0.1",
+    "codira-vector-store-duckdb==1.0.7",
+]
+
+[project.optional-dependencies]
+semantic = [
+    "sentence-transformers>=5.4,<6.0",
+    "einops>=0.8,<1.0",
+    "codira-embedding-sentence-transformers==1.0.1",
+    "codira-embedding-onnx==1.0.1",
+    "codira-vector-store-sqlite==1.0.1",
+    "codira-vector-store-duckdb==1.0.7",
+]
+
+bundle-official = [
+    "sentence-transformers>=5.4,<6.0",
+    "einops>=0.8,<1.0",
+    "codira-analyzer-python==1.43.0",
+    "codira-analyzer-json==1.41.0",
+    "codira-analyzer-c==1.43.0",
+    "codira-analyzer-cpp==1.44.0",
+    "codira-analyzer-bash==1.41.0",
+    "codira-analyzer-markdown==1.44.0",
+    "codira-analyzer-text==1.43.0",
+    "codira-backend-sqlite==1.45.1",
+    "codira-backend-duckdb==1.50.0",
+    "codira-embedding-sentence-transformers==1.0.1",
+    "codira-embedding-onnx==1.0.1",
+    "codira-vector-store-sqlite==1.0.1",
+    "codira-vector-store-duckdb==1.0.7",
 ]
 
 docs = [
@@ -83,6 +108,10 @@ codira-analyzer-markdown = { path = "packages/codira-analyzer-markdown", editabl
 codira-analyzer-text = { path = "packages/codira-analyzer-text", editable = true }
 codira-backend-sqlite = { path = "packages/codira-backend-sqlite", editable = true }
 codira-backend-duckdb = { path = "packages/codira-backend-duckdb", editable = true }
+codira-embedding-sentence-transformers = { path = "packages/codira-embedding-sentence-transformers", editable = true }
+codira-embedding-onnx = { path = "packages/codira-embedding-onnx", editable = true }
+codira-vector-store-sqlite = { path = "packages/codira-vector-store-sqlite", editable = true }
+codira-vector-store-duckdb = { path = "packages/codira-vector-store-duckdb", editable = true }
 codira-bundle-official = { path = "packages/codira-bundle-official", editable = true }
 
 # ============================================================
@@ -253,7 +282,13 @@ exclude = """(?x)(
 )"""
 
 [[tool.mypy.overrides]]
-module = ["tree_sitter", "tree_sitter_c", "tree_sitter_cpp"]
+module = [
+    "pyarrow",
+    "tree_sitter",
+    "tree_sitter_bash",
+    "tree_sitter_c",
+    "tree_sitter_cpp",
+]
 ignore_missing_imports = true
 
 # ============================================================

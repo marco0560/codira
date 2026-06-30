@@ -22,9 +22,19 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import sys
 from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, cast
+
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/benchmark_index.py [options]\n\n"
+        "Run one instrumented Codira index pass.\n"
+        "Use `uv run python scripts/benchmark_index.py --help` for the "
+        "environment-backed full option list."
+    )
+    raise SystemExit(0)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -40,7 +50,7 @@ if TYPE_CHECKING:
 
     class _BenchmarkBackendSupportModule(Protocol):
         _flush_embedding_rows: Callable[..., object]
-        embed_texts: Callable[[Sequence[str]], list[list[float]]]
+        embed_texts: Callable[..., list[list[float]]]
 
 
 from benchmark_timing import (  # type: ignore[import-not-found]
@@ -50,8 +60,9 @@ from benchmark_timing import (  # type: ignore[import-not-found]
 )
 
 from codira import indexer
+from codira.config import with_effective_config_cache
 from codira.indexer import index_repo
-from codira.registry import active_index_backend
+from codira.registry import active_index_backend, with_active_plugin_instance_cache
 from codira.semantic import embeddings as embeddings_module
 from codira.storage import override_storage_root
 
@@ -153,6 +164,8 @@ def active_backend_support_module(root: Path) -> _BenchmarkBackendSupportModule:
     )
 
 
+@with_effective_config_cache
+@with_active_plugin_instance_cache
 def main() -> int:
     """
     Run the benchmark and print one JSON report.
@@ -261,7 +274,11 @@ def main() -> int:
             conn=conn,
         )
 
-    def benchmark_embed_texts(texts: Sequence[str]) -> list[list[float]]:
+    def benchmark_embed_texts(
+        texts: Sequence[str],
+        *,
+        root: Path | None = None,
+    ) -> list[list[float]]:
         batch = list(texts)
         embedding_batch_sizes.append(len(batch))
         embedding_unique_batch_sizes.append(len(set(batch)))
@@ -269,6 +286,7 @@ def main() -> int:
             "embeddings",
             original_embed_texts,
             batch,
+            root=root,
         )
         return cast("list[list[float]]", result)
 

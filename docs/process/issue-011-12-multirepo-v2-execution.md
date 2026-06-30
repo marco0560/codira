@@ -63,12 +63,11 @@ Primary areas:
 * package metadata
 * plugin discovery validation
 * user and maintainer docs
-* compatibility shims for optional analyzers
+* removal of optional-analyzer compatibility shims
 
 Tasks:
 
-- [x] Inventory every remaining compatibility shim for extracted optional
-  analyzers in `docs/process/issue-011-optional-plugin-shim-inventory.md`.
+- [x] Remove the remaining optional-analyzer compatibility shims from core.
 - [x] Reconcile repository-local bootstrap with the accepted package boundary.
 - [x] Reconcile CI jobs with explicit first-party package installs.
 - [x] Align package and install docs with `codira[bundle-official]` and the
@@ -180,7 +179,7 @@ unnecessary.
 
 Primary areas:
 
-* analyzer compatibility shims
+* deleted analyzer compatibility shims
 * registry fallback code
 * tests that currently assume source-tree-local package visibility
 * bundle alignment

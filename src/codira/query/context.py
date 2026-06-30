@@ -25,6 +25,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
+from codira.config import with_effective_config_cache
 from codira.contracts import (
     BackendDocumentationCandidatesRequest,
     BackendQueryConnection,
@@ -66,7 +67,7 @@ from codira.query.signals import (
     RetrievalSignalKind,
     signal_sort_key,
 )
-from codira.registry import active_index_backend
+from codira.registry import active_index_backend, with_active_plugin_instance_cache
 from codira.semantic.embeddings import get_embedding_backend
 from codira.types import (
     ChannelBundle,
@@ -471,6 +472,9 @@ class ExplainSectionsRequest:
         Expansion diagnostics for graph-derived module expansion.
     top_matches : list[codira.types.SymbolRow]
         Primary merged symbols to explain.
+    root : pathlib.Path
+        Repository root whose repo-local embedding configuration should be
+        reported.
     """
 
     lines: list[str]
@@ -489,6 +493,7 @@ class ExplainSectionsRequest:
     diversity: DiversityDiagnostics | None
     expansion: ExpansionDiagnostics | None
     top_matches: list[SymbolRow]
+    root: Path
 
 
 @dataclass(frozen=True)
@@ -5199,20 +5204,22 @@ def _merge_explain_payload(
     return merge_entries
 
 
-def _context_environment_payload() -> dict[str, object]:
+def _context_environment_payload(root: Path) -> dict[str, object]:
     """
     Build the stable environment subsection for JSON explain output.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path
+        Repository root whose repo-local embedding configuration should be
+        reported.
 
     Returns
     -------
     dict[str, object]
         JSON-serializable environment metadata.
     """
-    embedding_backend = get_embedding_backend()
+    embedding_backend = get_embedding_backend(root=root)
     return {
         "codira_version": __version__,
         "schema_version": SCHEMA_VERSION,
@@ -5349,7 +5356,9 @@ def _context_explain_payload(
     dict[str, object]
         JSON-serializable explain block.
     """
-    explain_block: dict[str, object] = {"environment": _context_environment_payload()}
+    explain_block: dict[str, object] = {
+        "environment": _context_environment_payload(request.root)
+    }
 
     if request.intent:
         explain_block["intent"] = _intent_explain_payload(request.intent)
@@ -5496,6 +5505,7 @@ def _render_context(
                 diversity=request.diversity,
                 expansion=request.expansion,
                 top_matches=request.top_matches,
+                root=request.root,
             )
         )
 
@@ -5529,7 +5539,7 @@ def _append_explain_environment(
     None
         Environment, intent, and routing sections are appended in place.
     """
-    embedding_backend = get_embedding_backend()
+    embedding_backend = get_embedding_backend(root=request.root)
     request.lines.append("=== EXPLAIN: ENVIRONMENT ===")
     request.lines.append(f"codira_version: {__version__}")
     request.lines.append(f"schema_version: {SCHEMA_VERSION}")
@@ -6425,6 +6435,8 @@ def _finalize_signal_diagnostics(
     )
 
 
+@with_effective_config_cache
+@with_active_plugin_instance_cache
 def context_for(
     request: ContextRequest,
 ) -> str:

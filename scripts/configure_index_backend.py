@@ -27,6 +27,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/configure_index_backend.py [options]\n\n"
+        "Configure the active Codira index backend for the current shell.\n"
+        "Use `uv run python scripts/configure_index_backend.py --help` for "
+        "the environment-backed full option list."
+    )
+    raise SystemExit(0)
+
 from codira.registry import (
     DEFAULT_INDEX_BACKEND,
     INDEX_BACKEND_ENV_VAR,

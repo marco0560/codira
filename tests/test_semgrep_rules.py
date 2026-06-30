@@ -71,21 +71,52 @@ FIXTURE_FILES = (
     / "codira-analyzer-test"
     / "src"
     / "plugin_broad_except_exception_violation.py",
+    REPO_ROOT
+    / "fixtures"
+    / "packages"
+    / "codira-embedding-test"
+    / "src"
+    / "plugin_manual_schema_violation.py",
     REPO_ROOT / "fixtures" / "src" / "core_backend_import_violation.py",
     REPO_ROOT / "fixtures" / "src" / "core_sqlite_outside_allowlist_violation.py",
+    REPO_ROOT / "fixtures" / "src" / "query_config_resolution_violation.py",
     REPO_ROOT / "fixtures" / "src" / "random_violation.py",
     REPO_ROOT
     / "fixtures"
     / "packages"
     / "codira-backend-duckdb"
     / "src"
+    / "full_index_bulk_violation.py",
+    REPO_ROOT
+    / "fixtures"
+    / "packages"
+    / "codira-backend-duckdb"
+    / "src"
     / "duckdb_support_batch_violation.py",
+    REPO_ROOT
+    / "fixtures"
+    / "packages"
+    / "codira-vector-store-duckdb"
+    / "src"
+    / "vector_store_batch_violation.py",
+    REPO_ROOT
+    / "fixtures"
+    / "packages"
+    / "codira-vector-store-duckdb"
+    / "src"
+    / "vector_store_full_index_violation.py",
 )
 EXPECTED_FIXTURE_RULE_IDS = {
     "codira.arch.no-backend-import-in-analyzers",
     "codira.arch.no-backend-package-import-outside-allowed-layers",
+    "codira.arch.no-direct-config-load-in-query-hot-path",
     "codira.arch.no-duckdb-executemany-in-support",
     "codira.arch.no-duckdb-returning-id-in-support",
+    "codira.arch.no-store-analysis-in-duckdb-full-index-bulk",
+    "codira.arch.no-core-schema-ddl-import-in-backends",
+    "codira.arch.require-fresh-full-index-embedding-flush",
+    "codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk",
+    "codira.arch.require-duckdb-full-index-vector-preservation",
     "codira.arch.no-registry-import-in-analyzers",
     "codira.arch.no-sqlite3-in-analyzers",
     "codira.arch.no-sqlite3-outside-allowed-layers",
@@ -94,6 +125,7 @@ EXPECTED_FIXTURE_RULE_IDS = {
     "codira.det.no-random-without-explicit-seed",
     "codira.plugins.no-broad-except-exception",
     "codira.plugins.no-core-storage-import",
+    "codira.plugins.require-shared-plugin-json-schema-helper",
 }
 
 

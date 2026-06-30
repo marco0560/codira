@@ -1,18 +1,23 @@
 # Plugin Model
 
-`ADR-004` now lands a real plugin surface for analyzers and backends.
+`ADR-004` landed the analyzer/backend plugin surface. `ADR-022` extends that
+model with embedding engine and vector-store plugin families.
 
 ## Accepted Target Model
 
-The accepted migration distinguishes two extension families:
+The accepted migration now distinguishes four extension families:
 
 - `IndexBackend`: exactly one active storage/query backend per repository index
 - `LanguageAnalyzer`: zero or more analyzers participating in one indexing run
+- `EmbeddingEngine`: exactly one active text-to-vector runtime
+- `VectorStore`: exactly one active vector persistence/similarity store
 
 This asymmetry is deliberate:
 
 - storage selection is an instance-level policy
 - analyzers represent repository-content capabilities
+- embedding engines and vector stores are singleton runtime/storage choices
+  because vector identity and query ranking depend on the active pair
 
 ## Current State
 
@@ -25,6 +30,8 @@ The current codebase now exposes:
 - optional explicit configuration injection through `configure(config)`
 - optional plugin-owned JSON Schema publication through
   `configuration_json_schema()`
+- machine-readable capability reporting for all four plugin families through
+  `codira caps --json`
 
 ## Phase-3 Baseline
 
@@ -73,7 +80,7 @@ exclude_paths = ["tests/fixtures"]
 ```
 
 The table name is `plugins.<family>-<plugin-name>`, where `<family>` is
-`analyzer` or `backend`.
+`analyzer`, `backend`, `embedding`, or `vector-store`.
 
 Plugins may expose:
 
@@ -105,8 +112,14 @@ The current packaging boundary is also now explicit:
   first-party packages rather than remaining built-ins in the core install
 - the default SQLite backend is provided by `codira-backend-sqlite`
 - the optional DuckDB backend is provided by `codira-backend-duckdb`
+- the default SentenceTransformers engine is provided by
+  `codira-embedding-sentence-transformers`
+- the optional ONNX Runtime engine is provided by `codira-embedding-onnx`
+- local vector-store plugins are provided by `codira-vector-store-sqlite` and
+  `codira-vector-store-duckdb`
 - third-party plugins live in separate distributions and are discovered from
-  `codira.analyzers` and `codira.backends` entry-point groups
+  `codira.analyzers`, `codira.backends`, `codira.embedding_engines`, and
+  `codira.vector_stores` entry-point groups
 
 ## Phase-9 Analyzer Proof
 

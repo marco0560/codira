@@ -45,6 +45,7 @@ rules:
           - pattern: from codira_backend_sqlite import $IMPORT
           - pattern: import codira_backend_duckdb
           - pattern: from codira_backend_duckdb import $IMPORT
+      - pattern-not-regex: from codira_backend_(sqlite|duckdb)\.schema import
 
   - id: codira.arch.no-sqlite3-in-analyzers
     message: >
@@ -113,6 +114,7 @@ rules:
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_storage.py
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_support.py
+        - /packages/codira-vector-store-sqlite/src/codira_vector_store_sqlite/__init__.py
         - /packages/**/tests/**/*.py
     patterns:
       - pattern-either:
@@ -135,6 +137,9 @@ rules:
         - /fixtures/src/**/*.py
       exclude:
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py
+        - "**/packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_storage.py"
+        - "**/packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py"
+        - "**/packages/codira-backend-duckdb/src/codira_backend_duckdb/duckdb_query_backend.py"
         - /examples/plugins/codira_demo_backend/src/codira_demo_backend/__init__.py
         - /packages/**/tests/**/*.py
     patterns:
@@ -144,17 +149,36 @@ rules:
           - pattern: import codira_backend_duckdb
           - pattern: from codira_backend_duckdb import $IMPORT
 
+  - id: codira.arch.no-direct-config-load-in-query-hot-path
+    message: >
+      Query hot paths must use command-scoped runtime configuration instead of
+      directly loading effective config.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /src/codira/query/**/*.py
+        - /src/codira/semantic/search.py
+        - /fixtures/src/**/*.py
+      exclude:
+        - /tests/**/*.py
+    patterns:
+      - pattern: load_effective_config(...)
+
   - id: codira.arch.no-duckdb-executemany-in-support
     message: >
-      DuckDB support persistence must use columnar batch loading instead of
-      row-wise executemany calls.
+      DuckDB persistence must use columnar batch loading instead of row-wise
+      executemany calls.
     severity: ERROR
     languages:
       - python
     paths:
       include:
         - /packages/codira-backend-duckdb/src/codira_backend_duckdb/duckdb_support.py
+        - /packages/codira-vector-store-duckdb/src/**/*.py
         - /fixtures/packages/codira-backend-duckdb/src/**/*.py
+        - /fixtures/packages/codira-vector-store-duckdb/src/**/*.py
     patterns:
       - pattern: $CONN.executemany(...)
 
@@ -170,3 +194,84 @@ rules:
         - /packages/codira-backend-duckdb/src/codira_backend_duckdb/duckdb_support.py
         - /fixtures/packages/codira-backend-duckdb/src/**/*.py
     pattern-regex: RETURNING\s+id
+
+  - id: codira.arch.no-store-analysis-in-duckdb-full-index-bulk
+    message: >
+      DuckDB full-index bulk persistence must not route through the legacy
+      per-file _store_analysis helper.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-backend-duckdb/src/**/*.py
+        - /fixtures/packages/codira-backend-duckdb/src/**/*.py
+    patterns:
+      - pattern-inside: |
+          def persist_full_index(...):
+              ...
+      - pattern: _store_analysis(...)
+
+  - id: codira.arch.no-core-schema-ddl-import-in-backends
+    message: >
+      Backend plugins own their physical schema and must not import core schema
+      DDL.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-backend-*/src/**/*.py
+        - /fixtures/packages/codira-backend-*/src/**/*.py
+    patterns:
+      - pattern: from codira.schema import DDL
+
+  - id: codira.arch.require-fresh-full-index-embedding-flush
+    message: >
+      DuckDB full-index bulk embedding flushes must declare fresh_full_index=True
+      so stale pending-row cleanup is skipped without disabling vector-cache reuse.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-backend-duckdb/src/**/*.py
+        - /fixtures/packages/codira-backend-duckdb/src/**/*.py
+    patterns:
+      - pattern-inside: |
+          def persist_full_index(...):
+              ...
+      - pattern: _flush_pending_embedding_rows(...)
+      - pattern-not: _flush_pending_embedding_rows(..., fresh_full_index=True, ...)
+
+  - id: codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk
+    message: >
+      DuckDB vector-store full-index bulk persistence must not route through
+      the normal per-batch store_vectors path.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-vector-store-duckdb/src/**/*.py
+        - /fixtures/packages/codira-vector-store-duckdb/src/**/*.py
+    patterns:
+      - pattern-inside: |
+          def store_vectors_for_full_index(...):
+              ...
+      - pattern: self.store_vectors(...)
+
+  - id: codira.arch.require-duckdb-full-index-vector-preservation
+    message: >
+      DuckDB full-index vector-store requests must opt into preservation so
+      unchanged materialized vectors are not rewritten.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /packages/codira-backend-duckdb/src/**/*.py
+        - /fixtures/packages/codira-backend-duckdb/src/**/*.py
+    patterns:
+      - pattern: VectorStoreFullIndexRequest(...)
+      - pattern-not: VectorStoreFullIndexRequest(..., preserve_existing=True, ...)

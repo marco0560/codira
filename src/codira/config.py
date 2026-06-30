@@ -16,8 +16,11 @@ can consume configuration without circular imports.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Literal, cast
 
@@ -28,6 +31,8 @@ CONFIG_VERSION = 1
 APP_NAME = "codira"
 CONFIG_FILENAME = "config.toml"
 DEFAULT_BACKEND_NAME = "sqlite"
+DEFAULT_EMBEDDING_ENGINE_NAME = "sentence-transformers"
+DEFAULT_VECTOR_STORE_NAME = "sqlite"
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_EMBEDDING_VERSION = "1"
 DEFAULT_EMBEDDING_DIMENSION = 384
@@ -47,6 +52,9 @@ _PLUGIN_CONFIG_RESERVED_KEYS = frozenset(
 )
 LevelName = Literal["system", "user", "repo", "effective"]
 ProfileName = Literal["default", "low-memory", "gpu"]
+_EFFECTIVE_CONFIG_CACHE: ContextVar[
+    dict[tuple[str | None, bool], CodiraConfig] | None
+] = ContextVar("codira_effective_config_cache", default=None)
 
 
 class ConfigError(ValueError):
@@ -151,8 +159,12 @@ class EmbeddingsConfig:
     ----------
     enabled : bool
         Whether embedding computation and retrieval channels are active.
+    engine : str
+        Active embedding engine plugin name.
+    vector_store : str
+        Active vector-store plugin name.
     model : str
-        Sentence-transformers model identifier.
+        Embedding model identifier.
     version : str
         Explicit embedding backend version stored with persisted vectors.
     dimension : int
@@ -172,6 +184,8 @@ class EmbeddingsConfig:
     """
 
     enabled: bool = True
+    engine: str = DEFAULT_EMBEDDING_ENGINE_NAME
+    vector_store: str = DEFAULT_VECTOR_STORE_NAME
     model: str = DEFAULT_EMBEDDING_MODEL
     version: str = DEFAULT_EMBEDDING_VERSION
     dimension: int = DEFAULT_EMBEDDING_DIMENSION
@@ -238,6 +252,8 @@ DEFAULT_CONFIG: dict[str, object] = {
     },
     "embeddings": {
         "enabled": True,
+        "engine": DEFAULT_EMBEDDING_ENGINE_NAME,
+        "vector_store": DEFAULT_VECTOR_STORE_NAME,
         "model": DEFAULT_EMBEDDING_MODEL,
         "version": DEFAULT_EMBEDDING_VERSION,
         "dimension": DEFAULT_EMBEDDING_DIMENSION,
@@ -321,7 +337,19 @@ FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
         "exclude_fixtures_logs": True,
     },
     "backend-sqlite": {"enabled": True},
-    "backend-duckdb": {"enabled": True},
+    "backend-duckdb": {"enabled": True, "profiling_enabled": False},
+    "embedding-sentence-transformers": {"enabled": True},
+    "embedding-onnx": {
+        "enabled": True,
+        "provider": "CPUExecutionProvider",
+        "precision": "float32",
+        "normalize": True,
+        "max_tokens": 512,
+        "intra_op_num_threads": 0,
+        "inter_op_num_threads": 0,
+    },
+    "vector-store-sqlite": {"enabled": True},
+    "vector-store-duckdb": {"enabled": True},
 }
 PROFILE_OVERRIDES: dict[ProfileName, dict[str, object]] = {
     "default": {},
@@ -353,6 +381,8 @@ _SCHEMA: dict[str, object] = {
     },
     "embeddings": {
         "enabled": bool,
+        "engine": str,
+        "vector_store": str,
         "model": str,
         "version": str,
         "dimension": int,
@@ -745,10 +775,12 @@ def _validate_plugin_semantics(plugins: Mapping[str, object]) -> None:
     for key, item in plugins.items():
         if key in _PLUGIN_CONFIG_RESERVED_KEYS:
             continue
-        if not key.startswith(("analyzer-", "backend-")):
+        if not key.startswith(("analyzer-", "backend-", "embedding-", "vector-store-")):
             msg = (
                 "Plugin configuration tables must be named "
-                f"plugins.analyzer-* or plugins.backend-*: plugins.{key}"
+                "plugins.analyzer-*, plugins.backend-*, "
+                "plugins.embedding-*, or plugins.vector-store-*: "
+                f"plugins.{key}"
             )
             raise ConfigError(msg)
         if not isinstance(item, Mapping):
@@ -901,7 +933,7 @@ def _validate_semantics(value: Mapping[str, object]) -> None:
 
     embeddings = value.get("embeddings")
     if isinstance(embeddings, Mapping):
-        for key in ("model", "version", "device"):
+        for key in ("engine", "vector_store", "model", "version", "device"):
             item = embeddings.get(key)
             if isinstance(item, str) and not item.strip():
                 msg = f"Configuration key embeddings.{key} must be non-empty."
@@ -1405,6 +1437,80 @@ def ensure_user_config() -> Path:
     return path
 
 
+@contextmanager
+def effective_config_cache() -> Iterator[None]:
+    """
+    Cache effective configuration loads within one command scope.
+
+    Parameters
+    ----------
+    None
+
+    Yields
+    ------
+    None
+        The active context caches default-environment effective config loads
+        until the context exits.
+
+    Notes
+    -----
+    Explicit ``env`` mappings are intentionally excluded so tests and callers
+    that model alternate environments always receive freshly merged values.
+    """
+
+    if _EFFECTIVE_CONFIG_CACHE.get() is not None:
+        yield
+        return
+
+    token = _EFFECTIVE_CONFIG_CACHE.set({})
+    try:
+        yield
+    finally:
+        _EFFECTIVE_CONFIG_CACHE.reset(token)
+
+
+def with_effective_config_cache[**P, R](
+    func: Callable[P, R],
+) -> Callable[P, R]:
+    """
+    Run one callable inside a command-scoped effective-config cache.
+
+    Parameters
+    ----------
+    func : collections.abc.Callable
+        Callable whose nested default-environment config loads should share
+        one command-local cache.
+
+    Returns
+    -------
+    collections.abc.Callable
+        Wrapper preserving the original call signature for type checkers.
+    """
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        """
+        Execute the wrapped callable with scoped config caching.
+
+        Parameters
+        ----------
+        *args : object
+            Positional arguments forwarded to the wrapped callable.
+        **kwargs : object
+            Keyword arguments forwarded to the wrapped callable.
+
+        Returns
+        -------
+        object
+            Return value from the wrapped callable.
+        """
+
+        with effective_config_cache():
+            return func(*args, **kwargs)
+
+    return wrapper
+
+
 def load_effective_config(
     *,
     root: Path | None = None,
@@ -1433,6 +1539,14 @@ def load_effective_config(
     ConfigError
         If any present config source is invalid.
     """
+
+    cache = _EFFECTIVE_CONFIG_CACHE.get()
+    cache_key: tuple[str | None, bool] | None = None
+    if env is None and cache is not None:
+        cache_key = (None if root is None else str(root.resolve()), auto_create_user)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
 
     if auto_create_user:
         ensure_user_config()
@@ -1470,7 +1584,10 @@ def load_effective_config(
         )
 
     validate_config_mapping(merged)
-    return _config_from_mapping(merged, origins=origins)
+    config = _config_from_mapping(merged, origins=origins)
+    if cache_key is not None and cache is not None:
+        cache[cache_key] = config
+    return config
 
 
 def load_config_level(
@@ -1534,6 +1651,8 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
         "plugins": plugin_mapping,
         "embeddings": {
             "enabled": config.embeddings.enabled,
+            "engine": config.embeddings.engine,
+            "vector_store": config.embeddings.vector_store,
             "model": config.embeddings.model,
             "version": config.embeddings.version,
             "dimension": config.embeddings.dimension,
@@ -1638,6 +1757,8 @@ def _config_from_mapping(
         ),
         embeddings=EmbeddingsConfig(
             enabled=cast("bool", embeddings["enabled"]),
+            engine=cast("str", embeddings["engine"]).strip(),
+            vector_store=cast("str", embeddings["vector_store"]).strip(),
             model=cast("str", embeddings["model"]).strip(),
             version=cast("str", embeddings["version"]).strip(),
             dimension=cast("int", embeddings["dimension"]),

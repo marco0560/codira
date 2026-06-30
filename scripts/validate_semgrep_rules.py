@@ -27,6 +27,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUN_REPO_TOOL = REPO_ROOT / "scripts" / "run_repo_tool.py"
 
+if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+    print(
+        "Usage: python scripts/validate_semgrep_rules.py [-h|--help]\n\n"
+        "Validate repository-owned Semgrep fixture expectations."
+    )
+    raise SystemExit(0)
+
 FIXTURES = (
     (
         "architecture",
@@ -46,20 +53,29 @@ FIXTURES = (
         (
             "codira.arch.no-sqlite3-outside-allowed-layers",
             "codira.arch.no-backend-package-import-outside-allowed-layers",
+            "codira.arch.no-direct-config-load-in-query-hot-path",
         ),
     ),
     (
         "architecture-duckdb",
-        "fixtures/packages/codira-backend-duckdb",
+        "fixtures/packages",
         (
             "codira.arch.no-duckdb-executemany-in-support",
             "codira.arch.no-duckdb-returning-id-in-support",
+            "codira.arch.no-store-analysis-in-duckdb-full-index-bulk",
+            "codira.arch.no-core-schema-ddl-import-in-backends",
+            "codira.arch.require-fresh-full-index-embedding-flush",
+            "codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk",
+            "codira.arch.require-duckdb-full-index-vector-preservation",
         ),
     ),
     (
         "plugins",
         "fixtures/packages",
-        ("codira.plugins.no-broad-except-exception",),
+        (
+            "codira.plugins.no-broad-except-exception",
+            "codira.plugins.require-shared-plugin-json-schema-helper",
+        ),
     ),
     (
         "determinism",

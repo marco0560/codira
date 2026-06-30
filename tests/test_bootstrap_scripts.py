@@ -651,6 +651,7 @@ class _BenchmarkCampaignModule(Protocol):
 
     CampaignConfig: type
     RepositoryBenchmark: type
+    ResolvedRepositoryBenchmark: type
     subprocess: object
 
     def build_parser(self) -> argparse.ArgumentParser:
@@ -685,6 +686,58 @@ class _BenchmarkCampaignModule(Protocol):
         ...
 
     MANIFEST_BENCHMARK_SUBCOMMANDS: frozenset[str]
+
+    def run_directory(self, config: object) -> Path:
+        """
+        Return the campaign run directory.
+
+        Parameters
+        ----------
+        config : object
+            Campaign configuration.
+
+        Returns
+        -------
+        pathlib.Path
+            Run artifact directory.
+        """
+        ...
+
+    def utility_summary_path(self, repo: object, config: object) -> Path:
+        """
+        Return the utility-summary artifact path.
+
+        Parameters
+        ----------
+        repo : object
+            Resolved repository benchmark target.
+        config : object
+            Campaign configuration.
+
+        Returns
+        -------
+        pathlib.Path
+            Utility-summary artifact path.
+        """
+        ...
+
+    def write_utility_summary(self, repo: object, config: object) -> None:
+        """
+        Write one utility-summary artifact.
+
+        Parameters
+        ----------
+        repo : object
+            Resolved repository benchmark target.
+        config : object
+            Campaign configuration.
+
+        Returns
+        -------
+        None
+            The summary is written when Hyperfine data is present.
+        """
+        ...
 
     def command_plan(
         self,
@@ -760,6 +813,95 @@ class _BenchmarkCampaignModule(Protocol):
         -------
         int
             Process exit status.
+        """
+        ...
+
+
+class _ManifestBaselineModule(Protocol):
+    """Protocol for the paired backend benchmark baseline helper."""
+
+    def build_parser(self) -> argparse.ArgumentParser:
+        """
+        Build the manifest baseline parser.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        argparse.ArgumentParser
+            Parser for baseline campaign options.
+        """
+        ...
+
+
+class _FinalEmbeddingCampaignModule(Protocol):
+    """Protocol for the final embedding model campaign helper."""
+
+    def parse_args(self, argv: list[str] | None = None) -> argparse.Namespace:
+        """
+        Parse final campaign arguments.
+
+        Parameters
+        ----------
+        argv : list[str] | None, optional
+            Explicit command-line arguments.
+
+        Returns
+        -------
+        argparse.Namespace
+            Parsed campaign arguments.
+        """
+        ...
+
+    def concrete_backends(self, backend_mode: str) -> tuple[str, ...]:
+        """
+        Return concrete backend phases for a requested backend mode.
+
+        Parameters
+        ----------
+        backend_mode : str
+            Requested backend mode.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Concrete backend names.
+        """
+        ...
+
+    def read_models(self, model_manifest_path: Path) -> tuple[object, ...]:
+        """
+        Read model entries from a manifest.
+
+        Parameters
+        ----------
+        model_manifest_path : pathlib.Path
+            Model manifest path.
+
+        Returns
+        -------
+        tuple[object, ...]
+            Model entries.
+        """
+        ...
+
+    def render_model_config(self, model: object, backend_mode: str) -> str:
+        """
+        Render one model-specific Codira config.
+
+        Parameters
+        ----------
+        model : object
+            Model entry.
+        backend_mode : str
+            Concrete backend name.
+
+        Returns
+        -------
+        str
+            TOML configuration text.
         """
         ...
 
@@ -1555,6 +1697,63 @@ def _load_benchmark_campaign_helper() -> _BenchmarkCampaignModule:
     return cast("_BenchmarkCampaignModule", module)
 
 
+def _load_manifest_baseline_helper() -> _ManifestBaselineModule:
+    """
+    Load the paired backend baseline helper from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the paired backend baseline helper.
+    """
+    helper_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "run_manifest_baseline.py"
+    )
+    sys.path.insert(0, str(helper_path.parent))
+    spec = importlib.util.spec_from_file_location("run_manifest_baseline", helper_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_ManifestBaselineModule", module)
+
+
+def _load_final_embedding_campaign_helper() -> _FinalEmbeddingCampaignModule:
+    """
+    Load the final embedding model campaign helper from its repository path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    object
+        Loaded module object for the final embedding campaign helper.
+    """
+    helper_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_final_embedding_model_campaign.py"
+    )
+    sys.path.insert(0, str(helper_path.parent))
+    spec = importlib.util.spec_from_file_location(
+        "run_final_embedding_model_campaign",
+        helper_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast("_FinalEmbeddingCampaignModule", module)
+
+
 def _load_embedding_startup_benchmark_helper() -> _EmbeddingStartupBenchmarkModule:
     """
     Load the embedding-startup benchmark helper from its repository path.
@@ -2008,6 +2207,7 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
             "pytest",
             "-q",
             "tests",
+            "packages",
         ),
         (
             "python",
@@ -3090,6 +3290,159 @@ def test_release_benchmark_helper_builds_hyperfine_plan() -> None:
     )
 
 
+def test_manifest_baseline_uses_explicit_runs_and_warmup_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Keep paired backend baseline measurement counts on the CLI surface.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to prove old environment variables are ignored.
+
+    Returns
+    -------
+    None
+        The test asserts explicit flags and parser defaults drive run counts.
+    """
+    helper = _load_manifest_baseline_helper()
+    parser = helper.build_parser()
+
+    monkeypatch.setenv("RUNS", "99")
+    monkeypatch.setenv("WARMUP", "99")
+
+    explicit = parser.parse_args(["--runs", "7", "--warmup", "2"])
+    defaults = parser.parse_args([])
+
+    assert explicit.runs == 7
+    assert explicit.warmup == 2
+    assert defaults.runs == 5
+    assert defaults.warmup == 1
+
+
+def test_final_embedding_campaign_uses_explicit_runs_and_warmup_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Keep final embedding campaign measurement counts on the CLI surface.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to prove old environment variables are ignored.
+
+    Returns
+    -------
+    None
+        The test asserts explicit flags and parser defaults drive run counts.
+    """
+    helper = _load_final_embedding_campaign_helper()
+
+    monkeypatch.setenv("RUNS", "99")
+    monkeypatch.setenv("WARMUP", "99")
+
+    explicit = helper.parse_args(["--runs", "7", "--warmup", "2"])
+    defaults = helper.parse_args([])
+
+    assert explicit.runs == 7
+    assert explicit.warmup == 2
+    assert defaults.runs == 5
+    assert defaults.warmup == 1
+
+
+def test_final_embedding_campaign_expands_both_to_concrete_backend_configs(
+    tmp_path: Path,
+) -> None:
+    """
+    Expand ``--backend both`` into visible backend-specific campaign phases.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory used for the model manifest fixture.
+
+    Returns
+    -------
+    None
+        The test asserts both mode has concrete backend order and matching
+        generated backend/vector-store config.
+    """
+    helper = _load_final_embedding_campaign_helper()
+    model_manifest = tmp_path / "models.json"
+    model_manifest.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "id": "example-model",
+                        "engine": "sentence-transformers",
+                        "model": "sentence-transformers/all-MiniLM-L6-v2",
+                        "version": "1",
+                        "dimension": 384,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    model = helper.read_models(model_manifest)[0]
+
+    assert helper.concrete_backends("both") == ("sqlite", "duckdb")
+    assert helper.concrete_backends("sqlite") == ("sqlite",)
+    assert helper.concrete_backends("duckdb") == ("duckdb",)
+
+    sqlite_config = helper.render_model_config(model, "sqlite")
+    duckdb_config = helper.render_model_config(model, "duckdb")
+
+    assert 'name = "sqlite"' in sqlite_config
+    assert 'vector_store = "sqlite"' in sqlite_config
+    assert "[plugins.backend-duckdb]" in sqlite_config
+    assert "profiling_enabled = false" in sqlite_config
+    assert 'name = "duckdb"' in duckdb_config
+    assert 'vector_store = "duckdb"' in duckdb_config
+    assert "[plugins.backend-duckdb]" in duckdb_config
+    assert "profiling_enabled = true" in duckdb_config
+
+
+@pytest.mark.parametrize(
+    ("script_name", "argv"),
+    (
+        ("baseline", ["--runs", "0"]),
+        ("baseline", ["--warmup", "0"]),
+        ("final", ["--runs", "0"]),
+        ("final", ["--warmup", "0"]),
+    ),
+)
+def test_campaign_wrappers_reject_non_positive_run_counts(
+    script_name: str,
+    argv: list[str],
+) -> None:
+    """
+    Reject invalid benchmark run counts before launching campaigns.
+
+    Parameters
+    ----------
+    script_name : str
+        Script helper under test.
+    argv : list[str]
+        Invalid command-line arguments.
+
+    Returns
+    -------
+    None
+        The test asserts argparse rejects non-positive values.
+    """
+    if script_name == "baseline":
+        parser = _load_manifest_baseline_helper().build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(argv)
+    else:
+        helper = _load_final_embedding_campaign_helper()
+        with pytest.raises(SystemExit):
+            helper.parse_args(argv)
+
+
 def test_benchmark_index_helper_uses_the_active_backend_class(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3625,6 +3978,95 @@ def test_benchmark_campaign_helper_expands_manifest_commands(
     )
     assert any("caps --json" in command for command in display_commands)
     assert sum("codira index --full" in command for command in hyperfine_commands) == 1
+
+
+def test_benchmark_campaign_writes_utility_summary(tmp_path: Path) -> None:
+    """
+    Persist workflow-weighted utility scores from Hyperfine exports.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary artifact root.
+
+    Returns
+    -------
+    None
+        The test asserts query command inclusion and score weights stay
+        aligned with the benchmark utility contract.
+    """
+    helper = _load_benchmark_campaign_helper()
+    manifest = tmp_path / "manifest.json"
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260501T120000Z",
+        codira="/tmp/codira/.venv/bin/codira",
+        hyperfine="hyperfine",
+        python="python",
+        runs=3,
+        warmup=1,
+        dry_run=False,
+    )
+    repo = helper.ResolvedRepositoryBenchmark(
+        label="codira",
+        category="small",
+        path=tmp_path,
+        query="schema migration",
+        requested_query="schema migration",
+        modes=("benchmark",),
+        commands=(),
+        requested_commands=(),
+        skipped_commands=(),
+        selection={},
+    )
+    hyperfine_path = helper.run_directory(config) / "small-codira-hyperfine.json"
+    hyperfine_path.parent.mkdir(parents=True)
+    hyperfine_path.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira index --full",
+                        "mean": 10.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira index",
+                        "mean": 2.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira ctx --json query",
+                        "mean": 1.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira audit --json",
+                        "mean": 3.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira help",
+                        "mean": 100.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira caps --json",
+                        "mean": 100.0,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    helper.write_utility_summary(repo, config)
+
+    payload = json.loads(
+        helper.utility_summary_path(repo, config).read_text(encoding="utf-8")
+    )
+    assert payload["query_mean_seconds"] == 2.0
+    assert payload["utility_score"] == 56.0
+    assert [row["subcommand"] for row in payload["query_results"]] == [
+        "ctx",
+        "audit",
+    ]
 
 
 def test_benchmark_campaign_adaptive_resolution_picks_richer_candidates(

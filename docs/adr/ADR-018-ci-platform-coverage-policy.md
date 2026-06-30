@@ -12,7 +12,7 @@ Evidence:
 - `.github/workflows/ci.yml` sets `runs-on: ubuntu-latest`.
 - The same workflow installs the project, installs repository git config, runs
   pre-commit, `ruff check .`, `ruff format --check .`, `mypy .`, `pytest`, and
-  `bash scripts/release_audit.sh`.
+  `uv run python -m scripts.release_audit`.
 
 The repository also contains Windows-facing path and shell usage through local
 development, but Windows and macOS are not part of the current CI matrix.

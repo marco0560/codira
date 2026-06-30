@@ -163,7 +163,7 @@ def test_embed_texts_batches_inputs_and_preserves_blank_vectors(
     fake_model = _FakeModel()
     embeddings_module.reset_embedding_runtime_caches()
     monkeypatch.setenv("CODIRA_EMBED_BATCH_SIZE", "7")
-    monkeypatch.setattr(embeddings_module, "_load_model", lambda: fake_model)
+    monkeypatch.setattr(embeddings_module, "_load_model", lambda root=None: fake_model)
 
     vectors = embed_texts(["schema migration", "   ", "docstring audit"])
 
@@ -230,7 +230,7 @@ def test_embed_texts_deduplicates_identical_non_blank_payloads(
 
     fake_model = _FakeModel()
     embeddings_module.reset_embedding_runtime_caches()
-    monkeypatch.setattr(embeddings_module, "_load_model", lambda: fake_model)
+    monkeypatch.setattr(embeddings_module, "_load_model", lambda root=None: fake_model)
 
     vectors = embed_texts(
         ["schema migration", "schema migration", "docstring audit", "   "]
@@ -290,7 +290,7 @@ def test_embed_texts_uses_repo_default_batch_size(
     fake_model = _FakeModel()
     embeddings_module.reset_embedding_runtime_caches()
     monkeypatch.delenv("CODIRA_EMBED_BATCH_SIZE", raising=False)
-    monkeypatch.setattr(embeddings_module, "_load_model", lambda: fake_model)
+    monkeypatch.setattr(embeddings_module, "_load_model", lambda root=None: fake_model)
 
     assert embed_texts(["schema migration"]) == [[1.0] * EMBEDDING_DIM]
     assert fake_model.batch_sizes == [DEFAULT_EMBEDDING_BATCH_SIZE]
@@ -390,7 +390,12 @@ def test_flush_embedding_rows_batches_and_reuses_identical_payloads(
 
     calls: list[list[str]] = []
 
-    def fake_embed_texts(texts: list[str]) -> list[list[float]]:
+    def fake_embed_texts(
+        texts: list[str],
+        *,
+        root: Path | None = None,
+    ) -> list[list[float]]:
+        del root
         calls.append(list(texts))
         return [[float(index + 1)] * EMBEDDING_DIM for index, _text in enumerate(texts)]
 
@@ -505,7 +510,12 @@ def test_flush_embedding_rows_reuses_persistent_vector_cache(
         ),
     )
 
-    def unexpected_embed_texts(_texts: list[str]) -> list[list[float]]:
+    def unexpected_embed_texts(
+        _texts: list[str],
+        *,
+        root: Path | None = None,
+    ) -> list[list[float]]:
+        del root
         msg = "cached embedding should not invoke inference"
         raise AssertionError(msg)
 
@@ -981,17 +991,24 @@ def test_load_model_provisions_missing_local_artifact(
         sentence_transformer: type[object],
         *,
         offline: bool,
+        root: Path | None = None,
     ) -> object:
         del sentence_transformer
+        del root
         calls.append(offline)
         if offline and not provisioned:
             msg = "missing local artifact"
             raise OSError(msg)
         return _FakeModel()
 
-    def fake_provision_embedding_model(*, quiet: bool = False) -> None:
+    def fake_provision_embedding_model(
+        *,
+        quiet: bool = False,
+        root: Path | None = None,
+    ) -> None:
         nonlocal provisioned
         del quiet
+        del root
         provisioned = True
 
     embeddings_module.reset_embedding_runtime_caches()

@@ -17,8 +17,10 @@ This module belongs to the **plugin registration layer** powering ADR-004 analyz
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, wraps
 from importlib import metadata
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -28,21 +30,30 @@ from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
 from codira.config import DEFAULT_BACKEND_NAME, ConfigError, load_effective_config
 from codira.contracts import (
     ConfigurablePlugin,
+    EmbeddingEngine,
     IndexBackend,
     LanguageAnalyzer,
     PluginConfigurationSchemaProvider,
+    VectorStore,
 )
 from codira.plugin_config import plugin_configuration_fingerprint, plugin_enabled
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterator, Sequence
     from pathlib import Path
+
+    from codira.contracts import (
+        EmbeddingEngine as EmbeddingEngineProtocol,
+        VectorStore as VectorStoreProtocol,
+    )
 
 DEFAULT_INDEX_BACKEND = DEFAULT_BACKEND_NAME
 INDEX_BACKEND_ENV_VAR = "CODIRA_INDEX_BACKEND"
 DISABLE_THIRD_PARTY_PLUGINS_ENV_VAR = "CODIRA_DISABLE_THIRD_PARTY_PLUGINS"
 ANALYZER_ENTRY_POINT_GROUP = "codira.analyzers"
 BACKEND_ENTRY_POINT_GROUP = "codira.backends"
+EMBEDDING_ENGINE_ENTRY_POINT_GROUP = "codira.embedding_engines"
+VECTOR_STORE_ENTRY_POINT_GROUP = "codira.vector_stores"
 # These package hints are registry metadata only. SQLite remains the
 # compatibility default by backend name, while schema and connection ownership
 # live in the first-party backend package.
@@ -97,10 +108,13 @@ REQUIRED_BACKEND_METHODS: tuple[str, ...] = (
     "prune_orphaned_embeddings",
     "current_embedding_state_matches",
 )
-PluginFamily = Literal["analyzer", "backend"]
+PluginFamily = Literal["analyzer", "backend", "embedding", "vector-store"]
 PluginSource = Literal["builtin", "entry_point"]
 PluginStatus = Literal["loaded", "skipped", "duplicate"]
 PluginOrigin = Literal["core", "first_party", "third_party"]
+_ACTIVE_PLUGIN_INSTANCE_CACHE: ContextVar[
+    dict[tuple[PluginFamily, str, str | None], object] | None
+] = ContextVar("codira_active_plugin_instance_cache", default=None)
 
 
 @dataclass(frozen=True)
@@ -188,6 +202,165 @@ class _LoadedPlugin:
     version: str
     factory: Callable[[], object]
     entry_point: str | None = None
+
+
+@contextmanager
+def active_plugin_instance_cache() -> Iterator[None]:
+    """
+    Cache singleton plugin instances within one command scope.
+
+    Parameters
+    ----------
+    None
+
+    Yields
+    ------
+    None
+        The active context reuses configured backend, embedding, and vector
+        store instances until the context exits.
+    """
+
+    if _ACTIVE_PLUGIN_INSTANCE_CACHE.get() is not None:
+        yield
+        return
+
+    token = _ACTIVE_PLUGIN_INSTANCE_CACHE.set({})
+    try:
+        yield
+    finally:
+        _ACTIVE_PLUGIN_INSTANCE_CACHE.reset(token)
+
+
+def with_active_plugin_instance_cache[**P, R](
+    func: Callable[P, R],
+) -> Callable[P, R]:
+    """
+    Run one callable inside a command-scoped active-plugin cache.
+
+    Parameters
+    ----------
+    func : collections.abc.Callable
+        Callable whose nested active-plugin lookups should share one
+        command-local cache.
+
+    Returns
+    -------
+    collections.abc.Callable
+        Wrapper preserving the original call signature for type checkers.
+    """
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        """
+        Execute the wrapped callable with scoped active-plugin caching.
+
+        Parameters
+        ----------
+        *args : object
+            Positional arguments forwarded to the wrapped callable.
+        **kwargs : object
+            Keyword arguments forwarded to the wrapped callable.
+
+        Returns
+        -------
+        object
+            Return value from the wrapped callable.
+        """
+
+        with active_plugin_instance_cache():
+            return func(*args, **kwargs)
+
+    return wrapper
+
+
+def _active_plugin_cache_key(
+    *,
+    family: PluginFamily,
+    name: str,
+    root: Path | None,
+) -> tuple[PluginFamily, str, str | None]:
+    """
+    Return the command-scoped cache key for one active plugin.
+
+    Parameters
+    ----------
+    family : {"analyzer", "backend", "embedding", "vector-store"}
+        Plugin family.
+    name : str
+        Active plugin name.
+    root : pathlib.Path | None
+        Repository root participating in plugin configuration.
+
+    Returns
+    -------
+    tuple[str, str, str | None]
+        Stable cache key.
+    """
+
+    return (family, name, None if root is None else str(root.resolve()))
+
+
+def _cached_active_plugin(
+    *,
+    family: PluginFamily,
+    name: str,
+    root: Path | None,
+) -> object | None:
+    """
+    Return a cached active plugin instance when a command cache is active.
+
+    Parameters
+    ----------
+    family : {"analyzer", "backend", "embedding", "vector-store"}
+        Plugin family.
+    name : str
+        Active plugin name.
+    root : pathlib.Path | None
+        Repository root participating in plugin configuration.
+
+    Returns
+    -------
+    object | None
+        Cached plugin instance, or ``None`` when absent.
+    """
+
+    cache = _ACTIVE_PLUGIN_INSTANCE_CACHE.get()
+    if cache is None:
+        return None
+    return cache.get(_active_plugin_cache_key(family=family, name=name, root=root))
+
+
+def _store_active_plugin(
+    *,
+    family: PluginFamily,
+    name: str,
+    root: Path | None,
+    instance: object,
+) -> None:
+    """
+    Store one active plugin instance when a command cache is active.
+
+    Parameters
+    ----------
+    family : {"analyzer", "backend", "embedding", "vector-store"}
+        Plugin family.
+    name : str
+        Active plugin name.
+    root : pathlib.Path | None
+        Repository root participating in plugin configuration.
+    instance : object
+        Configured active plugin instance.
+
+    Returns
+    -------
+    None
+        The active command cache is updated when present.
+    """
+
+    cache = _ACTIVE_PLUGIN_INSTANCE_CACHE.get()
+    if cache is None:
+        return
+    cache[_active_plugin_cache_key(family=family, name=name, root=root)] = instance
 
 
 def _registered_index_backends() -> dict[str, type[IndexBackend]]:
@@ -517,6 +690,38 @@ def _builtin_backend_plugins() -> list[_LoadedPlugin]:
     return []
 
 
+def _builtin_embedding_engine_plugins() -> list[_LoadedPlugin]:
+    """
+    Return built-in embedding engine registrations.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    list[codira.registry._LoadedPlugin]
+        Built-in embedding engine plugins in deterministic order.
+    """
+    return []
+
+
+def _builtin_vector_store_plugins() -> list[_LoadedPlugin]:
+    """
+    Return built-in vector-store registrations.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    list[codira.registry._LoadedPlugin]
+        Built-in vector-store plugins in deterministic order.
+    """
+    return []
+
+
 def _registered_language_analyzer_factories() -> tuple[
     Callable[[], LanguageAnalyzer], ...
 ]:
@@ -689,71 +894,19 @@ def _load_entry_point_plugin(
             origin=_plugin_origin(provider=provider, source="entry_point"),
         )
 
-    if family == "analyzer":
-        if not isinstance(instance, LanguageAnalyzer):
-            return None, PluginRegistration(
-                family=family,
-                name=entry_point.name,
-                provider=provider,
-                source="entry_point",
-                status="skipped",
-                version="unknown",
-                entry_point=entry_point.name,
-                detail="factory returned a non-LanguageAnalyzer object",
-                origin=_plugin_origin(provider=provider, source="entry_point"),
-            )
-        discovery_globs = getattr(instance, "discovery_globs", None)
-        invalid_discovery_globs = (
-            not isinstance(discovery_globs, tuple)
-            or not discovery_globs
-            or any(
-                not isinstance(pattern, str) or not pattern.strip()
-                for pattern in discovery_globs
-            )
+    contract_error = _plugin_contract_error(family=family, instance=instance)
+    if contract_error is not None:
+        return None, PluginRegistration(
+            family=family,
+            name=entry_point.name,
+            provider=provider,
+            source="entry_point",
+            status="skipped",
+            version="unknown",
+            entry_point=entry_point.name,
+            detail=contract_error,
+            origin=_plugin_origin(provider=provider, source="entry_point"),
         )
-        if invalid_discovery_globs:
-            return None, PluginRegistration(
-                family=family,
-                name=entry_point.name,
-                provider=provider,
-                source="entry_point",
-                status="skipped",
-                version="unknown",
-                entry_point=entry_point.name,
-                detail="analyzer discovery_globs must be a non-empty tuple[str, ...]",
-                origin=_plugin_origin(provider=provider, source="entry_point"),
-            )
-    else:
-        if not isinstance(instance, IndexBackend):
-            return None, PluginRegistration(
-                family=family,
-                name=entry_point.name,
-                provider=provider,
-                source="entry_point",
-                status="skipped",
-                version="unknown",
-                entry_point=entry_point.name,
-                detail="factory returned a non-IndexBackend object",
-                origin=_plugin_origin(provider=provider, source="entry_point"),
-            )
-        missing_methods = [
-            method
-            for method in REQUIRED_BACKEND_METHODS
-            if not callable(getattr(instance, method, None))
-        ]
-        if missing_methods:
-            joined = ", ".join(sorted(missing_methods))
-            return None, PluginRegistration(
-                family=family,
-                name=entry_point.name,
-                provider=provider,
-                source="entry_point",
-                status="skipped",
-                version="unknown",
-                entry_point=entry_point.name,
-                detail=f"backend is missing required methods: {joined}",
-                origin=_plugin_origin(provider=provider, source="entry_point"),
-            )
 
     name = getattr(instance, "name", None)
     raw_version = getattr(instance, "version", None)
@@ -855,6 +1008,97 @@ def _discover_entry_point_plugins(
             loaded.append(plugin)
 
     return loaded, registrations
+
+
+def _analyzer_contract_error(instance: object) -> str | None:
+    """
+    Return a deterministic analyzer contract error for one plugin instance.
+
+    Parameters
+    ----------
+    instance : object
+        Plugin instance to validate.
+
+    Returns
+    -------
+    str | None
+        Error detail, or ``None`` when the instance satisfies the contract.
+    """
+
+    if not isinstance(instance, LanguageAnalyzer):
+        return "factory returned a non-LanguageAnalyzer object"
+    discovery_globs = getattr(instance, "discovery_globs", None)
+    invalid_discovery_globs = (
+        not isinstance(discovery_globs, tuple)
+        or not discovery_globs
+        or any(
+            not isinstance(pattern, str) or not pattern.strip()
+            for pattern in discovery_globs
+        )
+    )
+    if invalid_discovery_globs:
+        return "analyzer discovery_globs must be a non-empty tuple[str, ...]"
+    return None
+
+
+def _backend_contract_error(instance: object) -> str | None:
+    """
+    Return a deterministic backend contract error for one plugin instance.
+
+    Parameters
+    ----------
+    instance : object
+        Plugin instance to validate.
+
+    Returns
+    -------
+    str | None
+        Error detail, or ``None`` when the instance satisfies the contract.
+    """
+
+    if not isinstance(instance, IndexBackend):
+        return "factory returned a non-IndexBackend object"
+    missing_methods = [
+        method
+        for method in REQUIRED_BACKEND_METHODS
+        if not callable(getattr(instance, method, None))
+    ]
+    if missing_methods:
+        joined = ", ".join(sorted(missing_methods))
+        return f"backend is missing required methods: {joined}"
+    return None
+
+
+def _plugin_contract_error(
+    *,
+    family: PluginFamily,
+    instance: object,
+) -> str | None:
+    """
+    Return a deterministic contract error for one plugin instance.
+
+    Parameters
+    ----------
+    family : {"analyzer", "backend", "embedding", "vector-store"}
+        Plugin family being validated.
+    instance : object
+        Plugin instance to validate.
+
+    Returns
+    -------
+    str | None
+        Error detail, or ``None`` when the instance satisfies the contract.
+    """
+
+    if family == "analyzer":
+        return _analyzer_contract_error(instance)
+    if family == "backend":
+        return _backend_contract_error(instance)
+    if family == "embedding" and not isinstance(instance, EmbeddingEngine):
+        return "factory returned a non-EmbeddingEngine object"
+    if family == "vector-store" and not isinstance(instance, VectorStore):
+        return "factory returned a non-VectorStore object"
+    return None
 
 
 def _resolve_plugins(
@@ -990,7 +1234,13 @@ def _plugin_snapshot(
                 for key, value in configured_tables.items()
             )
         ),
-        (_entry_points_for_group, _builtin_analyzer_plugins, _builtin_backend_plugins),
+        (
+            _entry_points_for_group,
+            _builtin_analyzer_plugins,
+            _builtin_backend_plugins,
+            _builtin_embedding_engine_plugins,
+            _builtin_vector_store_plugins,
+        ),
     )
     return list(resolved), list(registrations)
 
@@ -1001,7 +1251,7 @@ def _cached_plugin_snapshot(
     third_party_disabled: bool,
     disabled_analyzers: tuple[str, ...],
     configured_enabled_plugins: tuple[tuple[str, bool], ...],
-    cache_tokens: tuple[object, object, object],
+    cache_tokens: tuple[object, object, object, object, object],
 ) -> tuple[tuple[_LoadedPlugin, ...], tuple[PluginRegistration, ...]]:
     """
     Cache the resolved plugin snapshot for one family.
@@ -1036,11 +1286,25 @@ def _cached_plugin_snapshot(
             group=ANALYZER_ENTRY_POINT_GROUP,
             third_party_disabled=third_party_disabled,
         )
-    else:
+    elif family == "backend":
         builtins = _builtin_backend_plugins()
         externals, external_registrations = _discover_entry_point_plugins(
             family="backend",
             group=BACKEND_ENTRY_POINT_GROUP,
+            third_party_disabled=third_party_disabled,
+        )
+    elif family == "embedding":
+        builtins = _builtin_embedding_engine_plugins()
+        externals, external_registrations = _discover_entry_point_plugins(
+            family="embedding",
+            group=EMBEDDING_ENGINE_ENTRY_POINT_GROUP,
+            third_party_disabled=third_party_disabled,
+        )
+    else:
+        builtins = _builtin_vector_store_plugins()
+        externals, external_registrations = _discover_entry_point_plugins(
+            family="vector-store",
+            group=VECTOR_STORE_ENTRY_POINT_GROUP,
             third_party_disabled=third_party_disabled,
         )
 
@@ -1234,12 +1498,22 @@ def plugin_registrations(*, root: Path | None = None) -> list[PluginRegistration
     Returns
     -------
     list[codira.registry.PluginRegistration]
-        Built-in and external plugin registrations for analyzers and backends.
+        Built-in and external plugin registrations for all plugin families.
     """
     analyzer_plugins, analyzer_registrations = _plugin_snapshot("analyzer", root=root)
     backend_plugins, backend_registrations = _plugin_snapshot("backend", root=root)
-    del analyzer_plugins, backend_plugins
-    return analyzer_registrations + backend_registrations
+    embedding_plugins, embedding_registrations = _plugin_snapshot(
+        "embedding",
+        root=root,
+    )
+    vector_plugins, vector_registrations = _plugin_snapshot("vector-store", root=root)
+    del analyzer_plugins, backend_plugins, embedding_plugins, vector_plugins
+    return (
+        analyzer_registrations
+        + backend_registrations
+        + embedding_registrations
+        + vector_registrations
+    )
 
 
 def validate_plugin_configuration(
@@ -1273,13 +1547,28 @@ def validate_plugin_configuration(
     configured_tables = _configured_plugin_tables(root=root)
     analyzer_plugins, analyzer_registrations = _plugin_snapshot("analyzer", root=root)
     backend_plugins, backend_registrations = _plugin_snapshot("backend", root=root)
+    embedding_plugins, embedding_registrations = _plugin_snapshot(
+        "embedding",
+        root=root,
+    )
+    vector_plugins, vector_registrations = _plugin_snapshot("vector-store", root=root)
     all_plugins = {
         plugin_config_key(family=plugin.family, name=plugin.name): plugin
-        for plugin in [*analyzer_plugins, *backend_plugins]
+        for plugin in [
+            *analyzer_plugins,
+            *backend_plugins,
+            *embedding_plugins,
+            *vector_plugins,
+        ]
     }
     loaded_before_enabled = {
         plugin_config_key(family=registration.family, name=registration.name)
-        for registration in [*analyzer_registrations, *backend_registrations]
+        for registration in [
+            *analyzer_registrations,
+            *backend_registrations,
+            *embedding_registrations,
+            *vector_registrations,
+        ]
         if registration.status in {"loaded", "skipped"}
     }
 
@@ -1322,7 +1611,134 @@ def validate_plugin_configuration(
         )
         raise ConfigError(msg)
 
+    configured_engine = config.embeddings.engine.strip()
+    engine_config_key = plugin_config_key(family="embedding", name=configured_engine)
+    if engine_config_key in configured_tables and not plugin_enabled(
+        configured_tables[engine_config_key]
+    ):
+        msg = (
+            f"Configured embedding engine '{configured_engine}' is disabled by "
+            f"plugins.{engine_config_key}."
+        )
+        raise ConfigError(msg)
+
+    configured_vector_store = config.embeddings.vector_store.strip()
+    vector_store_config_key = plugin_config_key(
+        family="vector-store",
+        name=configured_vector_store,
+    )
+    if vector_store_config_key in configured_tables and not plugin_enabled(
+        configured_tables[vector_store_config_key]
+    ):
+        msg = (
+            f"Configured vector store '{configured_vector_store}' is disabled by "
+            f"plugins.{vector_store_config_key}."
+        )
+        raise ConfigError(msg)
+
     return warnings
+
+
+def _active_plugin(
+    *,
+    family: PluginFamily,
+    name: str,
+    root: Path | None = None,
+) -> object:
+    """
+    Instantiate the active plugin for one singleton plugin family.
+
+    Parameters
+    ----------
+    family : {"analyzer", "backend", "embedding", "vector-store"}
+        Plugin family to inspect.
+    name : str
+        Configured plugin name.
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should configure the plugin.
+
+    Returns
+    -------
+    object
+        Configured plugin instance.
+
+    Raises
+    ------
+    ValueError
+        If the configured plugin is unavailable.
+    """
+
+    cached = _cached_active_plugin(family=family, name=name, root=root)
+    if cached is not None:
+        return cached
+
+    plugins, _registrations = _plugin_snapshot(family, root=root)
+    for plugin in plugins:
+        if plugin.name == name:
+            instance = plugin.factory()
+            configured = _configure_plugin_instance(
+                plugin=plugin,
+                instance=instance,
+                root=root,
+            )
+            _store_active_plugin(
+                family=family,
+                name=name,
+                root=root,
+                instance=configured,
+            )
+            return configured
+    available = ", ".join(sorted(plugin.name for plugin in plugins)) or "<none>"
+    msg = f"Unsupported {family} plugin '{name}'. Available plugins: {available}"
+    raise ValueError(msg)
+
+
+def active_embedding_engine(*, root: Path | None = None) -> EmbeddingEngineProtocol:
+    """
+    Return the configured active embedding engine.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should select the engine.
+
+    Returns
+    -------
+    codira.contracts.EmbeddingEngine
+        Configured embedding engine plugin instance.
+    """
+
+    config = load_effective_config(root=root)
+    engine = _active_plugin(
+        family="embedding",
+        name=config.embeddings.engine.strip(),
+        root=root,
+    )
+    return cast("EmbeddingEngineProtocol", engine)
+
+
+def active_vector_store(*, root: Path | None = None) -> VectorStoreProtocol:
+    """
+    Return the configured active vector store.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should select the vector store.
+
+    Returns
+    -------
+    codira.contracts.VectorStore
+        Configured vector-store plugin instance.
+    """
+
+    config = load_effective_config(root=root)
+    vector_store = _active_plugin(
+        family="vector-store",
+        name=config.embeddings.vector_store.strip(),
+        root=root,
+    )
+    return cast("VectorStoreProtocol", vector_store)
 
 
 def missing_language_analyzer_hint(path: Path) -> str | None:
@@ -1468,6 +1884,14 @@ def active_index_backend(*, root: Path | None = None) -> IndexBackend:
         If the configured backend name is not registered.
     """
     configured_name = configured_index_backend_name(root=root)
+    cached = _cached_active_plugin(
+        family="backend",
+        name=configured_name,
+        root=root,
+    )
+    if cached is not None:
+        return cast("IndexBackend", cached)
+
     plugins, _registrations = _plugin_snapshot("backend", root=root)
     registry = {
         plugin.name: cast("Callable[[], IndexBackend]", plugin.factory)
@@ -1494,10 +1918,17 @@ def active_index_backend(*, root: Path | None = None) -> IndexBackend:
 
     instance = factory()
     plugin = next(item for item in plugins if item.name == configured_name)
-    return cast(
+    configured = cast(
         "IndexBackend",
         _configure_plugin_instance(plugin=plugin, instance=instance, root=root),
     )
+    _store_active_plugin(
+        family="backend",
+        name=configured_name,
+        root=root,
+        instance=configured,
+    )
+    return configured
 
 
 def _instantiate_language_analyzers(

@@ -30,13 +30,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from codira_analyzer_python import PythonAnalyzer
 from codira_backend_sqlite import SQLiteIndexBackend
+from codira_backend_sqlite.schema import SCHEMA_VERSION
 from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
 
 import codira.indexer as indexer_module
 import codira.registry as registry_module
 import codira.storage as storage_module
-from codira.analyzers import PythonAnalyzer
 from codira.cli import (
     IndexCommandRequest,
     IndexRebuildRequest,
@@ -65,7 +66,6 @@ from codira.models import (
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.query.exact import docstring_issues, find_symbol
 from codira.scanner import file_metadata
-from codira.schema import SCHEMA_VERSION
 from codira.semantic.embeddings import (
     EMBEDDING_BACKEND,
     EMBEDDING_DIM,
@@ -1125,7 +1125,7 @@ def test_inspect_index_rebuild_request_uses_backend_connection_contract(
     cli_module._write_index_metadata(
         tmp_path,
         {
-            "schema_version": str(SCHEMA_VERSION),
+            "schema_version": str(backend.version),
         },
     )
 
@@ -1180,9 +1180,9 @@ def test_inspect_index_rebuild_request_uses_complete_metadata_fast_path(
     cli_module._write_index_metadata(
         tmp_path,
         {
-            "schema_version": str(SCHEMA_VERSION),
+            "schema_version": str(backend.version),
             "backend_name": "duckdb",
-            "backend_version": "1.5.3",
+            "backend_version": str(backend.version),
             "analyzer_inventory": json.dumps(python_inventory),
             "indexed_file_count": "1",
         },
@@ -2167,7 +2167,7 @@ def test_index_repo_recomputes_embeddings_when_backend_changes(
 
     monkeypatch.setattr(
         "codira.indexer.get_embedding_backend",
-        lambda: EmbeddingBackendSpec(
+        lambda root=None: EmbeddingBackendSpec(
             name=EMBEDDING_BACKEND,
             version="2",
             dim=EMBEDDING_DIM,
@@ -3142,6 +3142,14 @@ def test_index_cli_defers_and_processes_pending_embeddings(
     conn.close()
     assert pending_count == (2,)
     assert embedding_count == (0,)
+    vector_db_path = tmp_path / ".codira" / "embeddings.db"
+    assert vector_db_path.exists()
+    vector_conn = sqlite3.connect(vector_db_path)
+    vector_pending_count = vector_conn.execute(
+        "SELECT COUNT(*) FROM pending_vectors"
+    ).fetchone()
+    vector_conn.close()
+    assert vector_pending_count == (2,)
 
     monkeypatch.setattr(
         sys,
@@ -3157,6 +3165,55 @@ def test_index_cli_defers_and_processes_pending_embeddings(
     assert drain_payload["summary"]["embeddings_reused"] == 0
     assert drain_payload["summary"]["embeddings_pending"] == 0
     assert drain_payload["summary"]["embedding_complete"] is True
+    vector_conn = sqlite3.connect(vector_db_path)
+    vector_pending_count = vector_conn.execute(
+        "SELECT COUNT(*) FROM pending_vectors"
+    ).fetchone()
+    vector_count = vector_conn.execute("SELECT COUNT(*) FROM vectors").fetchone()
+    vector_conn.close()
+    assert vector_pending_count == (0,)
+    assert vector_count == (2,)
+
+
+def test_index_repo_stores_immediate_vectors_in_vector_store(tmp_path: Path) -> None:
+    """
+    Store immediate embedding rows in the separated vector store.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts immediate indexing materializes separated vectors.
+    """
+    module = tmp_path / "src" / "sample.py"
+    _write_module(
+        module,
+        'def demo():\n    """Return a constant."""\n    return 1\n',
+    )
+
+    report = index_repo(tmp_path)
+
+    vector_db_path = tmp_path / ".codira" / "embeddings.db"
+    vector_conn = sqlite3.connect(vector_db_path)
+    try:
+        vector_count = vector_conn.execute("SELECT COUNT(*) FROM vectors").fetchone()
+        cache_count = vector_conn.execute(
+            "SELECT COUNT(*) FROM vector_cache"
+        ).fetchone()
+        pending_count = vector_conn.execute(
+            "SELECT COUNT(*) FROM pending_vectors"
+        ).fetchone()
+    finally:
+        vector_conn.close()
+
+    assert report.embeddings_recomputed == 2
+    assert vector_count == (2,)
+    assert cache_count == (2,)
+    assert pending_count == (0,)
 
 
 def test_index_cli_embedding_mode_flags_do_not_override_disabled_embeddings(
@@ -3566,6 +3623,8 @@ def test_index_cli_supports_read_only_target_with_separate_output_directory(
         assert payload["status"] == "ok"
         assert get_db_path(output).exists()
         assert not get_db_path(target).exists()
+        assert (output / ".codira" / "embeddings.db").exists()
+        assert not (target / ".codira" / "embeddings.db").exists()
     finally:
         module.chmod(0o644)
         src_dir.chmod(0o755)
@@ -3602,7 +3661,10 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
 
     init_db(tmp_path)
     index_repo(tmp_path)
-    _write_index_metadata(tmp_path, {"schema_version": str(SCHEMA_VERSION)})
+    _write_index_metadata(
+        tmp_path,
+        {"schema_version": str(SCHEMA_VERSION)},
+    )
 
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(
@@ -3654,7 +3716,10 @@ def test_ensure_index_rebuilds_when_backend_inventory_changes(
 
     init_db(tmp_path)
     index_repo(tmp_path)
-    _write_index_metadata(tmp_path, {"schema_version": str(SCHEMA_VERSION)})
+    _write_index_metadata(
+        tmp_path,
+        {"schema_version": str(_SQLiteBackendVNext.version)},
+    )
 
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(

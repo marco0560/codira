@@ -1,1 +1,1 @@
-"""Standalone developer tooling scripts for codira."""
+"""Repository maintenance scripts."""

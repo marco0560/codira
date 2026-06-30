@@ -78,16 +78,9 @@ Owned paths per repository:
 * `src/`
 * `tests/`
 
-Core paths that still matter operationally after the split:
-
-* `src/codira/analyzers/python.py`
-* `src/codira/analyzers/json.py`
-* `src/codira/analyzers/c.py`
-* `src/codira/analyzers/bash.py`
-* `tests/test_plugins.py`
-
-These paths stay in core because they either provide compatibility imports or
-core-side integration coverage.
+No analyzer compatibility shim paths remain in core. Analyzer behavior is
+owned by package-local source trees and discovered through entry-point
+metadata.
 
 ## Backend Repository
 

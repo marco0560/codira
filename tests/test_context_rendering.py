@@ -18,6 +18,7 @@ This module belongs to the **context rendering verification layer** that keeps t
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from codira.query.classifier import build_retrieval_plan, classify_query
@@ -46,8 +47,6 @@ from codira.query.context import (
 from codira.query.signals import RetrievalSignal
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from pytest import MonkeyPatch
 
     from codira.contracts import (
@@ -716,6 +715,7 @@ def test_append_explain_signal_sections_renders_overload_evidence() -> None:
             diversity=None,
             expansion=None,
             top_matches=[],
+            root=Path(),
         )
     )
 

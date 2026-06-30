@@ -44,6 +44,8 @@ disabled_analyzers = []
 
 [embeddings]
 enabled = true
+engine = "sentence-transformers"
+vector_store = "sqlite"
 model = "sentence-transformers/all-MiniLM-L6-v2"
 version = "1"
 dimension = 384
@@ -69,6 +71,13 @@ Torch defaults unchanged.
 
 `embeddings.gpu.memory_limit_mb = 0` means no explicit GPU memory limit is
 configured.
+
+`embeddings.engine` selects the active embedding engine plugin. The first-party
+engines are `"sentence-transformers"` and `"onnx"`.
+
+`embeddings.vector_store` selects the active vector-store plugin. The
+first-party local stores are `"sqlite"` and `"duckdb"` and use separated files
+under `.codira/embeddings.db` or `.codira/embeddings.duckdb`.
 
 `embeddings.indexing.mode = "immediate"` computes embeddings during
 `codira index`. Set it to `"deferred"` to persist structural index rows first
@@ -151,6 +160,40 @@ The printed block includes the complete `[embeddings]` section plus
 `[embeddings.gpu]`, including model identity fields and calibrated runtime
 parameters.
 
+## Model Candidate Manifest
+
+`benchmarks/embedding-model-candidates.json` records the model/engine
+combinations used for embedding-engine campaigns. It includes the current
+MiniLM default, `BAAI/bge-small-en-v1.5`,
+`nomic-ai/nomic-embed-text-v1.5`, and
+`jinaai/jina-embeddings-v2-base-code`.
+
+Inspect the manifest and render a config snippet for one entry:
+
+```bash
+uv run python scripts/embedding_model_manifest.py --list
+uv run python scripts/embedding_model_manifest.py \
+  --id bge-small-en-v1.5-onnx \
+  --print-config
+```
+
+The manifest does not contain model weights. Use
+`scripts/download_embedding_model.py` to source `$HOME/.hf_token`, download the
+required Hugging Face artifacts, install ONNX files under the manifest's
+`.codira/models/...` paths, and smoke-test each candidate before launching the
+long campaign.
+
+The current Jina candidate is ONNX-only because the
+`jinaai/jina-embeddings-v2-base-code` SentenceTransformers remote-code path is
+not compatible with the pinned Transformers API used by this repository.
+
+ONNX embedding inputs are truncated before inference. The default
+`plugins.embedding-onnx.max_tokens = 512` protects fixed-length exports from
+runtime shape errors. Set `max_tokens = 0` only for dynamic-shape exports that
+are known to accept arbitrary sequence lengths. Changing `max_tokens` changes
+vectors for over-limit texts, so bump `[embeddings].version` when changing it
+for an existing index.
+
 ## Environment Overrides
 
 Existing process-local environment overrides still work and take precedence
@@ -218,7 +261,7 @@ First-party analyzer options:
 | `[plugins.analyzer-markdown]` | `strip_front_matter`, `emit_file_artifact_without_headings`, `min_heading_level`, `max_heading_level` |
 | `[plugins.analyzer-text]` | `include_root_files`, `include_docs_directories`, `exclude_generated`, `exclude_fixtures_logs` |
 
-First-party backend tables currently accept only common plugin keys:
+First-party backend tables are schema-validated:
 
 ```toml
 [plugins.backend-sqlite]
@@ -226,7 +269,45 @@ enabled = true
 
 [plugins.backend-duckdb]
 enabled = true
+profiling_enabled = false
 ```
 
 Disabling the configured active backend is invalid. Disable an inactive backend
 only, or change `[backend].name` first.
+
+When `plugins.backend-duckdb.profiling_enabled = true`, DuckDB index runs emit
+`.codira/duckdb-profile.json` with aggregate write-path timings. Leave it
+disabled for normal usage; enable it only when investigating backend
+performance.
+
+First-party embedding tables are also schema-validated:
+
+```toml
+[plugins.embedding-sentence-transformers]
+enabled = true
+trust_remote_code = false
+
+[plugins.embedding-onnx]
+enabled = true
+model_path = ".codira/models/example/model.onnx"
+tokenizer_path = ".codira/models/example/tokenizer.json"
+provider = "CPUExecutionProvider"
+precision = "float32"
+normalize = true
+max_tokens = 512
+intra_op_num_threads = 0
+inter_op_num_threads = 0
+```
+
+ONNX batching is controlled by the shared `[embeddings].batch_size` key, not by
+a plugin-local option.
+
+First-party vector-store tables currently accept only common plugin keys:
+
+```toml
+[plugins.vector-store-sqlite]
+enabled = true
+
+[plugins.vector-store-duckdb]
+enabled = true
+```

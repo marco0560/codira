@@ -36,12 +36,30 @@ CODIRA_INDEX_BACKEND=duckdb codira plugins
 CODIRA_INDEX_BACKEND=duckdb codira sym helper --json
 ```
 
+Optional profiling for backend-performance investigations:
+
+```toml
+[plugins.backend-duckdb]
+profiling_enabled = true
+```
+
+Enabled index runs emit `.codira/duckdb-profile.json` with aggregate timings for
+DuckDB SQL, flush, embedding, vector-store, and transaction spans. Keep this
+disabled during normal use.
+
 Operator model:
 
 * one backend is active for one repository instance
 * DuckDB uses `.codira/index.duckdb` under the repository storage root
 * core `codira` remains backend-neutral; this package owns DuckDB bootstrap and
   storage behavior
+* DuckDB physical schema DDL is package-local in `codira_backend_duckdb.schema`
+* full-index rebuilds use a DuckDB-native bulk path that recreates index tables,
+  skips fresh-output cache reads, and writes embeddings without stale-row
+  deletes or SQL window deduplication
+* when paired with the DuckDB vector store, full-index vector persistence fuses
+  cache writes, materialized vector replacement, and pending cleanup into one
+  vector-store transaction
 
 Good fit:
 

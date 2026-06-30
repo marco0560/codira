@@ -23,18 +23,16 @@ The Python analysis path currently performs:
 - docstring validation integration
 
 Today these responsibilities are concentrated in the analyzer packages and
-compatibility modules:
+shared parser helpers:
 
 - `src/codira/parser_ast.py`
-- `src/codira/analyzers/python.py`
-- `src/codira/analyzers/json.py`
-- `src/codira/analyzers/c.py`
-- `src/codira/analyzers/cpp.py`
 - `packages/codira-analyzer-python/`
 - `packages/codira-analyzer-json/`
 - `packages/codira-analyzer-c/`
 - `packages/codira-analyzer-cpp/`
 - `packages/codira-analyzer-bash/`
+- `packages/codira-analyzer-markdown/`
+- `packages/codira-analyzer-text/`
 - `src/codira/indexer.py` for analyzer routing only
 
 ## Current Scope Boundary
@@ -79,17 +77,6 @@ instead.
 - mixed-language repositories as a first-class target
 - a future proof analyzer beyond Python, with C named as the preferred first
   validation target
-
-## Phase-6 Baseline
-
-Phase 6 now extracts the current Python analysis path into
-`src/codira/analyzers/python.py`.
-
-That module owns:
-
-- Python parsing through `parser_ast.parse_file()`
-- normalization into `AnalysisResult`
-- Python file acceptance through the `LanguageAnalyzer` contract
 
 ## Phase-8 Registration Rules
 
@@ -163,8 +150,7 @@ language-specific C parsing strategy has been upgraded.
 The packaging surface now distinguishes core `codira` dependencies from
 analyzer-specific dependencies.
 
-- core install keeps the contracts, CLI, registry, and compatibility shims
-  available
+- core install keeps the contracts, CLI, and registry available
 - the Python analyzer loads when `codira-analyzer-python` is installed
 - the JSON analyzer loads when `codira-analyzer-json` is installed
 - the C analyzer loads when `codira-analyzer-c` is installed
