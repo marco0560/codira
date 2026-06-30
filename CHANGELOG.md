@@ -1,3 +1,15 @@
+# [1.46.0](https://github.com/marco0560/codira/compare/v1.45.0...v1.46.0) (2026-06-30)
+
+
+### Bug Fixes
+
+* **config:** expose embedding plugin configuration ([20dfd1c](https://github.com/marco0560/codira/commit/20dfd1c602c8737d46b2fe12e201fdca4f83b9b6))
+
+
+### Features
+
+* **config:** isolate repo config overrides ([23e37bc](https://github.com/marco0560/codira/commit/23e37bc67759a131b6d0aa3e9cfcb3c5392873de))
+
 # [1.45.0](https://github.com/marco0560/codira/compare/v1.44.6...v1.45.0) (2026-06-30)
 
 
