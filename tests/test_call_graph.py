@@ -1042,8 +1042,11 @@ def test_context_for_help_shows_incompatibility_and_examples(
     assert help_exit.value.code == 0
 
     captured = capsys.readouterr()
-    assert "--json | --prompt | --explain" in captured.out
+    assert "-j, --json" in captured.out
+    assert "-P, --prompt" in captured.out
+    assert "-e, --explain" in captured.out
     assert "codira ctx --explain" in captured.out
+    assert "# show retrieval diagnostics" in captured.out
 
     with pytest.raises(SystemExit) as exc:
         build_parser().parse_args(["ctx", "--prompt", "--explain", "static call graph"])
@@ -1088,7 +1091,48 @@ def test_query_subcommand_help_includes_json_examples(
         assert help_exit.value.code == 0
         output = capsys.readouterr().out
         assert "--json" in output
+        assert "-j" in output
         assert example in output
+        assert "  # " in output
+
+
+def test_short_cli_option_aliases_parse_for_representative_commands() -> None:
+    """
+    Parse representative short aliases for public CLI options.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts short aliases map to the same parser destinations.
+    """
+
+    parser = build_parser()
+
+    symbol_args = parser.parse_args(["sym", "build_parser", "-j", "-x", "src"])
+    assert symbol_args.json is True
+    assert symbol_args.prefix == "src"
+
+    index_args = parser.parse_args(["index", "-f", "-e", "-C", "-E", "-B", "-j"])
+    assert index_args.full is True
+    assert index_args.explain is True
+    assert index_args.require_full_coverage is True
+    assert index_args.defer_embeddings is True
+    assert index_args.embeddings_only is True
+    assert index_args.json is True
+
+    calls_args = parser.parse_args(
+        ["calls", "caller", "-m", "pkg.mod", "-i", "-t", "-d", "-D", "3", "-N", "5"]
+    )
+    assert calls_args.module == "pkg.mod"
+    assert calls_args.incoming is True
+    assert calls_args.tree is True
+    assert calls_args.dot is True
+    assert calls_args.max_depth == 3
+    assert calls_args.max_nodes == 5
 
 
 def test_calls_cli_tree_json_reports_truncation(

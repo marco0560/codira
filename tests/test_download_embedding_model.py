@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import types
 from typing import TYPE_CHECKING
 
 from scripts import download_embedding_model
@@ -148,3 +150,97 @@ def test_download_embedding_model_main_selects_manifest_entry(
 
     assert status == 0
     assert calls == [("candidate", "secret-token"), ("smoke:candidate", "")]
+
+
+def test_download_onnx_entry_keeps_only_manifest_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Install ONNX artifacts without duplicating the upstream HF layout.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace the Hugging Face download module.
+    tmp_path : pathlib.Path
+        Temporary artifact root.
+
+    Returns
+    -------
+    None
+        The test asserts the runtime directory contains only configured files.
+    """
+
+    install_root = tmp_path / "models"
+    entry = download_embedding_model.ModelEntry(
+        model_id="demo-onnx",
+        engine="onnx",
+        model="demo/model",
+        dimension=8,
+        config={
+            "model_path": str(install_root / "demo" / "model.onnx"),
+            "tokenizer_path": str(install_root / "demo" / "tokenizer.json"),
+        },
+    )
+    calls: list[tuple[str, Path]] = []
+
+    def fake_hf_hub_download(
+        *,
+        repo_id: str,
+        filename: str,
+        token: str,
+        local_dir: Path,
+    ) -> str:
+        """
+        Materialize one fake Hugging Face artifact.
+
+        Parameters
+        ----------
+        repo_id : str
+            Requested model repository.
+        filename : str
+            Requested artifact path inside the repository.
+        token : str
+            Hugging Face token.
+        local_dir : pathlib.Path
+            Download destination root.
+
+        Returns
+        -------
+        str
+            Path to the fake downloaded artifact.
+        """
+
+        assert repo_id == "demo/model"
+        assert token == "secret-token"
+        path = local_dir / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"payload:{filename}".encode())
+        calls.append((filename, local_dir))
+        return str(path)
+
+    fake_module = types.SimpleNamespace(hf_hub_download=fake_hf_hub_download)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_module)
+
+    download_embedding_model.download_entry(entry, "secret-token", install_root)
+    first_model_hash = download_embedding_model._file_sha256(
+        install_root / "demo" / "model.onnx"
+    )
+    download_embedding_model.download_entry(entry, "secret-token", install_root)
+
+    assert [filename for filename, _local_dir in calls] == [
+        "onnx/model.onnx",
+        "tokenizer.json",
+        "onnx/model.onnx",
+        "tokenizer.json",
+    ]
+    assert all(not local_dir.is_relative_to(install_root) for _name, local_dir in calls)
+    assert (install_root / "demo" / "model.onnx").is_file()
+    assert (install_root / "demo" / "tokenizer.json").is_file()
+    assert not (install_root / "demo" / "onnx" / "model.onnx").exists()
+    assert not (install_root / ".hf-downloads").exists()
+    assert (
+        download_embedding_model._file_sha256(install_root / "demo" / "model.onnx")
+        == first_model_hash
+    )

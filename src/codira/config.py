@@ -55,6 +55,10 @@ ProfileName = Literal["default", "low-memory", "gpu"]
 _EFFECTIVE_CONFIG_CACHE: ContextVar[
     dict[tuple[str | None, bool], CodiraConfig] | None
 ] = ContextVar("codira_effective_config_cache", default=None)
+_REPO_CONFIG_PATH_OVERRIDE: ContextVar[Path | None] = ContextVar(
+    "codira_repo_config_path_override",
+    default=None,
+)
 
 
 class ConfigError(ValueError):
@@ -351,6 +355,21 @@ FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
     "vector-store-sqlite": {"enabled": True},
     "vector-store-duckdb": {"enabled": True},
 }
+PLUGIN_CONFIG_RENDER_ORDER: tuple[str, ...] = (
+    "backend-sqlite",
+    "backend-duckdb",
+    "embedding-sentence-transformers",
+    "embedding-onnx",
+    "vector-store-sqlite",
+    "vector-store-duckdb",
+    "analyzer-python",
+    "analyzer-json",
+    "analyzer-c",
+    "analyzer-cpp",
+    "analyzer-bash",
+    "analyzer-markdown",
+    "analyzer-text",
+)
 PROFILE_OVERRIDES: dict[ProfileName, dict[str, object]] = {
     "default": {},
     "low-memory": {
@@ -454,7 +473,33 @@ def repo_config_path(root: Path) -> Path:
         Repository-level Codira configuration path.
     """
 
+    override = _REPO_CONFIG_PATH_OVERRIDE.get()
+    if override is not None:
+        return override
     return root / ".codira" / CONFIG_FILENAME
+
+
+@contextmanager
+def override_repo_config_path(path: Path | None) -> Iterator[None]:
+    """
+    Temporarily override the repository-level config path.
+
+    Parameters
+    ----------
+    path : pathlib.Path | None
+        Explicit repo config file path. ``None`` preserves normal resolution.
+
+    Yields
+    ------
+    None
+        The override is active within the context body.
+    """
+
+    token = _REPO_CONFIG_PATH_OVERRIDE.set(path)
+    try:
+        yield
+    finally:
+        _REPO_CONFIG_PATH_OVERRIDE.reset(token)
 
 
 def config_path(level: LevelName, *, root: Path | None = None) -> Path:
@@ -1265,6 +1310,69 @@ def _toml_table_from_mapping(value: Mapping[str, object]) -> tomlkit.items.Table
     return table
 
 
+def _ordered_plugin_config_keys(plugins: Mapping[str, object]) -> tuple[str, ...]:
+    """
+    Return plugin table keys in generated config display order.
+
+    Parameters
+    ----------
+    plugins : collections.abc.Mapping[str, object]
+        Plugins mapping from a config payload.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Plugin-specific table keys with first-party families first and unknown
+        plugin keys sorted afterward.
+    """
+
+    configured = {key for key in plugins if key not in _PLUGIN_CONFIG_RESERVED_KEYS}
+    ordered = [key for key in PLUGIN_CONFIG_RENDER_ORDER if key in configured]
+    ordered.extend(sorted(configured.difference(ordered)))
+    return tuple(ordered)
+
+
+def _plugin_globals_table(plugins: Mapping[str, object]) -> dict[str, object]:
+    """
+    Return only global plugin settings from a plugins mapping.
+
+    Parameters
+    ----------
+    plugins : collections.abc.Mapping[str, object]
+        Plugins mapping from a config payload.
+
+    Returns
+    -------
+    dict[str, object]
+        Reserved global plugin keys in their original order.
+    """
+
+    return {key: plugins[key] for key in plugins if key in _PLUGIN_CONFIG_RESERVED_KEYS}
+
+
+def _plugin_config_sections(plugins: Mapping[str, object]) -> str:
+    """
+    Render plugin-specific config sections.
+
+    Parameters
+    ----------
+    plugins : collections.abc.Mapping[str, object]
+        Plugins mapping from a config payload.
+
+    Returns
+    -------
+    str
+        TOML section text for plugin-specific configuration tables.
+    """
+
+    sections: list[str] = []
+    for key in _ordered_plugin_config_keys(plugins):
+        section = _require_table(plugins[key], key=f"plugins.{key}")
+        body = tomlkit.dumps(_toml_table_from_mapping(section)).strip()
+        sections.append(f"[plugins.{key}]\n{body}" if body else f"[plugins.{key}]")
+    return "\n\n".join(sections)
+
+
 def _merge_toml_table(table: object, updates: Mapping[str, object]) -> None:
     """
     Merge nested updates into an existing TOML table-like object.
@@ -1311,12 +1419,17 @@ def render_config_toml(value: Mapping[str, object]) -> str:
 
     document = tomlkit.document()
     document.add("config_version", value["config_version"])
-    for section_name in ("backend", "plugins", "embeddings"):
-        section = _require_table(value[section_name], key=section_name)
-        document.add(section_name, _toml_table_from_mapping(section))
-    text = tomlkit.dumps(document)
-    if not text.endswith("\n"):
-        text += "\n"
+    backend = _require_table(value["backend"], key="backend")
+    plugins = _require_table(value["plugins"], key="plugins")
+    embeddings = _require_table(value["embeddings"], key="embeddings")
+    document.add("backend", _toml_table_from_mapping(backend))
+    document.add("plugins", _toml_table_from_mapping(_plugin_globals_table(plugins)))
+    document.add("embeddings", _toml_table_from_mapping(embeddings))
+    text = tomlkit.dumps(document).rstrip()
+    plugin_sections = _plugin_config_sections(plugins)
+    if plugin_sections:
+        text = f"{text}\n\n{plugin_sections}"
+    text += "\n"
     return text
 
 
@@ -1618,7 +1731,10 @@ def load_effective_config(
     cache = _EFFECTIVE_CONFIG_CACHE.get()
     cache_key: tuple[str | None, bool] | None = None
     if env is None and cache is not None:
-        cache_key = (None if root is None else str(root.resolve()), auto_create_user)
+        config_override = _REPO_CONFIG_PATH_OVERRIDE.get()
+        root_key = None if root is None else str(root.resolve())
+        config_key = None if config_override is None else str(config_override)
+        cache_key = (f"{root_key}|{config_key}", auto_create_user)
         cached = cache.get(cache_key)
         if cached is not None:
             return cached

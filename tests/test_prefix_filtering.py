@@ -609,6 +609,21 @@ def test_cli_prefix_is_applied_and_rejects_escape(
         main()
 
     assert exc.value.code == 2
+    assert "Prefix must stay under the repository root" in capsys.readouterr().err
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["codira", "sym", "shared_symbol", "--prefix", "missing"],
+    )
+    with pytest.raises(SystemExit) as missing_exc:
+        main()
+
+    assert missing_exc.value.code == 2
+    assert (
+        "Prefix does not exist under repository root: missing"
+        in capsys.readouterr().err
+    )
 
 
 def test_symbol_cli_json_includes_prefix_and_status(
@@ -1062,7 +1077,7 @@ def test_json_cli_reports_no_matches_status(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """
-    Preserve empty-result semantics in JSON mode.
+    Reject missing prefixes before query execution.
 
     Parameters
     ----------
@@ -1076,7 +1091,7 @@ def test_json_cli_reports_no_matches_status(
     Returns
     -------
     None
-        The test asserts no-match status and exit code for exact queries.
+        The test asserts missing prefixes are reported as CLI usage errors.
     """
     _write_prefix_fixture(tmp_path)
     init_db(tmp_path)
@@ -1096,8 +1111,10 @@ def test_json_cli_reports_no_matches_status(
         ],
     )
 
-    assert main() == 1
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["command"] == "sym"
-    assert payload["status"] == "no_matches"
-    assert payload["results"] == []
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "Prefix does not exist under repository root: missing" in captured.err
+    assert captured.out == ""

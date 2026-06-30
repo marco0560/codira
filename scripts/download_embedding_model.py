@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -160,6 +162,51 @@ def _entry_destination(entry: ModelEntry, install_root: Path) -> Path:
     return install_root / entry.model.rsplit("/", 1)[-1]
 
 
+def _file_sha256(path: Path) -> str:
+    """
+    Return the SHA-256 digest for one file.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        File to hash.
+
+    Returns
+    -------
+    str
+        Hex-encoded SHA-256 digest.
+    """
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _install_artifact(source: Path, target: Path) -> None:
+    """
+    Install one artifact unless the target already has the same hash.
+
+    Parameters
+    ----------
+    source : pathlib.Path
+        Downloaded source artifact.
+    target : pathlib.Path
+        Runtime artifact path configured in the model manifest.
+
+    Returns
+    -------
+    None
+        The target file exists and matches the source hash.
+    """
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() and _file_sha256(source) == _file_sha256(target):
+        return
+    target.write_bytes(source.read_bytes())
+
+
 def _download_onnx_entry(entry: ModelEntry, token: str, install_root: Path) -> None:
     """
     Download ONNX artifacts for one manifest entry.
@@ -182,30 +229,30 @@ def _download_onnx_entry(entry: ModelEntry, token: str, install_root: Path) -> N
 
     destination = _entry_destination(entry, install_root)
     destination.mkdir(parents=True, exist_ok=True)
-    hf_hub_download(
-        repo_id=entry.model,
-        filename=str(
-            entry.config.get("hf_onnx_model_file", DEFAULT_ONNX_MODEL_FILENAME)
-        ),
-        token=token,
-        local_dir=destination,
-    )
-    model_source = destination / DEFAULT_ONNX_MODEL_FILENAME
-    model_target = Path(str(entry.config["model_path"]))
-    model_target.parent.mkdir(parents=True, exist_ok=True)
-    if model_source != model_target:
-        model_target.write_bytes(model_source.read_bytes())
-    hf_hub_download(
-        repo_id=entry.model,
-        filename=str(entry.config.get("hf_tokenizer_file", DEFAULT_TOKENIZER_FILENAME)),
-        token=token,
-        local_dir=destination,
-    )
-    tokenizer_source = destination / DEFAULT_TOKENIZER_FILENAME
-    tokenizer_target = Path(str(entry.config["tokenizer_path"]))
-    tokenizer_target.parent.mkdir(parents=True, exist_ok=True)
-    if tokenizer_source != tokenizer_target:
-        tokenizer_target.write_bytes(tokenizer_source.read_bytes())
+    with tempfile.TemporaryDirectory(prefix=f"codira-{entry.model_id}-") as temp_root:
+        download_root = Path(temp_root)
+        hf_hub_download(
+            repo_id=entry.model,
+            filename=str(
+                entry.config.get("hf_onnx_model_file", DEFAULT_ONNX_MODEL_FILENAME)
+            ),
+            token=token,
+            local_dir=download_root,
+        )
+        model_source = download_root / DEFAULT_ONNX_MODEL_FILENAME
+        model_target = Path(str(entry.config["model_path"]))
+        _install_artifact(model_source, model_target)
+        hf_hub_download(
+            repo_id=entry.model,
+            filename=str(
+                entry.config.get("hf_tokenizer_file", DEFAULT_TOKENIZER_FILENAME)
+            ),
+            token=token,
+            local_dir=download_root,
+        )
+        tokenizer_source = download_root / DEFAULT_TOKENIZER_FILENAME
+        tokenizer_target = Path(str(entry.config["tokenizer_path"]))
+        _install_artifact(tokenizer_source, tokenizer_target)
 
 
 def _download_sentence_transformers_entry(entry: ModelEntry, token: str) -> None:

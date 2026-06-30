@@ -47,6 +47,7 @@ from codira.config import (
     explain_key,
     load_config_level,
     load_effective_config,
+    override_repo_config_path,
     render_config_toml,
     update_config_file,
     user_config_path,
@@ -63,6 +64,7 @@ from codira.indexer import (
     index_repo,
 )
 from codira.path_resolution import (
+    CODIRA_CONFIG_FILE_ENV,
     CODIRA_OUTPUT_DIR_ENV,
     CODIRA_TARGET_DIR_ENV,
     resolve_runtime_paths,
@@ -783,16 +785,50 @@ def build_parser() -> argparse.ArgumentParser:
         """
 
         command_parser.add_argument(
+            "-p",
             "--path",
             help=(
                 f"Repository target directory to read (env: {CODIRA_TARGET_DIR_ENV})"
             ),
         )
         command_parser.add_argument(
+            "-o",
             "--output-dir",
             help=(
                 "Directory under which .codira state is stored "
                 f"(env: {CODIRA_OUTPUT_DIR_ENV})"
+            ),
+        )
+        command_parser.add_argument(
+            "-c",
+            "--config-file",
+            help=(
+                "Explicit repo-level config file to merge instead of "
+                f"<output-dir>/.codira/config.toml (env: {CODIRA_CONFIG_FILE_ENV})"
+            ),
+        )
+
+    def _add_config_file_argument(command_parser: argparse.ArgumentParser) -> None:
+        """
+        Add the explicit repo config file argument to one parser.
+
+        Parameters
+        ----------
+        command_parser : argparse.ArgumentParser
+            Subparser receiving the shared option.
+
+        Returns
+        -------
+        None
+            The option is added in place.
+        """
+
+        command_parser.add_argument(
+            "-c",
+            "--config-file",
+            help=(
+                "Explicit repo-level config file to merge instead of "
+                f"<output-dir>/.codira/config.toml (env: {CODIRA_CONFIG_FILE_ENV})"
             ),
         )
 
@@ -804,19 +840,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  codira index\n"
-            "  codira index --require-full-coverage\n"
-            "  codira index --path /mnt/readonly/repo --output-dir /tmp/codira-run\n"
-            "  codira sym build_parser\n"
-            '  codira emb "schema migration rules"\n'
-            '  codira docs "release process"\n'
-            "  codira symlist --limit 20\n"
-            '  codira ctx "find schema migration logic"\n'
+            "  codira index  # build or refresh the current repository index\n"
+            "  codira index --require-full-coverage  # fail if tracked source files are uncovered\n"
+            "  codira index --path /mnt/readonly/repo --output-dir /tmp/codira-run  # index a read-only repo while storing state elsewhere\n"
+            "  codira index --config-file /tmp/codira-config.toml  # use a specific repo config file\n"
+            "  codira sym build_parser  # look up the exact symbol named build_parser\n"
+            '  codira emb "schema migration rules"  # inspect embedding-only matches\n'
+            '  codira docs "release process"  # inspect documentation-only matches\n'
+            "  codira symlist --limit 20  # list the top 20 indexed symbols\n"
+            '  codira ctx "find schema migration logic"  # retrieve task-focused context\n'
             "  codira ctx --prompt "
-            '"add a regression test for symbol lookup"\n'
-            '  codira ctx --explain "why does symbol lookup rank this result?"\n'
-            "  codira calls caller --tree\n"
-            "  codira refs _retrieve_script_candidates --incoming --tree --dot"
+            '"add a regression test for symbol lookup"  # render a Codex-ready prompt\n'
+            '  codira ctx --explain "why does symbol lookup rank this result?"  # show retrieval diagnostics\n'
+            "  codira calls caller --tree  # render a bounded outgoing call tree\n"
+            "  codira refs _retrieve_script_candidates --incoming --tree --dot  # render incoming references as DOT"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -846,20 +883,23 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  codira index\n"
-            "  codira index --explain\n"
-            "  codira index --full\n"
-            "  codira index --require-full-coverage\n"
-            "  codira index --path /mnt/readonly/repo --output-dir /tmp/codira-run"
+            "  codira index  # incrementally refresh the repository index\n"
+            "  codira index --explain  # show per-file reuse and indexing decisions\n"
+            "  codira index --full  # rebuild the index from scratch\n"
+            "  codira index --require-full-coverage  # fail when canonical source files lack analyzer coverage\n"
+            "  codira index --path /mnt/readonly/repo --output-dir /tmp/codira-run  # index a target repo with state stored elsewhere\n"
+            "  codira index --config-file /tmp/codira-config.toml  # merge a specific repo config file"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     index_parser.add_argument(
+        "-f",
         "--full",
         action="store_true",
         help="Force a full rebuild instead of reusing unchanged files",
     )
     index_parser.add_argument(
+        "-e",
         "--explain",
         "--verbose",
         dest="explain",
@@ -867,6 +907,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show per-file indexing decisions after the summary",
     )
     index_parser.add_argument(
+        "-C",
         "--require-full-coverage",
         action="store_true",
         help=(
@@ -875,16 +916,19 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     index_parser.add_argument(
+        "-E",
         "--defer-embeddings",
         action="store_true",
         help="Record index data now and leave eligible embeddings pending",
     )
     index_parser.add_argument(
+        "-B",
         "--embeddings-only",
         action="store_true",
         help="Compute pending embeddings without reparsing source files",
     )
     index_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
@@ -898,10 +942,15 @@ def build_parser() -> argparse.ArgumentParser:
             "Inspect tracked files under canonical source directories and "
             "report which files are not covered by the active analyzer set."
         ),
-        epilog=("Examples:\n  codira cov\n  codira cov --json"),
+        epilog=(
+            "Examples:\n"
+            "  codira cov  # print analyzer coverage gaps\n"
+            "  codira cov --json  # emit analyzer coverage gaps as JSON"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     coverage_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
@@ -914,19 +963,21 @@ def build_parser() -> argparse.ArgumentParser:
         description="Resolve one exact symbol name from the indexed repository.",
         epilog=(
             "Examples:\n"
-            "  codira sym build_parser\n"
-            "  codira sym build_parser --json\n"
-            "  codira sym build_parser --prefix src/codira"
+            "  codira sym build_parser  # look up the exact symbol named build_parser\n"
+            "  codira sym build_parser --json  # emit exact symbol matches as JSON\n"
+            "  codira sym build_parser --prefix src/codira  # restrict matches to src/codira"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     symbol_parser.add_argument("name", help="Exact symbol name to look up")
     symbol_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
     )
     symbol_parser.add_argument(
+        "-x",
         "--prefix",
         help="Restrict results to files under this repo-root-relative path prefix",
     )
@@ -941,29 +992,33 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  codira symlist\n"
-            "  codira symlist --json\n"
-            "  codira symlist --limit 20\n"
-            "  codira symlist --include-tests\n"
-            "  codira symlist --prefix src/codira"
+            "  codira symlist  # list indexed symbols with graph metrics\n"
+            "  codira symlist --json  # emit the symbol inventory as JSON\n"
+            "  codira symlist --limit 20  # print only the first 20 sorted symbols\n"
+            "  codira symlist --include-tests  # include symbols from test modules\n"
+            "  codira symlist --prefix src/codira  # restrict inventory to src/codira"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     symlist_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
     )
     symlist_parser.add_argument(
+        "-x",
         "--prefix",
         help="Restrict symbols to files under this repo-root-relative path prefix",
     )
     symlist_parser.add_argument(
+        "-T",
         "--include-tests",
         action="store_true",
         help="Include symbols from tests modules",
     )
     symlist_parser.add_argument(
+        "-l",
         "--limit",
         type=int,
         default=1000,
@@ -980,11 +1035,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            '  codira emb "schema migration rules"\n'
-            '  codira emb "schema migration rules" --json\n'
-            '  codira emb "numpy docstring sections" --limit 3\n'
+            '  codira emb "schema migration rules"  # show embedding-only matches\n'
+            '  codira emb "schema migration rules" --json  # emit embedding matches as JSON\n'
+            '  codira emb "numpy docstring sections" --limit 3  # show only 3 embedding matches\n'
             '  codira emb "numpy docstring sections" --prefix '
-            "src/codira/query"
+            "src/codira/query  # restrict embedding matches to query code"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -993,17 +1048,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Natural-language query to score against stored embeddings",
     )
     embeddings_parser.add_argument(
+        "-l",
         "--limit",
         type=int,
         default=5,
         help="Maximum number of embedding matches to print",
     )
     embeddings_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
     )
     embeddings_parser.add_argument(
+        "-x",
         "--prefix",
         help="Restrict matches to files under this repo-root-relative path prefix",
     )
@@ -1019,10 +1077,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            '  codira docs "release process"\n'
-            '  codira docs "release process" --json\n'
-            '  codira docs "architecture decisions" --explain\n'
-            '  codira docs "plugin loading" --prefix docs'
+            '  codira docs "release process"  # show documentation-only matches\n'
+            '  codira docs "release process" --json  # emit documentation matches as JSON\n'
+            '  codira docs "architecture decisions" --explain  # show docs retrieval diagnostics\n'
+            '  codira docs "plugin loading" --prefix docs  # restrict matches to docs'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1031,6 +1089,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Natural-language query to score against stored documentation",
     )
     docs_parser.add_argument(
+        "-l",
         "--limit",
         type=int,
         default=5,
@@ -1038,16 +1097,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     docs_mode_group = docs_parser.add_mutually_exclusive_group()
     docs_mode_group.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
     )
     docs_mode_group.add_argument(
+        "-e",
         "--explain",
         action="store_true",
         help="Show docs-only retrieval diagnostics",
     )
     docs_parser.add_argument(
+        "-x",
         "--prefix",
         help="Restrict matches to files under this repo-root-relative path prefix",
     )
@@ -1062,12 +1124,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  codira calls caller\n"
-            "  codira calls caller --json\n"
-            "  codira calls caller --tree\n"
-            "  codira calls caller --tree --dot\n"
-            "  codira calls imported_helper --module pkg.b --incoming\n"
-            "  codira calls caller --prefix src/codira/query"
+            "  codira calls caller  # show outgoing static call edges for caller\n"
+            "  codira calls caller --json  # emit call edges as JSON\n"
+            "  codira calls caller --tree  # render outgoing calls as a bounded tree\n"
+            "  codira calls caller --tree --dot  # render the tree as Graphviz DOT\n"
+            "  codira calls imported_helper --module pkg.b --incoming  # show callers of imported_helper in pkg.b\n"
+            "  codira calls caller --prefix src/codira/query  # restrict caller files to query code"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1076,42 +1138,50 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exact logical caller or callee name to inspect",
     )
     calls_parser.add_argument(
+        "-m",
         "--module",
         help="Restrict the caller or callee side to one exact module",
     )
     calls_parser.add_argument(
+        "-i",
         "--incoming",
         action="store_true",
         help="Show callers of the named callee instead of outgoing edges",
     )
     calls_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
     )
     calls_parser.add_argument(
+        "-d",
         "--dot",
         action="store_true",
         help="Render a bounded tree as Graphviz DOT; requires --tree",
     )
     calls_parser.add_argument(
+        "-t",
         "--tree",
         action="store_true",
         help="Render a bounded traversal tree instead of a flat edge list",
     )
     calls_parser.add_argument(
+        "-D",
         "--max-depth",
         type=int,
         default=2,
         help="Maximum traversal depth used by --tree (default: 2)",
     )
     calls_parser.add_argument(
+        "-N",
         "--max-nodes",
         type=int,
         default=20,
         help="Maximum number of rendered nodes used by --tree (default: 20)",
     )
     calls_parser.add_argument(
+        "-x",
         "--prefix",
         help="Restrict caller files to this repo-root-relative path prefix",
     )
@@ -1127,13 +1197,13 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  codira refs helper\n"
-            "  codira refs helper --json\n"
-            "  codira refs helper --incoming --tree\n"
-            "  codira refs helper --tree --dot\n"
-            "  codira refs _retrieve_script_candidates --incoming\n"
-            "  codira refs imported_helper --module pkg.b --incoming\n"
-            "  codira refs helper --prefix src/codira/query"
+            "  codira refs helper  # show outgoing callable-object references from helper\n"
+            "  codira refs helper --json  # emit references as JSON\n"
+            "  codira refs helper --incoming --tree  # render incoming references as a bounded tree\n"
+            "  codira refs helper --tree --dot  # render the reference tree as Graphviz DOT\n"
+            "  codira refs _retrieve_script_candidates --incoming  # show owners that reference the target\n"
+            "  codira refs imported_helper --module pkg.b --incoming  # restrict incoming target side to pkg.b\n"
+            "  codira refs helper --prefix src/codira/query  # restrict owner files to query code"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1142,42 +1212,50 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exact logical owner or target name to inspect",
     )
     refs_parser.add_argument(
+        "-m",
         "--module",
         help="Restrict the owner or target side to one exact module",
     )
     refs_parser.add_argument(
+        "-i",
         "--incoming",
         action="store_true",
         help="Show owners of the named target instead of outgoing references",
     )
     refs_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
     )
     refs_parser.add_argument(
+        "-d",
         "--dot",
         action="store_true",
         help="Render a bounded tree as Graphviz DOT; requires --tree",
     )
     refs_parser.add_argument(
+        "-t",
         "--tree",
         action="store_true",
         help="Render a bounded traversal tree instead of a flat reference list",
     )
     refs_parser.add_argument(
+        "-D",
         "--max-depth",
         type=int,
         default=2,
         help="Maximum traversal depth used by --tree (default: 2)",
     )
     refs_parser.add_argument(
+        "-N",
         "--max-nodes",
         type=int,
         default=20,
         help="Maximum number of rendered nodes used by --tree (default: 20)",
     )
     refs_parser.add_argument(
+        "-x",
         "--prefix",
         help="Restrict owner files to this repo-root-relative path prefix",
     )
@@ -1189,18 +1267,20 @@ def build_parser() -> argparse.ArgumentParser:
         description="Print indexed docstring issues in deterministic order.",
         epilog=(
             "Examples:\n"
-            "  codira audit\n"
-            "  codira audit --json\n"
-            "  codira audit --prefix src/codira/query"
+            "  codira audit  # print indexed docstring issues\n"
+            "  codira audit --json  # emit docstring issues as JSON\n"
+            "  codira audit --prefix src/codira/query  # restrict issues to query code"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     audit_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
     )
     audit_parser.add_argument(
+        "-x",
         "--prefix",
         help="Restrict issues to files under this repo-root-relative path prefix",
     )
@@ -1216,14 +1296,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            '  codira ctx "find schema migration logic"\n'
-            '  codira ctx --json "schema migration rules"\n'
-            '  codira ctx --prompt "add a test for imported calls"\n'
+            '  codira ctx "find schema migration logic"  # retrieve task-focused context\n'
+            '  codira ctx --json "schema migration rules"  # emit retrieved context as JSON\n'
+            '  codira ctx --prompt "add a test for imported calls"  # render a Codex-ready prompt\n'
             "  codira ctx --explain "
-            '"why does symbol lookup rank this result?"\n'
+            '"why does symbol lookup rank this result?"  # show retrieval diagnostics\n'
             '  codira ctx "find schema migration logic" --prefix '
-            "src/codira/query\n"
-            '  codira ctx "static call graph"'
+            "src/codira/query  # restrict retrieval to query code\n"
+            '  codira ctx "static call graph"  # retrieve call-graph-related context'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1232,21 +1312,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mode_group = context_parser.add_mutually_exclusive_group()
     mode_group.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON (agent mode)",
     )
     mode_group.add_argument(
+        "-P",
         "--prompt",
         action="store_true",
         help="Output a Codex-ready deterministic prompt",
     )
     mode_group.add_argument(
+        "-e",
         "--explain",
         action="store_true",
         help="Show retrieval routing and merge diagnostics",
     )
     context_parser.add_argument(
+        "-x",
         "--prefix",
         help="Restrict retrieval to files under this repo-root-relative path prefix",
     )
@@ -1259,10 +1343,15 @@ def build_parser() -> argparse.ArgumentParser:
             "List analyzer and backend plugins discovered from built-ins and "
             "installed Python entry points."
         ),
-        epilog=("Examples:\n  codira plugins\n  codira plugins --json"),
+        epilog=(
+            "Examples:\n"
+            "  codira plugins  # list discovered plugins\n"
+            "  codira plugins --json  # emit plugin registrations as JSON"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     plugins_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
@@ -1279,18 +1368,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  codira caps\n"
-            "  codira caps --json\n"
-            "  codira caps --strict --json"
+            "  codira caps  # print the capability contract summary\n"
+            "  codira caps --json  # emit the full capability contract as JSON\n"
+            "  codira caps --strict --json  # fail if declarations are invalid"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     capabilities_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
     )
     capabilities_parser.add_argument(
+        "-s",
         "--strict",
         action="store_true",
         help="Fail if active analyzers have missing or invalid declarations",
@@ -1305,11 +1396,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  codira config init\n"
-            "  codira config init --level repo --profile low-memory\n"
-            "  codira config dump --level effective\n"
-            "  codira config explain embeddings.batch_size\n"
-            "  codira config validate"
+            "  codira config init  # create the default repository config template\n"
+            "  codira config init --level repo --profile low-memory  # create a repo config with low-memory overrides\n"
+            "  codira config dump --level effective  # print the merged effective config\n"
+            "  codira config explain embeddings.batch_size  # show where one config value came from\n"
+            "  codira config validate  # validate effective config and plugin tables"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1320,24 +1411,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create a config file for one level",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    _add_config_file_argument(config_init_parser)
     config_init_parser.add_argument(
+        "-l",
         "--level",
         choices=("user", "repo", "system"),
-        default="user",
-        help="Config level to create (default: user)",
+        default="repo",
+        help="Config level to create (default: repo)",
     )
     config_init_parser.add_argument(
+        "-r",
         "--profile",
         choices=("default", "low-memory", "gpu"),
         default="default",
         help="Generated profile to write (default: default)",
     )
     config_init_parser.add_argument(
+        "-f",
         "--force",
         action="store_true",
         help="Overwrite an existing config file",
     )
     config_init_parser.add_argument(
+        "-F",
         "--full",
         action="store_true",
         help="Include all known first-party plugin options with default values",
@@ -1347,13 +1443,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print one config level or the effective config",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    _add_config_file_argument(config_dump_parser)
     config_dump_parser.add_argument(
+        "-l",
         "--level",
         choices=("system", "user", "repo", "effective"),
         default="effective",
         help="Config level to dump (default: effective)",
     )
     config_dump_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
@@ -1363,8 +1462,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explain one effective config key",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    _add_config_file_argument(config_explain_parser)
     config_explain_parser.add_argument("key", help="Dotted config key to explain")
     config_explain_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
@@ -1374,13 +1475,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validate one config level or the effective config",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    _add_config_file_argument(config_validate_parser)
     config_validate_parser.add_argument(
+        "-l",
         "--level",
         choices=("system", "user", "repo", "effective"),
         default="effective",
         help="Config level to validate (default: effective)",
     )
     config_validate_parser.add_argument(
+        "-j",
         "--json",
         action="store_true",
         help="Output structured JSON for machine consumption",
@@ -1395,10 +1499,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  codira calibrate embeddings\n"
-            "  codira calibrate embeddings --print\n"
-            "  codira calibrate embeddings --write\n"
-            "  codira calibrate embeddings --output /tmp/codira-embeddings.toml"
+            "  codira calibrate embeddings  # print calibrated embedding settings\n"
+            "  codira calibrate embeddings --print  # explicitly print calibrated TOML\n"
+            "  codira calibrate embeddings --write  # merge calibrated values into user config\n"
+            "  codira calibrate embeddings --output /tmp/codira-embeddings.toml  # write calibrated TOML to a file"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1410,17 +1514,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     calibration_mode = embeddings_calibrate_parser.add_mutually_exclusive_group()
     calibration_mode.add_argument(
+        "-p",
         "--print",
         dest="print_output",
         action="store_true",
         help="Print the calibrated TOML snippet to stdout",
     )
     calibration_mode.add_argument(
+        "-w",
         "--write",
         action="store_true",
         help="Merge calibrated values into the user config file",
     )
     calibration_mode.add_argument(
+        "-o",
         "--output",
         type=Path,
         help="Write the calibrated TOML snippet to a file",
@@ -3537,9 +3644,12 @@ def _resolve_prefix_argument(
     if prefix is not None and Path(prefix).is_absolute():
         parser.error("Prefix must be relative to the repository root.")
     try:
-        return normalize_prefix(root, prefix)
+        normalized = normalize_prefix(root, prefix)
     except ValueError as exc:
         parser.error(str(exc))
+    if normalized is not None and not Path(normalized).exists():
+        parser.error(f"Prefix does not exist under repository root: {prefix}")
+    return normalized
 
 
 def _build_index_metadata(
@@ -4808,16 +4918,23 @@ def main() -> int:
         resolved_paths = resolve_runtime_paths(parser, args)
         root = resolved_paths.target_root
         storage_context = override_storage_root(root, resolved_paths.output_root)
+        repo_config_file = resolved_paths.repo_config_file
     else:
         root = Path.cwd()
         storage_context = contextlib.nullcontext()
+        repo_config_file = None
     raw_prefix = getattr(args, "prefix", None)
     prefix = _resolve_prefix_argument(parser, root, raw_prefix)
 
     try:
         if command not in {"help", "config", "calibrate"}:
             ensure_user_config()
-        with storage_context, effective_config_cache(), active_plugin_instance_cache():
+        with (
+            storage_context,
+            override_repo_config_path(repo_config_file),
+            effective_config_cache(),
+            active_plugin_instance_cache(),
+        ):
             handlers = _command_handlers(
                 args,
                 parser,

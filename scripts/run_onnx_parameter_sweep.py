@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -25,7 +24,7 @@ from scripts.run_final_embedding_model_campaign import (
     read_repositories,
     render_model_config,
 )
-from scripts.scriptlib import RepoConfigRestore, resolve_codira, safe_slug
+from scripts.scriptlib import resolve_codira, safe_slug
 
 DEFAULT_SWEEP_MANIFEST = Path("benchmarks/onnx-parameter-sweep.json")
 DEFAULT_MODEL_MANIFEST = Path("benchmarks/embedding-model-candidates.json")
@@ -414,9 +413,6 @@ def run_variant(  # noqa: PLR0913
         render_variant_config(model, variant, backend),
         encoding="utf-8",
     )
-    target_config = repo.path / ".codira" / "config.toml"
-    target_config.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(config_path, target_config)
 
     status = 0
     index_command = (
@@ -427,6 +423,8 @@ def run_variant(  # noqa: PLR0913
         str(repo.path),
         "--output-dir",
         str(output_dir),
+        "--config-file",
+        str(config_path),
         "--json",
     )
     index_result = timed_command(
@@ -467,6 +465,8 @@ def run_variant(  # noqa: PLR0913
                 str(repo.path),
                 "--output-dir",
                 str(output_dir),
+                "--config-file",
+                str(config_path),
             )
             if command_name == "emb":
                 command = (
@@ -480,6 +480,8 @@ def run_variant(  # noqa: PLR0913
                     str(repo.path),
                     "--output-dir",
                     str(output_dir),
+                    "--config-file",
+                    str(config_path),
                 )
             result = timed_command(
                 command,
@@ -532,7 +534,6 @@ def main(argv: list[str] | None = None) -> int:
     codira = resolve_codira()
     stamp = local_stamp()
     artifact_root = args.artifact_root / stamp
-    backup_root = artifact_root / "repo-config-backups"
     results_path = artifact_root / "results.jsonl"
     artifact_root.mkdir(parents=True, exist_ok=True)
 
@@ -551,34 +552,33 @@ def main(argv: list[str] | None = None) -> int:
 
     env = dict(os.environ)
     status = 0
-    with RepoConfigRestore(tuple(repo.path for repo in repos), backup_root):
-        for sweep in sweeps:
-            model = models[sweep.model_id]
-            if model.engine != "onnx":
-                message = f"Sweep model is not ONNX: {model.id}"
-                raise SystemExit(message)
-            variants = tuple(
-                variant
-                for variant in sweep.variants
-                if not selected_variants or variant.variant_id in selected_variants
-            )
-            for variant in variants:
-                for repo in repos:
-                    rc = run_variant(
-                        codira=codira,
-                        repo=repo,
-                        sweep=sweep,
-                        model=model,
-                        variant=variant,
-                        backend=args.backend,
-                        artifact_root=artifact_root,
-                        env=env,
-                        results_path=results_path,
-                        limit=args.limit,
-                        full=not args.no_full,
-                    )
-                    if rc and not status:
-                        status = rc
+    for sweep in sweeps:
+        model = models[sweep.model_id]
+        if model.engine != "onnx":
+            message = f"Sweep model is not ONNX: {model.id}"
+            raise SystemExit(message)
+        variants = tuple(
+            variant
+            for variant in sweep.variants
+            if not selected_variants or variant.variant_id in selected_variants
+        )
+        for variant in variants:
+            for repo in repos:
+                rc = run_variant(
+                    codira=codira,
+                    repo=repo,
+                    sweep=sweep,
+                    model=model,
+                    variant=variant,
+                    backend=args.backend,
+                    artifact_root=artifact_root,
+                    env=env,
+                    results_path=results_path,
+                    limit=args.limit,
+                    full=not args.no_full,
+                )
+                if rc and not status:
+                    status = rc
     print(f"Artifacts: {artifact_root}")
     print(f"Results: {results_path}")
     return status

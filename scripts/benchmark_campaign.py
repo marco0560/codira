@@ -67,7 +67,15 @@ DISCOVERY_SYMBOL_LIMIT = 100
 DISCOVERY_MAX_SYMBOL_CANDIDATES = 12
 DISCOVERY_MAX_QUERY_CANDIDATES = 8
 OPTION_FLAGS_WITH_VALUE = frozenset(
-    {"--limit", "--prefix", "--module", "--path", "--output-dir", "--max-depth"}
+    {
+        "--limit",
+        "--prefix",
+        "--module",
+        "--path",
+        "--output-dir",
+        "--max-depth",
+        "--config-file",
+    }
 )
 MANIFEST_BENCHMARK_SUBCOMMANDS = frozenset(
     {
@@ -144,6 +152,9 @@ class CampaignConfig:
     continue_on_error : bool
         Whether campaign execution should continue after command failures and
         persist a failure summary.
+    config_file : pathlib.Path | None
+        Optional explicit repo-level Codira config file passed to path-aware
+        Codira commands.
     """
 
     manifest: Path
@@ -156,6 +167,7 @@ class CampaignConfig:
     warmup: int
     dry_run: bool
     continue_on_error: bool = False
+    config_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -311,6 +323,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--python",
         default=sys.executable,
         help="Python executable used for profiling helper commands.",
+    )
+    parser.add_argument(
+        "--config-file",
+        type=Path,
+        help=(
+            "Explicit repo-level Codira config file passed to path-aware "
+            "benchmark commands."
+        ),
     )
     parser.add_argument(
         "--runs",
@@ -1056,6 +1076,27 @@ def _expand_manifest_token(
     return expanded.replace("{query}", query)
 
 
+def _config_file_args(config: CampaignConfig) -> tuple[str, ...]:
+    """
+    Return Codira CLI arguments for an explicit repo config file.
+
+    Parameters
+    ----------
+    config : CampaignConfig
+        Campaign configuration.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Empty tuple when no override is configured, otherwise the
+        ``--config-file`` argument pair.
+    """
+
+    if config.config_file is None:
+        return ()
+    return ("--config-file", str(config.config_file))
+
+
 def _manifest_command_argv(
     command: Sequence[str],
     *,
@@ -1100,6 +1141,8 @@ def _manifest_command_argv(
         argv.extend(("--path", str(repo_path)))
     if subcommand in PATH_AWARE_SUBCOMMANDS and "--output-dir" not in expanded:
         argv.extend(("--output-dir", str(output_dir)))
+    if subcommand in PATH_AWARE_SUBCOMMANDS and "--config-file" not in expanded:
+        argv.extend(_config_file_args(config))
     return tuple(argv)
 
 
@@ -1238,6 +1281,7 @@ def _resolve_text_query(
             str(repo.path),
             "--output-dir",
             str(output_dir),
+            *_config_file_args(config),
         )
         return_code, payload, _ = _json_command_result(
             argv,
@@ -1603,9 +1647,31 @@ def hyperfine_command_strings(
     """
     path = str(repo.path)
     output = str(output_dir)
+    config_file_args = _config_file_args(config)
     commands = [
-        shlex.join((codira, "index", "--full", "--path", path, "--output-dir", output)),
-        shlex.join((codira, "index", "--path", path, "--output-dir", output)),
+        shlex.join(
+            (
+                codira,
+                "index",
+                "--full",
+                "--path",
+                path,
+                "--output-dir",
+                output,
+                *config_file_args,
+            )
+        ),
+        shlex.join(
+            (
+                codira,
+                "index",
+                "--path",
+                path,
+                "--output-dir",
+                output,
+                *config_file_args,
+            )
+        ),
         shlex.join(
             (
                 codira,
@@ -1616,6 +1682,7 @@ def hyperfine_command_strings(
                 path,
                 "--output-dir",
                 output,
+                *config_file_args,
             )
         ),
     ]
@@ -1843,7 +1910,7 @@ def build_phase_benchmark_argv(
         run_directory(config)
         / f"{_safe_label(repo.category)}-{_safe_label(repo.label)}-index-phases.json"
     )
-    return (
+    argv = (
         config.python,
         str(Path(__file__).with_name("benchmark_index.py")),
         str(repo.path),
@@ -1852,6 +1919,14 @@ def build_phase_benchmark_argv(
         str(index_output_dir(repo, config)),
         "--output",
         str(output),
+    )
+    if config.config_file is None:
+        return argv
+    return (
+        *argv[:-2],
+        "--config-file",
+        str(config.config_file),
+        *argv[-2:],
     )
 
 
@@ -1897,6 +1972,7 @@ def build_profile_argvs(
     prefix = f"{_safe_label(repo.category)}-{_safe_label(repo.label)}"
     codira_script = _resolved_codira_script(config.codira)
     output_dir = str(index_output_dir(repo, config))
+    config_file_args = _config_file_args(config)
     return (
         (
             config.python,
@@ -1911,6 +1987,7 @@ def build_profile_argvs(
             str(repo.path),
             "--output-dir",
             output_dir,
+            *config_file_args,
         ),
         (
             config.python,
@@ -1926,6 +2003,7 @@ def build_profile_argvs(
             str(repo.path),
             "--output-dir",
             output_dir,
+            *config_file_args,
         ),
     )
 
@@ -1955,6 +2033,7 @@ def build_pyinstrument_argvs(
     prefix = f"{_safe_label(repo.category)}-{_safe_label(repo.label)}"
     codira_script = _resolved_codira_script(config.codira)
     output_dir = str(index_output_dir(repo, config))
+    config_file_args = _config_file_args(config)
     return (
         (
             "pyinstrument",
@@ -1967,6 +2046,7 @@ def build_pyinstrument_argvs(
             str(repo.path),
             "--output-dir",
             output_dir,
+            *config_file_args,
         ),
         (
             "pyinstrument",
@@ -1980,6 +2060,7 @@ def build_pyinstrument_argvs(
             str(repo.path),
             "--output-dir",
             output_dir,
+            *config_file_args,
         ),
     )
 
@@ -2213,6 +2294,9 @@ def main() -> int:
         warmup=int(args.warmup),
         dry_run=bool(args.dry_run),
         continue_on_error=bool(args.continue_on_error),
+        config_file=None
+        if args.config_file is None
+        else Path(args.config_file).expanduser().resolve(),
     )
     config.artifact_root.mkdir(parents=True, exist_ok=True)
     try:

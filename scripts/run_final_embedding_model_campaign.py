@@ -17,7 +17,6 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.scriptlib import (
-    RepoConfigRestore,
     resolve_codira,
     resolve_python,
     safe_slug,
@@ -687,9 +686,6 @@ def run_repo_campaign(  # noqa: PLR0913
         return (0, restart_seen)
 
     config_file = config_root / f"{model.id}-{backend}.toml"
-    target_config = repo.path / ".codira" / "config.toml"
-    target_config.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(config_file, target_config)
     repo_manifest = metadata_root / "single-repo-manifests" / f"{repo_slug}.json"
     write_single_repo_manifest(manifest_path, repo, repo_manifest)
     log_path = log_root / f"{model_slug}-{backend}-{repo_slug}.log"
@@ -729,6 +725,8 @@ def run_repo_campaign(  # noqa: PLR0913
                 "--warmup",
                 str(warmup),
                 str(repo_manifest),
+                "--config-file",
+                str(config_file),
             ],
             stdout=log_file,
             stderr=subprocess.STDOUT,
@@ -890,14 +888,12 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901, PLR0912
 
     config_root = matrix_root / "configs"
     metadata_root = matrix_root / "metadata"
-    backup_root = matrix_root / "repo-config-backups"
     campaign_root = matrix_root / "campaigns"
     log_root = matrix_root / "logs"
     checkpoint_root = matrix_root / "checkpoints"
     for path in (
         config_root,
         metadata_root,
-        backup_root,
         campaign_root,
         log_root,
         checkpoint_root,
@@ -992,37 +988,36 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901, PLR0912
 
     status = 0
     restart_seen = not bool(restart_from)
-    with RepoConfigRestore(tuple(repo.path for repo in repos), backup_root):
-        for model in models:
-            log(f"Model campaign started: {model.id} backend={backend_mode}")
-            for backend in concrete_backends(backend_mode):
-                log(f"Backend campaign started: model={model.id} backend={backend}")
-                for repo in repos:
-                    rc, restart_seen = run_repo_campaign(
-                        model=model,
-                        repo=repo,
-                        backend=backend,
-                        config_root=config_root,
-                        metadata_root=metadata_root,
-                        campaign_root=campaign_root,
-                        log_root=log_root,
-                        stamp=stamp,
-                        manifest_path=manifest_path,
-                        python=python,
-                        codira=codira,
-                        labels_path=labels_path,
-                        checkpoint_index=checkpoint_index,
-                        restart_from=restart_from,
-                        restart_seen=restart_seen,
-                        runs=runs,
-                        warmup=warmup,
-                    )
-                    if rc and not status:
-                        status = rc
-                log(
-                    f"Backend campaign completed: model={model.id} backend={backend} current_status={status}"
+    for model in models:
+        log(f"Model campaign started: {model.id} backend={backend_mode}")
+        for backend in concrete_backends(backend_mode):
+            log(f"Backend campaign started: model={model.id} backend={backend}")
+            for repo in repos:
+                rc, restart_seen = run_repo_campaign(
+                    model=model,
+                    repo=repo,
+                    backend=backend,
+                    config_root=config_root,
+                    metadata_root=metadata_root,
+                    campaign_root=campaign_root,
+                    log_root=log_root,
+                    stamp=stamp,
+                    manifest_path=manifest_path,
+                    python=python,
+                    codira=codira,
+                    labels_path=labels_path,
+                    checkpoint_index=checkpoint_index,
+                    restart_from=restart_from,
+                    restart_seen=restart_seen,
+                    runs=runs,
+                    warmup=warmup,
                 )
-            log(f"Model campaign completed: {model.id} current_status={status}")
+                if rc and not status:
+                    status = rc
+            log(
+                f"Backend campaign completed: model={model.id} backend={backend} current_status={status}"
+            )
+        log(f"Model campaign completed: {model.id} current_status={status}")
 
     if restart_from and not restart_seen:
         message = (

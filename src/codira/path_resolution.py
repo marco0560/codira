@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 CODIRA_TARGET_DIR_ENV = "CODIRA_TARGET_DIR"
 CODIRA_OUTPUT_DIR_ENV = "CODIRA_OUTPUT_DIR"
+CODIRA_CONFIG_FILE_ENV = "CODIRA_CONFIG_FILE"
 
 
 @dataclass(frozen=True)
@@ -42,10 +43,13 @@ class ResolvedRuntimePaths:
         Absolute repository root used for all reads and analyzer scans.
     output_root : pathlib.Path
         Absolute directory under which ``.codira`` state is stored.
+    repo_config_file : pathlib.Path | None
+        Explicit repository config file override.
     """
 
     target_root: Path
     output_root: Path
+    repo_config_file: Path | None = None
 
 
 def _resolve_candidate_directory(raw_path: str, *, must_exist: bool) -> Path:
@@ -146,6 +150,62 @@ def _validate_output_root(parser: argparse.ArgumentParser, output_root: Path) ->
         parser.error(f"Output directory is not writable: {output_root}")
 
 
+def _validate_config_file(parser: argparse.ArgumentParser, config_file: Path) -> None:
+    """
+    Fail fast when an explicit repo config file cannot be read.
+
+    Parameters
+    ----------
+    parser : argparse.ArgumentParser
+        Active parser used for deterministic error reporting.
+    config_file : pathlib.Path
+        Absolute config file path to validate.
+
+    Returns
+    -------
+    None
+        The function returns only for a readable file.
+    """
+
+    if not config_file.exists():
+        parser.error(f"Config file does not exist: {config_file}")
+    if not config_file.is_file():
+        parser.error(f"Config path is not a file: {config_file}")
+    if not os.access(config_file, os.R_OK):
+        parser.error(f"Config file is not readable: {config_file}")
+
+
+def _validate_config_file_target(
+    parser: argparse.ArgumentParser,
+    config_file: Path,
+) -> None:
+    """
+    Fail fast when an explicit repo config file target cannot be written.
+
+    Parameters
+    ----------
+    parser : argparse.ArgumentParser
+        Active parser used for deterministic error reporting.
+    config_file : pathlib.Path
+        Absolute config file path to validate.
+
+    Returns
+    -------
+    None
+        The function returns only for a writable file target.
+    """
+
+    if config_file.exists():
+        if not config_file.is_file():
+            parser.error(f"Config path is not a file: {config_file}")
+        return
+    parent = _nearest_existing_parent(config_file.parent)
+    if not parent.is_dir():
+        parser.error(f"Config file is not under a writable directory: {config_file}")
+    if not os.access(parent, os.W_OK | os.X_OK):
+        parser.error(f"Config file parent is not writable: {config_file}")
+
+
 def resolve_runtime_paths(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
@@ -170,6 +230,9 @@ def resolve_runtime_paths(
     raw_output = getattr(args, "output_dir", None) or os.environ.get(
         CODIRA_OUTPUT_DIR_ENV
     )
+    raw_config_file = getattr(args, "config_file", None) or os.environ.get(
+        CODIRA_CONFIG_FILE_ENV
+    )
 
     try:
         target_root = (
@@ -191,7 +254,25 @@ def resolve_runtime_paths(
         parser.error(f"Output directory cannot be resolved: {exc}")
     _validate_output_root(parser, output_root)
 
+    try:
+        repo_config_file = (
+            Path(raw_config_file).expanduser().resolve(strict=False)
+            if raw_config_file is not None
+            else None
+        )
+    except OSError as exc:
+        parser.error(f"Config file cannot be resolved: {exc}")
+    if repo_config_file is not None:
+        if (
+            getattr(args, "command", None) == "config"
+            and getattr(args, "config_action", None) == "init"
+        ):
+            _validate_config_file_target(parser, repo_config_file)
+        else:
+            _validate_config_file(parser, repo_config_file)
+
     return ResolvedRuntimePaths(
         target_root=target_root,
         output_root=output_root,
+        repo_config_file=repo_config_file,
     )

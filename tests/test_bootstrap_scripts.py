@@ -3877,6 +3877,8 @@ def test_benchmark_campaign_helper_expands_manifest_commands(
         ),
         encoding="utf-8",
     )
+    config_file = tmp_path / "generated-config.toml"
+    config_file.write_text("config_version = 1\n", encoding="utf-8")
     config = helper.CampaignConfig(
         manifest=manifest,
         artifact_root=tmp_path / ".artifacts" / "benchmarks",
@@ -3887,6 +3889,7 @@ def test_benchmark_campaign_helper_expands_manifest_commands(
         runs=3,
         warmup=1,
         dry_run=True,
+        config_file=config_file,
     )
 
     def fake_run(
@@ -3968,6 +3971,10 @@ def test_benchmark_campaign_helper_expands_manifest_commands(
         for command in display_commands
     )
     assert any(
+        "cov --json --path " in command and f"--config-file {config_file}" in command
+        for command in display_commands
+    )
+    assert any(
         "sym build_parser --json --path " in command and "--output-dir " in command
         for command in display_commands
     )
@@ -3977,6 +3984,10 @@ def test_benchmark_campaign_helper_expands_manifest_commands(
         for command in display_commands
     )
     assert any("caps --json" in command for command in display_commands)
+    assert not any(
+        "caps --json" in command and "--config-file" in command
+        for command in hyperfine_commands
+    )
     assert sum("codira index --full" in command for command in hyperfine_commands) == 1
 
 

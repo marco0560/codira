@@ -160,8 +160,9 @@ uv run python -m scripts.run_onnx_parameter_sweep \
   --backend sqlite
 ```
 
-Each variant writes a generated `.codira/config.toml`, runs an isolated
-`codira index`, then times `emb` and `ctx` queries. Results are written under
+Each variant writes a generated config under the sweep artifact directory,
+passes it to Codira with `--config-file`, runs an isolated `codira index`, then
+times `emb` and `ctx` queries. Results are written under
 `.artifacts/onnx-parameter-sweep/<timestamp>/`. Use `--sweep-id` or
 `--variant-id` to narrow a run while tuning `batch_size`, `max_tokens`,
 `intra_op_num_threads`, `inter_op_num_threads`, and optional
@@ -197,10 +198,11 @@ uv run python -m scripts.run_final_embedding_model_campaign \
 The wrapper writes artifacts under
 `.artifacts/final-embedding-model-campaign/<timestamp>/`, first runs
 `scripts/download_embedding_model.py` against the model manifest, records the
-optional baseline path and manifests, applies one generated `.codira/config.toml`
-per model to the repositories listed in the manifest, and restores the
-original repository configs when it exits. Use `--baseline PATH` only to record
-which previous matrix should be used later during analysis. Use
+optional baseline path and manifests, writes one generated config per
+model/backend under the artifact directory, and passes that config to benchmark
+commands with `--config-file`. It does not rewrite repository
+`.codira/config.toml` files. Use `--baseline PATH` only to record which
+previous matrix should be used later during analysis. Use
 `--preflight-only` to stop after download and smoke tests. Use `--backend both`
 only when the campaign must run separate SQLite and DuckDB backend phases for
 each model/repository pair as well as PyTorch and ONNX Runtime embedding

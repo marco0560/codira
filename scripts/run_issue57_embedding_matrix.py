@@ -15,7 +15,7 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.scriptlib import RepoConfigRestore, resolve_codira, resolve_python
+from scripts.scriptlib import resolve_codira, resolve_python
 
 
 def manifest_repositories(manifest_path: Path) -> tuple[Path, ...]:
@@ -97,29 +97,6 @@ def write_matrix_configs(config_root: Path) -> None:
         )
 
 
-def apply_repo_config(config_file: Path, repos: tuple[Path, ...]) -> None:
-    """
-    Apply one Codira config to repositories.
-
-    Parameters
-    ----------
-    config_file : pathlib.Path
-        Source config file.
-    repos : tuple[pathlib.Path, ...]
-        Repository roots to mutate.
-
-    Returns
-    -------
-    None
-        Config files are copied.
-    """
-
-    for repo in repos:
-        target = repo / ".codira" / "config.toml"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(config_file, target)
-
-
 def run_campaign_scenario(  # noqa: PLR0913
     scenario: str,
     config_file: Path,
@@ -169,7 +146,6 @@ def run_campaign_scenario(  # noqa: PLR0913
     """
 
     print(f"== Scenario: {scenario} ==")
-    apply_repo_config(config_file, repos)
     (metadata_root / f"{scenario}.started-at.txt").write_text(
         datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ") + "\n",
         encoding="utf-8",
@@ -186,7 +162,14 @@ def run_campaign_scenario(  # noqa: PLR0913
     )
     with (log_root / f"{scenario}.log").open("w", encoding="utf-8") as log_file:
         status = subprocess.call(
-            [python, "-m", "scripts.run_manifest_baseline"],
+            [
+                python,
+                "-m",
+                "scripts.run_manifest_baseline",
+                str(manifest_path),
+                "--config-file",
+                str(config_file),
+            ],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             env=env,
@@ -203,6 +186,7 @@ def run_campaign_scenario(  # noqa: PLR0913
 def run_embeddings_only_after_deferred(  # noqa: PLR0913
     *,
     repos: tuple[Path, ...],
+    config_file: Path,
     artifact_root: Path,
     log_root: Path,
     metadata_root: Path,
@@ -216,6 +200,8 @@ def run_embeddings_only_after_deferred(  # noqa: PLR0913
     ----------
     repos : tuple[pathlib.Path, ...]
         Repository roots to index.
+    config_file : pathlib.Path
+        Deferred scenario config used for the embeddings-only pass.
     artifact_root : pathlib.Path
         Campaign artifact root.
     log_root : pathlib.Path
@@ -288,6 +274,8 @@ def run_embeddings_only_after_deferred(  # noqa: PLR0913
                                 / "indexes"
                                 / repo.name
                             ),
+                            "--config-file",
+                            str(config_file),
                         ],
                         stdout=stdout_file,
                         stderr=stderr_file,
@@ -403,8 +391,7 @@ def main(argv: list[str] | None = None) -> int:
     config_root = matrix_root / "configs"
     log_root = matrix_root / "logs"
     metadata_root = matrix_root / "metadata"
-    backup_root = matrix_root / "repo-config-backups"
-    for path in (artifact_root, config_root, log_root, metadata_root, backup_root):
+    for path in (artifact_root, config_root, log_root, metadata_root):
         path.mkdir(parents=True, exist_ok=True)
 
     shutil.copy2(manifest_path, metadata_root / "manifest.json")
@@ -416,40 +403,41 @@ def main(argv: list[str] | None = None) -> int:
     write_matrix_configs(config_root)
 
     status = 0
-    with RepoConfigRestore(repos, backup_root):
-        for scenario in (
-            "deferred-full",
-            "immediate-symbol-only",
-            "immediate-documentation-only",
-            "immediate-no-embeddings",
-            "immediate-capped-docs",
-        ):
-            rc = run_campaign_scenario(
-                scenario,
-                config_root / f"{scenario}.toml",
-                manifest_path=manifest_path,
+    for scenario in (
+        "deferred-full",
+        "immediate-symbol-only",
+        "immediate-documentation-only",
+        "immediate-no-embeddings",
+        "immediate-capped-docs",
+    ):
+        config_file = config_root / f"{scenario}.toml"
+        rc = run_campaign_scenario(
+            scenario,
+            config_file,
+            manifest_path=manifest_path,
+            repos=repos,
+            matrix_root=matrix_root,
+            artifact_root=artifact_root,
+            log_root=log_root,
+            metadata_root=metadata_root,
+            stamp=stamp,
+            python=python,
+            codira=codira,
+        )
+        if rc and not status:
+            status = rc
+        if scenario == "deferred-full":
+            rc = run_embeddings_only_after_deferred(
                 repos=repos,
-                matrix_root=matrix_root,
+                config_file=config_file,
                 artifact_root=artifact_root,
                 log_root=log_root,
                 metadata_root=metadata_root,
                 stamp=stamp,
-                python=python,
                 codira=codira,
             )
             if rc and not status:
                 status = rc
-            if scenario == "deferred-full":
-                rc = run_embeddings_only_after_deferred(
-                    repos=repos,
-                    artifact_root=artifact_root,
-                    log_root=log_root,
-                    metadata_root=metadata_root,
-                    stamp=stamp,
-                    codira=codira,
-                )
-                if rc and not status:
-                    status = rc
 
     write_index(
         matrix_root=matrix_root,

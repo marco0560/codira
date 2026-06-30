@@ -49,7 +49,9 @@ repository and written under:
 ```
 
 The campaign runner passes this directory through `--output-dir` for `index`
-and `ctx` commands.
+and `ctx` commands. When a scenario needs a generated configuration, the
+runner keeps that TOML under the artifact directory and passes it separately
+with `--config-file`; `--output-dir` remains the state root only.
 
 Campaign runs also write `<category-label>-utility-summary.json` beside each
 Hyperfine export. The utility score is:

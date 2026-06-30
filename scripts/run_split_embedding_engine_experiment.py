@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -26,7 +25,7 @@ from scripts.run_final_embedding_model_campaign import (
     read_repositories,
     render_model_config,
 )
-from scripts.scriptlib import RepoConfigRestore, resolve_codira, safe_slug
+from scripts.scriptlib import resolve_codira, safe_slug
 
 DEFAULT_PAIR_MANIFEST = Path("benchmarks/split-embedding-engine-pairs.json")
 DEFAULT_MODEL_MANIFEST = Path("benchmarks/embedding-model-candidates.json")
@@ -724,7 +723,6 @@ def main(argv: list[str] | None = None) -> int:
     config_root = artifact_root / "configs"
     output_root = artifact_root / "outputs"
     log_root = artifact_root / "logs"
-    backup_root = artifact_root / "repo-config-backups"
     results_path = artifact_root / "results.jsonl"
     artifact_root.mkdir(parents=True, exist_ok=True)
 
@@ -744,140 +742,140 @@ def main(argv: list[str] | None = None) -> int:
     env = dict(os.environ)
     env["CODIRA"] = codira
     status = 0
-    with RepoConfigRestore(tuple(repo.path for repo in repos), backup_root):
-        for pair in pairs:
-            gate = run_gate(
-                pair=pair,
-                entries=compat_entries,
-                artifact_root=artifact_root,
+    for pair in pairs:
+        gate = run_gate(
+            pair=pair,
+            entries=compat_entries,
+            artifact_root=artifact_root,
+        )
+        if not gate.passed:
+            results_path.write_text(
+                render_result_row(
+                    pair_id=pair.pair_id,
+                    phase="gate",
+                    passed=False,
+                    min_cosine=gate.min_cosine,
+                    threshold=gate.threshold,
+                ),
+                encoding="utf-8",
             )
-            if not gate.passed:
-                results_path.write_text(
+            return 1
+        index_model = models[pair.index_model]
+        query_model = models[pair.query_model]
+        index_config = config_root / f"{pair.pair_id}-index.toml"
+        query_config = config_root / f"{pair.pair_id}-query.toml"
+        write_config(index_config, index_model, args.backend)
+        write_config(query_config, query_model, args.backend)
+        for repo in repos:
+            repo_slug = safe_slug(f"{repo.index}-{repo.label}")
+            output_dir = output_root / safe_slug(pair.pair_id) / repo_slug
+            index_command = (
+                codira,
+                "index",
+                *(("--full",) if not args.no_full else ()),
+                "--path",
+                str(repo.path),
+                "--output-dir",
+                str(output_dir),
+                "--config-file",
+                str(index_config),
+                "--json",
+            )
+            index_result = timed_command(
+                index_command,
+                cwd=Path.cwd(),
+                env=env,
+                log_path=log_root / f"{safe_slug(pair.pair_id)}-{repo_slug}-index.log",
+            )
+            with results_path.open("a", encoding="utf-8") as results_file:
+                results_file.write(
                     render_result_row(
                         pair_id=pair.pair_id,
-                        phase="gate",
-                        passed=False,
-                        min_cosine=gate.min_cosine,
-                        threshold=gate.threshold,
-                    ),
-                    encoding="utf-8",
-                )
-                return 1
-            index_model = models[pair.index_model]
-            query_model = models[pair.query_model]
-            index_config = config_root / f"{pair.pair_id}-index.toml"
-            query_config = config_root / f"{pair.pair_id}-query.toml"
-            write_config(index_config, index_model, args.backend)
-            write_config(query_config, query_model, args.backend)
-            for repo in repos:
-                repo_slug = safe_slug(f"{repo.index}-{repo.label}")
-                output_dir = output_root / safe_slug(pair.pair_id) / repo_slug
-                target_config = repo.path / ".codira" / "config.toml"
-                target_config.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(index_config, target_config)
-                index_command = (
-                    codira,
-                    "index",
-                    *(("--full",) if not args.no_full else ()),
-                    "--path",
-                    str(repo.path),
-                    "--output-dir",
-                    str(output_dir),
-                    "--json",
-                )
-                index_result = timed_command(
-                    index_command,
-                    cwd=Path.cwd(),
-                    env=env,
-                    log_path=log_root
-                    / f"{safe_slug(pair.pair_id)}-{repo_slug}-index.log",
-                )
-                with results_path.open("a", encoding="utf-8") as results_file:
-                    results_file.write(
-                        render_result_row(
-                            pair_id=pair.pair_id,
-                            repo=repo.label,
-                            backend=args.backend,
-                            phase="index",
-                            engine=index_model.engine,
-                            elapsed_seconds=index_result.elapsed_seconds,
-                            status=index_result.returncode,
-                            log=str(index_result.log_path),
-                        )
+                        repo=repo.label,
+                        backend=args.backend,
+                        phase="index",
+                        engine=index_model.engine,
+                        elapsed_seconds=index_result.elapsed_seconds,
+                        status=index_result.returncode,
+                        log=str(index_result.log_path),
                     )
-                if index_result.returncode:
-                    status = index_result.returncode
-                    continue
-                aliased_rows = alias_vector_set(
-                    output_dir=output_dir,
-                    backend=args.backend,
-                    source=index_model,
-                    target=query_model,
                 )
-                shutil.copy2(query_config, target_config)
-                with results_path.open("a", encoding="utf-8") as results_file:
-                    results_file.write(
-                        render_result_row(
-                            pair_id=pair.pair_id,
-                            repo=repo.label,
-                            backend=args.backend,
-                            phase="alias",
-                            rows=aliased_rows,
-                            source_engine=index_model.engine,
-                            query_engine=query_model.engine,
-                        )
+            if index_result.returncode:
+                status = index_result.returncode
+                continue
+            aliased_rows = alias_vector_set(
+                output_dir=output_dir,
+                backend=args.backend,
+                source=index_model,
+                target=query_model,
+            )
+            with results_path.open("a", encoding="utf-8") as results_file:
+                results_file.write(
+                    render_result_row(
+                        pair_id=pair.pair_id,
+                        repo=repo.label,
+                        backend=args.backend,
+                        phase="alias",
+                        rows=aliased_rows,
+                        source_engine=index_model.engine,
+                        query_engine=query_model.engine,
                     )
-                for query_index, query in enumerate(pair.queries, start=1):
-                    for command_name in ("emb", "ctx"):
-                        command: tuple[str, ...] = (
+                )
+            for query_index, query in enumerate(pair.queries, start=1):
+                for command_name in ("emb", "ctx"):
+                    command: tuple[str, ...] = (
+                        codira,
+                        command_name,
+                        "--json",
+                        query,
+                        "--path",
+                        str(repo.path),
+                        "--output-dir",
+                        str(output_dir),
+                        "--config-file",
+                        str(query_config),
+                    )
+                    if command_name == "emb":
+                        command = (
                             codira,
-                            command_name,
-                            "--json",
+                            "emb",
                             query,
+                            "--json",
+                            "--limit",
+                            str(args.limit),
                             "--path",
                             str(repo.path),
                             "--output-dir",
                             str(output_dir),
+                            "--config-file",
+                            str(query_config),
                         )
-                        if command_name == "emb":
-                            command = (
-                                codira,
-                                "emb",
-                                query,
-                                "--json",
-                                "--limit",
-                                str(args.limit),
-                                "--path",
-                                str(repo.path),
-                                "--output-dir",
-                                str(output_dir),
+                    result = timed_command(
+                        command,
+                        cwd=Path.cwd(),
+                        env=env,
+                        log_path=log_root
+                        / (
+                            f"{safe_slug(pair.pair_id)}-{repo_slug}-"
+                            f"{command_name}-{query_index}.log"
+                        ),
+                    )
+                    with results_path.open("a", encoding="utf-8") as results_file:
+                        results_file.write(
+                            render_result_row(
+                                pair_id=pair.pair_id,
+                                repo=repo.label,
+                                backend=args.backend,
+                                phase=command_name,
+                                engine=query_model.engine,
+                                query=query,
+                                elapsed_seconds=result.elapsed_seconds,
+                                status=result.returncode,
+                                log=str(result.log_path),
                             )
-                        result = timed_command(
-                            command,
-                            cwd=Path.cwd(),
-                            env=env,
-                            log_path=log_root
-                            / (
-                                f"{safe_slug(pair.pair_id)}-{repo_slug}-"
-                                f"{command_name}-{query_index}.log"
-                            ),
                         )
-                        with results_path.open("a", encoding="utf-8") as results_file:
-                            results_file.write(
-                                render_result_row(
-                                    pair_id=pair.pair_id,
-                                    repo=repo.label,
-                                    backend=args.backend,
-                                    phase=command_name,
-                                    engine=query_model.engine,
-                                    query=query,
-                                    elapsed_seconds=result.elapsed_seconds,
-                                    status=result.returncode,
-                                    log=str(result.log_path),
-                                )
-                            )
-                        if result.returncode and not status:
-                            status = result.returncode
+                    if result.returncode and not status:
+                        status = result.returncode
     print(f"Artifacts: {artifact_root}")
     print(f"Results: {results_path}")
     return status

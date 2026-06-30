@@ -1,6 +1,6 @@
 # Configuration
 
-Codira can run without a config file. Runtime commands create a default
+Codira can run without a config file. Runtime commands can create a default
 user-level config on first use when the platform user config directory is
 writable, and users can create or inspect config files explicitly with:
 
@@ -27,6 +27,18 @@ CLI flags
 
 Repository config lives at `.codira/config.toml`. The file can be committed,
 while normal `.codira` index artifacts remain ignored.
+
+`codira config init` creates the repository config by default. Use
+`codira config init --level user` when the file should be written to the
+platform user config directory instead.
+
+Most repository-scoped commands accept `--config-file PATH`. This option tells
+Codira which repo-level config file to merge instead of
+`<output-dir>/.codira/config.toml`; it does not move databases, indexes, model
+artifacts, or other runtime state. `--output-dir DIR` selects the Codira state
+root for a command, while `--config-file PATH` selects only the repo-level
+configuration source. When both are provided, state is written under
+`--output-dir` and configuration is read from `--config-file`.
 
 ## Generated Config
 

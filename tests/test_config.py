@@ -352,7 +352,28 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
     """
 
     rendered = render_config_toml(full_profile_config("default"))
+    section_order = [line for line in rendered.splitlines() if line.startswith("[")]
 
+    assert section_order == [
+        "[backend]",
+        "[plugins]",
+        "[embeddings]",
+        "[embeddings.gpu]",
+        "[embeddings.indexing]",
+        "[plugins.backend-sqlite]",
+        "[plugins.backend-duckdb]",
+        "[plugins.embedding-sentence-transformers]",
+        "[plugins.embedding-onnx]",
+        "[plugins.vector-store-sqlite]",
+        "[plugins.vector-store-duckdb]",
+        "[plugins.analyzer-python]",
+        "[plugins.analyzer-json]",
+        "[plugins.analyzer-c]",
+        "[plugins.analyzer-cpp]",
+        "[plugins.analyzer-bash]",
+        "[plugins.analyzer-markdown]",
+        "[plugins.analyzer-text]",
+    ]
     assert "[plugins.analyzer-python]" in rendered
     assert "emit_module_documentation = true" in rendered
     assert "[plugins.analyzer-json]" in rendered
@@ -396,7 +417,9 @@ def test_config_cli_init_and_dump_json(
 
     _isolate_config_paths(monkeypatch, tmp_path)
     monkeypatch.setattr(
-        sys, "argv", ["codira", "config", "init", "--profile", "low-memory"]
+        sys,
+        "argv",
+        ["codira", "config", "init", "--level", "user", "--profile", "low-memory"],
     )
 
     assert main() == 0
@@ -417,6 +440,123 @@ def test_config_cli_init_and_dump_json(
     assert "# enabled = true" in rendered
     assert "batch_size = 8" in rendered
     assert "# batch_size = 32" not in rendered
+
+
+def test_config_cli_init_defaults_to_repo_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Create a repository config by default through the CLI.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths and argv.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts the default init target is repo-local.
+    """
+
+    _isolate_config_paths(monkeypatch, tmp_path)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.chdir(repo_root)
+    monkeypatch.setattr(sys, "argv", ["codira", "config", "init"])
+
+    assert main() == 0
+
+    repo_config = repo_root / ".codira" / "config.toml"
+    assert repo_config.exists()
+    assert not config_module.user_config_path().exists()
+    assert "# config_version = 1" in repo_config.read_text(encoding="utf-8")
+
+
+def test_config_cli_config_file_overrides_repo_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Use an explicit repo-level config file for effective config resolution.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths and argv.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture CLI output.
+
+    Returns
+    -------
+    None
+        The test asserts ``--config-file`` replaces the default repo config
+        path without changing the output directory.
+    """
+
+    _isolate_config_paths(monkeypatch, tmp_path)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    default_repo_config = repo_root / ".codira" / "config.toml"
+    default_repo_config.parent.mkdir()
+    default_repo_config.write_text("[embeddings]\nbatch_size = 5\n", encoding="utf-8")
+    override_config = tmp_path / "override.toml"
+    override_config.write_text("[embeddings]\nbatch_size = 7\n", encoding="utf-8")
+    monkeypatch.chdir(repo_root)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["codira", "config", "dump", "--config-file", str(override_config), "--json"],
+    )
+
+    assert main() == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ok"
+    assert payload["results"]["embeddings"]["batch_size"] == 7
+
+
+def test_config_cli_init_config_file_writes_requested_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Write an explicit repository config file through ``config init``.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths and argv.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts ``--config-file`` changes only the repo config target.
+    """
+
+    _isolate_config_paths(monkeypatch, tmp_path)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    override_config = tmp_path / "configs" / "repo.toml"
+    monkeypatch.chdir(repo_root)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["codira", "config", "init", "--config-file", str(override_config)],
+    )
+
+    assert main() == 0
+
+    assert override_config.exists()
+    assert not (repo_root / ".codira" / "config.toml").exists()
 
 
 def test_config_cli_init_full_writes_plugin_defaults(
@@ -440,7 +580,11 @@ def test_config_cli_init_full_writes_plugin_defaults(
     """
 
     _isolate_config_paths(monkeypatch, tmp_path)
-    monkeypatch.setattr(sys, "argv", ["codira", "config", "init", "--full"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["codira", "config", "init", "--level", "user", "--full"],
+    )
 
     assert main() == 0
 

@@ -60,7 +60,7 @@ from benchmark_timing import (  # type: ignore[import-not-found]
 )
 
 from codira import indexer
-from codira.config import with_effective_config_cache
+from codira.config import override_repo_config_path, with_effective_config_cache
 from codira.indexer import index_repo
 from codira.registry import active_index_backend, with_active_plugin_instance_cache
 from codira.semantic import embeddings as embeddings_module
@@ -103,6 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=Path,
         help="Directory under which .codira benchmark state is stored.",
+    )
+    parser.add_argument(
+        "--config-file",
+        type=Path,
+        help="Explicit repo-level Codira config file to use for this run.",
     )
     return parser
 
@@ -182,6 +187,7 @@ def main() -> int:
     args = build_parser().parse_args()
     root = Path(args.root).resolve()
     output_dir = None if args.output_dir is None else Path(args.output_dir).resolve()
+    config_file = None if args.config_file is None else Path(args.config_file).resolve()
     timer = PhaseTimer()
     embedding_batch_sizes: list[int] = []
     embedding_unique_batch_sizes: list[int] = []
@@ -303,13 +309,14 @@ def main() -> int:
 
     total_start = perf_counter()
     try:
-        if output_dir is None:
-            active_index_backend(root=root).initialize(root)
-            report = index_repo(root, full=args.full)
-        else:
-            with override_storage_root(root, output_dir):
+        with override_repo_config_path(config_file):
+            if output_dir is None:
                 active_index_backend(root=root).initialize(root)
                 report = index_repo(root, full=args.full)
+            else:
+                with override_storage_root(root, output_dir):
+                    active_index_backend(root=root).initialize(root)
+                    report = index_repo(root, full=args.full)
     finally:
         total_elapsed = perf_counter() - total_start
         indexer._collect_project_scan_state = original_collect_scan

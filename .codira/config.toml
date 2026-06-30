@@ -1,119 +1,117 @@
-config_version = 1
+# config_version = 1
 
 [backend]
-name = "sqlite"
+# name = "sqlite"
 
 [plugins]
-disable_third_party = false
-disabled_analyzers = []
-
-[plugins.analyzer-python]
-enabled = true
-include_paths = []
-exclude_paths = []
-emit_module_documentation = true
-emit_imports = true
-emit_constants = true
-emit_type_aliases = true
-
-[plugins.analyzer-json]
-enabled = true
-include_paths = []
-exclude_paths = []
-enabled_families = ["schema", "package", "release"]
-emit_dependencies = true
-emit_scripts = true
-emit_schema_properties = true
-
-[plugins.analyzer-c]
-enabled = true
-include_paths = []
-exclude_paths = []
-use_leading_comments = true
-emit_doxygen_documentation = true
-include_system_includes = true
-emit_macros = true
-
-[plugins.analyzer-cpp]
-enabled = true
-include_paths = []
-exclude_paths = []
-use_leading_comments = true
-emit_doxygen_documentation = true
-include_system_includes = true
-emit_namespaces = true
-emit_macros = true
-
-[plugins.analyzer-bash]
-enabled = true
-include_paths = []
-exclude_paths = []
-emit_functions = true
-
-[plugins.analyzer-markdown]
-enabled = true
-include_paths = []
-exclude_paths = []
-strip_front_matter = true
-emit_file_artifact_without_headings = true
-min_heading_level = 1
-max_heading_level = 6
-
-[plugins.analyzer-text]
-enabled = true
-include_paths = []
-exclude_paths = []
-include_root_files = true
-include_docs_directories = true
-exclude_generated = true
-exclude_fixtures_logs = true
-
-[plugins.backend-sqlite]
-enabled = true
-
-[plugins.backend-duckdb]
-enabled = true
-profiling_enabled = true
-
-[plugins.embedding-sentence-transformers]
-enabled = true
-trust_remote_code = false
-
-[plugins.embedding-onnx]
-enabled = true
-precision = "float32"
-model_path = ""
-tokenizer_path = ""
-provider = "CPUExecutionProvider"
-normalize = true
-intra_op_num_threads = 0
-inter_op_num_threads = 0
-
-[plugins.vector-store-sqlite]
-enabled = true
-
-[plugins.vector-store-duckdb]
-enabled = true
+# disable_third_party = false
+# disabled_analyzers = []
 
 [embeddings]
-enabled = true
-engine = "sentence-transformers"
-vector_store = "sqlite"
-model = "sentence-transformers/all-MiniLM-L6-v2"
-version = "1"
-dimension = 384
-device = "cpu"
-batch_size = 32
-torch_num_threads = 0
-torch_num_interop_threads = 0
+# enabled = true
+# engine = "sentence-transformers"
+# vector_store = "sqlite"
+# model = "sentence-transformers/all-MiniLM-L6-v2"
+# version = "1"
+# dimension = 384
+# device = "cpu"
+# batch_size = 32
+# torch_num_threads = 0
+# torch_num_interop_threads = 0
 
 [embeddings.gpu]
-device_id = 0
-memory_limit_mb = 0
+# device_id = 0
+# memory_limit_mb = 0
 
 [embeddings.indexing]
-mode = "immediate"
-object_types = ["symbol", "documentation"]
-max_text_chars = 0
-include_paths = []
-exclude_paths = []
+# mode = "immediate"
+# object_types = ["symbol", "documentation"]
+# max_text_chars = 0
+# include_paths = []
+# exclude_paths = []
+
+[plugins.backend-sqlite]
+# enabled = true
+
+[plugins.backend-duckdb]
+# enabled = true
+# profiling_enabled = false
+
+[plugins.embedding-sentence-transformers]
+# enabled = true
+
+[plugins.embedding-onnx]
+# enabled = true
+# provider = "CPUExecutionProvider"
+# precision = "float32"
+# normalize = true
+# max_tokens = 512
+# intra_op_num_threads = 0
+# inter_op_num_threads = 0
+
+[plugins.vector-store-sqlite]
+# enabled = true
+
+[plugins.vector-store-duckdb]
+# enabled = true
+
+[plugins.analyzer-python]
+# enabled = true
+# include_paths = []
+# exclude_paths = []
+# emit_module_documentation = true
+# emit_imports = true
+# emit_constants = true
+# emit_type_aliases = true
+
+[plugins.analyzer-json]
+# enabled = true
+# include_paths = []
+# exclude_paths = []
+# enabled_families = ["schema", "package", "release"]
+# emit_dependencies = true
+# emit_scripts = true
+# emit_schema_properties = true
+
+[plugins.analyzer-c]
+# enabled = true
+# include_paths = []
+# exclude_paths = []
+# use_leading_comments = true
+# emit_doxygen_documentation = true
+# include_system_includes = true
+# emit_macros = true
+
+[plugins.analyzer-cpp]
+# enabled = true
+# include_paths = []
+# exclude_paths = []
+# use_leading_comments = true
+# emit_doxygen_documentation = true
+# include_system_includes = true
+# emit_namespaces = true
+# emit_macros = true
+
+[plugins.analyzer-bash]
+# enabled = true
+# include_paths = []
+# exclude_paths = []
+# emit_functions = true
+
+[plugins.analyzer-markdown]
+# enabled = true
+# include_paths = []
+# exclude_paths = []
+# strip_front_matter = true
+# emit_file_artifact_without_headings = true
+# min_heading_level = 1
+# max_heading_level = 6
+
+[plugins.analyzer-text]
+# enabled = true
+# include_paths = []
+# exclude_paths = []
+# include_root_files = true
+# include_docs_directories = true
+# exclude_generated = true
+# exclude_fixtures_logs = true
