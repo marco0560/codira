@@ -412,6 +412,11 @@ def test_config_cli_init_and_dump_json(
     payload = json.loads(captured.out[captured.out.index("{") :])
     assert payload["status"] == "ok"
     assert payload["results"]["embeddings"]["batch_size"] == 8
+    rendered = config_module.user_config_path().read_text(encoding="utf-8")
+    assert "# config_version = 1" in rendered
+    assert "# enabled = true" in rendered
+    assert "batch_size = 8" in rendered
+    assert "# batch_size = 32" not in rendered
 
 
 def test_config_cli_init_full_writes_plugin_defaults(
@@ -441,8 +446,8 @@ def test_config_cli_init_full_writes_plugin_defaults(
 
     rendered = config_module.user_config_path().read_text(encoding="utf-8")
     assert "[plugins.analyzer-cpp]" in rendered
-    assert "emit_macros = true" in rendered
-    assert "include_paths = []" in rendered
+    assert "# emit_macros = true" in rendered
+    assert "# include_paths = []" in rendered
     assert "[plugins.backend-sqlite]" in rendered
 
 

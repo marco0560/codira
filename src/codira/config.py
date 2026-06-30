@@ -1320,6 +1320,75 @@ def render_config_toml(value: Mapping[str, object]) -> str:
     return text
 
 
+def _value_at_path(value: Mapping[str, object], path: tuple[str, ...]) -> object:
+    """
+    Return one nested mapping value by path.
+
+    Parameters
+    ----------
+    value : collections.abc.Mapping[str, object]
+        Root mapping to inspect.
+    path : tuple[str, ...]
+        Nested key path.
+
+    Returns
+    -------
+    object
+        Nested value, or ``None`` when the path is not present.
+    """
+
+    current: object = value
+    for key in path:
+        if not isinstance(current, Mapping) or key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def _comment_default_config_values(
+    text: str,
+    *,
+    value: Mapping[str, object],
+    defaults: Mapping[str, object],
+) -> str:
+    """
+    Comment TOML assignment lines whose value matches the default profile.
+
+    Parameters
+    ----------
+    text : str
+        Rendered TOML text.
+    value : collections.abc.Mapping[str, object]
+        Generated profile mapping.
+    defaults : collections.abc.Mapping[str, object]
+        Default profile mapping used as the comparison baseline.
+
+    Returns
+    -------
+    str
+        TOML text with default-valued assignment lines prefixed by ``#``.
+    """
+
+    current_section: tuple[str, ...] = ()
+    lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            current_section = tuple(stripped.strip("[]").split("."))
+            lines.append(line)
+            continue
+        if "=" not in line or stripped.startswith("#"):
+            lines.append(line)
+            continue
+        key = line.split("=", 1)[0].strip()
+        path = (*current_section, key)
+        if _value_at_path(value, path) == _value_at_path(defaults, path):
+            lines.append(f"# {line}")
+        else:
+            lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
 def write_config_file(
     path: Path,
     *,
@@ -1359,7 +1428,13 @@ def write_config_file(
         raise ConfigError(msg)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = full_profile_config(profile) if full else profile_config(profile)
-    path.write_text(render_config_toml(payload), encoding="utf-8")
+    defaults = full_profile_config("default") if full else profile_config("default")
+    rendered = _comment_default_config_values(
+        render_config_toml(payload),
+        value=payload,
+        defaults=defaults,
+    )
+    path.write_text(rendered, encoding="utf-8")
 
 
 def update_config_file(path: Path, updates: Mapping[str, object]) -> None:

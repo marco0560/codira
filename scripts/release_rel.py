@@ -105,7 +105,17 @@ def main() -> int:
         print("ERROR: no wheel found in dist/")
         return 1
     status = run(
-        [python, "-m", "pip", "install", "--force-reinstall", "--no-deps", "-q", wheel]
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            python,
+            "--force-reinstall",
+            "--no-deps",
+            "-q",
+            wheel,
+        ]
     ).returncode
     if status:
         return status

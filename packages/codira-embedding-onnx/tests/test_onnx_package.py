@@ -35,7 +35,7 @@ def test_onnx_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.0.1"
+    assert project["project"]["version"] == "1.0.2"
     assert project["project"]["entry-points"]["codira.embedding_engines"] == {
         "onnx": "codira_embedding_onnx:build_engine"
     }
@@ -221,7 +221,7 @@ def test_onnx_engine_spec_uses_core_injected_identity() -> None:
     )
 
     assert spec.engine == "onnx"
-    assert spec.engine_version == "1.0.1"
+    assert spec.engine_version == "1.0.2"
     assert spec.model == "demo/model"
     assert spec.model_version == "revision-1"
     assert spec.dimension == 768

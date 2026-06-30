@@ -2619,8 +2619,8 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-text==1.43.0",
         "codira-backend-sqlite==1.45.1",
         "codira-backend-duckdb==1.50.0",
-        "codira-embedding-sentence-transformers==1.0.1",
-        "codira-embedding-onnx==1.0.1",
+        "codira-embedding-sentence-transformers==1.0.2",
+        "codira-embedding-onnx==1.0.2",
         "codira-vector-store-sqlite==1.0.1",
         "codira-vector-store-duckdb==1.0.7",
     ]

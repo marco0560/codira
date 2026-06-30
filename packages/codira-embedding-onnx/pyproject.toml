@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-embedding-onnx"
-version = "1.0.1"
+version = "1.0.2"
 description = "First-party native ONNX Runtime embedding engine plugin for codira"
 readme = "README.md"
 requires-python = ">=3.13"

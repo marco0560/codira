@@ -598,7 +598,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-embedding-onnx"
-version = "1.0.1"
+version = "1.0.2"
 source = { editable = "packages/codira-embedding-onnx" }
 dependencies = [
     { name = "codira" },
@@ -622,7 +622,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-embedding-sentence-transformers"
-version = "1.0.1"
+version = "1.0.2"
 source = { editable = "packages/codira-embedding-sentence-transformers" }
 dependencies = [
     { name = "codira" },

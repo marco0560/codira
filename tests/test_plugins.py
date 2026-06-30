@@ -931,6 +931,49 @@ def test_sentence_transformers_config_validation_rejects_invalid_trust_remote_co
         registry.validate_plugin_configuration(root=tmp_path)
 
 
+def test_embedding_plugin_configuration_validation_is_warning_free(
+    tmp_path: Path,
+) -> None:
+    """
+    Accept valid embedding plugin tables without configuration warnings.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing repo-local config.
+
+    Returns
+    -------
+    None
+        The test asserts embedding plugins expose the configuration interface.
+    """
+
+    config_path = tmp_path / ".codira" / "config.toml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        """
+        [embeddings]
+        engine = "sentence-transformers"
+
+        [plugins.embedding-sentence-transformers]
+        trust_remote_code = true
+
+        [plugins.embedding-onnx]
+        provider = "CPUExecutionProvider"
+        precision = "float32"
+        normalize = true
+        max_tokens = 512
+        intra_op_num_threads = 0
+        inter_op_num_threads = 0
+        """,
+        encoding="utf-8",
+    )
+
+    warnings = registry.validate_plugin_configuration(root=tmp_path)
+
+    assert warnings == []
+
+
 def test_plugin_configuration_validation_warns_for_missing_plugin(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

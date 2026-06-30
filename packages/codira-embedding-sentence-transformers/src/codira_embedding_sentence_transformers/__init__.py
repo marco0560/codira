@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 __all__ = ["SentenceTransformersEmbeddingEngine", "build_engine"]
 
-PACKAGE_VERSION = "1.0.1"
+PACKAGE_VERSION = "1.0.2"
 
 
 class SentenceTransformersEmbeddingEngine:
@@ -77,6 +77,23 @@ class SentenceTransformersEmbeddingEngine:
                 }
             }
         )
+
+    def configure(self, config: Mapping[str, object]) -> None:
+        """
+        Apply SentenceTransformers embedding configuration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Namespaced embedding plugin configuration table.
+
+        Returns
+        -------
+        None
+            Runtime calls receive the effective plugin config explicitly.
+        """
+
+        del config
 
     def spec(self, config: Mapping[str, object]) -> EmbeddingEngineSpec:
         """

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 __all__ = ["OnnxEmbeddingEngine", "build_engine"]
 
-PACKAGE_VERSION = "1.0.1"
+PACKAGE_VERSION = "1.0.2"
 DEFAULT_PROVIDER = "CPUExecutionProvider"
 DEFAULT_PRECISION = "float32"
 DEFAULT_MAX_TOKENS = 512
@@ -509,6 +509,23 @@ class OnnxEmbeddingEngine:
                 },
             }
         )
+
+    def configure(self, config: Mapping[str, object]) -> None:
+        """
+        Apply ONNX embedding configuration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Namespaced embedding plugin configuration table.
+
+        Returns
+        -------
+        None
+            Runtime calls receive the effective plugin config explicitly.
+        """
+
+        del config
 
     def spec(self, config: Mapping[str, object]) -> EmbeddingEngineSpec:
         """
