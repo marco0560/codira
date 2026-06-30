@@ -71,6 +71,28 @@
           "limitations": {
             "type": "array",
             "items": { "type": "string" }
+          },
+          "subcommands": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": ["intent", "modes", "options", "guarantee"],
+              "properties": {
+                "intent": { "type": "string" },
+                "modes": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "uniqueItems": true
+                },
+                "options": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "uniqueItems": true
+                },
+                "guarantee": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "additionalProperties": false

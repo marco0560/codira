@@ -60,6 +60,8 @@ from codira.contracts import (
     VectorSimilarityRequest,
     VectorSimilarityScore,
     VectorStore,
+    VectorStorePurgeRequest,
+    VectorStorePurgeResult,
     VectorStoreSpec,
     split_declared_retrieval_capabilities,
 )
@@ -530,6 +532,37 @@ class _FakeVectorStore:
         """
         del request
         return []
+
+    def purge_vector_sets(
+        self,
+        request: VectorStorePurgeRequest,
+    ) -> VectorStorePurgeResult:
+        """
+        Return an empty fake purge result.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStorePurgeRequest
+            Purge request.
+
+        Returns
+        -------
+        codira.contracts.VectorStorePurgeResult
+            Empty purge result.
+        """
+        del request
+        return VectorStorePurgeResult(
+            store=self.name,
+            mode="stale",
+            dry_run=True,
+            active_vector_set_id=None,
+            stale_vector_sets=0,
+            kept_stale_vector_sets=0,
+            deleted_vectors=0,
+            deleted_cached_vectors=0,
+            deleted_pending_vectors=0,
+            deleted_vector_sets=0,
+        )
 
     def reset_runtime_caches(self) -> None:
         """
@@ -2621,8 +2654,8 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-backend-duckdb==1.50.0",
         "codira-embedding-sentence-transformers==1.0.2",
         "codira-embedding-onnx==1.0.2",
-        "codira-vector-store-sqlite==1.0.1",
-        "codira-vector-store-duckdb==1.0.7",
+        "codira-vector-store-sqlite==1.0.2",
+        "codira-vector-store-duckdb==1.0.8",
     ]
     assert pyproject.get("tool", {}).get("poetry") is None
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
 import duckdb
@@ -11,6 +12,8 @@ from codira.contracts import (
     PreparedVectorRow,
     VectorSetIdentity,
     VectorStoreFullIndexRequest,
+    VectorStorePurgeRequest,
+    VectorStorePurgeResult,
     VectorSimilarityRequest,
     VectorSimilarityScore,
     VectorStoreSpec,
@@ -32,8 +35,37 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.7"
+PACKAGE_VERSION = "1.0.8"
 FORMAT_VERSION = "1"
+
+
+def _normalize_duckdb_timestamp(value: object) -> datetime | None:
+    """
+    Normalize DuckDB timestamp values to UTC datetimes.
+
+    Parameters
+    ----------
+    value : object
+        Timestamp value returned by DuckDB.
+
+    Returns
+    -------
+    datetime.datetime | None
+        Parsed UTC datetime, or ``None`` when the value is not parseable.
+    """
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    return None
 
 
 def _flush_registered_arrow_table(
@@ -1214,6 +1246,164 @@ class DuckDBVectorStore:
         return sorted(
             (score for score in scores if score.score >= request.min_score),
             key=lambda item: (-item.score, item.stable_id),
+        )
+
+    def purge_vector_sets(
+        self,
+        request: VectorStorePurgeRequest,
+    ) -> VectorStorePurgeResult:
+        """
+        Purge vector sets from the DuckDB vector store.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStorePurgeRequest
+            Purge mode, active identity, retention filters, and dry-run flag.
+
+        Returns
+        -------
+        codira.contracts.VectorStorePurgeResult
+            Purge summary.
+
+        Raises
+        ------
+        RuntimeError
+            If DuckDB returns an invalid aggregate count result.
+        """
+        path = get_vector_store_path(request.root)
+        size_before = path.stat().st_size if path.exists() else None
+        active_id = (
+            None
+            if request.all_sets
+            else self.ensure_vector_set(request.root, request.identity, request.config)
+        )
+        mode = "all" if request.all_sets else "stale"
+        conn = _connect(path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, created_at
+                FROM vector_sets
+                ORDER BY created_at DESC, id DESC
+                """
+            ).fetchall()
+            cutoff = (
+                datetime.now(UTC) - timedelta(days=request.older_than_days)
+                if request.older_than_days is not None
+                else None
+            )
+            candidates: list[tuple[int, datetime | None]] = []
+            kept_stale = 0
+            for row_id, created_at in rows:
+                vector_set_id = int(row_id)
+                if active_id is not None and vector_set_id == active_id:
+                    continue
+                parsed_created = _normalize_duckdb_timestamp(created_at)
+                if not request.all_sets and cutoff is not None:
+                    if parsed_created is None or parsed_created >= cutoff:
+                        kept_stale += 1
+                        continue
+                candidates.append((vector_set_id, parsed_created))
+            if not request.all_sets and request.keep > 0:
+                kept_stale += min(request.keep, len(candidates))
+                candidates = candidates[request.keep :]
+            selected_ids = [vector_set_id for vector_set_id, _created in candidates]
+            if not selected_ids:
+                return VectorStorePurgeResult(
+                    store=self.name,
+                    mode=mode,
+                    dry_run=request.dry_run,
+                    active_vector_set_id=active_id,
+                    stale_vector_sets=0,
+                    kept_stale_vector_sets=kept_stale,
+                    deleted_vectors=0,
+                    deleted_cached_vectors=0,
+                    deleted_pending_vectors=0,
+                    deleted_vector_sets=0,
+                    size_before_bytes=size_before,
+                    size_after_bytes=size_before,
+                )
+            placeholders = ",".join("?" for _item in selected_ids)
+            vector_count_row = conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM vectors
+                WHERE vector_set_id IN ({placeholders})
+                """,
+                selected_ids,
+            ).fetchone()
+            cache_count_row = conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM vector_cache
+                WHERE vector_set_id IN ({placeholders})
+                """,
+                selected_ids,
+            ).fetchone()
+            pending_count_row = conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM pending_vectors
+                WHERE vector_set_id IN ({placeholders})
+                """,
+                selected_ids,
+            ).fetchone()
+            if (
+                vector_count_row is None
+                or cache_count_row is None
+                or pending_count_row is None
+            ):
+                msg = "DuckDB COUNT query returned no row during vector purge"
+                raise RuntimeError(msg)
+            vector_count = int(vector_count_row[0])
+            cache_count = int(cache_count_row[0])
+            pending_count = int(pending_count_row[0])
+            if not request.dry_run:
+                conn.execute(
+                    f"DELETE FROM vectors WHERE vector_set_id IN ({placeholders})",
+                    selected_ids,
+                )
+                conn.execute(
+                    f"""
+                    DELETE FROM vector_cache
+                    WHERE vector_set_id IN ({placeholders})
+                    """,
+                    selected_ids,
+                )
+                conn.execute(
+                    f"""
+                    DELETE FROM pending_vectors
+                    WHERE vector_set_id IN ({placeholders})
+                    """,
+                    selected_ids,
+                )
+                conn.execute(
+                    f"DELETE FROM vector_sets WHERE id IN ({placeholders})",
+                    selected_ids,
+                )
+                conn.execute("CHECKPOINT")
+                self.reset_runtime_caches()
+        finally:
+            conn.close()
+        return VectorStorePurgeResult(
+            store=self.name,
+            mode=mode,
+            dry_run=request.dry_run,
+            active_vector_set_id=active_id,
+            stale_vector_sets=len(selected_ids),
+            kept_stale_vector_sets=kept_stale,
+            deleted_vectors=vector_count,
+            deleted_cached_vectors=cache_count,
+            deleted_pending_vectors=pending_count,
+            deleted_vector_sets=len(selected_ids),
+            size_before_bytes=size_before,
+            size_after_bytes=path.stat().st_size if path.exists() else None,
+            note=(
+                "DuckDB may reuse freed blocks before the file shrinks; "
+                "CHECKPOINT was run after the purge."
+            )
+            if not request.dry_run
+            else None,
         )
 
     def reset_runtime_caches(self) -> None:

@@ -210,6 +210,15 @@ def test_capability_contract_validates_against_schema() -> None:
     assert "help" in commands
     assert "ctx" in commands
     assert "docs" in commands
+    emb_command = cast("Mapping[str, object]", commands["emb"])
+    emb_subcommands = cast("Mapping[str, object]", emb_command["subcommands"])
+    emb_purge = cast("Mapping[str, object]", emb_subcommands["purge"])
+    assert emb_purge["modes"] == ["stale", "all"]
+    emb_purge_options = cast("list[str]", emb_purge["options"])
+    assert {"-S", "--stale", "-A", "--all"} <= set(emb_purge_options)
+    assert {"-n", "--dry-run", "-b", "--backend"} <= set(emb_purge_options)
+    assert {"-O", "--older-than"} <= set(emb_purge_options)
+    assert {"-K", "--keep", "-y", "--yes"} <= set(emb_purge_options)
     declared_channels = set(channels)
     referenced_channels: set[str] = set()
     for command in commands.values():

@@ -1134,6 +1134,17 @@ def test_short_cli_option_aliases_parse_for_representative_commands() -> None:
     assert calls_args.max_depth == 3
     assert calls_args.max_nodes == 5
 
+    purge_args = parser.parse_args(
+        ["emb", "purge", "-S", "-n", "-b", "duckdb", "-O", "30", "-K", "1", "-y"]
+    )
+    assert purge_args.query == "purge"
+    assert purge_args.stale is True
+    assert purge_args.dry_run is True
+    assert purge_args.backend == "duckdb"
+    assert purge_args.older_than == 30
+    assert purge_args.keep == 1
+    assert purge_args.yes is True
+
 
 def test_calls_cli_tree_json_reports_truncation(
     tmp_path: Path,

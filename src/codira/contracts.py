@@ -135,6 +135,91 @@ class VectorStoreSpec:
 
 
 @dataclass(frozen=True)
+class VectorStorePurgeResult:
+    """
+    Summary of a vector-store purge operation.
+
+    Parameters
+    ----------
+    store : str
+        Vector-store plugin name.
+    mode : str
+        Purge mode, either ``"stale"`` or ``"all"``.
+    dry_run : bool
+        Whether the operation only reported candidate rows.
+    active_vector_set_id : int | None
+        Store-local identifier for the active vector set, when preserved.
+    stale_vector_sets : int
+        Number of non-active vector sets selected for removal.
+    kept_stale_vector_sets : int
+        Number of stale vector sets preserved by retention filters.
+    deleted_vectors : int
+        Number of materialized vector rows removed or selected.
+    deleted_cached_vectors : int
+        Number of cached vector rows removed or selected.
+    deleted_pending_vectors : int
+        Number of pending vector rows removed or selected.
+    deleted_vector_sets : int
+        Number of vector-set identity rows removed or selected.
+    size_before_bytes : int | None
+        Vector-store file size before purge, when available.
+    size_after_bytes : int | None
+        Vector-store file size after purge/checkpoint, when available.
+    note : str | None
+        Backend-specific note about storage reuse or compaction.
+    """
+
+    store: str
+    mode: str
+    dry_run: bool
+    active_vector_set_id: int | None
+    stale_vector_sets: int
+    kept_stale_vector_sets: int
+    deleted_vectors: int
+    deleted_cached_vectors: int
+    deleted_pending_vectors: int
+    deleted_vector_sets: int
+    size_before_bytes: int | None = None
+    size_after_bytes: int | None = None
+    note: str | None = None
+
+
+@dataclass(frozen=True)
+class VectorStorePurgeRequest:
+    """
+    Vector-store purge request.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose vector store should be updated.
+    identity : VectorSetIdentity
+        Active vector-set identity that should be preserved for stale purges.
+    config : collections.abc.Mapping[str, object]
+        Vector-store-specific configuration table.
+    stale : bool
+        Whether non-active vector sets should be selected.
+    all_sets : bool
+        Whether every vector set should be selected.
+    dry_run : bool
+        Whether to report candidates without deleting rows.
+    older_than_days : int | None
+        Optional age threshold for stale vector sets.
+    keep : int
+        Number of newest selected stale vector sets to preserve.
+    """
+
+    root: Path
+    identity: VectorSetIdentity
+    config: Mapping[str, object]
+    stale: bool
+    all_sets: bool
+    dry_run: bool
+    older_than_days: int | None = None
+    keep: int = 0
+
+
+@dataclass(frozen=True)
 class VectorSetIdentity:
     """
     Complete identity for one persisted vector set.
@@ -779,6 +864,25 @@ class VectorStore(Protocol):
         -------
         list[codira.contracts.VectorSimilarityScore]
             Scores ordered by descending score and stable identity.
+        """
+        ...
+
+    def purge_vector_sets(
+        self,
+        request: VectorStorePurgeRequest,
+    ) -> VectorStorePurgeResult:
+        """
+        Purge persisted vector rows for inactive vector sets.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStorePurgeRequest
+            Purge mode, active identity, retention filters, and dry-run flag.
+
+        Returns
+        -------
+        codira.contracts.VectorStorePurgeResult
+            Purge summary.
         """
         ...
 

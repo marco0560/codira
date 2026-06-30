@@ -91,6 +91,20 @@ engines are `"sentence-transformers"` and `"onnx"`.
 first-party local stores are `"sqlite"` and `"duckdb"` and use separated files
 under `.codira/embeddings.db` or `.codira/embeddings.duckdb`.
 
+Vector stores can retain vectors for older embedding or vector-store
+identities. Use `codira emb purge` to inspect or delete retained sets:
+
+```bash
+codira emb purge --stale --dry-run
+codira emb purge --stale --backend duckdb --keep 1 --yes
+codira emb purge --all --backend sqlite --yes
+```
+
+The command defaults to the configured `[embeddings].vector_store`. Pass
+`--backend sqlite` or `--backend duckdb` to target a specific local vector
+store without editing the repository config. Destructive runs require `--yes`;
+without it, purge runs as a dry run.
+
 `embeddings.indexing.mode = "immediate"` computes embeddings during
 `codira index`. Set it to `"deferred"` to persist structural index rows first
 and queue embeddings for a later `codira index --embeddings-only` pass.

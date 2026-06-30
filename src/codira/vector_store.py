@@ -48,7 +48,11 @@ class ActiveVectorStoreContext:
     config: dict[str, object]
 
 
-def active_vector_store_context(root: Path) -> ActiveVectorStoreContext:
+def active_vector_store_context(
+    root: Path,
+    *,
+    vector_store_name: str | None = None,
+) -> ActiveVectorStoreContext:
     """
     Build and initialize the active vector-store context.
 
@@ -56,6 +60,9 @@ def active_vector_store_context(root: Path) -> ActiveVectorStoreContext:
     ----------
     root : pathlib.Path
         Repository root whose effective configuration should be used.
+    vector_store_name : str | None, optional
+        Explicit vector-store plugin name. When omitted, the effective
+        repository config selects the store.
 
     Returns
     -------
@@ -64,7 +71,13 @@ def active_vector_store_context(root: Path) -> ActiveVectorStoreContext:
     """
     effective_config = load_effective_config(root=root)
     plugin_configs = effective_config.plugins.configs or {}
-    store = active_vector_store(root=root)
+    configured_vector_store = effective_config.embeddings.vector_store.strip()
+    selected_vector_store = (
+        configured_vector_store
+        if vector_store_name is None
+        else vector_store_name.strip()
+    )
+    store = active_vector_store(root=root, name=selected_vector_store)
     engine = active_embedding_engine(root=root)
     engine_config_key = plugin_config_key(
         family="embedding",
@@ -72,7 +85,7 @@ def active_vector_store_context(root: Path) -> ActiveVectorStoreContext:
     )
     vector_store_config_key = plugin_config_key(
         family="vector-store",
-        name=effective_config.embeddings.vector_store.strip(),
+        name=selected_vector_store,
     )
     engine_config = dict(plugin_configs.get(engine_config_key, {}))
     engine_config["_codira_model"] = effective_config.embeddings.model

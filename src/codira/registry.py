@@ -1717,7 +1717,9 @@ def active_embedding_engine(*, root: Path | None = None) -> EmbeddingEngineProto
     return cast("EmbeddingEngineProtocol", engine)
 
 
-def active_vector_store(*, root: Path | None = None) -> VectorStoreProtocol:
+def active_vector_store(
+    *, root: Path | None = None, name: str | None = None
+) -> VectorStoreProtocol:
     """
     Return the configured active vector store.
 
@@ -1725,6 +1727,9 @@ def active_vector_store(*, root: Path | None = None) -> VectorStoreProtocol:
     ----------
     root : pathlib.Path | None, optional
         Repository root whose repo-local config should select the vector store.
+    name : str | None, optional
+        Explicit vector-store plugin name. When omitted, the effective
+        repository config selects the store.
 
     Returns
     -------
@@ -1733,9 +1738,10 @@ def active_vector_store(*, root: Path | None = None) -> VectorStoreProtocol:
     """
 
     config = load_effective_config(root=root)
+    vector_store_name = config.embeddings.vector_store.strip() if name is None else name
     vector_store = _active_plugin(
         family="vector-store",
-        name=config.embeddings.vector_store.strip(),
+        name=vector_store_name.strip(),
         root=root,
     )
     return cast("VectorStoreProtocol", vector_store)

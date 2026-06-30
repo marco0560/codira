@@ -95,13 +95,38 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
         ],
     },
     "emb": {
-        "intent": "embedding_similarity_lookup",
+        "intent": "embedding_similarity_lookup_and_vector_store_maintenance",
         "channels": ["embedding"],
-        "guarantee": "embedding_backend_similarity_order",
+        "guarantee": "embedding_backend_similarity_order_and_deterministic_purge_reporting",
         "limitations": [
             "approximate natural-language relevance",
             "requires persisted embeddings for indexed artifacts",
+            "purge submode deletes vector-store rows only after explicit confirmation",
+            "database files may reuse freed space before shrinking",
         ],
+        "subcommands": {
+            "purge": {
+                "intent": "vector_store_retention_maintenance",
+                "modes": ["stale", "all"],
+                "options": [
+                    "-S",
+                    "--stale",
+                    "-A",
+                    "--all",
+                    "-n",
+                    "--dry-run",
+                    "-b",
+                    "--backend",
+                    "-O",
+                    "--older-than",
+                    "-K",
+                    "--keep",
+                    "-y",
+                    "--yes",
+                ],
+                "guarantee": "deterministic_vector_set_selection_and_row_counts",
+            }
+        },
     },
     "docs": {
         "intent": "documentation_similarity_lookup",

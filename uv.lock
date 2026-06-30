@@ -644,7 +644,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-vector-store-duckdb"
-version = "1.0.7"
+version = "1.0.8"
 source = { editable = "packages/codira-vector-store-duckdb" }
 dependencies = [
     { name = "codira" },
@@ -664,7 +664,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-vector-store-sqlite"
-version = "1.0.1"
+version = "1.0.2"
 source = { editable = "packages/codira-vector-store-sqlite" }
 dependencies = [
     { name = "codira" },

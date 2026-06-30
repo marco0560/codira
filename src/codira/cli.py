@@ -54,7 +54,11 @@ from codira.config import (
     validate_config_mapping,
     write_config_file,
 )
-from codira.contracts import BackendError
+from codira.contracts import (
+    BackendError,
+    VectorStorePurgeRequest,
+    VectorStorePurgeResult,
+)
 from codira.indexer import (
     CoverageIssue,
     IndexFailure,
@@ -1030,8 +1034,8 @@ def build_parser() -> argparse.ArgumentParser:
         "emb",
         help="Inspect embedding-channel matches",
         description=(
-            "Inspect the active embedding backend and show top embedding-only "
-            "matches for a natural-language query."
+            "Inspect embedding-channel matches, or run vector-store maintenance "
+            "with `codira emb purge`."
         ),
         epilog=(
             "Examples:\n"
@@ -1039,12 +1043,17 @@ def build_parser() -> argparse.ArgumentParser:
             '  codira emb "schema migration rules" --json  # emit embedding matches as JSON\n'
             '  codira emb "numpy docstring sections" --limit 3  # show only 3 embedding matches\n'
             '  codira emb "numpy docstring sections" --prefix '
-            "src/codira/query  # restrict embedding matches to query code"
+            "src/codira/query  # restrict embedding matches to query code\n"
+            "  codira emb purge --stale --dry-run  # report stale vector sets without deleting them\n"
+            "  codira emb purge --stale --keep 1 --yes  # delete stale vector sets except the newest one\n"
+            "  codira emb purge --all --yes  # delete every persisted vector set"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     embeddings_parser.add_argument(
         "query",
+        nargs="?",
+        metavar="{query,purge}",
         help="Natural-language query to score against stored embeddings",
     )
     embeddings_parser.add_argument(
@@ -1064,6 +1073,56 @@ def build_parser() -> argparse.ArgumentParser:
         "-x",
         "--prefix",
         help="Restrict matches to files under this repo-root-relative path prefix",
+    )
+    purge_options = embeddings_parser.add_argument_group(
+        "purge options",
+        "Options used only with `codira emb purge`.",
+    )
+    purge_mode = purge_options.add_mutually_exclusive_group()
+    purge_mode.add_argument(
+        "-S",
+        "--stale",
+        action="store_true",
+        help="Delete vector sets not matching current config",
+    )
+    purge_mode.add_argument(
+        "-A",
+        "--all",
+        dest="all_sets",
+        action="store_true",
+        help="Delete all persisted vectors and vector cache",
+    )
+    purge_options.add_argument(
+        "-n",
+        "--dry-run",
+        action="store_true",
+        help="Report what would be deleted",
+    )
+    purge_options.add_argument(
+        "-b",
+        "--backend",
+        choices=("sqlite", "duckdb"),
+        help="Vector-store backend to target (default: configured vector store)",
+    )
+    purge_options.add_argument(
+        "-O",
+        "--older-than",
+        type=int,
+        metavar="DAYS",
+        help="With --stale, select stale vector sets older than DAYS",
+    )
+    purge_options.add_argument(
+        "-K",
+        "--keep",
+        type=int,
+        default=0,
+        help="With --stale, keep the N newest selected stale sets",
+    )
+    purge_options.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Confirm destructive purge execution",
     )
     _add_repo_path_arguments(embeddings_parser)
 
@@ -1536,6 +1595,61 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_embedding_purge_help() -> None:
+    """
+    Print focused help for ``codira emb purge``.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Help text is written to stdout.
+    """
+
+    print(
+        "usage: codira emb purge [-h] [-S | -A] [-n] [-b {sqlite,duckdb}] "
+        "[-O DAYS] [-K KEEP] [-y] [-p PATH] [-o OUTPUT_DIR] [-c CONFIG_FILE]\n"
+        "\n"
+        "Delete or report retained vector-store rows.\n"
+        "\n"
+        "options:\n"
+        "  -h, --help            show this help message and exit\n"
+        "  -S, --stale           delete vector sets not matching current config "
+        "(default mode)\n"
+        "  -A, --all             delete all persisted vectors and vector cache\n"
+        "  -n, --dry-run         report what would be deleted\n"
+        "  -b, --backend {sqlite,duckdb}\n"
+        "                        vector-store backend to target "
+        "(default: configured vector store)\n"
+        "  -O, --older-than DAYS\n"
+        "                        with --stale, select stale vector sets older "
+        "than DAYS\n"
+        "  -K, --keep KEEP       with --stale, keep the N newest selected stale "
+        "sets\n"
+        "  -y, --yes             confirm destructive purge execution\n"
+        f"  -p, --path PATH       repository target directory to read "
+        f"(env: {CODIRA_TARGET_DIR_ENV})\n"
+        "  -o, --output-dir OUTPUT_DIR\n"
+        "                        directory under which .codira state is stored "
+        f"(env: {CODIRA_OUTPUT_DIR_ENV})\n"
+        "  -c, --config-file CONFIG_FILE\n"
+        "                        explicit repo-level config file to merge instead "
+        "of <output-dir>/.codira/config.toml "
+        f"(env: {CODIRA_CONFIG_FILE_ENV})\n"
+        "\n"
+        "Examples:\n"
+        "  codira emb purge --stale --dry-run  # report stale vector sets "
+        "without deleting them\n"
+        "  codira emb purge --stale --backend duckdb --keep 1 --yes  # purge "
+        "DuckDB stale sets except the newest one\n"
+        "  codira emb purge --all --backend sqlite --yes  # delete every SQLite "
+        "vector set\n"
+    )
+
+
 def _emit_json(payload: dict[str, object]) -> None:
     """
     Print a JSON payload with deterministic formatting.
@@ -1551,6 +1665,31 @@ def _emit_json(payload: dict[str, object]) -> None:
         The formatted JSON is printed to standard output.
     """
     print(json.dumps(payload, indent=2))
+
+
+def _format_bytes(value: int | None) -> str:
+    """
+    Format a byte count for CLI output.
+
+    Parameters
+    ----------
+    value : int | None
+        Byte count, when available.
+
+    Returns
+    -------
+    str
+        Human-readable byte count.
+    """
+    if value is None:
+        return "unknown"
+    units = ("B", "KiB", "MiB", "GiB")
+    size = float(value)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.1f} {unit}" if unit != "B" else f"{value} B"
+        size /= 1024
+    return f"{value} B"
 
 
 def _query_payload(
@@ -4213,7 +4352,29 @@ def _run_embeddings_command(
     -------
     int
         Process exit status for the embedding command.
+
+    Raises
+    ------
+    ConfigError
+        If no query or purge submode is supplied, or if purge-only options are
+        combined with a search query.
     """
+    if args.query == "purge":
+        return _run_embedding_purge_command(args, root)
+    if args.query is None:
+        msg = "codira emb requires a query or `purge`"
+        raise ConfigError(msg)
+    if (
+        args.stale
+        or args.all_sets
+        or args.dry_run
+        or args.backend is not None
+        or args.older_than is not None
+        or args.keep
+        or args.yes
+    ):
+        msg = "emb purge options require `codira emb purge`"
+        raise ConfigError(msg)
     _ensure_index(root)
     return _run_embeddings(
         EmbeddingCommandRequest(
@@ -4225,6 +4386,124 @@ def _run_embeddings_command(
             query_prefix=raw_prefix,
         )
     )
+
+
+def _purge_result_payload(result: VectorStorePurgeResult) -> dict[str, object]:
+    """
+    Convert a vector-store purge result into JSON-compatible output.
+
+    Parameters
+    ----------
+    result : codira.contracts.VectorStorePurgeResult
+        Purge result from the active vector-store plugin.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-compatible result payload.
+    """
+
+    return {
+        "store": result.store,
+        "mode": result.mode,
+        "dry_run": result.dry_run,
+        "active_vector_set_id": result.active_vector_set_id,
+        "stale_vector_sets": result.stale_vector_sets,
+        "kept_stale_vector_sets": result.kept_stale_vector_sets,
+        "deleted_vectors": result.deleted_vectors,
+        "deleted_cached_vectors": result.deleted_cached_vectors,
+        "deleted_pending_vectors": result.deleted_pending_vectors,
+        "deleted_vector_sets": result.deleted_vector_sets,
+        "size_before_bytes": result.size_before_bytes,
+        "size_after_bytes": result.size_after_bytes,
+        "note": result.note,
+    }
+
+
+def _run_embedding_purge_command(args: argparse.Namespace, root: Path) -> int:
+    """
+    Run ``codira emb purge`` against the active vector store.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed embedding command arguments.
+    root : pathlib.Path
+        Repository root containing vector-store state.
+
+    Returns
+    -------
+    int
+        Zero after reporting or executing the purge.
+
+    Raises
+    ------
+    ConfigError
+        If purge retention options are invalid or incompatible.
+    """
+
+    stale = bool(args.stale)
+    all_sets = bool(args.all_sets)
+    dry_run = bool(args.dry_run or not args.yes)
+    older_than = cast("int | None", args.older_than)
+    keep = int(args.keep)
+    if not stale and not all_sets:
+        stale = True
+    if older_than is not None and older_than < 0:
+        msg = "--older-than must be >= 0"
+        raise ConfigError(msg)
+    if keep < 0:
+        msg = "--keep must be >= 0"
+        raise ConfigError(msg)
+    if all_sets and (older_than is not None or keep):
+        msg = "--older-than and --keep can only be used with --stale"
+        raise ConfigError(msg)
+    if not dry_run and not args.yes:
+        msg = "codira emb purge requires --yes unless --dry-run is used"
+        raise ConfigError(msg)
+
+    context = active_vector_store_context(root, vector_store_name=args.backend)
+    result = context.store.purge_vector_sets(
+        VectorStorePurgeRequest(
+            root=root,
+            identity=context.identity,
+            config=context.config,
+            stale=stale,
+            all_sets=all_sets,
+            dry_run=dry_run,
+            older_than_days=older_than,
+            keep=keep,
+        )
+    )
+    if args.json:
+        _emit_json(
+            {
+                "schema_version": QUERY_JSON_SCHEMA_VERSION,
+                "command": "emb purge",
+                "status": "dry_run" if result.dry_run else "ok",
+                "backend": context.store.name,
+                "results": _purge_result_payload(result),
+            }
+        )
+        return 0
+
+    verb = "Would delete" if result.dry_run else "Deleted"
+    print(f"Vector store backend: {context.store.name}")
+    print(f"{verb} vector sets: {result.deleted_vector_sets}")
+    print(f"{verb} materialized vectors: {result.deleted_vectors}")
+    print(f"{verb} cached vectors: {result.deleted_cached_vectors}")
+    print(f"{verb} pending vectors: {result.deleted_pending_vectors}")
+    print(f"Kept stale vector sets: {result.kept_stale_vector_sets}")
+    print(
+        "Database size: "
+        f"{_format_bytes(result.size_before_bytes)} -> "
+        f"{_format_bytes(result.size_after_bytes)}"
+    )
+    if result.note:
+        print(f"Note: {result.note}")
+    if result.dry_run and not args.dry_run:
+        print("Dry run only; pass --yes to delete.")
+    return 0
 
 
 def _run_docs_command(
@@ -4908,6 +5187,14 @@ def main() -> int:
     int
         Process exit status for the selected subcommand.
     """
+    if (
+        len(sys.argv) >= 4
+        and sys.argv[1:3] == ["emb", "purge"]
+        and any(arg in {"-h", "--help"} for arg in sys.argv[3:])
+    ):
+        _print_embedding_purge_help()
+        return 0
+
     parser = build_parser()
     args = parser.parse_args()
     if args.version:

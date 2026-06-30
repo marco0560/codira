@@ -12,6 +12,7 @@ from codira.contracts import (
     PreparedVectorRow,
     VectorSetIdentity,
     VectorStore,
+    VectorStorePurgeRequest,
 )
 from codira_vector_store_sqlite import (
     SQLiteVectorStore,
@@ -20,7 +21,11 @@ from codira_vector_store_sqlite import (
 )
 
 
-def _vector_identity(store: SQLiteVectorStore) -> VectorSetIdentity:
+def _vector_identity(
+    store: SQLiteVectorStore,
+    *,
+    model_version: str = "rev1",
+) -> VectorSetIdentity:
     """
     Return a deterministic vector-set identity for package tests.
 
@@ -28,6 +33,8 @@ def _vector_identity(store: SQLiteVectorStore) -> VectorSetIdentity:
     ----------
     store : codira_vector_store_sqlite.SQLiteVectorStore
         Vector store under test.
+    model_version : str, optional
+        Model revision used to distinguish vector sets.
 
     Returns
     -------
@@ -39,7 +46,7 @@ def _vector_identity(store: SQLiteVectorStore) -> VectorSetIdentity:
             engine="test-engine",
             engine_version="1",
             model="test-model",
-            model_version="rev1",
+            model_version=model_version,
             dimension=3,
         ),
         vector_store=store.spec({}),
@@ -99,7 +106,7 @@ def test_sqlite_vector_store_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.0.1"
+    assert project["project"]["version"] == "1.0.2"
     assert project["project"]["entry-points"]["codira.vector_stores"] == {
         "sqlite": "codira_vector_store_sqlite:build_vector_store"
     }
@@ -225,3 +232,85 @@ def test_sqlite_vector_store_persists_vector_rows(tmp_path: Path) -> None:
             "SELECT COUNT(*) FROM pending_vectors"
         ).fetchone()
     assert pending_after_clear == (0,)
+
+
+def test_sqlite_vector_store_purges_stale_sets_with_retention(
+    tmp_path: Path,
+) -> None:
+    """
+    Purge stale SQLite vector sets while preserving active and kept sets.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts dry-run counts and confirmed deletion behavior.
+    """
+
+    store = SQLiteVectorStore()
+    active = _vector_identity(store, model_version="active")
+    stale_old = _vector_identity(store, model_version="stale-old")
+    stale_new = _vector_identity(store, model_version="stale-new")
+    rows = _prepared_rows()
+    for identity in (active, stale_old, stale_new):
+        store.store_cached_vectors(tmp_path, identity, {"hash-one": b"cached"}, {})
+        store.store_pending_vectors(tmp_path, identity, rows, {})
+        store.store_vectors(tmp_path, identity, rows, {})
+    with sqlite3.connect(get_vector_store_path(tmp_path)) as conn:
+        conn.execute(
+            "UPDATE vector_sets SET created_at = ? WHERE model_version = ?",
+            ("2026-01-01 00:00:00", "stale-old"),
+        )
+        conn.execute(
+            "UPDATE vector_sets SET created_at = ? WHERE model_version = ?",
+            ("2026-06-01 00:00:00", "stale-new"),
+        )
+
+    dry_run = store.purge_vector_sets(
+        VectorStorePurgeRequest(
+            root=tmp_path,
+            identity=active,
+            config={},
+            stale=True,
+            all_sets=False,
+            dry_run=True,
+            older_than_days=30,
+            keep=0,
+        )
+    )
+    assert dry_run.deleted_vector_sets == 1
+    assert dry_run.deleted_vectors == 2
+    assert dry_run.deleted_cached_vectors == 1
+    assert dry_run.deleted_pending_vectors == 2
+
+    result = store.purge_vector_sets(
+        VectorStorePurgeRequest(
+            root=tmp_path,
+            identity=active,
+            config={},
+            stale=True,
+            all_sets=False,
+            dry_run=False,
+            older_than_days=None,
+            keep=1,
+        )
+    )
+
+    assert result.deleted_vector_sets == 1
+    assert result.kept_stale_vector_sets == 1
+    assert result.size_before_bytes is not None
+    assert result.size_after_bytes is not None
+    assert result.note is not None
+    with sqlite3.connect(get_vector_store_path(tmp_path)) as conn:
+        remaining = conn.execute(
+            """
+            SELECT model_version
+            FROM vector_sets
+            ORDER BY model_version
+            """
+        ).fetchall()
+    assert remaining == [("active",), ("stale-new",)]
