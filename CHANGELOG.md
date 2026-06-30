@@ -1,3 +1,10 @@
+# [1.47.0](https://github.com/marco0560/codira/compare/v1.46.0...v1.47.0) (2026-06-30)
+
+
+### Features
+
+* **embeddings:** add vector store purge command ([7807f83](https://github.com/marco0560/codira/commit/7807f83adbfb4e5b8d8d861c6ed77a9eb28d7b96))
+
 # [1.46.0](https://github.com/marco0560/codira/compare/v1.45.0...v1.46.0) (2026-06-30)
 
 
