@@ -196,6 +196,43 @@ def render_result_row(**values: object) -> str:
     return json.dumps(values, sort_keys=True) + "\n"
 
 
+def append_gate_result(
+    results_path: Path,
+    *,
+    pair_id: str,
+    gate: compare_embedding_engines.ComparisonResult,
+) -> None:
+    """
+    Append one compatibility-gate result row.
+
+    Parameters
+    ----------
+    results_path : pathlib.Path
+        JSONL result file path.
+    pair_id : str
+        Split-pair identifier.
+    gate : scripts.compare_embedding_engines.ComparisonResult
+        Compatibility gate outcome.
+
+    Returns
+    -------
+    None
+        Result row is appended to ``results_path``.
+    """
+
+    with results_path.open("a", encoding="utf-8") as results_file:
+        results_file.write(
+            render_result_row(
+                pair_id=pair_id,
+                phase="gate",
+                passed=gate.passed,
+                min_cosine=gate.min_cosine,
+                mean_cosine=gate.mean_cosine,
+                threshold=gate.threshold,
+            )
+        )
+
+
 def timed_command(
     command: tuple[str, ...],
     *,
@@ -748,18 +785,10 @@ def main(argv: list[str] | None = None) -> int:
             entries=compat_entries,
             artifact_root=artifact_root,
         )
+        append_gate_result(results_path, pair_id=pair.pair_id, gate=gate)
         if not gate.passed:
-            results_path.write_text(
-                render_result_row(
-                    pair_id=pair.pair_id,
-                    phase="gate",
-                    passed=False,
-                    min_cosine=gate.min_cosine,
-                    threshold=gate.threshold,
-                ),
-                encoding="utf-8",
-            )
-            return 1
+            status = 1
+            continue
         index_model = models[pair.index_model]
         query_model = models[pair.query_model]
         index_config = config_root / f"{pair.pair_id}-index.toml"

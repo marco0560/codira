@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import TYPE_CHECKING
 
-from scripts import run_split_embedding_engine_experiment as split_experiment
+from scripts import (
+    compare_embedding_engines,
+    run_split_embedding_engine_experiment as split_experiment,
+)
 from scripts.run_final_embedding_model_campaign import ModelEntry
 
 if TYPE_CHECKING:
@@ -116,6 +120,90 @@ def test_compatibility_entries_preserve_model_metadata() -> None:
     assert entries["demo"].engine == "onnx"
     assert entries["demo"].model == "demo/model"
     assert entries["demo"].dimension == 2
+
+
+def test_append_gate_result_appends_failed_and_passed_rows(tmp_path: Path) -> None:
+    """
+    Record every split compatibility gate without overwriting prior failures.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory.
+
+    Returns
+    -------
+    None
+        The test asserts failed and passed gate rows coexist in the JSONL file.
+    """
+
+    left = compare_embedding_engines.ModelEntry(
+        model_id="demo-st",
+        engine="sentence-transformers",
+        model="demo/model",
+        version="1",
+        dimension=2,
+        precision="float32",
+        config={},
+    )
+    right = compare_embedding_engines.ModelEntry(
+        model_id="demo-onnx",
+        engine="onnx",
+        model="demo/model",
+        version="1",
+        dimension=2,
+        precision="float32",
+        config={},
+    )
+    failed = compare_embedding_engines.ComparisonResult(
+        left=left,
+        right=right,
+        corpus_size=1,
+        threshold=0.99,
+        dimensions_match=True,
+        identity_matches=True,
+        min_cosine=0.95,
+        mean_cosine=0.95,
+        passed=False,
+    )
+    passed = compare_embedding_engines.ComparisonResult(
+        left=left,
+        right=right,
+        corpus_size=1,
+        threshold=0.90,
+        dimensions_match=True,
+        identity_matches=True,
+        min_cosine=0.95,
+        mean_cosine=0.95,
+        passed=True,
+    )
+    results_path = tmp_path / "results.jsonl"
+
+    split_experiment.append_gate_result(results_path, pair_id="first", gate=failed)
+    split_experiment.append_gate_result(results_path, pair_id="second", gate=passed)
+
+    rows = [
+        json.loads(line)
+        for line in results_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows == [
+        {
+            "mean_cosine": 0.95,
+            "min_cosine": 0.95,
+            "pair_id": "first",
+            "passed": False,
+            "phase": "gate",
+            "threshold": 0.99,
+        },
+        {
+            "mean_cosine": 0.95,
+            "min_cosine": 0.95,
+            "pair_id": "second",
+            "passed": True,
+            "phase": "gate",
+            "threshold": 0.9,
+        },
+    ]
 
 
 def test_alias_sqlite_vector_set_duplicates_materialized_vectors(

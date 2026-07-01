@@ -267,7 +267,7 @@ def test_sqlite_vector_store_purges_stale_sets_with_retention(
         )
         conn.execute(
             "UPDATE vector_sets SET created_at = ? WHERE model_version = ?",
-            ("2026-06-01 00:00:00", "stale-new"),
+            ("2030-01-01 00:00:00", "stale-new"),
         )
 
     dry_run = store.purge_vector_sets(
