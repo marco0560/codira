@@ -3353,11 +3353,11 @@ def test_manifest_baseline_uses_explicit_runs_and_warmup_cli(
     monkeypatch.setenv("RUNS", "99")
     monkeypatch.setenv("WARMUP", "99")
 
-    explicit = parser.parse_args(["--runs", "7", "--warmup", "2"])
+    explicit = parser.parse_args(["--runs", "7", "--warmup", "0"])
     defaults = parser.parse_args([])
 
     assert explicit.runs == 7
-    assert explicit.warmup == 2
+    assert explicit.warmup == 0
     assert defaults.runs == 5
     assert defaults.warmup == 1
 
@@ -3383,11 +3383,11 @@ def test_final_embedding_campaign_uses_explicit_runs_and_warmup_cli(
     monkeypatch.setenv("RUNS", "99")
     monkeypatch.setenv("WARMUP", "99")
 
-    explicit = helper.parse_args(["--runs", "7", "--warmup", "2"])
+    explicit = helper.parse_args(["--runs", "7", "--warmup", "0"])
     defaults = helper.parse_args([])
 
     assert explicit.runs == 7
-    assert explicit.warmup == 2
+    assert explicit.warmup == 0
     assert defaults.runs == 5
     assert defaults.warmup == 1
 
@@ -3450,9 +3450,9 @@ def test_final_embedding_campaign_expands_both_to_concrete_backend_configs(
     ("script_name", "argv"),
     (
         ("baseline", ["--runs", "0"]),
-        ("baseline", ["--warmup", "0"]),
+        ("baseline", ["--warmup", "-1"]),
         ("final", ["--runs", "0"]),
-        ("final", ["--warmup", "0"]),
+        ("final", ["--warmup", "-1"]),
     ),
 )
 def test_campaign_wrappers_reject_non_positive_run_counts(
@@ -3749,8 +3749,8 @@ def test_benchmark_campaign_helper_builds_dry_run_plan(
     -------
     None
         The test asserts the campaign helper loads all repository categories
-        and emits a dry-run command plan with phase, Hyperfine, and profiler
-        commands.
+        and emits a dry-run command plan with Hyperfine and profiler commands
+        after the phase index is used for adaptive calibration.
     """
     helper = _load_benchmark_campaign_helper()
     small = tmp_path / "codira"
@@ -3854,13 +3854,17 @@ def test_benchmark_campaign_helper_builds_dry_run_plan(
     repositories = helper.load_manifest(manifest)
     plan = helper.command_plan(repositories, config)
     help_text = helper.build_parser().format_help()
+    parsed_zero_warmup = helper.build_parser().parse_args(
+        [str(manifest), "--warmup", "0"]
+    )
 
     assert [row["category"] for row in plan] == ["small", "medium", "large"]
+    assert parsed_zero_warmup.warmup == 0
     assert "--dry-run" in help_text
     assert "Examples:" in help_text
     assert plan[0]["modes"] == ["cold", "warm", "partial_change"]
     display_commands = cast("list[str]", plan[0]["display_commands"])
-    assert any("benchmark_index.py" in command for command in display_commands)
+    assert not any("benchmark_index.py" in command for command in display_commands)
     assert any("hyperfine" in command for command in display_commands)
     assert any("cProfile" in command for command in display_commands)
     assert all("--output-dir" in command for command in display_commands)
@@ -3993,11 +3997,11 @@ def test_benchmark_campaign_helper_expands_manifest_commands(
     row = plan[0]
     display_commands = cast("list[str]", row["display_commands"])
     commands = cast("list[list[str]]", row["commands"])
-    hyperfine_commands = commands[1][8:]
+    hyperfine_commands = commands[0][8:]
 
     assert any("codira help" in command for command in display_commands)
-    assert "--show-output" not in commands[1]
-    assert "--ignore-failure" in commands[1]
+    assert "--show-output" not in commands[0]
+    assert "--ignore-failure" in commands[0]
     assert row["output_logs"] == [
         str(
             config.artifact_root
@@ -4029,7 +4033,8 @@ def test_benchmark_campaign_helper_expands_manifest_commands(
         "caps --json" in command and "--config-file" in command
         for command in hyperfine_commands
     )
-    assert sum("codira index --full" in command for command in hyperfine_commands) == 1
+    assert not any("codira index --full" in command for command in hyperfine_commands)
+    assert any("codira index --path " in command for command in hyperfine_commands)
 
 
 def test_benchmark_campaign_writes_utility_summary(tmp_path: Path) -> None:
@@ -4074,14 +4079,15 @@ def test_benchmark_campaign_writes_utility_summary(tmp_path: Path) -> None:
     )
     hyperfine_path = helper.run_directory(config) / "small-codira-hyperfine.json"
     hyperfine_path.parent.mkdir(parents=True)
+    phase_path = helper.run_directory(config) / "small-codira-index-phases.json"
+    phase_path.write_text(
+        json.dumps({"timings": {"total": 10.0}}),
+        encoding="utf-8",
+    )
     hyperfine_path.write_text(
         json.dumps(
             {
                 "results": [
-                    {
-                        "command": "/tmp/codira/.venv/bin/codira index --full",
-                        "mean": 10.0,
-                    },
                     {
                         "command": "/tmp/codira/.venv/bin/codira index",
                         "mean": 2.0,
@@ -4277,13 +4283,13 @@ def test_benchmark_campaign_adaptive_resolution_picks_richer_candidates(
     assert row["skipped_commands"] == []
 
 
-def test_benchmark_campaign_prints_repo_label_before_discovery_index(
+def test_benchmark_campaign_prints_repo_label_before_phase_discovery(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """
-    Print the manifest label before the first per-repository Codira index run.
+    Print the manifest label before the per-repository phase discovery run.
 
     Parameters
     ----------
@@ -4298,7 +4304,7 @@ def test_benchmark_campaign_prints_repo_label_before_discovery_index(
     -------
     None
         The test asserts repository discovery prints the uppercased label
-        banner before the initial index command output.
+        banner before the phase index command output.
     """
     helper = _load_benchmark_campaign_helper()
     repo_path = tmp_path / "fontshow"
@@ -4390,7 +4396,7 @@ def test_benchmark_campaign_prints_repo_label_before_discovery_index(
     assert captured.err == ""
     assert captured.out.startswith("--- FONTSHOW ---\n")
     discovery_index = next(
-        argv for argv in captured_commands if argv[:2] == ("codira", "index")
+        argv for argv in captured_commands if "benchmark_index.py" in argv[1]
     )
     assert "--config-file" in discovery_index
     assert str(config_file) in discovery_index

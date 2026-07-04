@@ -233,11 +233,13 @@ Run a manifest-driven performance measurement campaign across repository size
 categories.
 
 The campaign runner builds phase-timing, Hyperfine, cProfile, and optional
-Pyinstrument command plans for each configured repository. Use `--dry-run` to
-write and inspect `.artifacts/benchmarks/<run-id>/campaign-plan.json` without
-executing benchmark commands. `--dry-run` still validates the manifest before
-printing the plan. The dry run still performs the adaptive discovery pass used
-to resolve repo-specific benchmark commands.
+Pyinstrument command plans for each configured repository. Full-index profiling
+comes from the phase-timing helper; cProfile and Pyinstrument are reserved for
+context retrieval. Use `--dry-run` to write and inspect
+`.artifacts/benchmarks/<run-id>/campaign-plan.json` without executing benchmark
+commands. `--dry-run` still validates the manifest before printing the plan. The
+dry run still performs the adaptive discovery pass used to resolve
+repo-specific benchmark commands.
 
 Use `--continue-on-error` for torture campaigns. In that mode every planned
 command is attempted, command stdout and stderr are retained under
@@ -245,9 +247,9 @@ command is attempted, command stdout and stderr are retained under
 `<run-id>/failure-summary.json`.
 
 The manifest supports optional repository-local `commands` entries that extend
-the Hyperfine command set beyond the default `index --full`, warm `index`, and
-`ctx --json` measurements. Each command is written as a JSON argv array
-excluding the `codira` executable itself, for example:
+the Hyperfine command set beyond the default warm `index` and `ctx --json`
+measurements. Each command is written as a JSON argv array excluding the
+`codira` executable itself, for example:
 
 ```json
 ["sym", "build_parser", "--json"]
@@ -275,7 +277,8 @@ placeholders. For path-aware subcommands, the campaign runner appends
 Before building the final Hyperfine command matrix, the campaign runs an
 adaptive discovery pass for each repository:
 
-- a temporary Codira index is built under `/tmp`
+- `scripts/benchmark_index.py --full` builds the artifact index and records
+  phase timings
 - `symlist --json` is used to discover candidate symbols with meaningful graph
   connectivity
 - semantic query candidates are ranked from the manifest query plus discovered
@@ -285,17 +288,24 @@ adaptive discovery pass for each repository:
 - unresolved adaptive commands are skipped instead of aborting the whole repo
   campaign
 
-Discovery index state is not stored under `--artifact-root`. Selector
-provenance is persisted under
+Discovery index state is the same artifact index used by the later warm-index
+and query measurements. Selector provenance is persisted under
 `.artifacts/benchmarks/<run-id>/selection/*.json`, discovery command output is
 persisted under `.artifacts/benchmarks/<run-id>/logs/discovery/`, and the
 resolved or skipped commands are also recorded in `campaign-plan.json`.
+
+Full-index timing is therefore recorded once and written to
+`<category>-<label>-index-phases.json`. Hyperfine no longer duplicates
+`codira index --full`; the utility summary combines the phase full-index timing
+with Hyperfine warm-index and query timings. Pass `--warmup 0` to disable
+Hyperfine warmups entirely.
 
 Example:
 
 ```bash
 python scripts/benchmark_campaign.py benchmarks.json --dry-run
 python scripts/benchmark_campaign.py benchmarks.json --runs 10
+python scripts/benchmark_campaign.py benchmarks.json --runs 5 --warmup 0
 ```
 
 ## `scripts/run_manifest_baseline.py`
@@ -306,6 +316,7 @@ and `--continue-on-error`.
 
 ```bash
 uv run python -m scripts.run_manifest_baseline --runs 5 --warmup 1
+uv run python -m scripts.run_manifest_baseline --runs 5 --warmup 0
 ```
 
 See `docs/process/performance-benchmarking.md` for the manifest format,

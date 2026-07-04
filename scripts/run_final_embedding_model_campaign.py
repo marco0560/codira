@@ -81,6 +81,37 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def non_negative_int(value: str) -> int:
+    """
+    Parse a non-negative integer CLI value.
+
+    Parameters
+    ----------
+    value : str
+        Raw command-line value.
+
+    Returns
+    -------
+    int
+        Parsed non-negative integer.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        Raised when the value is not a non-negative integer.
+    """
+
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        msg = "value must be an integer"
+        raise argparse.ArgumentTypeError(msg) from exc
+    if parsed < 0:
+        msg = "value must be >= 0"
+        raise argparse.ArgumentTypeError(msg)
+    return parsed
+
+
 def local_stamp() -> str:
     """
     Return the local campaign timestamp.
@@ -152,9 +183,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--warmup",
-        type=positive_int,
+        type=non_negative_int,
         default=DEFAULT_WARMUP,
-        help="Hyperfine warmup runs per command.",
+        help="Hyperfine warmup runs per command. Use 0 to disable warmups.",
     )
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--restart-from", default=os.environ.get("RESTART_FROM", ""))

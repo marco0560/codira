@@ -27,7 +27,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -282,6 +281,37 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def non_negative_int(value: str) -> int:
+    """
+    Parse a non-negative integer CLI value.
+
+    Parameters
+    ----------
+    value : str
+        Raw command-line value.
+
+    Returns
+    -------
+    int
+        Parsed non-negative integer.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        Raised when the value is not a non-negative integer.
+    """
+
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        msg = "value must be an integer"
+        raise argparse.ArgumentTypeError(msg) from exc
+    if parsed < 0:
+        msg = "value must be >= 0"
+        raise argparse.ArgumentTypeError(msg)
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     """
     Build the benchmark campaign CLI parser.
@@ -344,9 +374,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--warmup",
-        type=positive_int,
+        type=non_negative_int,
         default=DEFAULT_WARMUP,
-        help="Hyperfine warmup runs per command.",
+        help="Hyperfine warmup runs per command. Use 0 to disable warmups.",
     )
     parser.add_argument(
         "--dry-run",
@@ -1413,133 +1443,126 @@ def resolve_repository_benchmark(
         "query_trials": [],
         "command_trials": [],
     }
-    with tempfile.TemporaryDirectory(
-        prefix=f"codira-benchmark-{_safe_label(repo.category)}-{_safe_label(repo.label)}-"
-    ) as temporary_root:
-        discovery_output_dir = Path(temporary_root) / "codira-output"
-        discovery = AdaptiveDiscoveryContext(
-            config=config,
-            output_dir=discovery_output_dir,
-        )
-        discovery_index = (
-            config.codira,
-            "index",
-            "--path",
-            str(repo.path),
-            "--output-dir",
-            str(discovery_output_dir),
-            *_config_file_args(config),
-        )
-        print(f"--- {repo.label.upper()} ---", flush=True)
-        print(f"--- {repo.label} calibration started ---", flush=True)
-        discovery_index_log = discovery_log_path(repo, config, "index")
-        return_code = _logged_command_result(
-            discovery_index,
-            output_log=discovery_index_log,
-        )
-        selection["discovery_index"] = {
-            "command": list(discovery_index),
-            "return_code": return_code,
-            "output_dir": str(discovery_output_dir),
-            "output_log": str(discovery_index_log),
+    discovery_output_dir = index_output_dir(repo, config)
+    discovery = AdaptiveDiscoveryContext(
+        config=config,
+        output_dir=discovery_output_dir,
+    )
+    discovery_index = build_phase_benchmark_argv(repo, config)
+    print(f"--- {repo.label.upper()} ---", flush=True)
+    print(f"--- {repo.label} calibration started ---", flush=True)
+    discovery_index_log = discovery_log_path(repo, config, "index")
+    return_code = _logged_command_result(
+        discovery_index,
+        output_log=discovery_index_log,
+    )
+    selection["discovery_index"] = {
+        "command": list(discovery_index),
+        "return_code": return_code,
+        "output_dir": str(discovery_output_dir),
+        "output_log": str(discovery_index_log),
+        "phase_artifact": str(
+            run_directory(config)
+            / f"{_safe_label(repo.category)}-{_safe_label(repo.label)}-index-phases.json"
+        ),
+    }
+    candidates = _discover_symbol_candidates(
+        repo=repo,
+        config=config,
+        output_dir=discovery_output_dir,
+    )
+    selection["symbol_candidates"] = [
+        {
+            "name": candidate.name,
+            "prefix": candidate.prefix,
+            "score": candidate.score,
+            "module": candidate.module,
         }
-        candidates = _discover_symbol_candidates(
-            repo=repo,
-            config=config,
-            output_dir=discovery_output_dir,
-        )
-        selection["symbol_candidates"] = [
-            {
-                "name": candidate.name,
-                "prefix": candidate.prefix,
-                "score": candidate.score,
-                "module": candidate.module,
-            }
-            for candidate in candidates
-        ]
-        resolved_query, query_trials = _resolve_text_query(
-            repo=repo,
-            config=config,
-            output_dir=discovery_output_dir,
-            candidates=candidates,
-        )
-        selection["query_trials"] = query_trials
+        for candidate in candidates
+    ]
+    resolved_query, query_trials = _resolve_text_query(
+        repo=repo,
+        config=config,
+        output_dir=discovery_output_dir,
+        candidates=candidates,
+    )
+    selection["query_trials"] = query_trials
 
-        resolved_commands: list[tuple[str, ...]] = []
-        skipped_commands: list[tuple[str, ...]] = []
-        command_trials: list[dict[str, object]] = []
-        for command in repo.commands:
-            subcommand = command[0]
-            if subcommand in ADAPTIVE_SYMBOL_SUBCOMMANDS:
-                resolved, trials = _resolve_symbol_command(
-                    command,
-                    repo=repo,
-                    discovery=discovery,
-                    candidates=candidates,
-                    trial_prefix=f"command-{len(command_trials) + 1:02d}",
-                )
-                command_trials.append(
-                    {
-                        "requested": list(command),
-                        "resolved": list(resolved) if resolved is not None else None,
-                        "trials": trials,
-                    }
-                )
-                if resolved is None:
-                    skipped_commands.append(tuple(command))
-                else:
-                    resolved_commands.append(resolved)
-                continue
-            if subcommand in ADAPTIVE_TEXT_SUBCOMMANDS:
-                resolved = _with_target(command, resolved_query)
-                if resolved is None:
-                    skipped_commands.append(tuple(command))
-                    command_trials.append(
-                        {
-                            "requested": list(command),
-                            "resolved": None,
-                            "reason": "missing positional query slot",
-                        }
-                    )
-                else:
-                    resolved_commands.append(resolved)
-                    command_trials.append(
-                        {
-                            "requested": list(command),
-                            "resolved": list(resolved),
-                            "reason": "resolved semantic query",
-                        }
-                    )
-                continue
-            if subcommand == "symlist":
-                resolved, metadata = _resolve_inventory_command(
-                    command,
-                    repo=repo,
-                    discovery=discovery,
-                    query=resolved_query,
-                    trial_prefix=f"command-{len(command_trials) + 1:02d}-inventory",
-                )
-                command_trials.append(
-                    {
-                        "requested": list(command),
-                        "resolved": list(resolved) if resolved is not None else None,
-                        "trials": [metadata],
-                    }
-                )
-                if resolved is None:
-                    skipped_commands.append(tuple(command))
-                else:
-                    resolved_commands.append(resolved)
-                continue
-            resolved_commands.append(tuple(command))
+    resolved_commands: list[tuple[str, ...]] = []
+    skipped_commands: list[tuple[str, ...]] = []
+    command_trials: list[dict[str, object]] = []
+    for command in repo.commands:
+        subcommand = command[0]
+        if subcommand in ADAPTIVE_SYMBOL_SUBCOMMANDS:
+            resolved, trials = _resolve_symbol_command(
+                command,
+                repo=repo,
+                discovery=discovery,
+                candidates=candidates,
+                trial_prefix=f"command-{len(command_trials) + 1:02d}",
+            )
             command_trials.append(
                 {
                     "requested": list(command),
-                    "resolved": list(command),
-                    "reason": "literal command",
+                    "resolved": list(resolved) if resolved is not None else None,
+                    "trials": trials,
                 }
             )
-        selection["command_trials"] = command_trials
+            if resolved is None:
+                skipped_commands.append(tuple(command))
+            else:
+                resolved_commands.append(resolved)
+            continue
+        if subcommand in ADAPTIVE_TEXT_SUBCOMMANDS:
+            resolved = _with_target(command, resolved_query)
+            if resolved is None:
+                skipped_commands.append(tuple(command))
+                command_trials.append(
+                    {
+                        "requested": list(command),
+                        "resolved": None,
+                        "reason": "missing positional query slot",
+                    }
+                )
+            else:
+                resolved_commands.append(resolved)
+                command_trials.append(
+                    {
+                        "requested": list(command),
+                        "resolved": list(resolved),
+                        "reason": "resolved semantic query",
+                    }
+                )
+            continue
+        if subcommand == "symlist":
+            resolved, metadata = _resolve_inventory_command(
+                command,
+                repo=repo,
+                discovery=discovery,
+                query=resolved_query,
+                trial_prefix=f"command-{len(command_trials) + 1:02d}-inventory",
+            )
+            command_trials.append(
+                {
+                    "requested": list(command),
+                    "resolved": list(resolved) if resolved is not None else None,
+                    "trials": [metadata],
+                }
+            )
+            if resolved is None:
+                skipped_commands.append(tuple(command))
+            else:
+                resolved_commands.append(resolved)
+            continue
+        resolved_commands.append(tuple(command))
+        command_trials.append(
+            {
+                "requested": list(command),
+                "resolved": list(command),
+                "reason": "literal command",
+            }
+        )
+    selection["command_trials"] = command_trials
 
     print(
         f"{repo.label}: calibration completed in {_elapsed_since(started_at)}",
@@ -1667,18 +1690,6 @@ def hyperfine_command_strings(
             (
                 codira,
                 "index",
-                "--full",
-                "--path",
-                path,
-                "--output-dir",
-                output,
-                *config_file_args,
-            )
-        ),
-        shlex.join(
-            (
-                codira,
-                "index",
                 "--path",
                 path,
                 "--output-dir",
@@ -1711,6 +1722,7 @@ def hyperfine_command_strings(
             )
         )
         for command in repo.commands
+        if not (command and command[0] == "index" and "--full" in command)
     )
     return tuple(dict.fromkeys(commands))
 
@@ -1807,6 +1819,108 @@ def _codira_subcommand_from_hyperfine_command(command: str) -> str | None:
     return None
 
 
+def _codira_command_parts(command: str) -> tuple[str, ...]:
+    """
+    Split one Hyperfine command string into shell argv parts.
+
+    Parameters
+    ----------
+    command : str
+        Shell command string stored by Hyperfine.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Parsed argv parts, or an empty tuple when parsing fails.
+    """
+
+    try:
+        return tuple(shlex.split(command))
+    except ValueError:
+        return ()
+
+
+def _is_full_index_command(command: str) -> bool:
+    """
+    Return whether a Hyperfine command is ``codira index --full``.
+
+    Parameters
+    ----------
+    command : str
+        Shell command string stored by Hyperfine.
+
+    Returns
+    -------
+    bool
+        True when the command invokes the full-index path.
+    """
+
+    parts = _codira_command_parts(command)
+    return _codira_subcommand_from_hyperfine_command(command) == "index" and (
+        "--full" in parts
+    )
+
+
+def _is_partial_index_command(command: str) -> bool:
+    """
+    Return whether a Hyperfine command is a non-full ``codira index``.
+
+    Parameters
+    ----------
+    command : str
+        Shell command string stored by Hyperfine.
+
+    Returns
+    -------
+    bool
+        True when the command invokes the incremental index path.
+    """
+
+    parts = _codira_command_parts(command)
+    return _codira_subcommand_from_hyperfine_command(command) == "index" and (
+        "--full" not in parts
+    )
+
+
+def phase_full_index_seconds(
+    repo: ResolvedRepositoryBenchmark,
+    config: CampaignConfig,
+) -> float | None:
+    """
+    Read the phase-instrumented full-index wall time for one repository.
+
+    Parameters
+    ----------
+    repo : ResolvedRepositoryBenchmark
+        Repository benchmark target.
+    config : CampaignConfig
+        Campaign configuration.
+
+    Returns
+    -------
+    float | None
+        Full-index total seconds when the phase artifact exists and is readable.
+    """
+
+    phase_path = (
+        run_directory(config)
+        / f"{_safe_label(repo.category)}-{_safe_label(repo.label)}-index-phases.json"
+    )
+    if not phase_path.exists():
+        return None
+    try:
+        payload = json.loads(phase_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    timings = payload.get("timings")
+    if not isinstance(timings, dict):
+        return None
+    total = timings.get("total")
+    if not isinstance(total, int | float):
+        return None
+    return float(total)
+
+
 def write_utility_summary(
     repo: ResolvedRepositoryBenchmark,
     config: CampaignConfig,
@@ -1834,17 +1948,23 @@ def write_utility_summary(
         return
     payload = json.loads(hyperfine_path.read_text(encoding="utf-8"))
     results = list(payload.get("results", []))
-    if len(results) < 2:
+    if not results:
         return
-    full_index = float(results[0].get("mean", 0.0))
-    partial_index = float(results[1].get("mean", 0.0))
+    full_index = phase_full_index_seconds(repo, config)
+    partial_index = 0.0
     query_results: list[dict[str, object]] = []
     query_means: list[float] = []
-    for result in results[2:]:
+    for result in results:
         command = str(result.get("command", ""))
+        mean_seconds = float(result.get("mean", 0.0))
+        if _is_full_index_command(command) and full_index is None:
+            full_index = mean_seconds
+            continue
+        if _is_partial_index_command(command):
+            partial_index = mean_seconds
+            continue
         subcommand = _codira_subcommand_from_hyperfine_command(command)
         if subcommand in UTILITY_QUERY_SUBCOMMANDS:
-            mean_seconds = float(result.get("mean", 0.0))
             query_means.append(mean_seconds)
             query_results.append(
                 {
@@ -1853,6 +1973,8 @@ def write_utility_summary(
                     "command": command,
                 }
             )
+    if full_index is None:
+        return
     query_mean = sum(query_means) / len(query_means) if query_means else 0.0
     score = full_index + (3.0 * partial_index) + (20.0 * query_mean)
     write_json_artifact(
@@ -1902,7 +2024,7 @@ def command_output_log_path(
 
 
 def build_phase_benchmark_argv(
-    repo: ResolvedRepositoryBenchmark,
+    repo: RepositoryBenchmark | ResolvedRepositoryBenchmark,
     config: CampaignConfig,
 ) -> tuple[str, ...]:
     """
@@ -1910,7 +2032,7 @@ def build_phase_benchmark_argv(
 
     Parameters
     ----------
-    repo : RepositoryBenchmark
+    repo : RepositoryBenchmark | ResolvedRepositoryBenchmark
         Repository benchmark target.
     config : CampaignConfig
         Campaign configuration.
@@ -1968,7 +2090,7 @@ def build_profile_argvs(
     config: CampaignConfig,
 ) -> tuple[tuple[str, ...], ...]:
     """
-    Build cProfile command vectors for index and context retrieval.
+    Build cProfile command vectors for context retrieval.
 
     Parameters
     ----------
@@ -1988,21 +2110,6 @@ def build_profile_argvs(
     output_dir = str(index_output_dir(repo, config))
     config_file_args = _config_file_args(config)
     return (
-        (
-            config.python,
-            "-m",
-            "cProfile",
-            "-o",
-            str(base / f"{prefix}-index.prof"),
-            codira_script,
-            "index",
-            "--full",
-            "--path",
-            str(repo.path),
-            "--output-dir",
-            output_dir,
-            *config_file_args,
-        ),
         (
             config.python,
             "-m",
@@ -2049,19 +2156,6 @@ def build_pyinstrument_argvs(
     output_dir = str(index_output_dir(repo, config))
     config_file_args = _config_file_args(config)
     return (
-        (
-            "pyinstrument",
-            "-o",
-            str(base / f"{prefix}-index-pyinstrument.html"),
-            codira_script,
-            "index",
-            "--full",
-            "--path",
-            str(repo.path),
-            "--output-dir",
-            output_dir,
-            *config_file_args,
-        ),
         (
             "pyinstrument",
             "-o",
@@ -2114,7 +2208,6 @@ def command_plan(
     plan: list[dict[str, object]] = []
     for repo in resolved_repositories:
         commands = [
-            build_phase_benchmark_argv(repo, config),
             build_hyperfine_argv(repo, config),
             *build_profile_argvs(repo, config),
             *build_pyinstrument_argvs(repo, config),
