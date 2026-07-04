@@ -42,6 +42,7 @@ DEFAULT_EMBEDDING_GPU_DEVICE_ID = 0
 DEFAULT_EMBEDDING_GPU_MEMORY_LIMIT_MB = 0
 DEFAULT_EMBEDDING_INDEX_MODE = "immediate"
 DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES = ("symbol", "documentation")
+DEFAULT_EMBEDDING_INDEX_WORK_BATCH_MULTIPLIER = 256
 KNOWN_EMBEDDING_INDEX_MODES = frozenset({"immediate", "deferred"})
 KNOWN_EMBEDDING_OBJECT_TYPES = frozenset(DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES)
 _PLUGIN_CONFIG_RESERVED_KEYS = frozenset(
@@ -140,6 +141,9 @@ class EmbeddingsIndexingConfig:
     max_text_chars : int
         Maximum text payload length eligible for embedding, or ``0`` for no
         configured limit.
+    work_batch_multiplier : int
+        Multiplier applied to ``embeddings.batch_size`` to bound indexing
+        work segments without exposing a second absolute batch size.
     include_paths : tuple[str, ...]
         Repo-root-relative path prefixes included in embedding computation.
         An empty tuple includes all indexed paths.
@@ -150,6 +154,7 @@ class EmbeddingsIndexingConfig:
     mode: str = DEFAULT_EMBEDDING_INDEX_MODE
     object_types: tuple[str, ...] = DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES
     max_text_chars: int = 0
+    work_batch_multiplier: int = DEFAULT_EMBEDDING_INDEX_WORK_BATCH_MULTIPLIER
     include_paths: tuple[str, ...] = ()
     exclude_paths: tuple[str, ...] = ()
 
@@ -273,6 +278,7 @@ DEFAULT_CONFIG: dict[str, object] = {
             "mode": DEFAULT_EMBEDDING_INDEX_MODE,
             "object_types": list(DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES),
             "max_text_chars": 0,
+            "work_batch_multiplier": DEFAULT_EMBEDDING_INDEX_WORK_BATCH_MULTIPLIER,
             "include_paths": [],
             "exclude_paths": [],
         },
@@ -417,6 +423,7 @@ _SCHEMA: dict[str, object] = {
             "mode": str,
             "object_types": list,
             "max_text_chars": int,
+            "work_batch_multiplier": int,
             "include_paths": list,
             "exclude_paths": list,
         },
@@ -1011,6 +1018,19 @@ def _validate_semantics(value: Mapping[str, object]) -> None:
                 prefix="embeddings.indexing",
                 minimum=0,
             )
+            _validate_int_minimums(
+                indexing,
+                ("work_batch_multiplier",),
+                prefix="embeddings.indexing",
+                minimum=1,
+            )
+            work_batch_multiplier = indexing.get("work_batch_multiplier")
+            if isinstance(work_batch_multiplier, int) and work_batch_multiplier > 4096:
+                msg = (
+                    "Configuration key embeddings.indexing.work_batch_multiplier "
+                    "must be less than or equal to 4096."
+                )
+                raise ConfigError(msg)
             _validate_embedding_indexing_semantics(indexing)
 
 
@@ -1859,6 +1879,9 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
                 "mode": config.embeddings.indexing.mode,
                 "object_types": list(config.embeddings.indexing.object_types),
                 "max_text_chars": config.embeddings.indexing.max_text_chars,
+                "work_batch_multiplier": (
+                    config.embeddings.indexing.work_batch_multiplier
+                ),
                 "include_paths": list(config.embeddings.indexing.include_paths),
                 "exclude_paths": list(config.embeddings.indexing.exclude_paths),
             },
@@ -1971,6 +1994,10 @@ def _config_from_mapping(
                     for item in cast("list[object]", indexing["object_types"])
                 ),
                 max_text_chars=cast("int", indexing["max_text_chars"]),
+                work_batch_multiplier=cast(
+                    "int",
+                    indexing["work_batch_multiplier"],
+                ),
                 include_paths=tuple(
                     str(item).strip()
                     for item in cast("list[object]", indexing["include_paths"])

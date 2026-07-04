@@ -520,7 +520,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.50.0"
+    assert project["project"]["version"] == "1.50.1"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -2575,6 +2575,103 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
         "latest-hash",
     )
     assert cast("object", stored_rows[0][5]) == [1.0] + [0.0] * 383
+
+
+def test_duckdb_pending_embedding_flush_respects_work_batch_size(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Segment DuckDB embedding work before calling the embedding engine.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace embedding generation and work sizing.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts large pending payloads are split into bounded work
+        segments.
+    """
+    pytest.importorskip("duckdb")
+    calls: list[list[str]] = []
+
+    def fake_embed_texts(
+        texts: list[str], *, root: Path | None = None
+    ) -> list[list[float]]:
+        """
+        Record one embedding batch.
+
+        Parameters
+        ----------
+        texts : list[str]
+            Text payloads requested from the embedding backend.
+        root : pathlib.Path | None, optional
+            Repository root passed by backend persistence.
+
+        Returns
+        -------
+        list[list[float]]
+            Deterministic embedding vectors matching the requested payloads.
+        """
+        assert root == tmp_path
+        calls.append(list(texts))
+        return [[float(index + 1)] + [0.0] * 383 for index, _text in enumerate(texts)]
+
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_support.embed_texts",
+        fake_embed_texts,
+    )
+    monkeypatch.setattr(
+        "codira_backend_duckdb.duckdb_support.embedding_work_batch_size",
+        lambda *, root=None: 2,
+    )
+
+    backend = DuckDBIndexBackend()
+    connection = backend.open_connection(tmp_path)
+    try:
+        object_ids = [0, 1, 2, 1, 4]
+        pending_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = [
+            (
+                PendingEmbeddingRow(
+                    object_type="documentation",
+                    object_id=object_id,
+                    stable_id=f"doc:{object_id}",
+                    text=f"text {row_index}",
+                ),
+                f"hash-{row_index}",
+                None,
+            )
+            for row_index, object_id in enumerate(object_ids)
+        ]
+        _flush_pending_embedding_rows(
+            cast("_DuckDBPersistenceConnection", connection),
+            tmp_path,
+            pending_embedding_rows=pending_rows,
+            backend=EmbeddingBackendSpec(
+                name="test-backend",
+                version="1",
+                dim=384,
+            ),
+            fresh_full_index=True,
+        )
+        stored_rows = connection.execute(
+            """
+            SELECT object_id, content_hash
+            FROM embeddings
+            ORDER BY object_id
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert calls == [["text 0", "text 1"], ["text 2", "text 3"], ["text 4"]]
+    assert pending_rows == []
+    assert stored_rows == [(0, "hash-0"), (1, "hash-1"), (2, "hash-2"), (4, "hash-4")]
 
 
 def test_duckdb_embedding_queue_helpers_use_registered_batches(

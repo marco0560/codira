@@ -335,6 +335,43 @@ def test_profile_rendering_includes_gpu_profile_values() -> None:
     assert "[embeddings.indexing]" in rendered
     assert 'mode = "immediate"' in rendered
     assert 'object_types = ["symbol", "documentation"]' in rendered
+    assert "work_batch_multiplier = 256" in rendered
+
+
+def test_embedding_work_batch_multiplier_validation() -> None:
+    """
+    Validate the embedding indexing work-batch multiplier bounds.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the public multiplier rejects invalid values.
+    """
+
+    validate_config_mapping({"embeddings": {"indexing": {"work_batch_multiplier": 1}}})
+    validate_config_mapping(
+        {"embeddings": {"indexing": {"work_batch_multiplier": 4096}}}
+    )
+
+    with pytest.raises(
+        ConfigError,
+        match="embeddings.indexing.work_batch_multiplier",
+    ):
+        validate_config_mapping(
+            {"embeddings": {"indexing": {"work_batch_multiplier": 0}}}
+        )
+
+    with pytest.raises(
+        ConfigError,
+        match="less than or equal to 4096",
+    ):
+        validate_config_mapping(
+            {"embeddings": {"indexing": {"work_batch_multiplier": 4097}}}
+        )
 
 
 def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
@@ -802,6 +839,7 @@ def test_config_to_mapping_round_trips_defaults(
         "mode": "immediate",
         "object_types": ["symbol", "documentation"],
         "max_text_chars": 0,
+        "work_batch_multiplier": 256,
         "include_paths": [],
         "exclude_paths": [],
     }

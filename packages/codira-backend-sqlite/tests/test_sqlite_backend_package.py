@@ -40,7 +40,7 @@ def test_sqlite_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.45.1"
+    assert project["project"]["version"] == "1.45.2"
     assert project["project"]["dependencies"] == ["codira>=1.5.0,<2.0.0"]
     assert project["project"]["entry-points"]["codira.backends"] == {
         "sqlite": "codira_backend_sqlite:build_backend"
@@ -539,6 +539,92 @@ def test_sqlite_session_batches_embedding_generation_across_files(
 
     assert len(calls) == 1
     assert len(calls[0]) == 2
+
+
+def test_sqlite_pending_embedding_flush_respects_work_batch_size(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Segment SQLite embedding work before calling the embedding engine.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace embedding generation and work sizing.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts large pending payloads are split into bounded work
+        segments.
+    """
+    calls: list[list[str]] = []
+
+    def fake_embed_texts(
+        texts: list[str], *, root: Path | None = None
+    ) -> list[list[float]]:
+        """
+        Record one embedding batch.
+
+        Parameters
+        ----------
+        texts : list[str]
+            Text payloads requested from the embedding backend.
+        root : pathlib.Path | None, optional
+            Repository root passed by backend persistence.
+
+        Returns
+        -------
+        list[list[float]]
+            Deterministic embedding vectors matching the requested payloads.
+        """
+        assert root == tmp_path
+        calls.append(list(texts))
+        return [[float(index + 1)] + [0.0] * 383 for index, _text in enumerate(texts)]
+
+    monkeypatch.setattr(
+        "codira_backend_sqlite.sqlite_support.embed_texts",
+        fake_embed_texts,
+    )
+    monkeypatch.setattr(
+        "codira_backend_sqlite.sqlite_support.embedding_work_batch_size",
+        lambda *, root=None: 2,
+    )
+
+    backend = SQLiteIndexBackend()
+    connection = backend.open_connection(tmp_path)
+    try:
+        pending_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = [
+            (
+                PendingEmbeddingRow(
+                    object_type="documentation",
+                    object_id=object_id,
+                    stable_id=f"doc:{object_id}",
+                    text=f"text {object_id}",
+                ),
+                f"hash-{object_id}",
+                None,
+            )
+            for object_id in range(5)
+        ]
+        _flush_pending_embedding_rows(
+            connection,
+            tmp_path,
+            pending_embedding_rows=pending_rows,
+            backend=EmbeddingBackendSpec(
+                name="test-backend",
+                version="1",
+                dim=384,
+            ),
+        )
+    finally:
+        connection.close()
+
+    assert calls == [["text 0", "text 1"], ["text 2", "text 3"], ["text 4"]]
+    assert pending_rows == []
 
 
 def test_sqlite_pending_embeddings_replace_duplicate_documentation_keys(

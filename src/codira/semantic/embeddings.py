@@ -773,6 +773,29 @@ def embed_texts(
         _ACTIVE_EMBEDDING_ROOT.reset(token)
 
 
+def embedding_work_batch_size(*, root: Path | None = None) -> int:
+    """
+    Return the effective indexing work-segment size.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local embedding configuration should be
+        used.
+
+    Returns
+    -------
+    int
+        Product of ``embeddings.batch_size`` and
+        ``embeddings.indexing.work_batch_multiplier``.
+    """
+    effective_root = _effective_root(root)
+    config = load_effective_config(root=effective_root)
+    return (
+        config.embeddings.batch_size * config.embeddings.indexing.work_batch_multiplier
+    )
+
+
 def embed_text(text: str, *, root: Path | None = None) -> list[float]:
     """
     Embed text using the deterministic local sentence-transformers backend.

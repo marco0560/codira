@@ -183,8 +183,9 @@ Read and acted upon:
   `torch.set_num_threads()` and `torch.set_num_interop_threads()` before
   sentence-transformers model use.
 - `indexing.mode`, `indexing.object_types`, `indexing.max_text_chars`,
-  `indexing.include_paths`, `indexing.exclude_paths`: validated by config
-  semantics and used by indexing selection.
+  `indexing.work_batch_multiplier`, `indexing.include_paths`,
+  `indexing.exclude_paths`: validated by config semantics and used by indexing
+  selection or embedding work segmentation.
 
 Environment overrides are wired for:
 

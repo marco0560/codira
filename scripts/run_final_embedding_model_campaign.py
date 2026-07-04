@@ -398,6 +398,7 @@ def render_model_config(model: ModelEntry, backend_mode: str) -> str:
             'mode = "immediate"',
             'object_types = ["symbol", "documentation"]',
             f"max_text_chars = {safe_max_text_chars(model)}",
+            "work_batch_multiplier = 256",
             "include_paths = []",
             "exclude_paths = []",
             "",

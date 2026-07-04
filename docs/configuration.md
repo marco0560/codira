@@ -74,6 +74,7 @@ memory_limit_mb = 0
 mode = "immediate"
 object_types = ["symbol", "documentation"]
 max_text_chars = 0
+work_batch_multiplier = 256
 include_paths = []
 exclude_paths = []
 ```
@@ -117,6 +118,12 @@ list skips all embedding rows while leaving structural indexing enabled.
 values skip embedding payloads longer than the configured number of
 characters.
 
+`embeddings.indexing.work_batch_multiplier` bounds indexing work segments as a
+multiple of `embeddings.batch_size`. With the defaults, Codira processes at
+most `32 * 256 = 8192` embedding rows per segment before calling the embedding
+engine and vector-store flush path. Valid values are integers from `1` to
+`4096`.
+
 `embeddings.indexing.include_paths` and `exclude_paths` are repo-root-relative
 path prefixes. Include filters are evaluated first; exclude filters remove
 matching files from embedding computation.
@@ -137,6 +144,9 @@ Issue #57 backend and embedding matrix:
 - `embeddings.indexing.max_text_chars = 0` keeps documentation embeddings
   uncapped. The capped-docs matrix did not show enough total-runtime benefit
   to justify reducing retrieval coverage by default.
+- `embeddings.indexing.work_batch_multiplier = 256` caps the memory footprint
+  of full-index embedding work while staying aligned with the configured model
+  inference batch size.
 - `embeddings.batch_size = 32` and zero Torch thread overrides preserve the
   current portable defaults. Host-local calibration can still override them
   through config, CLI flags, or environment variables.

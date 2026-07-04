@@ -68,7 +68,11 @@ from .duckdb_query_backend import (
     _BackendCompatibleConnectionAdapter,
     DuckDBQueryBackend,
 )
-from codira.semantic.embeddings import EmbeddingBackendSpec, get_embedding_backend
+from codira.semantic.embeddings import (
+    EmbeddingBackendSpec,
+    embedding_work_batch_size,
+    get_embedding_backend,
+)
 from codira.plugin_config import analyzer_inventory_discovery_json, plugin_json_schema
 from .schema import DDL, INDEX_DATA_TABLES, SCHEMA_VERSION, SEQUENCED_TABLES
 
@@ -84,7 +88,7 @@ if TYPE_CHECKING:
         VectorStore,
     )
 
-PACKAGE_VERSION = "1.50.0"
+PACKAGE_VERSION = "1.50.1"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -369,7 +373,7 @@ class _DuckDBIndexWriteSession:
         duckdb_error = _duckdb_module().Error
         try:
             with self._profiler.span("persist.store_analysis", rows=1):
-                return _store_analysis(
+                result = _store_analysis(
                     cast("_DuckDBPersistenceConnection", self._conn),
                     request.root,
                     request.file_metadata,
@@ -394,6 +398,8 @@ class _DuckDBIndexWriteSession:
                     structural_rows=self._structural_rows,
                     id_allocator=self._id_allocator,
                 )
+            self._flush_pending_embeddings_if_needed()
+            return result
         except duckdb_error as exc:
             _delete_indexed_file_data(
                 cast("_DuckDBPersistenceConnection", self._conn),
@@ -407,6 +413,26 @@ class _DuckDBIndexWriteSession:
                 str(request.file_metadata.path),
             )
             raise
+
+    def _flush_pending_embeddings_if_needed(self) -> None:
+        """
+        Flush session-level embedding rows when the work segment is full.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Buffered embedding rows are flushed when they reach the configured
+            work-segment size.
+        """
+        if len(self._pending_embedding_rows) < embedding_work_batch_size(
+            root=self._root
+        ):
+            return
+        self._flush_pending_embeddings()
 
     def _flush_pending_embeddings(self) -> None:
         """

@@ -210,8 +210,9 @@ engines.
 
 The wrapper applies conservative benchmark defaults for large embedding models:
 768-dimensional candidates use `batch_size = 1`,
-`[embeddings.indexing].max_text_chars = 2000`, Torch threads `4/1`, and ONNX
-thread limits `intra_op_num_threads = 4` plus `inter_op_num_threads = 1`.
+`[embeddings.indexing].max_text_chars = 2000`,
+`[embeddings.indexing].work_batch_multiplier = 256`, Torch threads `4/1`, and
+ONNX thread limits `intra_op_num_threads = 4` plus `inter_op_num_threads = 1`.
 384-dimensional ONNX candidates use `batch_size = 8`; 384-dimensional
 SentenceTransformers candidates use `batch_size = 32`.
 

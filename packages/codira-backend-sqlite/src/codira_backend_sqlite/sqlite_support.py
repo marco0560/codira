@@ -38,6 +38,7 @@ from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.repository_scope import path_has_excluded_tree_name
 from codira.semantic.embeddings import (
     embed_texts as embed_texts,
+    embedding_work_batch_size,
     embeddings_enabled,
     serialize_vector,
 )
@@ -2532,15 +2533,19 @@ def _flush_pending_embedding_rows(
     if not embeddings_enabled(root=root):
         pending_embedding_rows.clear()
         return
-    _flush_prepared_embedding_rows(
-        conn,
-        root,
-        prepared_rows=pending_embedding_rows,
-        backend=backend,
-        vector_store=vector_store,
-        vector_set_identity=vector_set_identity,
-        vector_store_config={} if vector_store_config is None else vector_store_config,
-    )
+    work_batch_size = embedding_work_batch_size(root=root)
+    for index in range(0, len(pending_embedding_rows), work_batch_size):
+        _flush_prepared_embedding_rows(
+            conn,
+            root,
+            prepared_rows=pending_embedding_rows[index : index + work_batch_size],
+            backend=backend,
+            vector_store=vector_store,
+            vector_set_identity=vector_set_identity,
+            vector_store_config={}
+            if vector_store_config is None
+            else vector_store_config,
+        )
     pending_embedding_rows.clear()
 
 

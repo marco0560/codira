@@ -44,6 +44,7 @@ from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
     deserialize_vector,
     embed_text,
+    embedding_work_batch_size,
     get_embedding_backend,
 )
 from codira_backend_sqlite.schema import SCHEMA_VERSION
@@ -360,7 +361,7 @@ class _SQLiteIndexWriteSession:
         self._vector_store_config = request.vector_store_config
 
         try:
-            return _store_analysis(
+            result = _store_analysis(
                 self._conn,
                 request.root,
                 request.file_metadata,
@@ -378,6 +379,8 @@ class _SQLiteIndexWriteSession:
                 vector_set_identity=request.vector_set_identity,
                 vector_store_config=request.vector_store_config,
             )
+            self._flush_pending_embeddings_if_needed()
+            return result
         except sqlite3.Error as exc:
             _delete_indexed_file_data(self._conn, str(request.file_metadata.path))
             msg = str(exc)
@@ -385,6 +388,26 @@ class _SQLiteIndexWriteSession:
         except (OSError, RuntimeError, ValueError):
             _delete_indexed_file_data(self._conn, str(request.file_metadata.path))
             raise
+
+    def _flush_pending_embeddings_if_needed(self) -> None:
+        """
+        Flush session-level embedding rows when the work segment is full.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Buffered embedding rows are flushed when they reach the configured
+            work-segment size.
+        """
+        if len(self._pending_embedding_rows) < embedding_work_batch_size(
+            root=self._root
+        ):
+            return
+        self._flush_pending_embeddings()
 
     def _flush_pending_embeddings(self) -> None:
         """
