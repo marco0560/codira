@@ -1,3 +1,10 @@
+## [1.47.2](https://github.com/marco0560/codira/compare/v1.47.1...v1.47.2) (2026-07-04)
+
+
+### Bug Fixes
+
+* **embeddings:** bound indexing work payloads ([5186ff9](https://github.com/marco0560/codira/commit/5186ff9357ba155ab76421dd48f7afd0b8da2b58))
+
 ## [1.47.1](https://github.com/marco0560/codira/compare/v1.47.0...v1.47.1) (2026-07-04)
 
 
