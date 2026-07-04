@@ -1,3 +1,12 @@
+## [1.47.1](https://github.com/marco0560/codira/compare/v1.47.0...v1.47.1) (2026-07-04)
+
+
+### Bug Fixes
+
+* **process:** continue split experiments after gate failures ([5278b0c](https://github.com/marco0560/codira/commit/5278b0c0d2a73ad2c7072dedc72fc2e4681aa5c7))
+* **process:** harden embedding campaign resume ([f3af5a4](https://github.com/marco0560/codira/commit/f3af5a4e2445ae7f13081068f05326c899912730))
+* **process:** reuse adaptive indexes in benchmarks ([863f1dc](https://github.com/marco0560/codira/commit/863f1dcca4090bfebc170e4a4a6130ac7e124d5c))
+
 # [1.47.0](https://github.com/marco0560/codira/compare/v1.46.0...v1.47.0) (2026-06-30)
 
 
