@@ -48,10 +48,13 @@ from codira.cli import (
 )
 from codira.contracts import (
     BackendPersistAnalysisRequest,
+    BackendResolveDocumentationScoresRequest,
+    BackendResolveEmbeddingScoresRequest,
     BackendRuntimeInventoryRequest,
     IndexWriteSession,
     LanguageAnalyzer,
     StoredEmbeddingRow,
+    VectorSimilarityScore,
 )
 from codira.indexer import audit_repo_coverage, index_repo
 from codira.models import (
@@ -143,6 +146,96 @@ def _default_analyzer_inventory_json() -> str:
     )
 
 
+def _insert_score_resolution_fixture(
+    root: Path,
+    *,
+    count: int,
+) -> None:
+    """
+    Insert symbol and documentation rows for score-resolution tests.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root containing an initialized SQLite backend database.
+    count : int
+        Number of symbol and documentation stable IDs to create.
+
+    Returns
+    -------
+    None
+        The fixture rows are committed to the backend database.
+    """
+
+    conn = sqlite3.connect(get_db_path(root))
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO files(path, hash, mtime, size, analyzer_name, analyzer_version)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("pkg/mod.py", "hash", 1.0, 1, "python", "1"),
+        )
+        assert cursor.lastrowid is not None
+        file_id = int(cursor.lastrowid)
+        conn.executemany(
+            """
+            INSERT INTO symbol_index(name, stable_id, type, module_name, file_id, lineno)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    f"symbol_{index}",
+                    f"symbol:{index}",
+                    "function",
+                    "pkg.mod",
+                    file_id,
+                    index + 1,
+                )
+                for index in range(count)
+            ),
+        )
+        conn.executemany(
+            """
+            INSERT INTO documentation_artifacts(
+                file_id,
+                stable_id,
+                kind,
+                source_format,
+                lineno,
+                end_lineno,
+                title,
+                heading_path,
+                text,
+                owner_stable_id,
+                owner_kind,
+                attachment_confidence
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    file_id,
+                    f"doc:{index}",
+                    "module_docstring",
+                    "python",
+                    index + 1,
+                    None,
+                    f"Doc {index}",
+                    json.dumps(("pkg", "mod")),
+                    f"Documentation {index}",
+                    None,
+                    None,
+                    None,
+                )
+                for index in range(count)
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _load_workspace_cli_module() -> types.ModuleType:
     """
     Load the workspace `src/codira/cli.py` module under a unique name.
@@ -173,6 +266,82 @@ def _load_workspace_cli_module() -> types.ModuleType:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_sqlite_resolve_embedding_scores_chunks_large_score_sets(
+    tmp_path: Path,
+) -> None:
+    """
+    Resolve symbol vector scores without exceeding SQLite parameter limits.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts large vector-store score batches are chunked before
+        querying structural symbol rows.
+    """
+
+    init_db(tmp_path)
+    _insert_score_resolution_fixture(tmp_path, count=950)
+    backend = SQLiteIndexBackend()
+
+    results = backend.resolve_embedding_scores(
+        BackendResolveEmbeddingScoresRequest(
+            root=tmp_path,
+            scores=[
+                VectorSimilarityScore(stable_id=f"symbol:{index}", score=float(index))
+                for index in range(950)
+            ],
+            limit=3,
+        )
+    )
+
+    assert [row[1][2] for row in results] == [
+        "symbol_949",
+        "symbol_948",
+        "symbol_947",
+    ]
+
+
+def test_sqlite_resolve_documentation_scores_chunks_large_score_sets(
+    tmp_path: Path,
+) -> None:
+    """
+    Resolve documentation vector scores without exceeding SQLite parameter limits.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts large vector-store score batches are chunked before
+        querying structural documentation rows.
+    """
+
+    init_db(tmp_path)
+    _insert_score_resolution_fixture(tmp_path, count=950)
+    backend = SQLiteIndexBackend()
+
+    results = backend.resolve_documentation_scores(
+        BackendResolveDocumentationScoresRequest(
+            root=tmp_path,
+            scores=[
+                VectorSimilarityScore(stable_id=f"doc:{index}", score=float(index))
+                for index in range(950)
+            ],
+            limit=3,
+        )
+    )
+
+    assert [row[1][6] for row in results] == ["Doc 949", "Doc 948", "Doc 947"]
 
 
 class _PythonAnalyzerV7:

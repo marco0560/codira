@@ -721,6 +721,47 @@ class _BenchmarkCampaignModule(Protocol):
         """
         ...
 
+    def index_output_dir(self, repo: object, config: object) -> Path:
+        """
+        Return the repository benchmark index directory.
+
+        Parameters
+        ----------
+        repo : object
+            Resolved repository benchmark target.
+        config : object
+            Campaign configuration.
+
+        Returns
+        -------
+        pathlib.Path
+            Repository-local benchmark index directory.
+        """
+        ...
+
+    def summarize_profile(
+        self,
+        profile: Path,
+        *,
+        limit: int = 20,
+    ) -> list[dict[str, object]]:
+        """
+        Summarize one cProfile artifact.
+
+        Parameters
+        ----------
+        profile : pathlib.Path
+            Profile artifact to read.
+        limit : int, optional
+            Maximum number of rows to report.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Profile summary or unreadable-profile diagnostic rows.
+        """
+        ...
+
     def write_utility_summary(self, repo: object, config: object) -> None:
         """
         Write one utility-summary artifact.
@@ -4277,6 +4318,8 @@ def test_benchmark_campaign_prints_repo_label_before_discovery_index(
         ),
         encoding="utf-8",
     )
+    config_file = tmp_path / "generated-config.toml"
+    config_file.write_text("config_version = 1\n", encoding="utf-8")
     config = helper.CampaignConfig(
         manifest=manifest,
         artifact_root=tmp_path / ".artifacts" / "benchmarks",
@@ -4287,7 +4330,9 @@ def test_benchmark_campaign_prints_repo_label_before_discovery_index(
         runs=3,
         warmup=1,
         dry_run=True,
+        config_file=config_file,
     )
+    captured_commands: list[tuple[str, ...]] = []
 
     def fake_run(
         command: Sequence[str],
@@ -4297,6 +4342,7 @@ def test_benchmark_campaign_prints_repo_label_before_discovery_index(
         check: bool | None = None,
     ) -> subprocess.CompletedProcess[str]:
         argv = tuple(str(part) for part in command)
+        captured_commands.append(argv)
         if "index" in argv:
             return subprocess.CompletedProcess(argv, 0, "", "")
         if "symlist" in argv and "--json" in argv:
@@ -4343,6 +4389,16 @@ def test_benchmark_campaign_prints_repo_label_before_discovery_index(
 
     assert captured.err == ""
     assert captured.out.startswith("--- FONTSHOW ---\n")
+    discovery_index = next(
+        argv for argv in captured_commands if argv[:2] == ("codira", "index")
+    )
+    assert "--config-file" in discovery_index
+    assert str(config_file) in discovery_index
+    discovery_symlist = next(
+        argv for argv in captured_commands if argv[:2] == ("codira", "symlist")
+    )
+    assert "--config-file" in discovery_symlist
+    assert str(config_file) in discovery_symlist
 
 
 def test_benchmark_campaign_skips_unresolved_adaptive_commands(
@@ -4738,6 +4794,128 @@ def test_benchmark_campaign_continue_on_error_records_all_failures(
     assert summary["failures"][0]["label"] == "target"
     assert summary["failures"][0]["return_code"] == 1
     assert summary["failures"][0]["output_log"].endswith("false.log")
+
+
+def test_benchmark_campaign_summarizes_unreadable_profiles(
+    tmp_path: Path,
+) -> None:
+    """
+    Report corrupt profile artifacts without failing the campaign.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for the profile fixture.
+
+    Returns
+    -------
+    None
+        The test asserts malformed cProfile output is represented as
+        diagnostic metadata.
+    """
+    helper = _load_benchmark_campaign_helper()
+    profile = tmp_path / "broken.prof"
+    profile.write_bytes(b"")
+
+    summary = helper.summarize_profile(profile)
+
+    assert summary == [
+        {
+            "status": "unreadable",
+            "error_type": "EOFError",
+            "error": "EOF read where object expected",
+        }
+    ]
+
+
+def test_benchmark_campaign_removes_index_artifacts_after_repository(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Drop bulky per-repository indexes after durable results are written.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for manifest and artifact fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace process arguments and command execution.
+
+    Returns
+    -------
+    None
+        The test asserts the default retention policy removes benchmark index
+        directories after a repository row completes.
+    """
+    helper = _load_benchmark_campaign_helper()
+    target = tmp_path / "target"
+    target.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {"label": "target", "category": "small", "path": str(target)}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifact_root = tmp_path / ".artifacts"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_campaign.py",
+            str(manifest),
+            "--artifact-root",
+            str(artifact_root),
+            "--run-id",
+            "cleanup",
+        ],
+    )
+    monkeypatch.setattr(helper, "utc_run_timestamp", lambda: "2026-05-20T10:15:30Z")
+
+    def fake_resolve_repositories(
+        repositories: Sequence[object],
+        config: object,
+    ) -> Sequence[object]:
+        del config
+        return repositories
+
+    index_dir_holder: dict[str, Path] = {}
+
+    def fake_command_plan(
+        repositories: Sequence[object],
+        config: object,
+    ) -> list[dict[str, object]]:
+        index_dir = helper.index_output_dir(repositories[0], config)
+        index_dir.mkdir(parents=True)
+        (index_dir / "index.db").write_text("temporary index\n", encoding="utf-8")
+        index_dir_holder["path"] = index_dir
+        return [
+            {
+                "label": "target",
+                "category": "small",
+                "commands": [["true"]],
+                "output_logs": [str(artifact_root / "cleanup" / "logs" / "true.log")],
+            }
+        ]
+
+    def fake_run_command(command: tuple[str, ...], *, output_log: Path) -> int:
+        del command
+        output_log.parent.mkdir(parents=True, exist_ok=True)
+        output_log.write_text("log\n", encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(helper, "resolve_repositories", fake_resolve_repositories)
+    monkeypatch.setattr(helper, "command_plan", fake_command_plan)
+    monkeypatch.setattr(helper, "_run_command", fake_run_command)
+
+    assert helper.main() == 0
+
+    assert not index_dir_holder["path"].exists()
 
 
 def test_benchmark_campaign_run_command_writes_combined_output_log(

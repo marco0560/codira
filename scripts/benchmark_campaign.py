@@ -152,6 +152,9 @@ class CampaignConfig:
     continue_on_error : bool
         Whether campaign execution should continue after command failures and
         persist a failure summary.
+    keep_indexes : bool
+        Whether repository-local benchmark index directories should be retained
+        after logs, summaries, and profiles are written.
     config_file : pathlib.Path | None
         Optional explicit repo-level Codira config file passed to path-aware
         Codira commands.
@@ -167,6 +170,7 @@ class CampaignConfig:
     warmup: int
     dry_run: bool
     continue_on_error: bool = False
+    keep_indexes: bool = False
     config_file: Path | None = None
 
 
@@ -355,6 +359,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Run every planned command, persist failure-summary.json, and return "
             "non-zero if any command fails."
+        ),
+    )
+    parser.add_argument(
+        "--keep-indexes",
+        action="store_true",
+        help=(
+            "Retain per-repository benchmark index directories. By default the "
+            "runner removes them after logs, summaries, and profiles are written."
         ),
     )
     return parser
@@ -843,6 +855,7 @@ def _discover_symbol_candidates(
         str(repo.path),
         "--output-dir",
         str(output_dir),
+        *_config_file_args(config),
     )
     _, payload, _ = _json_command_result(
         command,
@@ -1415,6 +1428,7 @@ def resolve_repository_benchmark(
             str(repo.path),
             "--output-dir",
             str(discovery_output_dir),
+            *_config_file_args(config),
         )
         print(f"--- {repo.label.upper()} ---", flush=True)
         print(f"--- {repo.label} calibration started ---", flush=True)
@@ -2152,7 +2166,16 @@ def summarize_profile(profile: Path, *, limit: int = 20) -> list[dict[str, objec
     list[dict[str, object]]
         Summary rows sorted by cumulative time.
     """
-    stats = pstats.Stats(str(profile))
+    try:
+        stats = pstats.Stats(str(profile))
+    except (EOFError, OSError, ValueError) as exc:
+        return [
+            {
+                "status": "unreadable",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+        ]
     raw_stats = cast(
         "dict[tuple[str, int, str], tuple[int, int, float, float, object]]",
         stats.stats,  # type: ignore[attr-defined]
@@ -2174,6 +2197,31 @@ def summarize_profile(profile: Path, *, limit: int = 20) -> list[dict[str, objec
         }
         for (file_name, line, function), values in rows
     ]
+
+
+def cleanup_index_artifacts(
+    repo: ResolvedRepositoryBenchmark,
+    config: CampaignConfig,
+) -> None:
+    """
+    Remove bulky per-repository index artifacts after result extraction.
+
+    Parameters
+    ----------
+    repo : ResolvedRepositoryBenchmark
+        Repository benchmark target whose index directory may be removed.
+    config : CampaignConfig
+        Campaign configuration controlling retention behavior.
+
+    Returns
+    -------
+    None
+        The index directory is removed unless explicit retention is enabled.
+    """
+
+    if config.keep_indexes:
+        return
+    shutil.rmtree(index_output_dir(repo, config), ignore_errors=True)
 
 
 def _run_command(command: tuple[str, ...], *, output_log: Path) -> int:
@@ -2294,6 +2342,7 @@ def main() -> int:
         warmup=int(args.warmup),
         dry_run=bool(args.dry_run),
         continue_on_error=bool(args.continue_on_error),
+        keep_indexes=bool(args.keep_indexes),
         config_file=None
         if args.config_file is None
         else Path(args.config_file).expanduser().resolve(),
@@ -2330,6 +2379,7 @@ def main() -> int:
     repositories_by_key = {
         (repo.category, repo.label): repo for repo in resolved_repositories
     }
+    repositories_by_label = {repo.label: repo for repo in resolved_repositories}
     for row in plan:
         repo_started_at = time.perf_counter()
         commands = row["commands"]
@@ -2397,6 +2447,11 @@ def main() -> int:
             label,
             elapsed_seconds=time.perf_counter() - repo_started_at,
         )
+        if category:
+            resolved_repo = repositories_by_key[(category, label)]
+        else:
+            resolved_repo = repositories_by_label[label]
+        cleanup_index_artifacts(resolved_repo, config)
 
     profile_summaries = {
         str(profile): summarize_profile(profile)

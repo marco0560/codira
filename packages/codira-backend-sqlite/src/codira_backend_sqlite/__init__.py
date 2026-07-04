@@ -67,6 +67,31 @@ from codira_backend_sqlite.sqlite_support import (
 )
 from codira_backend_sqlite.sqlite_storage import get_db_path, init_db
 
+_SQLITE_QUERY_PARAMETER_CHUNK_SIZE = 900
+
+
+def _chunks(items: Sequence[str], size: int) -> tuple[tuple[str, ...], ...]:
+    """
+    Split values into bounded SQLite parameter batches.
+
+    Parameters
+    ----------
+    items : collections.abc.Sequence[str]
+        Ordered values to split.
+    size : int
+        Maximum number of values per batch.
+
+    Returns
+    -------
+    tuple[tuple[str, ...], ...]
+        Non-empty chunks preserving input order.
+    """
+
+    return tuple(
+        tuple(items[index : index + size]) for index in range(0, len(items), size)
+    )
+
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from collections.abc import Sequence
@@ -2107,26 +2132,33 @@ class SQLiteIndexBackend:
             stable_ids = list(
                 dict.fromkeys(score.stable_id for score in request.scores)
             )
-            placeholders = ",".join("?" for _item in stable_ids)
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
-            rows = conn.execute(
-                f"""
-                SELECT s.stable_id, s.type, s.module_name, s.name, f.path, s.lineno
-                FROM symbol_index s
-                JOIN files f ON s.file_id = f.id
-                WHERE s.stable_id IN ({placeholders})
-                {prefix_sql}
-                ORDER BY s.stable_id
-                """,
-                (*stable_ids, *prefix_params),
-            ).fetchall()
+            rows: list[sqlite3.Row | tuple[object, ...]] = []
+            for stable_id_chunk in _chunks(
+                stable_ids,
+                _SQLITE_QUERY_PARAMETER_CHUNK_SIZE,
+            ):
+                placeholders = ",".join("?" for _item in stable_id_chunk)
+                rows.extend(
+                    conn.execute(
+                        f"""
+                        SELECT s.stable_id, s.type, s.module_name, s.name, f.path, s.lineno
+                        FROM symbol_index s
+                        JOIN files f ON s.file_id = f.id
+                        WHERE s.stable_id IN ({placeholders})
+                        {prefix_sql}
+                        ORDER BY s.stable_id
+                        """,
+                        (*stable_id_chunk, *prefix_params),
+                    ).fetchall()
+                )
             rows_by_stable_id: dict[str, SymbolRow] = {
                 str(stable_id): (
                     str(symbol_type),
                     str(module_name),
                     str(symbol_name),
                     str(file_path),
-                    int(lineno),
+                    int(str(lineno)),
                 )
                 for stable_id, symbol_type, module_name, symbol_name, file_path, lineno in rows
             }
@@ -2178,36 +2210,43 @@ class SQLiteIndexBackend:
             stable_ids = list(
                 dict.fromkeys(score.stable_id for score in request.scores)
             )
-            placeholders = ",".join("?" for _item in stable_ids)
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
-            rows = conn.execute(
-                f"""
-                SELECT
-                    d.stable_id,
-                    d.kind,
-                    d.source_format,
-                    f.path,
-                    d.lineno,
-                    d.end_lineno,
-                    d.title,
-                    d.heading_path,
-                    d.text
-                FROM documentation_artifacts d
-                JOIN files f ON d.file_id = f.id
-                WHERE d.stable_id IN ({placeholders})
-                {prefix_sql}
-                ORDER BY d.stable_id
-                """,
-                (*stable_ids, *prefix_params),
-            ).fetchall()
+            rows: list[sqlite3.Row | tuple[object, ...]] = []
+            for stable_id_chunk in _chunks(
+                stable_ids,
+                _SQLITE_QUERY_PARAMETER_CHUNK_SIZE,
+            ):
+                placeholders = ",".join("?" for _item in stable_id_chunk)
+                rows.extend(
+                    conn.execute(
+                        f"""
+                        SELECT
+                            d.stable_id,
+                            d.kind,
+                            d.source_format,
+                            f.path,
+                            d.lineno,
+                            d.end_lineno,
+                            d.title,
+                            d.heading_path,
+                            d.text
+                        FROM documentation_artifacts d
+                        JOIN files f ON d.file_id = f.id
+                        WHERE d.stable_id IN ({placeholders})
+                        {prefix_sql}
+                        ORDER BY d.stable_id
+                        """,
+                        (*stable_id_chunk, *prefix_params),
+                    ).fetchall()
+                )
             rows_by_stable_id: dict[str, DocumentationRow] = {
                 str(stable_id): (
                     str(stable_id),
                     str(kind),
                     str(source_format),
                     str(file_path),
-                    int(lineno),
-                    None if end_lineno is None else int(end_lineno),
+                    int(str(lineno)),
+                    None if end_lineno is None else int(str(end_lineno)),
                     str(title),
                     tuple(str(part) for part in json.loads(str(heading_path))),
                     str(text),
