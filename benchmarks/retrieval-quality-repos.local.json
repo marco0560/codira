@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "repositories": [
+    {
+      "label": "requests",
+      "category": "small",
+      "path": "/home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/requests",
+      "github_owner": "psf",
+      "github_repo": "requests",
+      "default_branch": "main"
+    },
+    {
+      "label": "nvm",
+      "category": "medium",
+      "path": "/home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/nvm",
+      "github_owner": "nvm-sh",
+      "github_repo": "nvm",
+      "default_branch": "master"
+    },
+    {
+      "label": "ohmyzsh",
+      "category": "medium",
+      "path": "/home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/ohmyzsh",
+      "github_owner": "ohmyzsh",
+      "github_repo": "ohmyzsh",
+      "default_branch": "master"
+    },
+    {
+      "label": "fmt",
+      "category": "medium",
+      "path": "/home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/fmt",
+      "github_owner": "fmtlib",
+      "github_repo": "fmt",
+      "default_branch": "master"
+    },
+    {
+      "label": "Catch2",
+      "category": "large",
+      "path": "/home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/Catch2",
+      "github_owner": "catchorg",
+      "github_repo": "Catch2",
+      "default_branch": "devel"
+    },
+    {
+      "label": "tree-sitter-c",
+      "category": "large",
+      "path": "/home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/tree-sitter-c",
+      "github_owner": "tree-sitter",
+      "github_repo": "tree-sitter-c",
+      "default_branch": "master"
+    },
+    {
+      "label": "tree-sitter-python",
+      "category": "large",
+      "path": "/home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/tree-sitter-python",
+      "github_owner": "tree-sitter",
+      "github_repo": "tree-sitter-python",
+      "default_branch": "master"
+    },
+    {
+      "label": "redis",
+      "category": "huge",
+      "path": "/home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/redis",
+      "github_owner": "redis",
+      "github_repo": "redis",
+      "default_branch": "unstable"
+    },
+    {
+      "label": "postgres",
+      "category": "huge",
+      "path": "/home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/postgres",
+      "github_owner": "postgres",
+      "github_repo": "postgres",
+      "default_branch": "master"
+    },
+    {
+      "label": "cpython",
+      "category": "huge",
+      "path": "/home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/cpython",
+      "github_owner": "python",
+      "github_repo": "cpython",
+      "default_branch": "main"
+    },
+    {
+      "label": "llvm-project",
+      "category": "huge",
+      "path": "/home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/llvm-project",
+      "github_owner": "llvm",
+      "github_repo": "llvm-project",
+      "default_branch": "main"
+    },
+    {
+      "label": "official-images",
+      "category": "small",
+      "path": "/home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/official-images",
+      "github_owner": "docker-library",
+      "github_repo": "official-images",
+      "default_branch": "master"
+    },
+    {
+      "label": "codira",
+      "category": "small",
+      "path": "/home/marco/Personalia/Progetti/Software/Python/codira",
+      "github_owner": "marco0560",
+      "github_repo": "codira",
+      "default_branch": "main"
+    },
+    {
+      "label": "Fontshow",
+      "category": "medium",
+      "path": "/home/marco/Personalia/Progetti/Software/Python/Fontshow"
+    },
+    {
+      "label": "chatops",
+      "category": "medium",
+      "path": "/home/marco/Personalia/Progetti/Tools/chatops"
+    },
+    {
+      "label": "sanikey",
+      "category": "medium",
+      "path": "/home/marco/Personalia/Progetti/Software/Python/sanikey"
+    }
+  ]
+}

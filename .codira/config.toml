@@ -1,7 +1,12 @@
 # config_version = 1
 
 [backend]
-# name = "sqlite"
+# Provisional sweet spot while the torture campaign is still running.
+# Rationale: bge-small-en-v1.5 ONNX has completed the full torture matrix
+# safely so far and is the best current speed/footprint candidate for this
+# workstation. Revisit after .artifacts/final-embedding-model-campaign/
+# 20260701T045905 completes.
+name = "sqlite"
 
 [plugins]
 # disable_third_party = false
@@ -9,13 +14,13 @@
 
 [embeddings]
 # enabled = true
-# engine = "sentence-transformers"
-# vector_store = "sqlite"
-# model = "sentence-transformers/all-MiniLM-L6-v2"
+engine = "onnx"
+vector_store = "sqlite"
+model = "BAAI/bge-small-en-v1.5"
 # version = "1"
 # dimension = 384
 # device = "cpu"
-# batch_size = 32
+batch_size = 8
 # torch_num_threads = 0
 # torch_num_interop_threads = 0
 
@@ -27,6 +32,7 @@
 # mode = "immediate"
 # object_types = ["symbol", "documentation"]
 # max_text_chars = 0
+work_batch_multiplier = 256
 # include_paths = []
 # exclude_paths = []
 
@@ -42,12 +48,14 @@
 
 [plugins.embedding-onnx]
 # enabled = true
-# provider = "CPUExecutionProvider"
-# precision = "float32"
-# normalize = true
-# max_tokens = 512
-# intra_op_num_threads = 0
-# inter_op_num_threads = 0
+provider = "CPUExecutionProvider"
+precision = "float32"
+model_path = ".codira/models/bge-small-en-v1.5/model.onnx"
+tokenizer_path = ".codira/models/bge-small-en-v1.5/tokenizer.json"
+normalize = true
+max_tokens = 512
+intra_op_num_threads = 4
+inter_op_num_threads = 1
 
 [plugins.vector-store-sqlite]
 # enabled = true

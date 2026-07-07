@@ -168,6 +168,53 @@ times `emb` and `ctx` queries. Results are written under
 `intra_op_num_threads`, `inter_op_num_threads`, and optional
 `max_text_chars`.
 
+## `scripts/build_retrieval_quality_dataset.py`
+
+Build a labeled retrieval-quality dataset from GitHub pull requests when a
+repository manifest provides `github_owner`/`github_repo`, and from local Git
+commit history as the deterministic fallback:
+
+```bash
+uv run python -m scripts.build_retrieval_quality_dataset \
+  --repo-manifest benchmarks/retrieval-quality-repos.local.json \
+  --output .artifacts/retrieval-quality/dataset.jsonl
+```
+
+The generated JSONL rows contain a natural-language query and expected
+repo-relative paths. GitHub PR examples use the PR title/body as the query and
+the changed files as labels. Git commit examples use the commit subject/body as
+the query and changed files as labels. The script writes only the requested
+dataset file and does not index repositories.
+
+Use `--source github` to require GitHub-backed rows only, or `--source git` to
+avoid network access entirely. GitHub collection uses the operator's existing
+`gh` authentication.
+
+## `scripts/run_retrieval_quality_benchmark.py`
+
+Run model quality measurements against a dataset produced by
+`scripts/build_retrieval_quality_dataset.py`:
+
+```bash
+uv run python -m scripts.run_retrieval_quality_benchmark \
+  --dataset .artifacts/retrieval-quality/dataset.jsonl \
+  --repo-manifest benchmarks/retrieval-quality-repos.local.json \
+  --model-manifest benchmarks/embedding-model-candidates.json \
+  --backend sqlite \
+  --top-k 10
+```
+
+The runner writes generated configs, isolated `.codira` output directories,
+logs, `results.jsonl`, `summary.json`, and `report.md` under
+`.artifacts/retrieval-quality/<timestamp>/`. It uses `codira emb` by default
+and records `Recall@K`, `MRR@K`, `nDCG@K`, hit rate, index time, and query
+time. Add `--include-ctx` only when the mixed `ctx` retrieval behavior is also
+part of the quality question.
+
+This benchmark performs full indexing unless `--no-full` is supplied. Do not
+run it during another large campaign unless CPU, RAM, and disk contention are
+acceptable.
+
 ## `scripts/embedding_engine_matrix_plan.py`
 
 Build a deterministic dry-run JSON plan for the long embedding engine/model
