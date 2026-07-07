@@ -1,3 +1,10 @@
+# [1.48.0](https://github.com/marco0560/codira/compare/v1.47.2...v1.48.0) (2026-07-07)
+
+
+### Features
+
+* **embeddings:** add retrieval quality benchmark tooling ([84b1435](https://github.com/marco0560/codira/commit/84b1435f4f7dd384d14d8656a7b65e2febcea2ec))
+
 ## [1.47.2](https://github.com/marco0560/codira/compare/v1.47.1...v1.47.2) (2026-07-04)
 
 
