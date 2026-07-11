@@ -1,3 +1,10 @@
+## [1.48.1](https://github.com/marco0560/codira/compare/v1.48.0...v1.48.1) (2026-07-11)
+
+
+### Performance Improvements
+
+* **embeddings:** tune local ONNX quality baseline ([9856913](https://github.com/marco0560/codira/commit/9856913434a0541f6d9a774bc32f31f11c2c5b42))
+
 # [1.48.0](https://github.com/marco0560/codira/compare/v1.47.2...v1.48.0) (2026-07-07)
 
 
