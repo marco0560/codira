@@ -23,6 +23,7 @@ from scripts.run_final_embedding_model_campaign import (
     read_models,
     read_repositories,
     render_model_config,
+    safe_embedding_batch_size,
 )
 from scripts.scriptlib import resolve_codira, safe_slug
 
@@ -237,7 +238,7 @@ def render_variant_config(model: ModelEntry, variant: OnnxVariant, backend: str)
 
     rendered = render_model_config(model_for_variant(model, variant), backend)
     rendered = rendered.replace(
-        f"batch_size = {8 if model.dimension < 768 else 1}",
+        f"batch_size = {safe_embedding_batch_size(model)}",
         f"batch_size = {variant.batch_size}",
         1,
     )

@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from scripts import run_onnx_parameter_sweep as onnx_sweep
-from scripts.run_final_embedding_model_campaign import ModelEntry
+from scripts.run_final_embedding_model_campaign import (
+    ModelEntry,
+    safe_embedding_batch_size,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -132,6 +135,24 @@ def test_model_for_variant_applies_onnx_overrides() -> None:
     assert model.config["max_tokens"] == 256
     assert model.config["intra_op_num_threads"] == 4
     assert model.config["inter_op_num_threads"] == 1
+
+
+def test_campaign_uses_tuned_onnx_batch_size() -> None:
+    """
+    Use the measured 384-dimensional ONNX campaign batch default.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the campaign generator defaults to the tuned ONNX
+        batch size for small embedding models.
+    """
+
+    assert safe_embedding_batch_size(_onnx_model()) == 4
 
 
 def test_render_variant_config_includes_runtime_knobs() -> None:

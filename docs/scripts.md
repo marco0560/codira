@@ -260,7 +260,7 @@ The wrapper applies conservative benchmark defaults for large embedding models:
 `[embeddings.indexing].max_text_chars = 2000`,
 `[embeddings.indexing].work_batch_multiplier = 256`, Torch threads `4/1`, and
 ONNX thread limits `intra_op_num_threads = 4` plus `inter_op_num_threads = 1`.
-384-dimensional ONNX candidates use `batch_size = 8`; 384-dimensional
+384-dimensional ONNX candidates use `batch_size = 4`; 384-dimensional
 SentenceTransformers candidates use `batch_size = 32`.
 
 ## `scripts/benchmark_index.py`

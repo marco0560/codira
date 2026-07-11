@@ -263,7 +263,7 @@ def safe_embedding_batch_size(model: ModelEntry) -> int:
     if model.dimension >= 768:
         return 1
     if model.engine == "onnx":
-        return 8
+        return 4
     return 32
 
 

@@ -131,10 +131,11 @@ matching files from embedding computation.
 ## Repository Performance Profile
 
 This repository commits an explicit `.codira/config.toml` tuned from the
-Issue #57 backend and embedding matrix:
+Issue #57 backend matrix, final embedding campaigns, and ONNX parameter
+sweeps:
 
-- `backend.name = "duckdb"` selects the backend with the strongest measured
-  read/query performance on the bk-cpp benchmark set.
+- `backend.name = "sqlite"` selects the backend with the best measured
+  weighted operational cost for the current ONNX profile on this workstation.
 - `embeddings.indexing.mode = "immediate"` keeps the clean matrix path as the
   default indexing mode. Deferred mode remains available for operators who
   explicitly want a two-step structural/indexing workflow.
@@ -147,9 +148,11 @@ Issue #57 backend and embedding matrix:
 - `embeddings.indexing.work_batch_multiplier = 256` caps the memory footprint
   of full-index embedding work while staying aligned with the configured model
   inference batch size.
-- `embeddings.batch_size = 32` and zero Torch thread overrides preserve the
-  current portable defaults. Host-local calibration can still override them
-  through config, CLI flags, or environment variables.
+- `embeddings.engine = "onnx"`, `embeddings.model = "BAAI/bge-small-en-v1.5"`,
+  `embeddings.batch_size = 4`, and ONNX Runtime default thread counts are the
+  current measured local sweet spot. They minimize weighted full-index plus
+  query cost in the 2026-07 ONNX sweep while keeping query latency close to
+  the fastest tested variant.
 
 The embedding matrix is hardware-sensitive because embedding throughput,
 DuckDB memory pressure, and Torch scheduling depend on CPU, RAM, GPU, and
