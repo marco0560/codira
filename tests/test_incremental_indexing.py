@@ -2596,7 +2596,8 @@ def test_index_repo_recomputes_embeddings_when_backend_changes(
 
     assert report.indexed == 1
     assert report.reused == 0
-    assert report.embeddings_recomputed > 0
+    assert report.embeddings_recomputed == 0
+    assert report.embeddings_reused == 2
     assert versions == [("2",)]
 
 

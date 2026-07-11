@@ -42,8 +42,6 @@ from codira.prefix import normalize_prefix, prefix_clause
 from codira.plugin_config import analyzer_inventory_discovery_json, plugin_json_schema
 from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
-    deserialize_vector,
-    embed_text,
     embedding_work_batch_size,
     get_embedding_backend,
 )
@@ -54,7 +52,6 @@ from codira_backend_sqlite.sqlite_support import (
     _count_reused_embeddings,
     _current_embedding_state_matches,
     _delete_indexed_file_data,
-    _dot_similarity,
     _flush_pending_embedding_rows,
     _load_existing_file_hashes,
     _load_existing_file_ownership,
@@ -1945,86 +1942,9 @@ class SQLiteIndexBackend:
             Ranked symbol candidates ordered by descending similarity and stable
             symbol identity.
         """
-        root = request.root
-        query = request.query
-        limit = request.limit
-        min_score = request.min_score
-        prefix = request.prefix
-        conn = cast("sqlite3.Connection | None", request.conn)
-        owns_connection = conn is None
-        normalized_prefix = normalize_prefix(root, prefix)
-        if conn is None:
-            conn = self.open_connection(root)
+        from codira.semantic.search import embedding_candidates
 
-        backend = get_embedding_backend(root=root)
-        query_vector = embed_text(query, root=root)
-        if not any(query_vector):
-            return []
-
-        try:
-            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
-            # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
-            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-            rows = conn.execute(
-                f"""
-                SELECT
-                    s.type,
-                    s.module_name,
-                    s.name,
-                    f.path,
-                    s.lineno,
-                    e.version,
-                    e.dim,
-                    e.vector
-                FROM embeddings e
-                JOIN symbol_index s
-                  ON e.object_type = 'symbol'
-                 AND e.object_id = s.id
-                JOIN files f
-                  ON s.file_id = f.id
-                WHERE e.backend = ? AND e.version = ?
-                {prefix_sql}
-                ORDER BY s.module_name, s.name, f.path, s.lineno, s.type
-                """,
-                (backend.name, backend.version, *prefix_params),
-            ).fetchall()
-
-            results: ChannelResults = []
-
-            for row in rows:
-                symbol: SymbolRow = (
-                    str(row[0]),
-                    str(row[1]),
-                    str(row[2]),
-                    str(row[3]),
-                    int(row[4]),
-                )
-                version = str(row[5])
-                dim = int(row[6])
-                blob = bytes(row[7])
-                if version != backend.version or dim != backend.dim:
-                    continue
-
-                score = _dot_similarity(query_vector, deserialize_vector(blob, dim=dim))
-                if score < min_score:
-                    continue
-
-                results.append((score, symbol))
-
-            results.sort(
-                key=lambda item: (
-                    -item[0],
-                    item[1][1],
-                    item[1][2],
-                    item[1][3],
-                    item[1][4],
-                    item[1][0],
-                )
-            )
-            return results[:limit]
-        finally:
-            if owns_connection:
-                conn.close()
+        return embedding_candidates(request)
 
     def documentation_candidates(
         self,
@@ -2043,89 +1963,9 @@ class SQLiteIndexBackend:
         codira.types.DocumentationChannelResults
             Ranked documentation candidates ordered deterministically.
         """
-        root = request.root
-        query = request.query
-        limit = request.limit
-        min_score = request.min_score
-        prefix = request.prefix
-        conn = cast("sqlite3.Connection | None", request.conn)
-        owns_connection = conn is None
-        normalized_prefix = normalize_prefix(root, prefix)
-        if conn is None:
-            conn = self.open_connection(root)
+        from codira.semantic.search import documentation_candidates
 
-        backend = get_embedding_backend(root=root)
-        query_vector = embed_text(query, root=root)
-        if not any(query_vector):
-            return []
-
-        try:
-            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
-            # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
-            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-            rows = conn.execute(
-                f"""
-                SELECT
-                    d.stable_id,
-                    d.kind,
-                    d.source_format,
-                    f.path,
-                    d.lineno,
-                    d.end_lineno,
-                    d.title,
-                    d.heading_path,
-                    d.text,
-                    e.version,
-                    e.dim,
-                    e.vector
-                FROM embeddings e
-                JOIN documentation_artifacts d
-                  ON e.object_type = 'documentation'
-                 AND e.object_id = d.id
-                JOIN files f
-                  ON d.file_id = f.id
-                WHERE e.backend = ? AND e.version = ?
-                {prefix_sql}
-                ORDER BY f.path, d.lineno, d.stable_id
-                """,
-                (backend.name, backend.version, *prefix_params),
-            ).fetchall()
-
-            results: DocumentationChannelResults = []
-            for row in rows:
-                version = str(row[9])
-                dim = int(row[10])
-                blob = bytes(row[11])
-                if version != backend.version or dim != backend.dim:
-                    continue
-                score = _dot_similarity(query_vector, deserialize_vector(blob, dim=dim))
-                if score < min_score:
-                    continue
-                documentation: DocumentationRow = (
-                    str(row[0]),
-                    str(row[1]),
-                    str(row[2]),
-                    str(row[3]),
-                    int(row[4]),
-                    None if row[5] is None else int(row[5]),
-                    str(row[6]),
-                    tuple(str(part) for part in json.loads(str(row[7]))),
-                    str(row[8]),
-                )
-                results.append((score, documentation))
-
-            results.sort(
-                key=lambda item: (
-                    -item[0],
-                    item[1][3],
-                    item[1][4],
-                    item[1][0],
-                )
-            )
-            return results[:limit]
-        finally:
-            if owns_connection:
-                conn.close()
+        return documentation_candidates(request)
 
     def resolve_embedding_scores(
         self,

@@ -2057,8 +2057,8 @@ def _flush_embedding_rows(
             and reusable_row.content_hash == content_hash
             and reusable_row.dim == backend.dim
         ):
-            prepared_rows.append((row, content_hash, reusable_row.vector))
-            reused += 1
+            prepared_rows.append((row, content_hash, None))
+            recomputed += 1
         else:
             prepared_rows.append((row, content_hash, None))
             recomputed += 1
@@ -2077,10 +2077,15 @@ def _flush_embedding_rows(
         for row, content_hash, stored_vector in prepared_rows
         if stored_vector is None
     ]
-    cached_vectors = _load_cached_embedding_vectors(
-        conn,
-        backend=backend,
-        content_hashes=missing_hashes,
+    cached_vectors = (
+        {}
+        if (root is None or vector_store is None or vector_set_identity is None)
+        else vector_store.load_cached_vectors(
+            root,
+            vector_set_identity,
+            missing_hashes,
+            {} if vector_store_config is None else vector_store_config,
+        )
     )
     if cached_vectors:
         resolved_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
@@ -2164,88 +2169,6 @@ def _store_pending_embedding_rows(
                 row.text,
             )
             for row, content_hash, _stored_vector in prepared_rows
-        ],
-    )
-
-
-def _load_cached_embedding_vectors(
-    conn: sqlite3.Connection,
-    *,
-    backend: EmbeddingBackendSpec,
-    content_hashes: list[str],
-) -> dict[str, bytes]:
-    """
-    Load reusable vectors from the persistent embedding vector cache.
-
-    Parameters
-    ----------
-    conn : sqlite3.Connection
-        Open database connection.
-    backend : EmbeddingBackendSpec
-        Active embedding backend metadata.
-    content_hashes : list[str]
-        Candidate content hashes to load.
-
-    Returns
-    -------
-    dict[str, bytes]
-        Cached serialized vectors keyed by content hash.
-    """
-
-    ordered_hashes = list(dict.fromkeys(content_hashes))
-    if not ordered_hashes:
-        return {}
-    placeholders = ",".join("?" for _item in ordered_hashes)
-    rows = conn.execute(
-        f"""
-        SELECT content_hash, vector
-        FROM embedding_vector_cache
-        WHERE backend = ?
-          AND version = ?
-          AND dim = ?
-          AND content_hash IN ({placeholders})
-        """,
-        (backend.name, backend.version, backend.dim, *ordered_hashes),
-    ).fetchall()
-    return {str(content_hash): bytes(vector) for content_hash, vector in rows}
-
-
-def _store_cached_embedding_vectors(
-    conn: sqlite3.Connection,
-    *,
-    backend: EmbeddingBackendSpec,
-    encoded_vectors: dict[str, bytes],
-) -> None:
-    """
-    Persist newly encoded vectors in the embedding vector cache.
-
-    Parameters
-    ----------
-    conn : sqlite3.Connection
-        Open database connection.
-    backend : EmbeddingBackendSpec
-        Active embedding backend metadata.
-    encoded_vectors : dict[str, bytes]
-        Serialized vectors keyed by content hash.
-
-    Returns
-    -------
-    None
-        Cache rows are inserted or replaced in place.
-    """
-
-    if not encoded_vectors:
-        return
-    conn.executemany(
-        """
-        INSERT OR REPLACE INTO embedding_vector_cache(
-            backend, version, dim, content_hash, vector
-        )
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        [
-            (backend.name, backend.version, backend.dim, content_hash, vector)
-            for content_hash, vector in sorted(encoded_vectors.items())
         ],
     )
 
@@ -2420,12 +2343,6 @@ def _flush_prepared_embedding_rows(
             strict=True,
         ):
             encoded_vectors[content_hash] = serialize_vector(vector)
-        _store_cached_embedding_vectors(
-            conn,
-            backend=backend,
-            encoded_vectors=encoded_vectors,
-        )
-
     insert_rows: list[tuple[str, int, str, str, str, int, bytes]] = []
     materialized_rows: list[PreparedVectorRow] = []
     for row, content_hash, stored_vector in deduplicated_rows:
@@ -2448,7 +2365,7 @@ def _flush_prepared_embedding_rows(
                 backend.version,
                 content_hash,
                 backend.dim,
-                resolved_blob,
+                b"",
             )
         )
     conn.executemany(
@@ -2609,10 +2526,16 @@ def _process_pending_embedding_rows(
         )
         for object_type, object_id, stable_id, content_hash, text in rows
     ]
-    cached_vectors = _load_cached_embedding_vectors(
-        conn,
-        backend=backend,
-        content_hashes=[content_hash for _row, content_hash, _vector in pending_rows],
+    content_hashes = [content_hash for _row, content_hash, _vector in pending_rows]
+    cached_vectors = (
+        {}
+        if vector_store is None or vector_set_identity is None
+        else vector_store.load_cached_vectors(
+            root,
+            vector_set_identity,
+            content_hashes,
+            {} if vector_store_config is None else vector_store_config,
+        )
     )
     prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
     recomputed = 0
@@ -2916,25 +2839,6 @@ def _persist_runtime_inventory(
                 analyzer_inventory_discovery_json(analyzer),
             ),
         )
-
-
-def _dot_similarity(left: list[float], right: list[float]) -> float:
-    """
-    Compute a dot-product similarity between normalized vectors.
-
-    Parameters
-    ----------
-    left : list[float]
-        Left embedding vector.
-    right : list[float]
-        Right embedding vector.
-
-    Returns
-    -------
-    float
-        Dot-product similarity score.
-    """
-    return sum(a * b for a, b in zip(left, right, strict=True))
 
 
 def _placeholders(values: list[int]) -> str:

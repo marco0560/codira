@@ -13,12 +13,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from codira.contracts import (
-    BackendDocumentationCandidatesRequest,
-    BackendEmbeddingCandidatesRequest,
     BackendError,
     BackendPersistAnalysisRequest,
+    BackendResolveDocumentationScoresRequest,
+    BackendResolveEmbeddingScoresRequest,
     BackendRuntimeInventoryRequest,
     PendingEmbeddingRow,
+    VectorSimilarityScore,
 )
 from codira.models import (
     AnalysisResult,
@@ -45,7 +46,6 @@ from codira_backend_duckdb.duckdb_support import _delete_pending_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_pending_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_pending_reference_scan_rows
 from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
-from codira_backend_duckdb.duckdb_support import _store_cached_embedding_vectors
 from codira_backend_duckdb.duckdb_support import _store_pending_embedding_rows
 from codira_backend_duckdb.profiling import (
     DuckDBProfileRecorder,
@@ -520,7 +520,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.50.1"
+    assert project["project"]["version"] == "1.50.2"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "duckdb>=1.4,<2.0",
@@ -755,10 +755,6 @@ def test_duckdb_sql_classifier_names_hotspot_tables() -> None:
     assert (
         classify_sql_statement("INSERT INTO call_records(file_id) SELECT 1")
         == "sql.insert.call_records"
-    )
-    assert (
-        classify_sql_statement("INSERT OR REPLACE INTO embedding_vector_cache")
-        == "sql.insert_or_replace.embedding_vector_cache"
     )
     assert classify_sql_statement("SELECT * FROM read_csv(?)") == "sql.read_csv"
 
@@ -1583,18 +1579,6 @@ def test_duckdb_backend_full_prepare_clears_populated_database_in_session(
             ) VALUES (1, 1, 1, 'method', 1, 1, NULL, NULL, 0, 1, 1)
             """
         )
-        raw.execute(
-            """
-            INSERT INTO embedding_vector_cache(
-                backend,
-                version,
-                dim,
-                content_hash,
-                vector
-            ) VALUES ('test-backend', '1', 384, 'stable-hash', ?)
-            """,
-            (b"stable-vector",),
-        )
         raw.commit()
     finally:
         raw.close()
@@ -1614,15 +1598,12 @@ def test_duckdb_backend_full_prepare_clears_populated_database_in_session(
         assert reopened.execute("SELECT COUNT(*) FROM classes").fetchone() == (0,)
         assert reopened.execute("SELECT COUNT(*) FROM functions").fetchone() == (0,)
         assert reopened.execute(
-            "SELECT COUNT(*) FROM embedding_vector_cache"
-        ).fetchone() == (1,)
-        assert reopened.execute(
             """
-                SELECT vector
-                FROM embedding_vector_cache
-                WHERE content_hash = 'stable-hash'
+                SELECT COUNT(*)
+                FROM duckdb_tables()
+                WHERE table_name = 'embedding_vector_cache'
                 """
-        ).fetchone() == (b"stable-vector",)
+        ).fetchone() == (0,)
         assert reopened.execute(
             """
                 SELECT COUNT(*)
@@ -2355,7 +2336,7 @@ def test_duckdb_backend_persist_analysis_with_shared_connection_uses_real_driver
     assert stored_row == (str(tmp_path / "pkg" / "sample.py"),)
     assert stored_embedding is not None
     stored_vector_values = cast("object", stored_embedding[0])
-    assert stored_vector_values == [0.0] * 384
+    assert stored_vector_values is None
     connection.close()
 
 
@@ -2574,7 +2555,7 @@ def test_duckdb_pending_embeddings_replace_duplicate_documentation_keys(
         "1",
         "latest-hash",
     )
-    assert cast("object", stored_rows[0][5]) == [1.0] + [0.0] * 383
+    assert cast("object", stored_rows[0][5]) is None
 
 
 def test_duckdb_pending_embedding_flush_respects_work_batch_size(
@@ -2717,13 +2698,6 @@ def test_duckdb_embedding_queue_helpers_use_registered_batches(
         prepared_rows=prepared_rows,
         backend=backend,
     )
-    _store_cached_embedding_vectors(
-        cast("_DuckDBPersistenceConnection", conn),
-        backend=backend,
-        encoded_vectors={
-            f"hash-{index}": bytes([index, index + 1]) for index in range(5)
-        },
-    )
     _delete_pending_embedding_rows(
         cast("_DuckDBPersistenceConnection", conn),
         prepared_rows=prepared_rows,
@@ -2737,132 +2711,31 @@ def test_duckdb_embedding_queue_helpers_use_registered_batches(
         "REGISTER __codira_pending_embedding_queue_rows",
         "REGISTER __codira_pending_embedding_queue_rows",
         "REGISTER __codira_pending_embedding_queue_rows",
-        "REGISTER __codira_embedding_vector_cache_rows",
-        "REGISTER __codira_embedding_vector_cache_rows",
-        "REGISTER __codira_embedding_vector_cache_rows",
         "REGISTER __codira_pending_embedding_delete_rows",
         "REGISTER __codira_pending_embedding_delete_rows",
         "REGISTER __codira_pending_embedding_delete_rows",
     ]
 
 
-def test_duckdb_embedding_batch_failures_raise_backend_error() -> None:
-    """
-    Wrap DuckDB embedding batch failures with operator diagnostics.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts batch operation failures expose operation, row-count,
-        and payload-size context.
-    """
-    conn = _FailingExecuteDuckDBConnection()
-    backend = EmbeddingBackendSpec(name="test-backend", version="1", dim=2)
-
-    with pytest.raises(BackendError) as exc_info:
-        _store_cached_embedding_vectors(
-            cast("_DuckDBPersistenceConnection", conn),
-            backend=backend,
-            encoded_vectors={"hash": b"\x00\x01"},
-        )
-
-    message = str(exc_info.value)
-    assert "operation=embedding_vector_cache_insert" in message
-    assert "rows=1" in message
-    assert "approx_payload_bytes=" in message
-    assert isinstance(exc_info.value.__cause__, RuntimeError)
-    assert ("UNREGISTER __codira_embedding_vector_cache_rows", None) in conn.executed
-
-
-def test_duckdb_cached_embedding_vectors_persist_with_chunking(
-    monkeypatch: pytest.MonkeyPatch,
+def test_duckdb_resolve_embedding_scores_uses_vector_store_scores(
     tmp_path: Path,
 ) -> None:
     """
-    Persist cached DuckDB embedding vectors through chunked Arrow batches.
+    Resolve DuckDB embedding candidates from vector-store scores.
 
     Parameters
     ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to force multiple vector-cache chunks.
     tmp_path : pathlib.Path
         Temporary repository root.
 
     Returns
     -------
     None
-        The test asserts vector-cache rows are written once across multiple
-        chunks.
-    """
-    pytest.importorskip("duckdb")
-    monkeypatch.setattr(
-        duckdb_support_module,
-        "_DUCKDB_EMBEDDING_BATCH_ROWS",
-        3,
-    )
-    backend = DuckDBIndexBackend()
-    connection = backend.open_connection(tmp_path)
-    try:
-        _store_cached_embedding_vectors(
-            cast("_DuckDBPersistenceConnection", connection),
-            backend=EmbeddingBackendSpec(
-                name="test-backend",
-                version="1",
-                dim=2,
-            ),
-            encoded_vectors={
-                f"hash-{index}": bytes([index, index + 1]) for index in range(7)
-            },
-        )
-        rows = connection.execute(
-            """
-            SELECT content_hash, vector
-            FROM embedding_vector_cache
-            ORDER BY content_hash
-            """
-        ).fetchall()
-    finally:
-        connection.close()
-
-    assert len(rows) == 7
-    assert rows[0] == ("hash-0", b"\x00\x01")
-    assert rows[-1] == ("hash-6", b"\x06\x07")
-
-
-def test_duckdb_embedding_candidates_use_stored_vector_values(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """
-    Score DuckDB embedding candidates through stored list vectors.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to replace embedding generation and reject blob fallback.
-    tmp_path : pathlib.Path
-        Temporary repository root.
-
-    Returns
-    -------
-    None
-        The test asserts DuckDB can rank candidates without deserializing
-        stored embedding blobs in Python.
+        The test asserts DuckDB maps vector-store stable IDs to structural
+        symbol rows without requiring structural vector blobs.
     """
     pytest.importorskip("duckdb")
     backend = DuckDBIndexBackend()
-    monkeypatch.setattr(
-        "codira_backend_duckdb.duckdb_support.embed_texts",
-        lambda texts, root=None: [[1.0] + [0.0] * 383 for _text in texts],
-    )
-    monkeypatch.setattr(
-        "codira_backend_duckdb.duckdb_query_backend.embed_text",
-        lambda text, root=None: [1.0] + [0.0] * 383,
-    )
 
     backend.persist_analysis(
         BackendPersistAnalysisRequest(
@@ -2889,41 +2762,16 @@ def test_duckdb_embedding_candidates_use_stored_vector_values(
         )
     )
 
-    def reject_blob_deserialization(blob: bytes, *, dim: int) -> list[float]:
-        """
-        Reject the legacy Python blob-scoring path.
-
-        Parameters
-        ----------
-        blob : bytes
-            Stored embedding blob supplied by a legacy fallback path.
-        dim : int
-            Expected embedding dimensionality.
-
-        Returns
-        -------
-        list[float]
-            This helper never returns.
-
-        Raises
-        ------
-        AssertionError
-            Always raised when the legacy fallback is used.
-        """
-        del blob, dim
-        raise AssertionError("legacy embedding blob fallback was used")
-
-    monkeypatch.setattr(
-        "codira_backend_duckdb.duckdb_query_backend.deserialize_vector",
-        reject_blob_deserialization,
-    )
-
-    results = backend.embedding_candidates(
-        BackendEmbeddingCandidatesRequest(
+    results = backend.resolve_embedding_scores(
+        BackendResolveEmbeddingScoresRequest(
             root=tmp_path,
-            query="sample",
+            scores=[
+                VectorSimilarityScore(
+                    stable_id="python:module:pkg.sample",
+                    score=1.0,
+                )
+            ],
             limit=5,
-            min_score=0.0,
         )
     )
 
@@ -2941,36 +2789,25 @@ def test_duckdb_embedding_candidates_use_stored_vector_values(
     ]
 
 
-def test_duckdb_documentation_candidates_use_stored_vector_values(
-    monkeypatch: pytest.MonkeyPatch,
+def test_duckdb_resolve_documentation_scores_uses_vector_store_scores(
     tmp_path: Path,
 ) -> None:
     """
-    Score DuckDB documentation candidates through stored list vectors.
+    Resolve DuckDB documentation candidates from vector-store scores.
 
     Parameters
     ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to replace embedding generation and reject blob fallback.
     tmp_path : pathlib.Path
         Temporary repository root.
 
     Returns
     -------
     None
-        The test asserts DuckDB can rank documentation candidates without
-        mixing them into the symbol embedding channel.
+        The test asserts DuckDB maps documentation stable IDs to structural
+        rows without mixing them into the symbol channel.
     """
     pytest.importorskip("duckdb")
     backend = DuckDBIndexBackend()
-    monkeypatch.setattr(
-        "codira_backend_duckdb.duckdb_support.embed_texts",
-        lambda texts, root=None: [[1.0] + [0.0] * 383 for _text in texts],
-    )
-    monkeypatch.setattr(
-        "codira_backend_duckdb.duckdb_query_backend.embed_text",
-        lambda text, root=None: [1.0] + [0.0] * 383,
-    )
     document = tmp_path / "docs" / "architecture.md"
     artifact = DocumentationArtifact(
         stable_id="doc:section:docs/architecture.md:plugin-loading:1",
@@ -3016,35 +2853,6 @@ def test_duckdb_documentation_candidates_use_stored_vector_values(
         )
     )
 
-    def reject_blob_deserialization(blob: bytes, *, dim: int) -> list[float]:
-        """
-        Reject the legacy Python blob-scoring path.
-
-        Parameters
-        ----------
-        blob : bytes
-            Stored embedding blob supplied by a legacy fallback path.
-        dim : int
-            Expected embedding dimensionality.
-
-        Returns
-        -------
-        list[float]
-            This helper never returns.
-
-        Raises
-        ------
-        AssertionError
-            Always raised when the legacy fallback is used.
-        """
-        del blob, dim
-        raise AssertionError("legacy embedding blob fallback was used")
-
-    monkeypatch.setattr(
-        "codira_backend_duckdb.duckdb_query_backend.deserialize_vector",
-        reject_blob_deserialization,
-    )
-
     conn = backend.open_connection(tmp_path)
     try:
         stored_owner = conn.execute(
@@ -3063,22 +2871,30 @@ def test_duckdb_documentation_candidates_use_stored_vector_values(
     )
 
     assert (
-        backend.embedding_candidates(
-            BackendEmbeddingCandidatesRequest(
+        backend.resolve_embedding_scores(
+            BackendResolveEmbeddingScoresRequest(
                 root=tmp_path,
-                query="plugin loading entry points",
+                scores=[
+                    VectorSimilarityScore(
+                        stable_id=artifact.stable_id,
+                        score=1.0,
+                    )
+                ],
                 limit=5,
-                min_score=0.0,
             )
         )
         == []
     )
-    assert backend.documentation_candidates(
-        BackendDocumentationCandidatesRequest(
+    assert backend.resolve_documentation_scores(
+        BackendResolveDocumentationScoresRequest(
             root=tmp_path,
-            query="plugin loading entry points",
+            scores=[
+                VectorSimilarityScore(
+                    stable_id=artifact.stable_id,
+                    score=1.0,
+                )
+            ],
             limit=5,
-            min_score=0.0,
         )
     ) == [
         (

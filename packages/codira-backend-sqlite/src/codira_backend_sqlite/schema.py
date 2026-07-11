@@ -18,7 +18,7 @@ definitions for SQLite persistence actions.
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 DDL = [
     """
@@ -400,16 +400,6 @@ DDL = [
     """
     CREATE UNIQUE INDEX IF NOT EXISTS idx_embeddings_object_backend_version
     ON embeddings(object_type, object_id, backend, version);
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS embedding_vector_cache (
-        backend TEXT NOT NULL,
-        version TEXT NOT NULL,
-        dim INTEGER NOT NULL,
-        content_hash TEXT NOT NULL,
-        vector BLOB NOT NULL,
-        PRIMARY KEY (backend, version, dim, content_hash)
-    );
     """,
     """
     CREATE TABLE IF NOT EXISTS pending_embeddings (

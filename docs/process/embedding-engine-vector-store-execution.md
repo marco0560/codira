@@ -221,12 +221,10 @@ only run fast smoke checks locally.
   back to symbol and documentation result rows with prefix filtering.
 - Kept structural backends responsible for metadata resolution while vector
   stores own similarity scoring.
-- Legacy structural embedding tables remain as compatibility shadows during
-  this transition. New writes, deferred pending rows, cache rows, materialized
-  vectors, and query-time similarity scoring are mirrored to or read from the
-  configured separated vector store. Removing the compatibility shadow should
-  be handled by a later schema/deprecation slice once downstream compatibility
-  no longer requires it.
+- Legacy structural embedding tables now retain embedding metadata only.
+  Materialized vectors, reusable cache rows, deferred pending rows, and
+  query-time similarity scoring are owned by the configured separated vector
+  store.
 - Focused validation passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_incremental_indexing.py::test_index_cli_defers_and_processes_pending_embeddings`.
 - Focused vector-store validation passed:

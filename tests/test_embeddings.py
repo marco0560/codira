@@ -28,6 +28,16 @@ from codira_backend_sqlite.sqlite_support import (
 )
 
 from codira.cli import main
+from codira.contracts import (
+    EmbeddingEngineSpec,
+    PreparedVectorRow,
+    VectorSetIdentity,
+    VectorSimilarityRequest,
+    VectorSimilarityScore,
+    VectorStorePurgeRequest,
+    VectorStorePurgeResult,
+    VectorStoreSpec,
+)
 from codira.indexer import (
     PendingEmbeddingRow,
     StoredEmbeddingRow,
@@ -48,9 +58,364 @@ from codira.semantic.embeddings import (
 from codira.semantic.search import EmbeddingCandidatesRequest, embedding_candidates
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
     from pathlib import Path
 
     import pytest
+
+
+class _CacheOnlyVectorStore:
+    """
+    Minimal vector store used by low-level embedding flush tests.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances keep cached and materialized vectors in memory.
+    """
+
+    name = "test-vector-store"
+    version = "1"
+
+    def __init__(self) -> None:
+        """
+        Initialize empty cache and materialized vector maps.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            In-memory state starts empty.
+        """
+        self.cached: dict[str, bytes] = {}
+        self.vectors: dict[str, bytes] = {}
+
+    def spec(self, config: Mapping[str, object]) -> VectorStoreSpec:
+        """
+        Return a stable test vector-store identity.
+
+        Parameters
+        ----------
+        config : dict[str, object]
+            Ignored test vector-store configuration.
+
+        Returns
+        -------
+        codira.contracts.VectorStoreSpec
+            Test vector-store identity.
+        """
+        del config
+        return VectorStoreSpec("test-vector-store", "1", "1")
+
+    def initialize(self, root: Path, config: Mapping[str, object]) -> None:
+        """
+        Perform no-op vector-store initialization.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Ignored repository root.
+        config : collections.abc.Mapping[str, object]
+            Ignored vector-store configuration.
+
+        Returns
+        -------
+        None
+            The in-memory fake needs no persistent setup.
+        """
+        del root, config
+
+    def ensure_vector_set(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: Mapping[str, object],
+    ) -> int:
+        """
+        Return a stable fake vector-set identifier.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Ignored repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Ignored vector-set identity.
+        config : collections.abc.Mapping[str, object]
+            Ignored vector-store configuration.
+
+        Returns
+        -------
+        int
+            Stable fake vector-set identifier.
+        """
+        del root, identity, config
+        return 1
+
+    def load_cached_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        content_hashes: Sequence[str],
+        config: Mapping[str, object],
+    ) -> dict[str, bytes]:
+        """
+        Return cached vectors for matching content hashes.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Ignored repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Ignored vector-set identity.
+        content_hashes : list[str]
+            Candidate content hashes.
+        config : dict[str, object]
+            Ignored vector-store configuration.
+
+        Returns
+        -------
+        dict[str, bytes]
+            Cached vectors keyed by content hash.
+        """
+        del root, identity, config
+        return {key: self.cached[key] for key in content_hashes if key in self.cached}
+
+    def store_cached_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        vectors: Mapping[str, bytes],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Store cached vectors by content hash.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Ignored repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Ignored vector-set identity.
+        vectors : dict[str, bytes]
+            Serialized vectors keyed by content hash.
+        config : dict[str, object]
+            Ignored vector-store configuration.
+
+        Returns
+        -------
+        None
+            Cache state is updated in memory.
+        """
+        del root, identity, config
+        self.cached.update(vectors)
+
+    def store_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Perform no-op pending-vector persistence.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Ignored repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Ignored vector-set identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Ignored pending rows.
+        config : collections.abc.Mapping[str, object]
+            Ignored vector-store configuration.
+
+        Returns
+        -------
+        None
+            No pending state is stored by this fake.
+        """
+        del root, identity, rows, config
+
+    def store_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Store materialized vectors by stable id.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Ignored repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Ignored vector-set identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Materialized vector rows.
+        config : dict[str, object]
+            Ignored vector-store configuration.
+
+        Returns
+        -------
+        None
+            Materialized vector state is updated in memory.
+        """
+        del root, identity, config
+        self.vectors.update(
+            {row.row.stable_id: row.vector for row in rows if row.vector is not None}
+        )
+
+    def delete_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        rows: Sequence[PreparedVectorRow],
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Perform no-op pending-vector cleanup.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Ignored repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Ignored vector-set identity.
+        rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+            Ignored materialized vector rows.
+        config : dict[str, object]
+            Ignored vector-store configuration.
+
+        Returns
+        -------
+        None
+            No pending state is stored by this fake.
+        """
+        del root, identity, rows, config
+
+    def clear_pending_vectors(
+        self,
+        root: Path,
+        identity: VectorSetIdentity,
+        config: Mapping[str, object],
+    ) -> None:
+        """
+        Perform no-op pending-vector reset.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Ignored repository root.
+        identity : codira.contracts.VectorSetIdentity
+            Ignored vector-set identity.
+        config : collections.abc.Mapping[str, object]
+            Ignored vector-store configuration.
+
+        Returns
+        -------
+        None
+            No pending state is stored by this fake.
+        """
+        del root, identity, config
+
+    def similarity_scores(
+        self,
+        request: VectorSimilarityRequest,
+    ) -> list[VectorSimilarityScore]:
+        """
+        Return no fake vector-store similarity scores.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorSimilarityRequest
+            Ignored vector-store similarity request.
+
+        Returns
+        -------
+        list[codira.contracts.VectorSimilarityScore]
+            Empty score list.
+        """
+        del request
+        return []
+
+    def purge_vector_sets(
+        self,
+        request: VectorStorePurgeRequest,
+    ) -> VectorStorePurgeResult:
+        """
+        Return an empty fake purge result.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStorePurgeRequest
+            Purge request.
+
+        Returns
+        -------
+        codira.contracts.VectorStorePurgeResult
+            Empty purge result.
+        """
+        return VectorStorePurgeResult(
+            store=self.name,
+            mode="all" if request.all_sets else "stale",
+            dry_run=request.dry_run,
+            active_vector_set_id=None,
+            stale_vector_sets=0,
+            kept_stale_vector_sets=0,
+            deleted_vectors=0,
+            deleted_cached_vectors=0,
+            deleted_pending_vectors=0,
+            deleted_vector_sets=0,
+        )
+
+    def reset_runtime_caches(self) -> None:
+        """
+        Perform no-op runtime-cache reset.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The in-memory fake has no process-local caches.
+        """
+
+
+def _test_vector_set_identity() -> VectorSetIdentity:
+    """
+    Return the vector-set identity used by low-level tests.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    codira.contracts.VectorSetIdentity
+        Stable test identity for vector-cache operations.
+    """
+    return VectorSetIdentity(
+        engine=EmbeddingEngineSpec(
+            engine=EMBEDDING_BACKEND,
+            engine_version=EMBEDDING_VERSION,
+            model="test-model",
+            model_version="1",
+            dimension=EMBEDDING_DIM,
+        ),
+        vector_store=VectorStoreSpec("test-vector-store", "1", "1"),
+    )
 
 
 def _write_embedding_fixture(root: Path) -> None:
@@ -365,16 +730,6 @@ def test_flush_embedding_rows_batches_and_reuses_identical_payloads(
         )
         """)
     conn.execute("""
-        CREATE TABLE embedding_vector_cache (
-            backend TEXT NOT NULL,
-            version TEXT NOT NULL,
-            dim INTEGER NOT NULL,
-            content_hash TEXT NOT NULL,
-            vector BLOB NOT NULL,
-            PRIMARY KEY (backend, version, dim, content_hash)
-        )
-        """)
-    conn.execute("""
         CREATE TABLE pending_embeddings (
             object_type TEXT NOT NULL,
             object_id INTEGER NOT NULL,
@@ -433,12 +788,13 @@ def test_flush_embedding_rows_batches_and_reuses_identical_payloads(
     assert calls == [["shared payload", "unique payload"]]
     assert len(stored) == 3
     assert stored[0][2] == stored[1][2]
-    assert stored[0][2] != stored[2][2]
+    assert stored[0][2] == stored[2][2] == b""
     conn.close()
 
 
 def test_flush_embedding_rows_reuses_persistent_vector_cache(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """
     Reuse a cached vector for a new embedding object with matching content.
@@ -469,16 +825,6 @@ def test_flush_embedding_rows_reuses_persistent_vector_cache(
         )
         """)
     conn.execute("""
-        CREATE TABLE embedding_vector_cache (
-            backend TEXT NOT NULL,
-            version TEXT NOT NULL,
-            dim INTEGER NOT NULL,
-            content_hash TEXT NOT NULL,
-            vector BLOB NOT NULL,
-            PRIMARY KEY (backend, version, dim, content_hash)
-        )
-        """)
-    conn.execute("""
         CREATE TABLE pending_embeddings (
             object_type TEXT NOT NULL,
             object_id INTEGER NOT NULL,
@@ -494,21 +840,8 @@ def test_flush_embedding_rows_reuses_persistent_vector_cache(
     text = "cached payload"
     content_hash = _embedding_content_hash(text)
     cached_vector = serialize_vector([0.25] * EMBEDDING_DIM)
-    conn.execute(
-        """
-        INSERT INTO embedding_vector_cache(
-            backend, version, dim, content_hash, vector
-        )
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            EMBEDDING_BACKEND,
-            EMBEDDING_VERSION,
-            EMBEDDING_DIM,
-            content_hash,
-            cached_vector,
-        ),
-    )
+    vector_store = _CacheOnlyVectorStore()
+    vector_store.cached[content_hash] = cached_vector
 
     def unexpected_embed_texts(
         _texts: list[str],
@@ -526,8 +859,12 @@ def test_flush_embedding_rows_reuses_persistent_vector_cache(
 
     recomputed, reused = _flush_embedding_rows(
         conn,
+        tmp_path,
         embedding_rows=[PendingEmbeddingRow("symbol", 1, "stable-a", text)],
         backend=embeddings_module.get_embedding_backend(),
+        vector_store=vector_store,
+        vector_set_identity=_test_vector_set_identity(),
+        vector_store_config={},
     )
 
     assert recomputed == 0
@@ -539,7 +876,8 @@ def test_flush_embedding_rows_reuses_persistent_vector_cache(
         WHERE object_type = 'symbol' AND object_id = 1
         """
     ).fetchone()
-    assert row == (content_hash, cached_vector)
+    assert row == (content_hash, b"")
+    assert vector_store.vectors == {"stable-a": cached_vector}
     conn.close()
 
 

@@ -106,12 +106,11 @@ feat/issue-57-embedding-optimization
 
 ### Phase 3
 
-- Added schema version `20` with a backend-neutral
-  `embedding_vector_cache` table keyed by backend, version, dimension, and
-  content hash.
-- Added SQLite and DuckDB persistent vector-cache lookups before embedding
-  inference.
-- Stored newly encoded vectors in the cache during embedding flushes.
+- Added schema version `20` with a backend-neutral structural vector cache,
+  later superseded by the separated vector-store `vector_cache` tables.
+- Added persistent vector-cache lookups before embedding inference.
+- Stored newly encoded vectors in the active vector-store cache during
+  embedding flushes.
 - Counted cache hits as reused embeddings while preserving the public backend
   persistence return contract.
 - Added a low-level SQLite regression that prepopulates the cache and verifies

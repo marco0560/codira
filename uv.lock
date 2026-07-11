@@ -558,7 +558,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-duckdb"
-version = "1.50.1"
+version = "1.50.2"
 source = { editable = "packages/codira-backend-duckdb" }
 dependencies = [
     { name = "codira" },
@@ -580,7 +580,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-sqlite"
-version = "1.45.2"
+version = "1.45.3"
 source = { editable = "packages/codira-backend-sqlite" }
 dependencies = [
     { name = "codira" },

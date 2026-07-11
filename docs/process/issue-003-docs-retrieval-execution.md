@@ -155,7 +155,7 @@ V2 preserves these V1 boundaries:
 - Added SQLite and DuckDB tests proving docs-only analyses produce no symbol
   candidates while returning documentation candidates.
 - Validation:
-  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_contracts.py::test_sqlite_index_backend_persists_documentation_without_symbols tests/test_contracts.py::test_sqlite_index_backend_persists_and_deletes_normalized_analysis packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py::test_duckdb_documentation_candidates_use_stored_vector_values packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py::test_duckdb_embedding_candidates_use_stored_vector_values`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_contracts.py::test_sqlite_index_backend_persists_documentation_without_symbols tests/test_contracts.py::test_sqlite_index_backend_persists_and_deletes_normalized_analysis packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py::test_duckdb_resolve_documentation_scores_uses_vector_store_scores packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py::test_duckdb_resolve_embedding_scores_uses_vector_store_scores`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/test_contracts.py packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py tests/memory_backend.py packages/codira-backend-sqlite/src/codira_backend_sqlite packages/codira-backend-duckdb/src/codira_backend_duckdb src/codira/contracts.py src/codira/semantic/search.py src/codira/schema.py`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check tests/test_contracts.py packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py tests/memory_backend.py packages/codira-backend-sqlite/src/codira_backend_sqlite packages/codira-backend-duckdb/src/codira_backend_duckdb src/codira/contracts.py src/codira/semantic/search.py src/codira/schema.py`
 
@@ -235,7 +235,7 @@ V2 preserves these V1 boundaries:
 - Kept generic C/C++ comments out of documentation retrieval.
 - Kept Python callable docstrings out of the docs channel.
 - Validation:
-  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q packages/codira-analyzer-c/tests/test_c_package.py packages/codira-analyzer-cpp/tests/test_cpp_package.py tests/test_capabilities.py tests/test_contracts.py::test_sqlite_index_backend_persists_documentation_without_symbols packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py::test_duckdb_documentation_candidates_use_stored_vector_values`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q packages/codira-analyzer-c/tests/test_c_package.py packages/codira-analyzer-cpp/tests/test_cpp_package.py tests/test_capabilities.py tests/test_contracts.py::test_sqlite_index_backend_persists_documentation_without_symbols packages/codira-backend-duckdb/tests/test_duckdb_backend_package.py::test_duckdb_resolve_documentation_scores_uses_vector_store_scores`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check ...`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff format --check ...`
   - `UV_CACHE_DIR=/tmp/uv-cache uv run mypy ...`

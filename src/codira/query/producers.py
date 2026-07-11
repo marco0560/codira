@@ -33,7 +33,7 @@ from codira.contracts import (
     RetrievalProducerInfo,
 )
 from codira.query.signals import RetrievalSignal
-from codira.registry import active_index_backend
+from codira.semantic.search import embedding_candidates
 
 QUERY_PRODUCER_VERSION = "1"
 QUERY_CAPABILITY_VERSION = "1"
@@ -235,8 +235,7 @@ class EmbeddingRetrievalProducer(QueryProducerSpec):
         codira.types.ChannelResults
             Ranked symbol candidates ordered by backend similarity semantics.
         """
-        backend = active_index_backend(root=request.root)
-        return backend.embedding_candidates(
+        return embedding_candidates(
             BackendEmbeddingCandidatesRequest(
                 root=request.root,
                 query=request.query,
