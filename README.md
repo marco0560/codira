@@ -851,19 +851,24 @@ Prefer specific queries over broad ones such as `"project structure"` or
 
 ## Reindexing and Freshness
 
-Rerun `codira index` when the repository state has changed enough that the
-existing `.codira/` snapshot may no longer reflect the current code.
+Index-backed read commands automatically refresh the repository-local index when
+Codira can prove that the existing `.codira/` snapshot is stale. This includes
+tracked source edits in the current Git working tree, branch changes, backend or
+analyzer changes, schema changes, and indexed-file count changes.
 
 Typical cases:
 
-- after significant code changes
+- after significant untracked or generated-file changes that Git does not
+  report as tracked source edits
 - after switching branches
 - after rebases, pulls, or merges
 - before a larger audit session
 - before querying a repository that has not been indexed yet
 
-The index is repository-local and intentionally conservative. Rebuilding it is
-cheap compared with working from stale symbol or docstring data.
+The index is repository-local and intentionally conservative. Automatic refresh
+uses Git as a cheap dirty-file signal for tracked source files, then compares
+only those candidate paths with the hashes stored in the index. Explicit
+rebuilding remains useful when you want to force a known checkpoint.
 
 Practical rule:
 

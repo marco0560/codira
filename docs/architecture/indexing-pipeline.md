@@ -82,6 +82,8 @@ Phase 21 makes that persisted metadata active in rebuild policy:
   the active backend
 - CLI canary checks rebuild when the stored analyzer inventory no longer
   matches the active analyzer set
+- CLI canary checks use Git to narrow tracked source edits, then compare those
+  dirty paths with stored file hashes before deciding to rebuild incrementally
 
 Phase 22 adds the operator-facing coverage controls:
 

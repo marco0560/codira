@@ -100,7 +100,8 @@ from codira.registry import (
     plugin_registrations,
     validate_plugin_configuration,
 )
-from codira.scanner import iter_project_files
+from codira.repository_scope import is_repository_scope_excluded
+from codira.scanner import analyzer_accepts_path, file_metadata, iter_project_files
 from codira.semantic.embeddings import EmbeddingBackendError, get_embedding_backend
 from codira.semantic.search import (
     DocumentationCandidatesRequest,
@@ -3721,6 +3722,47 @@ def _get_head_commit(root: Path) -> str | None:
         return None
 
 
+def _git_dirty_indexable_paths(root: Path) -> tuple[str, ...]:
+    """
+    Return Git-dirty paths that can affect the Codira index.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root used as the Git working directory.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Repo-root-relative paths reported dirty by Git and accepted by one
+        active analyzer. An empty tuple is returned when Git cannot provide a
+        dirty-path list.
+    """
+    try:
+        result = subprocess.run(
+            [GIT_EXE, "diff", "--name-only", "-z", "HEAD", "--"],
+            cwd=root,
+            capture_output=True,
+            text=False,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ()
+
+    analyzers = active_language_analyzers(root=root)
+    dirty_paths: list[str] = []
+    for raw_path in result.stdout.split(b"\0"):
+        if not raw_path:
+            continue
+        relative = raw_path.decode("utf-8", errors="surrogateescape")
+        path = root / relative
+        if is_repository_scope_excluded(path, root):
+            continue
+        if any(analyzer_accepts_path(analyzer, path, root) for analyzer in analyzers):
+            dirty_paths.append(relative)
+    return tuple(dict.fromkeys(dirty_paths))
+
+
 def _read_index_metadata(root: Path) -> dict[str, str]:
     """
     Load persisted index metadata.
@@ -3857,6 +3899,50 @@ def _count_indexed_files_for_freshness(
     return len(hash_loader.load_existing_file_hashes(root, conn=conn))
 
 
+def _dirty_indexable_paths_require_rebuild(
+    root: Path,
+    dirty_paths: tuple[str, ...],
+    backend: object,
+    *,
+    conn: object | None = None,
+) -> bool:
+    """
+    Return whether Git-dirty indexable paths differ from indexed content.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose index should be inspected.
+    dirty_paths : tuple[str, ...]
+        Repo-root-relative paths reported dirty by Git and accepted by one
+        active analyzer.
+    backend : object
+        Active index backend.
+    conn : object | None, optional
+        Existing backend connection to reuse.
+
+    Returns
+    -------
+    bool
+        ``True`` when at least one dirty path is new, deleted, or has content
+        that differs from the hash persisted in the index.
+    """
+    hash_loader = cast("_IndexedFileHashLoader", backend)
+    indexed_hashes = hash_loader.load_existing_file_hashes(root, conn=conn)
+    for relative in dirty_paths:
+        path = root / relative
+        persisted_hash = indexed_hashes.get(str(path))
+        if persisted_hash is None:
+            return True
+        try:
+            current_hash = str(file_metadata(path)["hash"])
+        except FileNotFoundError:
+            return True
+        if current_hash != persisted_hash:
+            return True
+    return False
+
+
 def _inspect_index_metadata_freshness(
     root: Path,
     metadata: dict[str, str],
@@ -3991,6 +4077,25 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
             reset_db=True,
             stderr=True,
         )
+
+    dirty_paths = _git_dirty_indexable_paths(root)
+    if dirty_paths:
+        conn = backend.open_connection(root)
+        try:
+            if _dirty_indexable_paths_require_rebuild(
+                root,
+                dirty_paths,
+                backend,
+                conn=conn,
+            ):
+                return IndexRebuildRequest(
+                    message="[codira] Index stale "
+                    "(working tree changed) — rebuilding...",
+                    reset_db=False,
+                    stderr=True,
+                )
+        finally:
+            backend.close_connection(conn)
 
     metadata_decided, metadata_request = _inspect_index_metadata_freshness(
         root,

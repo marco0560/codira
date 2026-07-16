@@ -1373,6 +1373,248 @@ def test_inspect_index_rebuild_request_uses_complete_metadata_fast_path(
     assert backend.load_existing_file_hash_calls == []
 
 
+def test_git_dirty_indexable_paths_filters_to_tracked_sources(tmp_path: Path) -> None:
+    """
+    Return only tracked Git-dirty paths accepted by active analyzers.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts untracked scratch files and non-source files do not
+        force index refreshes.
+    """
+    cli_module = _load_workspace_cli_module()
+    module = tmp_path / "pkg" / "sample.py"
+    notes = tmp_path / "notes.tmp"
+    scratch = tmp_path / "scratch.py"
+    _write_module(
+        module,
+        'def demo():\n    """Return a constant."""\n    return 1\n',
+    )
+    notes.write_text("tracked but unsupported\n", encoding="utf-8")
+    scratch.write_text("def ignored():\n    return 2\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "add", "pkg/sample.py", "notes.tmp"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=codira@example.invalid",
+            "-c",
+            "user.name=Codira Test",
+            "commit",
+            "-m",
+            "seed",
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
+    module.write_text(
+        'def demo():\n    """Return an updated constant."""\n    return 2\n',
+        encoding="utf-8",
+    )
+    notes.write_text("changed but unsupported\n", encoding="utf-8")
+
+    assert cli_module._git_dirty_indexable_paths(tmp_path) == ("pkg/sample.py",)
+
+
+def test_inspect_index_rebuild_request_detects_dirty_tracked_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Request incremental refresh when a tracked source file is dirty.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root provided by pytest.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to stub backend state.
+
+    Returns
+    -------
+    None
+        The test asserts a modified tracked source bypasses the complete
+        metadata fast path and asks for an incremental rebuild.
+    """
+    cli_module = _load_workspace_cli_module()
+    module = tmp_path / "pkg" / "sample.py"
+    _write_module(
+        module,
+        'def demo():\n    """Return a constant."""\n    return 1\n',
+    )
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "add", "pkg/sample.py"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=codira@example.invalid",
+            "-c",
+            "user.name=Codira Test",
+            "commit",
+            "-m",
+            "seed",
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    python_inventory = [_analyzer_inventory_row(PythonAnalyzer())]
+    backend = _RecordingBackend(
+        analyzer_inventory=python_inventory,
+        file_hashes={str(module): "abc123"},
+    )
+    cli_module._write_index_metadata(
+        tmp_path,
+        {
+            "schema_version": str(backend.version),
+            "backend_name": "duckdb",
+            "backend_version": str(backend.version),
+            "analyzer_inventory": json.dumps(python_inventory),
+            "indexed_file_count": "1",
+            "commit": commit,
+        },
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "active_index_backend",
+        lambda *, root=None: backend,
+    )
+    module.write_text(
+        'def demo():\n    """Return an updated constant."""\n    return 2\n',
+        encoding="utf-8",
+    )
+
+    request = cli_module._inspect_index_rebuild_request(tmp_path)
+
+    assert request == cli_module.IndexRebuildRequest(
+        message="[codira] Index stale (working tree changed) — rebuilding...",
+        reset_db=False,
+        stderr=True,
+    )
+    assert backend.opened == [tmp_path]
+    assert backend.count_indexed_file_calls == []
+    assert backend.load_existing_file_hash_calls == [tmp_path]
+
+
+def test_inspect_index_rebuild_request_accepts_indexed_dirty_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Avoid repeated refreshes when the index already reflects dirty content.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root provided by pytest.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to stub backend state.
+
+    Returns
+    -------
+    None
+        The test asserts Git-dirty source paths do not rebuild when their
+        current hashes match the persisted index rows.
+    """
+    cli_module = _load_workspace_cli_module()
+    module = tmp_path / "pkg" / "sample.py"
+    _write_module(
+        module,
+        'def demo():\n    """Return a constant."""\n    return 1\n',
+    )
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "add", "pkg/sample.py"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=codira@example.invalid",
+            "-c",
+            "user.name=Codira Test",
+            "commit",
+            "-m",
+            "seed",
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    module.write_text(
+        'def demo():\n    """Return an updated constant."""\n    return 2\n',
+        encoding="utf-8",
+    )
+    python_inventory = [_analyzer_inventory_row(PythonAnalyzer())]
+    backend = _RecordingBackend(
+        analyzer_inventory=python_inventory,
+        file_hashes={str(module): cast("str", file_metadata(module)["hash"])},
+    )
+    cli_module._write_index_metadata(
+        tmp_path,
+        {
+            "schema_version": str(backend.version),
+            "backend_name": "duckdb",
+            "backend_version": str(backend.version),
+            "analyzer_inventory": json.dumps(python_inventory),
+            "indexed_file_count": "1",
+            "commit": commit,
+        },
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "active_index_backend",
+        lambda *, root=None: backend,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "active_language_analyzers",
+        lambda *, root=None: [PythonAnalyzer()],
+    )
+
+    assert cli_module._inspect_index_rebuild_request(tmp_path) is None
+    assert backend.opened == [tmp_path]
+    assert backend.count_indexed_file_calls == []
+    assert backend.load_existing_file_hash_calls == [tmp_path]
+
+
 def test_cli_reports_unexpected_index_errors_without_traceback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

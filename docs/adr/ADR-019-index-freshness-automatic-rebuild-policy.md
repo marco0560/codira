@@ -16,8 +16,9 @@ Evidence:
   call `_ensure_index()` before reading indexed data.
 - `src/codira/storage.py` stores repository-local state under `.codira`,
   including `index.db`, `metadata.json`, and `index.lock`.
-- `src/codira/cli.py` checks schema version, Git commit, and indexed-file count
-  to decide whether a rebuild is required.
+- `src/codira/cli.py` checks schema version, Git commit, tracked working-tree
+  changes, dirty-file hashes, and indexed-file count to decide whether a
+  rebuild is required.
 
 This behavior affects the user-facing contract because commands that appear to
 read context may create or mutate repository-local index state.
@@ -29,8 +30,8 @@ index-backed read/query commands.
 
 When the index is missing, stale, or schema-incompatible, the CLI may rebuild
 the index before serving a query. Rebuild decisions must remain deterministic
-and grounded in explicit metadata such as schema version, Git commit, and
-indexed file counts.
+and grounded in explicit metadata such as schema version, Git commit, tracked
+working-tree changes, dirty-file hashes, and indexed file counts.
 
 If automatic rebuild fails, the CLI must surface an operator-facing error and
 manual remediation command instead of silently returning stale or partial
