@@ -141,6 +141,11 @@ def read_repositories(path: Path) -> tuple[QualityRepository, ...]:
     -------
     tuple[QualityRepository, ...]
         Parsed repository entries.
+
+    Raises
+    ------
+    TypeError
+        Raised when the repository manifest shape is invalid.
     """
 
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -280,7 +285,7 @@ def parse_git_log_examples(
     Parameters
     ----------
     text : str
-        Output produced by ``git log`` with record and field separators.
+        Output produced by ``git log`` with record, field, and path separators.
     repo : QualityRepository
         Repository metadata.
     max_examples : int
@@ -301,14 +306,17 @@ def parse_git_log_examples(
         stripped = record.strip()
         if not stripped:
             continue
-        header, _, path_text = stripped.partition("\n")
-        fields = header.split("\x00", 2)
+        if "\x1f" in stripped:
+            metadata, _, path_text = stripped.partition("\x1f")
+        else:
+            metadata, _, path_text = stripped.partition("\n")
+        fields = metadata.strip().split("\x00", 2)
         if len(fields) != 3:
             continue
         commit_hash, subject, body = fields
         query = example_query(subject, body)
         paths = selected_paths(
-            path_text.splitlines(),
+            path_text.strip().splitlines(),
             min_changed_files=min_changed_files,
             max_changed_files=max_changed_files,
         )
@@ -372,7 +380,7 @@ def collect_git_examples(
         "log",
         "--no-merges",
         f"-n{scan_limit}",
-        "--format=%x1e%H%x00%s%x00%b",
+        "--format=%x1e%H%x00%s%x00%B%x1f",
         "--name-only",
     )
     completed = subprocess.run(

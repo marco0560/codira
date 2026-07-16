@@ -75,6 +75,43 @@ def test_parse_git_log_examples_filters_large_commits(tmp_path: Path) -> None:
     assert examples[0].provenance == {"commit": "abc123"}
 
 
+def test_parse_git_log_examples_ignores_multiline_commit_body(tmp_path: Path) -> None:
+    """
+    Parse only name-only paths when commit bodies contain path-like prose.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository path.
+
+    Returns
+    -------
+    None
+        The test asserts commit body lines are kept in the query, not labels.
+    """
+
+    text = (
+        "\x1eabc123\x00Fix parser\x00"
+        "This body mentions src/not_a_label.py\n"
+        "and contains prose that is not a changed file.\n"
+        "\x1f\n"
+        "src/parser.py\n"
+        "tests/test_parser.py\n"
+    )
+
+    examples = dataset.parse_git_log_examples(
+        text,
+        repo=_repo(tmp_path),
+        max_examples=10,
+        min_changed_files=1,
+        max_changed_files=5,
+    )
+
+    assert len(examples) == 1
+    assert "src/not_a_label.py" in examples[0].query
+    assert examples[0].expected_paths == ("src/parser.py", "tests/test_parser.py")
+
+
 def test_write_examples_serializes_jsonl(tmp_path: Path) -> None:
     """
     Write dataset rows as stable JSON Lines.

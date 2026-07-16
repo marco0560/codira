@@ -177,14 +177,16 @@ commit history as the deterministic fallback:
 ```bash
 uv run python -m scripts.build_retrieval_quality_dataset \
   --repo-manifest benchmarks/retrieval-quality-repos.local.json \
-  --output .artifacts/retrieval-quality/dataset.jsonl
+  --output .artifacts/retrieval-quality/dataset.jsonl \
+  --source git
 ```
 
 The generated JSONL rows contain a natural-language query and expected
 repo-relative paths. GitHub PR examples use the PR title/body as the query and
 the changed files as labels. Git commit examples use the commit subject/body as
-the query and changed files as labels. The script writes only the requested
-dataset file and does not index repositories.
+the query and changed files as labels; the Git parser uses an explicit
+message/path separator so multiline commit bodies cannot become labels. The
+script writes only the requested dataset file and does not index repositories.
 
 Use `--source github` to require GitHub-backed rows only, or `--source git` to
 avoid network access entirely. GitHub collection uses the operator's existing
@@ -210,6 +212,14 @@ logs, `results.jsonl`, `summary.json`, and `report.md` under
 and records `Recall@K`, `MRR@K`, `nDCG@K`, hit rate, index time, and query
 time. Add `--include-ctx` only when the mixed `ctx` retrieval behavior is also
 part of the quality question.
+
+To recompute `summary.json` and `report.md` for an existing `results.jsonl`
+after scorer changes, run:
+
+```bash
+uv run python -m scripts.run_retrieval_quality_benchmark \
+  --rescore-results .artifacts/retrieval-quality/<timestamp>/results.jsonl
+```
 
 This benchmark performs full indexing unless `--no-full` is supplied. Do not
 run it during another large campaign unless CPU, RAM, and disk contention are

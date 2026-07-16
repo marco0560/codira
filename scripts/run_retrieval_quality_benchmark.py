@@ -205,6 +205,11 @@ def load_dataset(path: Path) -> tuple[QualityExample, ...]:
     -------
     tuple[QualityExample, ...]
         Parsed examples.
+
+    Raises
+    ------
+    TypeError
+        Raised when a dataset row has an invalid shape.
     """
 
     examples: list[QualityExample] = []
@@ -428,8 +433,10 @@ def score_paths(
         Retrieval quality metrics.
     """
 
-    expected = set(
-        normalize_path(path) for path in expected_paths if normalize_path(path)
+    expected = tuple(
+        dict.fromkeys(
+            normalize_path(path) for path in expected_paths if normalize_path(path)
+        )
     )
     ranked = tuple(
         dict.fromkeys(
@@ -439,11 +446,31 @@ def score_paths(
     if not expected:
         return Score(recall=0.0, mrr=0.0, ndcg=0.0, hit_any=False, hits=0)
 
+    def matches_expected(path: str) -> bool:
+        """
+        Return whether a retrieved path matches an expected repository path.
+
+        Parameters
+        ----------
+        path : str
+            Normalized retrieved path.
+
+        Returns
+        -------
+        bool
+            ``True`` when ``path`` is equal to or ends with an expected
+            repo-relative path.
+        """
+        return any(
+            path == expected_path or path.endswith(f"/{expected_path}")
+            for expected_path in expected
+        )
+
     hits = 0
     dcg = 0.0
     first_rank = 0
     for rank, path in enumerate(ranked, start=1):
-        if path not in expected:
+        if not matches_expected(path):
             continue
         hits += 1
         if not first_rank:
@@ -663,6 +690,7 @@ def summarize_results(results_path: Path) -> dict[str, object]:
     for (backend, model, repo, source, channel), rows in sorted(groups.items()):
         count = len(rows)
         index_elapsed = index_seconds.get((backend, model, repo), 0.0)
+        scores = tuple(_score_result_row(row) for row in rows)
         summaries.append(
             {
                 "backend": backend,
@@ -676,14 +704,40 @@ def summarize_results(results_path: Path) -> dict[str, object]:
                     _float_field(row, "elapsed_seconds") for row in rows
                 )
                 / count,
-                "mean_recall": sum(_float_field(row, "recall") for row in rows) / count,
-                "mean_mrr": sum(_float_field(row, "mrr") for row in rows) / count,
-                "mean_ndcg": sum(_float_field(row, "ndcg") for row in rows) / count,
-                "hit_any_rate": sum(1 for row in rows if bool(row.get("hit_any")))
-                / count,
+                "mean_recall": sum(score.recall for score in scores) / count,
+                "mean_mrr": sum(score.mrr for score in scores) / count,
+                "mean_ndcg": sum(score.ndcg for score in scores) / count,
+                "hit_any_rate": sum(1 for score in scores if score.hit_any) / count,
             }
         )
     return {"schema_version": 1, "groups": summaries}
+
+
+def _score_result_row(row: dict[str, object]) -> Score:
+    """
+    Recompute one stored query row score from path lists.
+
+    Parameters
+    ----------
+    row : dict[str, object]
+        Stored query result row.
+
+    Returns
+    -------
+    Score
+        Recomputed score using the current path-normalization logic.
+    """
+    expected_raw = row.get("expected_paths")
+    retrieved_raw = row.get("retrieved_paths")
+    expected = (
+        [str(value) for value in expected_raw] if isinstance(expected_raw, list) else []
+    )
+    retrieved = (
+        [str(value) for value in retrieved_raw]
+        if isinstance(retrieved_raw, list)
+        else []
+    )
+    return score_paths(expected, retrieved, k=len(retrieved) or 1)
 
 
 def _float_field(row: dict[str, object], key: str) -> float:
@@ -758,6 +812,31 @@ def write_report(path: Path, summary: dict[str, object]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_summary_artifacts(results_path: Path) -> tuple[Path, Path]:
+    """
+    Write summary artifacts for an existing result file.
+
+    Parameters
+    ----------
+    results_path : pathlib.Path
+        JSON Lines result file.
+
+    Returns
+    -------
+    tuple[pathlib.Path, pathlib.Path]
+        Written ``summary.json`` and ``report.md`` paths.
+    """
+
+    summary = summarize_results(results_path)
+    summary_path = results_path.parent / "summary.json"
+    report_path = results_path.parent / "report.md"
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    write_report(report_path, summary)
+    return summary_path, report_path
+
+
 def build_parser() -> argparse.ArgumentParser:
     """
     Build the retrieval-quality benchmark parser.
@@ -784,6 +863,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k", type=positive_int, default=10)
     parser.add_argument("--include-ctx", action="store_true")
     parser.add_argument("--no-full", action="store_true")
+    parser.add_argument(
+        "--rescore-results",
+        type=Path,
+        help="Regenerate summary.json and report.md beside an existing results.jsonl.",
+    )
     return parser
 
 
@@ -951,6 +1035,13 @@ def main(argv: list[str] | None = None) -> int:
     """
 
     args = build_parser().parse_args(argv)
+    if args.rescore_results is not None:
+        summary_path, report_path = write_summary_artifacts(args.rescore_results)
+        print(f"Results: {args.rescore_results}")
+        print(f"Summary: {summary_path}")
+        print(f"Report: {report_path}")
+        return 0
+
     codira = resolve_codira()
     stamp = local_stamp()
     artifact_root = args.artifact_root / stamp
@@ -1001,11 +1092,7 @@ def main(argv: list[str] | None = None) -> int:
                 if rc and not status:
                     status = rc
 
-    summary = summarize_results(results_path)
-    summary_path.write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    write_report(report_path, summary)
+    summary_path, report_path = write_summary_artifacts(results_path)
     print(f"Artifacts: {artifact_root}")
     print(f"Results: {results_path}")
     print(f"Summary: {summary_path}")

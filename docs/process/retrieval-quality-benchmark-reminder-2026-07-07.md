@@ -7,7 +7,7 @@ embedding model caches.
 Build the labeled retrieval-quality dataset:
 
 ```bash
-uv run python -m scripts.build_retrieval_quality_dataset --repo-manifest benchmarks/retrieval-quality-repos.local.json --output .artifacts/retrieval-quality/dataset.jsonl
+uv run python -m scripts.build_retrieval_quality_dataset --repo-manifest benchmarks/retrieval-quality-repos.local.json --output .artifacts/retrieval-quality/dataset.jsonl --source git
 ```
 
 Run the default SQLite quality benchmark:
@@ -28,3 +28,10 @@ uv run python -m scripts.run_retrieval_quality_benchmark --dataset .artifacts/re
 
 Use the default `emb`-only run first. Add `--include-ctx` only when the mixed
 context retrieval behavior is part of the quality question.
+
+After scorer changes, regenerate an existing summary/report without rerunning
+queries:
+
+```bash
+uv run python -m scripts.run_retrieval_quality_benchmark --rescore-results .artifacts/retrieval-quality/<timestamp>/results.jsonl
+```
