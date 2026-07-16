@@ -1,3 +1,15 @@
+# [1.49.0](https://github.com/marco0560/codira/compare/v1.48.1...v1.49.0) (2026-07-16)
+
+
+### Bug Fixes
+
+* **dev:** repair retrieval quality scoring ([037a784](https://github.com/marco0560/codira/commit/037a78422fc584e3fda7a581ff3f285661e2e480))
+
+
+### Features
+
+* **indexer:** refresh dirty tracked files ([950103d](https://github.com/marco0560/codira/commit/950103d5e65d835ecab26d24873fc49ad8e35db7))
+
 ## [1.48.1](https://github.com/marco0560/codira/compare/v1.48.0...v1.48.1) (2026-07-11)
 
 
