@@ -19,6 +19,7 @@ from codira_vector_store_sqlite import (
     build_vector_store,
     get_vector_store_path,
 )
+import codira_vector_store_sqlite as sqlite_vector_store_module
 
 
 def _vector_identity(
@@ -232,6 +233,42 @@ def test_sqlite_vector_store_persists_vector_rows(tmp_path: Path) -> None:
             "SELECT COUNT(*) FROM pending_vectors"
         ).fetchone()
     assert pending_after_clear == (0,)
+
+
+def test_sqlite_vector_store_loads_large_cache_sets_in_batches(
+    tmp_path: Path,
+) -> None:
+    """
+    Load every cached vector when one lookup exceeds SQLite's bind limit.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts chunked cache lookup preserves every vector.
+    """
+    store = SQLiteVectorStore()
+    identity = _vector_identity(store)
+    cached_vectors = {
+        f"hash-{index}": f"vector-{index}".encode()
+        for index in range(sqlite_vector_store_module._CACHE_LOOKUP_HASH_BATCH_SIZE + 1)
+    }
+
+    store.store_cached_vectors(tmp_path, identity, cached_vectors, {})
+
+    assert (
+        store.load_cached_vectors(
+            tmp_path,
+            identity,
+            [*cached_vectors, "hash-0"],
+            {},
+        )
+        == cached_vectors
+    )
 
 
 def test_sqlite_vector_store_purges_stale_sets_with_retention(

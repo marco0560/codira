@@ -21,6 +21,7 @@ from codira.contracts import (
 from codira.plugin_config import plugin_json_schema
 from codira.semantic.embeddings import deserialize_vector
 from codira.storage import get_codira_dir
+from codira.utils import iter_batched
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -37,6 +38,7 @@ __all__ = [
 
 PACKAGE_VERSION = "1.0.8"
 FORMAT_VERSION = "1"
+_CACHE_LOOKUP_HASH_BATCH_SIZE = 900
 
 
 def _normalize_duckdb_timestamp(value: object) -> datetime | None:
@@ -592,21 +594,29 @@ class DuckDBVectorStore:
         if not ordered_hashes:
             return {}
         vector_set_id = self.ensure_vector_set(root, identity, config)
-        placeholders = ",".join("?" for _item in ordered_hashes)
+        cached_vectors: dict[str, bytes] = {}
         conn = _connect(get_vector_store_path(root), read_only=True)
         try:
-            rows = conn.execute(
-                f"""
-                SELECT content_hash, vector
-                FROM vector_cache
-                WHERE vector_set_id = ?
-                  AND content_hash IN ({placeholders})
-                """,
-                (vector_set_id, *ordered_hashes),
-            ).fetchall()
+            for content_hash_batch in iter_batched(
+                ordered_hashes,
+                batch_size=_CACHE_LOOKUP_HASH_BATCH_SIZE,
+            ):
+                placeholders = ",".join("?" for _item in content_hash_batch)
+                rows = conn.execute(
+                    f"""
+                    SELECT content_hash, vector
+                    FROM vector_cache
+                    WHERE vector_set_id = ?
+                      AND content_hash IN ({placeholders})
+                    """,
+                    (vector_set_id, *content_hash_batch),
+                ).fetchall()
+                cached_vectors.update(
+                    {str(content_hash): bytes(vector) for content_hash, vector in rows}
+                )
         finally:
             conn.close()
-        return {str(content_hash): bytes(vector) for content_hash, vector in rows}
+        return cached_vectors
 
     def store_cached_vectors(
         self,

@@ -18,7 +18,9 @@ from codira.contracts import (
     BackendResolveDocumentationScoresRequest,
     BackendResolveEmbeddingScoresRequest,
     BackendRuntimeInventoryRequest,
+    EmbeddingEngineSpec,
     PendingEmbeddingRow,
+    VectorSetIdentity,
     VectorSimilarityScore,
 )
 from codira.models import (
@@ -45,6 +47,7 @@ from codira_backend_duckdb.duckdb_support import DocumentationArtifactRow
 from codira_backend_duckdb.duckdb_support import _delete_pending_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_pending_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_pending_reference_scan_rows
+from codira_backend_duckdb.duckdb_support import _resolve_cached_prepared_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
 from codira_backend_duckdb.duckdb_support import _store_pending_embedding_rows
 from codira_backend_duckdb.profiling import (
@@ -53,6 +56,7 @@ from codira_backend_duckdb.profiling import (
     duckdb_profile_path,
 )
 from codira_backend_duckdb import duckdb_support as duckdb_support_module
+from codira_vector_store_sqlite import SQLiteVectorStore
 
 if TYPE_CHECKING:
     from codira_backend_duckdb.duckdb_support import _DuckDBPersistenceConnection
@@ -1870,6 +1874,69 @@ def test_duckdb_full_index_reuses_cached_embeddings(
     assert len(embed_calls) == first_call_count
     assert second_report.embeddings_reused > 0
     assert second_report.embeddings_recomputed == 0
+
+
+def test_duckdb_cache_resolution_handles_large_sqlite_vector_store_lookups(
+    tmp_path: Path,
+) -> None:
+    """
+    Reuse a large cache set through the SQLite vector-store boundary.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB cache resolution does not exceed SQLite's bind
+        limit.
+    """
+    vector_store = SQLiteVectorStore()
+    backend = EmbeddingBackendSpec(name="test-backend", version="1", dim=384)
+    identity = VectorSetIdentity(
+        engine=EmbeddingEngineSpec(
+            engine=backend.name,
+            engine_version=backend.version,
+            model="test-model",
+            model_version="1",
+            dimension=backend.dim,
+        ),
+        vector_store=vector_store.spec({}),
+    )
+    prepared_rows = [
+        (
+            PendingEmbeddingRow(
+                object_type="symbol",
+                object_id=index,
+                stable_id=f"symbol:{index}",
+                text=f"text {index}",
+            ),
+            f"hash-{index}",
+            None,
+        )
+        for index in range(1_001)
+    ]
+    cached_vectors = {
+        content_hash: f"vector-{index}".encode()
+        for index, (_row, content_hash, _vector) in enumerate(prepared_rows)
+    }
+    vector_store.store_cached_vectors(tmp_path, identity, cached_vectors, {})
+
+    resolved_rows, recomputed, reused = _resolve_cached_prepared_embedding_rows(
+        prepared_rows=prepared_rows,
+        root=tmp_path,
+        vector_store=vector_store,
+        vector_set_identity=identity,
+        vector_store_config={},
+    )
+
+    assert recomputed == 0
+    assert reused == len(prepared_rows)
+    assert [vector for _row, _hash, vector in resolved_rows] == [
+        cached_vectors[f"hash-{index}"] for index in range(1_001)
+    ]
 
 
 def test_duckdb_deferred_session_flushes_pending_rows_after_structural_commit(
