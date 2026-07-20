@@ -1,3 +1,10 @@
+# [1.50.0](https://github.com/marco0560/codira/compare/v1.49.0...v1.50.0) (2026-07-20)
+
+
+### Features
+
+* **dev:** added Context7 MCP server for up-to-date documentation ([9783519](https://github.com/marco0560/codira/commit/9783519c42d43dc3e1f1e0f66e76d9e2c079b10c))
+
 # [1.49.0](https://github.com/marco0560/codira/compare/v1.48.1...v1.49.0) (2026-07-16)
 
 
