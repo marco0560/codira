@@ -33,7 +33,7 @@ from codira.models import (
 )
 from codira.indexer import index_repo
 from codira_backend_duckdb.schema import DDL, SCHEMA_VERSION
-from codira.semantic.embeddings import EmbeddingBackendSpec
+from codira.semantic.embeddings import EmbeddingBackendSpec, serialize_vector
 from codira.storage import override_storage_root
 import codira_backend_duckdb as duckdb_backend_module
 from codira_backend_duckdb import (
@@ -1905,7 +1905,7 @@ def test_duckdb_cache_resolution_handles_large_sqlite_vector_store_lookups(
         ),
         vector_store=vector_store.spec({}),
     )
-    prepared_rows = [
+    prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = [
         (
             PendingEmbeddingRow(
                 object_type="symbol",
@@ -1919,7 +1919,7 @@ def test_duckdb_cache_resolution_handles_large_sqlite_vector_store_lookups(
         for index in range(1_001)
     ]
     cached_vectors = {
-        content_hash: f"vector-{index}".encode()
+        content_hash: serialize_vector([float(index)] * backend.dim)
         for index, (_row, content_hash, _vector) in enumerate(prepared_rows)
     }
     vector_store.store_cached_vectors(tmp_path, identity, cached_vectors, {})

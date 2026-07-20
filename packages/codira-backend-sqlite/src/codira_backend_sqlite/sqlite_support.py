@@ -2207,6 +2207,20 @@ def _store_vector_store_materialized_rows(
     """
     if vector_store is None or vector_set_identity is None or root is None:
         return
+    from codira.contracts import VectorStoreBulkWriter, VectorStoreFullIndexRequest
+
+    if isinstance(vector_store, VectorStoreBulkWriter):
+        vector_store.store_vectors_for_full_index(
+            VectorStoreFullIndexRequest(
+                root=root,
+                identity=vector_set_identity,
+                rows=prepared_rows,
+                cached_vectors=encoded_vectors,
+                config=vector_store_config,
+                preserve_existing=True,
+            )
+        )
+        return
     if encoded_vectors:
         vector_store.store_cached_vectors(
             root,

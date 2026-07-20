@@ -17,7 +17,10 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+import sqlite_vec  # type: ignore[import-untyped]
+
 from codira.contracts import (
+    PreparedVectorIdentityRow,
     PreparedVectorRow,
     VectorSetIdentity,
     VectorSimilarityRequest,
@@ -25,6 +28,7 @@ from codira.contracts import (
     VectorStorePurgeRequest,
     VectorStorePurgeResult,
     VectorStoreSpec,
+    VectorStoreFullIndexRequest,
 )
 from codira.plugin_config import plugin_json_schema
 from codira.semantic.embeddings import deserialize_vector
@@ -44,9 +48,10 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.2"
-FORMAT_VERSION = "1"
+PACKAGE_VERSION = "1.0.4"
+FORMAT_VERSION = "3"
 _CACHE_LOOKUP_HASH_BATCH_SIZE = 900
+_DEFAULT_SIMILARITY_CANDIDATE_LIMIT = 256
 
 
 def _parse_sqlite_timestamp(value: str) -> datetime | None:
@@ -88,6 +93,63 @@ def get_vector_store_path(root: Path) -> Path:
     return get_codira_dir(root) / "embeddings.db"
 
 
+def _payload_table_name(vector_set_id: int) -> str:
+    """Return the sqlite-vec table name for one vector set.
+
+    Parameters
+    ----------
+    vector_set_id : int
+        Persistent vector-set identifier.
+
+    Returns
+    -------
+    str
+        Valid, store-owned virtual table name.
+    """
+    return f"vector_payload_index_{vector_set_id}"
+
+
+def _connect(path: Path) -> sqlite3.Connection:
+    """Open a SQLite vector-store connection with sqlite-vec loaded.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Vector-store database path.
+
+    Returns
+    -------
+    sqlite3.Connection
+        Connection ready to access ``vec0`` virtual tables.
+    """
+    conn = sqlite3.connect(path)
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+    return conn
+
+
+def _similarity_candidate_limit(config: Mapping[str, object]) -> int:
+    """Return the configured bounded sqlite-vec candidate window.
+
+    Parameters
+    ----------
+    config : collections.abc.Mapping[str, object]
+        SQLite vector-store configuration table.
+
+    Returns
+    -------
+    int
+        Positive number of nearest payloads retrieved before structural
+        resolution.
+    """
+    configured = config.get("candidate_limit", _DEFAULT_SIMILARITY_CANDIDATE_LIMIT)
+    if isinstance(configured, int) and not isinstance(configured, bool):
+        if configured > 0:
+            return configured
+    return _DEFAULT_SIMILARITY_CANDIDATE_LIMIT
+
+
 class SQLiteVectorStore:
     """
     SQLite-backed vector store.
@@ -113,7 +175,20 @@ class SQLiteVectorStore:
         collections.abc.Mapping[str, object]
             Strict JSON Schema for vector-store options.
         """
-        return plugin_json_schema({})
+        return plugin_json_schema(
+            {
+                "candidate_limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": _DEFAULT_SIMILARITY_CANDIDATE_LIMIT,
+                    "description": (
+                        "Maximum nearest vector payloads retrieved per "
+                        "sqlite-vec similarity request before structural "
+                        "filtering."
+                    ),
+                }
+            }
+        )
 
     def spec(self, config: Mapping[str, object]) -> VectorStoreSpec:
         """
@@ -155,7 +230,7 @@ class SQLiteVectorStore:
         del config
         path = get_vector_store_path(root)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(path) as conn:
+        with _connect(path) as conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS vector_sets (
@@ -182,20 +257,19 @@ class SQLiteVectorStore:
                         format_version
                     )
                 );
-                CREATE TABLE IF NOT EXISTS vectors (
+                CREATE TABLE IF NOT EXISTS vector_payloads (
+                    id INTEGER PRIMARY KEY,
+                    vector_set_id INTEGER NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    UNIQUE (vector_set_id, content_hash),
+                    FOREIGN KEY (vector_set_id) REFERENCES vector_sets(id)
+                );
+                CREATE TABLE IF NOT EXISTS vector_bindings (
                     vector_set_id INTEGER NOT NULL,
                     object_type TEXT NOT NULL,
                     stable_id TEXT NOT NULL,
                     content_hash TEXT NOT NULL,
-                    vector BLOB NOT NULL,
                     PRIMARY KEY (vector_set_id, object_type, stable_id),
-                    FOREIGN KEY (vector_set_id) REFERENCES vector_sets(id)
-                );
-                CREATE TABLE IF NOT EXISTS vector_cache (
-                    vector_set_id INTEGER NOT NULL,
-                    content_hash TEXT NOT NULL,
-                    vector BLOB NOT NULL,
-                    PRIMARY KEY (vector_set_id, content_hash),
                     FOREIGN KEY (vector_set_id) REFERENCES vector_sets(id)
                 );
                 CREATE TABLE IF NOT EXISTS pending_vectors (
@@ -247,7 +321,7 @@ class SQLiteVectorStore:
             identity.vector_store.store_version,
             identity.vector_store.format_version,
         )
-        with sqlite3.connect(get_vector_store_path(root)) as conn:
+        with _connect(get_vector_store_path(root)) as conn:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO vector_sets(
@@ -282,7 +356,16 @@ class SQLiteVectorStore:
                 values,
             ).fetchone()
         assert row is not None
-        return int(row[0])
+        vector_set_id = int(row[0])
+        table_name = _payload_table_name(vector_set_id)
+        with _connect(get_vector_store_path(root)) as conn:
+            conn.execute(
+                f"CREATE VIRTUAL TABLE IF NOT EXISTS {table_name} USING vec0("
+                f"content_hash TEXT, embedding float[{identity.engine.dimension}] "
+                "distance_metric=cosine"
+                ")"
+            )
+        return vector_set_id
 
     def load_cached_vectors(
         self,
@@ -315,7 +398,7 @@ class SQLiteVectorStore:
             return {}
         vector_set_id = self.ensure_vector_set(root, identity, config)
         cached_vectors: dict[str, bytes] = {}
-        with sqlite3.connect(get_vector_store_path(root)) as conn:
+        with _connect(get_vector_store_path(root)) as conn:
             for content_hash_batch in iter_batched(
                 ordered_hashes,
                 batch_size=_CACHE_LOOKUP_HASH_BATCH_SIZE,
@@ -323,10 +406,12 @@ class SQLiteVectorStore:
                 placeholders = ",".join("?" for _item in content_hash_batch)
                 rows = conn.execute(
                     f"""
-                    SELECT content_hash, vector
-                    FROM vector_cache
-                    WHERE vector_set_id = ?
-                      AND content_hash IN ({placeholders})
+                    SELECT payloads.content_hash, payload_index.embedding
+                    FROM vector_payloads payloads
+                    JOIN vector_payload_index_{vector_set_id} payload_index
+                      ON payload_index.rowid = payloads.id
+                    WHERE payloads.vector_set_id = ?
+                      AND payloads.content_hash IN ({placeholders})
                     """,
                     (vector_set_id, *content_hash_batch),
                 ).fetchall()
@@ -334,6 +419,58 @@ class SQLiteVectorStore:
                     {str(content_hash): bytes(vector) for content_hash, vector in rows}
                 )
         return cached_vectors
+
+    def _store_payloads(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        vector_set_id: int,
+        dimension: int,
+        vectors: Mapping[str, bytes],
+    ) -> None:
+        """Persist each payload once and mirror new payloads into sqlite-vec.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Open transaction-owned vector-store connection.
+        vector_set_id : int
+            Persistent vector-set identifier.
+        dimension : int
+            Embedding dimensionality used to decode vectors.
+        vectors : collections.abc.Mapping[str, bytes]
+            Serialized vectors keyed by their content hash.
+
+        Returns
+        -------
+        None
+            Missing payloads are inserted once in both persistent structures.
+        """
+        if not vectors:
+            return
+        table_name = _payload_table_name(vector_set_id)
+        for content_hash, vector in sorted(vectors.items()):
+            existing = conn.execute(
+                "SELECT id FROM vector_payloads WHERE vector_set_id = ? AND content_hash = ?",
+                (vector_set_id, content_hash),
+            ).fetchone()
+            if existing is not None:
+                continue
+            cursor = conn.execute(
+                "INSERT INTO vector_payloads(vector_set_id, content_hash) VALUES (?, ?)",
+                (vector_set_id, content_hash),
+            )
+            assert cursor.lastrowid is not None
+            conn.execute(
+                f"INSERT INTO {table_name}(rowid, content_hash, embedding) VALUES (?, ?, ?)",
+                (
+                    int(cursor.lastrowid),
+                    content_hash,
+                    sqlite_vec.serialize_float32(
+                        deserialize_vector(vector, dim=dimension)
+                    ),
+                ),
+            )
 
     def store_cached_vectors(
         self,
@@ -364,18 +501,12 @@ class SQLiteVectorStore:
         if not vectors:
             return
         vector_set_id = self.ensure_vector_set(root, identity, config)
-        with sqlite3.connect(get_vector_store_path(root)) as conn:
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO vector_cache(
-                    vector_set_id, content_hash, vector
-                )
-                VALUES (?, ?, ?)
-                """,
-                [
-                    (vector_set_id, content_hash, vector)
-                    for content_hash, vector in sorted(vectors.items())
-                ],
+        with _connect(get_vector_store_path(root)) as conn:
+            self._store_payloads(
+                conn,
+                vector_set_id=vector_set_id,
+                dimension=identity.engine.dimension,
+                vectors=vectors,
             )
 
     def store_pending_vectors(
@@ -407,7 +538,7 @@ class SQLiteVectorStore:
         if not rows:
             return
         vector_set_id = self.ensure_vector_set(root, identity, config)
-        with sqlite3.connect(get_vector_store_path(root)) as conn:
+        with _connect(get_vector_store_path(root)) as conn:
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO pending_vectors(
@@ -462,7 +593,7 @@ class SQLiteVectorStore:
         if not rows:
             return
         vector_set_id = self.ensure_vector_set(root, identity, config)
-        with sqlite3.connect(get_vector_store_path(root)) as conn:
+        with _connect(get_vector_store_path(root)) as conn:
             conn.executemany(
                 """
                 DELETE FROM pending_vectors
@@ -504,7 +635,7 @@ class SQLiteVectorStore:
             Matching pending rows are deleted in place.
         """
         vector_set_id = self.ensure_vector_set(root, identity, config)
-        with sqlite3.connect(get_vector_store_path(root)) as conn:
+        with _connect(get_vector_store_path(root)) as conn:
             conn.execute(
                 """
                 DELETE FROM pending_vectors
@@ -543,17 +674,22 @@ class SQLiteVectorStore:
         if not materialized:
             return
         vector_set_id = self.ensure_vector_set(root, identity, config)
-        with sqlite3.connect(get_vector_store_path(root)) as conn:
+        with _connect(get_vector_store_path(root)) as conn:
+            self._store_payloads(
+                conn,
+                vector_set_id=vector_set_id,
+                dimension=identity.engine.dimension,
+                vectors={
+                    prepared.content_hash: prepared.vector
+                    for prepared in materialized
+                    if prepared.vector is not None
+                },
+            )
             conn.executemany(
                 """
-                INSERT OR REPLACE INTO vectors(
-                    vector_set_id,
-                    object_type,
-                    stable_id,
-                    content_hash,
-                    vector
-                )
-                VALUES (?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO vector_bindings(
+                    vector_set_id, object_type, stable_id, content_hash
+                ) VALUES (?, ?, ?, ?)
                 """,
                 [
                     (
@@ -561,7 +697,6 @@ class SQLiteVectorStore:
                         prepared.row.object_type,
                         prepared.row.stable_id,
                         prepared.content_hash,
-                        prepared.vector,
                     )
                     for prepared in materialized
                 ],
@@ -589,38 +724,127 @@ class SQLiteVectorStore:
             request.identity,
             request.config,
         )
-        with sqlite3.connect(get_vector_store_path(request.root)) as conn:
+        table_name = _payload_table_name(vector_set_id)
+        candidate_limit = _similarity_candidate_limit(request.config)
+        with _connect(get_vector_store_path(request.root)) as conn:
             rows = conn.execute(
-                """
-                SELECT stable_id, vector
-                FROM vectors
-                WHERE vector_set_id = ?
-                  AND object_type = ?
-                ORDER BY stable_id
+                f"""
+                WITH nearest_payloads AS (
+                    SELECT content_hash, distance
+                    FROM {table_name}
+                    WHERE embedding MATCH ?
+                    LIMIT {candidate_limit}
+                )
+                SELECT bindings.stable_id, 1.0 - nearest_payloads.distance AS score
+                FROM nearest_payloads
+                JOIN vector_bindings bindings
+                  ON bindings.vector_set_id = ?
+                 AND bindings.content_hash = nearest_payloads.content_hash
+                WHERE bindings.object_type = ?
                 """,
-                (vector_set_id, request.object_type),
+                (
+                    sqlite_vec.serialize_float32(request.query_vector),
+                    vector_set_id,
+                    request.object_type,
+                ),
             ).fetchall()
         scores = [
-            VectorSimilarityScore(
-                stable_id=str(stable_id),
-                score=sum(
-                    left * right
-                    for left, right in zip(
-                        request.query_vector,
-                        deserialize_vector(
-                            bytes(vector),
-                            dim=request.identity.engine.dimension,
-                        ),
-                        strict=True,
-                    )
-                ),
-            )
-            for stable_id, vector in rows
+            VectorSimilarityScore(stable_id=str(stable_id), score=float(score))
+            for stable_id, score in rows
+            if score is not None and float(score) >= request.min_score
         ]
-        return sorted(
-            (score for score in scores if score.score >= request.min_score),
-            key=lambda item: (-item.score, item.stable_id),
+        return sorted(scores, key=lambda item: (-item.score, item.stable_id))
+
+    def store_vectors_for_full_index(
+        self,
+        request: VectorStoreFullIndexRequest,
+    ) -> None:
+        """Persist one complete vector index in a single SQLite transaction.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStoreFullIndexRequest
+            Complete materialized rows and newly encoded cache payloads.
+
+        Returns
+        -------
+        None
+            Bindings, payloads, and pending rows are atomically synchronized.
+        """
+        vector_set_id = self.ensure_vector_set(
+            request.root, request.identity, request.config
         )
+        materialized = [row for row in request.rows if row.vector is not None]
+        with _connect(get_vector_store_path(request.root)) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._store_payloads(
+                    conn,
+                    vector_set_id=vector_set_id,
+                    dimension=request.identity.engine.dimension,
+                    vectors=request.cached_vectors,
+                )
+                self._store_payloads(
+                    conn,
+                    vector_set_id=vector_set_id,
+                    dimension=request.identity.engine.dimension,
+                    vectors={
+                        row.content_hash: row.vector
+                        for row in materialized
+                        if row.vector is not None
+                    },
+                )
+                if request.preserve_existing:
+                    desired = request.identity_rows or tuple(
+                        PreparedVectorIdentityRow(
+                            object_type=row.row.object_type,
+                            stable_id=row.row.stable_id,
+                            content_hash=row.content_hash,
+                            vector=row.vector,
+                        )
+                        for row in materialized
+                    )
+                    conn.execute(
+                        "CREATE TEMP TABLE desired_bindings(object_type TEXT, stable_id TEXT)"
+                    )
+                    conn.executemany(
+                        "INSERT INTO desired_bindings VALUES (?, ?)",
+                        [(row.object_type, row.stable_id) for row in desired],
+                    )
+                    conn.execute(
+                        """DELETE FROM vector_bindings WHERE vector_set_id = ?
+                        AND NOT EXISTS (SELECT 1 FROM desired_bindings desired
+                        WHERE desired.object_type = vector_bindings.object_type
+                        AND desired.stable_id = vector_bindings.stable_id)""",
+                        (vector_set_id,),
+                    )
+                else:
+                    conn.execute(
+                        "DELETE FROM vector_bindings WHERE vector_set_id = ?",
+                        (vector_set_id,),
+                    )
+                conn.executemany(
+                    """INSERT OR REPLACE INTO vector_bindings(
+                    vector_set_id, object_type, stable_id, content_hash)
+                    VALUES (?, ?, ?, ?)""",
+                    [
+                        (
+                            vector_set_id,
+                            row.row.object_type,
+                            row.row.stable_id,
+                            row.content_hash,
+                        )
+                        for row in materialized
+                    ],
+                )
+                conn.execute(
+                    "DELETE FROM pending_vectors WHERE vector_set_id = ?",
+                    (vector_set_id,),
+                )
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
 
     def purge_vector_sets(
         self,
@@ -647,7 +871,7 @@ class SQLiteVectorStore:
             else self.ensure_vector_set(request.root, request.identity, request.config)
         )
         mode = "all" if request.all_sets else "stale"
-        with sqlite3.connect(path) as conn:
+        with _connect(path) as conn:
             rows = conn.execute(
                 """
                 SELECT id, created_at
@@ -694,13 +918,13 @@ class SQLiteVectorStore:
             placeholders = ",".join("?" for _item in selected_ids)
             vector_count = int(
                 conn.execute(
-                    f"SELECT COUNT(*) FROM vectors WHERE vector_set_id IN ({placeholders})",
+                    f"SELECT COUNT(*) FROM vector_bindings WHERE vector_set_id IN ({placeholders})",
                     selected_ids,
                 ).fetchone()[0]
             )
             cache_count = int(
                 conn.execute(
-                    f"SELECT COUNT(*) FROM vector_cache WHERE vector_set_id IN ({placeholders})",
+                    f"SELECT COUNT(*) FROM vector_payloads WHERE vector_set_id IN ({placeholders})",
                     selected_ids,
                 ).fetchone()[0]
             )
@@ -712,11 +936,11 @@ class SQLiteVectorStore:
             )
             if not request.dry_run:
                 conn.execute(
-                    f"DELETE FROM vectors WHERE vector_set_id IN ({placeholders})",
+                    f"DELETE FROM vector_bindings WHERE vector_set_id IN ({placeholders})",
                     selected_ids,
                 )
                 conn.execute(
-                    f"DELETE FROM vector_cache WHERE vector_set_id IN ({placeholders})",
+                    f"DELETE FROM vector_payloads WHERE vector_set_id IN ({placeholders})",
                     selected_ids,
                 )
                 conn.execute(
