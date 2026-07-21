@@ -1,3 +1,16 @@
+# [1.51.0](https://github.com/marco0560/codira/compare/v1.50.0...v1.51.0) (2026-07-21)
+
+
+### Bug Fixes
+
+* **embeddings:** batch vector cache lookups ([97862d0](https://github.com/marco0560/codira/commit/97862d0c15aeaee2dbfe0fb37fd4aa4c67907fba))
+* **embeddings:** bound sqlite vector retrieval ([195454c](https://github.com/marco0560/codira/commit/195454c4f9371bee6e73f0656a1dfbe00c49464d))
+
+
+### Features
+
+* **embeddings:** merge vector-store authority branch ([8312c38](https://github.com/marco0560/codira/commit/8312c38b017534a8aaa65b5e3d51bcc70aea646c))
+
 # [1.50.0](https://github.com/marco0560/codira/compare/v1.49.0...v1.50.0) (2026-07-20)
 
 
