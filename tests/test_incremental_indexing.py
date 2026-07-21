@@ -3581,10 +3581,16 @@ def test_index_cli_defers_and_processes_pending_embeddings(
     vector_pending_count = vector_conn.execute(
         "SELECT COUNT(*) FROM pending_vectors"
     ).fetchone()
-    vector_count = vector_conn.execute("SELECT COUNT(*) FROM vectors").fetchone()
+    vector_binding_count = vector_conn.execute(
+        "SELECT COUNT(*) FROM vector_bindings"
+    ).fetchone()
+    vector_payload_count = vector_conn.execute(
+        "SELECT COUNT(*) FROM vector_payloads"
+    ).fetchone()
     vector_conn.close()
     assert vector_pending_count == (0,)
-    assert vector_count == (2,)
+    assert vector_binding_count == (2,)
+    assert vector_payload_count == (2,)
 
 
 def test_index_repo_stores_immediate_vectors_in_vector_store(tmp_path: Path) -> None:
@@ -3612,9 +3618,11 @@ def test_index_repo_stores_immediate_vectors_in_vector_store(tmp_path: Path) -> 
     vector_db_path = tmp_path / ".codira" / "embeddings.db"
     vector_conn = sqlite3.connect(vector_db_path)
     try:
-        vector_count = vector_conn.execute("SELECT COUNT(*) FROM vectors").fetchone()
-        cache_count = vector_conn.execute(
-            "SELECT COUNT(*) FROM vector_cache"
+        vector_binding_count = vector_conn.execute(
+            "SELECT COUNT(*) FROM vector_bindings"
+        ).fetchone()
+        vector_payload_count = vector_conn.execute(
+            "SELECT COUNT(*) FROM vector_payloads"
         ).fetchone()
         pending_count = vector_conn.execute(
             "SELECT COUNT(*) FROM pending_vectors"
@@ -3623,8 +3631,8 @@ def test_index_repo_stores_immediate_vectors_in_vector_store(tmp_path: Path) -> 
         vector_conn.close()
 
     assert report.embeddings_recomputed == 2
-    assert vector_count == (2,)
-    assert cache_count == (2,)
+    assert vector_binding_count == (2,)
+    assert vector_payload_count == (2,)
     assert pending_count == (0,)
 
 
