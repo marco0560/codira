@@ -11,14 +11,17 @@ from codira.contracts import (
     PendingEmbeddingRow,
     PreparedVectorRow,
     VectorSetIdentity,
+    VectorSimilarityRequest,
     VectorStore,
     VectorStorePurgeRequest,
 )
+from codira.semantic.embeddings import serialize_vector
 from codira_vector_store_sqlite import (
     SQLiteVectorStore,
     build_vector_store,
     get_vector_store_path,
 )
+import codira_vector_store_sqlite as sqlite_vector_store_module
 
 
 def _vector_identity(
@@ -75,7 +78,7 @@ def _prepared_rows() -> list[PreparedVectorRow]:
                 text="symbol text",
             ),
             content_hash="hash-one",
-            vector=b"vector-one",
+            vector=serialize_vector([1.0, 0.0, 0.0]),
         ),
         PreparedVectorRow(
             row=PendingEmbeddingRow(
@@ -85,7 +88,7 @@ def _prepared_rows() -> list[PreparedVectorRow]:
                 text="doc text",
             ),
             content_hash="hash-two",
-            vector=b"vector-two",
+            vector=serialize_vector([0.0, 1.0, 0.0]),
         ),
     ]
 
@@ -106,7 +109,7 @@ def test_sqlite_vector_store_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.0.2"
+    assert project["project"]["version"] == "1.0.4"
     assert project["project"]["entry-points"]["codira.vector_stores"] == {
         "sqlite": "codira_vector_store_sqlite:build_vector_store"
     }
@@ -130,7 +133,7 @@ def test_sqlite_vector_store_exposes_configuration_schema() -> None:
     assert isinstance(properties, dict)
 
     assert schema["additionalProperties"] is False
-    assert sorted(properties) == ["enabled"]
+    assert sorted(properties) == ["candidate_limit", "enabled"]
 
 
 def test_sqlite_vector_store_initializes_separated_database(tmp_path: Path) -> None:
@@ -162,7 +165,12 @@ def test_sqlite_vector_store_initializes_separated_database(tmp_path: Path) -> N
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-    assert {"vector_sets", "vectors", "vector_cache", "pending_vectors"} <= tables
+    assert {
+        "vector_sets",
+        "vector_payloads",
+        "vector_bindings",
+        "pending_vectors",
+    } <= tables
 
 
 def test_sqlite_vector_store_persists_vector_rows(tmp_path: Path) -> None:
@@ -190,7 +198,10 @@ def test_sqlite_vector_store_persists_vector_rows(tmp_path: Path) -> None:
     store.store_cached_vectors(
         tmp_path,
         identity,
-        {"hash-one": b"cached-one", "hash-two": b"cached-two"},
+        {
+            "hash-one": serialize_vector([1.0, 0.0, 0.0]),
+            "hash-two": serialize_vector([0.0, 1.0, 0.0]),
+        },
         {},
     )
     assert store.load_cached_vectors(
@@ -198,7 +209,10 @@ def test_sqlite_vector_store_persists_vector_rows(tmp_path: Path) -> None:
         identity,
         ["hash-two", "hash-one", "hash-one"],
         {},
-    ) == {"hash-one": b"cached-one", "hash-two": b"cached-two"}
+    ) == {
+        "hash-one": serialize_vector([1.0, 0.0, 0.0]),
+        "hash-two": serialize_vector([0.0, 1.0, 0.0]),
+    }
 
     store.store_pending_vectors(tmp_path, identity, rows, {})
     store.store_vectors(tmp_path, identity, rows, {})
@@ -214,16 +228,16 @@ def test_sqlite_vector_store_persists_vector_rows(tmp_path: Path) -> None:
         ).fetchall()
         vector_rows = conn.execute(
             """
-            SELECT object_type, stable_id, content_hash, vector
-            FROM vectors
+            SELECT object_type, stable_id, content_hash
+            FROM vector_bindings
             ORDER BY object_type, stable_id
             """
         ).fetchall()
 
     assert pending_rows == [("documentation", 2, "doc:two", "hash-two", "doc text")]
     assert vector_rows == [
-        ("documentation", "doc:two", "hash-two", b"vector-two"),
-        ("symbol", "symbol:one", "hash-one", b"vector-one"),
+        ("documentation", "doc:two", "hash-two"),
+        ("symbol", "symbol:one", "hash-one"),
     ]
 
     store.clear_pending_vectors(tmp_path, identity, {})
@@ -232,6 +246,131 @@ def test_sqlite_vector_store_persists_vector_rows(tmp_path: Path) -> None:
             "SELECT COUNT(*) FROM pending_vectors"
         ).fetchone()
     assert pending_after_clear == (0,)
+
+
+def test_sqlite_vector_store_loads_large_cache_sets_in_batches(
+    tmp_path: Path,
+) -> None:
+    """
+    Load every cached vector when one lookup exceeds SQLite's bind limit.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts chunked cache lookup preserves every vector.
+    """
+    store = SQLiteVectorStore()
+    identity = _vector_identity(store)
+    cached_vectors = {
+        f"hash-{index}": serialize_vector([float(index), 0.0, 0.0])
+        for index in range(sqlite_vector_store_module._CACHE_LOOKUP_HASH_BATCH_SIZE + 1)
+    }
+
+    store.store_cached_vectors(tmp_path, identity, cached_vectors, {})
+
+    assert (
+        store.load_cached_vectors(
+            tmp_path,
+            identity,
+            [*cached_vectors, "hash-0"],
+            {},
+        )
+        == cached_vectors
+    )
+
+
+def test_sqlite_vector_store_indexes_one_payload_for_multiple_bindings(
+    tmp_path: Path,
+) -> None:
+    """Use sqlite-vec once when multiple identities share one payload.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts normalized payload storage and native similarity order.
+    """
+    store = SQLiteVectorStore()
+    identity = _vector_identity(store)
+    shared_vector = serialize_vector([1.0, 0.0, 0.0])
+    rows = [
+        PreparedVectorRow(
+            row=PendingEmbeddingRow("symbol", index, f"symbol:{index}", "text"),
+            content_hash="shared",
+            vector=shared_vector,
+        )
+        for index in (1, 2)
+    ]
+
+    store.store_vectors(tmp_path, identity, rows, {})
+    scores = store.similarity_scores(
+        VectorSimilarityRequest(
+            root=tmp_path,
+            identity=identity,
+            config={},
+            object_type="symbol",
+            query_vector=[1.0, 0.0, 0.0],
+            min_score=0.0,
+        )
+    )
+
+    with sqlite3.connect(get_vector_store_path(tmp_path)) as conn:
+        payload_count = conn.execute("SELECT COUNT(*) FROM vector_payloads").fetchone()
+        binding_count = conn.execute("SELECT COUNT(*) FROM vector_bindings").fetchone()
+    assert payload_count == (1,)
+    assert binding_count == (2,)
+    assert [score.stable_id for score in scores] == ["symbol:1", "symbol:2"]
+
+
+def test_sqlite_vector_store_bounds_large_similarity_requests(
+    tmp_path: Path,
+) -> None:
+    """Keep a large vector set inside the configured candidate window.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts retrieval does not request every stored binding.
+    """
+    store = SQLiteVectorStore()
+    identity = _vector_identity(store)
+    rows = [
+        PreparedVectorRow(
+            row=PendingEmbeddingRow("symbol", index, f"symbol:{index:05d}", "text"),
+            content_hash=f"hash:{index}",
+            vector=serialize_vector([1.0, float(index), 0.0]),
+        )
+        for index in range(5_000)
+    ]
+
+    store.store_vectors(tmp_path, identity, rows, {})
+    scores = store.similarity_scores(
+        VectorSimilarityRequest(
+            root=tmp_path,
+            identity=identity,
+            config={"candidate_limit": 64},
+            object_type="symbol",
+            query_vector=[1.0, 0.0, 0.0],
+            min_score=-10_000.0,
+        )
+    )
+
+    assert len(scores) == 64
+    assert scores[0].stable_id == "symbol:00000"
 
 
 def test_sqlite_vector_store_purges_stale_sets_with_retention(
@@ -257,7 +396,9 @@ def test_sqlite_vector_store_purges_stale_sets_with_retention(
     stale_new = _vector_identity(store, model_version="stale-new")
     rows = _prepared_rows()
     for identity in (active, stale_old, stale_new):
-        store.store_cached_vectors(tmp_path, identity, {"hash-one": b"cached"}, {})
+        store.store_cached_vectors(
+            tmp_path, identity, {"hash-one": serialize_vector([1.0, 0.0, 0.0])}, {}
+        )
         store.store_pending_vectors(tmp_path, identity, rows, {})
         store.store_vectors(tmp_path, identity, rows, {})
     with sqlite3.connect(get_vector_store_path(tmp_path)) as conn:
@@ -284,7 +425,7 @@ def test_sqlite_vector_store_purges_stale_sets_with_retention(
     )
     assert dry_run.deleted_vector_sets == 1
     assert dry_run.deleted_vectors == 2
-    assert dry_run.deleted_cached_vectors == 1
+    assert dry_run.deleted_cached_vectors == 2
     assert dry_run.deleted_pending_vectors == 2
 
     result = store.purge_vector_sets(

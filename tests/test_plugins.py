@@ -462,6 +462,7 @@ class _DemoDuckDBBackend(SQLiteIndexBackend):
     """Small DuckDB-shaped backend stub used for registry-selection tests."""
 
     name = "duckdb"
+    version = 23
 
 
 def _patch_entry_points(
@@ -1241,12 +1242,12 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
         (
             "backend: sqlite [active, loaded] "
             "provider=codira-backend-sqlite origin=first_party "
-            "source=entry_point version=21 entry_point=sqlite"
+            "source=entry_point version=22 entry_point=sqlite"
         ),
         (
             "backend: duckdb [loaded] "
             "provider=codira-backend-duckdb origin=first_party "
-            "source=entry_point version=21 entry_point=duckdb"
+            "source=entry_point version=23 entry_point=duckdb"
         ),
     ]
 
@@ -1261,7 +1262,7 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
             "origin": "first_party",
             "source": "entry_point",
             "status": "loaded",
-            "version": "21",
+            "version": "22",
             "entry_point": "sqlite",
             "detail": None,
         },
@@ -1273,7 +1274,7 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
             "origin": "first_party",
             "source": "entry_point",
             "status": "loaded",
-            "version": "21",
+            "version": "23",
             "entry_point": "duckdb",
             "detail": None,
         },

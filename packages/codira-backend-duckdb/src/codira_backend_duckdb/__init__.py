@@ -88,7 +88,7 @@ if TYPE_CHECKING:
         VectorStore,
     )
 
-PACKAGE_VERSION = "1.50.1"
+PACKAGE_VERSION = "1.50.2"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -1858,9 +1858,11 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                         embeddings_recomputed,
                         embeddings_reused,
                     ) = _resolve_cached_prepared_embedding_rows(
-                        persistence_conn,
                         prepared_rows=pending_embedding_rows,
-                        backend=request.embedding_backend,
+                        root=request.root,
+                        vector_store=request.vector_store,
+                        vector_set_identity=request.vector_set_identity,
+                        vector_store_config=request.vector_store_config,
                         profiler=profiler,
                     )
                     _flush_pending_embedding_rows(

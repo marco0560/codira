@@ -12,7 +12,7 @@ import pytest
 from codira.contracts import BackendPersistAnalysisRequest, PendingEmbeddingRow
 from codira.models import AnalysisResult, FileMetadataSnapshot, ModuleArtifact
 from codira_backend_sqlite.schema import DDL
-from codira.semantic.embeddings import EmbeddingBackendSpec, deserialize_vector
+from codira.semantic.embeddings import EmbeddingBackendSpec
 from codira_backend_sqlite import SQLiteIndexBackend, build_backend
 from codira_backend_sqlite.sqlite_support import _flush_pending_embedding_rows
 
@@ -40,7 +40,7 @@ def test_sqlite_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.45.2"
+    assert project["project"]["version"] == "1.45.3"
     assert project["project"]["dependencies"] == ["codira>=1.5.0,<2.0.0"]
     assert project["project"]["entry-points"]["codira.backends"] == {
         "sqlite": "codira_backend_sqlite:build_backend"
@@ -750,4 +750,4 @@ def test_sqlite_pending_embeddings_replace_duplicate_documentation_keys(
         "1",
         "latest-hash",
     )
-    assert deserialize_vector(stored_rows[0][5], dim=384) == [1.0] + [0.0] * 383
+    assert stored_rows[0][5] == b""

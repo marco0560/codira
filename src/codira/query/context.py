@@ -27,7 +27,6 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from codira.config import with_effective_config_cache
 from codira.contracts import (
-    BackendDocumentationCandidatesRequest,
     BackendQueryConnection,
     split_declared_retrieval_capabilities,
 )
@@ -69,6 +68,10 @@ from codira.query.signals import (
 )
 from codira.registry import active_index_backend, with_active_plugin_instance_cache
 from codira.semantic.embeddings import get_embedding_backend
+from codira.semantic.search import (
+    DocumentationCandidatesRequest,
+    documentation_candidates,
+)
 from codira.types import (
     ChannelBundle,
     ChannelName,
@@ -4165,9 +4168,8 @@ def _retrieve_documentation_candidates(
         Ranked documentation candidates converted to top-match rows.
     """
     del intent
-    backend = active_index_backend(root=root)
-    rows = backend.documentation_candidates(
-        BackendDocumentationCandidatesRequest(
+    rows = documentation_candidates(
+        DocumentationCandidatesRequest(
             root=root,
             query=query,
             limit=DOCUMENTATION_RESULT_LIMIT,

@@ -106,6 +106,7 @@ from codira.semantic.embeddings import (
     EMBEDDING_DIM,
     EMBEDDING_VERSION,
 )
+from codira.vector_store import active_vector_store_context
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -2650,8 +2651,8 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-bash==1.41.0",
         "codira-analyzer-markdown==1.44.0",
         "codira-analyzer-text==1.43.0",
-        "codira-backend-sqlite==1.45.2",
-        "codira-backend-duckdb==1.50.1",
+        "codira-backend-sqlite==1.45.3",
+        "codira-backend-duckdb==1.50.2",
         "codira-embedding-sentence-transformers==1.0.2",
         "codira-embedding-onnx==1.0.2",
         "codira-vector-store-sqlite==1.0.2",
@@ -4801,6 +4802,7 @@ def test_c_declaration_comments_contribute_to_embedding_candidates(
 
     backend = SQLiteIndexBackend()
     backend.initialize(tmp_path)
+    vector_store_context = active_vector_store_context(tmp_path)
     analysis = CAnalyzer().analyze_file(source, tmp_path)
     snapshot = FileMetadataSnapshot(
         path=source,
@@ -4813,6 +4815,9 @@ def test_c_declaration_comments_contribute_to_embedding_candidates(
             root=tmp_path,
             file_metadata=snapshot,
             analysis=analysis,
+            vector_store=vector_store_context.store,
+            vector_set_identity=vector_store_context.identity,
+            vector_store_config=vector_store_context.config,
         )
     )
 
@@ -4993,6 +4998,7 @@ def test_sqlite_index_backend_persists_and_deletes_normalized_analysis(
 
     backend = SQLiteIndexBackend()
     backend.initialize(tmp_path)
+    vector_store_context = active_vector_store_context(tmp_path)
 
     parsed = parse_file(module, tmp_path)
     analysis = analysis_result_from_parsed(module, parsed)
@@ -5008,6 +5014,9 @@ def test_sqlite_index_backend_persists_and_deletes_normalized_analysis(
             root=tmp_path,
             file_metadata=snapshot,
             analysis=analysis,
+            vector_store=vector_store_context.store,
+            vector_set_identity=vector_store_context.identity,
+            vector_store_config=vector_store_context.config,
         )
     )
     backend.rebuild_derived_indexes(tmp_path)
@@ -5118,11 +5127,15 @@ def test_sqlite_index_backend_persists_documentation_without_symbols(
 
     backend = SQLiteIndexBackend()
     backend.initialize(tmp_path)
+    vector_store_context = active_vector_store_context(tmp_path)
     recomputed, reused = backend.persist_analysis(
         BackendPersistAnalysisRequest(
             root=tmp_path,
             file_metadata=snapshot,
             analysis=analysis,
+            vector_store=vector_store_context.store,
+            vector_set_identity=vector_store_context.identity,
+            vector_store_config=vector_store_context.config,
         )
     )
 

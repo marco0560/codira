@@ -341,11 +341,15 @@ inter_op_num_threads = 0
 ONNX batching is controlled by the shared `[embeddings].batch_size` key, not by
 a plugin-local option.
 
-First-party vector-store tables currently accept only common plugin keys:
+The SQLite vector store bounds each sqlite-vec nearest-neighbor request before
+structural filtering. Tune that window only when retrieval recall requires it;
+larger values increase query latency and must remain supported by the installed
+sqlite-vec build.
 
 ```toml
 [plugins.vector-store-sqlite]
 enabled = true
+candidate_limit = 256
 
 [plugins.vector-store-duckdb]
 enabled = true

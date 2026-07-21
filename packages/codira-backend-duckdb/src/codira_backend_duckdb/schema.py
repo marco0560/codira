@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 DDL: tuple[str, ...] = (
     "CREATE SEQUENCE IF NOT EXISTS files_id_seq START 1;",
@@ -227,16 +227,6 @@ DDL: tuple[str, ...] = (
         dim INTEGER NOT NULL,
         vector BLOB NOT NULL,
         vector_values DOUBLE[]
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS embedding_vector_cache (
-        backend TEXT NOT NULL,
-        version TEXT NOT NULL,
-        dim INTEGER NOT NULL,
-        content_hash TEXT NOT NULL,
-        vector BLOB NOT NULL,
-        PRIMARY KEY (backend, version, dim, content_hash)
     );
     """,
     """

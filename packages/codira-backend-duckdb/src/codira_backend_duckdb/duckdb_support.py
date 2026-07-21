@@ -46,7 +46,6 @@ from codira.docstring import DocstringValidationRequest, validate_docstring
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.repository_scope import path_has_excluded_tree_name
 from codira.semantic.embeddings import (
-    deserialize_vector,
     embed_texts as embed_texts,
     embedding_work_batch_size,
     embeddings_enabled,
@@ -3695,8 +3694,8 @@ def _flush_embedding_rows(
             and reusable_row.content_hash == content_hash
             and reusable_row.dim == backend.dim
         ):
-            prepared_rows.append((row, content_hash, reusable_row.vector))
-            reused += 1
+            prepared_rows.append((row, content_hash, None))
+            recomputed += 1
         else:
             prepared_rows.append((row, content_hash, None))
             recomputed += 1
@@ -3720,10 +3719,15 @@ def _flush_embedding_rows(
         for row, content_hash, stored_vector in prepared_rows
         if stored_vector is None
     ]
-    cached_vectors = _load_cached_embedding_vectors(
-        conn,
-        backend=backend,
-        content_hashes=missing_hashes,
+    cached_vectors = (
+        {}
+        if (root is None or vector_store is None or vector_set_identity is None)
+        else vector_store.load_cached_vectors(
+            root,
+            vector_set_identity,
+            missing_hashes,
+            {} if vector_store_config is None else vector_store_config,
+        )
     )
     if cached_vectors:
         resolved_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
@@ -4017,154 +4021,6 @@ def _store_pending_embedding_rows(
             raise BackendError(msg) from exc
 
 
-def _load_cached_embedding_vectors(
-    conn: _DuckDBPersistenceConnection,
-    *,
-    backend: EmbeddingBackendSpec,
-    content_hashes: list[str],
-) -> dict[str, bytes]:
-    """
-    Load reusable vectors from the persistent embedding vector cache.
-
-    Parameters
-    ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
-    backend : EmbeddingBackendSpec
-        Active embedding backend metadata.
-    content_hashes : list[str]
-        Candidate content hashes to load.
-
-    Returns
-    -------
-    dict[str, bytes]
-        Cached serialized vectors keyed by content hash.
-    """
-
-    ordered_hashes = list(dict.fromkeys(content_hashes))
-    if not ordered_hashes:
-        return {}
-    placeholders = ",".join("?" for _item in ordered_hashes)
-    rows = conn.execute(
-        f"""
-        SELECT content_hash, vector
-        FROM embedding_vector_cache
-        WHERE backend = ?
-          AND version = ?
-          AND dim = ?
-          AND content_hash IN ({placeholders})
-        """,
-        (backend.name, backend.version, backend.dim, *ordered_hashes),
-    ).fetchall()
-    return {
-        str(content_hash): bytes(cast("bytes", vector)) for content_hash, vector in rows
-    }
-
-
-def _store_cached_embedding_vectors(
-    conn: _DuckDBPersistenceConnection,
-    *,
-    backend: EmbeddingBackendSpec,
-    encoded_vectors: dict[str, bytes],
-    profiler: DuckDBProfileRecorder | None = None,
-) -> None:
-    """
-    Persist newly encoded vectors in the embedding vector cache.
-
-    Parameters
-    ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
-    backend : EmbeddingBackendSpec
-        Active embedding backend metadata.
-    encoded_vectors : dict[str, bytes]
-        Serialized vectors keyed by content hash.
-    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
-        Optional recorder for Arrow batch spans.
-
-    Returns
-    -------
-    None
-        Cache rows are inserted or replaced in place.
-
-    Raises
-    ------
-    codira.contracts.BackendError
-        Raised when DuckDB or Arrow rejects one vector-cache batch.
-    """
-
-    if not encoded_vectors:
-        return
-
-    import pyarrow as pa
-
-    active_profiler = (
-        DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
-    )
-    ordered_vectors = sorted(encoded_vectors.items())
-    for batch in _chunked_embedding_batches(ordered_vectors):
-        backends: list[str] = []
-        versions: list[str] = []
-        dims: list[int] = []
-        content_hashes: list[str] = []
-        vectors: list[bytes] = []
-        for content_hash, vector in batch:
-            backends.append(backend.name)
-            versions.append(backend.version)
-            dims.append(backend.dim)
-            content_hashes.append(content_hash)
-            vectors.append(vector)
-
-        try:
-            with active_profiler.span(
-                "arrow.build.embedding_vector_cache",
-                rows=len(batch),
-                payload_bytes=_cached_vector_payload_bytes(dict(batch)),
-            ):
-                table = pa.table(
-                    {
-                        "backend": pa.array(backends, type=pa.string()),
-                        "version": pa.array(versions, type=pa.string()),
-                        "dim": pa.array(dims, type=pa.int64()),
-                        "content_hash": pa.array(content_hashes, type=pa.string()),
-                        "vector": pa.array(vectors, type=pa.binary()),
-                    }
-                )
-            with active_profiler.span(
-                "arrow.flush.embedding_vector_cache",
-                rows=len(batch),
-                payload_bytes=_cached_vector_payload_bytes(dict(batch)),
-            ):
-                _flush_registered_arrow_table(
-                    conn,
-                    view_name="__codira_embedding_vector_cache_rows",
-                    table=table,
-                    insert_sql="""
-                        INSERT OR REPLACE INTO embedding_vector_cache(
-                            backend,
-                            version,
-                            dim,
-                            content_hash,
-                            vector
-                        )
-                        SELECT
-                            backend,
-                            version,
-                            dim,
-                            content_hash,
-                            vector
-                        FROM __codira_embedding_vector_cache_rows
-                        """,
-                )
-        except _duckdb_batch_error_types() as exc:
-            msg = _embedding_batch_backend_error(
-                operation="embedding_vector_cache_insert",
-                row_count=len(batch),
-                payload_bytes=_cached_vector_payload_bytes(dict(batch)),
-            )
-            raise BackendError(msg) from exc
-
-
 def _store_vector_store_materialized_rows(
     *,
     vector_store: VectorStore | None,
@@ -4445,19 +4301,6 @@ def _flush_prepared_embedding_rows(
             strict=True,
         ):
             encoded_vectors[content_hash] = (serialize_vector(vector), vector)
-        _store_cached_embedding_vectors(
-            conn,
-            backend=backend,
-            encoded_vectors={
-                content_hash: vector_blob
-                for content_hash, (
-                    vector_blob,
-                    _vector_values,
-                ) in encoded_vectors.items()
-            },
-            profiler=active_profiler,
-        )
-
     object_types: list[str] = []
     object_ids: list[int] = []
     backends: list[str] = []
@@ -4465,17 +4308,14 @@ def _flush_prepared_embedding_rows(
     content_hashes: list[str] = []
     dims: list[int] = []
     vectors: list[bytes] = []
-    vector_values_rows: list[list[float]] = []
+    vector_values_rows: list[list[float] | None] = []
     row_ordinals: list[int] = []
     materialized_rows: list[PreparedVectorRow] = []
     identity_rows: list[PreparedVectorIdentityRow] = []
     for row_ordinal, (row, content_hash, stored_vector) in enumerate(deduplicated_rows):
         resolved_blob = stored_vector
-        vector_values: list[float]
         if resolved_blob is None:
-            resolved_blob, vector_values = encoded_vectors[content_hash]
-        else:
-            vector_values = deserialize_vector(resolved_blob, dim=backend.dim)
+            resolved_blob, _vector_values = encoded_vectors[content_hash]
 
         object_types.append(row.object_type)
         object_ids.append(row.object_id)
@@ -4483,8 +4323,8 @@ def _flush_prepared_embedding_rows(
         versions.append(backend.version)
         content_hashes.append(content_hash)
         dims.append(backend.dim)
-        vectors.append(resolved_blob)
-        vector_values_rows.append(vector_values)
+        vectors.append(b"")
+        vector_values_rows.append(None)
         row_ordinals.append(row_ordinal)
         materialized_rows.append(
             PreparedVectorRow(
@@ -4631,10 +4471,12 @@ def _flush_prepared_embedding_rows(
 
 
 def _resolve_cached_prepared_embedding_rows(
-    conn: _DuckDBPersistenceConnection,
     *,
     prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
-    backend: EmbeddingBackendSpec,
+    root: Path | None = None,
+    vector_store: VectorStore | None = None,
+    vector_set_identity: VectorSetIdentity | None = None,
+    vector_store_config: Mapping[str, object] | None = None,
     profiler: DuckDBProfileRecorder | None = None,
 ) -> tuple[list[tuple[PendingEmbeddingRow, str, bytes | None]], int, int]:
     """
@@ -4642,12 +4484,16 @@ def _resolve_cached_prepared_embedding_rows(
 
     Parameters
     ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
     prepared_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
         Prepared embedding rows as ``(row, content_hash, stored_vector)``.
-    backend : codira.semantic.embeddings.EmbeddingBackendSpec
-        Active embedding backend metadata.
+    root : pathlib.Path | None, optional
+        Repository root used to load vector-store cache rows.
+    vector_store : codira.contracts.VectorStore | None, optional
+        Active vector store used as the authoritative vector cache.
+    vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
+        Active vector-set identity for cache lookup.
+    vector_store_config : collections.abc.Mapping[str, object] | None, optional
+        Vector-store-specific configuration table.
     profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
         Optional recorder for cache lookup spans.
 
@@ -4673,10 +4519,15 @@ def _resolve_cached_prepared_embedding_rows(
         "embeddings.load_cached_vectors",
         rows=len(missing_hashes),
     ):
-        cached_vectors = _load_cached_embedding_vectors(
-            conn,
-            backend=backend,
-            content_hashes=missing_hashes,
+        cached_vectors = (
+            {}
+            if (root is None or vector_store is None or vector_set_identity is None)
+            else vector_store.load_cached_vectors(
+                root,
+                vector_set_identity,
+                missing_hashes,
+                {} if vector_store_config is None else vector_store_config,
+            )
         )
 
     resolved_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
@@ -4823,10 +4674,16 @@ def _process_pending_embedding_rows(
         )
         for object_type, object_id, stable_id, content_hash, text in rows
     ]
-    cached_vectors = _load_cached_embedding_vectors(
-        conn,
-        backend=backend,
-        content_hashes=[content_hash for _row, content_hash, _vector in pending_rows],
+    content_hashes = [content_hash for _row, content_hash, _vector in pending_rows]
+    cached_vectors = (
+        {}
+        if vector_store is None or vector_set_identity is None
+        else vector_store.load_cached_vectors(
+            root,
+            vector_set_identity,
+            content_hashes,
+            {} if vector_store_config is None else vector_store_config,
+        )
     )
     prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
     recomputed = 0
@@ -5372,25 +5229,6 @@ def _persist_runtime_inventory(
                 FROM __codira_pending_index_analyzer_rows
                 """,
         )
-
-
-def _dot_similarity(left: list[float], right: list[float]) -> float:
-    """
-    Compute a dot-product similarity between normalized vectors.
-
-    Parameters
-    ----------
-    left : list[float]
-        Left embedding vector.
-    right : list[float]
-        Right embedding vector.
-
-    Returns
-    -------
-    float
-        Dot-product similarity score.
-    """
-    return sum(a * b for a, b in zip(left, right, strict=True))
 
 
 def _placeholders(values: Sequence[object]) -> str:
