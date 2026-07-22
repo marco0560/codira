@@ -407,6 +407,7 @@ class MarkdownAnalyzer:
     name = "markdown"
     version = "2"
     discovery_globs: tuple[str, ...] = ("*.md",)
+    default_coverage_roots: tuple[str, ...] = ("docs", "examples")
 
     def __init__(self) -> None:
         self._path_filters = AnalyzerPathFilters()

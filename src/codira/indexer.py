@@ -22,6 +22,7 @@ import warnings
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from functools import partial
 from multiprocessing import get_context
 from pathlib import Path
@@ -61,10 +62,9 @@ from codira.registry import (
     with_active_plugin_instance_cache,
 )
 from codira.scanner import (
-    CANONICAL_SOURCE_DIRS,
     analyzer_accepts_path,
     file_metadata,
-    iter_canonical_project_files,
+    iter_coverage_project_files,
     iter_project_files,
 )
 from codira.semantic.embeddings import (
@@ -79,6 +79,15 @@ if TYPE_CHECKING:
 ParsedFile = tuple[Path, FileMetadataSnapshot, AnalysisResult]
 _IGNORED_COVERAGE_SUFFIXES = frozenset({"<no-suffix>", ".md", ".txt", ".typed"})
 _BINARY_SNIFF_BYTES = 8192
+_ANALYZER_COVERAGE_ROOTS: dict[str, tuple[str, ...]] = {
+    "python": ("src", "tests", "scripts"),
+    "bash": ("scripts",),
+    "c": ("src", "include", "tests"),
+    "cpp": ("src", "include", "tests"),
+    "json": ("config", ".github", "scripts"),
+    "markdown": ("docs", "examples"),
+    "text": ("docs", "examples"),
+}
 _PROCESS_ANALYSIS_ROOT: Path | None = None
 _PROCESS_WORKER_ANALYZERS: list[LanguageAnalyzer] | None = None
 __all__ = [
@@ -487,7 +496,7 @@ def _audit_canonical_directory_coverage(
     analyzers: list[LanguageAnalyzer],
 ) -> list[CoverageIssue]:
     """
-    Audit canonical source directories for uncovered tracked files.
+    Audit configured or analyzer-default coverage roots for uncovered files.
 
     Parameters
     ----------
@@ -503,13 +512,35 @@ def _audit_canonical_directory_coverage(
     """
     issues: list[CoverageIssue] = []
 
-    for path in iter_canonical_project_files(root):
+    configured_roots = load_effective_config(root=root).coverage.roots
+    if configured_roots == ("-",):
+        return []
+    roots = configured_roots or tuple(
+        sorted(
+            {
+                item
+                for analyzer in analyzers
+                for item in getattr(
+                    analyzer,
+                    "default_coverage_roots",
+                    _ANALYZER_COVERAGE_ROOTS.get(str(analyzer.name), ()),
+                )
+            }
+        )
+    )
+    for path in iter_coverage_project_files(root, roots):
+        rel_text = path.relative_to(root).as_posix()
+        if not any(
+            fnmatch(rel_text, pattern)
+            or rel_text == pattern
+            or rel_text.startswith(f"{pattern.rstrip('/')}/")
+            for pattern in roots
+        ):
+            continue
         if any(analyzer_accepts_path(analyzer, path, root) for analyzer in analyzers):
             continue
         rel_path = path.relative_to(root)
         top_dir = rel_path.parts[0] if rel_path.parts else ""
-        if top_dir not in CANONICAL_SOURCE_DIRS:
-            continue
         if _should_ignore_coverage_gap(path):
             continue
         suffix = path.suffix.lower() or "<no-suffix>"

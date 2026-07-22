@@ -1722,6 +1722,7 @@ class CAnalyzer:
     name = "c"
     version = "10"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
+    default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
     def __init__(self) -> None:
         self._path_filters = AnalyzerPathFilters()

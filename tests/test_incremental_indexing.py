@@ -3204,8 +3204,8 @@ def test_coverage_cli_groups_text_output_by_suffix_and_directory(
     captured = capsys.readouterr()
     assert "Coverage issues: 1" in captured.out
     assert (
-        "coverage: .json x1 in "
-        "src (.json, no registered analyzer accepts this file type/content combination)"
+        "coverage: .json x1 in src "
+        "(.json, no registered analyzer accepts this file type/content combination)"
     ) in captured.out
 
 
@@ -3294,7 +3294,20 @@ def test_coverage_cli_emits_json(
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "cov"
     assert payload["status"] == "incomplete"
-    assert payload["query"]["canonical_directories"] == ["src", "tests", "scripts"]
+    assert payload["query"]["coverage"] == {
+        "source": "analyzer-defaults",
+        "patterns": [
+            ".github",
+            "config",
+            "docs",
+            "examples",
+            "include",
+            "scripts",
+            "src",
+            "tests",
+        ],
+        "resolved_roots": ["src"],
+    }
     assert payload["results"] == [
         {
             "path": str(rust_module),
@@ -3304,6 +3317,57 @@ def test_coverage_cli_emits_json(
         }
     ]
     assert payload["analyzers"]
+
+
+def test_coverage_config_can_disable_auditing(tmp_path: Path) -> None:
+    """Honor the explicit coverage-audit opt-out sentinel.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The assertion verifies disabled auditing emits no gaps.
+    """
+
+    source = tmp_path / "src" / "unclaimed.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text("fn main() {}\n", encoding="utf-8")
+    config = tmp_path / ".codira" / "config.toml"
+    config.parent.mkdir()
+    config.write_text('[index.coverage]\nroots = ["-"]\n', encoding="utf-8")
+
+    assert audit_repo_coverage(tmp_path) == []
+
+
+def test_coverage_config_overrides_analyzer_defaults(tmp_path: Path) -> None:
+    """Restrict coverage auditing to configured root patterns.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The assertion verifies only configured roots are audited.
+    """
+
+    covered = tmp_path / "custom" / "unclaimed.rs"
+    ignored = tmp_path / "src" / "unclaimed.rs"
+    covered.parent.mkdir(parents=True)
+    ignored.parent.mkdir(parents=True)
+    covered.write_text("fn main() {}\n", encoding="utf-8")
+    ignored.write_text("fn main() {}\n", encoding="utf-8")
+    config = tmp_path / ".codira" / "config.toml"
+    config.parent.mkdir()
+    config.write_text('[index.coverage]\nroots = ["custom/**"]\n', encoding="utf-8")
+
+    assert [issue.path for issue in audit_repo_coverage(tmp_path)] == [str(covered)]
 
 
 def test_index_cli_can_require_full_coverage(

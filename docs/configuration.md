@@ -1,5 +1,14 @@
 # Configuration
 
+## Coverage roots
+
+Configure coverage auditing under `[index.coverage]`. `roots = []` uses the
+deterministic union declared by active analyzers; `roots = ["-"]` explicitly
+disables coverage auditing. Other values are repository-relative glob patterns.
+The first-party defaults cover Python (`src`, `tests`, `scripts`), Bash
+(`scripts`), C/C++ (`src`, `include`, `tests`), JSON (`config`, `.github`,
+`scripts`), and Markdown/text (`docs`, `examples`).
+
 Codira can run without a config file. Runtime commands can create a default
 user-level config on first use when the platform user config directory is
 writable, and users can create or inspect config files explicitly with:

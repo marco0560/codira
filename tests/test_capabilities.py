@@ -337,6 +337,7 @@ def test_capability_contract_degrades_analyzers_without_declarations() -> None:
             "does_not_support": [],
             "mappings": {},
             "checksum": None,
+            "default_coverage_roots": [],
             "concurrency": {
                 "declaration_status": "missing",
                 "process_workers": False,

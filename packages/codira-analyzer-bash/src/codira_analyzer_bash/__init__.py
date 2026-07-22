@@ -342,6 +342,7 @@ class BashAnalyzer:
     name = "bash"
     version = "2"
     discovery_globs: tuple[str, ...] = ("*.sh", "*.bash")
+    default_coverage_roots: tuple[str, ...] = ("scripts",)
 
     def __init__(self) -> None:
         self._path_filters = AnalyzerPathFilters()

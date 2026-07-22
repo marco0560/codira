@@ -232,6 +232,19 @@ class IndexConcurrencyConfig:
 
 
 @dataclass(frozen=True)
+class IndexCoverageConfig:
+    """Configure coverage-root glob patterns.
+
+    Parameters
+    ----------
+    roots : tuple[str, ...]
+        Empty selects analyzer defaults; ``("-",)`` disables auditing.
+    """
+
+    roots: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ConfigOrigin:
     """
     Origin metadata for one effective configuration value.
@@ -268,6 +281,8 @@ class CodiraConfig:
         Embedding runtime configuration.
     index : IndexConcurrencyConfig
         Index analysis scheduling configuration.
+    coverage : IndexCoverageConfig
+        Coverage-root configuration.
     origins : dict[str, ConfigOrigin]
         Origin metadata keyed by dotted config key.
     """
@@ -277,6 +292,7 @@ class CodiraConfig:
     plugins: PluginsConfig
     embeddings: EmbeddingsConfig
     index: IndexConcurrencyConfig
+    coverage: IndexCoverageConfig
     origins: dict[str, ConfigOrigin]
 
 
@@ -317,6 +333,7 @@ DEFAULT_CONFIG: dict[str, object] = {
             "max_workers": DEFAULT_INDEX_CONCURRENCY_MAX_WORKERS,
             "min_files": DEFAULT_INDEX_CONCURRENCY_MIN_FILES,
         },
+        "coverage": {"roots": []},
     },
 }
 FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
@@ -469,6 +486,7 @@ _SCHEMA: dict[str, object] = {
             "max_workers": int,
             "min_files": int,
         },
+        "coverage": {"roots": list},
     },
 }
 
@@ -1028,6 +1046,36 @@ def _validate_index_concurrency_semantics(concurrency: Mapping[str, object]) -> 
     )
 
 
+def _validate_index_coverage_semantics(coverage: Mapping[str, object]) -> None:
+    """Validate configured coverage-root patterns.
+
+    Parameters
+    ----------
+    coverage : collections.abc.Mapping[str, object]
+        Coverage configuration table.
+
+    Returns
+    -------
+    None
+        The table is accepted when patterns are safe and unambiguous.
+    """
+
+    roots = coverage.get("roots")
+    _validate_string_list(roots, key="index.coverage.roots", allow_empty_items=False)
+    if not isinstance(roots, list):
+        return
+    patterns = [str(item).strip() for item in roots]
+    if "-" in patterns and patterns != ["-"]:
+        msg = "Configuration key index.coverage.roots may use '-' only by itself."
+        raise ConfigError(msg)
+    if any(
+        pattern != "-" and (pattern.startswith("/") or ".." in pattern.split("/"))
+        for pattern in patterns
+    ):
+        msg = "Configuration key index.coverage.roots must use repo-relative patterns."
+        raise ConfigError(msg)
+
+
 def _validate_semantics(value: Mapping[str, object]) -> None:
     """
     Validate semantic constraints after type validation.
@@ -1119,6 +1167,9 @@ def _validate_semantics(value: Mapping[str, object]) -> None:
         concurrency = index.get("concurrency")
         if isinstance(concurrency, Mapping):
             _validate_index_concurrency_semantics(concurrency)
+        coverage = index.get("coverage")
+        if isinstance(coverage, Mapping):
+            _validate_index_coverage_semantics(coverage)
 
 
 def validate_config_mapping(value: Mapping[str, object]) -> None:
@@ -1529,9 +1580,11 @@ def render_config_toml(value: Mapping[str, object]) -> str:
     backend = _require_table(value["backend"], key="backend")
     plugins = _require_table(value["plugins"], key="plugins")
     embeddings = _require_table(value["embeddings"], key="embeddings")
+    index = _require_table(value["index"], key="index")
     document.add("backend", _toml_table_from_mapping(backend))
     document.add("plugins", _toml_table_from_mapping(_plugin_globals_table(plugins)))
     document.add("embeddings", _toml_table_from_mapping(embeddings))
+    document.add("index", _toml_table_from_mapping(index))
     text = tomlkit.dumps(document).rstrip()
     plugin_sections = _plugin_config_sections(plugins)
     if plugin_sections:
@@ -1979,6 +2032,7 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
                 "max_workers": config.index.max_workers,
                 "min_files": config.index.min_files,
             },
+            "coverage": {"roots": list(config.coverage.roots)},
         },
     }
 
@@ -2054,6 +2108,7 @@ def _config_from_mapping(
     indexing = cast("Mapping[str, object]", embeddings["indexing"])
     index = cast("Mapping[str, object]", value["index"])
     concurrency = cast("Mapping[str, object]", index["concurrency"])
+    coverage = cast("Mapping[str, object]", index["coverage"])
     return CodiraConfig(
         config_version=cast("int", value["config_version"]),
         backend=BackendConfig(name=cast("str", backend["name"]).strip()),
@@ -2108,6 +2163,11 @@ def _config_from_mapping(
             strategy=cast("str", concurrency["strategy"]),
             max_workers=cast("int", concurrency["max_workers"]),
             min_files=cast("int", concurrency["min_files"]),
+        ),
+        coverage=IndexCoverageConfig(
+            roots=tuple(
+                str(item).strip() for item in cast("list[object]", coverage["roots"])
+            )
         ),
         origins=origins,
     )

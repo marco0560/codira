@@ -397,3 +397,50 @@ def iter_canonical_project_files(root: Path) -> Iterator[Path]:
                 raise
 
         return iter(sorted(_iter_canonical_files_from_filesystem(root)))
+
+
+def iter_coverage_project_files(root: Path, patterns: Sequence[str]) -> Iterator[Path]:
+    """Yield tracked files matching deterministic coverage-root patterns.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root to inspect.
+    patterns : collections.abc.Sequence[str]
+        Repository-relative root paths or glob patterns.
+
+    Returns
+    -------
+    collections.abc.Iterator[pathlib.Path]
+        Sorted matching tracked files, with filesystem fallback outside Git.
+    """
+
+    try:
+        result = subprocess.run(
+            [GIT_EXE, "ls-files", "--cached"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        files: Iterator[Path] = iter(
+            root / line for line in result.stdout.splitlines() if line
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        files = root.rglob("*")
+    return iter(
+        sorted(
+            path
+            for path in files
+            if path.is_file()
+            and not is_repository_scope_excluded(path, root)
+            and any(
+                fnmatch.fnmatch(path.relative_to(root).as_posix(), pattern)
+                or path.relative_to(root).as_posix() == pattern
+                or path.relative_to(root)
+                .as_posix()
+                .startswith(f"{pattern.rstrip('/')}/")
+                for pattern in patterns
+            )
+        )
+    )

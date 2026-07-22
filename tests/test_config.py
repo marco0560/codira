@@ -397,6 +397,8 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
         "[embeddings]",
         "[embeddings.gpu]",
         "[embeddings.indexing]",
+        "[index.concurrency]",
+        "[index.coverage]",
         "[plugins.backend-sqlite]",
         "[plugins.backend-duckdb]",
         "[plugins.embedding-sentence-transformers]",
@@ -897,3 +899,39 @@ def test_config_validation_rejects_invalid_embedding_indexing_values() -> None:
         validate_config_mapping(
             {"embeddings": {"indexing": {"exclude_paths": [""]}}},
         )
+
+
+@pytest.mark.parametrize(
+    ("roots", "accepted"),
+    [
+        ([], True),
+        (["-"], True),
+        (["src/**", "tests/**"], True),
+        (["-", "src/**"], False),
+        (["../src/**"], False),
+    ],
+)
+def test_config_validation_handles_coverage_roots(
+    roots: list[str], accepted: bool
+) -> None:
+    """Validate coverage-root fallback, opt-out, and path safety.
+
+    Parameters
+    ----------
+    roots : list[str]
+        Candidate coverage-root configuration.
+    accepted : bool
+        Whether validation should accept the candidate.
+
+    Returns
+    -------
+    None
+        The assertions verify the configured acceptance result.
+    """
+
+    payload = {"index": {"coverage": {"roots": roots}}}
+    if accepted:
+        validate_config_mapping(payload)
+    else:
+        with pytest.raises(ConfigError):
+            validate_config_mapping(payload)

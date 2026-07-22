@@ -2428,15 +2428,38 @@ def _run_coverage(root: Path, *, as_json: bool = False) -> int:
         key=lambda item: str(item.name),
     )
     issues = audit_repo_coverage(root)
+    configured_roots = load_effective_config(root=root).coverage.roots
+    if configured_roots == ("-",):
+        coverage = {"source": "disabled", "patterns": [], "resolved_roots": []}
+    else:
+        roots = configured_roots or tuple(
+            sorted(
+                {
+                    item
+                    for analyzer in analyzers
+                    for item in getattr(analyzer, "default_coverage_roots", ())
+                }
+            )
+        )
+        coverage = {
+            "source": "config" if configured_roots else "analyzer-defaults",
+            "patterns": list(roots),
+            "resolved_roots": sorted(
+                {
+                    path.relative_to(root).as_posix()
+                    for pattern in roots
+                    for path in root.glob(pattern)
+                    if path.exists()
+                }
+            ),
+        }
 
     if as_json:
         _emit_json(
             _query_payload(
                 "cov",
                 "ok" if not issues else "incomplete",
-                {
-                    "canonical_directories": ["src", "tests", "scripts"],
-                },
+                {"coverage": coverage},
                 [
                     {
                         "path": issue.path,

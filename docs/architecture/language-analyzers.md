@@ -1,5 +1,12 @@
 # Language Analyzers
 
+## Default coverage roots
+
+First-party analyzers declare `default_coverage_roots` as part of their public
+capability payload. These roots are policy defaults, not filesystem inference;
+projects can override them with repository-relative glob patterns in
+`[index.coverage]`.
+
 The current repository now gets its default analyzers from first-party plugin
 packages:
 

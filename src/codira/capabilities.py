@@ -374,6 +374,7 @@ def _declaration_payload(
     payload["supports"] = list(declaration.supports)
     payload["does_not_support"] = list(declaration.does_not_support)
     payload["mappings"] = dict(sorted(declaration.mappings.items()))
+    payload["default_coverage_roots"] = list(declaration.default_coverage_roots)
     return payload
 
 
@@ -401,6 +402,7 @@ def _missing_declaration_payload(analyzer: LanguageAnalyzer) -> dict[str, object
         "does_not_support": [],
         "mappings": {},
         "checksum": None,
+        "default_coverage_roots": [],
     }
 
 
@@ -492,6 +494,9 @@ def _analyzer_declarations(
         issues.extend(declaration_issues)
         status = "invalid" if declaration_issues else "declared"
         payload = _declaration_payload(declaration, declaration_status=status)
+        payload["default_coverage_roots"] = list(
+            getattr(analyzer, "default_coverage_roots", ())
+        )
         payload["concurrency"] = _concurrency_payload(analyzer)
         payloads.append(payload)
 

@@ -908,6 +908,7 @@ class JsonAnalyzer:
     name = "json"
     version = "3"
     discovery_globs: tuple[str, ...] = ("*.json",)
+    default_coverage_roots: tuple[str, ...] = ("config", ".github", "scripts")
 
     def __init__(self) -> None:
         self._path_filters = AnalyzerPathFilters()

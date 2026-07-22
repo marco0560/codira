@@ -279,6 +279,7 @@ class TextAnalyzer:
     name = "text"
     version = "1"
     discovery_globs: tuple[str, ...] = ("*.txt",)
+    default_coverage_roots: tuple[str, ...] = ("docs", "examples")
 
     def __init__(self) -> None:
         self._path_filters = AnalyzerPathFilters()

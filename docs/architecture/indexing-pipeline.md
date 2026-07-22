@@ -1,5 +1,14 @@
 # Indexing Pipeline
 
+## Coverage policy
+
+Coverage auditing is independent from analyzer discovery. Codira resolves
+`[index.coverage].roots` first; an empty list uses the deterministic union of
+active analyzer declarations, while `roots = ["-"]` disables auditing. The
+`cov --json` response exposes the source, effective patterns, and matched
+roots. Coverage candidates remain Git-tracked files, so untracked work and
+repository-scope exclusions do not affect strict coverage results.
+
 The current indexing entry point is `index_repo()` in
 `src/codira/indexer.py`.
 

@@ -186,6 +186,7 @@
           "does_not_support",
           "mappings",
           "checksum",
+          "default_coverage_roots",
           "concurrency"
         ],
         "properties": {
@@ -212,6 +213,11 @@
           },
           "checksum": {
             "anyOf": [{ "type": "string" }, { "type": "null" }]
+          },
+          "default_coverage_roots": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
           },
           "concurrency": {
             "type": "object",

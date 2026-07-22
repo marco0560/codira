@@ -900,6 +900,7 @@ class PythonAnalyzer:
     name = "python"
     version = "6"
     discovery_globs: tuple[str, ...] = ("*.py",)
+    default_coverage_roots: tuple[str, ...] = ("src", "tests", "scripts")
 
     def __init__(self) -> None:
         self._path_filters = AnalyzerPathFilters()

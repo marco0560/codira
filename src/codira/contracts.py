@@ -1142,6 +1142,8 @@ class AnalyzerCapabilityDeclaration:
         Analyzer-native artifact types mapped to canonical ontology types.
     checksum : str | None, optional
         Optional stable implementation checksum when available.
+    default_coverage_roots : tuple[str, ...], optional
+        Analyzer-declared repository-relative default coverage roots.
     """
 
     analyzer_name: str
@@ -1152,6 +1154,7 @@ class AnalyzerCapabilityDeclaration:
     does_not_support: tuple[OntologyObjectType, ...]
     mappings: dict[str, OntologyObjectType]
     checksum: str | None = None
+    default_coverage_roots: tuple[str, ...] = ()
 
 
 @runtime_checkable

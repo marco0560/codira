@@ -420,7 +420,7 @@ dev = [
 
 [[package]]
 name = "codira-analyzer-bash"
-version = "1.42.0"
+version = "1.43.0"
 source = { editable = "packages/codira-analyzer-bash" }
 dependencies = [
     { name = "codira" },
@@ -442,7 +442,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-c"
-version = "1.44.0"
+version = "1.45.0"
 source = { editable = "packages/codira-analyzer-c" }
 dependencies = [
     { name = "codira" },
@@ -464,7 +464,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-cpp"
-version = "1.45.0"
+version = "1.46.0"
 source = { editable = "packages/codira-analyzer-cpp" }
 dependencies = [
     { name = "codira" },
@@ -486,7 +486,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-json"
-version = "1.42.0"
+version = "1.43.0"
 source = { editable = "packages/codira-analyzer-json" }
 dependencies = [
     { name = "codira" },
@@ -504,7 +504,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-markdown"
-version = "1.45.0"
+version = "1.46.0"
 source = { editable = "packages/codira-analyzer-markdown" }
 dependencies = [
     { name = "codira" },
@@ -522,7 +522,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-python"
-version = "1.44.0"
+version = "1.45.0"
 source = { editable = "packages/codira-analyzer-python" }
 dependencies = [
     { name = "codira" },
@@ -540,7 +540,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-text"
-version = "1.44.0"
+version = "1.45.0"
 source = { editable = "packages/codira-analyzer-text" }
 dependencies = [
     { name = "codira" },
