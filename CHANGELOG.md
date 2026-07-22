@@ -1,3 +1,10 @@
+# [1.53.0](https://github.com/marco0560/codira/compare/v1.52.0...v1.53.0) (2026-07-22)
+
+
+### Features
+
+* **coverage:** configure analyzer-aware coverage roots ([92e8325](https://github.com/marco0560/codira/commit/92e8325bef577ddd54643bab4f45cd98cd136bd3)), closes [#6](https://github.com/marco0560/codira/issues/6)
+
 # [1.52.0](https://github.com/marco0560/codira/compare/v1.51.0...v1.52.0) (2026-07-22)
 
 
