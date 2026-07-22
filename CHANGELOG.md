@@ -1,3 +1,10 @@
+# [1.52.0](https://github.com/marco0560/codira/compare/v1.51.0...v1.52.0) (2026-07-22)
+
+
+### Features
+
+* **indexer:** add safe concurrent analyzer scheduling ([73a9184](https://github.com/marco0560/codira/commit/73a918479e671b4e899d921788a3bdc466429fe2)), closes [#55](https://github.com/marco0560/codira/issues/55)
+
 # [1.51.0](https://github.com/marco0560/codira/compare/v1.50.0...v1.51.0) (2026-07-21)
 
 
