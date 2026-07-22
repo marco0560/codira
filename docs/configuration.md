@@ -77,7 +77,20 @@ max_text_chars = 0
 work_batch_multiplier = 256
 include_paths = []
 exclude_paths = []
+
+[index.concurrency]
+strategy = "auto"
+max_workers = 0
+min_files = 16
 ```
+
+`index.concurrency.strategy` is one of `"off"`, `"auto"`, `"process"`, or
+`"thread"`. Auto mode prefers isolated process workers, falls back to serial
+analysis when an active analyzer has not declared process support, and starts
+only when at least `min_files` files are selected. `max_workers = 0` resolves
+to at most four workers. Use `codira index --concurrency STRATEGY` or
+`codira index --jobs N` for one-run overrides; `--jobs` selects auto mode with
+an explicit cap. Backend writes and embedding persistence remain serial.
 
 `torch_num_threads = 0` and `torch_num_interop_threads = 0` mean Codira leaves
 Torch defaults unchanged.

@@ -17,14 +17,19 @@ This module belongs to the **indexing layer** and glues together analyzers, stor
 
 from __future__ import annotations
 
+import os
 import warnings
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
+from multiprocessing import get_context
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from codira.config import (
     DEFAULT_EMBEDDING_INDEX_MODE,
+    IndexConcurrencyConfig,
     load_effective_config,
     with_effective_config_cache,
 )
@@ -34,6 +39,7 @@ from codira.contracts import (
     BackendPersistFullIndexFile,
     BackendPersistFullIndexRequest,
     BackendRuntimeInventoryRequest,
+    ConcurrencyDeclaringAnalyzer,
     EmbeddingIndexingMetrics,
     EmbeddingIndexingPolicy,
     FullIndexBulkBackend,
@@ -73,10 +79,13 @@ if TYPE_CHECKING:
 ParsedFile = tuple[Path, FileMetadataSnapshot, AnalysisResult]
 _IGNORED_COVERAGE_SUFFIXES = frozenset({"<no-suffix>", ".md", ".txt", ".typed"})
 _BINARY_SNIFF_BYTES = 8192
+_PROCESS_ANALYSIS_ROOT: Path | None = None
+_PROCESS_WORKER_ANALYZERS: list[LanguageAnalyzer] | None = None
 __all__ = [
     "PendingEmbeddingRow",
     "StoredEmbeddingRow",
     "index_repo",
+    "validate_index_concurrency_preflight",
 ]
 
 
@@ -173,6 +182,48 @@ class IndexWarning:
 
 
 @dataclass(frozen=True)
+class IndexConcurrencyReport:
+    """
+    Describe the scheduler selected for one index run.
+
+    Parameters
+    ----------
+    requested_strategy : str
+        Strategy requested by configuration or CLI override.
+    effective_strategy : str
+        Scheduler actually used for analysis.
+    workers : int
+        Effective worker count, with ``1`` representing serial execution.
+    reason : str | None
+        Stable fallback explanation, when the requested strategy was not used.
+    """
+
+    requested_strategy: str
+    effective_strategy: str
+    workers: int
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _AnalysisTask:
+    """Serializable one-file analyzer task."""
+
+    ordinal: int
+    path: str
+    metadata: dict[str, object]
+
+
+@dataclass(frozen=True)
+class _AnalysisTaskResult:
+    """Serializable outcome of one analyzer task."""
+
+    ordinal: int
+    parsed_file: ParsedFile | None
+    failure: IndexFailure | None
+    warnings: tuple[IndexWarning, ...]
+
+
+@dataclass(frozen=True)
 class IndexReport:
     """
     Summary of one indexing run.
@@ -208,6 +259,8 @@ class IndexReport:
         Effective embedding population mode used for the run.
     embedding_complete : bool
         Whether persisted embedding data is complete for the indexed content.
+    analysis_concurrency : IndexConcurrencyReport
+        Requested and effective analysis scheduling details.
     """
 
     indexed: int
@@ -224,6 +277,11 @@ class IndexReport:
     embeddings_pending: int = 0
     embedding_index_mode: str = DEFAULT_EMBEDDING_INDEX_MODE
     embedding_complete: bool = True
+    analysis_concurrency: IndexConcurrencyReport = IndexConcurrencyReport(
+        requested_strategy="off",
+        effective_strategy="off",
+        workers=1,
+    )
 
 
 @dataclass(frozen=True)
@@ -376,6 +434,11 @@ class FinalizeIndexReportRequest:
     embeddings_pending: int = 0
     embedding_index_mode: str = DEFAULT_EMBEDDING_INDEX_MODE
     embedding_complete: bool = True
+    analysis_concurrency: IndexConcurrencyReport = IndexConcurrencyReport(
+        requested_strategy="off",
+        effective_strategy="off",
+        workers=1,
+    )
 
 
 def _is_binary_coverage_candidate(path: Path) -> bool:
@@ -633,11 +696,223 @@ def _select_language_analyzer(
     raise ValueError(msg)
 
 
+def _analyze_index_task(
+    task: _AnalysisTask,
+    root: Path,
+    analyzers: list[LanguageAnalyzer],
+) -> _AnalysisTaskResult:
+    """
+    Analyze one selected file without performing backend work.
+
+    Parameters
+    ----------
+    task : _AnalysisTask
+        Serializable selected-file work item.
+    root : pathlib.Path
+        Repository root being indexed.
+    analyzers : list[codira.contracts.LanguageAnalyzer]
+        Configured analyzers used for deterministic path routing.
+
+    Returns
+    -------
+    _AnalysisTaskResult
+        Successful parsed file or one normalized failure plus captured warnings.
+    """
+
+    path_obj = Path(task.path)
+    metadata_snapshot = _snapshot_from_metadata(task.metadata)
+    analyzer = _select_language_analyzer(path_obj, analyzers, root=root)
+    metadata_snapshot = _snapshot_with_analyzer(metadata_snapshot, analyzer)
+    try:
+        with warnings.catch_warnings(record=True) as warning_records:
+            warnings.simplefilter("always")
+            analysis = analyzer.analyze_file(path_obj, root)
+    except (SyntaxError, UnicodeDecodeError, ValueError) as exc:
+        return _AnalysisTaskResult(
+            ordinal=task.ordinal,
+            parsed_file=None,
+            failure=IndexFailure(
+                path=task.path,
+                analyzer_name=str(analyzer.name),
+                error_type=type(exc).__name__,
+                reason=str(exc),
+            ),
+            warnings=(),
+        )
+    collected_warnings = tuple(
+        IndexWarning(
+            path=task.path,
+            analyzer_name=str(analyzer.name),
+            warning_type=warning_record.category.__name__,
+            line=warning_record.lineno,
+            reason=str(warning_record.message),
+        )
+        for warning_record in warning_records
+    )
+    return _AnalysisTaskResult(
+        ordinal=task.ordinal,
+        parsed_file=(path_obj, metadata_snapshot, analysis),
+        failure=None,
+        warnings=collected_warnings,
+    )
+
+
+def _initialize_process_analysis_worker(root: Path) -> None:
+    """
+    Configure one reusable analyzer set for a process-pool worker.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose configuration is loaded in the worker.
+
+    Returns
+    -------
+    None
+        Worker-global analysis state is initialized for subsequent tasks.
+    """
+
+    global _PROCESS_ANALYSIS_ROOT, _PROCESS_WORKER_ANALYZERS
+    _PROCESS_ANALYSIS_ROOT = root
+    _PROCESS_WORKER_ANALYZERS = active_language_analyzers(root=root)
+
+
+def _analyze_index_task_in_process_worker(task: _AnalysisTask) -> _AnalysisTaskResult:
+    """
+    Analyze one task with the process-local configured analyzers.
+
+    Parameters
+    ----------
+    task : _AnalysisTask
+        Serializable selected-file work item.
+
+    Returns
+    -------
+    _AnalysisTaskResult
+        Normalized analyzer outcome returned to the parent process.
+
+    Raises
+    ------
+    RuntimeError
+        If the process-pool initializer did not establish worker state.
+    """
+
+    if _PROCESS_ANALYSIS_ROOT is None or _PROCESS_WORKER_ANALYZERS is None:
+        msg = "Process analysis worker was not initialized."
+        raise RuntimeError(msg)
+    return _analyze_index_task(task, _PROCESS_ANALYSIS_ROOT, _PROCESS_WORKER_ANALYZERS)
+
+
+def _resolve_index_concurrency(
+    config: IndexConcurrencyConfig,
+    analyzers: list[LanguageAnalyzer],
+    selected_file_count: int,
+) -> IndexConcurrencyReport:
+    """
+    Resolve deterministic analyzer scheduling for one plan.
+
+    Parameters
+    ----------
+    config : codira.config.IndexConcurrencyConfig
+        Effective scheduling configuration.
+    analyzers : list[codira.contracts.LanguageAnalyzer]
+        Active analyzers that must all explicitly support concurrent execution.
+    selected_file_count : int
+        Number of files selected for analysis.
+
+    Returns
+    -------
+    IndexConcurrencyReport
+        Requested strategy and the safe effective scheduler.
+
+    Raises
+    ------
+    ValueError
+        If an explicit process or thread strategy is unsupported by an active
+        analyzer.
+    """
+
+    requested = config.strategy
+    if requested == "off" or selected_file_count <= 1:
+        return IndexConcurrencyReport(requested, "off", 1)
+    if requested == "auto" and selected_file_count < config.min_files:
+        return IndexConcurrencyReport(requested, "off", 1, "below_min_files")
+    candidates = ("process", "thread") if requested == "auto" else (requested,)
+    for strategy in candidates:
+        incompatible: str | None = None
+        for analyzer in analyzers:
+            if not isinstance(analyzer, ConcurrencyDeclaringAnalyzer):
+                incompatible = str(analyzer.name)
+                break
+            declaration = analyzer.analyzer_concurrency_declaration()
+            valid_identity = (
+                declaration.analyzer_name == analyzer.name
+                and declaration.analyzer_version == analyzer.version
+            )
+            supported = (
+                declaration.supports_process_workers
+                if strategy == "process"
+                else (
+                    declaration.supports_thread_workers
+                    and declaration.reentrant_after_configure
+                )
+            )
+            if not valid_identity or not supported:
+                incompatible = str(analyzer.name)
+                break
+        if incompatible is None:
+            automatic = min(4, max(1, os.process_cpu_count() or 1), selected_file_count)
+            workers = min(selected_file_count, config.max_workers or automatic)
+            return IndexConcurrencyReport(requested, strategy, workers)
+        if requested != "auto":
+            msg = (
+                f"Index concurrency strategy {requested!r} requires all active "
+                f"analyzers to declare support; incompatible analyzer: {incompatible}."
+            )
+            raise ValueError(msg)
+    return IndexConcurrencyReport(requested, "off", 1, "incompatible_analyzer")
+
+
+def validate_index_concurrency_preflight(
+    root: Path,
+    config: IndexConcurrencyConfig,
+) -> None:
+    """
+    Reject unsupported explicit schedulers before backend initialization.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose active analyzers are inspected.
+    config : codira.config.IndexConcurrencyConfig
+        Effective or CLI-overridden scheduling configuration.
+
+    Returns
+    -------
+    None
+        Explicit process and thread modes are accepted only when every active
+        analyzer declares support.
+
+    Raises
+    ------
+    ValueError
+        If the requested explicit strategy is incompatible with an analyzer.
+    """
+
+    if config.strategy in {"process", "thread"}:
+        _resolve_index_concurrency(
+            config,
+            active_language_analyzers(root=root),
+            max(2, config.min_files),
+        )
+
+
 def _collect_indexed_file_analyses(
     root: Path,
     indexed_paths: list[str],
     current_metadata: dict[str, dict[str, object]],
     analyzers: list[LanguageAnalyzer],
+    concurrency: IndexConcurrencyReport | None = None,
 ) -> tuple[list[ParsedFile], list[IndexFailure], list[IndexWarning]]:
     """
     Analyze reindexed files and collect normalized artifacts.
@@ -659,40 +934,35 @@ def _collect_indexed_file_analyses(
         Successful analyzed file snapshots plus deterministic failures and
         warnings.
     """
+    tasks = [
+        _AnalysisTask(ordinal, path, current_metadata[path])
+        for ordinal, path in enumerate(indexed_paths)
+    ]
+    effective = concurrency or IndexConcurrencyReport("off", "off", 1)
+    if effective.effective_strategy == "off":
+        results = [_analyze_index_task(task, root, analyzers) for task in tasks]
+    elif effective.effective_strategy == "process":
+        with ProcessPoolExecutor(
+            max_workers=effective.workers,
+            mp_context=get_context("spawn"),
+            initializer=_initialize_process_analysis_worker,
+            initargs=(root,),
+        ) as executor:
+            results = list(executor.map(_analyze_index_task_in_process_worker, tasks))
+    else:
+        analyze_task = partial(_analyze_index_task, root=root, analyzers=analyzers)
+        with ThreadPoolExecutor(max_workers=effective.workers) as executor:
+            results = list(executor.map(analyze_task, tasks))
+
     parsed_files: list[ParsedFile] = []
     failures: list[IndexFailure] = []
     collected_warnings: list[IndexWarning] = []
-
-    for path in indexed_paths:
-        path_obj = Path(path)
-        metadata_snapshot = _snapshot_from_metadata(current_metadata[path])
-        analyzer = _select_language_analyzer(path_obj, analyzers, root=root)
-        metadata_snapshot = _snapshot_with_analyzer(metadata_snapshot, analyzer)
-        try:
-            with warnings.catch_warnings(record=True) as warning_records:
-                warnings.simplefilter("always")
-                analysis = analyzer.analyze_file(path_obj, root)
-        except (SyntaxError, UnicodeDecodeError, ValueError) as exc:
-            failures.append(
-                IndexFailure(
-                    path=path,
-                    analyzer_name=str(analyzer.name),
-                    error_type=type(exc).__name__,
-                    reason=str(exc),
-                )
-            )
-            continue
-        for warning_record in warning_records:
-            collected_warnings.append(
-                IndexWarning(
-                    path=path,
-                    analyzer_name=str(analyzer.name),
-                    warning_type=warning_record.category.__name__,
-                    line=warning_record.lineno,
-                    reason=str(warning_record.message),
-                )
-            )
-        parsed_files.append((path_obj, metadata_snapshot, analysis))
+    for result in sorted(results, key=lambda item: item.ordinal):
+        if result.parsed_file is not None:
+            parsed_files.append(result.parsed_file)
+        if result.failure is not None:
+            failures.append(result.failure)
+        collected_warnings.extend(result.warnings)
 
     return parsed_files, failures, collected_warnings
 
@@ -1257,6 +1527,7 @@ def _finalize_index_report(request: FinalizeIndexReportRequest) -> IndexReport:
         embeddings_pending=request.embeddings_pending,
         embedding_index_mode=request.embedding_index_mode,
         embedding_complete=request.embedding_complete,
+        analysis_concurrency=request.analysis_concurrency,
     )
 
 
@@ -1267,6 +1538,7 @@ def index_repo(
     *,
     full: bool = False,
     embedding_index_mode: str | None = None,
+    analysis_concurrency: IndexConcurrencyConfig | None = None,
 ) -> IndexReport:
     """
     Incrementally scan repository files and update the backend-neutral index.
@@ -1281,6 +1553,9 @@ def index_repo(
     embedding_index_mode : str | None, optional
         Embedding population mode override supplied by the CLI. ``None`` uses
         the effective configuration.
+    analysis_concurrency : codira.config.IndexConcurrencyConfig | None, optional
+        Scheduler override supplied by the CLI. ``None`` uses effective
+        configuration.
 
     Returns
     -------
@@ -1309,6 +1584,9 @@ def index_repo(
         effective_config.embeddings.indexing.mode
         if embedding_index_mode is None
         else embedding_index_mode
+    )
+    concurrency_config = (
+        effective_config.index if analysis_concurrency is None else analysis_concurrency
     )
     coverage_issues = _audit_canonical_directory_coverage(root, analyzers=analyzers)
     current_state = _collect_project_scan_state(root, analyzers=analyzers)
@@ -1355,6 +1633,11 @@ def index_repo(
         )
     finally:
         index_backend.close_connection(planning_conn)
+    resolved_analysis_concurrency = _resolve_index_concurrency(
+        concurrency_config,
+        analyzers,
+        len(plan.indexed_paths),
+    )
     if (
         not plan.indexed_paths
         and not plan.deleted_paths
@@ -1372,6 +1655,7 @@ def index_repo(
                 embeddings_recomputed=0,
                 embeddings_reused=unchanged_embeddings_reused,
                 embedding_index_mode=effective_embedding_index_mode,
+                analysis_concurrency=resolved_analysis_concurrency,
             )
         )
 
@@ -1380,6 +1664,7 @@ def index_repo(
         plan.indexed_paths,
         current_state.metadata_by_path,
         analyzers,
+        resolved_analysis_concurrency,
     )
     if full and isinstance(index_backend, FullIndexBulkBackend):
         (
@@ -1417,6 +1702,7 @@ def index_repo(
                 embeddings_pending=changed_file_embeddings_pending,
                 embedding_index_mode=effective_embedding_index_mode,
                 embedding_complete=changed_file_embeddings_pending == 0,
+                analysis_concurrency=resolved_analysis_concurrency,
             )
         )
 
@@ -1493,6 +1779,7 @@ def index_repo(
                 embeddings_pending=changed_file_embeddings_pending,
                 embedding_index_mode=effective_embedding_index_mode,
                 embedding_complete=changed_file_embeddings_pending == 0,
+                analysis_concurrency=resolved_analysis_concurrency,
             )
         )
     except BaseException:

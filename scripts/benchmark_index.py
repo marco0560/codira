@@ -182,7 +182,8 @@ def main() -> int:
     Returns
     -------
     int
-        Zero on success.
+        Zero when indexing has no file failures, otherwise one after writing
+        the diagnostic artifact.
     """
     args = build_parser().parse_args()
     root = Path(args.root).resolve()
@@ -371,12 +372,27 @@ def main() -> int:
             "embeddings_recomputed": report.embeddings_recomputed,
             "embeddings_reused": report.embeddings_reused,
             "coverage_issues": len(report.coverage_issues),
+            "failures": [
+                {
+                    "path": failure.path,
+                    "analyzer_name": failure.analyzer_name,
+                    "error_type": failure.error_type,
+                    "reason": failure.reason,
+                }
+                for failure in report.failures
+            ],
+            "analysis_concurrency": {
+                "requested_strategy": report.analysis_concurrency.requested_strategy,
+                "effective_strategy": report.analysis_concurrency.effective_strategy,
+                "workers": report.analysis_concurrency.workers,
+                "reason": report.analysis_concurrency.reason,
+            },
         },
     }
     if args.output is not None:
         write_json_artifact(Path(args.output), benchmark_report)
     print(json.dumps(benchmark_report, indent=2, sort_keys=True))
-    return 0
+    return int(report.failed > 0)
 
 
 if __name__ == "__main__":

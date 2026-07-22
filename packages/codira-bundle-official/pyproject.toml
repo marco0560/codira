@@ -4,20 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-bundle-official"
-version = "1.52.13"
+version = "1.52.14"
 description = "Curated first-party plugin bundle for codira"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "codira[semantic]>=1.42.0,<2.0.0",
     "einops>=0.8,<1.0",
-    "codira-analyzer-python==1.43.0",
-    "codira-analyzer-json==1.41.0",
-    "codira-analyzer-c==1.43.0",
-    "codira-analyzer-cpp==1.44.0",
-    "codira-analyzer-bash==1.41.0",
-    "codira-analyzer-markdown==1.44.0",
-    "codira-analyzer-text==1.43.0",
+    "codira-analyzer-python==1.44.0",
+    "codira-analyzer-json==1.42.0",
+    "codira-analyzer-c==1.44.0",
+    "codira-analyzer-cpp==1.45.0",
+    "codira-analyzer-bash==1.42.0",
+    "codira-analyzer-markdown==1.45.0",
+    "codira-analyzer-text==1.44.0",
     "codira-backend-sqlite==1.45.3",
     "codira-backend-duckdb==1.50.2",
     "codira-embedding-sentence-transformers==1.0.2",

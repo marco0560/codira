@@ -3410,6 +3410,12 @@ def test_index_cli_emits_json(
         "embeddings_pending": 0,
         "embedding_index_mode": "immediate",
         "embedding_complete": True,
+        "analysis_concurrency": {
+            "requested_strategy": "auto",
+            "effective_strategy": "off",
+            "workers": 1,
+            "reason": None,
+        },
     }
     assert payload["coverage_issues"] == [
         {
@@ -3486,6 +3492,12 @@ def test_index_cli_emits_json_for_required_coverage_failure(
         "embeddings_pending": 0,
         "embedding_index_mode": "unknown",
         "embedding_complete": False,
+        "analysis_concurrency": {
+            "requested_strategy": "unknown",
+            "effective_strategy": "unknown",
+            "workers": 0,
+            "reason": None,
+        },
     }
     assert payload["coverage_issues"] == [
         {

@@ -14,6 +14,9 @@ The current indexing entry point is `index_repo()` in
 4. Reindexed files are routed to the first registered analyzer that supports
    each path.
 5. The selected analyzer emits one normalized `AnalysisResult` per file.
+   Auto scheduling may execute this analysis phase in isolated process workers;
+   results are sorted back into planned path order before persistence. Thread
+   execution is available only to explicitly reentrant analyzers.
 6. Normalized semantic artifacts now include analyzer-owned durable symbol
    identities for every embedding-owning unit.
 7. The same indexing pass computes persisted embeddings for indexed symbols and

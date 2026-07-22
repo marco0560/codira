@@ -24,6 +24,7 @@ The repository currently tracks these architecture decision records:
 - [ADR-020 — Backend-isolated repository test policy](ADR-020-backend-isolated-repository-test-policy.md)
 - [ADR-021 — Codira configuration hierarchy and runtime policy](ADR-021-codira-configuration-hierarchy-runtime-policy.md)
 - [ADR-022 — Embedding engine and vector-store plugins](ADR-022-embedding-engine-and-vector-store-plugins.md)
+- [ADR-023 — Analyzer-side index concurrency](ADR-023-analyzer-index-concurrency.md)
 
 `ADR-004` is the active migration record for the current architecture branch
 and should be read together with the documents under `docs/architecture/`.

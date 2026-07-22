@@ -24,7 +24,10 @@ import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from codira.contracts import AnalyzerCapabilityDeclaration
+from codira.contracts import (
+    AnalyzerCapabilityDeclaration,
+    AnalyzerConcurrencyDeclaration,
+)
 from codira.models import (
     AnalysisResult,
     DocumentationArtifact,
@@ -510,6 +513,28 @@ class MarkdownAnalyzer:
             mappings={
                 "markdown_section": "documentation",
             },
+        )
+
+    def analyzer_concurrency_declaration(self) -> AnalyzerConcurrencyDeclaration:
+        """
+        Return analyzer execution-safety guarantees.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        codira.contracts.AnalyzerConcurrencyDeclaration
+            Declaration permitting isolated process and thread workers.
+        """
+
+        return AnalyzerConcurrencyDeclaration(
+            analyzer_name=self.name,
+            analyzer_version=self.version,
+            supports_process_workers=True,
+            supports_thread_workers=True,
+            reentrant_after_configure=True,
         )
 
     def supports_path(self, path: Path) -> bool:

@@ -1180,6 +1180,60 @@ class CapabilityDeclaringAnalyzer(Protocol):
 
 
 @dataclass(frozen=True)
+class AnalyzerConcurrencyDeclaration:
+    """
+    Machine-readable declaration of analyzer execution safety.
+
+    Parameters
+    ----------
+    analyzer_name : str
+        Stable analyzer identifier.
+    analyzer_version : str
+        Analyzer implementation version.
+    supports_process_workers : bool
+        Whether independently configured process workers may analyze files.
+    supports_thread_workers : bool
+        Whether independently configured thread workers may analyze files.
+    reentrant_after_configure : bool
+        Whether concurrent calls after configuration are safe.
+    notes : tuple[str, ...], optional
+        Stable maintainer notes describing relevant constraints.
+    """
+
+    analyzer_name: str
+    analyzer_version: str
+    supports_process_workers: bool
+    supports_thread_workers: bool
+    reentrant_after_configure: bool
+    notes: tuple[str, ...] = ()
+
+
+@runtime_checkable
+class ConcurrencyDeclaringAnalyzer(Protocol):
+    """
+    Optional analyzer-side contract for concurrent indexing.
+
+    Missing declarations are treated as incompatible with concurrent analysis
+    so third-party plugins remain serial by default.
+    """
+
+    def analyzer_concurrency_declaration(self) -> AnalyzerConcurrencyDeclaration:
+        """
+        Return the analyzer's execution-safety declaration.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        AnalyzerConcurrencyDeclaration
+            Stable process and thread execution guarantees.
+        """
+        ...
+
+
+@dataclass(frozen=True)
 class BackendRelationQueryRequest:
     """
     Backend request for exact relation and include-edge lookup.

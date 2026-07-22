@@ -185,7 +185,8 @@
           "supports",
           "does_not_support",
           "mappings",
-          "checksum"
+          "checksum",
+          "concurrency"
         ],
         "properties": {
           "analyzer_name": { "type": "string", "minLength": 1 },
@@ -211,6 +212,29 @@
           },
           "checksum": {
             "anyOf": [{ "type": "string" }, { "type": "null" }]
+          },
+          "concurrency": {
+            "type": "object",
+            "required": [
+              "declaration_status",
+              "process_workers",
+              "thread_workers",
+              "reentrant_after_configure",
+              "notes"
+            ],
+            "properties": {
+              "declaration_status": {
+                "enum": ["declared", "missing", "invalid"]
+              },
+              "process_workers": { "type": "boolean" },
+              "thread_workers": { "type": "boolean" },
+              "reentrant_after_configure": { "type": "boolean" },
+              "notes": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

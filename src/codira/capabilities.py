@@ -28,7 +28,9 @@ from codira.contracts import (
     CANONICAL_ONTOLOGY_TYPES,
     KNOWN_RETRIEVAL_CAPABILITIES,
     AnalyzerCapabilityDeclaration,
+    AnalyzerConcurrencyDeclaration,
     CapabilityDeclaringAnalyzer,
+    ConcurrencyDeclaringAnalyzer,
     LanguageAnalyzer,
     split_declared_retrieval_capabilities,
 )
@@ -47,7 +49,7 @@ from codira.registry import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-CAPABILITY_SCHEMA_VERSION = "1.0"
+CAPABILITY_SCHEMA_VERSION = "1.1"
 ONTOLOGY_VERSION = "2"
 
 COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
@@ -402,6 +404,52 @@ def _missing_declaration_payload(analyzer: LanguageAnalyzer) -> dict[str, object
     }
 
 
+def _concurrency_payload(analyzer: LanguageAnalyzer) -> dict[str, object]:
+    """
+    Return validated concurrency metadata for one analyzer.
+
+    Parameters
+    ----------
+    analyzer : codira.contracts.LanguageAnalyzer
+        Active analyzer whose optional concurrency contract is inspected.
+
+    Returns
+    -------
+    dict[str, object]
+        Deterministic declared, missing, or invalid concurrency payload.
+    """
+
+    missing = {
+        "declaration_status": "missing",
+        "process_workers": False,
+        "thread_workers": False,
+        "reentrant_after_configure": False,
+        "notes": [],
+    }
+    if not isinstance(analyzer, ConcurrencyDeclaringAnalyzer):
+        return missing
+    declaration: AnalyzerConcurrencyDeclaration = (
+        analyzer.analyzer_concurrency_declaration()
+    )
+    valid = (
+        declaration.analyzer_name == analyzer.name
+        and declaration.analyzer_version == analyzer.version
+        and (
+            not declaration.supports_thread_workers
+            or declaration.reentrant_after_configure
+        )
+    )
+    return {
+        "declaration_status": "declared" if valid else "invalid",
+        "process_workers": declaration.supports_process_workers if valid else False,
+        "thread_workers": declaration.supports_thread_workers if valid else False,
+        "reentrant_after_configure": (
+            declaration.reentrant_after_configure if valid else False
+        ),
+        "notes": list(declaration.notes),
+    }
+
+
 def _analyzer_declarations(
     analyzers: Sequence[LanguageAnalyzer],
 ) -> tuple[list[dict[str, object]], list[str]]:
@@ -424,7 +472,9 @@ def _analyzer_declarations(
     for analyzer in sorted(analyzers, key=lambda item: str(item.name)):
         if not isinstance(analyzer, CapabilityDeclaringAnalyzer):
             issues.append(f"{analyzer.name}: analyzer does not declare capabilities")
-            payloads.append(_missing_declaration_payload(analyzer))
+            payload = _missing_declaration_payload(analyzer)
+            payload["concurrency"] = _concurrency_payload(analyzer)
+            payloads.append(payload)
             continue
         declaration = analyzer.analyzer_capability_declaration()
         declaration_issues: list[str] = []
@@ -441,7 +491,9 @@ def _analyzer_declarations(
         declaration_issues.extend(_validate_declaration(declaration))
         issues.extend(declaration_issues)
         status = "invalid" if declaration_issues else "declared"
-        payloads.append(_declaration_payload(declaration, declaration_status=status))
+        payload = _declaration_payload(declaration, declaration_status=status)
+        payload["concurrency"] = _concurrency_payload(analyzer)
+        payloads.append(payload)
 
     return payloads, sorted(issues)
 

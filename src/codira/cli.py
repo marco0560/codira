@@ -38,6 +38,7 @@ from codira.capabilities import build_capability_contract
 from codira.config import (
     ConfigError,
     ConfigOrigin,
+    IndexConcurrencyConfig,
     LevelName,
     ProfileName,
     config_path,
@@ -66,6 +67,7 @@ from codira.indexer import (
     IndexWarning,
     audit_repo_coverage,
     index_repo,
+    validate_index_concurrency_preflight,
 )
 from codira.path_resolution import (
     CODIRA_CONFIG_FILE_ENV,
@@ -215,6 +217,10 @@ class IndexCommandRequest:
         Whether strict coverage gating is enabled.
     defer_embeddings : bool
         Whether eligible embedding work should be left pending.
+    concurrency : str | None
+        Optional scheduler override.
+    jobs : int | None
+        Optional explicit analysis worker cap.
     embeddings_only : bool
         Whether only pending embeddings should be computed.
     as_json : bool
@@ -227,7 +233,9 @@ class IndexCommandRequest:
     require_full_coverage: bool
     defer_embeddings: bool
     embeddings_only: bool
-    as_json: bool
+    concurrency: str | None = None
+    jobs: int | None = None
+    as_json: bool = False
 
 
 @dataclass(frozen=True)
@@ -931,6 +939,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--embeddings-only",
         action="store_true",
         help="Compute pending embeddings without reparsing source files",
+    )
+    index_parser.add_argument(
+        "--concurrency",
+        choices=("off", "auto", "process", "thread"),
+        help="Override configured analyzer scheduling strategy",
+    )
+    index_parser.add_argument(
+        "--jobs",
+        type=int,
+        help="Force automatic scheduling with this positive analysis worker cap",
     )
     index_parser.add_argument(
         "-j",
@@ -1798,7 +1816,7 @@ def _run_capabilities(*, as_json: bool, strict: bool) -> int:
     return 0
 
 
-def _run_index(request: IndexCommandRequest) -> int:
+def _run_index(request: IndexCommandRequest) -> int:  # noqa: C901, PLR0912
     """
     Build or refresh the repository index.
 
@@ -1818,6 +1836,8 @@ def _run_index(request: IndexCommandRequest) -> int:
     require_full_coverage = request.require_full_coverage
     defer_embeddings = request.defer_embeddings
     embeddings_only = request.embeddings_only
+    concurrency = request.concurrency
+    jobs = request.jobs
     as_json = request.as_json
     if defer_embeddings and embeddings_only:
         msg = "--defer-embeddings and --embeddings-only are mutually exclusive."
@@ -1841,6 +1861,47 @@ def _run_index(request: IndexCommandRequest) -> int:
         return 2
 
     config = load_effective_config(root=root)
+    if jobs is not None and jobs < 1:
+        msg = "--jobs must be a positive integer."
+        print(f"[codira] ValueError: {msg}", file=sys.stderr)
+        return 2
+    if concurrency == "off" and jobs is not None:
+        msg = "--jobs cannot be combined with --concurrency off."
+        print(f"[codira] ValueError: {msg}", file=sys.stderr)
+        return 2
+    analysis_concurrency = (
+        None
+        if concurrency is None and jobs is None
+        else IndexConcurrencyConfig(
+            strategy="auto"
+            if jobs is not None and concurrency is None
+            else (concurrency or config.index.strategy),
+            max_workers=config.index.max_workers if jobs is None else jobs,
+            min_files=config.index.min_files,
+        )
+    )
+    effective_analysis_concurrency = analysis_concurrency or config.index
+    try:
+        validate_index_concurrency_preflight(root, effective_analysis_concurrency)
+    except ValueError as exc:
+        if as_json:
+            _emit_json(
+                _index_payload(
+                    IndexPayloadRequest(
+                        full=full,
+                        explain=explain,
+                        require_full_coverage=require_full_coverage,
+                        status="invalid_concurrency",
+                        report=None,
+                        coverage_issues=[],
+                        defer_embeddings=defer_embeddings,
+                        embeddings_only=embeddings_only,
+                    )
+                )
+            )
+        else:
+            print(f"[codira] ValueError: {exc}", file=sys.stderr)
+        return 2
     if not config.embeddings.enabled and (defer_embeddings or embeddings_only):
         msg = "Embedding index mode flags require embeddings.enabled = true."
         if as_json:
@@ -1937,11 +1998,19 @@ def _run_index(request: IndexCommandRequest) -> int:
         return 2
 
     active_index_backend(root=root).initialize(root)
-    report = index_repo(
-        root,
-        full=full,
-        embedding_index_mode=effective_embedding_index_mode,
-    )
+    if analysis_concurrency is None:
+        report = index_repo(
+            root,
+            full=full,
+            embedding_index_mode=effective_embedding_index_mode,
+        )
+    else:
+        report = index_repo(
+            root,
+            full=full,
+            embedding_index_mode=effective_embedding_index_mode,
+            analysis_concurrency=analysis_concurrency,
+        )
     _write_index_head_metadata(
         root,
         indexed_file_count=report.indexed + report.reused,
@@ -2020,6 +2089,18 @@ def _index_payload(
             "embedding_complete": False
             if report is None
             else report.embedding_complete,
+            "analysis_concurrency": {
+                "requested_strategy": "unknown"
+                if report is None
+                else report.analysis_concurrency.requested_strategy,
+                "effective_strategy": "unknown"
+                if report is None
+                else report.analysis_concurrency.effective_strategy,
+                "workers": 0 if report is None else report.analysis_concurrency.workers,
+                "reason": None
+                if report is None
+                else report.analysis_concurrency.reason,
+            },
         },
         "coverage_issues": [
             {
@@ -2225,6 +2306,12 @@ def _render_index_report(root: Path, report: IndexReport) -> None:
     print(f"Embeddings pending: {report.embeddings_pending}")
     print(f"Embedding index mode: {report.embedding_index_mode}")
     print(f"Embedding complete: {str(report.embedding_complete).lower()}")
+    concurrency = report.analysis_concurrency
+    suffix = "" if concurrency.reason is None else f" ({concurrency.reason})"
+    print(
+        "Analysis concurrency: "
+        f"{concurrency.effective_strategy}, workers={concurrency.workers}{suffix}"
+    )
     _render_coverage_issues(root, report.coverage_issues)
     _render_index_warnings(root, report.warnings)
     _render_index_failures(root, report.failures)
@@ -5209,6 +5296,8 @@ def _command_handlers(
                 require_full_coverage=args.require_full_coverage,
                 defer_embeddings=args.defer_embeddings,
                 embeddings_only=args.embeddings_only,
+                concurrency=args.concurrency,
+                jobs=args.jobs,
                 as_json=args.json,
             )
         ),

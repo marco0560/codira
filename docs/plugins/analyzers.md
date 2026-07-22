@@ -14,6 +14,13 @@ Required attributes and methods:
 - `supports_path(path: Path) -> bool`
 - `analyze_file(path: Path, root: Path) -> AnalysisResult`
 
+Concurrent indexing is opt-in for plugins. Implement
+`analyzer_concurrency_declaration()` and return an
+`AnalyzerConcurrencyDeclaration` to permit process or thread workers. Thread
+support also requires `reentrant_after_configure = True`. Plugins without this
+declaration remain serial in auto mode; explicit concurrent modes reject an
+active undeclared plugin before backend initialization.
+
 Minimal example:
 
 ```python

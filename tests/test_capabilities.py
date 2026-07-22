@@ -183,7 +183,7 @@ def test_capability_contract_validates_against_schema() -> None:
     payload = build_capability_contract([PythonAnalyzer()])
 
     jsonschema.validate(payload, _capabilities_schema())
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
     assert payload["ontology"] == {
         "version": "2",
         "types": [
@@ -337,6 +337,13 @@ def test_capability_contract_degrades_analyzers_without_declarations() -> None:
             "does_not_support": [],
             "mappings": {},
             "checksum": None,
+            "concurrency": {
+                "declaration_status": "missing",
+                "process_workers": False,
+                "thread_workers": False,
+                "reentrant_after_configure": False,
+                "notes": [],
+            },
         }
     ]
 

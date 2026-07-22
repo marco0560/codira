@@ -43,7 +43,11 @@ DEFAULT_EMBEDDING_GPU_MEMORY_LIMIT_MB = 0
 DEFAULT_EMBEDDING_INDEX_MODE = "immediate"
 DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES = ("symbol", "documentation")
 DEFAULT_EMBEDDING_INDEX_WORK_BATCH_MULTIPLIER = 256
+DEFAULT_INDEX_CONCURRENCY_STRATEGY = "auto"
+DEFAULT_INDEX_CONCURRENCY_MAX_WORKERS = 0
+DEFAULT_INDEX_CONCURRENCY_MIN_FILES = 16
 KNOWN_EMBEDDING_INDEX_MODES = frozenset({"immediate", "deferred"})
+KNOWN_INDEX_CONCURRENCY_STRATEGIES = frozenset({"off", "auto", "process", "thread"})
 KNOWN_EMBEDDING_OBJECT_TYPES = frozenset(DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES)
 _PLUGIN_CONFIG_RESERVED_KEYS = frozenset(
     {
@@ -207,6 +211,27 @@ class EmbeddingsConfig:
 
 
 @dataclass(frozen=True)
+class IndexConcurrencyConfig:
+    """
+    Configure concurrent analyzer execution for indexing.
+
+    Parameters
+    ----------
+    strategy : {"off", "auto", "process", "thread"}
+        Requested analysis scheduler. ``"auto"`` prefers process workers when
+        every active analyzer declares support.
+    max_workers : int
+        Explicit worker cap, or ``0`` to use the bounded automatic cap.
+    min_files : int
+        Minimum selected-file count before ``"auto"`` starts workers.
+    """
+
+    strategy: str = DEFAULT_INDEX_CONCURRENCY_STRATEGY
+    max_workers: int = DEFAULT_INDEX_CONCURRENCY_MAX_WORKERS
+    min_files: int = DEFAULT_INDEX_CONCURRENCY_MIN_FILES
+
+
+@dataclass(frozen=True)
 class ConfigOrigin:
     """
     Origin metadata for one effective configuration value.
@@ -241,6 +266,8 @@ class CodiraConfig:
         Plugin activation configuration.
     embeddings : EmbeddingsConfig
         Embedding runtime configuration.
+    index : IndexConcurrencyConfig
+        Index analysis scheduling configuration.
     origins : dict[str, ConfigOrigin]
         Origin metadata keyed by dotted config key.
     """
@@ -249,6 +276,7 @@ class CodiraConfig:
     backend: BackendConfig
     plugins: PluginsConfig
     embeddings: EmbeddingsConfig
+    index: IndexConcurrencyConfig
     origins: dict[str, ConfigOrigin]
 
 
@@ -281,6 +309,13 @@ DEFAULT_CONFIG: dict[str, object] = {
             "work_batch_multiplier": DEFAULT_EMBEDDING_INDEX_WORK_BATCH_MULTIPLIER,
             "include_paths": [],
             "exclude_paths": [],
+        },
+    },
+    "index": {
+        "concurrency": {
+            "strategy": DEFAULT_INDEX_CONCURRENCY_STRATEGY,
+            "max_workers": DEFAULT_INDEX_CONCURRENCY_MAX_WORKERS,
+            "min_files": DEFAULT_INDEX_CONCURRENCY_MIN_FILES,
         },
     },
 }
@@ -426,6 +461,13 @@ _SCHEMA: dict[str, object] = {
             "work_batch_multiplier": int,
             "include_paths": list,
             "exclude_paths": list,
+        },
+    },
+    "index": {
+        "concurrency": {
+            "strategy": str,
+            "max_workers": int,
+            "min_files": int,
         },
     },
 }
@@ -947,6 +989,45 @@ def _validate_embedding_indexing_semantics(indexing: Mapping[str, object]) -> No
     )
 
 
+def _validate_index_concurrency_semantics(concurrency: Mapping[str, object]) -> None:
+    """
+    Validate index analysis scheduling controls.
+
+    Parameters
+    ----------
+    concurrency : collections.abc.Mapping[str, object]
+        Index concurrency configuration table.
+
+    Returns
+    -------
+    None
+        The table is accepted when its strategy and numeric bounds are valid.
+
+    Raises
+    ------
+    ConfigError
+        If a strategy or numeric control is unsupported.
+    """
+
+    strategy = concurrency.get("strategy")
+    if isinstance(strategy, str) and strategy not in KNOWN_INDEX_CONCURRENCY_STRATEGIES:
+        allowed = ", ".join(sorted(KNOWN_INDEX_CONCURRENCY_STRATEGIES))
+        msg = f"Configuration key index.concurrency.strategy must be one of: {allowed}."
+        raise ConfigError(msg)
+    _validate_int_minimums(
+        concurrency,
+        ("max_workers",),
+        prefix="index.concurrency",
+        minimum=0,
+    )
+    _validate_int_minimums(
+        concurrency,
+        ("min_files",),
+        prefix="index.concurrency",
+        minimum=1,
+    )
+
+
 def _validate_semantics(value: Mapping[str, object]) -> None:
     """
     Validate semantic constraints after type validation.
@@ -1032,6 +1113,12 @@ def _validate_semantics(value: Mapping[str, object]) -> None:
                 )
                 raise ConfigError(msg)
             _validate_embedding_indexing_semantics(indexing)
+
+    index = value.get("index")
+    if isinstance(index, Mapping):
+        concurrency = index.get("concurrency")
+        if isinstance(concurrency, Mapping):
+            _validate_index_concurrency_semantics(concurrency)
 
 
 def validate_config_mapping(value: Mapping[str, object]) -> None:
@@ -1886,6 +1973,13 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
                 "exclude_paths": list(config.embeddings.indexing.exclude_paths),
             },
         },
+        "index": {
+            "concurrency": {
+                "strategy": config.index.strategy,
+                "max_workers": config.index.max_workers,
+                "min_files": config.index.min_files,
+            },
+        },
     }
 
 
@@ -1958,6 +2052,8 @@ def _config_from_mapping(
     embeddings = cast("Mapping[str, object]", value["embeddings"])
     gpu = cast("Mapping[str, object]", embeddings["gpu"])
     indexing = cast("Mapping[str, object]", embeddings["indexing"])
+    index = cast("Mapping[str, object]", value["index"])
+    concurrency = cast("Mapping[str, object]", index["concurrency"])
     return CodiraConfig(
         config_version=cast("int", value["config_version"]),
         backend=BackendConfig(name=cast("str", backend["name"]).strip()),
@@ -2007,6 +2103,11 @@ def _config_from_mapping(
                     for item in cast("list[object]", indexing["exclude_paths"])
                 ),
             ),
+        ),
+        index=IndexConcurrencyConfig(
+            strategy=cast("str", concurrency["strategy"]),
+            max_workers=cast("int", concurrency["max_workers"]),
+            min_files=cast("int", concurrency["min_files"]),
         ),
         origins=origins,
     )
