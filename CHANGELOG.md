@@ -1,3 +1,15 @@
+# [1.55.0](https://github.com/marco0560/codira/compare/v1.54.0...v1.55.0) (2026-07-24)
+
+
+### Bug Fixes
+
+* **cli:** group version plugin families ([75e17bc](https://github.com/marco0560/codira/commit/75e17bc175398ab8188164f1365cdae79d6a9c54))
+
+
+### Features
+
+* **plugins:** expose documentation audit capability routing ([9bcc02e](https://github.com/marco0560/codira/commit/9bcc02e688cf4b227053e81177f418a5feb38aba))
+
 # [1.54.0](https://github.com/marco0560/codira/compare/v1.53.0...v1.54.0) (2026-07-24)
 
 
