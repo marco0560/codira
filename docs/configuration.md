@@ -62,6 +62,7 @@ name = "sqlite"
 [plugins]
 disable_third_party = false
 disabled_analyzers = []
+documentation_audit_routes = []
 
 [embeddings]
 enabled = true
@@ -309,6 +310,60 @@ Common analyzer keys:
 
 Path filter values must be non-empty repo-relative paths. Absolute paths and
 `..` traversal segments are invalid.
+
+Documentation audit routing is explicit. Empty
+`plugins.documentation_audit_routes = []` disables documentation audit
+execution; this is the compatibility mode for repositories that have not chosen
+a convention.
+
+Each documentation audit route is an ordered inline table:
+
+```toml
+[plugins]
+documentation_audit_routes = [
+  { language = "python", convention = "numpy", plugin = "numpy", include_paths = ["src/**/*.py"], exclude_paths = ["tests/fixtures/**"] },
+  { language = "python", convention = "google", plugin = "google", include_paths = ["tests/**/*.py"] },
+  { language = "c", convention = "doxygen", plugin = "doxygen", include_paths = ["src/**/*.c", "include/**/*.h"] },
+  { language = "cpp", convention = "doxygen", plugin = "doxygen", include_paths = ["src/**/*.cpp", "include/**/*.hpp"] },
+]
+```
+
+Route keys:
+
+| Key | Type | Required | Description |
+| --- | --- | --- | --- |
+| `language` | str | yes | Analyzer language matched by the route, such as `python`, `c`, or `cpp`. |
+| `convention` | str | yes | Convention label passed to the selected audit plugin. |
+| `plugin` | str | yes | Documentation audit plugin name. First-party names are `numpy`, `google`, and `doxygen`. |
+| `include_paths` | list[str] | no | Repo-relative glob patterns accepted by this route. Empty means all paths for the language. |
+| `exclude_paths` | list[str] | no | Repo-relative glob patterns rejected by this route. Excludes win over includes. |
+
+A public artifact is audited only when exactly one route matches its language
+and path. Multiple matching routes emit an `ambiguous_route` diagnostic instead
+of guessing the convention.
+
+`codira audit --json` includes persisted plugin and convention provenance for
+single-route matches:
+
+```json
+{
+  "audit_plugin": {
+    "name": "numpy",
+    "version": "1"
+  },
+  "audit_convention": {
+    "name": "numpy",
+    "version": "1"
+  },
+  "rule_id": "missing_parameter",
+  "severity": "warning",
+  "audit_route": {
+    "language": "python",
+    "convention": "numpy",
+    "plugin": "numpy"
+  }
+}
+```
 
 First-party analyzer options:
 

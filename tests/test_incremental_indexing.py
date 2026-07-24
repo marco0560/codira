@@ -1947,12 +1947,23 @@ def test_index_repo_purges_stale_shell_docstring_issues(tmp_path: Path) -> None:
         )
         conn.execute(
             "INSERT INTO docstring_issues"
-            "(file_id, function_id, class_id, module_id, issue_type, message) "
-            "VALUES (?, NULL, NULL, NULL, ?, ?)",
+            "("
+            "file_id, function_id, class_id, module_id, issue_type, message, "
+            "audit_language, audit_plugin_name, audit_plugin_version, "
+            "convention_name, convention_version, rule_id, severity"
+            ") "
+            "VALUES (?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 file_id,
                 "missing",
                 "Function build: Missing docstring",
+                "python",
+                "numpy",
+                "1",
+                "numpy",
+                "1",
+                "missing",
+                "warning",
             ),
         )
         conn.commit()

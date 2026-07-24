@@ -42,7 +42,7 @@ from codira.contracts import (
     VectorStoreFullIndexRequest,
     filter_embedding_rows_for_policy,
 )
-from codira.docstring import DocstringValidationRequest, validate_docstring
+from codira.docstring import validate_documentation_issues_with_configured_plugin
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.repository_scope import path_has_excluded_tree_name
 from codira.semantic.embeddings import (
@@ -103,7 +103,21 @@ DocumentationArtifactRow = tuple[
     str | None,
     str | None,
 ]
-DocstringIssueRow = tuple[int, int | None, int | None, int | None, str, str]
+DocstringIssueRow = tuple[
+    int,
+    int | None,
+    int | None,
+    int | None,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+]
 ImportRow = tuple[int, str, str | None, str, int]
 OverloadRow = tuple[int, str, str, int, str, str | None, int, int | None]
 EnumMemberRow = tuple[int, str, str, int, str, str, int, str, str, int]
@@ -617,12 +631,27 @@ class DocstringIssueRequest:
         Whether the callable returns values.
     raises_exception : bool
         Whether the callable raises exceptions.
+    root : pathlib.Path
+        Repository root whose config selects audit routes.
+    source_path : pathlib.Path
+        Source file owning the artifact.
+    stable_id : str
+        Stable analyzer-owned artifact identifier.
+    symbol_name : str
+        Artifact name shown in diagnostics.
+    artifact_kind : str
+        Artifact kind shown to plugins.
     """
 
     file_id: int
     label: str
     docstring: str | None
     is_public: int
+    root: Path
+    source_path: Path
+    stable_id: str
+    symbol_name: str
+    artifact_kind: str
     function_id: int | None = None
     class_id: int | None = None
     module_id: int | None = None
@@ -664,6 +693,8 @@ class ArtifactPersistenceRequest:
         Pending structural row buffers for explicit-ID bulk inserts.
     id_allocator : DuckDBIdAllocator
         Explicit-ID allocator shared across structural tables.
+    root : pathlib.Path | None
+        Repository root whose config selects audit routes.
     """
 
     conn: _DuckDBPersistenceConnection
@@ -678,6 +709,7 @@ class ArtifactPersistenceRequest:
     pending_docstring_issue_rows: list[DocstringIssueRow] | None = None
     structural_rows: DuckDBStructuralRowBuffers | None = None
     id_allocator: DuckDBIdAllocator | None = None
+    root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -2067,19 +2099,30 @@ def _persist_docstring_issues(
             request.function_id,
             request.class_id,
             request.module_id,
-            issue_type,
-            f"{request.label}: {message}",
+            issue.issue_type,
+            issue.message,
+            issue.audit_language,
+            issue.audit_plugin_name,
+            issue.audit_plugin_version,
+            issue.convention_name,
+            issue.convention_version,
+            issue.rule_id,
+            str(issue.severity),
         )
-        for issue_type, message in validate_docstring(
-            DocstringValidationRequest(
-                doc=request.docstring,
-                is_public=request.is_public,
-                parameters=request.parameters or [],
-                require_callable_sections=request.require_callable_sections,
-                yields_value=request.yields_value,
-                returns_value=request.returns_value,
-                raises_exception=request.raises_exception,
-            )
+        for issue in validate_documentation_issues_with_configured_plugin(
+            root=request.root,
+            source_path=request.source_path,
+            stable_id=request.stable_id,
+            symbol_name=request.symbol_name,
+            artifact_kind=request.artifact_kind,
+            label=request.label,
+            doc=request.docstring,
+            is_public=request.is_public,
+            parameters=request.parameters,
+            require_callable_sections=request.require_callable_sections,
+            yields_value=request.yields_value,
+            returns_value=request.returns_value,
+            raises_exception=request.raises_exception,
         )
     ]
     if issue_rows:
@@ -2148,6 +2191,7 @@ def _persist_module_artifacts(
     conn: _DuckDBPersistenceConnection,
     *,
     file_id: int,
+    root: Path,
     analysis: AnalysisResult,
     embedding_rows: list[PendingEmbeddingRow],
     structural_rows: DuckDBStructuralRowBuffers,
@@ -2163,6 +2207,8 @@ def _persist_module_artifacts(
         Open database connection.
     file_id : int
         Integer identifier of the owner file.
+    root : pathlib.Path
+        Repository root whose config selects audit routes.
     analysis : codira.models.AnalysisResult
         Normalized analyzer output for the file.
     embedding_rows : list[codira.indexer.PendingEmbeddingRow]
@@ -2225,6 +2271,11 @@ def _persist_module_artifacts(
             label=f"Module {module_name}",
             docstring=module.docstring,
             is_public=int(_should_audit_docstrings(analysis.source_path)),
+            root=root,
+            source_path=analysis.source_path,
+            stable_id=module.stable_id,
+            symbol_name=module_name,
+            artifact_kind="module",
         ),
         pending_rows=pending_docstring_issue_rows,
     )
@@ -2257,8 +2308,10 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
     pending_docstring_issue_rows = request.pending_docstring_issue_rows
     structural_rows = request.structural_rows
     id_allocator = request.id_allocator
+    root = request.root
     assert structural_rows is not None
     assert id_allocator is not None
+    assert root is not None
 
     for cls in analysis.classes:
         class_id = id_allocator.next_id("classes")
@@ -2306,6 +2359,11 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
                     label=f"Class {cls.name}",
                     docstring=cls.docstring,
                     is_public=1,
+                    root=root,
+                    source_path=analysis.source_path,
+                    stable_id=cls.stable_id,
+                    symbol_name=cls.name,
+                    artifact_kind="class",
                 ),
                 pending_rows=pending_docstring_issue_rows,
             )
@@ -2367,6 +2425,11 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
                         label=f"Method {cls.name}.{method.name}",
                         docstring=method.docstring,
                         is_public=method.is_public,
+                        root=root,
+                        source_path=analysis.source_path,
+                        stable_id=method.stable_id,
+                        symbol_name=logical_name,
+                        artifact_kind="method",
                         parameters=list(method.parameters),
                         require_callable_sections=True,
                         yields_value=bool(method.yields_value),
@@ -2419,8 +2482,10 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
     pending_docstring_issue_rows = request.pending_docstring_issue_rows
     structural_rows = request.structural_rows
     id_allocator = request.id_allocator
+    root = request.root
     assert structural_rows is not None
     assert id_allocator is not None
+    assert root is not None
 
     for fn in analysis.functions:
         python_embedding_context = _python_embedding_context(analysis, fn)
@@ -2474,6 +2539,11 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
                     label=f"Function {fn.name}",
                     docstring=fn.docstring,
                     is_public=fn.is_public,
+                    root=root,
+                    source_path=analysis.source_path,
+                    stable_id=fn.stable_id,
+                    symbol_name=fn.name,
+                    artifact_kind="function",
                     parameters=list(fn.parameters),
                     require_callable_sections=True,
                     yields_value=bool(fn.yields_value),
@@ -3367,13 +3437,41 @@ def _flush_docstring_issue_rows(
     module_ids: list[int | None] = []
     issue_types: list[str] = []
     messages: list[str] = []
-    for file_id, function_id, class_id, module_id, issue_type, message in rows:
+    audit_languages: list[str] = []
+    audit_plugin_names: list[str] = []
+    audit_plugin_versions: list[str] = []
+    convention_names: list[str] = []
+    convention_versions: list[str] = []
+    rule_ids: list[str] = []
+    severities: list[str] = []
+    for (
+        file_id,
+        function_id,
+        class_id,
+        module_id,
+        issue_type,
+        message,
+        audit_language,
+        audit_plugin_name,
+        audit_plugin_version,
+        convention_name,
+        convention_version,
+        rule_id,
+        severity,
+    ) in rows:
         file_ids.append(file_id)
         function_ids.append(function_id)
         class_ids.append(class_id)
         module_ids.append(module_id)
         issue_types.append(issue_type)
         messages.append(message)
+        audit_languages.append(audit_language)
+        audit_plugin_names.append(audit_plugin_name)
+        audit_plugin_versions.append(audit_plugin_version)
+        convention_names.append(convention_name)
+        convention_versions.append(convention_version)
+        rule_ids.append(rule_id)
+        severities.append(severity)
 
     table = pa.table(
         {
@@ -3383,6 +3481,13 @@ def _flush_docstring_issue_rows(
             "module_id": pa.array(module_ids, type=pa.int64()),
             "issue_type": pa.array(issue_types, type=pa.string()),
             "message": pa.array(messages, type=pa.string()),
+            "audit_language": pa.array(audit_languages, type=pa.string()),
+            "audit_plugin_name": pa.array(audit_plugin_names, type=pa.string()),
+            "audit_plugin_version": pa.array(audit_plugin_versions, type=pa.string()),
+            "convention_name": pa.array(convention_names, type=pa.string()),
+            "convention_version": pa.array(convention_versions, type=pa.string()),
+            "rule_id": pa.array(rule_ids, type=pa.string()),
+            "severity": pa.array(severities, type=pa.string()),
         }
     )
     view_name = "__codira_pending_docstring_issue_rows"
@@ -3396,7 +3501,14 @@ def _flush_docstring_issue_rows(
                 class_id,
                 module_id,
                 issue_type,
-                message
+                message,
+                audit_language,
+                audit_plugin_name,
+                audit_plugin_version,
+                convention_name,
+                convention_version,
+                rule_id,
+                severity
             )
             SELECT
                 file_id,
@@ -3404,7 +3516,14 @@ def _flush_docstring_issue_rows(
                 class_id,
                 module_id,
                 issue_type,
-                message
+                message,
+                audit_language,
+                audit_plugin_name,
+                audit_plugin_version,
+                convention_name,
+                convention_version,
+                rule_id,
+                severity
             FROM __codira_pending_docstring_issue_rows
             """
         )
@@ -4978,6 +5097,7 @@ def _append_analysis_rows(
     module_name, module_id, c_embedding_context = _persist_module_artifacts(
         conn,
         file_id=file_id,
+        root=root,
         analysis=analysis,
         embedding_rows=embedding_rows,
         structural_rows=structural_rows,
@@ -4997,6 +5117,7 @@ def _append_analysis_rows(
         pending_docstring_issue_rows=effective_docstring_issue_rows,
         structural_rows=structural_rows,
         id_allocator=id_allocator,
+        root=root,
     )
     _persist_class_artifacts(artifact_request)
     _persist_function_artifacts(artifact_request)

@@ -33,7 +33,7 @@ from codira.contracts import (
     StoredEmbeddingRow,
     filter_embedding_rows_for_policy,
 )
-from codira.docstring import DocstringValidationRequest, validate_docstring
+from codira.docstring import validate_documentation_issues_with_configured_plugin
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.repository_scope import path_has_excluded_tree_name
 from codira.semantic.embeddings import (
@@ -220,12 +220,27 @@ class DocstringIssueRequest:
         Whether the callable returns values.
     raises_exception : bool
         Whether the callable raises exceptions.
+    root : pathlib.Path
+        Repository root whose config selects audit routes.
+    source_path : pathlib.Path
+        Source file owning the artifact.
+    stable_id : str
+        Stable analyzer-owned artifact identifier.
+    symbol_name : str
+        Artifact name shown in diagnostics.
+    artifact_kind : str
+        Artifact kind shown to plugins.
     """
 
     file_id: int
     label: str
     docstring: str | None
     is_public: int
+    root: Path
+    source_path: Path
+    stable_id: str
+    symbol_name: str
+    artifact_kind: str
     function_id: int | None = None
     class_id: int | None = None
     module_id: int | None = None
@@ -261,6 +276,8 @@ class ArtifactPersistenceRequest:
         Pending call rows collected for the file.
     ref_rows : list[RefRow]
         Pending callable-reference rows collected for the file.
+    root : pathlib.Path
+        Repository root whose config selects audit routes.
     """
 
     conn: sqlite3.Connection
@@ -272,6 +289,7 @@ class ArtifactPersistenceRequest:
     embedding_rows: list[PendingEmbeddingRow]
     call_rows: list[CallRow]
     ref_rows: list[RefRow]
+    root: Path
 
 
 @dataclass(frozen=True)
@@ -1358,28 +1376,43 @@ def _persist_docstring_issues(
     None
         Matching docstring issues are inserted in place.
     """
-    for issue_type, message in validate_docstring(
-        DocstringValidationRequest(
-            doc=request.docstring,
-            is_public=request.is_public,
-            parameters=request.parameters or [],
-            require_callable_sections=request.require_callable_sections,
-            yields_value=request.yields_value,
-            returns_value=request.returns_value,
-            raises_exception=request.raises_exception,
-        )
+    for issue in validate_documentation_issues_with_configured_plugin(
+        root=request.root,
+        source_path=request.source_path,
+        stable_id=request.stable_id,
+        symbol_name=request.symbol_name,
+        artifact_kind=request.artifact_kind,
+        label=request.label,
+        doc=request.docstring,
+        is_public=request.is_public,
+        parameters=request.parameters,
+        require_callable_sections=request.require_callable_sections,
+        yields_value=request.yields_value,
+        returns_value=request.returns_value,
+        raises_exception=request.raises_exception,
     ):
         conn.execute(
             "INSERT INTO docstring_issues"
-            "(file_id, function_id, class_id, module_id, issue_type, message) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "("
+            "file_id, function_id, class_id, module_id, issue_type, message, "
+            "audit_language, audit_plugin_name, audit_plugin_version, convention_name, "
+            "convention_version, rule_id, severity"
+            ") "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 request.file_id,
                 request.function_id,
                 request.class_id,
                 request.module_id,
-                issue_type,
-                f"{request.label}: {message}",
+                issue.issue_type,
+                issue.message,
+                issue.audit_language,
+                issue.audit_plugin_name,
+                issue.audit_plugin_version,
+                issue.convention_name,
+                issue.convention_version,
+                issue.rule_id,
+                issue.severity,
             ),
         )
 
@@ -1443,6 +1476,7 @@ def _persist_module_artifacts(
     conn: sqlite3.Connection,
     *,
     file_id: int,
+    root: Path,
     analysis: AnalysisResult,
     embedding_rows: list[PendingEmbeddingRow],
 ) -> tuple[str, int, tuple[str, ...]]:
@@ -1455,6 +1489,8 @@ def _persist_module_artifacts(
         Open database connection.
     file_id : int
         Integer identifier of the owner file.
+    root : pathlib.Path
+        Repository root whose config selects audit routes.
     analysis : codira.models.AnalysisResult
         Normalized analyzer output for the file.
     embedding_rows : list[codira.indexer.PendingEmbeddingRow]
@@ -1512,6 +1548,11 @@ def _persist_module_artifacts(
             label=f"Module {module_name}",
             docstring=module.docstring,
             is_public=int(_should_audit_docstrings(analysis.source_path)),
+            root=root,
+            source_path=analysis.source_path,
+            stable_id=module.stable_id,
+            symbol_name=module_name,
+            artifact_kind="module",
         ),
     )
     return module_name, module_id, c_embedding_context
@@ -1540,6 +1581,7 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
     embedding_rows = request.embedding_rows
     call_rows = request.call_rows
     ref_rows = request.ref_rows
+    root = request.root
 
     for cls in analysis.classes:
         cur = conn.execute(
@@ -1589,6 +1631,11 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
                     label=f"Class {cls.name}",
                     docstring=cls.docstring,
                     is_public=1,
+                    root=root,
+                    source_path=analysis.source_path,
+                    stable_id=cls.stable_id,
+                    symbol_name=cls.name,
+                    artifact_kind="class",
                 ),
             )
 
@@ -1652,6 +1699,11 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
                         label=f"Method {cls.name}.{method.name}",
                         docstring=method.docstring,
                         is_public=method.is_public,
+                        root=root,
+                        source_path=analysis.source_path,
+                        stable_id=method.stable_id,
+                        symbol_name=logical_name,
+                        artifact_kind="method",
                         parameters=list(method.parameters),
                         require_callable_sections=True,
                         yields_value=bool(method.yields_value),
@@ -1700,6 +1752,7 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
     embedding_rows = request.embedding_rows
     call_rows = request.call_rows
     ref_rows = request.ref_rows
+    root = request.root
 
     for fn in analysis.functions:
         python_embedding_context = _python_embedding_context(analysis, fn)
@@ -1756,6 +1809,11 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
                     label=f"Function {fn.name}",
                     docstring=fn.docstring,
                     is_public=fn.is_public,
+                    root=root,
+                    source_path=analysis.source_path,
+                    stable_id=fn.stable_id,
+                    symbol_name=fn.name,
+                    artifact_kind="function",
                     parameters=list(fn.parameters),
                     require_callable_sections=True,
                     yields_value=bool(fn.yields_value),
@@ -2742,6 +2800,7 @@ def _store_analysis(
     module_name, module_id, c_embedding_context = _persist_module_artifacts(
         conn,
         file_id=file_id,
+        root=root,
         analysis=analysis,
         embedding_rows=embedding_rows,
     )
@@ -2755,6 +2814,7 @@ def _store_analysis(
         embedding_rows=embedding_rows,
         call_rows=call_rows,
         ref_rows=ref_rows,
+        root=root,
     )
     _persist_class_artifacts(artifact_request)
     _persist_function_artifacts(artifact_request)

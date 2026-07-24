@@ -301,6 +301,9 @@ bundle-official = [
     { name = "codira-analyzer-text" },
     { name = "codira-backend-duckdb" },
     { name = "codira-backend-sqlite" },
+    { name = "codira-documentation-audit-doxygen" },
+    { name = "codira-documentation-audit-google" },
+    { name = "codira-documentation-audit-numpy" },
     { name = "codira-embedding-onnx" },
     { name = "codira-embedding-sentence-transformers" },
     { name = "codira-vector-store-duckdb" },
@@ -335,6 +338,9 @@ dev = [
     { name = "codira-analyzer-text" },
     { name = "codira-backend-duckdb" },
     { name = "codira-backend-sqlite" },
+    { name = "codira-documentation-audit-doxygen" },
+    { name = "codira-documentation-audit-google" },
+    { name = "codira-documentation-audit-numpy" },
     { name = "codira-embedding-onnx" },
     { name = "codira-embedding-sentence-transformers" },
     { name = "codira-vector-store-duckdb" },
@@ -365,6 +371,9 @@ requires-dist = [
     { name = "codira-analyzer-text", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-text" },
     { name = "codira-backend-duckdb", marker = "extra == 'bundle-official'", editable = "packages/codira-backend-duckdb" },
     { name = "codira-backend-sqlite", marker = "extra == 'bundle-official'", editable = "packages/codira-backend-sqlite" },
+    { name = "codira-documentation-audit-doxygen", marker = "extra == 'bundle-official'", editable = "packages/codira-documentation-audit-doxygen" },
+    { name = "codira-documentation-audit-google", marker = "extra == 'bundle-official'", editable = "packages/codira-documentation-audit-google" },
+    { name = "codira-documentation-audit-numpy", marker = "extra == 'bundle-official'", editable = "packages/codira-documentation-audit-numpy" },
     { name = "codira-embedding-onnx", marker = "extra == 'bundle-official'", editable = "packages/codira-embedding-onnx" },
     { name = "codira-embedding-onnx", marker = "extra == 'semantic'", editable = "packages/codira-embedding-onnx" },
     { name = "codira-embedding-sentence-transformers", marker = "extra == 'bundle-official'", editable = "packages/codira-embedding-sentence-transformers" },
@@ -399,6 +408,9 @@ dev = [
     { name = "codira-analyzer-text", editable = "packages/codira-analyzer-text" },
     { name = "codira-backend-duckdb", editable = "packages/codira-backend-duckdb" },
     { name = "codira-backend-sqlite", editable = "packages/codira-backend-sqlite" },
+    { name = "codira-documentation-audit-doxygen", editable = "packages/codira-documentation-audit-doxygen" },
+    { name = "codira-documentation-audit-google", editable = "packages/codira-documentation-audit-google" },
+    { name = "codira-documentation-audit-numpy", editable = "packages/codira-documentation-audit-numpy" },
     { name = "codira-embedding-onnx", editable = "packages/codira-embedding-onnx" },
     { name = "codira-embedding-sentence-transformers", editable = "packages/codira-embedding-sentence-transformers" },
     { name = "codira-vector-store-duckdb", editable = "packages/codira-vector-store-duckdb" },
@@ -558,7 +570,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-duckdb"
-version = "1.50.2"
+version = "1.50.3"
 source = { editable = "packages/codira-backend-duckdb" }
 dependencies = [
     { name = "codira" },
@@ -580,8 +592,62 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-sqlite"
-version = "1.45.3"
+version = "1.45.4"
 source = { editable = "packages/codira-backend-sqlite" }
+dependencies = [
+    { name = "codira" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "black", marker = "extra == 'test'" },
+    { name = "codira", specifier = ">=1.5.0,<2.0.0" },
+    { name = "mypy", marker = "extra == 'test'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "ruff", marker = "extra == 'test'" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "codira-documentation-audit-doxygen"
+version = "1.0.0"
+source = { editable = "packages/codira-documentation-audit-doxygen" }
+dependencies = [
+    { name = "codira" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "black", marker = "extra == 'test'" },
+    { name = "codira", specifier = ">=1.5.0,<2.0.0" },
+    { name = "mypy", marker = "extra == 'test'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "ruff", marker = "extra == 'test'" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "codira-documentation-audit-google"
+version = "1.0.0"
+source = { editable = "packages/codira-documentation-audit-google" }
+dependencies = [
+    { name = "codira" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "black", marker = "extra == 'test'" },
+    { name = "codira", specifier = ">=1.5.0,<2.0.0" },
+    { name = "mypy", marker = "extra == 'test'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "ruff", marker = "extra == 'test'" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "codira-documentation-audit-numpy"
+version = "1.0.0"
+source = { editable = "packages/codira-documentation-audit-numpy" }
 dependencies = [
     { name = "codira" },
 ]

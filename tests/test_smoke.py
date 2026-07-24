@@ -34,6 +34,34 @@ from codira.query.exact import docstring_issues, find_symbol
 from codira.registry import active_index_backend
 
 
+def _write_numpy_audit_config(root: Path) -> None:
+    """
+    Write explicit NumPy audit routing for smoke fixtures.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        A repo-local Codira config is written under ``root``.
+    """
+
+    config_dir = root / ".codira"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        """
+[plugins]
+documentation_audit_routes = [
+  { language = "python", convention = "numpy", plugin = "numpy", include_paths = ["**/*.py"] },
+]
+""".strip(),
+        encoding="utf-8",
+    )
+
+
 @pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
 def test_index_and_queries(
     tmp_path: Path,
@@ -83,6 +111,7 @@ def test_index_and_queries(
         "    return x\n",
         encoding="utf-8",
     )
+    _write_numpy_audit_config(tmp_path)
 
     active_index_backend().initialize(tmp_path)
     index_repo(tmp_path)

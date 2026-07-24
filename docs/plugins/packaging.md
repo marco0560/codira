@@ -6,6 +6,9 @@ Current groups:
 
 - `codira.analyzers`
 - `codira.backends`
+- `codira.embedding_engines`
+- `codira.vector_stores`
+- `codira.documentation_audits`
 
 Install model:
 
@@ -40,6 +43,14 @@ Repository-owned first-party distributions now live under:
 - `packages/codira-analyzer-cpp`
 - `packages/codira-analyzer-bash`
 - `packages/codira-backend-sqlite`
+- `packages/codira-backend-duckdb`
+- `packages/codira-embedding-sentence-transformers`
+- `packages/codira-embedding-onnx`
+- `packages/codira-vector-store-sqlite`
+- `packages/codira-vector-store-duckdb`
+- `packages/codira-documentation-audit-numpy`
+- `packages/codira-documentation-audit-google`
+- `packages/codira-documentation-audit-doxygen`
 - `packages/codira-bundle-official`
 
 The authoritative repository-local editable install set for those packages is

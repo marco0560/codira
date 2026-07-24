@@ -49,6 +49,7 @@ nav:
       - Quick start: plugins/getting-started.md
       - Analyzer plugins: plugins/analyzers.md
       - Backend plugins: plugins/backends.md
+      - Documentation audit plugins: plugins/documentation-audits.md
       - Packaging and install: plugins/packaging.md
       - Tutorial: plugins/tutorial.md
   - Contributing: CONTRIBUTING.md

@@ -293,6 +293,96 @@ enabled = true
     assert plugins["vector-store-sqlite"] == {"enabled": True}
 
 
+def test_config_validation_accepts_documentation_audit_routes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Accept ordered documentation audit routing rules under plugin globals.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths.
+    tmp_path : pathlib.Path
+        Temporary config directory.
+
+    Returns
+    -------
+    None
+        The test asserts route tables survive effective config loading.
+    """
+
+    user_dir, _system_dir = _isolate_config_paths(monkeypatch, tmp_path)
+    user_path = user_dir / "config.toml"
+    user_path.parent.mkdir(parents=True)
+    user_path.write_text(
+        """
+[plugins]
+documentation_audit_routes = [
+  { language = "python", convention = "numpy", plugin = "numpy", include_paths = ["src/**"], exclude_paths = ["tests/**"] },
+  { language = "python", convention = "google", plugin = "google" },
+]
+
+[plugins.documentation-audit-numpy]
+enabled = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_effective_config(env={}, root=None)
+    mapping = config_to_mapping(config)
+    plugins = cast("Mapping[str, object]", mapping["plugins"])
+
+    assert plugins["documentation_audit_routes"] == [
+        {
+            "language": "python",
+            "convention": "numpy",
+            "plugin": "numpy",
+            "include_paths": ["src/**"],
+            "exclude_paths": ["tests/**"],
+        },
+        {
+            "language": "python",
+            "convention": "google",
+            "plugin": "google",
+            "include_paths": [],
+            "exclude_paths": [],
+        },
+    ]
+    assert plugins["documentation-audit-numpy"] == {"enabled": True}
+    assert config.plugins.documentation_audit_routes[0].plugin == "numpy"
+
+
+def test_config_validation_rejects_invalid_documentation_audit_routes() -> None:
+    """
+    Reject malformed documentation audit routing rules.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts missing required route fields fail deterministically.
+    """
+
+    with pytest.raises(
+        ConfigError,
+        match=r"plugins.documentation_audit_routes\[0\].plugin",
+    ):
+        validate_config_mapping(
+            {
+                "plugins": {
+                    "documentation_audit_routes": [
+                        {"language": "python", "convention": "numpy"}
+                    ]
+                }
+            }
+        )
+
+
 def test_config_validation_rejects_invalid_plugin_table_names() -> None:
     """
     Reject plugin tables without supported namespace prefixes.

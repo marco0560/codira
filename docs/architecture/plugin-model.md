@@ -5,12 +5,14 @@ model with embedding engine and vector-store plugin families.
 
 ## Accepted Target Model
 
-The accepted migration now distinguishes four extension families:
+The accepted migration now distinguishes five extension families:
 
 - `IndexBackend`: exactly one active storage/query backend per repository index
 - `LanguageAnalyzer`: zero or more analyzers participating in one indexing run
 - `EmbeddingEngine`: exactly one active text-to-vector runtime
 - `VectorStore`: exactly one active vector persistence/similarity store
+- `DocumentationAuditPlugin`: zero or more convention-specific documentation
+  validators selected by explicit routes
 
 This asymmetry is deliberate:
 
@@ -18,6 +20,9 @@ This asymmetry is deliberate:
 - analyzers represent repository-content capabilities
 - embedding engines and vector stores are singleton runtime/storage choices
   because vector identity and query ranking depend on the active pair
+- documentation audit plugins may overlap by language, so activation is an
+  explicit language/convention/path routing decision instead of an implicit
+  analyzer side effect
 
 ## Current State
 
@@ -30,7 +35,7 @@ The current codebase now exposes:
 - optional explicit configuration injection through `configure(config)`
 - optional plugin-owned JSON Schema publication through
   `configuration_json_schema()`
-- machine-readable capability reporting for all four plugin families through
+- machine-readable capability reporting for all five plugin families through
   `codira caps --json`
 
 ## Phase-3 Baseline
@@ -80,7 +85,8 @@ exclude_paths = ["tests/fixtures"]
 ```
 
 The table name is `plugins.<family>-<plugin-name>`, where `<family>` is
-`analyzer`, `backend`, `embedding`, or `vector-store`.
+`analyzer`, `backend`, `embedding`, `vector-store`, or
+`documentation-audit`.
 
 Plugins may expose:
 
@@ -117,9 +123,43 @@ The current packaging boundary is also now explicit:
 - the optional ONNX Runtime engine is provided by `codira-embedding-onnx`
 - local vector-store plugins are provided by `codira-vector-store-sqlite` and
   `codira-vector-store-duckdb`
+- first-party documentation audit plugins are provided by
+  `codira-documentation-audit-numpy`,
+  `codira-documentation-audit-google`, and
+  `codira-documentation-audit-doxygen`
+- documentation audit plugin implementations are loaded from package entry
+  points; core only owns the shared contract and route execution boundary
 - third-party plugins live in separate distributions and are discovered from
-  `codira.analyzers`, `codira.backends`, `codira.embedding_engines`, and
-  `codira.vector_stores` entry-point groups
+  `codira.analyzers`, `codira.backends`, `codira.embedding_engines`,
+  `codira.vector_stores`, and `codira.documentation_audits` entry-point groups
+
+## Documentation Audit Routing
+
+Documentation audit plugins are intentionally separate from language analyzers.
+Analyzers decide which source files and artifacts are indexed; documentation
+audit plugins decide whether an indexed documentation block satisfies one
+documentation convention.
+
+Routes live in `plugins.documentation_audit_routes`. Each route declares:
+
+- `language`: analyzer language such as `python`, `c`, or `cpp`
+- `convention`: convention label passed to the plugin, such as `numpy`,
+  `google`, or `doxygen`
+- `plugin`: plugin name selected from the documentation-audit registry
+- optional `include_paths` and `exclude_paths` repo-relative glob patterns
+
+More than one documentation audit plugin can be installed for the same
+language. Codira therefore does not auto-select a convention. During indexing,
+a public artifact is audited only when exactly one route matches its language
+and path. No route means no documentation audit row is emitted; more than one
+matching route emits an `ambiguous_route` diagnostic so operators can tighten
+the route table.
+
+The first release scope supports:
+
+- NumPy-style Python docstrings through plugin `numpy`
+- Google-style Python docstrings through plugin `google`
+- Doxygen-style C and C++ comments through plugin `doxygen`
 
 ## Phase-9 Analyzer Proof
 

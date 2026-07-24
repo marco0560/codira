@@ -1326,6 +1326,13 @@ class SQLiteIndexBackend:
                 SELECT
                     di.issue_type,
                     di.message,
+                    di.audit_language,
+                    di.audit_plugin_name,
+                    di.audit_plugin_version,
+                    di.convention_name,
+                    di.convention_version,
+                    di.rule_id,
+                    di.severity,
                     COALESCE(si_fn.stable_id, si_cls.stable_id, si_mod.stable_id, '') AS stable_id,
                     CASE
                         WHEN di.function_id IS NOT NULL AND fn.is_method = 1 THEN 'method'
@@ -1400,6 +1407,13 @@ class SQLiteIndexBackend:
                 (
                     str(issue_type),
                     str(message),
+                    str(audit_language),
+                    str(audit_plugin_name),
+                    str(audit_plugin_version),
+                    str(convention_name),
+                    str(convention_version),
+                    str(rule_id),
+                    str(severity),
                     str(stable_id),
                     str(symbol_type),
                     str(module_name),
@@ -1411,6 +1425,13 @@ class SQLiteIndexBackend:
                 for (
                     issue_type,
                     message,
+                    audit_language,
+                    audit_plugin_name,
+                    audit_plugin_version,
+                    convention_name,
+                    convention_version,
+                    rule_id,
+                    severity,
                     stable_id,
                     symbol_type,
                     module_name,

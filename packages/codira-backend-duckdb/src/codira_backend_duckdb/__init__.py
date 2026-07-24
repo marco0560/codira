@@ -88,7 +88,7 @@ if TYPE_CHECKING:
         VectorStore,
     )
 
-PACKAGE_VERSION = "1.50.2"
+PACKAGE_VERSION = "1.50.3"
 _SAFE_SQL_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
 _INDEX_NAME_PATTERN = re.compile(
     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)",
@@ -142,9 +142,7 @@ class _DuckDBIndexWriteSession:
         self._pending_call_rows: list[CallRow] = []
         self._pending_ref_rows: list[RefRow] = []
         self._pending_import_rows: list[tuple[int, str, str | None, str, int]] = []
-        self._pending_docstring_issue_rows: list[
-            tuple[int, int | None, int | None, int | None, str, str]
-        ] = []
+        self._pending_docstring_issue_rows: list[DocstringIssueRow] = []
 
     def purge_skipped_docstring_issues(self) -> None:
         """

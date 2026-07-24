@@ -24,6 +24,7 @@ import hashlib
 import math
 import struct
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from codira.contracts import (
@@ -34,14 +35,13 @@ from codira.contracts import (
     BackendSymbolInventoryItem,
     StoredEmbeddingRow,
 )
-from codira.docstring import DocstringValidationRequest, validate_docstring
+from codira.docstring import validate_documentation_issues_with_configured_plugin
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.prefix import normalize_prefix, path_has_prefix
 from codira.repository_scope import path_has_excluded_tree_name
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-    from pathlib import Path
     from typing import Protocol
 
     from codira.contracts import (
@@ -181,6 +181,13 @@ class _MemoryDocIssue:
 
     issue_type: str
     message: str
+    audit_language: str
+    audit_plugin_name: str
+    audit_plugin_version: str
+    convention_name: str
+    convention_version: str
+    rule_id: str
+    severity: str
     stable_id: str
     symbol_type: str
     module_name: str
@@ -287,6 +294,7 @@ class _MemoryEnumMember:
 class _MemoryState:
     """Mutable root-scoped backend state."""
 
+    root: Path | None = None
     next_file_id: int = 1
     next_symbol_id: int = 1
     next_documentation_id: int = 1
@@ -832,7 +840,10 @@ class MemoryIndexBackend:
         _MemoryState
             Mutable root-scoped state.
         """
-        return self._states.setdefault(root.resolve(), _MemoryState())
+        resolved = root.resolve()
+        state = self._states.setdefault(resolved, _MemoryState())
+        state.root = resolved
+        return state
 
     def _conn_state(self, root: Path, conn: object | None) -> _MemoryState:
         """
@@ -2457,6 +2468,13 @@ class MemoryIndexBackend:
             (
                 issue.issue_type,
                 issue.message,
+                issue.audit_language,
+                issue.audit_plugin_name,
+                issue.audit_plugin_version,
+                issue.convention_name,
+                issue.convention_version,
+                issue.rule_id,
+                issue.severity,
                 issue.stable_id,
                 issue.symbol_type,
                 issue.module_name,
@@ -2698,21 +2716,34 @@ class MemoryIndexBackend:
         None
             Matching docstring issues are appended in place.
         """
-        for issue_type, message in validate_docstring(
-            DocstringValidationRequest(
-                doc=docstring,
-                is_public=is_public,
-                parameters=list(parameters),
-                require_callable_sections=require_callable_sections,
-                yields_value=yields_value,
-                returns_value=returns_value,
-                raises_exception=raises_exception,
-            )
+        source_path = Path(state.files[file_id].path)
+        assert state.root is not None
+        for issue in validate_documentation_issues_with_configured_plugin(
+            root=state.root,
+            source_path=source_path,
+            stable_id=stable_id,
+            symbol_name=symbol_name,
+            artifact_kind=symbol_type,
+            label=label,
+            doc=docstring,
+            is_public=is_public,
+            parameters=list(parameters),
+            require_callable_sections=require_callable_sections,
+            yields_value=yields_value,
+            returns_value=returns_value,
+            raises_exception=raises_exception,
         ):
             state.doc_issues.append(
                 _MemoryDocIssue(
-                    issue_type=issue_type,
-                    message=f"{label}: {message}",
+                    issue_type=issue.issue_type,
+                    message=issue.message,
+                    audit_language=issue.audit_language,
+                    audit_plugin_name=issue.audit_plugin_name,
+                    audit_plugin_version=issue.audit_plugin_version,
+                    convention_name=issue.convention_name,
+                    convention_version=issue.convention_version,
+                    rule_id=issue.rule_id,
+                    severity=issue.severity,
                     stable_id=stable_id,
                     symbol_type=symbol_type,
                     module_name=module_name,

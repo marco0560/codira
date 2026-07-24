@@ -147,7 +147,13 @@
         ],
         "properties": {
           "family": {
-            "enum": ["analyzer", "backend", "embedding", "vector-store"]
+            "enum": [
+              "analyzer",
+              "backend",
+              "embedding",
+              "vector-store",
+              "documentation-audit"
+            ]
           },
           "name": { "type": "string", "minLength": 1 },
           "active": { "type": "boolean" },

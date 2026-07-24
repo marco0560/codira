@@ -85,6 +85,161 @@ class VectorStoreError(RuntimeError):
     """
 
 
+class DocumentationAuditError(RuntimeError):
+    """
+    Audit-plugin-neutral validation failure.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances carry the documentation audit failure message through
+        ``RuntimeError``.
+    """
+
+
+DocumentationAuditSeverity = Literal["info", "warning", "error"]
+
+
+@dataclass(frozen=True)
+class DocumentationAuditRequest:
+    """
+    Request passed to a documentation audit plugin.
+
+    Parameters
+    ----------
+    source_path : pathlib.Path
+        Absolute or repo-root-relative source path being audited.
+    language : str
+        Analyzer language associated with the source artifact.
+    convention : str
+        Documentation convention selected by explicit routing.
+    artifact_kind : str
+        Analyzer-native artifact kind, such as ``"function"`` or
+        ``"doxygen"``.
+    symbol_name : str
+        Human-readable symbol or documentation artifact name.
+    stable_id : str
+        Stable artifact identifier emitted by the analyzer.
+    doc : str | None
+        Documentation text to validate.
+    parameters : tuple[str, ...]
+        Logical parameter names for callable artifacts.
+    require_callable_sections : bool
+        Whether callable-oriented structured sections are required.
+    yields_value : bool
+        Whether the callable yields values.
+    returns_value : bool
+        Whether the callable returns values.
+    raises_exception : bool
+        Whether the callable raises exceptions.
+    metadata : collections.abc.Mapping[str, object]
+        Additional analyzer-owned metadata carried through without core
+        interpretation.
+    """
+
+    source_path: Path
+    language: str
+    convention: str
+    artifact_kind: str
+    symbol_name: str
+    stable_id: str
+    doc: str | None
+    parameters: tuple[str, ...] = ()
+    require_callable_sections: bool = False
+    yields_value: bool = False
+    returns_value: bool = False
+    raises_exception: bool = False
+    metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DocumentationAuditDiagnostic:
+    """
+    One documentation audit diagnostic.
+
+    Parameters
+    ----------
+    code : str
+        Stable plugin-defined diagnostic code.
+    message : str
+        Human-readable diagnostic message.
+    severity : {"info", "warning", "error"}
+        Diagnostic severity.
+    plugin_name : str
+        Plugin name that emitted the diagnostic.
+    plugin_version : str
+        Plugin implementation version that emitted the diagnostic.
+    convention : str
+        Documentation convention evaluated by the plugin.
+    convention_version : str
+        Version of the documentation convention profile.
+    """
+
+    code: str
+    message: str
+    severity: DocumentationAuditSeverity
+    plugin_name: str
+    plugin_version: str
+    convention: str
+    convention_version: str = "1"
+
+
+@dataclass(frozen=True)
+class DocumentationAuditResult:
+    """
+    Result returned by one documentation audit plugin.
+
+    Parameters
+    ----------
+    diagnostics : collections.abc.Sequence[codira.contracts.DocumentationAuditDiagnostic]
+        Diagnostics emitted for the request.
+    metadata : collections.abc.Mapping[str, object]
+        Optional plugin-owned result metadata.
+    """
+
+    diagnostics: Sequence[DocumentationAuditDiagnostic]
+    metadata: Mapping[str, object] = dataclass_field(default_factory=dict)
+
+
+@runtime_checkable
+class DocumentationAuditPlugin(Protocol):
+    """
+    Contract for convention-specific documentation audit plugins.
+
+    Documentation audit plugins are selected by explicit routing over language
+    and source path. They validate documentation artifacts emitted by language
+    analyzers; they do not replace analyzers or read source files directly.
+    """
+
+    name: str
+    version: str
+    languages: tuple[str, ...]
+    conventions: tuple[str, ...]
+
+    def audit_documentation(
+        self,
+        request: DocumentationAuditRequest,
+    ) -> DocumentationAuditResult:
+        """
+        Validate one documentation artifact.
+
+        Parameters
+        ----------
+        request : codira.contracts.DocumentationAuditRequest
+            Documentation artifact selected by the core audit router.
+
+        Returns
+        -------
+        codira.contracts.DocumentationAuditResult
+            Diagnostics emitted for the artifact.
+        """
+        ...
+
+
 @dataclass(frozen=True)
 class EmbeddingEngineSpec:
     """

@@ -107,6 +107,34 @@ def _write_prefix_fixture(root: Path) -> None:
     )
 
 
+def _write_numpy_audit_config(root: Path) -> None:
+    """
+    Write explicit NumPy audit routing for audit-expecting fixtures.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        A repo-local Codira config is written under ``root``.
+    """
+
+    config_dir = root / ".codira"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        """
+[plugins]
+documentation_audit_routes = [
+  { language = "python", convention = "numpy", plugin = "numpy", include_paths = ["**/*.py"] },
+]
+""".strip(),
+        encoding="utf-8",
+    )
+
+
 def _write_overload_audit_fixture(root: Path, *, documented_impl: bool) -> None:
     """
     Write one overload-bearing Python module for docstring-audit regressions.
@@ -217,6 +245,7 @@ def test_find_symbol_respects_prefix(tmp_path: Path) -> None:
         The test asserts exact symbol filtering by defining-file prefix.
     """
     _write_prefix_fixture(tmp_path)
+    _write_numpy_audit_config(tmp_path)
     init_db(tmp_path)
     index_repo(tmp_path)
 
@@ -244,6 +273,7 @@ def test_embedding_candidates_respect_prefix(tmp_path: Path) -> None:
         The test asserts embedding-channel filtering by file prefix.
     """
     _write_prefix_fixture(tmp_path)
+    _write_numpy_audit_config(tmp_path)
     init_db(tmp_path)
     index_repo(tmp_path)
 
@@ -339,6 +369,7 @@ def test_docstring_audit_respects_prefix(tmp_path: Path) -> None:
         The test asserts prefix-filtered audit messages.
     """
     _write_prefix_fixture(tmp_path)
+    _write_numpy_audit_config(tmp_path)
     init_db(tmp_path)
     index_repo(tmp_path)
 
@@ -497,6 +528,7 @@ def test_audit_json_reports_only_canonical_callables_for_overload_sets(
         and method stable IDs when implementations lack docstrings.
     """
     _write_overload_audit_fixture(tmp_path, documented_impl=False)
+    _write_numpy_audit_config(tmp_path)
     init_db(tmp_path)
     index_repo(tmp_path)
 
@@ -537,6 +569,7 @@ def test_context_for_respects_prefix_across_symbols_and_references(
         The test asserts all returned files stay within the selected prefix.
     """
     _write_prefix_fixture(tmp_path)
+    _write_numpy_audit_config(tmp_path)
     init_db(tmp_path)
     index_repo(tmp_path)
 
@@ -585,6 +618,7 @@ def test_cli_prefix_is_applied_and_rejects_escape(
         The test asserts one successful scoped CLI run and one parser error.
     """
     _write_prefix_fixture(tmp_path)
+    _write_numpy_audit_config(tmp_path)
     init_db(tmp_path)
     index_repo(tmp_path)
 
@@ -649,6 +683,7 @@ def test_symbol_cli_json_includes_prefix_and_status(
         The test asserts the shared JSON envelope for `symbol`.
     """
     _write_prefix_fixture(tmp_path)
+    _write_numpy_audit_config(tmp_path)
     init_db(tmp_path)
     index_repo(tmp_path)
 
@@ -700,6 +735,7 @@ def test_calls_and_refs_cli_json_emit_structured_results(
         The test asserts structured owner-side filtering for calls and refs.
     """
     _write_prefix_fixture(tmp_path)
+    _write_numpy_audit_config(tmp_path)
     init_db(tmp_path)
     index_repo(tmp_path)
 
@@ -958,6 +994,7 @@ def test_embeddings_and_audit_cli_json_emit_shared_envelope(
         The test asserts command-specific metadata and filtered results.
     """
     _write_prefix_fixture(tmp_path)
+    _write_numpy_audit_config(tmp_path)
     init_db(tmp_path)
     index_repo(tmp_path)
 
@@ -1023,6 +1060,18 @@ def test_embeddings_and_audit_cli_json_emit_shared_envelope(
     assert undocumented_pkg["file"] == str(tmp_path / "pkg" / "b.py")
     assert undocumented_pkg["lineno"] == 11
     assert undocumented_pkg["end_lineno"] == 12
+    assert undocumented_pkg["audit_plugin"] == {"name": "numpy", "version": "1"}
+    assert undocumented_pkg["audit_convention"] == {
+        "name": "numpy",
+        "version": "1",
+    }
+    assert undocumented_pkg["rule_id"] == "missing"
+    assert undocumented_pkg["severity"] == "warning"
+    assert undocumented_pkg["audit_route"] == {
+        "language": "python",
+        "convention": "numpy",
+        "plugin": "numpy",
+    }
 
 
 def test_plain_docstring_audit_reports_file_location(
@@ -1048,6 +1097,7 @@ def test_plain_docstring_audit_reports_file_location(
         The test asserts plain audit output includes actionable file context.
     """
     _write_prefix_fixture(tmp_path)
+    _write_numpy_audit_config(tmp_path)
     init_db(tmp_path)
     index_repo(tmp_path)
 

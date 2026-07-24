@@ -30,6 +30,7 @@ from jsonschema.exceptions import SchemaError  # type: ignore[import-untyped]
 from codira.config import DEFAULT_BACKEND_NAME, ConfigError, load_effective_config
 from codira.contracts import (
     ConfigurablePlugin,
+    DocumentationAuditPlugin,
     EmbeddingEngine,
     IndexBackend,
     LanguageAnalyzer,
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from codira.contracts import (
+        DocumentationAuditPlugin as DocumentationAuditPluginProtocol,
         EmbeddingEngine as EmbeddingEngineProtocol,
         VectorStore as VectorStoreProtocol,
     )
@@ -54,6 +56,7 @@ ANALYZER_ENTRY_POINT_GROUP = "codira.analyzers"
 BACKEND_ENTRY_POINT_GROUP = "codira.backends"
 EMBEDDING_ENGINE_ENTRY_POINT_GROUP = "codira.embedding_engines"
 VECTOR_STORE_ENTRY_POINT_GROUP = "codira.vector_stores"
+DOCUMENTATION_AUDIT_ENTRY_POINT_GROUP = "codira.documentation_audits"
 # These package hints are registry metadata only. SQLite remains the
 # compatibility default by backend name, while schema and connection ownership
 # live in the first-party backend package.
@@ -108,7 +111,13 @@ REQUIRED_BACKEND_METHODS: tuple[str, ...] = (
     "prune_orphaned_embeddings",
     "current_embedding_state_matches",
 )
-PluginFamily = Literal["analyzer", "backend", "embedding", "vector-store"]
+PluginFamily = Literal[
+    "analyzer",
+    "backend",
+    "embedding",
+    "vector-store",
+    "documentation-audit",
+]
 PluginSource = Literal["builtin", "entry_point"]
 PluginStatus = Literal["loaded", "skipped", "duplicate"]
 PluginOrigin = Literal["core", "first_party", "third_party"]
@@ -722,6 +731,22 @@ def _builtin_vector_store_plugins() -> list[_LoadedPlugin]:
     return []
 
 
+def _builtin_documentation_audit_plugins() -> list[_LoadedPlugin]:
+    """
+    Return built-in documentation-audit registrations.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    list[codira.registry._LoadedPlugin]
+        Built-in documentation-audit plugins in deterministic order.
+    """
+    return []
+
+
 def _registered_language_analyzer_factories() -> tuple[
     Callable[[], LanguageAnalyzer], ...
 ]:
@@ -1098,6 +1123,10 @@ def _plugin_contract_error(
         return "factory returned a non-EmbeddingEngine object"
     if family == "vector-store" and not isinstance(instance, VectorStore):
         return "factory returned a non-VectorStore object"
+    if family == "documentation-audit" and not isinstance(
+        instance, DocumentationAuditPlugin
+    ):
+        return "factory returned a non-DocumentationAuditPlugin object"
     return None
 
 
@@ -1240,18 +1269,19 @@ def _plugin_snapshot(
             _builtin_backend_plugins,
             _builtin_embedding_engine_plugins,
             _builtin_vector_store_plugins,
+            _builtin_documentation_audit_plugins,
         ),
     )
     return list(resolved), list(registrations)
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def _cached_plugin_snapshot(
     family: PluginFamily,
     third_party_disabled: bool,
     disabled_analyzers: tuple[str, ...],
     configured_enabled_plugins: tuple[tuple[str, bool], ...],
-    cache_tokens: tuple[object, object, object, object, object],
+    cache_tokens: tuple[object, object, object, object, object, object],
 ) -> tuple[tuple[_LoadedPlugin, ...], tuple[PluginRegistration, ...]]:
     """
     Cache the resolved plugin snapshot for one family.
@@ -1300,11 +1330,18 @@ def _cached_plugin_snapshot(
             group=EMBEDDING_ENGINE_ENTRY_POINT_GROUP,
             third_party_disabled=third_party_disabled,
         )
-    else:
+    elif family == "vector-store":
         builtins = _builtin_vector_store_plugins()
         externals, external_registrations = _discover_entry_point_plugins(
             family="vector-store",
             group=VECTOR_STORE_ENTRY_POINT_GROUP,
+            third_party_disabled=third_party_disabled,
+        )
+    else:
+        builtins = _builtin_documentation_audit_plugins()
+        externals, external_registrations = _discover_entry_point_plugins(
+            family="documentation-audit",
+            group=DOCUMENTATION_AUDIT_ENTRY_POINT_GROUP,
             third_party_disabled=third_party_disabled,
         )
 
@@ -1507,12 +1544,23 @@ def plugin_registrations(*, root: Path | None = None) -> list[PluginRegistration
         root=root,
     )
     vector_plugins, vector_registrations = _plugin_snapshot("vector-store", root=root)
-    del analyzer_plugins, backend_plugins, embedding_plugins, vector_plugins
+    documentation_audit_plugins, documentation_audit_registrations = _plugin_snapshot(
+        "documentation-audit",
+        root=root,
+    )
+    del (
+        analyzer_plugins,
+        backend_plugins,
+        embedding_plugins,
+        vector_plugins,
+        documentation_audit_plugins,
+    )
     return (
         analyzer_registrations
         + backend_registrations
         + embedding_registrations
         + vector_registrations
+        + documentation_audit_registrations
     )
 
 
@@ -1552,6 +1600,10 @@ def validate_plugin_configuration(
         root=root,
     )
     vector_plugins, vector_registrations = _plugin_snapshot("vector-store", root=root)
+    documentation_audit_plugins, documentation_audit_registrations = _plugin_snapshot(
+        "documentation-audit",
+        root=root,
+    )
     all_plugins = {
         plugin_config_key(family=plugin.family, name=plugin.name): plugin
         for plugin in [
@@ -1559,6 +1611,7 @@ def validate_plugin_configuration(
             *backend_plugins,
             *embedding_plugins,
             *vector_plugins,
+            *documentation_audit_plugins,
         ]
     }
     loaded_before_enabled = {
@@ -1568,6 +1621,7 @@ def validate_plugin_configuration(
             *backend_registrations,
             *embedding_registrations,
             *vector_registrations,
+            *documentation_audit_registrations,
         ]
         if registration.status in {"loaded", "skipped"}
     }
@@ -1745,6 +1799,40 @@ def active_vector_store(
         root=root,
     )
     return cast("VectorStoreProtocol", vector_store)
+
+
+def documentation_audit_plugins(
+    *,
+    root: Path | None = None,
+) -> dict[str, DocumentationAuditPluginProtocol]:
+    """
+    Return configured documentation audit plugins keyed by plugin name.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Repository root whose repo-local config should configure plugins.
+
+    Returns
+    -------
+    dict[str, codira.contracts.DocumentationAuditPlugin]
+        Configured documentation-audit plugins keyed by stable plugin name.
+    """
+
+    plugins, _registrations = _plugin_snapshot("documentation-audit", root=root)
+    configured: dict[str, DocumentationAuditPluginProtocol] = {}
+    for plugin in plugins:
+        instance = plugin.factory()
+        configured_instance = _configure_plugin_instance(
+            plugin=plugin,
+            instance=instance,
+            root=root,
+        )
+        configured[plugin.name] = cast(
+            "DocumentationAuditPluginProtocol",
+            configured_instance,
+        )
+    return configured
 
 
 def missing_language_analyzer_hint(path: Path) -> str | None:

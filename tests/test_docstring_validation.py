@@ -16,12 +16,20 @@ This module belongs to the **docstring verification layer** that keeps docstring
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from codira.config import override_repo_config_path
 from codira.docstring import (
     DocstringValidationRequest,
     find_missing_sections,
     find_unexpected_sections,
     validate_docstring,
+    validate_documentation_with_configured_plugin,
 )
+from codira.registry import reset_plugin_registry_caches
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _validation_request(
@@ -252,6 +260,132 @@ def test_validate_docstring_reports_missing_parameter_entry() -> None:
     )
 
     assert ("missing_parameter", "Parameter not documented: y") in issues
+
+
+def test_documentation_audit_requires_explicit_route(tmp_path: Path) -> None:
+    """
+    Skip documentation audit execution when no explicit route is configured.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts compatibility mode requires an explicit route.
+    """
+
+    source_path = tmp_path / "src" / "sample.py"
+    source_path.parent.mkdir()
+    source_path.write_text("def f(x):\n    return x\n", encoding="utf-8")
+
+    issues = validate_documentation_with_configured_plugin(
+        root=tmp_path,
+        source_path=source_path,
+        stable_id="py:function:f",
+        symbol_name="f",
+        artifact_kind="function",
+        label="Function f",
+        doc=None,
+        is_public=1,
+    )
+
+    assert issues == []
+
+
+def test_documentation_audit_routes_numpy_plugin(tmp_path: Path) -> None:
+    """
+    Route Python artifacts to the NumPy documentation audit plugin.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts configured NumPy routes emit validator diagnostics.
+    """
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[plugins]
+documentation_audit_routes = [
+  { language = "python", convention = "numpy", plugin = "numpy", include_paths = ["src/**"] },
+]
+""".strip(),
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "src" / "sample.py"
+    source_path.parent.mkdir()
+    source_path.write_text("def f(x):\n    return x\n", encoding="utf-8")
+
+    reset_plugin_registry_caches()
+    with override_repo_config_path(config_path):
+        issues = validate_documentation_with_configured_plugin(
+            root=tmp_path,
+            source_path=source_path,
+            stable_id="py:function:f",
+            symbol_name="f",
+            artifact_kind="function",
+            label="Function f",
+            doc="Summary.",
+            is_public=1,
+            parameters=["x"],
+            require_callable_sections=True,
+            returns_value=True,
+        )
+
+    assert ("non_numpy", "Function f: Docstring not in NumPy style") in issues
+
+
+def test_documentation_audit_routes_doxygen_plugin(tmp_path: Path) -> None:
+    """
+    Route C artifacts to the Doxygen documentation audit plugin.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts configured Doxygen routes emit diagnostics.
+    """
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[plugins]
+documentation_audit_routes = [
+  { language = "c", convention = "doxygen", plugin = "doxygen", include_paths = ["src/**"] },
+]
+""".strip(),
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "src" / "sample.c"
+    source_path.parent.mkdir()
+    source_path.write_text("int f(void) { return 1; }\n", encoding="utf-8")
+
+    reset_plugin_registry_caches()
+    with override_repo_config_path(config_path):
+        issues = validate_documentation_with_configured_plugin(
+            root=tmp_path,
+            source_path=source_path,
+            stable_id="c:function:f",
+            symbol_name="f",
+            artifact_kind="function",
+            label="Function f",
+            doc=None,
+            is_public=1,
+        )
+
+    assert issues == [("missing_doxygen", "Function f: Missing Doxygen documentation")]
 
 
 def test_validate_docstring_reports_malformed_section_heading() -> None:

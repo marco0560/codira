@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 DDL: tuple[str, ...] = (
     "CREATE SEQUENCE IF NOT EXISTS files_id_seq START 1;",
@@ -123,7 +123,14 @@ DDL: tuple[str, ...] = (
         class_id INTEGER,
         module_id INTEGER,
         issue_type TEXT NOT NULL,
-        message TEXT NOT NULL
+        message TEXT NOT NULL,
+        audit_language TEXT NOT NULL,
+        audit_plugin_name TEXT NOT NULL,
+        audit_plugin_version TEXT NOT NULL,
+        convention_name TEXT NOT NULL,
+        convention_version TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        severity TEXT NOT NULL
     );
     """,
     """

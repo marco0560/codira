@@ -240,8 +240,46 @@ def _normalize_symbols(
 
 def _normalize_issues(
     root: Path,
-    rows: list[tuple[str, str, str, str, str, str, str, int, int | None]],
-) -> list[tuple[str, str, str, str, str, str, str, int, int | None]]:
+    rows: list[
+        tuple[
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            str,
+            int,
+            int | None,
+        ]
+    ],
+) -> list[
+    tuple[
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+        int,
+        int | None,
+    ]
+]:
     """
     Normalize absolute file paths in docstring issue rows.
 
@@ -249,18 +287,25 @@ def _normalize_issues(
     ----------
     root : pathlib.Path
         Fixture root.
-    rows : list[tuple[str, str, str, str, str, str, str, int, int | None]]
+    rows : list[tuple[...]]
         Backend docstring issue rows.
 
     Returns
     -------
-    list[tuple[str, str, str, str, str, str, str, int, int | None]]
+    list[tuple[...]]
         Rows with repo-relative paths.
     """
     return [
         (
             issue_type,
             message,
+            audit_language,
+            audit_plugin_name,
+            audit_plugin_version,
+            convention_name,
+            convention_version,
+            rule_id,
+            severity,
             stable_id,
             symbol_type,
             module,
@@ -272,6 +317,13 @@ def _normalize_issues(
         for (
             issue_type,
             message,
+            audit_language,
+            audit_plugin_name,
+            audit_plugin_version,
+            convention_name,
+            convention_version,
+            rule_id,
+            severity,
             stable_id,
             symbol_type,
             module,

@@ -34,8 +34,11 @@ dev = [
     "codira-analyzer-bash==1.41.0",
     "codira-analyzer-markdown==1.44.0",
     "codira-analyzer-text==1.43.0",
-    "codira-backend-sqlite==1.45.3",
-    "codira-backend-duckdb==1.50.2",
+    "codira-documentation-audit-numpy==1.0.0",
+    "codira-documentation-audit-google==1.0.0",
+    "codira-documentation-audit-doxygen==1.0.0",
+    "codira-backend-sqlite==1.45.4",
+    "codira-backend-duckdb==1.50.3",
     "codira-embedding-sentence-transformers==1.0.2",
     "codira-embedding-onnx==1.0.2",
     "codira-vector-store-sqlite==1.0.2",
@@ -62,8 +65,11 @@ bundle-official = [
     "codira-analyzer-bash==1.41.0",
     "codira-analyzer-markdown==1.44.0",
     "codira-analyzer-text==1.43.0",
-    "codira-backend-sqlite==1.45.3",
-    "codira-backend-duckdb==1.50.2",
+    "codira-documentation-audit-numpy==1.0.0",
+    "codira-documentation-audit-google==1.0.0",
+    "codira-documentation-audit-doxygen==1.0.0",
+    "codira-backend-sqlite==1.45.4",
+    "codira-backend-duckdb==1.50.3",
     "codira-embedding-sentence-transformers==1.0.2",
     "codira-embedding-onnx==1.0.2",
     "codira-vector-store-sqlite==1.0.2",
@@ -106,6 +112,9 @@ codira-analyzer-cpp = { path = "packages/codira-analyzer-cpp", editable = true }
 codira-analyzer-bash = { path = "packages/codira-analyzer-bash", editable = true }
 codira-analyzer-markdown = { path = "packages/codira-analyzer-markdown", editable = true }
 codira-analyzer-text = { path = "packages/codira-analyzer-text", editable = true }
+codira-documentation-audit-numpy = { path = "packages/codira-documentation-audit-numpy", editable = true }
+codira-documentation-audit-google = { path = "packages/codira-documentation-audit-google", editable = true }
+codira-documentation-audit-doxygen = { path = "packages/codira-documentation-audit-doxygen", editable = true }
 codira-backend-sqlite = { path = "packages/codira-backend-sqlite", editable = true }
 codira-backend-duckdb = { path = "packages/codira-backend-duckdb", editable = true }
 codira-embedding-sentence-transformers = { path = "packages/codira-embedding-sentence-transformers", editable = true }

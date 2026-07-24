@@ -53,6 +53,7 @@ _PLUGIN_CONFIG_RESERVED_KEYS = frozenset(
     {
         "disable_third_party",
         "disabled_analyzers",
+        "documentation_audit_routes",
     }
 )
 LevelName = Literal["system", "user", "repo", "effective"]
@@ -92,6 +93,32 @@ class BackendConfig:
 
 
 @dataclass(frozen=True)
+class DocumentationAuditRouteConfig:
+    """
+    Explicit route for documentation audit plugin selection.
+
+    Parameters
+    ----------
+    language : str
+        Analyzer language matched by this route.
+    convention : str
+        Documentation convention matched by this route.
+    plugin : str
+        Documentation audit plugin name selected by this route.
+    include_paths : tuple[str, ...]
+        Repo-relative glob patterns included by this route.
+    exclude_paths : tuple[str, ...]
+        Repo-relative glob patterns excluded by this route.
+    """
+
+    language: str
+    convention: str
+    plugin: str
+    include_paths: tuple[str, ...] = ()
+    exclude_paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class PluginsConfig:
     """
     Plugin activation configuration.
@@ -102,6 +129,8 @@ class PluginsConfig:
         Whether third-party entry-point plugins should be skipped.
     disabled_analyzers : tuple[str, ...]
         Analyzer names to remove from the active analyzer set.
+    documentation_audit_routes : tuple[DocumentationAuditRouteConfig, ...]
+        Ordered documentation audit routing rules.
     configs : dict[str, dict[str, object]]
         Plugin-specific configuration tables keyed by namespaced plugin key,
         such as ``"analyzer-python"`` or ``"backend-sqlite"``.
@@ -109,6 +138,7 @@ class PluginsConfig:
 
     disable_third_party: bool = False
     disabled_analyzers: tuple[str, ...] = ()
+    documentation_audit_routes: tuple[DocumentationAuditRouteConfig, ...] = ()
     configs: dict[str, dict[str, object]] | None = None
 
 
@@ -302,6 +332,7 @@ DEFAULT_CONFIG: dict[str, object] = {
     "plugins": {
         "disable_third_party": False,
         "disabled_analyzers": [],
+        "documentation_audit_routes": [],
     },
     "embeddings": {
         "enabled": True,
@@ -455,6 +486,7 @@ _SCHEMA: dict[str, object] = {
     "plugins": {
         "disable_third_party": bool,
         "disabled_analyzers": list,
+        "documentation_audit_routes": list,
     },
     "embeddings": {
         "enabled": bool,
@@ -884,14 +916,26 @@ def _validate_plugin_semantics(plugins: Mapping[str, object]) -> None:
                     "contain non-empty strings."
                 )
                 raise ConfigError(msg)
+    routes = plugins.get("documentation_audit_routes")
+    if isinstance(routes, list):
+        _validate_documentation_audit_routes(routes)
     for key, item in plugins.items():
         if key in _PLUGIN_CONFIG_RESERVED_KEYS:
             continue
-        if not key.startswith(("analyzer-", "backend-", "embedding-", "vector-store-")):
+        if not key.startswith(
+            (
+                "analyzer-",
+                "backend-",
+                "embedding-",
+                "vector-store-",
+                "documentation-audit-",
+            )
+        ):
             msg = (
                 "Plugin configuration tables must be named "
                 "plugins.analyzer-*, plugins.backend-*, "
-                "plugins.embedding-*, or plugins.vector-store-*: "
+                "plugins.embedding-*, plugins.vector-store-*, "
+                "or plugins.documentation-audit-*: "
                 f"plugins.{key}"
             )
             raise ConfigError(msg)
@@ -902,6 +946,53 @@ def _validate_plugin_semantics(plugins: Mapping[str, object]) -> None:
         if enabled is not None and not isinstance(enabled, bool):
             msg = f"Configuration key plugins.{key}.enabled must be bool."
             raise ConfigError(msg)
+
+
+def _validate_documentation_audit_routes(routes: list[object]) -> None:
+    """
+    Validate documentation audit route tables.
+
+    Parameters
+    ----------
+    routes : list[object]
+        Candidate ordered route tables from ``plugins.documentation_audit_routes``.
+
+    Returns
+    -------
+    None
+        Routes are accepted when required fields and path lists are valid.
+
+    Raises
+    ------
+    ConfigError
+        If any route is malformed.
+    """
+
+    for index, item in enumerate(routes):
+        key = f"plugins.documentation_audit_routes[{index}]"
+        if not isinstance(item, Mapping):
+            msg = f"Configuration key {key} must be a table."
+            raise ConfigError(msg)
+        allowed = {"language", "convention", "plugin", "include_paths", "exclude_paths"}
+        unknown = sorted(set(item) - allowed)
+        if unknown:
+            msg = f"Unknown configuration key: {key}.{unknown[0]}"
+            raise ConfigError(msg)
+        for required in ("language", "convention", "plugin"):
+            value = item.get(required)
+            if not isinstance(value, str) or not value.strip():
+                msg = f"Configuration key {key}.{required} must be a non-empty string."
+                raise ConfigError(msg)
+        for path_key in ("include_paths", "exclude_paths"):
+            value = item.get(path_key, [])
+            if not isinstance(value, list):
+                msg = f"Configuration key {key}.{path_key} must be list."
+                raise ConfigError(msg)
+            _validate_string_list(
+                value,
+                key=f"{key}.{path_key}",
+                allow_empty_items=False,
+            )
 
 
 def _validate_string_list(
@@ -1992,6 +2083,16 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
     plugin_mapping: dict[str, object] = {
         "disable_third_party": config.plugins.disable_third_party,
         "disabled_analyzers": list(config.plugins.disabled_analyzers),
+        "documentation_audit_routes": [
+            {
+                "language": route.language,
+                "convention": route.convention,
+                "plugin": route.plugin,
+                "include_paths": list(route.include_paths),
+                "exclude_paths": list(route.exclude_paths),
+            }
+            for route in config.plugins.documentation_audit_routes
+        ],
     }
     for key, item in sorted((config.plugins.configs or {}).items()):
         plugin_mapping[key] = _deep_copy_mapping(item)
@@ -2097,11 +2198,29 @@ def _config_from_mapping(
     backend = cast("Mapping[str, object]", value["backend"])
     plugins = cast("Mapping[str, object]", value["plugins"])
     plugin_configs: dict[str, dict[str, object]] = {}
+    documentation_audit_routes: list[DocumentationAuditRouteConfig] = []
     for key, item in plugins.items():
         if key in _PLUGIN_CONFIG_RESERVED_KEYS:
             continue
         plugin_configs[key] = _deep_copy_mapping(
             _require_table(item, key=f"plugins.{key}")
+        )
+    for item in cast("list[object]", plugins["documentation_audit_routes"]):
+        route = cast("Mapping[str, object]", item)
+        documentation_audit_routes.append(
+            DocumentationAuditRouteConfig(
+                language=cast("str", route["language"]).strip(),
+                convention=cast("str", route["convention"]).strip(),
+                plugin=cast("str", route["plugin"]).strip(),
+                include_paths=tuple(
+                    str(path).strip()
+                    for path in cast("list[object]", route.get("include_paths", []))
+                ),
+                exclude_paths=tuple(
+                    str(path).strip()
+                    for path in cast("list[object]", route.get("exclude_paths", []))
+                ),
+            )
         )
     embeddings = cast("Mapping[str, object]", value["embeddings"])
     gpu = cast("Mapping[str, object]", embeddings["gpu"])
@@ -2118,6 +2237,7 @@ def _config_from_mapping(
                 str(item).strip()
                 for item in cast("list[object]", plugins["disabled_analyzers"])
             ),
+            documentation_audit_routes=tuple(documentation_audit_routes),
             configs=plugin_configs,
         ),
         embeddings=EmbeddingsConfig(

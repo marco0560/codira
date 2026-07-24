@@ -75,6 +75,7 @@ def _database_has_current_schema(db_path: Path) -> bool:
                 "callable_refs",
                 "call_records",
                 "callable_ref_records",
+                "docstring_issues",
                 "documentation_artifacts",
             )
         }
@@ -82,23 +83,35 @@ def _database_has_current_schema(db_path: Path) -> bool:
         conn.close()
 
     required_relation_columns = {"external_target_kind", "external_target_name"}
-    return all(
-        required_relation_columns.issubset(table_columns[table_name])
-        for table_name in (
-            "call_edges",
-            "callable_refs",
-            "call_records",
-            "callable_ref_records",
+    return (
+        all(
+            required_relation_columns.issubset(table_columns[table_name])
+            for table_name in (
+                "call_edges",
+                "callable_refs",
+                "call_records",
+                "callable_ref_records",
+            )
         )
-    ) and {
-        "stable_id",
-        "kind",
-        "source_format",
-        "heading_path",
-        "text",
-        "owner_kind",
-        "attachment_confidence",
-    }.issubset(table_columns["documentation_artifacts"])
+        and {
+            "audit_plugin_name",
+            "audit_language",
+            "audit_plugin_version",
+            "convention_name",
+            "convention_version",
+            "rule_id",
+            "severity",
+        }.issubset(table_columns["docstring_issues"])
+        and {
+            "stable_id",
+            "kind",
+            "source_format",
+            "heading_path",
+            "text",
+            "owner_kind",
+            "attachment_confidence",
+        }.issubset(table_columns["documentation_artifacts"])
+    )
 
 
 def init_db(root: Path) -> None:

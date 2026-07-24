@@ -20,6 +20,20 @@ from __future__ import annotations
 import inspect
 import re
 from dataclasses import dataclass
+from fnmatch import fnmatch
+from typing import TYPE_CHECKING
+
+from codira.contracts import (
+    DocumentationAuditDiagnostic,
+    DocumentationAuditRequest,
+    DocumentationAuditResult,
+    DocumentationAuditSeverity,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from codira.config import DocumentationAuditRouteConfig
 
 REQUIRED_SECTIONS = [
     "Parameters",
@@ -35,6 +49,33 @@ OPTIONAL_SECTIONS = [
 KNOWN_SECTIONS = REQUIRED_SECTIONS + OPTIONAL_SECTIONS
 SECTION_HEADING_RE = re.compile(r"^[A-Z][A-Za-z ]+$")
 PARAMETER_LINE_RE = re.compile(r"^([*]{0,2}[A-Za-z_][A-Za-z0-9_]*)\s*:")
+GOOGLE_ARGS_RE = re.compile(r"^\s*(Args|Arguments):\s*$")
+GOOGLE_RETURNS_RE = re.compile(r"^\s*Returns:\s*$")
+GOOGLE_RAISES_RE = re.compile(r"^\s*Raises:\s*$")
+
+
+def _documentation_audit_config_schema() -> dict[str, object]:
+    """
+    Return the common documentation audit plugin configuration schema.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    dict[str, object]
+        Strict JSON Schema accepted by first-party documentation audit plugins.
+    """
+
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "enabled": {"type": "boolean"},
+        },
+    }
 
 
 @dataclass(frozen=True)
@@ -68,6 +109,44 @@ class DocstringValidationRequest:
     yields_value: bool = False
     returns_value: bool = False
     raises_exception: bool = False
+
+
+@dataclass(frozen=True)
+class DocumentationAuditIssue:
+    """
+    Persistable documentation audit issue with provenance metadata.
+
+    Parameters
+    ----------
+    issue_type : str
+        Legacy audit issue type exposed to existing query consumers.
+    message : str
+        User-facing labeled diagnostic message.
+    audit_language : str
+        Analyzer language selected by the route.
+    audit_plugin_name : str
+        Documentation audit plugin that produced the diagnostic.
+    audit_plugin_version : str
+        Plugin implementation version.
+    convention_name : str
+        Documentation convention evaluated by the plugin.
+    convention_version : str
+        Convention profile version.
+    rule_id : str
+        Stable plugin rule identifier.
+    severity : {"info", "warning", "error"}
+        Diagnostic severity.
+    """
+
+    issue_type: str
+    message: str
+    audit_language: str
+    audit_plugin_name: str
+    audit_plugin_version: str
+    convention_name: str
+    convention_version: str
+    rule_id: str
+    severity: DocumentationAuditSeverity
 
 
 def _iter_lines(doc: str) -> list[str]:
@@ -396,3 +475,639 @@ def validate_docstring(
             )
 
     return issues
+
+
+class NumpyDocumentationAuditPlugin:
+    """
+    Documentation audit plugin for NumPy-style Python docstrings.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances are stateless.
+    """
+
+    name = "numpy"
+    version = "1"
+    languages = ("python",)
+    conventions = ("numpy",)
+
+    def configuration_json_schema(self) -> dict[str, object]:
+        """
+        Return the strict plugin configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, object]
+            JSON Schema accepted by the plugin config table.
+        """
+
+        return _documentation_audit_config_schema()
+
+    def audit_documentation(
+        self,
+        request: DocumentationAuditRequest,
+    ) -> DocumentationAuditResult:
+        """
+        Validate one artifact with the NumPy docstring profile.
+
+        Parameters
+        ----------
+        request : codira.contracts.DocumentationAuditRequest
+            Documentation artifact to validate.
+
+        Returns
+        -------
+        codira.contracts.DocumentationAuditResult
+            Structured diagnostics emitted for the artifact.
+        """
+
+        diagnostics = [
+            DocumentationAuditDiagnostic(
+                code=issue_type,
+                message=message,
+                severity="warning",
+                plugin_name=self.name,
+                plugin_version=self.version,
+                convention=request.convention,
+            )
+            for issue_type, message in validate_docstring(
+                DocstringValidationRequest(
+                    doc=request.doc,
+                    is_public=1,
+                    parameters=list(request.parameters),
+                    require_callable_sections=request.require_callable_sections,
+                    yields_value=request.yields_value,
+                    returns_value=request.returns_value,
+                    raises_exception=request.raises_exception,
+                )
+            )
+        ]
+        return DocumentationAuditResult(diagnostics=diagnostics)
+
+
+class GooglePythonDocumentationAuditPlugin:
+    """
+    Documentation audit plugin for Google-style Python docstrings.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances are stateless.
+    """
+
+    name = "google"
+    version = "1"
+    languages = ("python",)
+    conventions = ("google",)
+
+    def configuration_json_schema(self) -> dict[str, object]:
+        """
+        Return the strict plugin configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, object]
+            JSON Schema accepted by the plugin config table.
+        """
+
+        return _documentation_audit_config_schema()
+
+    def audit_documentation(
+        self,
+        request: DocumentationAuditRequest,
+    ) -> DocumentationAuditResult:
+        """
+        Validate one artifact with a bounded Google-style profile.
+
+        Parameters
+        ----------
+        request : codira.contracts.DocumentationAuditRequest
+            Documentation artifact to validate.
+
+        Returns
+        -------
+        codira.contracts.DocumentationAuditResult
+            Structured diagnostics emitted for the artifact.
+        """
+
+        diagnostics: list[DocumentationAuditDiagnostic] = []
+        if not request.doc:
+            diagnostics.append(
+                DocumentationAuditDiagnostic(
+                    code="missing",
+                    message="Missing docstring",
+                    severity="warning",
+                    plugin_name=self.name,
+                    plugin_version=self.version,
+                    convention=request.convention,
+                )
+            )
+            return DocumentationAuditResult(diagnostics=diagnostics)
+
+        text = inspect.cleandoc(request.doc)
+        if request.parameters and GOOGLE_ARGS_RE.search(text) is None:
+            diagnostics.append(
+                DocumentationAuditDiagnostic(
+                    code="missing_section",
+                    message="Missing section: Args",
+                    severity="warning",
+                    plugin_name=self.name,
+                    plugin_version=self.version,
+                    convention=request.convention,
+                )
+            )
+        if (
+            request.require_callable_sections
+            and request.returns_value
+            and GOOGLE_RETURNS_RE.search(text) is None
+        ):
+            diagnostics.append(
+                DocumentationAuditDiagnostic(
+                    code="missing_section",
+                    message="Missing section: Returns",
+                    severity="warning",
+                    plugin_name=self.name,
+                    plugin_version=self.version,
+                    convention=request.convention,
+                )
+            )
+        if request.raises_exception and GOOGLE_RAISES_RE.search(text) is None:
+            diagnostics.append(
+                DocumentationAuditDiagnostic(
+                    code="missing_section",
+                    message="Missing section: Raises",
+                    severity="warning",
+                    plugin_name=self.name,
+                    plugin_version=self.version,
+                    convention=request.convention,
+                )
+            )
+        return DocumentationAuditResult(diagnostics=diagnostics)
+
+
+class DoxygenDocumentationAuditPlugin:
+    """
+    Documentation audit plugin for bounded Doxygen checks on C-family files.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances are stateless.
+    """
+
+    name = "doxygen"
+    version = "1"
+    languages = ("c", "cpp")
+    conventions = ("doxygen",)
+
+    def configuration_json_schema(self) -> dict[str, object]:
+        """
+        Return the strict plugin configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, object]
+            JSON Schema accepted by the plugin config table.
+        """
+
+        return _documentation_audit_config_schema()
+
+    def audit_documentation(
+        self,
+        request: DocumentationAuditRequest,
+    ) -> DocumentationAuditResult:
+        """
+        Validate one C-family artifact with a bounded Doxygen profile.
+
+        Parameters
+        ----------
+        request : codira.contracts.DocumentationAuditRequest
+            Documentation artifact to validate.
+
+        Returns
+        -------
+        codira.contracts.DocumentationAuditResult
+            Structured diagnostics emitted for the artifact.
+        """
+
+        if request.doc and ("/**" in request.doc or "///" in request.doc):
+            return DocumentationAuditResult(diagnostics=())
+        return DocumentationAuditResult(
+            diagnostics=(
+                DocumentationAuditDiagnostic(
+                    code="missing_doxygen",
+                    message="Missing Doxygen documentation",
+                    severity="warning",
+                    plugin_name=self.name,
+                    plugin_version=self.version,
+                    convention=request.convention,
+                ),
+            )
+        )
+
+
+def _language_for_path(source_path: Path) -> str:
+    """
+    Infer the analyzer language for a source path.
+
+    Parameters
+    ----------
+    source_path : pathlib.Path
+        Source path to classify.
+
+    Returns
+    -------
+    str
+        Analyzer language label used by documentation audit routing.
+    """
+
+    suffix = source_path.suffix.lower()
+    if suffix == ".py":
+        return "python"
+    if suffix in {".c", ".h"}:
+        return "c"
+    if suffix in {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".ipp"}:
+        return "cpp"
+    return suffix.lstrip(".")
+
+
+def _matches_route_path(
+    *,
+    relative_path: str,
+    include_paths: tuple[str, ...],
+    exclude_paths: tuple[str, ...],
+) -> bool:
+    """
+    Return whether a route accepts a repo-relative path.
+
+    Parameters
+    ----------
+    relative_path : str
+        POSIX-style repo-relative source path.
+    include_paths : tuple[str, ...]
+        Include glob patterns. Empty includes every path.
+    exclude_paths : tuple[str, ...]
+        Exclude glob patterns.
+
+    Returns
+    -------
+    bool
+        ``True`` when the path is included and not excluded.
+    """
+
+    included = not include_paths or any(
+        fnmatch(relative_path, pattern) for pattern in include_paths
+    )
+    excluded = any(fnmatch(relative_path, pattern) for pattern in exclude_paths)
+    return included and not excluded
+
+
+def _relative_route_path(*, root: Path, source_path: Path) -> str:
+    """
+    Return the POSIX route path for one source file.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root.
+    source_path : pathlib.Path
+        Source path to normalize.
+
+    Returns
+    -------
+    str
+        POSIX-style repo-relative path when possible.
+    """
+
+    if not source_path.is_absolute():
+        return source_path.as_posix()
+    try:
+        return source_path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return source_path.as_posix()
+
+
+def _matching_documentation_audit_routes(
+    *,
+    root: Path,
+    source_path: Path,
+) -> tuple[str, list[DocumentationAuditRouteConfig]]:
+    """
+    Return matching documentation audit routes for one source path.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose effective config selects routes.
+    source_path : pathlib.Path
+        Source file path.
+
+    Returns
+    -------
+    tuple[str, list[codira.config.DocumentationAuditRouteConfig]]
+        Inferred language and matching route objects.
+    """
+
+    from codira.config import load_effective_config  # noqa: PLC0415
+
+    config = load_effective_config(root=root)
+    language = _language_for_path(source_path)
+    relative_path = _relative_route_path(root=root, source_path=source_path)
+    matches = [
+        route
+        for route in config.plugins.documentation_audit_routes
+        if route.language == language
+        and _matches_route_path(
+            relative_path=relative_path,
+            include_paths=route.include_paths,
+            exclude_paths=route.exclude_paths,
+        )
+    ]
+    return language, matches
+
+
+def documentation_audit_route_metadata(
+    *,
+    root: Path,
+    source_path: Path,
+) -> dict[str, str] | None:
+    """
+    Return JSON-ready route metadata for one audited source path.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose effective config selects routes.
+    source_path : pathlib.Path
+        Source file path.
+
+    Returns
+    -------
+    dict[str, str] | None
+        Route metadata with language, convention, and plugin, or ``None`` when
+        no single route matches.
+    """
+
+    language, matches = _matching_documentation_audit_routes(
+        root=root,
+        source_path=source_path,
+    )
+    if len(matches) != 1:
+        return None
+    route = matches[0]
+    return {
+        "language": language,
+        "convention": route.convention,
+        "plugin": route.plugin,
+    }
+
+
+def validate_documentation_issues_with_configured_plugin(  # noqa: PLR0913
+    *,
+    root: Path,
+    source_path: Path,
+    stable_id: str,
+    symbol_name: str,
+    artifact_kind: str,
+    label: str,
+    doc: str | None,
+    is_public: int,
+    parameters: list[str] | None = None,
+    require_callable_sections: bool = False,
+    yields_value: bool = False,
+    returns_value: bool = False,
+    raises_exception: bool = False,
+) -> list[DocumentationAuditIssue]:
+    """
+    Validate one artifact through explicit documentation-audit routing.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose effective config selects routes.
+    source_path : pathlib.Path
+        Source file owning the artifact.
+    stable_id : str
+        Stable analyzer-owned artifact identifier.
+    symbol_name : str
+        Artifact name shown in diagnostics.
+    artifact_kind : str
+        Artifact kind shown to plugins.
+    label : str
+        Existing user-facing label prefixed onto issue messages.
+    doc : str | None
+        Documentation text to validate.
+    is_public : int
+        Public visibility flag. Private artifacts are skipped.
+    parameters : list[str] | None, optional
+        Callable parameters.
+    require_callable_sections : bool, optional
+        Whether callable sections are required.
+    yields_value : bool, optional
+        Whether the callable yields values.
+    returns_value : bool, optional
+        Whether the callable returns values.
+    raises_exception : bool, optional
+        Whether the callable raises exceptions.
+
+    Returns
+    -------
+    list[DocumentationAuditIssue]
+        Persistable issue records with plugin and convention provenance.
+    """
+
+    if not is_public:
+        return []
+
+    from codira.registry import documentation_audit_plugins  # noqa: PLC0415
+
+    language, matches = _matching_documentation_audit_routes(
+        root=root,
+        source_path=source_path,
+    )
+    if not matches:
+        return []
+    if len(matches) > 1:
+        relative_path = _relative_route_path(root=root, source_path=source_path)
+        return [
+            DocumentationAuditIssue(
+                issue_type="ambiguous_route",
+                message=(
+                    f"{label}: Ambiguous documentation audit routes for {relative_path}"
+                ),
+                audit_language=language,
+                audit_plugin_name="",
+                audit_plugin_version="",
+                convention_name="",
+                convention_version="",
+                rule_id="ambiguous_route",
+                severity="error",
+            )
+        ]
+
+    route = matches[0]
+    plugins = documentation_audit_plugins(root=root)
+    plugin = plugins.get(route.plugin)
+    if plugin is None:
+        return [
+            DocumentationAuditIssue(
+                issue_type="unsupported_plugin",
+                message=(
+                    f"{label}: Unsupported documentation audit plugin: {route.plugin}"
+                ),
+                audit_language=language,
+                audit_plugin_name=route.plugin,
+                audit_plugin_version="",
+                convention_name=route.convention,
+                convention_version="",
+                rule_id="unsupported_plugin",
+                severity="error",
+            )
+        ]
+    if language not in plugin.languages or route.convention not in plugin.conventions:
+        return [
+            DocumentationAuditIssue(
+                issue_type="unsupported_route",
+                message=(
+                    f"{label}: Documentation audit plugin {route.plugin} does not "
+                    f"support {language}/{route.convention}"
+                ),
+                audit_language=language,
+                audit_plugin_name=plugin.name,
+                audit_plugin_version=plugin.version,
+                convention_name=route.convention,
+                convention_version="",
+                rule_id="unsupported_route",
+                severity="error",
+            )
+        ]
+
+    result = plugin.audit_documentation(
+        DocumentationAuditRequest(
+            source_path=source_path,
+            language=language,
+            convention=route.convention,
+            artifact_kind=artifact_kind,
+            symbol_name=symbol_name,
+            stable_id=stable_id,
+            doc=doc,
+            parameters=tuple(parameters or ()),
+            require_callable_sections=require_callable_sections,
+            yields_value=yields_value,
+            returns_value=returns_value,
+            raises_exception=raises_exception,
+        )
+    )
+    return [
+        DocumentationAuditIssue(
+            issue_type=diagnostic.code,
+            message=f"{label}: {diagnostic.message}",
+            audit_language=language,
+            audit_plugin_name=diagnostic.plugin_name,
+            audit_plugin_version=diagnostic.plugin_version,
+            convention_name=diagnostic.convention,
+            convention_version=diagnostic.convention_version,
+            rule_id=diagnostic.code,
+            severity=diagnostic.severity,
+        )
+        for diagnostic in result.diagnostics
+    ]
+
+
+def validate_documentation_with_configured_plugin(  # noqa: PLR0913
+    *,
+    root: Path,
+    source_path: Path,
+    stable_id: str,
+    symbol_name: str,
+    artifact_kind: str,
+    label: str,
+    doc: str | None,
+    is_public: int,
+    parameters: list[str] | None = None,
+    require_callable_sections: bool = False,
+    yields_value: bool = False,
+    returns_value: bool = False,
+    raises_exception: bool = False,
+) -> list[tuple[str, str]]:
+    """
+    Validate one artifact and return legacy issue tuples.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose effective config selects routes.
+    source_path : pathlib.Path
+        Source file owning the artifact.
+    stable_id : str
+        Stable analyzer-owned artifact identifier.
+    symbol_name : str
+        Artifact name shown in diagnostics.
+    artifact_kind : str
+        Artifact kind shown to plugins.
+    label : str
+        Existing user-facing label prefixed onto issue messages.
+    doc : str | None
+        Documentation text to validate.
+    is_public : int
+        Public visibility flag. Private artifacts are skipped.
+    parameters : list[str] | None, optional
+        Callable parameters.
+    require_callable_sections : bool, optional
+        Whether callable sections are required.
+    yields_value : bool, optional
+        Whether the callable yields values.
+    returns_value : bool, optional
+        Whether the callable returns values.
+    raises_exception : bool, optional
+        Whether the callable raises exceptions.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        Issue code and labeled message pairs.
+    """
+
+    return [
+        (issue.issue_type, issue.message)
+        for issue in validate_documentation_issues_with_configured_plugin(
+            root=root,
+            source_path=source_path,
+            stable_id=stable_id,
+            symbol_name=symbol_name,
+            artifact_kind=artifact_kind,
+            label=label,
+            doc=doc,
+            is_public=is_public,
+            parameters=parameters,
+            require_callable_sections=require_callable_sections,
+            yields_value=yields_value,
+            returns_value=returns_value,
+            raises_exception=raises_exception,
+        )
+    ]

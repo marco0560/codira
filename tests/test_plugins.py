@@ -36,7 +36,12 @@ import codira.config as config_module
 import codira.registry as registry
 from codira.cli import main
 from codira.config import ConfigError
-from codira.contracts import IndexBackend, LanguageAnalyzer
+from codira.contracts import (
+    DocumentationAuditRequest,
+    DocumentationAuditResult,
+    IndexBackend,
+    LanguageAnalyzer,
+)
 from codira.models import AnalysisResult, ModuleArtifact
 
 
@@ -153,6 +158,9 @@ FIRST_PARTY_PLUGIN_FACTORIES = (
     ("codira_embedding_sentence_transformers", "build_engine"),
     ("codira_vector_store_duckdb", "build_vector_store"),
     ("codira_vector_store_sqlite", "build_vector_store"),
+    ("codira_documentation_audit_doxygen", "build_audit_plugin"),
+    ("codira_documentation_audit_google", "build_audit_plugin"),
+    ("codira_documentation_audit_numpy", "build_audit_plugin"),
 )
 
 
@@ -462,7 +470,37 @@ class _DemoDuckDBBackend(SQLiteIndexBackend):
     """Small DuckDB-shaped backend stub used for registry-selection tests."""
 
     name = "duckdb"
-    version = 23
+    version = 24
+
+
+class _DemoDocumentationAuditPlugin:
+    """Small documentation-audit plugin stub."""
+
+    name = "numpy"
+    version = "1"
+    languages = ("python",)
+    conventions = ("numpy",)
+
+    def audit_documentation(
+        self,
+        request: DocumentationAuditRequest,
+    ) -> DocumentationAuditResult:
+        """
+        Return no diagnostics for the fake documentation artifact.
+
+        Parameters
+        ----------
+        request : codira.contracts.DocumentationAuditRequest
+            Documentation audit request supplied by the registry caller.
+
+        Returns
+        -------
+        codira.contracts.DocumentationAuditResult
+            Empty audit result for registry tests.
+        """
+
+        del request
+        return DocumentationAuditResult(diagnostics=())
 
 
 def _patch_entry_points(
@@ -470,6 +508,7 @@ def _patch_entry_points(
     *,
     analyzers: list[_FakeEntryPoint],
     backends: list[_FakeEntryPoint],
+    documentation_audits: list[_FakeEntryPoint] | None = None,
 ) -> None:
     """
     Patch registry entry-point discovery for one test.
@@ -482,6 +521,8 @@ def _patch_entry_points(
         Fake analyzer entry points exposed during the test.
     backends : list[_FakeEntryPoint]
         Fake backend entry points exposed during the test.
+    documentation_audits : list[_FakeEntryPoint] | None, optional
+        Fake documentation audit entry points exposed during the test.
 
     Returns
     -------
@@ -494,6 +535,8 @@ def _patch_entry_points(
             return analyzers
         if group == registry.BACKEND_ENTRY_POINT_GROUP:
             return backends
+        if group == registry.DOCUMENTATION_AUDIT_ENTRY_POINT_GROUP:
+            return documentation_audits or []
         return []
 
     monkeypatch.setattr(registry, "_entry_points_for_group", fake_group_loader)
@@ -1230,6 +1273,14 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
                 loaded=_DemoDuckDBBackend,
             ),
         ],
+        documentation_audits=[
+            _FakeEntryPoint(
+                name="numpy",
+                value="codira_documentation_audit_numpy:build_audit_plugin",
+                dist=_FakeDistribution("codira-documentation-audit-numpy"),
+                loaded=_DemoDocumentationAuditPlugin,
+            )
+        ],
     )
     monkeypatch.setattr(
         "codira.cli.configured_index_backend_name",
@@ -1242,12 +1293,17 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
         (
             "backend: sqlite [active, loaded] "
             "provider=codira-backend-sqlite origin=first_party "
-            "source=entry_point version=22 entry_point=sqlite"
+            "source=entry_point version=23 entry_point=sqlite"
         ),
         (
             "backend: duckdb [loaded] "
             "provider=codira-backend-duckdb origin=first_party "
-            "source=entry_point version=23 entry_point=duckdb"
+            "source=entry_point version=24 entry_point=duckdb"
+        ),
+        (
+            "documentation-audit: numpy [loaded] "
+            "provider=codira-documentation-audit-numpy origin=first_party "
+            "source=entry_point version=1 entry_point=numpy"
         ),
     ]
 
@@ -1262,7 +1318,7 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
             "origin": "first_party",
             "source": "entry_point",
             "status": "loaded",
-            "version": "22",
+            "version": "23",
             "entry_point": "sqlite",
             "detail": None,
         },
@@ -1274,8 +1330,20 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
             "origin": "first_party",
             "source": "entry_point",
             "status": "loaded",
-            "version": "23",
+            "version": "24",
             "entry_point": "duckdb",
+            "detail": None,
+        },
+        {
+            "family": "documentation-audit",
+            "name": "numpy",
+            "active": False,
+            "provider": "codira-documentation-audit-numpy",
+            "origin": "first_party",
+            "source": "entry_point",
+            "status": "loaded",
+            "version": "1",
+            "entry_point": "numpy",
             "detail": None,
         },
     ]
@@ -1303,6 +1371,7 @@ def test_plugin_snapshot_cache_reuses_entry_point_discovery(
         registry.BACKEND_ENTRY_POINT_GROUP: 0,
         registry.EMBEDDING_ENGINE_ENTRY_POINT_GROUP: 0,
         registry.VECTOR_STORE_ENTRY_POINT_GROUP: 0,
+        registry.DOCUMENTATION_AUDIT_ENTRY_POINT_GROUP: 0,
     }
 
     def fake_group_loader(group: str) -> list[_FakeEntryPoint]:
@@ -1339,6 +1408,7 @@ def test_plugin_snapshot_cache_reuses_entry_point_discovery(
         registry.BACKEND_ENTRY_POINT_GROUP: 1,
         registry.EMBEDDING_ENGINE_ENTRY_POINT_GROUP: 1,
         registry.VECTOR_STORE_ENTRY_POINT_GROUP: 1,
+        registry.DOCUMENTATION_AUDIT_ENTRY_POINT_GROUP: 1,
     }
 
 
