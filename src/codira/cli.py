@@ -655,7 +655,13 @@ def _loaded_plugin_registrations(
         ],
         key=lambda item: (
             {"first_party": 0, "third_party": 1, "core": 2}.get(item[0], 99),
-            {"analyzer": 0, "backend": 1}.get(item[1], 99),
+            {
+                "analyzer": 0,
+                "backend": 1,
+                "documentation-audit": 2,
+                "embedding": 3,
+                "vector-store": 4,
+            }.get(item[1], 99),
             item[2],
             item[3],
         ),

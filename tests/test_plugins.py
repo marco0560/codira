@@ -1510,6 +1510,33 @@ def test_version_cli_groups_curated_bundle_plugins(
                 version="0.1.0",
                 origin="first_party",
             ),
+            registry.PluginRegistration(
+                family="vector-store",
+                name="sqlite",
+                provider="codira-vector-store-sqlite",
+                source="entry_point",
+                status="loaded",
+                version="0.1.0",
+                origin="first_party",
+            ),
+            registry.PluginRegistration(
+                family="documentation-audit",
+                name="numpy",
+                provider="codira-documentation-audit-numpy",
+                source="entry_point",
+                status="loaded",
+                version="0.1.0",
+                origin="first_party",
+            ),
+            registry.PluginRegistration(
+                family="embedding",
+                name="onnx",
+                provider="codira-embedding-onnx",
+                source="entry_point",
+                status="loaded",
+                version="0.1.0",
+                origin="first_party",
+            ),
         ],
     )
     monkeypatch.setattr(
@@ -1524,6 +1551,9 @@ def test_version_cli_groups_curated_bundle_plugins(
         "bundle-official 0.9.0",
         "  analyzer python 0.1.0",
         "  backend sqlite 0.1.0 [active]",
+        "  documentation-audit numpy 0.1.0",
+        "  embedding onnx 0.1.0",
+        "  vector-store sqlite 0.1.0",
     ]
 
 
