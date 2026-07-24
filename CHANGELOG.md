@@ -1,3 +1,10 @@
+# [1.54.0](https://github.com/marco0560/codira/compare/v1.53.0...v1.54.0) (2026-07-24)
+
+
+### Features
+
+* **plugins:** add documentation audit conventions ([b19602c](https://github.com/marco0560/codira/commit/b19602cd600be104c54727477ec4c6fdba252774)), closes [#4](https://github.com/marco0560/codira/issues/4) [#4](https://github.com/marco0560/codira/issues/4)
+
 # [1.53.0](https://github.com/marco0560/codira/compare/v1.52.0...v1.53.0) (2026-07-22)
 
 
