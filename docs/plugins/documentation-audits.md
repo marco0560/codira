@@ -80,6 +80,11 @@ No route means no documentation audit diagnostics are emitted. More than one
 matching route emits an `ambiguous_route` diagnostic instead of selecting a
 convention implicitly.
 
+`codira caps --json` exposes documentation audit as a route-selected plugin
+family through `plugin_families[]`. Individual documentation-audit plugin rows
+under `plugins[]` are active only when an explicit route selects that plugin
+and its `[plugins.documentation-audit-*]` table does not disable it.
+
 ## JSON Output
 
 `codira audit --json` emits persisted plugin and convention provenance for

@@ -443,6 +443,9 @@ FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
     },
     "vector-store-sqlite": {"enabled": True},
     "vector-store-duckdb": {"enabled": True},
+    "documentation-audit-numpy": {"enabled": True},
+    "documentation-audit-google": {"enabled": True},
+    "documentation-audit-doxygen": {"enabled": True},
 }
 PLUGIN_CONFIG_RENDER_ORDER: tuple[str, ...] = (
     "backend-sqlite",
@@ -451,6 +454,9 @@ PLUGIN_CONFIG_RENDER_ORDER: tuple[str, ...] = (
     "embedding-onnx",
     "vector-store-sqlite",
     "vector-store-duckdb",
+    "documentation-audit-numpy",
+    "documentation-audit-google",
+    "documentation-audit-doxygen",
     "analyzer-python",
     "analyzer-json",
     "analyzer-c",

@@ -1774,12 +1774,20 @@ def _run_help(parser: argparse.ArgumentParser) -> int:
     return 0
 
 
-def _run_capabilities(*, as_json: bool, strict: bool) -> int:
+def _run_capabilities(
+    *,
+    root: Path,
+    as_json: bool,
+    strict: bool,
+) -> int:
     """
     Render the deterministic capability contract.
 
     Parameters
     ----------
+    root : pathlib.Path
+        Repository root whose effective configuration determines active
+        plugins.
     as_json : bool
         Whether to render the full JSON contract. Plain text prints a compact
         summary for humans.
@@ -1792,7 +1800,7 @@ def _run_capabilities(*, as_json: bool, strict: bool) -> int:
     int
         Zero after rendering the capability contract.
     """
-    payload = build_capability_contract(strict=strict)
+    payload = build_capability_contract(root=root, strict=strict)
     if as_json:
         _emit_json(payload)
         return 0
@@ -5418,8 +5426,13 @@ def _command_handlers(
             raw_prefix=raw_prefix,
         ),
         "plugins": lambda: _run_plugins(root=root, as_json=args.json),
-        "caps": lambda: _run_capabilities(as_json=args.json, strict=args.strict),
+        "caps": lambda: _run_capabilities(
+            root=root,
+            as_json=args.json,
+            strict=args.strict,
+        ),
         "capabilities": lambda: _run_capabilities(
+            root=root,
             as_json=args.json,
             strict=args.strict,
         ),

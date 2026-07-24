@@ -41,6 +41,7 @@ The export includes:
 - the canonical ontology version and object types
 - command intents, channels, guarantees, and limitations
 - retrieval producer declarations and known capability names
+- plugin family declarations, including each family selection model
 - analyzer declarations mapping native artifacts to ontology types
 - validation status for the active analyzer declarations
 
@@ -53,6 +54,7 @@ The canonical ontology is intentionally small:
 - `constant`
 - `variable`
 - `namespace`
+- `documentation`
 
 Analyzer declarations must explicitly list both supported and unsupported
 ontology types. Missing declarations produce degraded capability metadata in

@@ -10,6 +10,7 @@
     "channels",
     "retrieval_capabilities",
     "retrieval_producers",
+    "plugin_families",
     "plugins",
     "analyzers",
     "validation"
@@ -128,6 +129,31 @@
     "retrieval_producers": {
       "type": "array",
       "items": { "type": "object" }
+    },
+    "plugin_families": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["family", "selection", "configuration", "role"],
+        "properties": {
+          "family": {
+            "enum": [
+              "analyzer",
+              "backend",
+              "embedding",
+              "vector-store",
+              "documentation-audit"
+            ]
+          },
+          "selection": {
+            "enum": ["multiple_active", "single_active", "route_active"]
+          },
+          "configuration": { "type": "string", "minLength": 1 },
+          "role": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      },
+      "uniqueItems": true
     },
     "plugins": {
       "type": "array",

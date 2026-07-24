@@ -608,6 +608,7 @@ Suggested use cases:
 
 - inspect the canonical ontology used by active analyzers
 - verify analyzer declarations after plugin changes
+- verify plugin family selection models and active configured plugins
 - inspect command and retrieval-channel guarantees
 - feed deterministic capability metadata into agent workflows
 
@@ -621,7 +622,8 @@ codira caps --strict --json
 
 Expected result semantics:
 
-- exports command, channel, analyzer, and retrieval-producer declarations
+- exports command, channel, plugin-family, plugin, analyzer, and
+  retrieval-producer declarations
 - reports degraded metadata if an active analyzer does not explicitly declare
   ontology coverage
 - fails on missing or invalid analyzer declarations only when `--strict` is set

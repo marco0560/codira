@@ -21,7 +21,7 @@ This module belongs to the **capability contract layer** described by issue #7.
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
 from codira.config import load_effective_config
 from codira.contracts import (
@@ -34,6 +34,7 @@ from codira.contracts import (
     LanguageAnalyzer,
     split_declared_retrieval_capabilities,
 )
+from codira.plugin_config import plugin_enabled
 from codira.query.producers import (
     CHANNEL_PRODUCER_SPECS,
     ENRICHMENT_PRODUCER_SPECS,
@@ -43,14 +44,46 @@ from codira.registry import (
     PluginRegistration,
     active_language_analyzers,
     configured_index_backend_name,
+    plugin_config_key,
     plugin_registrations,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
-CAPABILITY_SCHEMA_VERSION = "1.1"
+CAPABILITY_SCHEMA_VERSION = "1.2"
 ONTOLOGY_VERSION = "2"
+
+PLUGIN_FAMILY_CONTRACTS: dict[str, dict[str, object]] = {
+    "analyzer": {
+        "selection": "multiple_active",
+        "configuration": "plugins.disabled_analyzers and plugins.analyzer-*",
+        "role": "language-specific source analysis",
+    },
+    "backend": {
+        "selection": "single_active",
+        "configuration": "backend.name and plugins.backend-*",
+        "role": "structural index persistence",
+    },
+    "embedding": {
+        "selection": "single_active",
+        "configuration": "embeddings.engine and plugins.embedding-*",
+        "role": "embedding generation",
+    },
+    "vector-store": {
+        "selection": "single_active",
+        "configuration": "embeddings.vector_store and plugins.vector-store-*",
+        "role": "embedding vector persistence",
+    },
+    "documentation-audit": {
+        "selection": "route_active",
+        "configuration": (
+            "plugins.documentation_audit_routes and plugins.documentation-audit-*"
+        ),
+        "role": "convention-specific documentation validation",
+    },
+}
 
 COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
     "help": {
@@ -503,7 +536,11 @@ def _analyzer_declarations(
     return payloads, sorted(issues)
 
 
-def _plugin_is_active(registration: PluginRegistration) -> bool:
+def _plugin_is_active(
+    registration: PluginRegistration,
+    *,
+    root: Path | None = None,
+) -> bool:
     """
     Return whether one plugin registration is active in the current config.
 
@@ -511,6 +548,8 @@ def _plugin_is_active(registration: PluginRegistration) -> bool:
     ----------
     registration : codira.registry.PluginRegistration
         Plugin registration diagnostic row.
+    root : pathlib.Path | None, optional
+        Repository root whose effective config determines plugin activity.
 
     Returns
     -------
@@ -522,21 +561,53 @@ def _plugin_is_active(registration: PluginRegistration) -> bool:
     if registration.family == "analyzer":
         return True
     if registration.family == "backend":
-        return registration.name == configured_index_backend_name()
+        return registration.name == configured_index_backend_name(root=root)
 
-    config = load_effective_config()
+    config = load_effective_config(root=root)
     if registration.family == "embedding":
         return registration.name == config.embeddings.engine
-    return registration.name == config.embeddings.vector_store
+    if registration.family == "vector-store":
+        return registration.name == config.embeddings.vector_store
+    if registration.family == "documentation-audit":
+        if registration.name not in {
+            route.plugin for route in config.plugins.documentation_audit_routes
+        }:
+            return False
+        plugin_config = (config.plugins.configs or {}).get(
+            plugin_config_key(family=registration.family, name=registration.name),
+            {},
+        )
+        return plugin_enabled(plugin_config)
+    assert_never(registration.family)
 
 
-def _plugin_payloads() -> list[dict[str, object]]:
+def _plugin_family_payloads() -> list[dict[str, object]]:
+    """
+    Return deterministic plugin family capability metadata.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Supported plugin families and their selection contracts.
+    """
+    return [
+        {"family": family, **dict(values)}
+        for family, values in sorted(PLUGIN_FAMILY_CONTRACTS.items())
+    ]
+
+
+def _plugin_payloads(*, root: Path | None = None) -> list[dict[str, object]]:
     """
     Return deterministic plugin-family capability metadata.
 
     Parameters
     ----------
-    None
+    root : pathlib.Path | None, optional
+        Repository root whose effective config determines plugin activity.
 
     Returns
     -------
@@ -547,7 +618,7 @@ def _plugin_payloads() -> list[dict[str, object]]:
         {
             "family": registration.family,
             "name": registration.name,
-            "active": _plugin_is_active(registration),
+            "active": _plugin_is_active(registration, root=root),
             "provider": registration.provider,
             "origin": registration.origin,
             "source": registration.source,
@@ -556,13 +627,14 @@ def _plugin_payloads() -> list[dict[str, object]]:
             "entry_point": registration.entry_point,
             "detail": registration.detail,
         }
-        for registration in plugin_registrations()
+        for registration in plugin_registrations(root=root)
     ]
 
 
 def build_capability_contract(
     analyzers: Sequence[LanguageAnalyzer] | None = None,
     *,
+    root: Path | None = None,
     strict: bool = False,
 ) -> dict[str, object]:
     """
@@ -573,6 +645,8 @@ def build_capability_contract(
     analyzers : collections.abc.Sequence[LanguageAnalyzer] | None, optional
         Analyzer instances to describe. When omitted, active analyzers are
         loaded through the registry.
+    root : pathlib.Path | None, optional
+        Repository root whose configuration participates in plugin activation.
     strict : bool, optional
         Whether validation issues should raise instead of producing a degraded
         contract payload.
@@ -588,7 +662,9 @@ def build_capability_contract(
         If ``strict`` is true and active analyzers are missing valid capability
         declarations.
     """
-    active_analyzers = active_language_analyzers() if analyzers is None else analyzers
+    active_analyzers = (
+        active_language_analyzers(root=root) if analyzers is None else analyzers
+    )
     analyzer_payloads, validation_issues = _analyzer_declarations(active_analyzers)
     if strict and validation_issues:
         joined = "; ".join(validation_issues)
@@ -639,7 +715,8 @@ def build_capability_contract(
         },
         "retrieval_capabilities": list(KNOWN_RETRIEVAL_CAPABILITIES),
         "retrieval_producers": _retrieval_producer_payloads(),
-        "plugins": _plugin_payloads(),
+        "plugin_families": _plugin_family_payloads(),
+        "plugins": _plugin_payloads(root=root),
         "analyzers": analyzer_payloads,
         "validation": {
             "status": validation_status,

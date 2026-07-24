@@ -9,6 +9,9 @@ name = "sqlite"
 [plugins]
 # disable_third_party = false
 # disabled_analyzers = []
+documentation_audit_routes = [
+  { language = "python", convention = "numpy", plugin = "numpy" },
+]
 
 [embeddings]
 # enabled = true
@@ -62,6 +65,15 @@ inter_op_num_threads = 0
 # enabled = true
 
 [plugins.vector-store-duckdb]
+# enabled = true
+
+[plugins.documentation-audit-numpy]
+enabled = true
+
+[plugins.documentation-audit-google]
+# enabled = true
+
+[plugins.documentation-audit-doxygen]
 # enabled = true
 
 [plugins.analyzer-python]

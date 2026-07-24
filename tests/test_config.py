@@ -495,6 +495,9 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
         "[plugins.embedding-onnx]",
         "[plugins.vector-store-sqlite]",
         "[plugins.vector-store-duckdb]",
+        "[plugins.documentation-audit-numpy]",
+        "[plugins.documentation-audit-google]",
+        "[plugins.documentation-audit-doxygen]",
         "[plugins.analyzer-python]",
         "[plugins.analyzer-json]",
         "[plugins.analyzer-c]",
@@ -722,6 +725,7 @@ def test_config_cli_init_full_writes_plugin_defaults(
     assert "# emit_macros = true" in rendered
     assert "# include_paths = []" in rendered
     assert "[plugins.backend-sqlite]" in rendered
+    assert "[plugins.documentation-audit-numpy]" in rendered
 
 
 def test_config_cli_explain_reports_environment_origin(

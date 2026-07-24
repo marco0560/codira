@@ -14,6 +14,7 @@ from codira_analyzer_python import PythonAnalyzer
 
 from codira.capabilities import build_capability_contract
 from codira.cli import main
+from codira.registry import reset_plugin_registry_caches
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -183,7 +184,7 @@ def test_capability_contract_validates_against_schema() -> None:
     payload = build_capability_contract([PythonAnalyzer()])
 
     jsonschema.validate(payload, _capabilities_schema())
-    assert payload["schema_version"] == "1.1"
+    assert payload["schema_version"] == "1.2"
     assert payload["ontology"] == {
         "version": "2",
         "types": [
@@ -202,6 +203,7 @@ def test_capability_contract_validates_against_schema() -> None:
     channels = cast("dict[str, object]", payload["channels"])
     commands = cast("dict[str, object]", payload["commands"])
     plugins = cast("list[Mapping[str, object]]", payload["plugins"])
+    plugin_families = cast("list[Mapping[str, object]]", payload["plugin_families"])
     retrieval_capabilities = cast("list[str]", payload["retrieval_capabilities"])
     assert [item["analyzer_name"] for item in analyzers] == ["python"]
     assert [item["declaration_status"] for item in analyzers] == ["declared"]
@@ -250,7 +252,64 @@ def test_capability_contract_validates_against_schema() -> None:
         ("embedding", "sentence-transformers"),
         ("vector-store", "sqlite"),
     }
+    documentation_audit_family = {item["family"]: item for item in plugin_families}[
+        "documentation-audit"
+    ]
+    assert documentation_audit_family["selection"] == "route_active"
+    assert (
+        documentation_audit_family["configuration"]
+        == "plugins.documentation_audit_routes and plugins.documentation-audit-*"
+    )
     assert "symbol_lookup" in retrieval_capabilities
+
+
+def test_capability_contract_marks_routed_documentation_audit_plugins_active(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Report documentation-audit plugins as active when selected by route config.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths and current directory.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts ``codira caps`` treats documentation-audit as a
+        route-selected plugin family.
+    """
+    repo_root = tmp_path / "repo"
+    repo_config = repo_root / ".codira" / "config.toml"
+    repo_config.parent.mkdir(parents=True)
+    repo_config.write_text(
+        """
+[plugins]
+documentation_audit_routes = [
+  { language = "python", convention = "numpy", plugin = "numpy" },
+]
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(repo_root)
+    reset_plugin_registry_caches()
+
+    payload = build_capability_contract([PythonAnalyzer()], root=repo_root)
+    plugins = cast("list[Mapping[str, object]]", payload["plugins"])
+
+    assert {
+        (item["family"], item["name"], item["active"])
+        for item in plugins
+        if item["family"] == "documentation-audit"
+    } >= {
+        ("documentation-audit", "numpy", True),
+        ("documentation-audit", "google", False),
+        ("documentation-audit", "doxygen", False),
+    }
 
 
 def test_capability_contract_degrades_analyzers_without_declarations() -> None:
