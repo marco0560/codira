@@ -432,7 +432,7 @@ dev = [
 
 [[package]]
 name = "codira-analyzer-bash"
-version = "1.43.0"
+version = "1.55.0"
 source = { editable = "packages/codira-analyzer-bash" }
 dependencies = [
     { name = "codira" },
@@ -454,7 +454,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-c"
-version = "1.45.0"
+version = "1.55.0"
 source = { editable = "packages/codira-analyzer-c" }
 dependencies = [
     { name = "codira" },
@@ -476,7 +476,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-cpp"
-version = "1.46.0"
+version = "1.55.0"
 source = { editable = "packages/codira-analyzer-cpp" }
 dependencies = [
     { name = "codira" },
@@ -498,7 +498,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-json"
-version = "1.43.0"
+version = "1.55.0"
 source = { editable = "packages/codira-analyzer-json" }
 dependencies = [
     { name = "codira" },
@@ -516,7 +516,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-markdown"
-version = "1.46.0"
+version = "1.55.0"
 source = { editable = "packages/codira-analyzer-markdown" }
 dependencies = [
     { name = "codira" },
@@ -534,7 +534,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-python"
-version = "1.45.0"
+version = "1.55.0"
 source = { editable = "packages/codira-analyzer-python" }
 dependencies = [
     { name = "codira" },
@@ -552,7 +552,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-text"
-version = "1.45.0"
+version = "1.55.0"
 source = { editable = "packages/codira-analyzer-text" }
 dependencies = [
     { name = "codira" },
@@ -570,7 +570,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-duckdb"
-version = "1.50.3"
+version = "1.55.0"
 source = { editable = "packages/codira-backend-duckdb" }
 dependencies = [
     { name = "codira" },
@@ -592,7 +592,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-sqlite"
-version = "1.45.4"
+version = "1.55.0"
 source = { editable = "packages/codira-backend-sqlite" }
 dependencies = [
     { name = "codira" },
@@ -610,7 +610,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-documentation-audit-doxygen"
-version = "1.0.0"
+version = "1.55.0"
 source = { editable = "packages/codira-documentation-audit-doxygen" }
 dependencies = [
     { name = "codira" },
@@ -628,7 +628,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-documentation-audit-google"
-version = "1.0.0"
+version = "1.55.0"
 source = { editable = "packages/codira-documentation-audit-google" }
 dependencies = [
     { name = "codira" },
@@ -646,7 +646,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-documentation-audit-numpy"
-version = "1.0.0"
+version = "1.55.0"
 source = { editable = "packages/codira-documentation-audit-numpy" }
 dependencies = [
     { name = "codira" },
@@ -664,7 +664,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-embedding-onnx"
-version = "1.0.2"
+version = "1.55.0"
 source = { editable = "packages/codira-embedding-onnx" }
 dependencies = [
     { name = "codira" },
@@ -688,7 +688,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-embedding-sentence-transformers"
-version = "1.0.2"
+version = "1.55.0"
 source = { editable = "packages/codira-embedding-sentence-transformers" }
 dependencies = [
     { name = "codira" },
@@ -710,7 +710,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-vector-store-duckdb"
-version = "1.0.8"
+version = "1.55.0"
 source = { editable = "packages/codira-vector-store-duckdb" }
 dependencies = [
     { name = "codira" },
@@ -730,7 +730,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-vector-store-sqlite"
-version = "1.0.4"
+version = "1.55.0"
 source = { editable = "packages/codira-vector-store-sqlite" }
 dependencies = [
     { name = "codira" },

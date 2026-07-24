@@ -25,18 +25,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.first_party_packages import FIRST_PARTY_PACKAGE_DIRS
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-PACKAGE_REPOS: tuple[str, ...] = (
-    "codira-analyzer-python",
-    "codira-analyzer-json",
-    "codira-analyzer-c",
-    "codira-analyzer-cpp",
-    "codira-analyzer-bash",
-    "codira-analyzer-markdown",
-    "codira-analyzer-text",
-    "codira-backend-sqlite",
-    "codira-backend-duckdb",
+PACKAGE_REPOS: tuple[str, ...] = tuple(
+    relative.removeprefix("packages/")
+    for relative in FIRST_PARTY_PACKAGE_DIRS
+    if relative != "packages/codira-bundle-official"
 )
 BUNDLE_REPO = "codira-bundle-official"
 

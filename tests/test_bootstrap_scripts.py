@@ -219,6 +219,110 @@ class _GitConfigInstallModule(Protocol):
         ...
 
 
+EXPECTED_FIRST_PARTY_PACKAGE_DIRS: tuple[str, ...] = (
+    "packages/codira-analyzer-python",
+    "packages/codira-analyzer-json",
+    "packages/codira-analyzer-c",
+    "packages/codira-analyzer-cpp",
+    "packages/codira-analyzer-bash",
+    "packages/codira-analyzer-markdown",
+    "packages/codira-analyzer-text",
+    "packages/codira-documentation-audit-numpy",
+    "packages/codira-documentation-audit-google",
+    "packages/codira-documentation-audit-doxygen",
+    "packages/codira-backend-sqlite",
+    "packages/codira-backend-duckdb",
+    "packages/codira-embedding-sentence-transformers",
+    "packages/codira-embedding-onnx",
+    "packages/codira-vector-store-sqlite",
+    "packages/codira-vector-store-duckdb",
+    "packages/codira-bundle-official",
+)
+EXPECTED_NON_BUNDLE_PACKAGE_DIRS: tuple[str, ...] = tuple(
+    item
+    for item in EXPECTED_FIRST_PARTY_PACKAGE_DIRS
+    if item != "packages/codira-bundle-official"
+)
+
+
+def _expected_monorepo_package_paths(
+    root: Path,
+    *,
+    include_bundle: bool = True,
+) -> tuple[Path, ...]:
+    """
+    Return expected monorepo package paths in release/install order.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root used to resolve package directories.
+    include_bundle : bool, optional
+        Whether to include the curated bundle package path.
+
+    Returns
+    -------
+    tuple[pathlib.Path, ...]
+        Expected package paths.
+    """
+    entries = (
+        EXPECTED_FIRST_PARTY_PACKAGE_DIRS
+        if include_bundle
+        else EXPECTED_NON_BUNDLE_PACKAGE_DIRS
+    )
+    return tuple(root / relative for relative in entries)
+
+
+def _expected_split_package_paths(
+    package_root: Path,
+    *,
+    include_bundle: bool = True,
+) -> tuple[Path, ...]:
+    """
+    Return expected split-repository package paths in release/install order.
+
+    Parameters
+    ----------
+    package_root : pathlib.Path
+        Directory containing split first-party repositories.
+    include_bundle : bool, optional
+        Whether to include the curated bundle package path.
+
+    Returns
+    -------
+    tuple[pathlib.Path, ...]
+        Expected split package paths.
+    """
+    entries = (
+        EXPECTED_FIRST_PARTY_PACKAGE_DIRS
+        if include_bundle
+        else EXPECTED_NON_BUNDLE_PACKAGE_DIRS
+    )
+    return tuple(
+        package_root / relative.removeprefix("packages/") for relative in entries
+    )
+
+
+def _editable_args(paths: tuple[Path, ...]) -> tuple[str, ...]:
+    """
+    Render editable-install argument pairs for expected package paths.
+
+    Parameters
+    ----------
+    paths : tuple[pathlib.Path, ...]
+        Package paths to render.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Flattened ``-e`` and path argument pairs.
+    """
+    args: list[str] = []
+    for path in paths:
+        args.extend(("-e", str(path)))
+    return tuple(args)
+
+
 class _GithubSnapshotModule(Protocol):
     """Protocol for the GitHub planning snapshot generator."""
 
@@ -1898,29 +2002,9 @@ def test_editable_package_paths_follow_authoritative_first_party_order() -> None
 
     assert helper.first_party_package_root(repo_root, None) == (repo_root / "packages")
     assert helper.editable_package_paths(repo_root) == (
-        repo_root / "packages/codira-analyzer-python",
-        repo_root / "packages/codira-analyzer-json",
-        repo_root / "packages/codira-analyzer-c",
-        repo_root / "packages/codira-analyzer-cpp",
-        repo_root / "packages/codira-analyzer-bash",
-        repo_root / "packages/codira-analyzer-markdown",
-        repo_root / "packages/codira-analyzer-text",
-        repo_root / "packages/codira-backend-sqlite",
-        repo_root / "packages/codira-backend-duckdb",
-        repo_root / "packages/codira-bundle-official",
+        _expected_monorepo_package_paths(repo_root)
     )
-    assert helper.FIRST_PARTY_EDITABLE_PACKAGES == (
-        "packages/codira-analyzer-python",
-        "packages/codira-analyzer-json",
-        "packages/codira-analyzer-c",
-        "packages/codira-analyzer-cpp",
-        "packages/codira-analyzer-bash",
-        "packages/codira-analyzer-markdown",
-        "packages/codira-analyzer-text",
-        "packages/codira-backend-sqlite",
-        "packages/codira-backend-duckdb",
-        "packages/codira-bundle-official",
-    )
+    assert helper.FIRST_PARTY_EDITABLE_PACKAGES == EXPECTED_FIRST_PARTY_PACKAGE_DIRS
 
 
 def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
@@ -2576,18 +2660,7 @@ def test_install_helper_can_target_exported_split_repositories() -> None:
     assert helper.editable_package_paths(
         repo_root,
         package_root=package_root,
-    ) == (
-        package_root / "codira-analyzer-python",
-        package_root / "codira-analyzer-json",
-        package_root / "codira-analyzer-c",
-        package_root / "codira-analyzer-cpp",
-        package_root / "codira-analyzer-bash",
-        package_root / "codira-analyzer-markdown",
-        package_root / "codira-analyzer-text",
-        package_root / "codira-backend-sqlite",
-        package_root / "codira-backend-duckdb",
-        package_root / "codira-bundle-official",
-    )
+    ) == _expected_split_package_paths(package_root)
     assert helper.bundle_package_path(
         repo_root,
         package_root=package_root,
@@ -2617,24 +2690,9 @@ def test_install_helper_can_target_exported_split_repositories() -> None:
             "/tmp/codira/.venv/bin/python",
             "-e",
             "/tmp/codira",
-            "-e",
-            "/tmp/codira-split-repos/codira-analyzer-python",
-            "-e",
-            "/tmp/codira-split-repos/codira-analyzer-json",
-            "-e",
-            "/tmp/codira-split-repos/codira-analyzer-c",
-            "-e",
-            "/tmp/codira-split-repos/codira-analyzer-cpp",
-            "-e",
-            "/tmp/codira-split-repos/codira-analyzer-bash",
-            "-e",
-            "/tmp/codira-split-repos/codira-analyzer-markdown",
-            "-e",
-            "/tmp/codira-split-repos/codira-analyzer-text",
-            "-e",
-            "/tmp/codira-split-repos/codira-backend-sqlite",
-            "-e",
-            "/tmp/codira-split-repos/codira-backend-duckdb",
+            *_editable_args(
+                _expected_split_package_paths(package_root, include_bundle=False)
+            ),
         ),
         (
             "uv",
@@ -2666,30 +2724,10 @@ def test_shared_first_party_package_inventory_stays_in_split_order() -> None:
     helper = _load_first_party_package_inventory()
     repo_root = Path("/tmp/codira")
 
-    assert helper.package_paths(repo_root) == (
-        repo_root / "packages/codira-analyzer-python",
-        repo_root / "packages/codira-analyzer-json",
-        repo_root / "packages/codira-analyzer-c",
-        repo_root / "packages/codira-analyzer-cpp",
-        repo_root / "packages/codira-analyzer-bash",
-        repo_root / "packages/codira-analyzer-markdown",
-        repo_root / "packages/codira-analyzer-text",
-        repo_root / "packages/codira-backend-sqlite",
-        repo_root / "packages/codira-backend-duckdb",
-        repo_root / "packages/codira-bundle-official",
+    assert helper.package_paths(repo_root) == _expected_monorepo_package_paths(
+        repo_root
     )
-    assert helper.FIRST_PARTY_PACKAGE_DIRS == (
-        "packages/codira-analyzer-python",
-        "packages/codira-analyzer-json",
-        "packages/codira-analyzer-c",
-        "packages/codira-analyzer-cpp",
-        "packages/codira-analyzer-bash",
-        "packages/codira-analyzer-markdown",
-        "packages/codira-analyzer-text",
-        "packages/codira-backend-sqlite",
-        "packages/codira-backend-duckdb",
-        "packages/codira-bundle-official",
-    )
+    assert helper.FIRST_PARTY_PACKAGE_DIRS == EXPECTED_FIRST_PARTY_PACKAGE_DIRS
 
 
 def test_build_install_argv_installs_each_first_party_package_editably() -> None:
@@ -2713,15 +2751,7 @@ def test_build_install_argv_installs_each_first_party_package_editably() -> None
         repo_root / "packages/codira-bundle-official"
     )
     assert helper.non_bundle_package_paths(repo_root) == (
-        repo_root / "packages/codira-analyzer-python",
-        repo_root / "packages/codira-analyzer-json",
-        repo_root / "packages/codira-analyzer-c",
-        repo_root / "packages/codira-analyzer-cpp",
-        repo_root / "packages/codira-analyzer-bash",
-        repo_root / "packages/codira-analyzer-markdown",
-        repo_root / "packages/codira-analyzer-text",
-        repo_root / "packages/codira-backend-sqlite",
-        repo_root / "packages/codira-backend-duckdb",
+        _expected_monorepo_package_paths(repo_root, include_bundle=False)
     )
     assert helper.build_install_commands(
         helper.InstallCommandRequest(
@@ -2735,24 +2765,9 @@ def test_build_install_argv_installs_each_first_party_package_editably() -> None
             "install",
             "--python",
             "/tmp/codira/.venv/bin/python",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-python",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-json",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-c",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-cpp",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-bash",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-markdown",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-text",
-            "-e",
-            "/tmp/codira/packages/codira-backend-sqlite",
-            "-e",
-            "/tmp/codira/packages/codira-backend-duckdb",
+            *_editable_args(
+                _expected_monorepo_package_paths(repo_root, include_bundle=False)
+            ),
         ),
     )
 
@@ -2798,24 +2813,9 @@ def test_install_helper_can_include_core_repo_with_requested_extras() -> None:
             "/tmp/codira/.venv/bin/python",
             "-e",
             "/tmp/codira[semantic]",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-python",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-json",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-c",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-cpp",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-bash",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-markdown",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-text",
-            "-e",
-            "/tmp/codira/packages/codira-backend-sqlite",
-            "-e",
-            "/tmp/codira/packages/codira-backend-duckdb",
+            *_editable_args(
+                _expected_monorepo_package_paths(repo_root, include_bundle=False)
+            ),
         ),
     )
 
@@ -2858,24 +2858,9 @@ def test_install_helper_can_opt_into_bundle_package() -> None:
             "install",
             "--python",
             "/tmp/codira/.venv/bin/python",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-python",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-json",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-c",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-cpp",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-bash",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-markdown",
-            "-e",
-            "/tmp/codira/packages/codira-analyzer-text",
-            "-e",
-            "/tmp/codira/packages/codira-backend-sqlite",
-            "-e",
-            "/tmp/codira/packages/codira-backend-duckdb",
+            *_editable_args(
+                _expected_monorepo_package_paths(repo_root, include_bundle=False)
+            ),
         ),
         (
             "uv",
@@ -2912,7 +2897,7 @@ def test_build_helper_rehearses_each_first_party_package_boundary() -> None:
         python="/tmp/codira/.venv/bin/python",
         repo_root=repo_root,
         wheel_dir=wheel_dir,
-    ) == (
+    ) == tuple(
         (
             "uv",
             "build",
@@ -2922,107 +2907,9 @@ def test_build_helper_rehearses_each_first_party_package_boundary() -> None:
             "--out-dir",
             "/tmp/codira/.artifacts/wheels",
             "--no-build-isolation",
-            "/tmp/codira/packages/codira-analyzer-python",
-        ),
-        (
-            "uv",
-            "build",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "--wheel",
-            "--out-dir",
-            "/tmp/codira/.artifacts/wheels",
-            "--no-build-isolation",
-            "/tmp/codira/packages/codira-analyzer-json",
-        ),
-        (
-            "uv",
-            "build",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "--wheel",
-            "--out-dir",
-            "/tmp/codira/.artifacts/wheels",
-            "--no-build-isolation",
-            "/tmp/codira/packages/codira-analyzer-c",
-        ),
-        (
-            "uv",
-            "build",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "--wheel",
-            "--out-dir",
-            "/tmp/codira/.artifacts/wheels",
-            "--no-build-isolation",
-            "/tmp/codira/packages/codira-analyzer-cpp",
-        ),
-        (
-            "uv",
-            "build",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "--wheel",
-            "--out-dir",
-            "/tmp/codira/.artifacts/wheels",
-            "--no-build-isolation",
-            "/tmp/codira/packages/codira-analyzer-bash",
-        ),
-        (
-            "uv",
-            "build",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "--wheel",
-            "--out-dir",
-            "/tmp/codira/.artifacts/wheels",
-            "--no-build-isolation",
-            "/tmp/codira/packages/codira-analyzer-markdown",
-        ),
-        (
-            "uv",
-            "build",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "--wheel",
-            "--out-dir",
-            "/tmp/codira/.artifacts/wheels",
-            "--no-build-isolation",
-            "/tmp/codira/packages/codira-analyzer-text",
-        ),
-        (
-            "uv",
-            "build",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "--wheel",
-            "--out-dir",
-            "/tmp/codira/.artifacts/wheels",
-            "--no-build-isolation",
-            "/tmp/codira/packages/codira-backend-sqlite",
-        ),
-        (
-            "uv",
-            "build",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "--wheel",
-            "--out-dir",
-            "/tmp/codira/.artifacts/wheels",
-            "--no-build-isolation",
-            "/tmp/codira/packages/codira-backend-duckdb",
-        ),
-        (
-            "uv",
-            "build",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "--wheel",
-            "--out-dir",
-            "/tmp/codira/.artifacts/wheels",
-            "--no-build-isolation",
-            "/tmp/codira/packages/codira-bundle-official",
-        ),
+            str(path),
+        )
+        for path in _expected_monorepo_package_paths(repo_root)
     )
 
 
@@ -3192,16 +3079,7 @@ def test_release_artifact_helper_covers_core_and_all_first_party_packages() -> N
 
     assert helper.release_package_paths(repo_root) == (
         repo_root,
-        repo_root / "packages/codira-analyzer-python",
-        repo_root / "packages/codira-analyzer-json",
-        repo_root / "packages/codira-analyzer-c",
-        repo_root / "packages/codira-analyzer-cpp",
-        repo_root / "packages/codira-analyzer-bash",
-        repo_root / "packages/codira-analyzer-markdown",
-        repo_root / "packages/codira-analyzer-text",
-        repo_root / "packages/codira-backend-sqlite",
-        repo_root / "packages/codira-backend-duckdb",
-        repo_root / "packages/codira-bundle-official",
+        *_expected_monorepo_package_paths(repo_root),
     )
 
 
@@ -3257,28 +3135,15 @@ def test_release_artifact_helper_builds_build_and_twine_commands() -> None:
             "/tmp/codira/packages/codira-analyzer-python",
         ),
     )
-    assert release_plan[-3:] == (
+    assert release_plan[-3:] == tuple(
         (
             "python",
             "-m",
             "twine",
             "check",
-            "/tmp/codira/packages/codira-backend-sqlite/dist/*",
-        ),
-        (
-            "python",
-            "-m",
-            "twine",
-            "check",
-            "/tmp/codira/packages/codira-backend-duckdb/dist/*",
-        ),
-        (
-            "python",
-            "-m",
-            "twine",
-            "check",
-            "/tmp/codira/packages/codira-bundle-official/dist/*",
-        ),
+            f"{path}/dist/*",
+        )
+        for path in _expected_monorepo_package_paths(repo_root)[-3:]
     )
 
 
@@ -3674,16 +3539,9 @@ def test_benchmark_metadata_includes_first_party_plugins(
     monkeypatch.setenv("CODIRA_EMBED_DEVICE", "cpu")
     monkeypatch.setenv("CODIRA_TORCH_NUM_THREADS", "4")
     monkeypatch.setenv("CODIRA_TORCH_NUM_INTEROP_THREADS", "1")
-    expected_providers = (
-        "codira-analyzer-python",
-        "codira-analyzer-json",
-        "codira-analyzer-c",
-        "codira-analyzer-cpp",
-        "codira-analyzer-bash",
-        "codira-analyzer-markdown",
-        "codira-analyzer-text",
-        "codira-backend-sqlite",
-        "codira-backend-duckdb",
+    expected_providers = tuple(
+        relative.removeprefix("packages/")
+        for relative in EXPECTED_NON_BUNDLE_PACKAGE_DIRS
     )
 
     metadata = helper.benchmark_metadata(
@@ -4979,17 +4837,9 @@ def test_split_repo_verification_uses_local_core_checkout_before_package_install
     repo_root = export_root / "codira-analyzer-python"
     core_root = Path("/tmp/codira")
 
-    assert helper.split_repo_names() == (
-        "codira-analyzer-python",
-        "codira-analyzer-json",
-        "codira-analyzer-c",
-        "codira-analyzer-cpp",
-        "codira-analyzer-bash",
-        "codira-analyzer-markdown",
-        "codira-analyzer-text",
-        "codira-backend-sqlite",
-        "codira-backend-duckdb",
-        "codira-bundle-official",
+    assert helper.split_repo_names() == tuple(
+        relative.removeprefix("packages/")
+        for relative in EXPECTED_FIRST_PARTY_PACKAGE_DIRS
     )
     assert helper.build_repo_validation_commands(
         python="python",
@@ -5036,88 +4886,19 @@ def test_split_repo_verification_installs_local_first_party_packages_for_bundle(
         core_repo_root=core_root,
     )
 
-    assert commands[:11] == (
+    expected_commands = (
         ("uv", "pip", "install", "--python", "python", "-e", "/tmp/codira[semantic]"),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "python",
-            "-e",
-            "/tmp/newrepos/split/codira-analyzer-python",
-        ),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "python",
-            "-e",
-            "/tmp/newrepos/split/codira-analyzer-json",
-        ),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "python",
-            "-e",
-            "/tmp/newrepos/split/codira-analyzer-c",
-        ),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "python",
-            "-e",
-            "/tmp/newrepos/split/codira-analyzer-cpp",
-        ),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "python",
-            "-e",
-            "/tmp/newrepos/split/codira-analyzer-bash",
-        ),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "python",
-            "-e",
-            "/tmp/newrepos/split/codira-analyzer-markdown",
-        ),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "python",
-            "-e",
-            "/tmp/newrepos/split/codira-analyzer-text",
-        ),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "python",
-            "-e",
-            "/tmp/newrepos/split/codira-backend-sqlite",
-        ),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "python",
-            "-e",
-            "/tmp/newrepos/split/codira-backend-duckdb",
+        *(
+            (
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                "python",
+                "-e",
+                f"/tmp/newrepos/split/{relative.removeprefix('packages/')}",
+            )
+            for relative in EXPECTED_NON_BUNDLE_PACKAGE_DIRS
         ),
         (
             "uv",
@@ -5129,6 +4910,7 @@ def test_split_repo_verification_installs_local_first_party_packages_for_bundle(
             "/tmp/newrepos/split/codira-bundle-official[test]",
         ),
     )
+    assert commands[: len(expected_commands)] == expected_commands
 
 
 def test_build_bootstrap_commands_reuses_shared_first_party_install_command() -> None:

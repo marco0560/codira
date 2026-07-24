@@ -53,20 +53,15 @@ from codira.semantic.embeddings import (
     TORCH_NUM_THREADS_ENV_VAR,
 )
 from codira.version import installed_distribution_version, package_version
+from scripts.first_party_packages import FIRST_PARTY_PACKAGE_DIRS
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
-FIRST_PARTY_PLUGIN_PROVIDERS: tuple[str, ...] = (
-    "codira-analyzer-python",
-    "codira-analyzer-json",
-    "codira-analyzer-c",
-    "codira-analyzer-cpp",
-    "codira-analyzer-bash",
-    "codira-analyzer-markdown",
-    "codira-analyzer-text",
-    "codira-backend-sqlite",
-    "codira-backend-duckdb",
+FIRST_PARTY_PLUGIN_PROVIDERS: tuple[str, ...] = tuple(
+    relative.removeprefix("packages/")
+    for relative in FIRST_PARTY_PACKAGE_DIRS
+    if relative != "packages/codira-bundle-official"
 )
 
 

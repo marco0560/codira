@@ -33,8 +33,15 @@ FIRST_PARTY_PACKAGE_DIRS: tuple[str, ...] = (
     "packages/codira-analyzer-bash",
     "packages/codira-analyzer-markdown",
     "packages/codira-analyzer-text",
+    "packages/codira-documentation-audit-numpy",
+    "packages/codira-documentation-audit-google",
+    "packages/codira-documentation-audit-doxygen",
     "packages/codira-backend-sqlite",
     "packages/codira-backend-duckdb",
+    "packages/codira-embedding-sentence-transformers",
+    "packages/codira-embedding-onnx",
+    "packages/codira-vector-store-sqlite",
+    "packages/codira-vector-store-duckdb",
     "packages/codira-bundle-official",
 )
 
