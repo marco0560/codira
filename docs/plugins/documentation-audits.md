@@ -37,6 +37,13 @@ Expose plugins through the `codira.documentation_audits` entry-point group:
 numpy = "codira_documentation_audit_numpy:build_audit_plugin"
 ```
 
+Enable a plugin with the usual `enabled` key:
+
+```toml
+[plugins.documentation-audit-numpy]
+enabled = true
+```
+
 The entry point value must return a fresh plugin instance. Verify discovery
 with:
 
