@@ -2050,6 +2050,8 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
     }
 
     assert {key for key in entries if key.startswith("alias.")} == expected_aliases
+    assert entries["init.defaultBranch"] == "main"
+    assert entries["alias.lg"] == "log --oneline --graph --decorate --show-notes -40"
     assert entries["alias.check"] == "!uv run python scripts/validate_repo.py"
     assert "source .venv/bin/activate" not in entries["alias.check"]
     assert entries["alias.fix"] == (
@@ -2065,7 +2067,9 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
         "milestones.json"
     )
     assert "rsync" not in entries["alias.txz"]
-    assert "--transform='s,^,repo/,'" in entries["alias.txz"]
+    assert 'name="${1:-codira}"' in entries["alias.txz"]
+    assert 'mkdir -p "$tmp/codira"' in entries["alias.txz"]
+    assert "--transform='s,^,codira/,'" in entries["alias.txz"]
     assert "\x00" not in entries["alias.txz"]
     assert 'printf "%s\\0" issues.json milestones.json' in entries["alias.txz"]
     assert "alias.ctx" not in entries

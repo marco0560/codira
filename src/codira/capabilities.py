@@ -108,7 +108,9 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
         "intent": "coverage_audit",
         "channels": [],
         "guarantee": "deterministic_analyzer_coverage_report",
-        "limitations": ["coverage roots are currently repository-policy defined"],
+        "limitations": [
+            "coverage scope depends on configured or analyzer-declared roots"
+        ],
     },
     "sym": {
         "intent": "exact_symbol_lookup",

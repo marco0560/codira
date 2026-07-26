@@ -263,15 +263,18 @@ class IndexConcurrencyConfig:
 
 @dataclass(frozen=True)
 class IndexCoverageConfig:
-    """Configure coverage-root glob patterns.
+    """Configure coverage-root glob patterns and suffix exclusions.
 
     Parameters
     ----------
     roots : tuple[str, ...]
         Empty selects analyzer defaults; ``("-",)`` disables auditing.
+    exclude_suffixes : tuple[str, ...]
+        File suffixes excluded from coverage diagnostics after root selection.
     """
 
     roots: tuple[str, ...] = ()
+    exclude_suffixes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -364,7 +367,7 @@ DEFAULT_CONFIG: dict[str, object] = {
             "max_workers": DEFAULT_INDEX_CONCURRENCY_MAX_WORKERS,
             "min_files": DEFAULT_INDEX_CONCURRENCY_MIN_FILES,
         },
-        "coverage": {"roots": []},
+        "coverage": {"roots": [], "exclude_suffixes": []},
     },
 }
 FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
@@ -524,7 +527,7 @@ _SCHEMA: dict[str, object] = {
             "max_workers": int,
             "min_files": int,
         },
-        "coverage": {"roots": list},
+        "coverage": {"roots": list, "exclude_suffixes": list},
     },
 }
 
@@ -1144,7 +1147,7 @@ def _validate_index_concurrency_semantics(concurrency: Mapping[str, object]) -> 
 
 
 def _validate_index_coverage_semantics(coverage: Mapping[str, object]) -> None:
-    """Validate configured coverage-root patterns.
+    """Validate configured coverage-root and suffix-exclusion patterns.
 
     Parameters
     ----------
@@ -1159,17 +1162,43 @@ def _validate_index_coverage_semantics(coverage: Mapping[str, object]) -> None:
 
     roots = coverage.get("roots")
     _validate_string_list(roots, key="index.coverage.roots", allow_empty_items=False)
-    if not isinstance(roots, list):
+    if isinstance(roots, list):
+        patterns = [str(item).strip() for item in roots]
+        if "-" in patterns and patterns != ["-"]:
+            msg = "Configuration key index.coverage.roots may use '-' only by itself."
+            raise ConfigError(msg)
+        if any(
+            pattern != "-" and (pattern.startswith("/") or ".." in pattern.split("/"))
+            for pattern in patterns
+        ):
+            msg = (
+                "Configuration key index.coverage.roots must use repo-relative "
+                "patterns."
+            )
+            raise ConfigError(msg)
+    suffixes = coverage.get("exclude_suffixes")
+    _validate_string_list(
+        suffixes,
+        key="index.coverage.exclude_suffixes",
+        allow_empty_items=False,
+    )
+    if not isinstance(suffixes, list):
         return
-    patterns = [str(item).strip() for item in roots]
-    if "-" in patterns and patterns != ["-"]:
-        msg = "Configuration key index.coverage.roots may use '-' only by itself."
-        raise ConfigError(msg)
+    normalized_suffixes = [str(item).strip().lower() for item in suffixes]
     if any(
-        pattern != "-" and (pattern.startswith("/") or ".." in pattern.split("/"))
-        for pattern in patterns
+        suffix != "<no-suffix>"
+        and (
+            not suffix.startswith(".")
+            or "/" in suffix
+            or "\\" in suffix
+            or suffix == "."
+        )
+        for suffix in normalized_suffixes
     ):
-        msg = "Configuration key index.coverage.roots must use repo-relative patterns."
+        msg = (
+            "Configuration key index.coverage.exclude_suffixes must contain "
+            "file suffixes such as '.yml' or '<no-suffix>'."
+        )
         raise ConfigError(msg)
 
 
@@ -2139,7 +2168,10 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
                 "max_workers": config.index.max_workers,
                 "min_files": config.index.min_files,
             },
-            "coverage": {"roots": list(config.coverage.roots)},
+            "coverage": {
+                "roots": list(config.coverage.roots),
+                "exclude_suffixes": list(config.coverage.exclude_suffixes),
+            },
         },
     }
 
@@ -2293,7 +2325,11 @@ def _config_from_mapping(
         coverage=IndexCoverageConfig(
             roots=tuple(
                 str(item).strip() for item in cast("list[object]", coverage["roots"])
-            )
+            ),
+            exclude_suffixes=tuple(
+                str(item).strip().lower()
+                for item in cast("list[object]", coverage["exclude_suffixes"])
+            ),
         ),
         origins=origins,
     )

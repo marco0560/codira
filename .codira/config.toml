@@ -39,6 +39,7 @@ work_batch_multiplier = 256
 
 [index.coverage]
 # roots = []
+# exclude_suffixes = []
 
 [plugins.backend-sqlite]
 # enabled = true

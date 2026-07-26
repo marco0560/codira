@@ -5,6 +5,9 @@
 Configure coverage auditing under `[index.coverage]`. `roots = []` uses the
 deterministic union declared by active analyzers; `roots = ["-"]` explicitly
 disables coverage auditing. Other values are repository-relative glob patterns.
+`exclude_suffixes` removes known, intentionally unsupported file types from
+coverage diagnostics after root selection; suffixes use lowercase dotted form
+such as `.yml`, or `<no-suffix>` for extensionless files.
 The first-party defaults cover Python (`src`, `tests`, `scripts`), Bash
 (`scripts`), C/C++ (`src`, `include`, `tests`), JSON (`config`, `.github`,
 `scripts`), and Markdown/text (`docs`, `examples`).
@@ -92,6 +95,10 @@ exclude_paths = []
 strategy = "auto"
 max_workers = 0
 min_files = 16
+
+[index.coverage]
+roots = []
+exclude_suffixes = []
 ```
 
 `index.concurrency.strategy` is one of `"off"`, `"auto"`, `"process"`, or
@@ -101,6 +108,14 @@ only when at least `min_files` files are selected. `max_workers = 0` resolves
 to at most four workers. Use `codira index --concurrency STRATEGY` or
 `codira index --jobs N` for one-run overrides; `--jobs` selects auto mode with
 an explicit cap. Backend writes and embedding persistence remain serial.
+
+For example, to keep default coverage roots but suppress intentionally
+unsupported CI and documentation asset formats:
+
+```toml
+[index.coverage]
+exclude_suffixes = [".yml", ".yaml", ".dot", ".js", ".svg"]
+```
 
 `torch_num_threads = 0` and `torch_num_interop_threads = 0` mean Codira leaves
 Torch defaults unchanged.

@@ -13,6 +13,7 @@ from codira.contracts import EmbeddingEngine, EmbeddingEngineError
 from codira_embedding_onnx import (
     OnnxEmbeddingEngine,
     _engine_config,
+    _load_runtime,
     _pool_outputs,
     _runtime_input_feed,
     build_engine,
@@ -126,6 +127,40 @@ def test_onnx_engine_requires_explicit_artifact_paths() -> None:
 
     with pytest.raises(EmbeddingEngineError, match="model_path"):
         engine.provision({})
+
+
+def test_onnx_runtime_rejects_missing_artifacts_before_loading_runtime(
+    tmp_path: Path,
+) -> None:
+    """
+    Report missing local ONNX artifacts as Codira configuration errors.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory used to build non-existent artifact paths.
+
+    Returns
+    -------
+    None
+        The test asserts missing artifacts fail before ONNX Runtime can emit a
+        low-level traceback.
+    """
+    _load_runtime.cache_clear()
+    engine_config = _engine_config(
+        {
+            "model_path": str(tmp_path / "model.onnx"),
+            "tokenizer_path": str(tmp_path / "tokenizer.json"),
+        }
+    )
+
+    with pytest.raises(EmbeddingEngineError) as exc_info:
+        _load_runtime(engine_config)
+
+    message = str(exc_info.value)
+    assert "Missing ONNX embedding artifacts" in message
+    assert str(tmp_path / "model.onnx") in message
+    assert str(tmp_path / "tokenizer.json") in message
 
 
 def test_onnx_engine_config_reads_runtime_knobs() -> None:

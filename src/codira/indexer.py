@@ -469,7 +469,11 @@ def _is_binary_coverage_candidate(path: Path) -> bool:
         return b"\x00" in handle.read(_BINARY_SNIFF_BYTES)
 
 
-def _should_ignore_coverage_gap(path: Path) -> bool:
+def _should_ignore_coverage_gap(
+    path: Path,
+    *,
+    exclude_suffixes: tuple[str, ...],
+) -> bool:
     """
     Return whether an uncovered canonical file should be excluded from coverage.
 
@@ -477,6 +481,8 @@ def _should_ignore_coverage_gap(path: Path) -> bool:
     ----------
     path : pathlib.Path
         Repository file that no analyzer claimed.
+    exclude_suffixes : tuple[str, ...]
+        User-configured suffixes excluded from coverage diagnostics.
 
     Returns
     -------
@@ -485,7 +491,7 @@ def _should_ignore_coverage_gap(path: Path) -> bool:
         or is conservatively identified as binary content.
     """
     suffix = path.suffix.lower() or "<no-suffix>"
-    if suffix in _IGNORED_COVERAGE_SUFFIXES:
+    if suffix in _IGNORED_COVERAGE_SUFFIXES or suffix in exclude_suffixes:
         return True
     return _is_binary_coverage_candidate(path)
 
@@ -512,7 +518,8 @@ def _audit_canonical_directory_coverage(
     """
     issues: list[CoverageIssue] = []
 
-    configured_roots = load_effective_config(root=root).coverage.roots
+    coverage_config = load_effective_config(root=root).coverage
+    configured_roots = coverage_config.roots
     if configured_roots == ("-",):
         return []
     roots = configured_roots or tuple(
@@ -541,7 +548,10 @@ def _audit_canonical_directory_coverage(
             continue
         rel_path = path.relative_to(root)
         top_dir = rel_path.parts[0] if rel_path.parts else ""
-        if _should_ignore_coverage_gap(path):
+        if _should_ignore_coverage_gap(
+            path,
+            exclude_suffixes=coverage_config.exclude_suffixes,
+        ):
             continue
         suffix = path.suffix.lower() or "<no-suffix>"
         issues.append(

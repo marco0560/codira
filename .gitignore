@@ -19,6 +19,7 @@ benchmarks/
 issues.json
 milestones.json
 guidelines.tar.xz
+codira.tar.xz
 .coverage-report.json
 
 # -------------------------------

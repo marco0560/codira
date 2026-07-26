@@ -80,8 +80,14 @@ Rules:
 - analyzers must emit stable IDs that are unique within one returned
   `AnalysisResult`; if a language can produce same-name collisions in one file,
   the analyzer must disambiguate them deterministically before returning
-- uncovered tracked files under `src/`, `tests/`, and `scripts/` will be
-  surfaced by the index coverage audit when no analyzer claims them
+- when `[index.coverage]` does not override `roots`, the coverage audit uses
+  the deterministic union of the roots declared by active analyzers; the
+  first-party Python analyzer defaults to `src/`, `tests/`, and `scripts/`
+- configured `roots` replace the analyzer defaults, while `roots = ["-"]`
+  disables coverage auditing; see
+  [Coverage roots](../configuration.md#coverage-roots)
+- configured `exclude_suffixes` silence intentionally unsupported tracked file
+  types after root selection, for example `.yml`, `.dot`, `.js`, or `.svg`
 - `codira cov` is the operator-facing way to verify whether your
   analyzer closes those gaps
 - analyzers must not own storage or query persistence

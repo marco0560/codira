@@ -168,6 +168,53 @@ def _runtime_batch_size(config: Mapping[str, object]) -> int:
     return value
 
 
+def _missing_artifact_paths(config: _OnnxEngineConfig) -> list[str]:
+    """
+    Return configured ONNX artifact paths that do not exist.
+
+    Parameters
+    ----------
+    config : _OnnxEngineConfig
+        Normalized ONNX runtime configuration.
+
+    Returns
+    -------
+    list[str]
+        Missing model or tokenizer paths in operator-facing order.
+    """
+    return [
+        str(path)
+        for path in (config.model_path, config.tokenizer_path)
+        if not path.exists()
+    ]
+
+
+def _raise_for_missing_artifacts(config: _OnnxEngineConfig) -> None:
+    """
+    Reject missing ONNX artifacts with a Codira-owned error message.
+
+    Parameters
+    ----------
+    config : _OnnxEngineConfig
+        Normalized ONNX runtime configuration.
+
+    Returns
+    -------
+    None
+        All configured artifacts exist.
+
+    Raises
+    ------
+    codira.contracts.EmbeddingEngineError
+        Raised when the configured model or tokenizer file is missing.
+    """
+    missing = _missing_artifact_paths(config)
+    if missing:
+        joined = ", ".join(missing)
+        msg = f"Missing ONNX embedding artifacts: {joined}"
+        raise EmbeddingEngineError(msg)
+
+
 def _bool_config(
     config: Mapping[str, object],
     key: str,
@@ -592,15 +639,7 @@ class OnnxEmbeddingEngine:
         """
         del quiet
         onnx_config = _engine_config(config)
-        missing = [
-            str(path)
-            for path in (onnx_config.model_path, onnx_config.tokenizer_path)
-            if not path.exists()
-        ]
-        if missing:
-            joined = ", ".join(missing)
-            msg = f"Missing ONNX embedding artifacts: {joined}"
-            raise EmbeddingEngineError(msg)
+        _raise_for_missing_artifacts(onnx_config)
 
     def embed_texts(
         self,
@@ -679,8 +718,9 @@ def _load_runtime(config: _OnnxEngineConfig) -> tuple[Any, Any]:
     Raises
     ------
     codira.contracts.EmbeddingEngineError
-        Raised when ONNX Runtime or tokenizer dependencies are missing.
+        Raised when configured artifacts or runtime dependencies are missing.
     """
+    _raise_for_missing_artifacts(config)
     try:
         onnxruntime = import_module("onnxruntime")
         tokenizer_module = import_module("tokenizers")

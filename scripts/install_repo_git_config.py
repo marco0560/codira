@@ -57,6 +57,7 @@ def git_alias_entries() -> list[tuple[str, str]]:
         ("commit.template", ".gitmessage"),
         ("commit.gpgsign", "true"),
         ("commit.verbose", "true"),
+        ("init.defaultBranch", "main"),
         ("pull.ff", "only"),
         ("pull.rebase", "false"),
         ("rebase.autostash", "true"),
@@ -64,7 +65,7 @@ def git_alias_entries() -> list[tuple[str, str]]:
         ("alias.co", "checkout"),
         ("alias.br", "branch"),
         ("alias.ci", "commit"),
-        ("alias.lg", "log --oneline --graph --decorate -50"),
+        ("alias.lg", "log --oneline --graph --decorate --show-notes -40"),
         (
             "alias.check",
             "!uv run python scripts/validate_repo.py",
@@ -112,11 +113,11 @@ def git_alias_entries() -> list[tuple[str, str]]:
         (
             "alias.txz",
             (
-                '!f() { name="${1:-repo}"; tmp="$(mktemp -d)"; '
-                'trap \'rm -rf "$tmp"\' EXIT; mkdir -p "$tmp/repo"; '
+                '!f() { name="${1:-codira}"; tmp="$(mktemp -d)"; '
+                'trap \'rm -rf "$tmp"\' EXIT; mkdir -p "$tmp/codira"; '
                 '{ git ls-files -z; printf "%s\\0" issues.json milestones.json; } '
                 '| XZ_OPT="-9e -T0" tar --null -T - -cJf '
-                "\"$PWD/$name.tar.xz\" --transform='s,^,repo/,'; }; f"
+                "\"$PWD/$name.tar.xz\" --transform='s,^,codira/,'; }; f"
             ),
         ),
         (

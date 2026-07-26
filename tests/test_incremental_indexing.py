@@ -3317,6 +3317,7 @@ def test_coverage_cli_emits_json(
             "src",
             "tests",
         ],
+        "exclude_suffixes": [],
         "resolved_roots": ["src"],
     }
     assert payload["results"] == [
@@ -3379,6 +3380,36 @@ def test_coverage_config_overrides_analyzer_defaults(tmp_path: Path) -> None:
     config.write_text('[index.coverage]\nroots = ["custom/**"]\n', encoding="utf-8")
 
     assert [issue.path for issue in audit_repo_coverage(tmp_path)] == [str(covered)]
+
+
+def test_coverage_config_excludes_uncovered_suffixes(tmp_path: Path) -> None:
+    """Silence known uncovered file types without narrowing coverage roots.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The assertion verifies configured suffix exclusions suppress matching
+        coverage diagnostics only.
+    """
+
+    rust_file = tmp_path / "src" / "unclaimed.rs"
+    yaml_file = tmp_path / "src" / "workflow.yml"
+    rust_file.parent.mkdir(parents=True)
+    rust_file.write_text("fn main() {}\n", encoding="utf-8")
+    yaml_file.write_text("name: demo\n", encoding="utf-8")
+    config = tmp_path / ".codira" / "config.toml"
+    config.parent.mkdir()
+    config.write_text(
+        '[index.coverage]\nroots = ["src"]\nexclude_suffixes = [".yml"]\n',
+        encoding="utf-8",
+    )
+
+    assert [issue.path for issue in audit_repo_coverage(tmp_path)] == [str(rust_file)]
 
 
 def test_index_cli_can_require_full_coverage(

@@ -2442,9 +2442,15 @@ def _run_coverage(root: Path, *, as_json: bool = False) -> int:
         key=lambda item: str(item.name),
     )
     issues = audit_repo_coverage(root)
-    configured_roots = load_effective_config(root=root).coverage.roots
+    coverage_config = load_effective_config(root=root).coverage
+    configured_roots = coverage_config.roots
     if configured_roots == ("-",):
-        coverage = {"source": "disabled", "patterns": [], "resolved_roots": []}
+        coverage = {
+            "source": "disabled",
+            "patterns": [],
+            "resolved_roots": [],
+            "exclude_suffixes": list(coverage_config.exclude_suffixes),
+        }
     else:
         roots = configured_roots or tuple(
             sorted(
@@ -2458,6 +2464,7 @@ def _run_coverage(root: Path, *, as_json: bool = False) -> int:
         coverage = {
             "source": "config" if configured_roots else "analyzer-defaults",
             "patterns": list(roots),
+            "exclude_suffixes": list(coverage_config.exclude_suffixes),
             "resolved_roots": sorted(
                 {
                     path.relative_to(root).as_posix()

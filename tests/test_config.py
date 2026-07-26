@@ -506,6 +506,7 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
         "[plugins.analyzer-markdown]",
         "[plugins.analyzer-text]",
     ]
+    assert "exclude_suffixes = []" in rendered
     assert "[plugins.analyzer-python]" in rendered
     assert "emit_module_documentation = true" in rendered
     assert "[plugins.analyzer-json]" in rendered
@@ -1024,6 +1025,43 @@ def test_config_validation_handles_coverage_roots(
     """
 
     payload = {"index": {"coverage": {"roots": roots}}}
+    if accepted:
+        validate_config_mapping(payload)
+    else:
+        with pytest.raises(ConfigError):
+            validate_config_mapping(payload)
+
+
+@pytest.mark.parametrize(
+    ("exclude_suffixes", "accepted"),
+    [
+        ([], True),
+        ([".yml", ".svg", "<no-suffix>"], True),
+        (["YML"], False),
+        (["."], False),
+        (["docs/*.svg"], False),
+        ([""], False),
+    ],
+)
+def test_config_validation_handles_coverage_exclude_suffixes(
+    exclude_suffixes: list[str], accepted: bool
+) -> None:
+    """Validate coverage suffix exclusions.
+
+    Parameters
+    ----------
+    exclude_suffixes : list[str]
+        Candidate suffix exclusion configuration.
+    accepted : bool
+        Whether validation should accept the candidate.
+
+    Returns
+    -------
+    None
+        The assertions verify accepted suffix syntax.
+    """
+
+    payload = {"index": {"coverage": {"exclude_suffixes": exclude_suffixes}}}
     if accepted:
         validate_config_mapping(payload)
     else:
