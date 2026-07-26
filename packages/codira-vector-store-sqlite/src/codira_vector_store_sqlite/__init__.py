@@ -770,6 +770,14 @@ class SQLiteVectorStore:
         -------
         None
             Bindings, payloads, and pending rows are atomically synchronized.
+
+        Raises
+        ------
+        sqlite3.Error
+            Raised when SQLite cannot persist the vector rows.
+        ValueError
+            Raised when vector payloads are incompatible with the configured
+            vector-set dimension.
         """
         vector_set_id = self.ensure_vector_set(
             request.root, request.identity, request.config

@@ -803,6 +803,8 @@ def test_flush_embedding_rows_reuses_persistent_vector_cache(
     ----------
     monkeypatch : pytest.MonkeyPatch
         Fixture used to fail the test if embedding inference is invoked.
+    tmp_path : pathlib.Path
+        Temporary repository root used for persistent vector-store state.
 
     Returns
     -------

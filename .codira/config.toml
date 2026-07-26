@@ -39,7 +39,7 @@ work_batch_multiplier = 256
 
 [index.coverage]
 # roots = []
-# exclude_suffixes = []
+exclude_suffixes = [".yml", ".yaml", ".dot", ".js", ".svg", ".htm", ".html", ".css", ".toml"]
 
 [plugins.backend-sqlite]
 # enabled = true
