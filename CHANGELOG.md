@@ -1,3 +1,10 @@
+# [1.56.0](https://github.com/marco0560/codira/compare/v1.55.0...v1.56.0) (2026-07-26)
+
+
+### Features
+
+* **coverage:** add configurable suffix exclusions ([bc7e95c](https://github.com/marco0560/codira/commit/bc7e95ca748817e188b787403bbca8988247de74))
+
 # [1.55.0](https://github.com/marco0560/codira/compare/v1.54.0...v1.55.0) (2026-07-24)
 
 
