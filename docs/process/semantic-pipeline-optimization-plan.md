@@ -1602,3 +1602,77 @@ The workstream is done only when:
 - the blocking CPU comparison passes every acceptance gate;
 - the final report explicitly recommends or rejects integration;
 - no merge into `main` occurs without the owner's decision.
+
+## 2026-07-27 closeout report
+
+### Decision
+
+**REJECTED: do not merge `perf/semantic-pipeline-optimization` into `main`.**
+
+The branch is retained for historical investigation only. Its implementation
+and repair commit were deliberately not merged into `main`.
+
+| Field | Value |
+| --- | --- |
+| Base SHA | `5bda60c5c5ae11898829be495b543988c23dbca8` |
+| Optimization commit | `70d2e4e12141acc8e56635ee62f2a54f2fec0bf2` |
+| Branch repair commit | `b38efee` |
+| Branch | `perf/semantic-pipeline-optimization` |
+| Main-branch report commit | Recorded with this report |
+
+### Campaign evidence
+
+The initial performance comparison was not valid for the warm-workload gate:
+baseline and candidate adaptive resolution selected different context queries.
+The branch repair commit added baseline-selection reuse and Hyperfine
+per-result failure detection. The corrected candidate measurement completed
+all 24 cells without recorded command failures:
+
+- immediate: `.artifacts/semantic-pipeline-measure-corrected-v2-20260727/immediate/20260727T204149/`;
+- deferred: `.artifacts/semantic-pipeline-measure-corrected-v2-20260727/deferred/20260727T212742/`;
+- paired baselines: `.artifacts/semantic-pipeline-final-rerun-20260727/`.
+
+The corrected comparison reused each baseline's resolved command selection.
+
+### Measured result
+
+| Mode | Cold full-index aggregate | Warm unchanged-index aggregate | Gate result |
+| --- | ---: | ---: | --- |
+| Immediate | +3.85% | +6.38% | FAIL |
+| Deferred | +2.57% | +0.78% | PASS for these timing measures |
+
+The plan requires cold full-index regression no greater than 3% and warm
+unchanged-index regression no greater than 5%. Immediate mode therefore fails
+both blocking timing gates.
+
+The candidate campaign did not supply process-tree RSS or swap measurements,
+so the memory gate is **INCOMPLETE**, not passed. It also did not rerun the
+retrieval-quality dataset after the vector-binding repair, so the final quality
+gate is **INCOMPLETE**, not passed.
+
+### Correctness repairs found during measurement
+
+Two branch-local defects were found and repaired before the corrected
+measurement:
+
+1. DuckDB incremental replacements could violate a unique index because
+   deleted keys remained visible until a transaction boundary.
+2. Segmented embedding writes in both vector stores could remove bindings from
+   preceding segments, leaving only the final segment searchable.
+
+Focused backend/campaign tests and the full repository validation passed on
+the branch after these repairs. They remain branch-local because the branch
+failed its optimization acceptance gates.
+
+### Interpretation and follow-up
+
+Documentation chunking reduced vector-row counts on qualifying workloads, but
+the measured immediate-mode elapsed time regressed. The campaign does not
+contain sufficient per-inference token, vector-persistence, or incremental
+index profiling to attribute the overhead precisely. Do not resume this plan
+from intuition or rerun the same matrix unchanged.
+
+Any future performance effort must begin with a new, independently reviewed
+hypothesis and paired preflight that proves identical inputs, commands,
+versions, vector bindings, RSS instrumentation, and retrieval-quality inputs
+before a long campaign is launched.
