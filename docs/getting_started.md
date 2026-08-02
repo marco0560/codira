@@ -61,7 +61,8 @@ python3 scripts/bootstrap_dev_environment.py
 
 The bootstrap script installs the core package, the extracted first-party
 analyzer/backend packages, and the local embedding dependencies through the
-uv-managed repository environment.
+uv-managed repository environment. It also downloads and smoke-tests the
+default public ONNX embedding model required for semantic indexing.
 
 The repository-local first-party package set is owned by:
 

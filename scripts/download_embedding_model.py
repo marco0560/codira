@@ -64,7 +64,7 @@ class ModelEntry:
     config: dict[str, object]
 
 
-def read_hf_token(token_file: Path = DEFAULT_TOKEN_FILE) -> str:
+def read_hf_token(token_file: Path = DEFAULT_TOKEN_FILE) -> str | None:
     """
     Read the Hugging Face token from a shell-style token file.
 
@@ -75,15 +75,9 @@ def read_hf_token(token_file: Path = DEFAULT_TOKEN_FILE) -> str:
 
     Returns
     -------
-    str
-        Hugging Face access token.
-
-    Raises
-    ------
-    FileNotFoundError
-        Raised when the token file does not exist.
-    ValueError
-        Raised when no usable token is present.
+    str | None
+        Hugging Face access token when configured, otherwise ``None`` for an
+        anonymous download.
     """
     if token_file.exists():
         completed = subprocess.run(
@@ -109,8 +103,7 @@ def read_hf_token(token_file: Path = DEFAULT_TOKEN_FILE) -> str:
     env_token = os.environ.get("HF_TOKEN", "").strip()
     if env_token:
         return env_token
-    msg = f"No HF_TOKEN assignment found in {token_file}"
-    raise ValueError(msg)
+    return None
 
 
 def load_manifest_entries(manifest: Path) -> list[ModelEntry]:
@@ -207,7 +200,9 @@ def _install_artifact(source: Path, target: Path) -> None:
     target.write_bytes(source.read_bytes())
 
 
-def _download_onnx_entry(entry: ModelEntry, token: str, install_root: Path) -> None:
+def _download_onnx_entry(
+    entry: ModelEntry, token: str | None, install_root: Path
+) -> None:
     """
     Download ONNX artifacts for one manifest entry.
 
@@ -215,8 +210,8 @@ def _download_onnx_entry(entry: ModelEntry, token: str, install_root: Path) -> N
     ----------
     entry : ModelEntry
         ONNX manifest entry to download.
-    token : str
-        Hugging Face access token.
+    token : str | None
+        Hugging Face access token, or ``None`` for a public model.
     install_root : pathlib.Path
         Root directory for model artifacts.
 
@@ -255,7 +250,7 @@ def _download_onnx_entry(entry: ModelEntry, token: str, install_root: Path) -> N
         _install_artifact(tokenizer_source, tokenizer_target)
 
 
-def _download_sentence_transformers_entry(entry: ModelEntry, token: str) -> None:
+def _download_sentence_transformers_entry(entry: ModelEntry, token: str | None) -> None:
     """
     Download SentenceTransformers artifacts for one manifest entry.
 
@@ -263,8 +258,8 @@ def _download_sentence_transformers_entry(entry: ModelEntry, token: str) -> None
     ----------
     entry : ModelEntry
         SentenceTransformers manifest entry to download.
-    token : str
-        Hugging Face access token.
+    token : str | None
+        Hugging Face access token, or ``None`` for a public model.
 
     Returns
     -------
@@ -280,7 +275,7 @@ def _download_sentence_transformers_entry(entry: ModelEntry, token: str) -> None
     )
 
 
-def download_entry(entry: ModelEntry, token: str, install_root: Path) -> None:
+def download_entry(entry: ModelEntry, token: str | None, install_root: Path) -> None:
     """
     Download model artifacts for one manifest entry.
 
@@ -288,8 +283,8 @@ def download_entry(entry: ModelEntry, token: str, install_root: Path) -> None:
     ----------
     entry : ModelEntry
         Manifest entry to download.
-    token : str
-        Hugging Face access token.
+    token : str | None
+        Hugging Face access token, or ``None`` for a public model.
     install_root : pathlib.Path
         Root directory for local ONNX artifacts.
 
@@ -474,7 +469,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         token = read_hf_token(args.token_file)
-        os.environ["HF_TOKEN"] = token
+        if token is not None:
+            os.environ["HF_TOKEN"] = token
         entries = _selected_entries(
             load_manifest_entries(args.manifest),
             set(args.model_id),

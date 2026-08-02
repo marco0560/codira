@@ -2,9 +2,11 @@
 
 ## `scripts/bootstrap_dev_environment.py`
 
-Synchronize the uv-managed `.venv`, install repo-local Git configuration,
-install the extracted first-party analyzer and backend packages, and
-optionally run the validation surface.
+Synchronize the uv-managed `.venv`, install the extracted first-party analyzer
+and backend packages, download and smoke-test the default public ONNX embedding
+model, install repo-local Git configuration, and optionally run the validation
+surface. An `HF_TOKEN` is used when configured but is not required for the
+default public model.
 
 ## `scripts/install_first_party_packages.py`
 

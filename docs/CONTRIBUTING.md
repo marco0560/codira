@@ -35,8 +35,9 @@ python3 scripts/bootstrap_dev_environment.py
 ```
 
 That bootstrap flow creates `.venv`, installs development and documentation
-dependencies, installs the repository-local first-party package set, and
-installs repo-local Git configuration.
+dependencies, installs the repository-local first-party package set, downloads
+and smoke-tests the default public ONNX embedding model, and installs repo-local
+Git configuration.
 
 ## Release discipline
 

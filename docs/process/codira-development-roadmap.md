@@ -123,34 +123,29 @@ Stabilize the plugin and analyzer-facing contracts needed before ecosystem expan
 
 ---
 
-## Phase 2 — Backend Concurrency and Staged Index Runs
+## Deferred Design — Backend Write Concurrency and Staged Index Runs
 
-**Target Window:** 06/07/2026–31/07/2026
-**Release Milestone:** v1.60.0 - Backend concurrency contract
+**Status:** Deferred; not scheduled and not a release gate.
+**Tracked by:** #56
 
-### Phase 2 Objectives
+The #55 concurrency campaign found no justified implementation target among the
+current file-local backends: SQLite has one effective writer, while DuckDB
+persistence is not a material end-to-end bottleneck. The cross-cutting cost of
+staged runs, atomic activation, cleanup, reader isolation, migrations, and
+contract tests is disproportionate to the measured benefit.
 
-Define backend write-concurrency semantics that work for current in-process backends and future server-backed storage.
+Reopen #56 only when one of these conditions is met:
 
-### Phase 2 Issues
+1. a genuinely multi-writer server backend is approved; or
+2. a reproducible campaign identifies persistence as a material bottleneck and
+   a staged prototype improves end-to-end time by at least 20% while preserving
+   deterministic results and active-reader isolation.
 
-* #56 Define backend write-concurrency contracts and staged index runs
-
-### Phase 2 Deliverables
-
-* Backend write-concurrency declaration contract
-* Fail-closed backend concurrency configuration
-* Staged index-run contract
-* Serial backend compatibility strategy
-* Fake staged backend contract tests
-* Documentation for SQLite, DuckDB, memory, and future server DB caveats
-
-### Phase 2 Exit Criteria
-
-* Current backends explicitly declare serial-only write support.
-* Unsupported backend concurrency modes fail before mutation.
-* Staged run semantics are documented and testable.
-* Future PostgreSQL, MySQL, and MariaDB plugins have a clear contract target.
+Any future design must also provide a clean backend-facing lifecycle contract
+for storage paths, metadata paths, index-run identity, and activation state.
+Backend plugins must not depend on private or semi-private `codira.storage`
+helpers; the existing storage/plugin boundary is a reopening constraint, not
+current implementation work.
 
 ---
 

@@ -4954,6 +4954,20 @@ def test_build_bootstrap_commands_reuses_shared_first_party_install_command() ->
         "pip",
         "check",
     )
+    embedding_model_command = next(
+        command
+        for command in commands
+        if command.description
+        == "Download and smoke-test the default ONNX embedding model"
+    )
+    assert embedding_model_command.argv == (
+        "uv",
+        "run",
+        "python",
+        "scripts/download_embedding_model.py",
+        "--model-id",
+        "bge-small-en-v1.5-onnx",
+    )
     install_command = next(
         command
         for command in commands

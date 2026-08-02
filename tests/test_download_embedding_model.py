@@ -41,6 +41,23 @@ def test_read_hf_token_sources_shell_file(tmp_path: Path) -> None:
     assert download_embedding_model.read_hf_token(token_file) == "token-from-shell"
 
 
+def test_read_hf_token_allows_anonymous_download(tmp_path: Path) -> None:
+    """
+    Allow public model downloads without a configured Hugging Face token.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory without a token file.
+
+    Returns
+    -------
+    None
+        The test asserts missing credentials produce an anonymous request.
+    """
+    assert download_embedding_model.read_hf_token(tmp_path / ".hf_token") is None
+
+
 def test_download_embedding_model_main_selects_manifest_entry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -85,11 +102,11 @@ def test_download_embedding_model_main_selects_manifest_entry(
     )
     token_file = tmp_path / ".hf_token"
     token_file.write_text('export HF_TOKEN="secret-token"\n', encoding="utf-8")
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str | None]] = []
 
     def fake_download_entry(
         entry: download_embedding_model.ModelEntry,
-        token: str,
+        token: str | None,
         install_root: Path,
     ) -> None:
         """
@@ -99,8 +116,8 @@ def test_download_embedding_model_main_selects_manifest_entry(
         ----------
         entry : scripts.download_embedding_model.ModelEntry
             Manifest entry being downloaded.
-        token : str
-            Sourced Hugging Face token.
+        token : str | None
+            Sourced Hugging Face token, if configured.
         install_root : pathlib.Path
             Requested local artifact root.
 
@@ -152,6 +169,96 @@ def test_download_embedding_model_main_selects_manifest_entry(
     assert calls == [("candidate", "secret-token"), ("smoke:candidate", "")]
 
 
+def test_download_embedding_model_main_allows_anonymous_download(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Pass no token to downloads when public credentials are absent.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace network and runtime operations.
+    tmp_path : pathlib.Path
+        Temporary directory for manifest and token inputs.
+
+    Returns
+    -------
+    None
+        The test asserts a public model can be downloaded anonymously.
+    """
+    manifest = tmp_path / "models.json"
+    manifest.write_text(
+        """{\"models\": [{\"id\": \"candidate\", \"engine\": \"onnx\", \"model\": \"demo/model\", \"dimension\": 8, \"config\": {}}]}""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    calls: list[str | None] = []
+
+    def fake_download_entry(
+        entry: download_embedding_model.ModelEntry,
+        token: str | None,
+        install_root: Path,
+    ) -> None:
+        """
+        Record the anonymous download token.
+
+        Parameters
+        ----------
+        entry : scripts.download_embedding_model.ModelEntry
+            Manifest entry being downloaded.
+        token : str | None
+            Optional Hugging Face access token.
+        install_root : pathlib.Path
+            Requested local artifact root.
+
+        Returns
+        -------
+        None
+            The fake records the optional token only.
+        """
+        del entry, install_root
+        calls.append(token)
+
+    def fake_smoke_test_entry(entry: download_embedding_model.ModelEntry) -> None:
+        """
+        Accept the fake public model smoke test.
+
+        Parameters
+        ----------
+        entry : scripts.download_embedding_model.ModelEntry
+            Manifest entry being smoke-tested.
+
+        Returns
+        -------
+        None
+            The fake performs no runtime work.
+        """
+        del entry
+
+    monkeypatch.setattr(download_embedding_model, "download_entry", fake_download_entry)
+    monkeypatch.setattr(
+        download_embedding_model,
+        "smoke_test_entry",
+        fake_smoke_test_entry,
+    )
+
+    status = download_embedding_model.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--model-id",
+            "candidate",
+            "--token-file",
+            str(tmp_path / ".hf_token"),
+        ]
+    )
+
+    assert status == 0
+    assert calls == [None]
+
+
 def test_download_onnx_entry_keeps_only_manifest_artifacts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -189,7 +296,7 @@ def test_download_onnx_entry_keeps_only_manifest_artifacts(
         *,
         repo_id: str,
         filename: str,
-        token: str,
+        token: str | None,
         local_dir: Path,
     ) -> str:
         """

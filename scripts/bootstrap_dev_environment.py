@@ -28,6 +28,7 @@ from pathlib import Path
 
 DEFAULT_VENV_DIR = ".venv"
 REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_EMBEDDING_MODEL_ID = "bge-small-en-v1.5-onnx"
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,18 @@ def build_bootstrap_commands(
                 "docs",
                 "--core-extra",
                 "semantic",
+            ),
+            repo_root,
+        ),
+        CommandSpec(
+            "Download and smoke-test the default ONNX embedding model",
+            (
+                "uv",
+                "run",
+                "python",
+                "scripts/download_embedding_model.py",
+                "--model-id",
+                DEFAULT_EMBEDDING_MODEL_ID,
             ),
             repo_root,
         ),
