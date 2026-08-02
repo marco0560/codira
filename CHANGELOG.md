@@ -1,3 +1,10 @@
+# [1.57.0](https://github.com/marco0560/codira/compare/v1.56.0...v1.57.0) (2026-08-02)
+
+
+### Features
+
+* **contracts:** define MCP interface ([7a93d51](https://github.com/marco0560/codira/commit/7a93d519c09f377c23ecb99925dd0264ccc5985e)), closes [#62](https://github.com/marco0560/codira/issues/62)
+
 # [1.56.0](https://github.com/marco0560/codira/compare/v1.55.0...v1.56.0) (2026-07-26)
 
 
