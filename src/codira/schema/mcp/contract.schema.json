@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codira.local/schema/mcp/contract.schema.json",
+  "title": "Codira local MCP contract manifest",
+  "type": "object",
+  "required": [
+    "contract_version",
+    "transport",
+    "repository_model",
+    "read_only",
+    "compatibility",
+    "errors",
+    "tools"
+  ],
+  "properties": {
+    "contract_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "transport": {"const": "stdio"},
+    "repository_model": {
+      "type": "object",
+      "required": ["selection", "path_inputs"],
+      "properties": {
+        "selection": {"const": "startup_trusted_root"},
+        "path_inputs": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "read_only": {"const": true},
+    "compatibility": {"type": "object"},
+    "errors": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "description", "request_schema", "response_schema"],
+        "properties": {
+          "name": {"type": "string"},
+          "description": {"type": "string"},
+          "request_schema": {"type": "object"},
+          "response_schema": {"type": "object"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

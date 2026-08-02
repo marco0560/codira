@@ -99,7 +99,7 @@ version_scheme = "no-guess-dev"
 local_scheme = "no-local-version"
 
 [tool.setuptools.package-data]
-codira = ["py.typed", "schema/*.json"]
+codira = ["py.typed", "schema/*.json", "schema/mcp/*.json"]
 
 [project.scripts]
 codira = "codira.cli:main"
