@@ -106,70 +106,6 @@ uv run python scripts/download_embedding_model.py \
   --model-id bge-small-en-v1.5-onnx
 ```
 
-## `scripts/compare_embedding_engines.py`
-
-Compare two embedding model manifest entries on a fixed local corpus and report
-whether their vectors are compatible enough to justify experimental mixed
-engine use:
-
-```bash
-uv run python scripts/compare_embedding_engines.py \
-  --left bge-small-en-v1.5-sentence-transformers \
-  --right bge-small-en-v1.5-onnx
-```
-
-The script is read-only. It does not modify indexes or configuration. It emits
-a human-readable summary plus JSON by default; use `--json` for JSON only. A
-non-zero exit status means the compared engines failed at least one gate:
-matching model identity, matching dimensions, or minimum cosine similarity.
-
-## `scripts/run_split_embedding_engine_experiment.py`
-
-Run an experimental split-engine check where indexing uses a
-SentenceTransformers manifest entry and query-time `emb`/`ctx` use the paired
-ONNX manifest entry:
-
-```bash
-uv run python -m scripts.run_split_embedding_engine_experiment \
-  --pair-manifest benchmarks/split-embedding-engine-pairs.json \
-  --model-manifest benchmarks/embedding-model-candidates.json \
-  --repo-manifest benchmarks/uv-backed-repos.local.json \
-  --backend sqlite
-```
-
-The script first runs `scripts/compare_embedding_engines.py` logic as a
-compatibility gate. If the gate passes, it indexes with the
-SentenceTransformers config, creates an experimental vector-store identity
-alias for the ONNX engine over the same materialized vectors, then runs `emb`
-and `ctx` with the ONNX config. Artifacts and JSONL results are written under
-`.artifacts/split-embedding-engine-experiment/<timestamp>/`.
-
-This is deliberately not production behavior. Codira's normal vector-store
-identity includes the embedding engine, so simply switching config from
-SentenceTransformers to ONNX after indexing will not reuse vectors without the
-script's explicit experimental aliasing step.
-
-## `scripts/run_onnx_parameter_sweep.py`
-
-Run isolated ONNX Runtime parameter experiments from
-`benchmarks/onnx-parameter-sweep.json`:
-
-```bash
-uv run python -m scripts.run_onnx_parameter_sweep \
-  --sweep-manifest benchmarks/onnx-parameter-sweep.json \
-  --model-manifest benchmarks/embedding-model-candidates.json \
-  --repo-manifest benchmarks/uv-backed-repos.local.json \
-  --backend sqlite
-```
-
-Each variant writes a generated config under the sweep artifact directory,
-passes it to Codira with `--config-file`, runs an isolated `codira index`, then
-times `emb` and `ctx` queries. Results are written under
-`.artifacts/onnx-parameter-sweep/<timestamp>/`. Use `--sweep-id` or
-`--variant-id` to narrow a run while tuning `batch_size`, `max_tokens`,
-`intra_op_num_threads`, `inter_op_num_threads`, and optional
-`max_text_chars`.
-
 ## `scripts/build_retrieval_quality_dataset.py`
 
 Build a labeled retrieval-quality dataset from GitHub pull requests when a
@@ -226,20 +162,6 @@ uv run python -m scripts.run_retrieval_quality_benchmark \
 This benchmark performs full indexing unless `--no-full` is supplied. Do not
 run it during another large campaign unless CPU, RAM, and disk contention are
 acceptable.
-
-## `scripts/embedding_engine_matrix_plan.py`
-
-Build a deterministic dry-run JSON plan for the long embedding engine/model
-matrix:
-
-```bash
-uv run python scripts/embedding_engine_matrix_plan.py
-```
-
-The plan combines `benchmarks/embedding-engine-matrix.json` with the embedding
-model candidate manifest and the selected repository benchmark manifest. It is
-safe to run before the long campaign because it only validates manifests and
-prints planned runs.
 
 ## `scripts/run_final_embedding_model_campaign.py`
 

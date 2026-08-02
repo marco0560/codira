@@ -168,36 +168,29 @@ matching files from embedding computation.
 
 ## Repository Performance Profile
 
-This repository commits an explicit `.codira/config.toml` tuned from the
-Issue #57 backend matrix, final embedding campaigns, and ONNX parameter
-sweeps:
+This repository commits an explicit `.codira/config.toml` with operational
+defaults for the checked-in ONNX profile:
 
 - `backend.name = "sqlite"` selects the backend with the best measured
   weighted operational cost for the current ONNX profile on this workstation.
-- `embeddings.indexing.mode = "immediate"` keeps the clean matrix path as the
-  default indexing mode. Deferred mode remains available for operators who
-  explicitly want a two-step structural/indexing workflow.
+- `embeddings.indexing.mode = "immediate"` keeps a one-step indexing workflow
+  as the default. Deferred mode remains available for operators who explicitly
+  want a two-step structural/indexing workflow.
 - `embeddings.indexing.object_types = ["symbol", "documentation"]` keeps both
-  retrieval channels active. The matrix showed symbol embeddings dominate
-  runtime, while documentation embeddings are comparatively cheap.
+  retrieval channels active.
 - `embeddings.indexing.max_text_chars = 0` keeps documentation embeddings
-  uncapped. The capped-docs matrix did not show enough total-runtime benefit
-  to justify reducing retrieval coverage by default.
+  uncapped.
 - `embeddings.indexing.work_batch_multiplier = 256` caps the memory footprint
   of full-index embedding work while staying aligned with the configured model
   inference batch size.
 - `embeddings.engine = "onnx"`, `embeddings.model = "BAAI/bge-small-en-v1.5"`,
   `embeddings.batch_size = 4`, and ONNX Runtime default thread counts are the
-  current measured local sweet spot. They minimize weighted full-index plus
-  query cost in the 2026-07 ONNX sweep while keeping query latency close to
-  the fastest tested variant.
+  current project defaults.
 
-The embedding matrix is hardware-sensitive because embedding throughput,
-DuckDB memory pressure, and Torch scheduling depend on CPU, RAM, GPU, and
-local model state. Re-run the matrix after a meaningful hardware change before
-treating these values as tuned for the new host. The matrix is a long
-operation; run it only when the expected hardware or backend signal justifies
-the elapsed time.
+Embedding performance is hardware-sensitive because throughput and memory
+pressure depend on CPU, RAM, GPU, and local model state. Reassess these values
+with the maintained retrieval-quality benchmark after a meaningful hardware or
+backend change; do not treat them as portable tuning advice.
 
 ## Profiles
 

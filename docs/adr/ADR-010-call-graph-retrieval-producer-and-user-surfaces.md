@@ -98,7 +98,9 @@ Examples of out-of-scope first-version behavior:
 
 * Keep this ADR in `Under review` state until at least the producer extraction
   boundary and the initial user-facing phase ordering have been validated.
-* Maintain a dedicated execution ledger for issue `#10` under `docs/process/`.
+* Record implementation progress in the issue and commits; completed execution
+  material is recovered from Git history rather than retained as a process
+  ledger.
 * Treat `issue/10-call-graph-retrieval-producer` as the long-lived design and
   integration branch for this issue.
 * Prefer short-lived implementation branches or `main` for concrete slices, and

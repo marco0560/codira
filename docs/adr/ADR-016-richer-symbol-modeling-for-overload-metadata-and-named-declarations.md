@@ -272,7 +272,9 @@ Backward-compatibility rule:
 
 ## Execution Rules
 
-* Use a dedicated execution ledger for issue `#21` under `docs/process/`.
+* Record implementation progress in the issue and commits; completed execution
+  material is recovered from Git history rather than retained as a process
+  ledger.
 * Treat this ADR as the design baseline for future implementation slices.
 * Do not reintroduce overload stubs as ordinary runtime function rows.
 * Do not change existing callable stable IDs without a separate migration ADR.
