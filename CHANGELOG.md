@@ -1,3 +1,10 @@
+# [1.59.0](https://github.com/marco0560/codira/compare/v1.58.0...v1.59.0) (2026-08-04)
+
+
+### Features
+
+* **contracts:** expose MCP capability discovery ([1ffa67b](https://github.com/marco0560/codira/commit/1ffa67b1c2d556585bd389c76e8e078190a8ae04))
+
 # [1.58.0](https://github.com/marco0560/codira/compare/v1.57.0...v1.58.0) (2026-08-04)
 
 
