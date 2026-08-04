@@ -1,3 +1,10 @@
+# [1.58.0](https://github.com/marco0560/codira/compare/v1.57.0...v1.58.0) (2026-08-04)
+
+
+### Features
+
+* **contracts:** ship local MCP interface ([ffaf852](https://github.com/marco0560/codira/commit/ffaf8523cf2d707c2a1f7c68c5c0f2687ce7cb9a)), closes [#22](https://github.com/marco0560/codira/issues/22) [#58](https://github.com/marco0560/codira/issues/58) [#63](https://github.com/marco0560/codira/issues/63) [#64](https://github.com/marco0560/codira/issues/64) [#65](https://github.com/marco0560/codira/issues/65) [#66](https://github.com/marco0560/codira/issues/66) [#51](https://github.com/marco0560/codira/issues/51)
+
 # [1.57.0](https://github.com/marco0560/codira/compare/v1.56.0...v1.57.0) (2026-08-02)
 
 
