@@ -78,6 +78,11 @@ def read_hf_token(token_file: Path = DEFAULT_TOKEN_FILE) -> str | None:
     str | None
         Hugging Face access token when configured, otherwise ``None`` for an
         anonymous download.
+
+    Raises
+    ------
+    ValueError
+        If the configured token file cannot be sourced successfully.
     """
     if token_file.exists():
         completed = subprocess.run(

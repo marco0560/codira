@@ -286,6 +286,7 @@ name = "codira"
 source = { editable = "." }
 dependencies = [
     { name = "jsonschema" },
+    { name = "mcp" },
     { name = "platformdirs" },
     { name = "tomlkit" },
 ]
@@ -385,6 +386,7 @@ requires-dist = [
     { name = "einops", marker = "extra == 'bundle-official'", specifier = ">=0.8,<1.0" },
     { name = "einops", marker = "extra == 'semantic'", specifier = ">=0.8,<1.0" },
     { name = "jsonschema", specifier = ">=4.0" },
+    { name = "mcp", specifier = ">=1.23.3,<2" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6,<2.0" },
     { name = "mkdocs-awesome-pages-plugin", marker = "extra == 'docs'", specifier = ">=2.10,<3.0" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.7,<10.0" },

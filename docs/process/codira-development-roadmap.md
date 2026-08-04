@@ -92,7 +92,8 @@ important repository class; otherwise convert #20 to deferred with that gate.
 * #18 plugin extraction readiness
 * #33 final package split and publish rehearsal, after #18
 * #34 trusted publishing verification, after #33
-* #51 shared repository index service gate/implementation
+* #51 shared repository index service gate/implementation, including the
+  deferred multi-repository and daemon-backed MCP continuation from #58
 * #69 productization baseline and support-tier contract
 
 The #51 gate follows #15, #20, #22, and #68. It requires stable MCP, verified

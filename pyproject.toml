@@ -6,7 +6,12 @@ readme = "README.md"
 authors = [{ name = "Marco Coppola" }]
 license = "MIT"
 requires-python = ">=3.13"
-dependencies = ["jsonschema>=4.0", "platformdirs>=4.9.6", "tomlkit>=0.15.0"]
+dependencies = [
+    "jsonschema>=4.0",
+    "mcp>=1.23.3,<2",
+    "platformdirs>=4.9.6",
+    "tomlkit>=0.15.0",
+]
 
 [tool.uv]
 python-preference = "only-managed"
@@ -103,6 +108,8 @@ codira = ["py.typed", "schema/*.json", "schema/mcp/*.json"]
 
 [project.scripts]
 codira = "codira.cli:main"
+codira-mcp = "codira.mcp.server:main"
+codira-mcp-config = "codira.mcp.presets:main"
 
 [tool.uv.sources]
 codira-analyzer-python = { path = "packages/codira-analyzer-python", editable = true }
