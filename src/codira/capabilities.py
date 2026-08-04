@@ -34,6 +34,7 @@ from codira.contracts import (
     LanguageAnalyzer,
     split_declared_retrieval_capabilities,
 )
+from codira.mcp.contract import build_contract_document
 from codira.plugin_config import plugin_enabled
 from codira.query.producers import (
     CHANNEL_PRODUCER_SPECS,
@@ -52,7 +53,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-CAPABILITY_SCHEMA_VERSION = "1.2"
+CAPABILITY_SCHEMA_VERSION = "1.3"
 ONTOLOGY_VERSION = "2"
 
 PLUGIN_FAMILY_CONTRACTS: dict[str, dict[str, object]] = {
@@ -226,7 +227,6 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
     },
     "caps": {
         "intent": "capability_contract_export",
-        "aliases": ["capabilities"],
         "channels": [],
         "guarantee": "deterministic_layer_0_contract_export",
         "limitations": [
@@ -633,6 +633,34 @@ def _plugin_payloads(*, root: Path | None = None) -> list[dict[str, object]]:
     ]
 
 
+def _mcp_payload() -> dict[str, object]:
+    """Build the discoverable local MCP interface summary.
+
+    Returns
+    -------
+    dict[str, object]
+        Stable MCP server metadata derived from the public MCP contract.
+    """
+    contract = build_contract_document()
+    tools = contract["tools"]
+    if not isinstance(tools, list):
+        msg = "MCP contract tools must be a list"
+        raise TypeError(msg)
+    tool_names = [
+        str(tool["name"])
+        for tool in tools
+        if isinstance(tool, dict) and isinstance(tool.get("name"), str)
+    ]
+    return {
+        "server_command": "codira-mcp",
+        "config_command": "codira-mcp-config",
+        "contract_version": contract["contract_version"],
+        "transport": contract["transport"],
+        "read_only": contract["read_only"],
+        "tools": tool_names,
+    }
+
+
 def build_capability_contract(
     analyzers: Sequence[LanguageAnalyzer] | None = None,
     *,
@@ -719,6 +747,7 @@ def build_capability_contract(
         "retrieval_producers": _retrieval_producer_payloads(),
         "plugin_families": _plugin_family_payloads(),
         "plugins": _plugin_payloads(root=root),
+        "mcp": _mcp_payload(),
         "analyzers": analyzer_payloads,
         "validation": {
             "status": validation_status,

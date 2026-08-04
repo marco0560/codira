@@ -184,7 +184,7 @@ def test_capability_contract_validates_against_schema() -> None:
     payload = build_capability_contract([PythonAnalyzer()])
 
     jsonschema.validate(payload, _capabilities_schema())
-    assert payload["schema_version"] == "1.2"
+    assert payload["schema_version"] == "1.3"
     assert payload["ontology"] == {
         "version": "2",
         "types": [
@@ -202,6 +202,7 @@ def test_capability_contract_validates_against_schema() -> None:
     analyzers = cast("list[Mapping[str, object]]", payload["analyzers"])
     channels = cast("dict[str, object]", payload["channels"])
     commands = cast("dict[str, object]", payload["commands"])
+    mcp = cast("Mapping[str, object]", payload["mcp"])
     plugins = cast("list[Mapping[str, object]]", payload["plugins"])
     plugin_families = cast("list[Mapping[str, object]]", payload["plugin_families"])
     retrieval_capabilities = cast("list[str]", payload["retrieval_capabilities"])
@@ -212,6 +213,28 @@ def test_capability_contract_validates_against_schema() -> None:
     assert "help" in commands
     assert "ctx" in commands
     assert "docs" in commands
+    caps_command = cast("Mapping[str, object]", commands["caps"])
+    assert "aliases" not in caps_command
+    assert mcp == {
+        "server_command": "codira-mcp",
+        "config_command": "codira-mcp-config",
+        "contract_version": "1.0.0",
+        "transport": "stdio",
+        "read_only": True,
+        "tools": [
+            "capabilities",
+            "index_status",
+            "symbol",
+            "symbols",
+            "references",
+            "callers",
+            "callees",
+            "documentation_findings",
+            "context_for_task",
+            "impact_analysis",
+            "repository_map",
+        ],
+    }
     emb_command = cast("Mapping[str, object]", commands["emb"])
     emb_subcommands = cast("Mapping[str, object]", emb_command["subcommands"])
     emb_purge = cast("Mapping[str, object]", emb_subcommands["purge"])
@@ -506,15 +529,16 @@ def test_capabilities_cli_exports_json_contract(
     analyzer_names = {item["analyzer_name"] for item in payload["analyzers"]}
     assert "python" in analyzer_names
     assert payload["commands"]["caps"]["intent"] == "capability_contract_export"
-    assert payload["commands"]["caps"]["aliases"] == ["capabilities"]
+    assert "aliases" not in payload["commands"]["caps"]
+    assert payload["mcp"]["server_command"] == "codira-mcp"
 
 
-def test_capabilities_cli_keeps_long_alias(
+def test_capabilities_cli_human_summary_includes_embedding_plugins_and_mcp(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """
-    Preserve ``codira capabilities`` as a compatibility alias.
+    Expose embedding plugin state and MCP discovery in human ``caps`` output.
 
     Parameters
     ----------
@@ -526,12 +550,42 @@ def test_capabilities_cli_keeps_long_alias(
     Returns
     -------
     None
-        The test asserts the long alias emits schema-valid JSON.
+        The test asserts the summary includes both human-facing surfaces.
     """
-    monkeypatch.setattr("sys.argv", ["codira", "capabilities", "--json"])
+    monkeypatch.setattr("sys.argv", ["codira", "caps"])
 
     assert main() == 0
-    payload = json.loads(capsys.readouterr().out)
+    output = capsys.readouterr().out
 
-    jsonschema.validate(payload, _capabilities_schema())
-    assert payload["validation"]["status"] == "ok"
+    assert "embedding_plugins: onnx" in output
+    assert "sentence-transformers" in output
+    assert "mcp: codira-mcp (stdio, read-only, tools: capabilities" in output
+
+
+def test_top_level_help_advertises_local_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Expose the separate local MCP entry points in top-level CLI help."""
+    monkeypatch.setattr("sys.argv", ["codira", "--help"])
+
+    with pytest.raises(SystemExit) as error:
+        main()
+
+    assert error.value.code == 0
+    output = capsys.readouterr().out
+    assert "Local MCP:" in output
+    assert "codira-mcp --root ." in output
+    assert "codira-mcp-config codex --root ." in output
+
+
+def test_capabilities_cli_rejects_removed_long_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject the removed ``codira capabilities`` compatibility alias."""
+    monkeypatch.setattr("sys.argv", ["codira", "capabilities"])
+
+    with pytest.raises(SystemExit) as error:
+        main()
+
+    assert error.value.code == 2

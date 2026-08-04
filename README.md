@@ -601,8 +601,7 @@ Expected result semantics:
 ### 10. `caps`
 
 Use `caps` when a tool, contributor, or agent needs codira to declare what it
-can answer before making retrieval decisions. The longer `capabilities` command
-is kept as a compatibility alias.
+can answer before making retrieval decisions.
 
 Suggested use cases:
 
@@ -610,6 +609,8 @@ Suggested use cases:
 - verify analyzer declarations after plugin changes
 - verify plugin family selection models and active configured plugins
 - inspect command and retrieval-channel guarantees
+- inspect installed embedding plugins and their active state in human output
+- discover the local read-only MCP server and its supported tools
 - feed deterministic capability metadata into agent workflows
 
 Examples:

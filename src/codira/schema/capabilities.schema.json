@@ -12,6 +12,7 @@
     "retrieval_producers",
     "plugin_families",
     "plugins",
+    "mcp",
     "analyzers",
     "validation"
   ],
@@ -203,6 +204,30 @@
         },
         "additionalProperties": false
       }
+    },
+    "mcp": {
+      "type": "object",
+      "required": [
+        "server_command",
+        "config_command",
+        "contract_version",
+        "transport",
+        "read_only",
+        "tools"
+      ],
+      "properties": {
+        "server_command": { "const": "codira-mcp" },
+        "config_command": { "const": "codira-mcp-config" },
+        "contract_version": { "type": "string" },
+        "transport": { "const": "stdio" },
+        "read_only": { "const": true },
+        "tools": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
     },
     "analyzers": {
       "type": "array",

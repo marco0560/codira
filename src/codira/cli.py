@@ -872,7 +872,11 @@ def build_parser() -> argparse.ArgumentParser:
             '"add a regression test for symbol lookup"  # render a Codex-ready prompt\n'
             '  codira ctx --explain "why does symbol lookup rank this result?"  # show retrieval diagnostics\n'
             "  codira calls caller --tree  # render a bounded outgoing call tree\n"
-            "  codira refs _retrieve_script_candidates --incoming --tree --dot  # render incoming references as DOT"
+            "  codira refs _retrieve_script_candidates --incoming --tree --dot  # render incoming references as DOT\n"
+            "\n"
+            "Local MCP:\n"
+            "  codira-mcp --root .  # start the read-only stdio server\n"
+            "  codira-mcp-config codex --root .  # generate a client configuration"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1443,7 +1447,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     capabilities_parser = sub.add_parser(
         "caps",
-        aliases=["capabilities"],
         help="Export the machine-readable capability contract",
         description=(
             "Export codira's deterministic Layer 0 capability contract, "
@@ -1808,6 +1811,8 @@ def _run_capabilities(
     ontology = payload["ontology"]
     commands = payload["commands"]
     analyzers = payload["analyzers"]
+    plugins = payload["plugins"]
+    mcp = payload["mcp"]
     validation = payload["validation"]
     print(f"schema_version: {payload['schema_version']}")
     if isinstance(ontology, dict):
@@ -1822,6 +1827,24 @@ def _run_capabilities(
             if isinstance(item, dict) and "analyzer_name" in item
         ]
         print("analyzers: " + ", ".join(sorted(analyzer_names)))
+    if isinstance(plugins, list):
+        embedding_plugins = sorted(
+            f"{item['name']} ({'active' if item['active'] else 'inactive'})"
+            for item in plugins
+            if isinstance(item, dict)
+            and item.get("family") == "embedding"
+            and isinstance(item.get("name"), str)
+            and isinstance(item.get("active"), bool)
+        )
+        print("embedding_plugins: " + ", ".join(embedding_plugins))
+    if isinstance(mcp, dict):
+        tools = mcp.get("tools")
+        if isinstance(tools, list):
+            print(
+                "mcp: "
+                + f"{mcp['server_command']} ({mcp['transport']}, "
+                + f"read-only, tools: {', '.join(str(tool) for tool in tools)})"
+            )
     if isinstance(validation, dict):
         print(f"validation: {validation['status']}")
         issues = validation.get("issues")
@@ -5434,11 +5457,6 @@ def _command_handlers(
         ),
         "plugins": lambda: _run_plugins(root=root, as_json=args.json),
         "caps": lambda: _run_capabilities(
-            root=root,
-            as_json=args.json,
-            strict=args.strict,
-        ),
-        "capabilities": lambda: _run_capabilities(
             root=root,
             as_json=args.json,
             strict=args.strict,
