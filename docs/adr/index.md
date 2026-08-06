@@ -26,6 +26,7 @@ The repository currently tracks these architecture decision records:
 - [ADR-022 — Embedding engine and vector-store plugins](ADR-022-embedding-engine-and-vector-store-plugins.md)
 - [ADR-023 — Analyzer-side index concurrency](ADR-023-analyzer-index-concurrency.md)
 - [ADR-024 — Documentation audit plugin family](ADR-024-documentation-audit-plugin-family.md)
+- [ADR-025 — Optional deterministic daemon mode](ADR-025-optional-deterministic-daemon-mode.md)
 
 `ADR-004` is the active migration record for the current architecture branch
 and should be read together with the documents under `docs/architecture/`.

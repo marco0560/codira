@@ -99,6 +99,12 @@ min_files = 16
 [index.coverage]
 roots = []
 exclude_suffixes = []
+
+[daemon]
+enabled = false
+debounce_ms = 250
+include_paths = []
+exclude_paths = []
 ```
 
 `index.concurrency.strategy` is one of `"off"`, `"auto"`, `"process"`, or
@@ -165,6 +171,66 @@ engine and vector-store flush path. Valid values are integers from `1` to
 `embeddings.indexing.include_paths` and `exclude_paths` are repo-root-relative
 path prefixes. Include filters are evaluated first; exclude filters remove
 matching files from embedding computation.
+
+## Optional daemon contract
+
+`[daemon]` declares configuration for Codira's optional automatic-indexing
+daemon. It does not enable a background process by itself, and explicit
+`codira index` remains authoritative.
+
+- `enabled` controls whether a later daemon runtime may start for the
+  repository; the default is `false`.
+- `debounce_ms` is a positive filesystem-notification coalescing interval.
+- `include_paths` and `exclude_paths` are repo-root-relative watch prefixes;
+  an empty include list watches every non-ignored path outside Codira and Git
+  state directories. A matching change schedules the normal index operation;
+  active analyzers still determine which files produce indexed records.
+
+Set `daemon.enabled = true` and run `codira daemon run` to start foreground
+automatic indexing. The `watchfiles` runtime debounces configured source-path
+events, ignores Codira and Git state directories, and discards batches whose
+paths match active Git ignore rules (including `.gitignore`). It checks Git
+`HEAD` every second so a branch checkout is reconciled even when no source
+event is delivered. The scheduler records the `HEAD` observed after each
+successful index and queues a follow-up pass if it changes during indexing.
+On Windows, the same lifecycle commands manage a repository-scoped automatic
+start SCM service through the Windows-only `pywin32` dependency. Installation
+requires permission to create a service and persists the canonical repository
+root in that service's SCM parameters.
+
+On Linux with a systemd user manager, `codira daemon install` writes and
+enables a repository-scoped unit under the XDG user-unit directory. `start`,
+`stop`, `status`, and `uninstall` operate on that same unit. Installation does
+not enable systemd user lingering; use `loginctl enable-linger` separately if
+the daemon must survive logout.
+
+On macOS, the same lifecycle commands manage a repository-scoped LaunchAgent
+under `~/Library/LaunchAgents`. The agent runs while the user GUI session is
+available; it is not a system-wide LaunchDaemon.
+
+The lifecycle commands are implemented on Linux, macOS, and Windows:
+
+```bash
+codira daemon run
+codira daemon install
+codira daemon start
+codira daemon status
+codira daemon stop
+codira daemon uninstall
+```
+
+`run` and `install` require `daemon.enabled = true`; `status`, `stop`, and
+`uninstall` remain available to inspect or clean up an existing service.
+`install` creates the platform-specific service definition; use `start` when
+you want to start an installed service immediately.
+
+Every foreground daemon writes a current snapshot to
+`.codira/daemon-status.json` and appends state-transition snapshots to
+`.codira/daemon-activity.jsonl` below Codira's effective storage root. By
+default that is the repository root; with `--output-dir`, it is the selected
+output directory. The records contain no changed file paths. `codira daemon
+status` combines the platform service state with the latest durable
+reconciliation snapshot.
 
 ## Repository Performance Profile
 

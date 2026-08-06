@@ -47,6 +47,10 @@ _STORAGE_ROOT_OVERRIDES: ContextVar[dict[Path, Path] | None] = ContextVar(
     "_STORAGE_ROOT_OVERRIDES",
     default=None,
 )
+_HELD_INDEX_LOCKS: ContextVar[dict[Path, int] | None] = ContextVar(
+    "_HELD_INDEX_LOCKS",
+    default=None,
+)
 
 
 def _read_metadata_file(path: Path) -> dict[str, str]:
@@ -240,17 +244,40 @@ def acquire_index_lock(root: Path) -> Iterator[None]:
     ------
     None
         Control while the exclusive lock is held.
+
+    Notes
+    -----
+    Re-entering this context for the same root in one execution context does
+    not reopen or reacquire the operating-system lock. This lets the public
+    indexing API own coordination while callers retain a lock for a wider
+    atomic operation such as metadata persistence.
     """
-    lock_path = get_index_lock_path(root)
+    resolved_root = root.resolve()
+    held_locks = _HELD_INDEX_LOCKS.get()
+    if held_locks is not None and resolved_root in held_locks:
+        reentered_locks = dict(held_locks)
+        reentered_locks[resolved_root] += 1
+        token = _HELD_INDEX_LOCKS.set(reentered_locks)
+        try:
+            yield
+        finally:
+            _HELD_INDEX_LOCKS.reset(token)
+        return
+
+    lock_path = get_index_lock_path(resolved_root)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as handle:
         handle.seek(0)
         handle.write("0")
         handle.flush()
         _lock_file_handle(handle)
+        updated_locks = {} if held_locks is None else dict(held_locks)
+        updated_locks[resolved_root] = 1
+        token = _HELD_INDEX_LOCKS.set(updated_locks)
         try:
             yield
         finally:
+            _HELD_INDEX_LOCKS.reset(token)
             _unlock_file_handle(handle)
 
 

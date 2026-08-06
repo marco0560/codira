@@ -566,7 +566,20 @@ def test_top_level_help_advertises_local_mcp(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Expose the separate local MCP entry points in top-level CLI help."""
+    """Expose the separate local MCP entry points in top-level CLI help.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to set command-line arguments.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture command output.
+
+    Returns
+    -------
+    None
+        The test asserts help advertises both local MCP entry points.
+    """
     monkeypatch.setattr("sys.argv", ["codira", "--help"])
 
     with pytest.raises(SystemExit) as error:
@@ -582,7 +595,18 @@ def test_top_level_help_advertises_local_mcp(
 def test_capabilities_cli_rejects_removed_long_alias(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Reject the removed ``codira capabilities`` compatibility alias."""
+    """Reject the removed ``codira capabilities`` compatibility alias.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to set command-line arguments.
+
+    Returns
+    -------
+    None
+        The test asserts the removed compatibility alias remains unavailable.
+    """
     monkeypatch.setattr("sys.argv", ["codira", "capabilities"])
 
     with pytest.raises(SystemExit) as error:

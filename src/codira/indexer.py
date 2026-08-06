@@ -71,6 +71,7 @@ from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
     get_embedding_backend,
 )
+from codira.storage import acquire_index_lock
 from codira.vector_store import active_vector_store_context
 
 if TYPE_CHECKING:
@@ -1614,6 +1615,47 @@ def index_repo(
         If one backend-owned runtime operation cannot complete.
     ValueError
         If validated indexing inputs are semantically inconsistent.
+    """
+    with acquire_index_lock(root):
+        return _index_repo_unlocked(
+            root,
+            full=full,
+            embedding_index_mode=embedding_index_mode,
+            analysis_concurrency=analysis_concurrency,
+        )
+
+
+def _index_repo_unlocked(
+    root: Path,
+    *,
+    full: bool = False,
+    embedding_index_mode: str | None = None,
+    analysis_concurrency: IndexConcurrencyConfig | None = None,
+) -> IndexReport:
+    """
+    Incrementally update the index while the caller owns its mutation lock.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose tracked analyzer-supported files should be
+        indexed.
+    full : bool, optional
+        When ``True``, force a full rebuild instead of reusing unchanged files.
+    embedding_index_mode : str | None, optional
+        Embedding population mode override supplied by the public coordinator.
+    analysis_concurrency : codira.config.IndexConcurrencyConfig | None, optional
+        Scheduler override supplied by the public coordinator.
+
+    Returns
+    -------
+    IndexReport
+        Deterministic summary of the indexing run.
+
+    Notes
+    -----
+    ``index_repo()`` is the public mutation coordinator. This implementation
+    assumes its caller already holds ``acquire_index_lock(root)``.
     """
     index_backend = active_index_backend(root=root)
     vector_store_context = active_vector_store_context(root)

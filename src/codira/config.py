@@ -46,6 +46,7 @@ DEFAULT_EMBEDDING_INDEX_WORK_BATCH_MULTIPLIER = 256
 DEFAULT_INDEX_CONCURRENCY_STRATEGY = "auto"
 DEFAULT_INDEX_CONCURRENCY_MAX_WORKERS = 0
 DEFAULT_INDEX_CONCURRENCY_MIN_FILES = 16
+DEFAULT_DAEMON_DEBOUNCE_MS = 250
 KNOWN_EMBEDDING_INDEX_MODES = frozenset({"immediate", "deferred"})
 KNOWN_INDEX_CONCURRENCY_STRATEGIES = frozenset({"off", "auto", "process", "thread"})
 KNOWN_EMBEDDING_OBJECT_TYPES = frozenset(DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES)
@@ -278,6 +279,30 @@ class IndexCoverageConfig:
 
 
 @dataclass(frozen=True)
+class DaemonConfig:
+    """Configure the optional automatic-indexing daemon.
+
+    Parameters
+    ----------
+    enabled : bool
+        Whether daemon commands may start automatic indexing when their runtime
+        implementation is available.
+    debounce_ms : int
+        Milliseconds used to coalesce filesystem-change notifications.
+    include_paths : tuple[str, ...]
+        Repo-root-relative path prefixes watched by the daemon. An empty tuple
+        selects every path supported by active analyzers.
+    exclude_paths : tuple[str, ...]
+        Repo-root-relative path prefixes excluded from daemon watching.
+    """
+
+    enabled: bool = False
+    debounce_ms: int = DEFAULT_DAEMON_DEBOUNCE_MS
+    include_paths: tuple[str, ...] = ()
+    exclude_paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ConfigOrigin:
     """
     Origin metadata for one effective configuration value.
@@ -316,6 +341,8 @@ class CodiraConfig:
         Index analysis scheduling configuration.
     coverage : IndexCoverageConfig
         Coverage-root configuration.
+    daemon : DaemonConfig
+        Optional automatic-indexing daemon configuration.
     origins : dict[str, ConfigOrigin]
         Origin metadata keyed by dotted config key.
     """
@@ -326,6 +353,7 @@ class CodiraConfig:
     embeddings: EmbeddingsConfig
     index: IndexConcurrencyConfig
     coverage: IndexCoverageConfig
+    daemon: DaemonConfig
     origins: dict[str, ConfigOrigin]
 
 
@@ -368,6 +396,12 @@ DEFAULT_CONFIG: dict[str, object] = {
             "min_files": DEFAULT_INDEX_CONCURRENCY_MIN_FILES,
         },
         "coverage": {"roots": [], "exclude_suffixes": []},
+    },
+    "daemon": {
+        "enabled": False,
+        "debounce_ms": DEFAULT_DAEMON_DEBOUNCE_MS,
+        "include_paths": [],
+        "exclude_paths": [],
     },
 }
 FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
@@ -528,6 +562,12 @@ _SCHEMA: dict[str, object] = {
             "min_files": int,
         },
         "coverage": {"roots": list, "exclude_suffixes": list},
+    },
+    "daemon": {
+        "enabled": bool,
+        "debounce_ms": int,
+        "include_paths": list,
+        "exclude_paths": list,
     },
 }
 
@@ -1202,6 +1242,40 @@ def _validate_index_coverage_semantics(coverage: Mapping[str, object]) -> None:
         raise ConfigError(msg)
 
 
+def _validate_daemon_semantics(daemon: Mapping[str, object]) -> None:
+    """Validate automatic-indexing daemon controls.
+
+    Parameters
+    ----------
+    daemon : collections.abc.Mapping[str, object]
+        Daemon configuration table.
+
+    Returns
+    -------
+    None
+        The table is accepted when its debounce and path controls are safe.
+
+    Raises
+    ------
+    ConfigError
+        If a daemon control is unsupported or unsafe.
+    """
+
+    _validate_int_minimums(daemon, ("debounce_ms",), prefix="daemon", minimum=1)
+    for key in ("include_paths", "exclude_paths"):
+        value = daemon.get(key)
+        _validate_string_list(value, key=f"daemon.{key}", allow_empty_items=False)
+        if not isinstance(value, list):
+            continue
+        patterns = [str(item).strip() for item in value]
+        if any(
+            pattern.startswith("/") or ".." in pattern.split("/")
+            for pattern in patterns
+        ):
+            msg = f"Configuration key daemon.{key} must use repo-relative paths."
+            raise ConfigError(msg)
+
+
 def _validate_semantics(value: Mapping[str, object]) -> None:
     """
     Validate semantic constraints after type validation.
@@ -1296,6 +1370,10 @@ def _validate_semantics(value: Mapping[str, object]) -> None:
         coverage = index.get("coverage")
         if isinstance(coverage, Mapping):
             _validate_index_coverage_semantics(coverage)
+
+    daemon = value.get("daemon")
+    if isinstance(daemon, Mapping):
+        _validate_daemon_semantics(daemon)
 
 
 def validate_config_mapping(value: Mapping[str, object]) -> None:
@@ -1707,10 +1785,12 @@ def render_config_toml(value: Mapping[str, object]) -> str:
     plugins = _require_table(value["plugins"], key="plugins")
     embeddings = _require_table(value["embeddings"], key="embeddings")
     index = _require_table(value["index"], key="index")
+    daemon = _require_table(value["daemon"], key="daemon")
     document.add("backend", _toml_table_from_mapping(backend))
     document.add("plugins", _toml_table_from_mapping(_plugin_globals_table(plugins)))
     document.add("embeddings", _toml_table_from_mapping(embeddings))
     document.add("index", _toml_table_from_mapping(index))
+    document.add("daemon", _toml_table_from_mapping(daemon))
     text = tomlkit.dumps(document).rstrip()
     plugin_sections = _plugin_config_sections(plugins)
     if plugin_sections:
@@ -2173,6 +2253,12 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
                 "exclude_suffixes": list(config.coverage.exclude_suffixes),
             },
         },
+        "daemon": {
+            "enabled": config.daemon.enabled,
+            "debounce_ms": config.daemon.debounce_ms,
+            "include_paths": list(config.daemon.include_paths),
+            "exclude_paths": list(config.daemon.exclude_paths),
+        },
     }
 
 
@@ -2266,6 +2352,7 @@ def _config_from_mapping(
     index = cast("Mapping[str, object]", value["index"])
     concurrency = cast("Mapping[str, object]", index["concurrency"])
     coverage = cast("Mapping[str, object]", index["coverage"])
+    daemon = cast("Mapping[str, object]", value["daemon"])
     return CodiraConfig(
         config_version=cast("int", value["config_version"]),
         backend=BackendConfig(name=cast("str", backend["name"]).strip()),
@@ -2329,6 +2416,18 @@ def _config_from_mapping(
             exclude_suffixes=tuple(
                 str(item).strip().lower()
                 for item in cast("list[object]", coverage["exclude_suffixes"])
+            ),
+        ),
+        daemon=DaemonConfig(
+            enabled=cast("bool", daemon["enabled"]),
+            debounce_ms=cast("int", daemon["debounce_ms"]),
+            include_paths=tuple(
+                str(item).strip()
+                for item in cast("list[object]", daemon["include_paths"])
+            ),
+            exclude_paths=tuple(
+                str(item).strip()
+                for item in cast("list[object]", daemon["exclude_paths"])
             ),
         ),
         origins=origins,

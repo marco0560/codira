@@ -60,6 +60,14 @@ from codira.contracts import (
     VectorStorePurgeRequest,
     VectorStorePurgeResult,
 )
+from codira.daemon import (
+    DaemonStatusStore,
+    LaunchdUserAgent,
+    SystemdUserService,
+    WindowsScmService,
+    run_foreground_daemon,
+)
+from codira.git import read_head_commit
 from codira.indexer import (
     CoverageIssue,
     IndexFailure,
@@ -175,6 +183,7 @@ _REPO_PATH_COMMANDS = frozenset(
         "audit",
         "ctx",
         "config",
+        "daemon",
     }
 )
 _CONFIG_INSPECTION_ACTIONS = frozenset({"dump", "explain", "validate"})
@@ -873,6 +882,7 @@ def build_parser() -> argparse.ArgumentParser:
             '  codira ctx --explain "why does symbol lookup rank this result?"  # show retrieval diagnostics\n'
             "  codira calls caller --tree  # render a bounded outgoing call tree\n"
             "  codira refs _retrieve_script_candidates --incoming --tree --dot  # render incoming references as DOT\n"
+            "  codira daemon --help  # inspect the optional automatic-indexing daemon contract\n"
             "\n"
             "Local MCP:\n"
             "  codira-mcp --root .  # start the read-only stdio server\n"
@@ -891,7 +901,7 @@ def build_parser() -> argparse.ArgumentParser:
         title="subcommands",
         metavar=(
             "{help,index,cov,sym,symlist,emb,docs,calls,refs,audit,ctx,plugins,"
-            "caps,config,calibrate}"
+            "caps,config,daemon,calibrate}"
         ),
     )
 
@@ -1577,6 +1587,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output structured JSON for machine consumption",
     )
 
+    daemon_parser = sub.add_parser(
+        "daemon",
+        help="Run or inspect the optional automatic-indexing daemon",
+        description=(
+            "Run the foreground mode of Codira's optional automatic indexing "
+            "daemon, or manage its installed platform service."
+        ),
+        epilog=(
+            "Lifecycle commands:\n"
+            "  codira daemon run\n"
+            "  codira daemon install\n"
+            "  codira daemon uninstall\n"
+            "  codira daemon start\n"
+            "  codira daemon stop\n"
+            "  codira daemon status\n"
+            "\n"
+            "Service support: Linux systemd user units, macOS LaunchAgents, "
+            "and Windows SCM services."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_repo_path_arguments(daemon_parser)
+    daemon_sub = daemon_parser.add_subparsers(dest="daemon_action")
+    for action, help_text in (
+        ("run", "Run the daemon in the foreground"),
+        ("install", "Install a platform service definition"),
+        ("uninstall", "Remove a platform service definition"),
+        ("start", "Start the installed daemon service"),
+        ("stop", "Stop the installed daemon service"),
+        ("status", "Inspect daemon service and indexing status"),
+    ):
+        daemon_sub.add_parser(action, help=help_text)
+
     calibrate_parser = sub.add_parser(
         "calibrate",
         help="Calibrate hardware-aware Codira runtime settings",
@@ -1966,19 +2009,20 @@ def _run_index(request: IndexCommandRequest) -> int:  # noqa: C901, PLR0912
     if embeddings_only:
         vector_store_context = active_vector_store_context(root)
         active_backend = active_index_backend(root=root)
-        active_backend.initialize(root)
-        recomputed, reused = active_backend.process_pending_embeddings(
-            root,
-            embedding_backend=get_embedding_backend(root=root),
-            vector_store=vector_store_context.store,
-            vector_set_identity=vector_store_context.identity,
-            vector_store_config=vector_store_context.config,
-        )
-        vector_store_context.store.clear_pending_vectors(
-            root,
-            vector_store_context.identity,
-            vector_store_context.config,
-        )
+        with acquire_index_lock(root):
+            active_backend.initialize(root)
+            recomputed, reused = active_backend.process_pending_embeddings(
+                root,
+                embedding_backend=get_embedding_backend(root=root),
+                vector_store=vector_store_context.store,
+                vector_set_identity=vector_store_context.identity,
+                vector_store_config=vector_store_context.config,
+            )
+            vector_store_context.store.clear_pending_vectors(
+                root,
+                vector_store_context.identity,
+                vector_store_context.config,
+            )
         report = IndexReport(
             indexed=0,
             reused=0,
@@ -2034,24 +2078,25 @@ def _run_index(request: IndexCommandRequest) -> int:  # noqa: C901, PLR0912
             _render_required_coverage_failure(root, coverage_issues)
         return 2
 
-    active_index_backend(root=root).initialize(root)
-    if analysis_concurrency is None:
-        report = index_repo(
+    with acquire_index_lock(root):
+        active_index_backend(root=root).initialize(root)
+        if analysis_concurrency is None:
+            report = index_repo(
+                root,
+                full=full,
+                embedding_index_mode=effective_embedding_index_mode,
+            )
+        else:
+            report = index_repo(
+                root,
+                full=full,
+                embedding_index_mode=effective_embedding_index_mode,
+                analysis_concurrency=analysis_concurrency,
+            )
+        _write_index_head_metadata(
             root,
-            full=full,
-            embedding_index_mode=effective_embedding_index_mode,
+            indexed_file_count=report.indexed + report.reused,
         )
-    else:
-        report = index_repo(
-            root,
-            full=full,
-            embedding_index_mode=effective_embedding_index_mode,
-            analysis_concurrency=analysis_concurrency,
-        )
-    _write_index_head_metadata(
-        root,
-        indexed_file_count=report.indexed + report.reused,
-    )
     if as_json:
         _emit_json(
             _index_payload(
@@ -3899,17 +3944,7 @@ def _get_head_commit(root: Path) -> str | None:
     str | None
         Current ``HEAD`` commit hash, or ``None`` if it cannot be read.
     """
-    try:
-        result = subprocess.run(
-            [GIT_EXE, "rev-parse", "HEAD"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return result.stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
+    return read_head_commit(root)
 
 
 def _git_dirty_indexable_paths(root: Path) -> tuple[str, ...]:
@@ -5301,6 +5336,94 @@ def _run_config_command(args: argparse.Namespace, root: Path) -> int:
     raise ConfigError(msg)
 
 
+def _run_daemon_command(args: argparse.Namespace, root: Path) -> int:
+    """Run foreground daemon mode or report unavailable service operations.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed daemon command arguments.
+    root : pathlib.Path
+        Repository root used to resolve effective daemon configuration.
+
+    Returns
+    -------
+    int
+        Zero after foreground daemon shutdown, otherwise nonzero for disabled
+        configuration or a service command not implemented in this slice.
+    """
+
+    action = args.daemon_action or "help"
+    if action == "run":
+        config = load_effective_config(root=root)
+        if not config.daemon.enabled:
+            print(
+                "[codira] daemon run requires daemon.enabled = true.",
+                file=sys.stderr,
+            )
+            return 2
+        with contextlib.suppress(KeyboardInterrupt):
+            run_foreground_daemon(root, config.daemon)
+        return 0
+    if action not in {"install", "uninstall", "start", "stop", "status"}:
+        print(f"[codira] Unsupported daemon action: {action}", file=sys.stderr)
+        return 2
+    if sys.platform.startswith("linux"):
+        service = SystemdUserService(root)
+        service_kind = "systemd user unit"
+    elif sys.platform == "darwin":
+        service = LaunchdUserAgent(root)
+        service_kind = "launchd user agent"
+    elif sys.platform == "win32":
+        service = WindowsScmService(root)
+        service_kind = "Windows SCM service"
+    else:
+        print(
+            "[codira] daemon service commands require Linux systemd, macOS launchd, or Windows SCM services.",
+            file=sys.stderr,
+        )
+        return 2
+    if action in {"install", "start"}:
+        config = load_effective_config(root=root)
+        if not config.daemon.enabled:
+            print(
+                f"[codira] daemon {action} requires daemon.enabled = true.",
+                file=sys.stderr,
+            )
+            return 2
+    if action == "install":
+        print(f"[codira] Installed {service_kind}: {service.install()}")
+        return 0
+    if action == "uninstall":
+        service.uninstall()
+        print(f"[codira] Uninstalled {service_kind}: {service.identifier}")
+        return 0
+    if action == "start":
+        service.start()
+        print(f"[codira] Started {service_kind}: {service.identifier}")
+        return 0
+    if action == "stop":
+        service.stop()
+        print(f"[codira] Stopped {service_kind}: {service.identifier}")
+        return 0
+    status = service.status()
+    state = "active" if status.active else "inactive"
+    print(f"[codira] {service_kind.capitalize()} {service.identifier}: {state}")
+    durable_status = DaemonStatusStore(root).read()
+    if durable_status is None:
+        print("[codira] No durable daemon status record.")
+        return 0
+    print(
+        "[codira] Daemon reconciliation: "
+        f"{durable_status.state.value}; "
+        f"pending={durable_status.pending_reconciliation}; "
+        f"commit={durable_status.last_reconciled_commit or '-'}; "
+        f"last_success={durable_status.last_success_at or '-'}; "
+        f"last_error={durable_status.last_error or '-'}"
+    )
+    return 0
+
+
 def _run_calibrate_embeddings(args: argparse.Namespace) -> int:
     """
     Run embeddings calibration and emit or write config-compatible output.
@@ -5467,6 +5590,7 @@ def _command_handlers(
             prefix=prefix,
         ),
         "config": lambda: _run_config_command(args, root),
+        "daemon": lambda: _run_daemon_command(args, root),
         "calibrate": lambda: _run_calibrate_command(args),
     }
 

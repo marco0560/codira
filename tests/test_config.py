@@ -38,6 +38,7 @@ from codira.config import (
     write_config_file,
 )
 from codira.contracts import BackendEmbeddingCandidatesRequest
+from codira.daemon import DaemonState, DaemonStatus, DaemonStatusStore
 from codira.registry import reset_plugin_registry_caches
 from codira.semantic import embeddings as embeddings_module
 from codira.semantic.search import embedding_candidates
@@ -45,6 +46,8 @@ from codira.semantic.search import embedding_candidates
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
+
+    from codira.config import DaemonConfig
 
 
 def _isolate_config_paths(
@@ -234,6 +237,86 @@ def test_config_validation_rejects_unknown_keys() -> None:
 
     with pytest.raises(ConfigError, match="Unknown configuration key"):
         validate_config_mapping({"embeddings": {"unknown": True}})
+
+
+def test_daemon_config_round_trips_and_tracks_repo_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Load daemon controls from the repository configuration level.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate platform config paths.
+    tmp_path : pathlib.Path
+        Temporary repository root and configuration directory.
+
+    Returns
+    -------
+    None
+        The test asserts typed daemon settings and their origins round-trip.
+    """
+
+    _isolate_config_paths(monkeypatch, tmp_path)
+    root = tmp_path / "repo"
+    config_path = root / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        """
+[daemon]
+enabled = true
+debounce_ms = 500
+include_paths = ["src"]
+exclude_paths = ["tests/fixtures"]
+""",
+        encoding="utf-8",
+    )
+
+    config = load_effective_config(root=root)
+
+    assert config.daemon.enabled is True
+    assert config.daemon.debounce_ms == 500
+    assert config.daemon.include_paths == ("src",)
+    assert config.daemon.exclude_paths == ("tests/fixtures",)
+    assert config.origins["daemon.debounce_ms"].path == config_path
+    assert config_to_mapping(config)["daemon"] == {
+        "enabled": True,
+        "debounce_ms": 500,
+        "include_paths": ["src"],
+        "exclude_paths": ["tests/fixtures"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ({"debounce_ms": 0}, "daemon.debounce_ms"),
+        ({"include_paths": ["../outside"]}, "repo-relative"),
+        ({"exclude_paths": ["/absolute"]}, "repo-relative"),
+    ],
+)
+def test_daemon_config_rejects_unsafe_values(
+    value: dict[str, object],
+    message: str,
+) -> None:
+    """Reject invalid daemon configuration controls.
+
+    Parameters
+    ----------
+    value : dict[str, object]
+        Invalid daemon table supplied to validation.
+    message : str
+        Required stable diagnostic fragment.
+
+    Returns
+    -------
+    None
+        The test asserts invalid daemon controls fail deterministically.
+    """
+
+    with pytest.raises(ConfigError, match=message):
+        validate_config_mapping({"daemon": value})
 
 
 def test_config_validation_accepts_namespaced_plugin_tables(
@@ -489,6 +572,7 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
         "[embeddings.indexing]",
         "[index.concurrency]",
         "[index.coverage]",
+        "[daemon]",
         "[plugins.backend-sqlite]",
         "[plugins.backend-duckdb]",
         "[plugins.embedding-sentence-transformers]",
@@ -607,6 +691,247 @@ def test_config_cli_init_defaults_to_repo_config(
     assert repo_config.exists()
     assert not config_module.user_config_path().exists()
     assert "# config_version = 1" in repo_config.read_text(encoding="utf-8")
+
+
+def test_daemon_cli_reports_windows_scm_dependency_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Report that Windows service commands require the SCM dependency.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths, current directory, and argv.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture the contract diagnostic.
+
+    Returns
+    -------
+    None
+        The test asserts Windows routing reports its missing optional dependency.
+    """
+
+    _isolate_config_paths(monkeypatch, tmp_path)
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "argv", ["codira", "daemon", "status"])
+
+    assert main() == 2
+
+    assert (
+        "Windows daemon services require the pywin32 dependency"
+        in capsys.readouterr().err
+    )
+
+
+def test_daemon_status_reports_durable_reconciliation_record(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Render repository-local reconciliation status with service activity.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate platform routing and the systemd boundary.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture the daemon status report.
+
+    Returns
+    -------
+    None
+        The test asserts service and durable reconciliation state are visible.
+    """
+    _isolate_config_paths(monkeypatch, tmp_path)
+    root = tmp_path / "repo"
+    root.mkdir()
+    DaemonStatusStore(root).record(
+        DaemonStatus(
+            state=DaemonState.WATCHING,
+            last_reconciled_commit="abc123",
+        )
+    )
+
+    class Service:
+        """Provide the minimal systemd status boundary for this CLI test.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root accepted by the service adapter boundary.
+
+        Returns
+        -------
+        None
+            The fixture does not retain state.
+        """
+
+        identifier = "codira-daemon-test.service"
+
+        def __init__(self, root: Path) -> None:
+            """Accept the repository root used by CLI platform routing.
+
+            Parameters
+            ----------
+            root : pathlib.Path
+                Repository root supplied by the CLI.
+
+            Returns
+            -------
+            None
+                The fixture has no mutable service state.
+            """
+            del root
+
+        def status(self) -> object:
+            """Return an active status compatible with the service contract.
+
+            Parameters
+            ----------
+            None
+
+            Returns
+            -------
+            object
+                Minimal status object with an ``active`` attribute.
+            """
+            return type("Status", (), {"active": True})()
+
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "argv", ["codira", "daemon", "status"])
+    monkeypatch.setattr("codira.cli.SystemdUserService", Service)
+
+    assert main() == 0
+
+    output = capsys.readouterr().out
+    assert "Systemd user unit codira-daemon-test.service: active" in output
+    assert "Daemon reconciliation: watching; pending=False; commit=abc123" in output
+
+
+def test_daemon_help_describes_available_lifecycle_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Describe implemented daemon lifecycle operations in CLI help.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to set the CLI help arguments.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture rendered help output.
+
+    Returns
+    -------
+    None
+        The test asserts help does not label supported operations as planned.
+    """
+    monkeypatch.setattr(sys, "argv", ["codira", "daemon", "--help"])
+
+    with pytest.raises(SystemExit, match="0"):
+        main()
+
+    output = capsys.readouterr().out
+    assert "Lifecycle commands:" in output
+    assert "Planned lifecycle commands" not in output
+    assert "Windows SCM services" in output
+
+
+def test_daemon_run_requires_explicit_enablement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject foreground daemon mode until repository configuration enables it.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths, current directory, and argv.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture the enablement diagnostic.
+
+    Returns
+    -------
+    None
+        The test asserts disabled-by-default daemon mode cannot start a watcher.
+    """
+    _isolate_config_paths(monkeypatch, tmp_path)
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(sys, "argv", ["codira", "daemon", "run"])
+
+    assert main() == 2
+
+    assert "daemon run requires daemon.enabled = true" in capsys.readouterr().err
+
+
+def test_daemon_run_starts_foreground_runtime_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Dispatch enabled foreground daemon mode through the CLI.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate config paths, current directory, argv, and the
+        runtime boundary.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts the CLI passes the effective daemon configuration to
+        foreground runtime without starting a watcher.
+    """
+    _isolate_config_paths(monkeypatch, tmp_path)
+    root = tmp_path / "repo"
+    root.mkdir()
+    daemon_config_path = root / ".codira" / "config.toml"
+    daemon_config_path.parent.mkdir()
+    daemon_config_path.write_text("[daemon]\nenabled = true\n", encoding="utf-8")
+    started: list[tuple[Path, object]] = []
+
+    def start_runtime(runtime_root: Path, daemon_config: object) -> None:
+        """Record CLI dispatch without starting watchfiles.
+
+        Parameters
+        ----------
+        runtime_root : pathlib.Path
+            Repository root supplied by the CLI.
+        daemon_config : object
+            Effective daemon configuration supplied by the CLI.
+
+        Returns
+        -------
+        None
+            The runtime invocation is recorded for assertions.
+        """
+        started.append((runtime_root, daemon_config))
+
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(sys, "argv", ["codira", "daemon", "run"])
+    monkeypatch.setattr("codira.cli.run_foreground_daemon", start_runtime)
+
+    assert main() == 0
+
+    assert started[0][0] == root
+    assert cast("DaemonConfig", started[0][1]).enabled is True
 
 
 def test_config_cli_config_file_overrides_repo_config(

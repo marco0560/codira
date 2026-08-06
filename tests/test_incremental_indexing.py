@@ -1833,6 +1833,43 @@ def test_index_repo_reuses_unchanged_files(tmp_path: Path) -> None:
     assert second.embeddings_reused == first.embeddings_recomputed
 
 
+def test_index_repo_coordinates_public_mutations_with_the_index_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Acquire the shared mutation lock through the public indexing API.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to record lock acquisition without platform I/O.
+
+    Returns
+    -------
+    None
+        The test asserts direct and future daemon callers share one public
+        coordination boundary.
+    """
+    acquired_roots: list[Path] = []
+
+    @contextlib.contextmanager
+    def _recording_lock(root: Path) -> Iterator[None]:
+        acquired_roots.append(root)
+        yield
+
+    _write_module(tmp_path / "pkg" / "sample.py", "def demo() -> int:\n    return 1\n")
+    init_db(tmp_path)
+    monkeypatch.setattr(indexer_module, "acquire_index_lock", _recording_lock)
+
+    report = index_repo(tmp_path)
+
+    assert report.indexed == 1
+    assert acquired_roots == [tmp_path]
+
+
 def test_index_repo_skips_write_session_for_unchanged_repository(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4502,6 +4539,44 @@ def test_acquire_index_lock_blocks_other_processes(tmp_path: Path) -> None:
     stdout, stderr = proc.communicate(timeout=5)
     assert proc.returncode == 0, (stdout, stderr)
     assert acquired_marker.exists()
+
+
+def test_acquire_index_lock_reenters_without_relocking_same_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Avoid reacquiring an operating-system lock inside one mutation transaction.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to record low-level lock operations.
+
+    Returns
+    -------
+    None
+        The test asserts nested same-root coordination acquires and releases
+        the underlying advisory lock exactly once.
+    """
+    operations: list[str] = []
+    monkeypatch.setattr(
+        storage_module,
+        "_lock_file_handle",
+        lambda handle: operations.append("lock"),
+    )
+    monkeypatch.setattr(
+        storage_module,
+        "_unlock_file_handle",
+        lambda handle: operations.append("unlock"),
+    )
+
+    with acquire_index_lock(tmp_path), acquire_index_lock(tmp_path.resolve()):
+        assert operations == ["lock"]
+
+    assert operations == ["lock", "unlock"]
 
 
 def test_lock_file_handle_uses_windows_locking_api(
