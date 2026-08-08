@@ -132,11 +132,12 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     repository_map = adapter.repository_map()
     truncated_map = adapter.repository_map(output_budget=1)
 
-    assert status["result"] == {
-        "indexed": True,
-        "metadata": {"schema_version": "23"},
-        "coverage": {"status": "complete", "issues": []},
-    }
+    status_result = cast("dict[str, object]", status["result"])
+    assert status_result["indexed"] is True
+    assert status_result["coverage"] == {"status": "complete", "issues": []}
+    status_metadata = cast("dict[str, str]", status_result["metadata"])
+    assert status_metadata["schema_version"] == "23"
+    assert status_metadata["backend_name"] == "sqlite"
     assert inventory["result"] == {
         "symbols": [
             {
@@ -282,7 +283,9 @@ def test_server_symbol_tool_invokes_the_direct_adapter(tmp_path: Path) -> None:
         "repository": tmp_path.name,
         "trusted_root": ".",
     }
-    assert structured["freshness"] == {"schema_version": "23"}
+    freshness = cast("dict[str, str]", structured["freshness"])
+    assert freshness["schema_version"] == "23"
+    assert freshness["backend_name"] == "sqlite"
     assert structured["page"] == {"limit": 100, "next_cursor": None}
     truncation = cast("dict[str, object]", structured["truncation"])
     assert truncation["truncated"] is False

@@ -67,6 +67,10 @@ class IndexGenerationStore:
     def read(self) -> IndexGeneration | None:
         """Read the latest generation record when it is valid.
 
+        Parameters
+        ----------
+        None
+
         Returns
         -------
         IndexGeneration | None
@@ -119,6 +123,16 @@ def transition_record(  # noqa: PLR0913
         Current transition state.
     last_successful_generation : int
         Last committed generation.
+    git_commit : str | None, optional
+        Git commit observed after the successful index pass.
+    backend_name : str | None, optional
+        Active structural backend name.
+    backend_version : str | None, optional
+        Active structural backend version.
+    analyzer_inventory : list[dict[str, object]] | None, optional
+        Active analyzer identity inventory.
+    indexed_file_count : int | None, optional
+        Number of indexed file rows after the pass.
 
     Returns
     -------

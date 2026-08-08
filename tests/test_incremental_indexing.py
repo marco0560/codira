@@ -4416,7 +4416,7 @@ def test_open_connection_does_not_clear_commit_metadata(
         'def demo():\n    """Return a constant."""\n    return 1\n',
     )
     monkeypatch.setattr(
-        "codira.cli._get_head_commit",
+        "codira.indexer.read_head_commit",
         lambda root: "abc123",
     )
 
