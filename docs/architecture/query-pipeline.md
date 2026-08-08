@@ -100,6 +100,15 @@ The service is not a repository catalogue and never accepts request-provided
 repository paths. Cross-repository service selection remains the separate #51
 boundary.
 
+### Warm runtime ownership
+
+The warm runtime owns one backend read connection on a dedicated worker thread
+and serializes v1 operations through that worker. It reads only the durable
+generation record for its fixed repository/output identity. A `ready` record
+builds a replacement session before the runtime swaps it in; `updating` never
+becomes current. Direct context retrieval remains unchanged when no supplied
+connection is present.
+
 Phases 12 through 17 complete the ranking and retrieval side by adding:
 
 - deterministic file-role classification

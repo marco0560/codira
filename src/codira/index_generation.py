@@ -54,7 +54,7 @@ class IndexGenerationStore:
         Repository root whose effective storage root owns the record.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, output_root: Path | None = None) -> None:
         """Initialize a store for one repository.
 
         Parameters
@@ -62,7 +62,11 @@ class IndexGenerationStore:
         root : pathlib.Path
             Repository root used to resolve the effective state directory.
         """
-        self.path = get_codira_dir(root) / "index-generation.json"
+        self.path = (
+            get_codira_dir(root)
+            if output_root is None
+            else output_root.resolve() / ".codira"
+        ) / "index-generation.json"
 
     def read(self) -> IndexGeneration | None:
         """Read the latest generation record when it is valid.

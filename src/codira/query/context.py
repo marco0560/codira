@@ -627,6 +627,9 @@ class ContextRequest:
         Whether to emit the prompt-oriented representation.
     explain : bool, optional
         Whether to include retrieval diagnostics.
+    conn : codira.contracts.BackendQueryConnection | None, optional
+        Existing read connection to reuse. When omitted, context retrieval owns
+        and closes a direct backend connection.
     """
 
     root: Path
@@ -635,6 +638,7 @@ class ContextRequest:
     as_json: bool = False
     as_prompt: bool = False
     explain: bool = False
+    conn: BackendQueryConnection | None = None
 
 
 @dataclass(frozen=True)
@@ -6471,10 +6475,11 @@ def context_for(
     codira.contracts.BackendError
         If the active backend cannot open or query the repository index.
     """
-    conn = cast(
+    conn = request.conn or cast(
         "BackendQueryConnection",
         active_index_backend(root=request.root).open_connection(request.root),
     )
+    owns_connection = request.conn is None
     try:
         state = _initial_context_state(request, conn)
         _append_issue_driven_matches(request, state, conn)
@@ -6548,7 +6553,8 @@ def context_for(
             )
         )
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
 
 __version__ = package_version()
