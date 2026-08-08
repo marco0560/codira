@@ -107,6 +107,18 @@ Phase 22 adds the operator-facing coverage controls:
 
 ## Current Boundary
 
+### Durable generation publication
+
+Every public `index_repo()` call owns the existing mutation lock and publishes
+`.codira/index-generation.json` atomically. It writes `updating` before the
+backend pass and `ready` only after the pass completes, with backend/analyzer
+inventory, Git commit, file count, and the last successful generation. A
+failed pass remains `updating` so readers can enter transient fallback mode;
+a genuine no-op restores the prior ready record without advancing generation.
+
+This is the shared coordination boundary for manual CLI indexing and the
+automatic indexing daemon. Query clients remain read-only.
+
 The current implementation keeps orchestration and persistence separated:
 
 - `indexer.py` owns incremental orchestration decisions

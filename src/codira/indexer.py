@@ -50,6 +50,8 @@ from codira.contracts import (
     VectorSetIdentity,
     VectorStore,
 )
+from codira.git import read_head_commit
+from codira.index_generation import IndexGenerationStore, transition_record
 from codira.models import (
     AnalysisResult,
     FileMetadataSnapshot,
@@ -1617,12 +1619,50 @@ def index_repo(
         If validated indexing inputs are semantically inconsistent.
     """
     with acquire_index_lock(root):
-        return _index_repo_unlocked(
+        store = IndexGenerationStore(root)
+        previous = store.read()
+        generation = (previous.generation if previous else 0) + 1
+        last_successful = previous.last_successful_generation if previous else 0
+        store.write(
+            transition_record(
+                generation=generation,
+                state="updating",
+                last_successful_generation=last_successful,
+            )
+        )
+        report = _index_repo_unlocked(
             root,
             full=full,
             embedding_index_mode=embedding_index_mode,
             analysis_concurrency=analysis_concurrency,
         )
+        if (
+            previous is not None
+            and previous.state == "ready"
+            and report.indexed == 0
+            and report.deleted == 0
+            and report.failed == 0
+        ):
+            store.write(previous)
+            return report
+        backend = active_index_backend(root=root)
+        analyzers = _active_language_analyzers(root=root)
+        store.write(
+            transition_record(
+                generation=generation,
+                state="ready",
+                last_successful_generation=generation,
+                git_commit=read_head_commit(root),
+                backend_name=str(backend.name),
+                backend_version=str(backend.version),
+                analyzer_inventory=[
+                    {"name": str(analyzer.name), "version": str(analyzer.version)}
+                    for analyzer in analyzers
+                ],
+                indexed_file_count=report.indexed + report.reused,
+            )
+        )
+        return report
 
 
 def _index_repo_unlocked(

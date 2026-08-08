@@ -80,6 +80,10 @@ class QueryDaemonIdentity:
     def value(self) -> str:
         """Return a stable opaque identity suitable for local descriptors.
 
+        Parameters
+        ----------
+        None
+
         Returns
         -------
         str
