@@ -319,6 +319,38 @@ def test_daemon_config_rejects_unsafe_values(
         validate_config_mapping({"daemon": value})
 
 
+def test_query_daemon_config_defaults_disabled_and_tracks_repo_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Load query-daemon enablement from repository configuration.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate platform config paths.
+    tmp_path : pathlib.Path
+        Temporary repository root and configuration directory.
+
+    Returns
+    -------
+    None
+        The test asserts the initial query-daemon contract is disabled unless
+        explicitly enabled by the repository configuration.
+    """
+    _isolate_config_paths(monkeypatch, tmp_path)
+    root = tmp_path / "repo"
+    config_path = root / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("[query_daemon]\nenabled = true\n", encoding="utf-8")
+
+    config = load_effective_config(root=root)
+
+    assert config.query_daemon.enabled is True
+    assert config.origins["query_daemon.enabled"].path == config_path
+    assert config_to_mapping(config)["query_daemon"] == {"enabled": True}
+
+
 def test_config_validation_accepts_namespaced_plugin_tables(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -573,6 +605,7 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
         "[index.concurrency]",
         "[index.coverage]",
         "[daemon]",
+        "[query_daemon]",
         "[plugins.backend-sqlite]",
         "[plugins.backend-duckdb]",
         "[plugins.embedding-sentence-transformers]",

@@ -87,6 +87,19 @@ query modules directly.
 Phase 8 completes the backend-selection side of that boundary by routing query
 entry points through `codira.registry.active_index_backend()`.
 
+## Repository-local warm query daemon (contract)
+
+ADR-026 establishes a second optional daemon for repeated read/query work. It
+is scoped to one resolved repository root and effective output directory, and
+will retain warm plugins, an embedding model, and a backend read connection.
+The automatic indexing daemon remains the only automatic writer; SQLite and
+DuckDB remain authoritative. MCP and eligible CLI commands will use the
+service opportunistically and fall back to direct-core execution.
+
+The service is not a repository catalogue and never accepts request-provided
+repository paths. Cross-repository service selection remains the separate #51
+boundary.
+
 Phases 12 through 17 complete the ranking and retrieval side by adding:
 
 - deterministic file-role classification

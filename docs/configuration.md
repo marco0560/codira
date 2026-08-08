@@ -105,6 +105,9 @@ enabled = false
 debounce_ms = 250
 include_paths = []
 exclude_paths = []
+
+[query_daemon]
+enabled = false
 ```
 
 `index.concurrency.strategy` is one of `"off"`, `"auto"`, `"process"`, or
@@ -231,6 +234,37 @@ default that is the repository root; with `--output-dir`, it is the selected
 output directory. The records contain no changed file paths. `codira daemon
 status` combines the platform service state with the latest durable
 reconciliation snapshot.
+
+## Optional warm query daemon contract
+
+`[query_daemon]` reserves configuration for a second, repository-local daemon
+that will keep read/query resources warm. It is disabled by default and does
+not change direct CLI or MCP behavior in this slice.
+
+- `enabled` permits a future query-daemon runtime to start. It defaults to
+  `false`.
+
+The query daemon will be fixed to one resolved repository root and effective
+output directory; it will never accept repository paths from requests. It is
+read-only: the indexing daemon remains the sole automatic index writer, and
+CLI and MCP will retain direct-core fallback when it is unavailable. This is
+separate from the indexing daemon, the MCP stdio server, and the future
+multi-repository catalogue work tracked by #51.
+
+The reserved lifecycle hierarchy is:
+
+```bash
+codira query-daemon run
+codira query-daemon install
+codira query-daemon uninstall
+codira query-daemon start
+codira query-daemon stop
+codira query-daemon status
+```
+
+In this contract slice, no query-daemon process or platform service starts;
+even with enablement set, lifecycle commands report that the runtime is not
+yet available.
 
 ## Repository Performance Profile
 

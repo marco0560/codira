@@ -53,7 +53,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-CAPABILITY_SCHEMA_VERSION = "1.3"
+CAPABILITY_SCHEMA_VERSION = "1.4"
 ONTOLOGY_VERSION = "2"
 
 PLUGIN_FAMILY_CONTRACTS: dict[str, dict[str, object]] = {
@@ -223,6 +223,15 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
         "limitations": [
             "uses locally available embedding model artifacts only",
             "GPU calibration depends on Torch CUDA device metadata",
+        ],
+    },
+    "query-daemon": {
+        "intent": "repository_local_warm_query_service_lifecycle",
+        "channels": [],
+        "guarantee": "disabled_by_default_optional_query_service_contract",
+        "limitations": [
+            "runtime and IPC arrive in later implementation slices",
+            "does not index files or mutate the index",
         ],
     },
     "caps": {
@@ -661,6 +670,36 @@ def _mcp_payload() -> dict[str, object]:
     }
 
 
+def _query_daemon_payload(root: Path | None) -> dict[str, object]:
+    """Build the discoverable warm query daemon capability summary.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None
+        Repository root whose effective enablement is reported.
+
+    Returns
+    -------
+    dict[str, object]
+        Stable query-daemon support metadata.
+    """
+    enabled = load_effective_config(root=root).query_daemon.enabled if root else False
+    return {
+        "supported": True,
+        "enabled": enabled,
+        "lifecycle_commands": [
+            "run",
+            "install",
+            "uninstall",
+            "start",
+            "stop",
+            "status",
+        ],
+        "repository_scope": "one fixed repository root and effective output directory",
+        "mutation_policy": "read_only; indexing daemon remains the automatic writer",
+    }
+
+
 def build_capability_contract(
     analyzers: Sequence[LanguageAnalyzer] | None = None,
     *,
@@ -748,6 +787,7 @@ def build_capability_contract(
         "plugin_families": _plugin_family_payloads(),
         "plugins": _plugin_payloads(root=root),
         "mcp": _mcp_payload(),
+        "query_daemon": _query_daemon_payload(root),
         "analyzers": analyzer_payloads,
         "validation": {
             "status": validation_status,

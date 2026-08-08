@@ -184,6 +184,7 @@ _REPO_PATH_COMMANDS = frozenset(
         "ctx",
         "config",
         "daemon",
+        "query-daemon",
     }
 )
 _CONFIG_INSPECTION_ACTIONS = frozenset({"dump", "explain", "validate"})
@@ -883,6 +884,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  codira calls caller --tree  # render a bounded outgoing call tree\n"
             "  codira refs _retrieve_script_candidates --incoming --tree --dot  # render incoming references as DOT\n"
             "  codira daemon --help  # inspect the optional automatic-indexing daemon contract\n"
+            "  codira query-daemon --help  # inspect the optional warm query service contract\n"
             "\n"
             "Local MCP:\n"
             "  codira-mcp --root .  # start the read-only stdio server\n"
@@ -901,7 +903,7 @@ def build_parser() -> argparse.ArgumentParser:
         title="subcommands",
         metavar=(
             "{help,index,cov,sym,symlist,emb,docs,calls,refs,audit,ctx,plugins,"
-            "caps,config,daemon,calibrate}"
+            "caps,config,daemon,query-daemon,calibrate}"
         ),
     )
 
@@ -1619,6 +1621,39 @@ def build_parser() -> argparse.ArgumentParser:
         ("status", "Inspect daemon service and indexing status"),
     ):
         daemon_sub.add_parser(action, help=help_text)
+
+    query_daemon_parser = sub.add_parser(
+        "query-daemon",
+        help="Inspect the optional repository-local warm query daemon",
+        description=(
+            "Reserve lifecycle commands for Codira's optional repository-local "
+            "warm query daemon. This contract slice does not start a daemon."
+        ),
+        epilog=(
+            "Lifecycle commands:\n"
+            "  codira query-daemon run\n"
+            "  codira query-daemon install\n"
+            "  codira query-daemon uninstall\n"
+            "  codira query-daemon start\n"
+            "  codira query-daemon stop\n"
+            "  codira query-daemon status\n"
+            "\n"
+            "The service is disabled by default with query_daemon.enabled = false. "
+            "It is repository/output-directory scoped and read-only."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_repo_path_arguments(query_daemon_parser)
+    query_daemon_sub = query_daemon_parser.add_subparsers(dest="query_daemon_action")
+    for action, help_text in (
+        ("run", "Run the query daemon in the foreground"),
+        ("install", "Install a platform service definition"),
+        ("uninstall", "Remove a platform service definition"),
+        ("start", "Start the installed query daemon service"),
+        ("stop", "Stop the installed query daemon service"),
+        ("status", "Inspect query daemon service status"),
+    ):
+        query_daemon_sub.add_parser(action, help=help_text)
 
     calibrate_parser = sub.add_parser(
         "calibrate",
@@ -5424,6 +5459,36 @@ def _run_daemon_command(args: argparse.Namespace, root: Path) -> int:
     return 0
 
 
+def _run_query_daemon_command(args: argparse.Namespace, root: Path) -> int:
+    """Reserve query-daemon lifecycle commands without starting a runtime.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed query-daemon command arguments.
+    root : pathlib.Path
+        Repository root used to resolve effective configuration.
+
+    Returns
+    -------
+    int
+        ``2`` while the runtime and service adapters are intentionally absent.
+    """
+    action = args.query_daemon_action or "help"
+    config = load_effective_config(root=root)
+    if not config.query_daemon.enabled:
+        print(
+            f"[codira] query-daemon {action} requires query_daemon.enabled = true.",
+            file=sys.stderr,
+        )
+        return 2
+    print(
+        "[codira] query-daemon runtime is not available in this contract slice.",
+        file=sys.stderr,
+    )
+    return 2
+
+
 def _run_calibrate_embeddings(args: argparse.Namespace) -> int:
     """
     Run embeddings calibration and emit or write config-compatible output.
@@ -5591,6 +5656,7 @@ def _command_handlers(
         ),
         "config": lambda: _run_config_command(args, root),
         "daemon": lambda: _run_daemon_command(args, root),
+        "query-daemon": lambda: _run_query_daemon_command(args, root),
         "calibrate": lambda: _run_calibrate_command(args),
     }
 
