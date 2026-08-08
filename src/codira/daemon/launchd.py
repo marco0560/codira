@@ -19,7 +19,6 @@ agents.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import plistlib
 import shutil
@@ -28,6 +27,8 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from codira.daemon.service_spec import ServiceSpecification
 
 LaunchctlRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 _LABEL_PREFIX = "io.codira.daemon"
@@ -155,10 +156,11 @@ class LaunchdUserAgent:
     one user can install independent automatic-indexing agents for many roots.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         root: Path,
         *,
+        specification: ServiceSpecification | None = None,
         executable: Path | None = None,
         agent_directory: Path | None = None,
         uid: int | None = None,
@@ -184,7 +186,8 @@ class LaunchdUserAgent:
         None
             The adapter retains only deterministic agent identity and paths.
         """
-        self._root = root.resolve()
+        self._specification = specification or ServiceSpecification.indexing(root)
+        self._root = self._specification.root
         self._executable = (executable or Path(sys.argv[0])).resolve()
         self._agent_directory = agent_directory or _default_agent_directory()
         self._uid = uid if uid is not None else _current_uid()
@@ -203,8 +206,12 @@ class LaunchdUserAgent:
         str
             Stable LaunchAgent label for the canonical repository root.
         """
-        digest = hashlib.sha256(str(self._root).encode("utf-8")).hexdigest()[:16]
-        return f"{_LABEL_PREFIX}.{digest}"
+        prefix = (
+            _LABEL_PREFIX
+            if self._specification.kind == "daemon"
+            else "io.codira.query-daemon"
+        )
+        return f"{prefix}.{self._specification.identity}"
 
     @property
     def plist_path(self) -> Path:
@@ -278,17 +285,20 @@ class LaunchdUserAgent:
         bytes
             Deterministic XML plist content for foreground daemon mode.
         """
+        arguments = [
+            str(self._executable),
+            *self._specification.command[:-1],
+            "--path",
+            str(self._root),
+        ]
+        if self._specification.kind == "query-daemon":
+            arguments.extend(("--output-dir", str(self._specification.output_root)))
+        arguments.append(self._specification.command[-1])
         return plistlib.dumps(
             {
                 "KeepAlive": True,
                 "Label": self.label,
-                "ProgramArguments": [
-                    str(self._executable),
-                    "daemon",
-                    "--path",
-                    str(self._root),
-                    "run",
-                ],
+                "ProgramArguments": arguments,
                 "RunAtLoad": True,
                 "WorkingDirectory": str(self._root),
             },
@@ -419,3 +429,29 @@ class LaunchdUserAgent:
             if detail:
                 msg = f"{msg}: {detail}"
             raise LaunchdServiceError(msg)
+
+
+class QueryDaemonLaunchdUserAgent(LaunchdUserAgent):
+    """Manage a launchd user agent for one warm query-daemon identity."""
+
+    def __init__(self, root: Path, output_root: Path, **kwargs: object) -> None:
+        """Initialize a query-daemon agent with fixed repository/output paths.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        output_root : pathlib.Path
+            Effective output root.
+        **kwargs : object
+            Existing launchd adapter keyword arguments.
+
+        Returns
+        -------
+        None
+        """
+        super().__init__(
+            root,
+            specification=ServiceSpecification.query(root, output_root),
+            **kwargs,  # type: ignore[arg-type]
+        )

@@ -303,6 +303,21 @@ class DaemonConfig:
 
 
 @dataclass(frozen=True)
+class QueryDaemonConfig:
+    """Configure the optional repository-local warm query daemon.
+
+    Parameters
+    ----------
+    enabled : bool
+        Whether lifecycle commands may start the query daemon after its runtime
+        is implemented. The default keeps all queries direct and independent
+        from daemon availability.
+    """
+
+    enabled: bool = False
+
+
+@dataclass(frozen=True)
 class ConfigOrigin:
     """
     Origin metadata for one effective configuration value.
@@ -343,6 +358,8 @@ class CodiraConfig:
         Coverage-root configuration.
     daemon : DaemonConfig
         Optional automatic-indexing daemon configuration.
+    query_daemon : QueryDaemonConfig
+        Optional repository-local warm query daemon configuration.
     origins : dict[str, ConfigOrigin]
         Origin metadata keyed by dotted config key.
     """
@@ -354,6 +371,7 @@ class CodiraConfig:
     index: IndexConcurrencyConfig
     coverage: IndexCoverageConfig
     daemon: DaemonConfig
+    query_daemon: QueryDaemonConfig
     origins: dict[str, ConfigOrigin]
 
 
@@ -403,6 +421,7 @@ DEFAULT_CONFIG: dict[str, object] = {
         "include_paths": [],
         "exclude_paths": [],
     },
+    "query_daemon": {"enabled": False},
 }
 FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
     "analyzer-python": {
@@ -569,6 +588,7 @@ _SCHEMA: dict[str, object] = {
         "include_paths": list,
         "exclude_paths": list,
     },
+    "query_daemon": {"enabled": bool},
 }
 
 
@@ -1786,11 +1806,13 @@ def render_config_toml(value: Mapping[str, object]) -> str:
     embeddings = _require_table(value["embeddings"], key="embeddings")
     index = _require_table(value["index"], key="index")
     daemon = _require_table(value["daemon"], key="daemon")
+    query_daemon = _require_table(value["query_daemon"], key="query_daemon")
     document.add("backend", _toml_table_from_mapping(backend))
     document.add("plugins", _toml_table_from_mapping(_plugin_globals_table(plugins)))
     document.add("embeddings", _toml_table_from_mapping(embeddings))
     document.add("index", _toml_table_from_mapping(index))
     document.add("daemon", _toml_table_from_mapping(daemon))
+    document.add("query_daemon", _toml_table_from_mapping(query_daemon))
     text = tomlkit.dumps(document).rstrip()
     plugin_sections = _plugin_config_sections(plugins)
     if plugin_sections:
@@ -2259,6 +2281,7 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
             "include_paths": list(config.daemon.include_paths),
             "exclude_paths": list(config.daemon.exclude_paths),
         },
+        "query_daemon": {"enabled": config.query_daemon.enabled},
     }
 
 
@@ -2353,6 +2376,7 @@ def _config_from_mapping(
     concurrency = cast("Mapping[str, object]", index["concurrency"])
     coverage = cast("Mapping[str, object]", index["coverage"])
     daemon = cast("Mapping[str, object]", value["daemon"])
+    query_daemon = cast("Mapping[str, object]", value["query_daemon"])
     return CodiraConfig(
         config_version=cast("int", value["config_version"]),
         backend=BackendConfig(name=cast("str", backend["name"]).strip()),
@@ -2429,6 +2453,9 @@ def _config_from_mapping(
                 str(item).strip()
                 for item in cast("list[object]", daemon["exclude_paths"])
             ),
+        ),
+        query_daemon=QueryDaemonConfig(
+            enabled=cast("bool", query_daemon["enabled"]),
         ),
         origins=origins,
     )

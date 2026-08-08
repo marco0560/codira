@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 
-from codira.mcp.adapter import MCPAdapter
+from codira.mcp.proxy import QueryDaemonMCPProxy
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -27,7 +27,7 @@ def create_server(root: Path) -> FastMCP:
     mcp.server.fastmcp.FastMCP
         Server exposing the implemented read-only Codira tools.
     """
-    adapter = MCPAdapter(root)
+    adapter = QueryDaemonMCPProxy(root)
     server = FastMCP(
         "Codira",
         instructions=(

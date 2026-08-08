@@ -184,7 +184,7 @@ def test_capability_contract_validates_against_schema() -> None:
     payload = build_capability_contract([PythonAnalyzer()])
 
     jsonschema.validate(payload, _capabilities_schema())
-    assert payload["schema_version"] == "1.3"
+    assert payload["schema_version"] == "1.4"
     assert payload["ontology"] == {
         "version": "2",
         "types": [
@@ -213,12 +213,30 @@ def test_capability_contract_validates_against_schema() -> None:
     assert "help" in commands
     assert "ctx" in commands
     assert "docs" in commands
+    query_daemon_command = cast("Mapping[str, object]", commands["query-daemon"])
+    assert query_daemon_command["intent"] == (
+        "repository_local_warm_query_service_lifecycle"
+    )
+    assert payload["query_daemon"] == {
+        "supported": True,
+        "enabled": False,
+        "lifecycle_commands": [
+            "run",
+            "install",
+            "uninstall",
+            "start",
+            "stop",
+            "status",
+        ],
+        "repository_scope": "one fixed repository root and effective output directory",
+        "mutation_policy": "read_only; indexing daemon remains the automatic writer",
+    }
     caps_command = cast("Mapping[str, object]", commands["caps"])
     assert "aliases" not in caps_command
     assert mcp == {
         "server_command": "codira-mcp",
         "config_command": "codira-mcp-config",
-        "contract_version": "1.0.0",
+        "contract_version": "1.1.0",
         "transport": "stdio",
         "read_only": True,
         "tools": [

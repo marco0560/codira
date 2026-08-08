@@ -19,7 +19,6 @@ managers.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import shutil
 import subprocess
@@ -27,6 +26,8 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from codira.daemon.service_spec import ServiceSpecification
 
 SystemctlRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 _UNIT_PREFIX = "codira-daemon"
@@ -158,6 +159,7 @@ class SystemdUserService:
         self,
         root: Path,
         *,
+        specification: ServiceSpecification | None = None,
         executable: Path | None = None,
         unit_directory: Path | None = None,
         run_systemctl: SystemctlRunner = _run_systemctl,
@@ -180,7 +182,8 @@ class SystemdUserService:
         None
             The adapter retains only deterministic service identity and paths.
         """
-        self._root = root.resolve()
+        self._specification = specification or ServiceSpecification.indexing(root)
+        self._root = self._specification.root
         self._executable = (executable or Path(sys.argv[0])).resolve()
         self._unit_directory = unit_directory or _default_unit_directory()
         self._run_systemctl = run_systemctl
@@ -198,8 +201,12 @@ class SystemdUserService:
         str
             Stable user-unit filename for the canonical repository root.
         """
-        digest = hashlib.sha256(str(self._root).encode("utf-8")).hexdigest()[:16]
-        return f"{_UNIT_PREFIX}-{digest}.service"
+        prefix = (
+            _UNIT_PREFIX
+            if self._specification.kind == "daemon"
+            else "codira-query-daemon"
+        )
+        return f"{prefix}-{self._specification.identity}.service"
 
     @property
     def unit_path(self) -> Path:
@@ -243,19 +250,25 @@ class SystemdUserService:
         str
             Deterministic UTF-8 unit-file content for foreground daemon mode.
         """
-        command = " ".join(
-            (
-                _quote_unit_argument(str(self._executable)),
-                "daemon",
-                "--path",
-                _quote_unit_argument(str(self._root)),
-                "run",
+        arguments = [
+            _quote_unit_argument(str(self._executable)),
+            *self._specification.command[:-1],
+            "--path",
+            _quote_unit_argument(str(self._root)),
+        ]
+        if self._specification.kind == "query-daemon":
+            arguments.extend(
+                (
+                    "--output-dir",
+                    _quote_unit_argument(str(self._specification.output_root)),
+                )
             )
-        )
+        arguments.append(self._specification.command[-1])
+        command = " ".join(arguments)
         return "\n".join(
             (
                 "[Unit]",
-                f"Description=Codira automatic indexing for {self.unit_name}",
+                f"Description=Codira {self._specification.kind} for {self.unit_name}",
                 "After=default.target",
                 "",
                 "[Service]",
@@ -400,3 +413,29 @@ class SystemdUserService:
             if detail:
                 msg = f"{msg}: {detail}"
             raise SystemdServiceError(msg)
+
+
+class QueryDaemonSystemdUserService(SystemdUserService):
+    """Manage a systemd user unit for one warm query-daemon identity."""
+
+    def __init__(self, root: Path, output_root: Path, **kwargs: object) -> None:
+        """Initialize a query-daemon unit with fixed repository/output paths.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        output_root : pathlib.Path
+            Effective output root.
+        **kwargs : object
+            Existing systemd adapter keyword arguments.
+
+        Returns
+        -------
+        None
+        """
+        super().__init__(
+            root,
+            specification=ServiceSpecification.query(root, output_root),
+            **kwargs,  # type: ignore[arg-type]
+        )

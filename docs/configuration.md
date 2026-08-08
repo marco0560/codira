@@ -105,6 +105,9 @@ enabled = false
 debounce_ms = 250
 include_paths = []
 exclude_paths = []
+
+[query_daemon]
+enabled = false
 ```
 
 `index.concurrency.strategy` is one of `"off"`, `"auto"`, `"process"`, or
@@ -231,6 +234,60 @@ default that is the repository root; with `--output-dir`, it is the selected
 output directory. The records contain no changed file paths. `codira daemon
 status` combines the platform service state with the latest durable
 reconciliation snapshot.
+
+## Optional warm query daemon contract
+
+`[query_daemon]` configures the second, repository-local daemon that keeps
+read/query resources warm. It is disabled by default and does not change
+direct CLI or MCP behavior when the process is absent or degraded.
+
+- `enabled` permits `codira query-daemon run`. It defaults to `false`.
+
+The query daemon will be fixed to one resolved repository root and effective
+output directory; it will never accept repository paths from requests. It is
+read-only: the indexing daemon remains the sole automatic index writer, and
+CLI and MCP will retain direct-core fallback when it is unavailable. This is
+separate from the indexing daemon, the MCP stdio server, and the future
+multi-repository catalogue work tracked by #51.
+
+The reserved lifecycle hierarchy is:
+
+```bash
+codira query-daemon run
+codira query-daemon install
+codira query-daemon uninstall
+codira query-daemon start
+codira query-daemon stop
+codira query-daemon status
+```
+
+With `enabled = true`, `codira query-daemon run` starts one foreground process
+for the resolved repository root and effective output directory. It warms only
+read resources and observes durable index generations; it never indexes or
+mutates the persistent backend. `status` remains safe to run while disabled
+and reports the repository-local durable snapshot when one exists.
+
+With enablement, service management is available through the same lifecycle
+commands: Linux installs a systemd user unit, macOS installs a LaunchAgent,
+and Windows installs an SCM service. Each service name includes the resolved
+repository root, effective output directory, and daemon kind, so it cannot
+operate on a different repository's service. Installed commands use absolute
+executable, repository, and output-directory arguments.
+
+The indexing daemon and query daemon have distinct platform-service names and
+status records. MCP always discovers the compatible local daemon
+opportunistically. CLI routing is enabled only when both
+`query_daemon.enabled = true` and a compatible service is running.
+
+Eligible CLI reads are `ctx` (without `--prefix`), embedding search through
+`emb` (never `emb purge`, and without `--prefix`), `plugins`, and `caps`.
+Indexing, configuration writes, vector-store purges, and every other command
+remain direct. The normal stdout and exit code are identical in warm and
+direct modes. Add `--execution-mode` to any eligible command to write one
+diagnostic to stderr: `warm` includes the served generation; `direct` means
+no compatible service was used; `fallback` means one failed daemon request was
+re-run directly. No command is ever routed to another repository or output
+directory identity.
 
 ## Repository Performance Profile
 

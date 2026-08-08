@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from codira.capabilities import build_capability_contract
+from codira.index_generation import IndexGenerationStore
 from codira.indexer import audit_repo_coverage
 from codira.mcp.contract import (
     DEFAULT_OUTPUT_BUDGET,
@@ -31,7 +32,13 @@ from codira.query.exact import (
 from codira.storage import _read_metadata_file, get_metadata_path
 
 if TYPE_CHECKING:
-    from codira.contracts import BackendGraphMetric, BackendSymbolInventoryItem
+    from collections.abc import Callable
+
+    from codira.contracts import (
+        BackendGraphMetric,
+        BackendQueryConnection,
+        BackendSymbolInventoryItem,
+    )
     from codira.indexer import CoverageIssue
     from codira.types import DocstringIssueRow, SymbolRow
 
@@ -40,6 +47,34 @@ _MIN_RESULT_LIMIT = 1
 _MAX_RESULT_LIMIT = 100
 _REPOSITORY_MAP_INVENTORY_LIMIT = 10_000
 _Row = TypeVar("_Row")
+_QueryResult = TypeVar("_QueryResult")
+
+
+class QueryExecutor(Protocol):
+    """Execute read operations against a supplied backend connection.
+
+    Parameters
+    ----------
+    None
+    """
+
+    def execute(
+        self,
+        operation: Callable[[BackendQueryConnection], _QueryResult],
+    ) -> _QueryResult:
+        """Execute one connection-owning read operation.
+
+        Parameters
+        ----------
+        operation : collections.abc.Callable
+            Read operation receiving a backend connection.
+
+        Returns
+        -------
+        object
+            Result from the supplied operation.
+        """
+        ...
 
 
 @dataclass(frozen=True)
@@ -50,9 +85,13 @@ class MCPAdapter:
     ----------
     root : pathlib.Path
         Existing repository directory selected when the MCP server starts.
+    query_executor : QueryExecutor | None, optional
+        Warm executor for read operations. When omitted, the adapter preserves
+        direct-core execution and opens connections through existing APIs.
     """
 
     root: Path
+    query_executor: QueryExecutor | None = None
 
     def __post_init__(self) -> None:
         """Resolve and validate the configured repository root.
@@ -126,7 +165,11 @@ class MCPAdapter:
         ValueError
             If ``limit`` is outside the contract's supported range.
         """
-        rows, page = self._page_rows(find_symbol(self.root, name), cursor, limit)
+        rows, page = self._page_rows(
+            self._query(lambda conn: find_symbol(self.root, name, conn=conn)),
+            cursor,
+            limit,
+        )
         return self._envelope(
             {"symbols": [self._symbol_payload(row) for row in rows]},
             page=page,
@@ -182,7 +225,13 @@ class MCPAdapter:
             Contract envelope containing structural symbol inventory rows.
         """
         rows, page = self._page_rows(
-            symbol_inventory(self.root, limit=_REPOSITORY_MAP_INVENTORY_LIMIT + 1),
+            self._query(
+                lambda conn: symbol_inventory(
+                    self.root,
+                    limit=_REPOSITORY_MAP_INVENTORY_LIMIT + 1,
+                    conn=conn,
+                )
+            ),
             cursor,
             limit,
         )
@@ -229,8 +278,15 @@ class MCPAdapter:
         """
         incoming = self._incoming_direction(direction)
         rows, page = self._page_rows(
-            find_callable_refs(
-                EdgeQueryRequest(root=self.root, name=name, incoming=incoming)
+            self._query(
+                lambda conn: find_callable_refs(
+                    EdgeQueryRequest(
+                        root=self.root,
+                        name=name,
+                        incoming=incoming,
+                        conn=conn,
+                    )
+                )
             ),
             cursor,
             limit,
@@ -337,7 +393,11 @@ class MCPAdapter:
         dict[str, object]
             Contract envelope containing normalized audit findings.
         """
-        rows, page = self._page_rows(docstring_issues(self.root), cursor, limit)
+        rows, page = self._page_rows(
+            self._query(lambda conn: docstring_issues(self.root, conn=conn)),
+            cursor,
+            limit,
+        )
         return self._envelope(
             {"findings": [self._finding_payload(row) for row in rows]},
             page=page,
@@ -362,7 +422,11 @@ class MCPAdapter:
             Contract envelope containing the structured direct-core context.
         """
         context = json.loads(
-            context_for(ContextRequest(root=self.root, query=query, as_json=True))
+            self._query(
+                lambda conn: context_for(
+                    ContextRequest(root=self.root, query=query, as_json=True, conn=conn)
+                )
+            )
         )
         return self._envelope({"context": context}, output_budget=output_budget)
 
@@ -393,15 +457,35 @@ class MCPAdapter:
             Contract envelope containing matching symbols and incoming graph
             relations that depend on them.
         """
-        symbols, page = self._page_rows(find_symbol(self.root, name), cursor, limit)
+        symbols, page = self._page_rows(
+            self._query(lambda conn: find_symbol(self.root, name, conn=conn)),
+            cursor,
+            limit,
+        )
         call_rows, _ = self._page_rows(
-            find_call_edges(EdgeQueryRequest(root=self.root, name=name, incoming=True)),
+            self._query(
+                lambda conn: find_call_edges(
+                    EdgeQueryRequest(
+                        root=self.root,
+                        name=name,
+                        incoming=True,
+                        conn=conn,
+                    )
+                )
+            ),
             cursor,
             limit,
         )
         reference_rows, _ = self._page_rows(
-            find_callable_refs(
-                EdgeQueryRequest(root=self.root, name=name, incoming=True)
+            self._query(
+                lambda conn: find_callable_refs(
+                    EdgeQueryRequest(
+                        root=self.root,
+                        name=name,
+                        incoming=True,
+                        conn=conn,
+                    )
+                )
             ),
             cursor,
             limit,
@@ -461,7 +545,13 @@ class MCPAdapter:
         """
         self._validate_limit(limit)
         self._validate_output_budget(output_budget)
-        rows = symbol_inventory(self.root, limit=_REPOSITORY_MAP_INVENTORY_LIMIT + 1)
+        rows = self._query(
+            lambda conn: symbol_inventory(
+                self.root,
+                limit=_REPOSITORY_MAP_INVENTORY_LIMIT + 1,
+                conn=conn,
+            )
+        )
         source_truncated = len(rows) > _REPOSITORY_MAP_INVENTORY_LIMIT
         if source_truncated:
             rows = rows[:_REPOSITORY_MAP_INVENTORY_LIMIT]
@@ -519,8 +609,15 @@ class MCPAdapter:
             Contract envelope containing normalized static call-edge rows.
         """
         rows, page = self._page_rows(
-            find_call_edges(
-                EdgeQueryRequest(root=self.root, name=name, incoming=incoming)
+            self._query(
+                lambda conn: find_call_edges(
+                    EdgeQueryRequest(
+                        root=self.root,
+                        name=name,
+                        incoming=incoming,
+                        conn=conn,
+                    )
+                )
             ),
             cursor,
             limit,
@@ -539,6 +636,27 @@ class MCPAdapter:
             page=page,
             output_budget=output_budget,
         )
+
+    def _query(
+        self,
+        operation: Callable[[BackendQueryConnection | None], _QueryResult],
+    ) -> _QueryResult:
+        """Run a structural read through the optional warm executor.
+
+        Parameters
+        ----------
+        operation : collections.abc.Callable
+            Read operation accepting a warm connection or ``None`` for the
+            existing direct-core path.
+
+        Returns
+        -------
+        object
+            Result produced by the operation.
+        """
+        if self.query_executor is None:
+            return operation(None)
+        return self.query_executor.execute(operation)
 
     def _envelope(
         self,
@@ -583,11 +701,28 @@ class MCPAdapter:
                 "source": "codira-core",
                 "repository": self.root.name,
                 "trusted_root": ".",
+                "execution_mode": "direct",
+                "generation": self._generation(),
             },
             "freshness": _read_metadata_file(get_metadata_path(self.root)),
             "page": {} if page is None else page,
             "truncation": resolved_truncation,
         }
+
+    def _generation(self) -> int | None:
+        """Return the current ready generation for direct-core provenance.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        int | None
+            Ready durable generation, or ``None`` when unavailable.
+        """
+        record = IndexGenerationStore(self.root).read()
+        return None if record is None or record.state != "ready" else record.generation
 
     def _page_rows(
         self, rows: list[_Row], cursor: str | None, limit: int

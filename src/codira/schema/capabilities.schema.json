@@ -13,6 +13,7 @@
     "plugin_families",
     "plugins",
     "mcp",
+    "query_daemon",
     "analyzers",
     "validation"
   ],
@@ -226,6 +227,24 @@
           "items": { "type": "string", "minLength": 1 },
           "uniqueItems": true
         }
+      },
+      "additionalProperties": false
+    },
+    "query_daemon": {
+      "type": "object",
+      "required": ["supported", "enabled", "lifecycle_commands", "repository_scope", "mutation_policy"],
+      "properties": {
+        "supported": { "const": true },
+        "enabled": { "type": "boolean" },
+        "lifecycle_commands": {
+          "type": "array",
+          "items": { "enum": ["run", "install", "uninstall", "start", "stop", "status"] },
+          "uniqueItems": true,
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "repository_scope": { "type": "string", "minLength": 1 },
+        "mutation_policy": { "const": "read_only; indexing daemon remains the automatic writer" }
       },
       "additionalProperties": false
     },

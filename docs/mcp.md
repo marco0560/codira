@@ -32,3 +32,23 @@ uv run codira-mcp --root "$PWD"
 ```
 
 MCP clients manage the stdio session themselves. Use the generated configuration instead of starting the server manually during normal client use.
+
+## Optional warm query daemon
+
+`codira-mcp` always remains usable without a query daemon. At startup it binds
+only the supplied trusted root and discovers the matching local endpoint below
+that root's effective output directory; it never starts, installs, or selects
+another repository service. When the authenticated endpoint has the matching
+root identity and protocol, every approved read-only tool is routed through the
+warm daemon. Otherwise the existing direct-core adapter is used.
+
+Each response includes credential-free `provenance.execution_mode`:
+
+- `warm` identifies a daemon response and reports its index `generation`.
+- `direct` means no compatible daemon was available.
+- `fallback` means the daemon request failed and was retried once directly.
+
+This preserves output and pagination semantics while making failures
+non-blocking. Multiple MCP processes for one repository can share its one
+daemon; another repository or output directory has a distinct identity and is
+rejected before connection.

@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import io
 import json
 import shutil
 import subprocess
@@ -27,6 +28,7 @@ import sys
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import TYPE_CHECKING, cast
 
 from codira.calibration import (
@@ -63,6 +65,9 @@ from codira.contracts import (
 from codira.daemon import (
     DaemonStatusStore,
     LaunchdUserAgent,
+    QueryDaemonLaunchdUserAgent,
+    QueryDaemonSystemdUserService,
+    QueryDaemonWindowsScmService,
     SystemdUserService,
     WindowsScmService,
     run_foreground_daemon,
@@ -102,6 +107,13 @@ from codira.query.exact import (
     find_symbol_overloads,
     symbol_inventory,
 )
+from codira.query_daemon import QueryDaemonIdentity
+from codira.query_daemon_cli import CliRouteResult, emit_execution_mode, route_cli_read
+from codira.query_daemon_lifecycle import (
+    QueryDaemonStatusStore,
+    install_query_daemon_signal_handlers,
+    run_foreground_query_daemon,
+)
 from codira.registry import (
     active_index_backend,
     active_language_analyzers,
@@ -124,6 +136,7 @@ from codira.storage import (
     _write_metadata_file,
     acquire_index_lock,
     get_metadata_path,
+    get_storage_root,
     override_storage_root,
 )
 from codira.vector_store import active_vector_store_context
@@ -136,6 +149,7 @@ if TYPE_CHECKING:
     import codira.indexer as indexer_types
     from codira.contracts import (
         BackendGraphMetric,
+        BackendQueryConnection,
         BackendSymbolInventoryItem,
     )
     from codira.types import DocstringIssueRow
@@ -184,6 +198,7 @@ _REPO_PATH_COMMANDS = frozenset(
         "ctx",
         "config",
         "daemon",
+        "query-daemon",
     }
 )
 _CONFIG_INSPECTION_ACTIONS = frozenset({"dump", "explain", "validate"})
@@ -860,6 +875,25 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         )
 
+    def _add_execution_mode_argument(command_parser: argparse.ArgumentParser) -> None:
+        """Add opt-in warm/direct routing diagnostics to an eligible read.
+
+        Parameters
+        ----------
+        command_parser : argparse.ArgumentParser
+            Parser receiving the diagnostic option.
+
+        Returns
+        -------
+        None
+            The option is added in place.
+        """
+        command_parser.add_argument(
+            "--execution-mode",
+            action="store_true",
+            help="Report warm, direct, or fallback execution to standard error",
+        )
+
     parser = argparse.ArgumentParser(
         prog="codira",
         description=(
@@ -883,6 +917,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  codira calls caller --tree  # render a bounded outgoing call tree\n"
             "  codira refs _retrieve_script_candidates --incoming --tree --dot  # render incoming references as DOT\n"
             "  codira daemon --help  # inspect the optional automatic-indexing daemon contract\n"
+            "  codira query-daemon --help  # inspect the optional warm query service contract\n"
             "\n"
             "Local MCP:\n"
             "  codira-mcp --root .  # start the read-only stdio server\n"
@@ -901,7 +936,7 @@ def build_parser() -> argparse.ArgumentParser:
         title="subcommands",
         metavar=(
             "{help,index,cov,sym,symlist,emb,docs,calls,refs,audit,ctx,plugins,"
-            "caps,config,daemon,calibrate}"
+            "caps,config,daemon,query-daemon,calibrate}"
         ),
     )
 
@@ -1113,6 +1148,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--prefix",
         help="Restrict matches to files under this repo-root-relative path prefix",
     )
+    _add_execution_mode_argument(embeddings_parser)
     purge_options = embeddings_parser.add_argument_group(
         "purge options",
         "Options used only with `codira emb purge`.",
@@ -1408,6 +1444,7 @@ def build_parser() -> argparse.ArgumentParser:
     context_parser.add_argument(
         "query", type=str, help="Natural-language query to retrieve context for"
     )
+    _add_execution_mode_argument(context_parser)
     mode_group = context_parser.add_mutually_exclusive_group()
     mode_group.add_argument(
         "-j",
@@ -1454,6 +1491,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Output structured JSON for machine consumption",
     )
+    _add_execution_mode_argument(plugins_parser)
 
     capabilities_parser = sub.add_parser(
         "caps",
@@ -1477,6 +1515,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Output structured JSON for machine consumption",
     )
+    _add_execution_mode_argument(capabilities_parser)
     capabilities_parser.add_argument(
         "-s",
         "--strict",
@@ -1619,6 +1658,38 @@ def build_parser() -> argparse.ArgumentParser:
         ("status", "Inspect daemon service and indexing status"),
     ):
         daemon_sub.add_parser(action, help=help_text)
+
+    query_daemon_parser = sub.add_parser(
+        "query-daemon",
+        help="Inspect the optional repository-local warm query daemon",
+        description=(
+            "Run or inspect Codira's optional repository-local warm query daemon."
+        ),
+        epilog=(
+            "Lifecycle commands:\n"
+            "  codira query-daemon run\n"
+            "  codira query-daemon install\n"
+            "  codira query-daemon uninstall\n"
+            "  codira query-daemon start\n"
+            "  codira query-daemon stop\n"
+            "  codira query-daemon status\n"
+            "\n"
+            "The service is disabled by default with query_daemon.enabled = false. "
+            "It is repository/output-directory scoped and read-only."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_repo_path_arguments(query_daemon_parser)
+    query_daemon_sub = query_daemon_parser.add_subparsers(dest="query_daemon_action")
+    for action, help_text in (
+        ("run", "Run the query daemon in the foreground"),
+        ("install", "Install a platform service definition"),
+        ("uninstall", "Remove a platform service definition"),
+        ("start", "Start the installed query daemon service"),
+        ("stop", "Stop the installed query daemon service"),
+        ("status", "Inspect query daemon service status"),
+    ):
+        query_daemon_sub.add_parser(action, help=help_text)
 
     calibrate_parser = sub.add_parser(
         "calibrate",
@@ -1896,6 +1967,35 @@ def _run_capabilities(
     return 0
 
 
+def _run_capabilities_command(args: argparse.Namespace, root: Path) -> int:
+    """Run capability diagnostics through the optional warm daemon.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed capabilities command arguments.
+    root : pathlib.Path
+        Current repository root used for daemon identity.
+
+    Returns
+    -------
+    int
+        Original capability command exit status.
+    """
+    routing = _route_eligible_cli_read(
+        root,
+        "cli.caps",
+        {"as_json": args.json, "strict": args.strict},
+    )
+    if routing.stdout is not None:
+        print(routing.stdout, end="")
+        emit_execution_mode(routing, requested=args.execution_mode)
+        return cast("int", routing.exit_code)
+    result = _run_capabilities(root=root, as_json=args.json, strict=args.strict)
+    emit_execution_mode(routing, requested=args.execution_mode)
+    return result
+
+
 def _run_index(request: IndexCommandRequest) -> int:  # noqa: C901, PLR0912
     """
     Build or refresh the repository index.
@@ -2093,10 +2193,6 @@ def _run_index(request: IndexCommandRequest) -> int:  # noqa: C901, PLR0912
                 embedding_index_mode=effective_embedding_index_mode,
                 analysis_concurrency=analysis_concurrency,
             )
-        _write_index_head_metadata(
-            root,
-            indexed_file_count=report.indexed + report.reused,
-        )
     if as_json:
         _emit_json(
             _index_payload(
@@ -4404,14 +4500,7 @@ def _run_locked_index_refresh(
     else:
         print(request.message)
     active_index_backend(root=root).initialize(root)
-    report = index_repo(root)
-    _write_index_metadata(
-        root,
-        _build_index_metadata(
-            root,
-            indexed_file_count=report.indexed + report.reused,
-        ),
-    )
+    index_repo(root)
     print("[codira] Index ready", file=sys.stderr)
 
 
@@ -4621,6 +4710,31 @@ def _run_plugins(*, root: Path | None = None, as_json: bool = False) -> int:
     return 0
 
 
+def _run_plugins_command(args: argparse.Namespace, root: Path) -> int:
+    """Run plugin diagnostics through the optional warm daemon.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed plugin command arguments.
+    root : pathlib.Path
+        Current repository root used for daemon identity.
+
+    Returns
+    -------
+    int
+        Original plugin command exit status.
+    """
+    routing = _route_eligible_cli_read(root, "cli.plugins", {"as_json": args.json})
+    if routing.stdout is not None:
+        print(routing.stdout, end="")
+        emit_execution_mode(routing, requested=args.execution_mode)
+        return cast("int", routing.exit_code)
+    result = _run_plugins(root=root, as_json=args.json)
+    emit_execution_mode(routing, requested=args.execution_mode)
+    return result
+
+
 def _run_symbol_command(
     args: argparse.Namespace,
     root: Path,
@@ -4705,8 +4819,24 @@ def _run_embeddings_command(
     ):
         msg = "emb purge options require `codira emb purge`"
         raise ConfigError(msg)
+    routing = _route_eligible_cli_read(
+        root,
+        "cli.emb",
+        {
+            "query": args.query,
+            "limit": args.limit,
+            "as_json": args.json,
+            "prefix": None if prefix is None else None,
+            "query_prefix": raw_prefix,
+        },
+        supported=prefix is None,
+    )
+    if routing.stdout is not None:
+        print(routing.stdout, end="")
+        emit_execution_mode(routing, requested=args.execution_mode)
+        return cast("int", routing.exit_code)
     _ensure_index(root)
-    return _run_embeddings(
+    result = _run_embeddings(
         EmbeddingCommandRequest(
             root=root,
             query=args.query,
@@ -4716,6 +4846,8 @@ def _run_embeddings_command(
             query_prefix=raw_prefix,
         )
     )
+    emit_execution_mode(routing, requested=args.execution_mode)
+    return result
 
 
 def _purge_result_payload(result: VectorStorePurgeResult) -> dict[str, object]:
@@ -5050,6 +5182,21 @@ def _run_context_command(
     int
         Zero after printing the rendered context output.
     """
+    routing = _route_eligible_cli_read(
+        root,
+        "cli.ctx",
+        {
+            "query": args.query,
+            "as_json": args.json,
+            "as_prompt": args.prompt,
+            "explain": args.explain,
+        },
+        supported=prefix is None,
+    )
+    if routing.stdout is not None:
+        print(routing.stdout, end="")
+        emit_execution_mode(routing, requested=args.execution_mode)
+        return cast("int", routing.exit_code)
     _ensure_index(root)
     result = context_for(
         ContextRequest(
@@ -5062,6 +5209,291 @@ def _run_context_command(
         )
     )
     print(result)
+    emit_execution_mode(routing, requested=args.execution_mode)
+    return 0
+
+
+def _route_eligible_cli_read(
+    root: Path,
+    operation: str,
+    arguments: dict[str, object],
+    *,
+    supported: bool = True,
+) -> CliRouteResult:
+    """Attempt one configuration-enabled CLI warm read without mutation.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Resolved repository root for the current command.
+    operation : str
+        Fixed daemon CLI operation name.
+    arguments : dict[str, object]
+        Path-free request options.
+    supported : bool, optional
+        Whether this CLI invocation has a daemon-compatible option shape.
+
+    Returns
+    -------
+    codira.query_daemon_cli.CliRouteResult
+        Warm output when available, otherwise the direct/fallback state.
+    """
+    if not supported:
+        return CliRouteResult(mode="direct")
+    return route_cli_read(
+        root,
+        operation,
+        arguments,
+        enabled=load_effective_config(root=root).query_daemon.enabled,
+    )
+
+
+def build_query_daemon_cli_operations(
+    root: Path,
+) -> dict[
+    str, Callable[[dict[str, object], BackendQueryConnection], dict[str, object]]
+]:
+    """Build fixed-root daemon handlers for eligible read-only CLI commands.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Startup-trusted repository root.
+
+    Returns
+    -------
+    dict[str, object]
+        IPC operation handlers that preserve CLI stdout and exit codes.
+    """
+    trusted_root = root.resolve()
+
+    def required(arguments: dict[str, object], name: str) -> str:
+        """Return one required string request value.
+
+        Parameters
+        ----------
+        arguments : dict[str, object]
+            IPC request arguments.
+        name : str
+            Required argument name.
+
+        Returns
+        -------
+        str
+            Validated string value.
+
+        Raises
+        ------
+        TypeError
+            If the request value is not a string.
+        """
+        value = arguments.get(name)
+        if not isinstance(value, str):
+            msg = f"CLI daemon argument must be a string: {name}."
+            raise TypeError(msg)
+        return value
+
+    def optional_bool(arguments: dict[str, object], name: str) -> bool:
+        """Return one optional boolean request value.
+
+        Parameters
+        ----------
+        arguments : dict[str, object]
+            IPC request arguments.
+        name : str
+            Optional argument name.
+
+        Returns
+        -------
+        bool
+            Validated value or ``False``.
+
+        Raises
+        ------
+        TypeError
+            If the request value is not boolean.
+        """
+        value = arguments.get(name, False)
+        if not isinstance(value, bool):
+            msg = f"CLI daemon argument must be boolean: {name}."
+            raise TypeError(msg)
+        return value
+
+    def capture(operation: Callable[[], int]) -> dict[str, object]:
+        """Capture one existing CLI renderer without changing its output.
+
+        Parameters
+        ----------
+        operation : collections.abc.Callable[[], int]
+            Read-only CLI implementation to execute in the warm worker.
+
+        Returns
+        -------
+        dict[str, object]
+            Captured stdout and original exit code.
+        """
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            exit_code = operation()
+        return {"stdout": output.getvalue(), "exit_code": exit_code}
+
+    def context_handler(
+        arguments: dict[str, object], _connection: BackendQueryConnection
+    ) -> dict[str, object]:
+        """Execute a daemon-owned context read.
+
+        Parameters
+        ----------
+        arguments : dict[str, object]
+            Path-free context CLI arguments.
+        _connection : object
+            Active warm connection retained by the worker.
+
+        Returns
+        -------
+        dict[str, object]
+            Captured CLI output and exit code.
+        """
+        return capture(
+            lambda: _run_context_without_freshness_check(
+                trusted_root,
+                query=required(arguments, "query"),
+                as_json=optional_bool(arguments, "as_json"),
+                as_prompt=optional_bool(arguments, "as_prompt"),
+                explain=optional_bool(arguments, "explain"),
+            )
+        )
+
+    def embedding_handler(
+        arguments: dict[str, object], _connection: BackendQueryConnection
+    ) -> dict[str, object]:
+        """Execute a daemon-owned embedding-search read.
+
+        Parameters
+        ----------
+        arguments : dict[str, object]
+            Path-free embedding CLI arguments.
+        _connection : object
+            Active warm connection retained by the worker.
+
+        Returns
+        -------
+        dict[str, object]
+            Captured CLI output and exit code.
+        """
+        limit = arguments.get("limit")
+        if not isinstance(limit, int) or limit <= 0:
+            msg = "CLI daemon embedding limit must be positive."
+            raise TypeError(msg)
+        return capture(
+            lambda: _run_embeddings(
+                EmbeddingCommandRequest(
+                    root=trusted_root,
+                    query=required(arguments, "query"),
+                    limit=limit,
+                    prefix=None,
+                    as_json=optional_bool(arguments, "as_json"),
+                    query_prefix=cast("str | None", arguments.get("query_prefix")),
+                )
+            )
+        )
+
+    def plugins_handler(
+        arguments: dict[str, object], _connection: BackendQueryConnection
+    ) -> dict[str, object]:
+        """Execute daemon-owned plugin diagnostics.
+
+        Parameters
+        ----------
+        arguments : dict[str, object]
+            Path-free plugin CLI arguments.
+        _connection : object
+            Active warm connection retained by the worker.
+
+        Returns
+        -------
+        dict[str, object]
+            Captured CLI output and exit code.
+        """
+        return capture(
+            lambda: _run_plugins(
+                root=trusted_root, as_json=optional_bool(arguments, "as_json")
+            )
+        )
+
+    def capabilities_handler(
+        arguments: dict[str, object], _connection: BackendQueryConnection
+    ) -> dict[str, object]:
+        """Execute daemon-owned capability diagnostics.
+
+        Parameters
+        ----------
+        arguments : dict[str, object]
+            Path-free capability CLI arguments.
+        _connection : object
+            Active warm connection retained by the worker.
+
+        Returns
+        -------
+        dict[str, object]
+            Captured CLI output and exit code.
+        """
+        return capture(
+            lambda: _run_capabilities(
+                root=trusted_root,
+                as_json=optional_bool(arguments, "as_json"),
+                strict=optional_bool(arguments, "strict"),
+            )
+        )
+
+    return {
+        "cli.ctx": context_handler,
+        "cli.emb": embedding_handler,
+        "cli.plugins": plugins_handler,
+        "cli.caps": capabilities_handler,
+    }
+
+
+def _run_context_without_freshness_check(
+    root: Path,
+    *,
+    query: str,
+    as_json: bool,
+    as_prompt: bool,
+    explain: bool,
+) -> int:
+    """Render context in the daemon after its generation check already passed.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Startup-trusted repository root.
+    query : str
+        Context retrieval query.
+    as_json : bool
+        Whether to render structured JSON.
+    as_prompt : bool
+        Whether to render a prompt.
+    explain : bool
+        Whether to render retrieval diagnostics.
+
+    Returns
+    -------
+    int
+        Zero after emitting the existing context rendering.
+    """
+    print(
+        context_for(
+            ContextRequest(
+                root=root,
+                query=query,
+                prefix=None,
+                as_json=as_json,
+                as_prompt=as_prompt,
+                explain=explain,
+            )
+        )
+    )
     return 0
 
 
@@ -5424,6 +5856,101 @@ def _run_daemon_command(args: argparse.Namespace, root: Path) -> int:
     return 0
 
 
+def _run_query_daemon_command(args: argparse.Namespace, root: Path) -> int:
+    """Run or inspect the repository-local foreground query daemon.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed query-daemon command arguments.
+    root : pathlib.Path
+        Repository root used to resolve effective configuration.
+
+    Returns
+    -------
+    int
+        Zero after foreground shutdown or status inspection; ``2`` for
+        disabled foreground mode or service actions deferred to Slice 6.
+    """
+    action = args.query_daemon_action or "help"
+    config = load_effective_config(root=root)
+    identity = QueryDaemonIdentity.from_paths(root, get_storage_root(root))
+    if action == "status":
+        try:
+            status = QueryDaemonStatusStore(identity).read()
+        except ValueError as error:
+            print(f"[codira] Query daemon status is corrupt: {error}", file=sys.stderr)
+            return 2
+        if status is None:
+            print("[codira] No durable query-daemon status record.")
+            return 0
+        print(
+            "[codira] Query daemon: "
+            f"{status.state.value}; "
+            f"identity={status.identity}; "
+            f"pid={status.pid or '-'}; "
+            f"backend={status.backend}; "
+            f"embedding={status.embedding_backend}; "
+            f"current_generation={status.current_generation or '-'}; "
+            f"observed_generation={status.observed_generation or '-'}; "
+            f"connection_warm={status.connection_warm}; "
+            f"model_warm={status.model_warm}; "
+            f"queued={status.queued_requests}; "
+            f"active={status.active_requests}; "
+            f"fallback={status.fallback_available}; "
+            f"last_error={status.last_error or '-'}"
+        )
+        return 0
+    if action == "run":
+        if not config.query_daemon.enabled:
+            print(
+                "[codira] query-daemon run requires query_daemon.enabled = true.",
+                file=sys.stderr,
+            )
+            return 2
+        stop_event = Event()
+        restore_handlers = install_query_daemon_signal_handlers(stop_event)
+        try:
+            run_foreground_query_daemon(identity, config, stop_event=stop_event)
+        finally:
+            restore_handlers()
+        return 0
+    if action not in {"install", "uninstall", "start", "stop"}:
+        print(f"[codira] Unsupported query-daemon action: {action}", file=sys.stderr)
+        return 2
+    if not config.query_daemon.enabled:
+        print(
+            f"[codira] query-daemon {action} requires query_daemon.enabled = true.",
+            file=sys.stderr,
+        )
+        return 2
+    output_root = get_storage_root(root)
+    if sys.platform.startswith("linux"):
+        service = QueryDaemonSystemdUserService(root, output_root)
+    elif sys.platform == "darwin":
+        service = QueryDaemonLaunchdUserAgent(root, output_root)
+    elif sys.platform == "win32":
+        service = QueryDaemonWindowsScmService(root, output_root)
+    else:
+        print(
+            "[codira] query-daemon services require Linux, macOS, or Windows.",
+            file=sys.stderr,
+        )
+        return 2
+    if action == "install":
+        print(f"[codira] Installed query-daemon service: {service.install()}")
+    elif action == "uninstall":
+        service.uninstall()
+        print(f"[codira] Uninstalled query-daemon service: {service.identifier}")
+    elif action == "start":
+        service.start()
+        print(f"[codira] Started query-daemon service: {service.identifier}")
+    else:
+        service.stop()
+        print(f"[codira] Stopped query-daemon service: {service.identifier}")
+    return 0
+
+
 def _run_calibrate_embeddings(args: argparse.Namespace) -> int:
     """
     Run embeddings calibration and emit or write config-compatible output.
@@ -5578,12 +6105,8 @@ def _command_handlers(
             prefix=prefix,
             raw_prefix=raw_prefix,
         ),
-        "plugins": lambda: _run_plugins(root=root, as_json=args.json),
-        "caps": lambda: _run_capabilities(
-            root=root,
-            as_json=args.json,
-            strict=args.strict,
-        ),
+        "plugins": lambda: _run_plugins_command(args, root),
+        "caps": lambda: _run_capabilities_command(args, root),
         "ctx": lambda: _run_context_command(
             args,
             root,
@@ -5591,6 +6114,7 @@ def _command_handlers(
         ),
         "config": lambda: _run_config_command(args, root),
         "daemon": lambda: _run_daemon_command(args, root),
+        "query-daemon": lambda: _run_query_daemon_command(args, root),
         "calibrate": lambda: _run_calibrate_command(args),
     }
 

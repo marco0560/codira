@@ -29,6 +29,9 @@ from typing import Protocol, cast
 
 from codira.config import load_effective_config
 from codira.daemon.runtime import run_foreground_daemon
+from codira.daemon.service_spec import ServiceSpecification
+from codira.query_daemon import QueryDaemonIdentity
+from codira.query_daemon_lifecycle import run_foreground_query_daemon
 
 
 class _ServiceUtilModule(Protocol):
@@ -445,6 +448,73 @@ class WindowsScmService:
         )
 
 
+class QueryDaemonWindowsScmService(WindowsScmService):
+    """Manage one output-isolated Windows SCM query-daemon service."""
+
+    def __init__(
+        self, root: Path, output_root: Path, *, api: WindowsScmApi | None = None
+    ) -> None:
+        """Initialize fixed repository/output SCM query service identity.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        output_root : pathlib.Path
+            Effective output root.
+        api : WindowsScmApi | None, optional
+            pywin32 adapter override.
+
+        Returns
+        -------
+        None
+        """
+        super().__init__(root, api=api)
+        self._specification = ServiceSpecification.query(root, output_root)
+
+    @property
+    def service_name(self) -> str:
+        """Return the output-isolated SCM query service identity.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        str
+            Stable Windows SCM service name.
+        """
+        return f"CodiraQueryDaemon_{self._specification.identity}"
+
+    def install(self) -> Path:
+        """Install query service identity and persist its output root.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        pathlib.Path
+            Effective output root persisted for the service host.
+        """
+        self._api.serviceutil.InstallService(
+            f"{__name__}.CodiraQueryWindowsService",
+            self.service_name,
+            f"Codira warm query daemon ({self._root.name})",
+            startType=self._api.service.SERVICE_AUTO_START,
+            description="Repository-scoped Codira warm query daemon.",
+        )
+        self._api.serviceutil.SetServiceCustomOption(
+            self.service_name, "root", str(self._root)
+        )
+        self._api.serviceutil.SetServiceCustomOption(
+            self.service_name, "output_root", str(self._specification.output_root)
+        )
+        return self._specification.output_root
+
+
 if sys.platform == "win32":
     _serviceutil = importlib.import_module("win32serviceutil")
     _win32service = importlib.import_module("win32service")
@@ -518,10 +588,39 @@ if sys.platform == "win32":
             root_value = _serviceutil.GetServiceCustomOption(self, "root")
             if not isinstance(root_value, str) or not root_value:
                 msg = "Windows service has no configured repository root"
-                raise RuntimeError(msg)
+                raise TypeError(msg)
             root = Path(root_value)
             config = load_effective_config(root=root)
             run_foreground_daemon(root, config.daemon, stop_event=self._stop_event)
+
+    class CodiraQueryWindowsService(CodiraWindowsService):  # type: ignore[misc]
+        """Host one warm query daemon under Windows Service Control Manager."""
+
+        def SvcDoRun(self) -> None:
+            """Run the fixed repository/output foreground query daemon.
+
+            Parameters
+            ----------
+            None
+
+            Returns
+            -------
+            None
+
+            Raises
+            ------
+            RuntimeError
+                If required SCM root or output-root configuration is missing.
+            """
+            root_value = _serviceutil.GetServiceCustomOption(self, "root")
+            output_value = _serviceutil.GetServiceCustomOption(self, "output_root")
+            if not isinstance(root_value, str) or not isinstance(output_value, str):
+                msg = "Windows query service has no configured repository/output roots"
+                raise TypeError(msg)
+            root = Path(root_value)
+            config = load_effective_config(root=root)
+            identity = QueryDaemonIdentity.from_paths(root, Path(output_value))
+            run_foreground_query_daemon(identity, config, stop_event=self._stop_event)
 
 else:
 
@@ -537,3 +636,6 @@ else:
         None
             Windows imports replace this placeholder with the SCM host class.
         """
+
+    class CodiraQueryWindowsService(CodiraWindowsService):
+        """Placeholder exported on non-Windows hosts for query registration."""

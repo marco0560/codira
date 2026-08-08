@@ -11,7 +11,10 @@ import pytest
 from codira.indexer import index_repo
 from codira.mcp.adapter import MCPAdapter
 from codira.mcp.contract import MCP_CONTRACT_VERSION
+from codira.mcp.proxy import QueryDaemonMCPProxy, build_mcp_operations
 from codira.mcp.server import create_server
+from codira.query_daemon import QueryDaemonIdentity, QueryRuntime, WarmQuerySession
+from codira.query_daemon_ipc import QueryDaemonIpcServer
 from codira.registry import active_index_backend
 
 if TYPE_CHECKING:
@@ -61,6 +64,8 @@ def test_adapter_returns_direct_core_symbol_result(tmp_path: Path) -> None:
         "source": "codira-core",
         "repository": tmp_path.name,
         "trusted_root": ".",
+        "execution_mode": "direct",
+        "generation": 1,
     }
     assert result["result"] == {
         "symbols": [
@@ -73,6 +78,96 @@ def test_adapter_returns_direct_core_symbol_result(tmp_path: Path) -> None:
             }
         ]
     }
+
+
+def test_adapter_uses_supplied_warm_query_executor(tmp_path: Path) -> None:
+    """Execute structural MCP reads through a supplied warm session.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-provided temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts the warm and direct result envelopes are identical.
+    """
+    _indexed_repository(tmp_path)
+    identity = QueryDaemonIdentity.from_paths(tmp_path, tmp_path)
+    runtime = QueryRuntime(
+        identity,
+        lambda generation: WarmQuerySession(
+            lambda: active_index_backend(root=tmp_path),
+            tmp_path,
+            generation,
+        ),
+    )
+    runtime.refresh(1)
+    try:
+        direct = MCPAdapter(tmp_path).symbol("answer")
+        warm = MCPAdapter(tmp_path, query_executor=runtime).symbol("answer")
+    finally:
+        runtime.close()
+
+    assert warm == direct
+
+
+def test_proxy_routes_every_approved_tool_through_warm_daemon(tmp_path: Path) -> None:
+    """Route the complete MCP surface through a real local warm IPC server.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-provided temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts warm output and pagination retain direct parity.
+    """
+    _indexed_repository(tmp_path)
+    identity = QueryDaemonIdentity.from_paths(tmp_path, tmp_path)
+    runtime = QueryRuntime(
+        identity,
+        lambda generation: WarmQuerySession(
+            lambda: active_index_backend(root=tmp_path), tmp_path, generation
+        ),
+    )
+    runtime.refresh_from_generation_store()
+    daemon = QueryDaemonIpcServer(identity, runtime, build_mcp_operations(tmp_path))
+    daemon.start()
+    try:
+        direct = MCPAdapter(tmp_path)
+        proxy = QueryDaemonMCPProxy(tmp_path)
+        calls = {
+            "capabilities": lambda adapter: adapter.capabilities(),
+            "index_status": lambda adapter: adapter.index_status(),
+            "symbol": lambda adapter: adapter.symbol("answer", limit=1),
+            "symbols": lambda adapter: adapter.symbols(limit=1),
+            "references": lambda adapter: adapter.references("helper", limit=1),
+            "callers": lambda adapter: adapter.callers("helper", limit=1),
+            "callees": lambda adapter: adapter.callees("answer", limit=1),
+            "documentation_findings": lambda adapter: adapter.documentation_findings(
+                limit=1
+            ),
+            "context_for_task": lambda adapter: adapter.context_for_task("answer"),
+            "impact_analysis": lambda adapter: adapter.impact_analysis(
+                "helper", limit=1
+            ),
+            "repository_map": lambda adapter: adapter.repository_map(limit=1),
+        }
+        for name, call in calls.items():
+            warm = call(proxy)  # type: ignore[no-untyped-call]
+            direct_result = call(direct)  # type: ignore[no-untyped-call]
+            assert warm["result"] == direct_result["result"], name
+            assert warm["page"] == direct_result["page"], name
+            provenance = cast("dict[str, object]", warm["provenance"])
+            assert provenance["execution_mode"] == "warm", name
+            assert provenance["generation"] == 1, name
+    finally:
+        daemon.close()
+        runtime.close()
 
 
 def test_server_exposes_initial_approved_tools(tmp_path: Path) -> None:
@@ -132,11 +227,12 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     repository_map = adapter.repository_map()
     truncated_map = adapter.repository_map(output_budget=1)
 
-    assert status["result"] == {
-        "indexed": True,
-        "metadata": {"schema_version": "23"},
-        "coverage": {"status": "complete", "issues": []},
-    }
+    status_result = cast("dict[str, object]", status["result"])
+    assert status_result["indexed"] is True
+    assert status_result["coverage"] == {"status": "complete", "issues": []}
+    status_metadata = cast("dict[str, str]", status_result["metadata"])
+    assert status_metadata["schema_version"] == "23"
+    assert status_metadata["backend_name"] == "sqlite"
     assert inventory["result"] == {
         "symbols": [
             {
@@ -281,8 +377,12 @@ def test_server_symbol_tool_invokes_the_direct_adapter(tmp_path: Path) -> None:
         "source": "codira-core",
         "repository": tmp_path.name,
         "trusted_root": ".",
+        "execution_mode": "direct",
+        "generation": 1,
     }
-    assert structured["freshness"] == {"schema_version": "23"}
+    freshness = cast("dict[str, str]", structured["freshness"])
+    assert freshness["schema_version"] == "23"
+    assert freshness["backend_name"] == "sqlite"
     assert structured["page"] == {"limit": 100, "next_cursor": None}
     truncation = cast("dict[str, object]", structured["truncation"])
     assert truncation["truncated"] is False

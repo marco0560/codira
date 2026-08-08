@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-MCP_CONTRACT_VERSION: Final = "1.0.0"
+MCP_CONTRACT_VERSION: Final = "1.1.0"
 MAX_OUTPUT_BUDGET: Final = 16_000
 DEFAULT_OUTPUT_BUDGET: Final = 4_000
 
@@ -117,7 +117,25 @@ def _response_schema() -> dict[str, object]:
         "properties": {
             "contract_version": {"const": MCP_CONTRACT_VERSION},
             "result": {},
-            "provenance": {"type": "object"},
+            "provenance": {
+                "type": "object",
+                "required": [
+                    "source",
+                    "repository",
+                    "trusted_root",
+                    "execution_mode",
+                    "generation",
+                ],
+                "properties": {
+                    "source": {"type": "string"},
+                    "repository": {"type": "string"},
+                    "trusted_root": {"const": "."},
+                    "execution_mode": {"enum": ["warm", "direct", "fallback"]},
+                    "generation": {"type": ["integer", "null"]},
+                    "fallback_reason": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
             "freshness": {"type": "object"},
             "page": {"type": "object"},
             "truncation": {"type": "object"},

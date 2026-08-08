@@ -87,6 +87,44 @@ query modules directly.
 Phase 8 completes the backend-selection side of that boundary by routing query
 entry points through `codira.registry.active_index_backend()`.
 
+## Repository-local warm query daemon (contract)
+
+ADR-026 establishes a second optional daemon for repeated read/query work. It
+is scoped to one resolved repository root and effective output directory, and
+will retain warm plugins, an embedding model, and a backend read connection.
+The automatic indexing daemon remains the only automatic writer; SQLite and
+DuckDB remain authoritative. MCP and eligible CLI commands will use the
+service opportunistically and fall back to direct-core execution.
+
+The service is not a repository catalogue and never accepts request-provided
+repository paths. Cross-repository service selection remains the separate #51
+boundary.
+
+### Warm runtime ownership
+
+The warm runtime owns one backend read connection on a dedicated worker thread
+and serializes v1 operations through that worker. It reads only the durable
+generation record for its fixed repository/output identity. A `ready` record
+builds a replacement session before the runtime swaps it in; `updating` never
+becomes current. Direct context retrieval remains unchanged when no supplied
+connection is present.
+
+Each worker also holds one effective-configuration and active-plugin scope for
+the lifetime of that session. The configured structural backend, vector store,
+and embedding engine are therefore reused by repeated reads. When embeddings
+are enabled, session warmup initializes the vector store and loads the model
+before the session is published. A warmup failure leaves no partial session
+installed, so a caller can continue through the existing direct-core path.
+Session retirement closes the backend connection, invokes an available vector
+store close hook, and clears plus closes the embedding runtime before its
+worker-local plugin scope is released.
+
+`MCPAdapter` accepts an optional connection-owning query executor. With no
+executor it preserves the current direct-core behavior; with one it sends
+approved structural and context reads to the executor while retaining the MCP
+startup-trusted-root boundary. IPC proxying and automatic discovery remain
+later slices, not part of this in-process seam.
+
 Phases 12 through 17 complete the ranking and retrieval side by adding:
 
 - deterministic file-role classification

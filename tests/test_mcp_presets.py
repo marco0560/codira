@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from codira.mcp.contract import MCP_CONTRACT_VERSION
 from codira.mcp.presets import ClientPreset, build_client_configuration
 from codira.mcp.server import create_server
 
@@ -49,4 +50,4 @@ def test_generated_client_profile_reaches_mcp_server(
         "tuple[object, dict[str, object]]",
         asyncio.run(create_server(tmp_path).call_tool("capabilities", {})),
     )
-    assert structured["contract_version"] == "1.0.0"
+    assert structured["contract_version"] == MCP_CONTRACT_VERSION

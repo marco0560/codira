@@ -17,6 +17,7 @@ These documents describe the current architecture produced by the accepted
 - [System overview](system-overview.md)
 - [Indexing pipeline](indexing-pipeline.md)
 - [Query pipeline](query-pipeline.md)
+- [Query-daemon local IPC](query-daemon-ipc.md)
 - [Plugin model](plugin-model.md)
 - [Core contracts](core-contracts.md)
 - [Storage backends](storage-backends.md)

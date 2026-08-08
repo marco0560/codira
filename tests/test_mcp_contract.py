@@ -87,7 +87,13 @@ def test_every_tool_request_and_response_schema_is_valid() -> None:
     response = {
         "contract_version": MCP_CONTRACT_VERSION,
         "result": {},
-        "provenance": {},
+        "provenance": {
+            "source": "codira-core",
+            "repository": "repo",
+            "trusted_root": ".",
+            "execution_mode": "direct",
+            "generation": None,
+        },
         "freshness": {},
         "page": {},
         "truncation": {},

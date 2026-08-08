@@ -256,3 +256,19 @@ assert exact timing values.
 
 Performance campaigns are manual developer workflows. Normal CI should validate
 the scripts without running noisy wall-clock benchmark gates.
+
+## Query-daemon repeated reads
+
+Use `scripts/benchmark_query_daemon.py` after `codira index` to compare direct
+and warm `ctx`, embedding search, `plugins`, and `caps` reads for one fixed
+repository. It records mean/minimum latency, generation, plugin/runtime
+metadata, and peak RSS in a timestamped JSON artifact. Stop any already-running
+query daemon first: the script owns a temporary local endpoint for the run.
+
+```bash
+uv run python scripts/benchmark_query_daemon.py --runs 10
+```
+
+The script is a report generator, never a pass/fail timing gate. Compare
+backend-specific artifacts only when their commit, configuration, machine, and
+command vector match.

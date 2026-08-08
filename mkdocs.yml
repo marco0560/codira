@@ -41,6 +41,7 @@ nav:
       - System overview: architecture/system-overview.md
       - Indexing pipeline: architecture/indexing-pipeline.md
       - Query pipeline: architecture/query-pipeline.md
+      - Query-daemon local IPC: architecture/query-daemon-ipc.md
       - Plugin model: architecture/plugin-model.md
       - Core contracts: architecture/core-contracts.md
       - Storage backends: architecture/storage-backends.md
