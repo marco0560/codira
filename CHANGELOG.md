@@ -1,3 +1,11 @@
+# [1.60.0](https://github.com/marco0560/codira/compare/v1.59.0...v1.60.0) (2026-08-08)
+
+
+### Features
+
+* **cli:** add optional automatic indexing daemon ([1c7f87e](https://github.com/marco0560/codira/commit/1c7f87e6243a76f372f76eb086bddbeaf89d6c6b)), closes [#22](https://github.com/marco0560/codira/issues/22)
+* **query:** add repository-local warm query daemon ([bc162ee](https://github.com/marco0560/codira/commit/bc162eeb747539b2d2532b92c4c69d87f0030733)), closes [#22](https://github.com/marco0560/codira/issues/22)
+
 # [1.59.0](https://github.com/marco0560/codira/compare/v1.58.0...v1.59.0) (2026-08-04)
 
 
