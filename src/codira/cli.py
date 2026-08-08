@@ -2128,10 +2128,6 @@ def _run_index(request: IndexCommandRequest) -> int:  # noqa: C901, PLR0912
                 embedding_index_mode=effective_embedding_index_mode,
                 analysis_concurrency=analysis_concurrency,
             )
-        _write_index_head_metadata(
-            root,
-            indexed_file_count=report.indexed + report.reused,
-        )
     if as_json:
         _emit_json(
             _index_payload(
@@ -4439,14 +4435,7 @@ def _run_locked_index_refresh(
     else:
         print(request.message)
     active_index_backend(root=root).initialize(root)
-    report = index_repo(root)
-    _write_index_metadata(
-        root,
-        _build_index_metadata(
-            root,
-            indexed_file_count=report.indexed + report.reused,
-        ),
-    )
+    index_repo(root)
     print("[codira] Index ready", file=sys.stderr)
 
 

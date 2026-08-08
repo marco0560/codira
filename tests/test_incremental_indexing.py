@@ -4375,7 +4375,7 @@ def test_ensure_index_missing_db_writes_schema_and_commit_metadata(
         'def demo():\n    """Return a constant."""\n    return 1\n',
     )
     monkeypatch.setattr(
-        "codira.cli._get_head_commit",
+        "codira.indexer.read_head_commit",
         lambda root: "abc123",
     )
 

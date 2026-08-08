@@ -17,6 +17,7 @@ This module belongs to the **indexing layer** and glues together analyzers, stor
 
 from __future__ import annotations
 
+import json
 import os
 import warnings
 from collections import Counter
@@ -73,7 +74,12 @@ from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
     get_embedding_backend,
 )
-from codira.storage import acquire_index_lock
+from codira.storage import (
+    _read_metadata_file,
+    _write_metadata_file,
+    acquire_index_lock,
+    get_metadata_path,
+)
 from codira.vector_store import active_vector_store_context
 
 if TYPE_CHECKING:
@@ -1662,6 +1668,22 @@ def index_repo(
                 indexed_file_count=report.indexed + report.reused,
             )
         )
+        metadata = _read_metadata_file(get_metadata_path(root))
+        metadata.update(
+            {
+                "schema_version": str(backend.version),
+                "backend_name": str(backend.name),
+                "backend_version": str(backend.version),
+                "analyzer_inventory": json.dumps(
+                    _current_analyzer_inventory_rows(analyzers)
+                ),
+                "indexed_file_count": str(report.indexed + report.reused),
+            }
+        )
+        commit = read_head_commit(root)
+        if commit:
+            metadata["commit"] = commit
+        _write_metadata_file(get_metadata_path(root), metadata)
         return report
 
 
