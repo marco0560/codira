@@ -1,3 +1,10 @@
+# Unreleased
+
+### Features
+
+* **installer:** add the standalone Textual setup workflow, offline release
+  rehearsal, and cross-platform installer smoke coverage
+
 # [1.60.0](https://github.com/marco0560/codira/compare/v1.59.0...v1.60.0) (2026-08-08)
 
 

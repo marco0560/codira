@@ -42,4 +42,5 @@ def test_bundle_package_declares_expected_first_party_dependencies() -> None:
         "codira-embedding-onnx==1.55.0",
         "codira-vector-store-sqlite==1.55.0",
         "codira-vector-store-duckdb==1.55.0",
+        "codira-installer==1.55.0",
     ]

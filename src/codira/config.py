@@ -69,14 +69,32 @@ _REPO_CONFIG_PATH_OVERRIDE: ContextVar[Path | None] = ContextVar(
 
 
 class ConfigError(ValueError):
-    """
-    Stable operator-facing configuration error.
+    """Stable operator-facing configuration error.
 
     Parameters
     ----------
     message : str
         Human-readable validation or loading failure.
     """
+
+
+@dataclass(frozen=True)
+class ConfigWriteResult:
+    """Describe an atomic configuration replacement and its recoverable backup.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Configuration file considered for update.
+    backup_path : pathlib.Path | None
+        Previous byte-identical content backup when a replacement occurred.
+    changed : bool
+        Whether the configuration file was replaced.
+    """
+
+    path: Path
+    backup_path: Path | None
+    changed: bool
 
 
 @dataclass(frozen=True)
@@ -1938,7 +1956,7 @@ def write_config_file(
     path.write_text(rendered, encoding="utf-8")
 
 
-def update_config_file(path: Path, updates: Mapping[str, object]) -> None:
+def update_config_file(path: Path, updates: Mapping[str, object]) -> ConfigWriteResult:
     """
     Merge partial config updates into one TOML config file.
 
@@ -1951,8 +1969,8 @@ def update_config_file(path: Path, updates: Mapping[str, object]) -> None:
 
     Returns
     -------
-    None
-        The target file is updated in place.
+    ConfigWriteResult
+        Replacement status and backup metadata.
 
     Raises
     ------
@@ -1962,26 +1980,56 @@ def update_config_file(path: Path, updates: Mapping[str, object]) -> None:
         If directory or file access fails.
     """
 
-    validate_config_mapping(updates)
-    if path.exists():
-        document = tomlkit.parse(path.read_text(encoding="utf-8"))
-        existing = _deep_copy_mapping(document)
-        validate_config_mapping(existing)
-    else:
-        document = tomlkit.document()
-        existing = {}
+    original = path.read_text(encoding="utf-8") if path.exists() else None
+    rendered = preview_config_update(path, updates)
+    if original == rendered:
+        return ConfigWriteResult(path=path, backup_path=None, changed=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup_path: Path | None = None
+    if original is not None:
+        backup_path = path.with_suffix(path.suffix + ".bak")
+        backup_temporary = backup_path.with_suffix(backup_path.suffix + ".tmp")
+        backup_temporary.write_text(original, encoding="utf-8")
+        backup_temporary.replace(backup_path)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(rendered, encoding="utf-8")
+    temporary.replace(path)
+    return ConfigWriteResult(path=path, backup_path=backup_path, changed=True)
 
+
+def preview_config_update(path: Path, updates: Mapping[str, object]) -> str:
+    """Render a validated comment-preserving configuration update without writing.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Existing config path, or a path that does not yet exist.
+    updates : collections.abc.Mapping[str, object]
+        Partial configuration update.
+
+    Returns
+    -------
+    str
+        Validated TOML replacement text.
+    """
+    validate_config_mapping(updates)
+    document = (
+        tomlkit.parse(path.read_text(encoding="utf-8"))
+        if path.exists()
+        else tomlkit.document()
+    )
+    existing = _deep_copy_mapping(document)
+    validate_config_mapping(existing)
     merged = _deep_copy_mapping(existing)
     _merge_config(
         merged,
         updates,
         origins={},
-        origin=ConfigOrigin("update", path, str(path)),
+        origin=ConfigOrigin("preview", path, str(path)),
     )
     validate_config_mapping(merged)
     _merge_toml_table(document, updates)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(tomlkit.dumps(document), encoding="utf-8")
+    return tomlkit.dumps(document)
 
 
 def ensure_user_config() -> Path:

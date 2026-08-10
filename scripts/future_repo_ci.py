@@ -154,6 +154,12 @@ def future_repo_ci_specs() -> tuple[FutureRepoCISpec, ...]:
             validate=package_validate,
         ),
         FutureRepoCISpec(
+            repository="codira-installer",
+            purpose="first-party installer distribution",
+            install=(("uv", "sync", "--frozen", "--extra", "test"),),
+            validate=package_validate,
+        ),
+        FutureRepoCISpec(
             repository="codira-bundle-official",
             purpose="curated first-party bundle package",
             install=(("uv", "sync", "--frozen", "--extra", "test"),),

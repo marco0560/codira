@@ -236,6 +236,7 @@ EXPECTED_FIRST_PARTY_PACKAGE_DIRS: tuple[str, ...] = (
     "packages/codira-embedding-onnx",
     "packages/codira-vector-store-sqlite",
     "packages/codira-vector-store-duckdb",
+    "packages/codira-installer",
     "packages/codira-bundle-official",
 )
 EXPECTED_NON_BUNDLE_PACKAGE_DIRS: tuple[str, ...] = tuple(

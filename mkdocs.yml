@@ -36,6 +36,7 @@ nav:
   - Getting started: getting_started.md
   - Local MCP: mcp.md
   - Configuration: configuration.md
+  - Installer: installer.md
   - Architecture:
       - Index: architecture/index.md
       - System overview: architecture/system-overview.md

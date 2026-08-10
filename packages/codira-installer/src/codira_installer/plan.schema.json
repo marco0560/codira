@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codira installer plan",
+  "type": "object",
+  "required": ["schema_version", "coordinated_version", "request", "packages", "steps", "fingerprint"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "coordinated_version": {"type": "string", "minLength": 1},
+    "packages": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "deselected_packages": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "request": {"type": "object"},
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["identifier", "command", "postcondition"],
+        "properties": {
+          "identifier": {"type": "string", "minLength": 1},
+          "command": {"type": "array", "items": {"type": "string"}},
+          "postcondition": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

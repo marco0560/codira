@@ -20,29 +20,36 @@ accepted first-party package boundary used across migration tooling.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from pathlib import Path
+from typing import cast
 
-if TYPE_CHECKING:
-    from pathlib import Path
+REPO_ROOT = Path(__file__).resolve().parents[1]
+MANIFEST_PATH = REPO_ROOT / "packages" / "first_party_packages.json"
 
-FIRST_PARTY_PACKAGE_DIRS: tuple[str, ...] = (
-    "packages/codira-analyzer-python",
-    "packages/codira-analyzer-json",
-    "packages/codira-analyzer-c",
-    "packages/codira-analyzer-cpp",
-    "packages/codira-analyzer-bash",
-    "packages/codira-analyzer-markdown",
-    "packages/codira-analyzer-text",
-    "packages/codira-documentation-audit-numpy",
-    "packages/codira-documentation-audit-google",
-    "packages/codira-documentation-audit-doxygen",
-    "packages/codira-backend-sqlite",
-    "packages/codira-backend-duckdb",
-    "packages/codira-embedding-sentence-transformers",
-    "packages/codira-embedding-onnx",
-    "packages/codira-vector-store-sqlite",
-    "packages/codira-vector-store-duckdb",
-    "packages/codira-bundle-official",
+
+def load_first_party_manifest() -> dict[str, object]:
+    """Load the canonical first-party package manifest.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    dict[str, object]
+        Parsed manifest data.
+    """
+    return cast(
+        "dict[str, object]", json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+
+
+FIRST_PARTY_PACKAGE_DIRS: tuple[str, ...] = tuple(
+    cast("str", package["path"])
+    for package in cast(
+        "list[dict[str, object]]", load_first_party_manifest()["packages"]
+    )
 )
 
 

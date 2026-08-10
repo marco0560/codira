@@ -175,6 +175,16 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
             stays_in_core=("tests/test_plugins.py",),
         ),
         FutureRepoSplitManifest(
+            repository="codira-installer",
+            owned_paths=(
+                "packages/codira-installer/README.md",
+                "packages/codira-installer/pyproject.toml",
+                "packages/codira-installer/src/",
+                "packages/codira-installer/tests/",
+            ),
+            stays_in_core=(),
+        ),
+        FutureRepoSplitManifest(
             repository="codira-bundle-official",
             owned_paths=(
                 "packages/codira-bundle-official/README.md",

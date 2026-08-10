@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+import tomlkit
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -51,6 +53,57 @@ def build_client_configuration(client: ClientPreset, root: Path) -> str:
         return json.dumps({key: {"codira": command}}, indent=2, sort_keys=True) + "\n"
     msg = f"unsupported MCP client preset: {client}"
     raise ValueError(msg)
+
+
+def merge_client_configuration(client: ClientPreset, root: Path, existing: str) -> str:
+    """Merge Codira's MCP entry while preserving unrelated client settings.
+
+    Parameters
+    ----------
+    client : {"claude-desktop", "codex", "cursor"}
+        Client configuration format to merge.
+    root : pathlib.Path
+        Trusted repository root for the server entry.
+    existing : str
+        Existing TOML or JSON configuration text.
+
+    Returns
+    -------
+    str
+        Deterministic merged configuration text.
+
+    Raises
+    ------
+    json.JSONDecodeError
+        If an existing JSON client configuration is invalid.
+    tomlkit.exceptions.ParseError
+        If an existing Codex TOML configuration is invalid.
+    TypeError
+        If the selected JSON MCP table is not an object.
+    ValueError
+        If the trusted repository root is not a directory.
+    """
+    trusted_root = root.resolve()
+    if not trusted_root.is_dir():
+        msg = f"MCP repository root is not a directory: {trusted_root}"
+        raise ValueError(msg)
+    command = {"command": "codira-mcp", "args": ["--root", str(trusted_root)]}
+    if client == "codex":
+        document = tomlkit.parse(existing) if existing.strip() else tomlkit.document()
+        servers = document.get("mcp_servers")
+        if servers is None:
+            servers = tomlkit.table()
+            document["mcp_servers"] = servers
+        servers["codira"] = command
+        return tomlkit.dumps(document)
+    payload = json.loads(existing) if existing.strip() else {}
+    key = "mcpServers" if client == "claude-desktop" else "mcp"
+    servers = payload.setdefault(key, {})
+    if not isinstance(servers, dict):
+        msg = f"{key} must be a JSON object"
+        raise TypeError(msg)
+    servers["codira"] = command
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
 def main(argv: Sequence[str] | None = None) -> int:

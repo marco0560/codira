@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, cast
+import sys
+from pathlib import Path
+from typing import cast
 
 import pytest
+from mcp.client.session import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from codira.indexer import index_repo
 from codira.mcp.adapter import MCPAdapter
@@ -17,8 +21,29 @@ from codira.query_daemon import QueryDaemonIdentity, QueryRuntime, WarmQuerySess
 from codira.query_daemon_ipc import QueryDaemonIpcServer
 from codira.registry import active_index_backend
 
-if TYPE_CHECKING:
-    from pathlib import Path
+
+async def _subprocess_tool_names(root: Path) -> set[str]:
+    """Initialize the installed stdio entry point and return its tool names.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Trusted repository root passed to the child server process.
+
+    Returns
+    -------
+    set[str]
+        MCP tool names reported after a completed JSON-RPC initialization.
+    """
+    entry_point = Path(sys.executable).with_name("codira-mcp")
+    parameters = StdioServerParameters(
+        command=str(entry_point),
+        args=["--root", str(root)],
+    )
+    async with stdio_client(parameters) as streams, ClientSession(*streams) as session:
+        await session.initialize()
+        tools = await session.list_tools()
+    return {tool.name for tool in tools.tools}
 
 
 def _indexed_repository(root: Path) -> None:
@@ -186,6 +211,34 @@ def test_server_exposes_initial_approved_tools(tmp_path: Path) -> None:
     tools = asyncio.run(create_server(tmp_path).list_tools())
 
     assert {tool.name for tool in tools} == {
+        "callees",
+        "callers",
+        "capabilities",
+        "documentation_findings",
+        "context_for_task",
+        "impact_analysis",
+        "index_status",
+        "references",
+        "symbol",
+        "symbols",
+        "repository_map",
+    }
+
+
+def test_stdio_entry_point_completes_mcp_initialization(tmp_path: Path) -> None:
+    """Assert the installed stdio server completes a real MCP handshake.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-provided trusted repository root.
+
+    Returns
+    -------
+    None
+        The test asserts the external process advertises every approved tool.
+    """
+    assert asyncio.run(_subprocess_tool_names(tmp_path)) == {
         "callees",
         "callers",
         "capabilities",

@@ -31,3 +31,32 @@
    the long description before uploading the same artifacts to PyPI.
 10. Upload to PyPI in dependency order.
 11. Run a fresh PyPI smoke test with `codira-bundle-official`.
+
+## Installer release rehearsal
+
+Before a coordinated release, validate the two user-facing artifacts without
+allowing the rehearsal to contact a package index:
+
+```bash
+uv run python scripts/rehearse_installer_installs.py \
+  --wheel-dir /tmp/codira-installer-wheels \
+  --venv-dir /tmp/codira-installer-venv \
+  --plan-dir /tmp/codira-installer-plans
+```
+
+The rehearsal builds `codira-installer` and `codira-bundle-official`, installs
+their wheels with `uv pip install --no-index --no-deps`, verifies bundle
+metadata, and exports standalone, selected-feature, core-only, and
+local-checkout plans. It is deliberately not a PyPI upload rehearsal; TestPyPI
+and PyPI uploads remain explicit operator actions above.
+
+Build and check both installer-facing wheel and source artifacts as part of the
+same release evidence. In an offline or locked development environment, use
+the repository's synchronized build backend rather than requesting a build
+isolation download:
+
+```bash
+uv run python -m build --no-isolation --wheel --sdist --outdir /tmp/codira-installer-artifacts packages/codira-installer
+uv run python -m build --no-isolation --wheel --sdist --outdir /tmp/codira-installer-artifacts packages/codira-bundle-official
+uv run python -m twine check /tmp/codira-installer-artifacts/*
+```

@@ -28,6 +28,7 @@ The repository currently tracks these architecture decision records:
 - [ADR-024 — Documentation audit plugin family](ADR-024-documentation-audit-plugin-family.md)
 - [ADR-025 — Optional deterministic daemon mode](ADR-025-optional-deterministic-daemon-mode.md)
 - [ADR-026 — Repository-local warm query daemon](ADR-026-repository-local-warm-query-daemon.md)
+- [ADR-027 — Standalone installer package boundary](ADR-027-standalone-installer-package-boundary.md)
 
 `ADR-004` is the active migration record for the current architecture branch
 and should be read together with the documents under `docs/architecture/`.

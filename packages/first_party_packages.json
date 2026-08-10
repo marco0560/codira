@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "coordinated_version": "1.55.0",
+  "packages": [
+    {"name": "codira-analyzer-python", "path": "packages/codira-analyzer-python", "family": "analyzer", "entry_point": "codira_analyzer_python:build_analyzer", "selectable": true},
+    {"name": "codira-analyzer-json", "path": "packages/codira-analyzer-json", "family": "analyzer", "entry_point": "codira_analyzer_json:build_analyzer", "selectable": true},
+    {"name": "codira-analyzer-c", "path": "packages/codira-analyzer-c", "family": "analyzer", "entry_point": "codira_analyzer_c:build_analyzer", "selectable": true},
+    {"name": "codira-analyzer-cpp", "path": "packages/codira-analyzer-cpp", "family": "analyzer", "entry_point": "codira_analyzer_cpp:build_analyzer", "selectable": true},
+    {"name": "codira-analyzer-bash", "path": "packages/codira-analyzer-bash", "family": "analyzer", "entry_point": "codira_analyzer_bash:build_analyzer", "selectable": true},
+    {"name": "codira-analyzer-markdown", "path": "packages/codira-analyzer-markdown", "family": "analyzer", "entry_point": "codira_analyzer_markdown:build_analyzer", "selectable": true},
+    {"name": "codira-analyzer-text", "path": "packages/codira-analyzer-text", "family": "analyzer", "entry_point": "codira_analyzer_text:build_analyzer", "selectable": true},
+    {"name": "codira-documentation-audit-numpy", "path": "packages/codira-documentation-audit-numpy", "family": "documentation-audit", "entry_point": "codira_documentation_audit_numpy:build_audit_plugin", "selectable": true},
+    {"name": "codira-documentation-audit-google", "path": "packages/codira-documentation-audit-google", "family": "documentation-audit", "entry_point": "codira_documentation_audit_google:build_audit_plugin", "selectable": true},
+    {"name": "codira-documentation-audit-doxygen", "path": "packages/codira-documentation-audit-doxygen", "family": "documentation-audit", "entry_point": "codira_documentation_audit_doxygen:build_audit_plugin", "selectable": true},
+    {"name": "codira-backend-sqlite", "path": "packages/codira-backend-sqlite", "family": "backend", "entry_point": "codira_backend_sqlite:build_backend", "selectable": true},
+    {"name": "codira-backend-duckdb", "path": "packages/codira-backend-duckdb", "family": "backend", "entry_point": "codira_backend_duckdb:build_backend", "selectable": true},
+    {"name": "codira-embedding-sentence-transformers", "path": "packages/codira-embedding-sentence-transformers", "family": "embedding", "entry_point": "codira_embedding_sentence_transformers:build_engine", "selectable": true},
+    {"name": "codira-embedding-onnx", "path": "packages/codira-embedding-onnx", "family": "embedding", "entry_point": "codira_embedding_onnx:build_engine", "selectable": true},
+    {"name": "codira-vector-store-sqlite", "path": "packages/codira-vector-store-sqlite", "family": "vector-store", "entry_point": "codira_vector_store_sqlite:build_vector_store", "selectable": true},
+    {"name": "codira-vector-store-duckdb", "path": "packages/codira-vector-store-duckdb", "family": "vector-store", "entry_point": "codira_vector_store_duckdb:build_vector_store", "selectable": true},
+    {"name": "codira-installer", "path": "packages/codira-installer", "family": null, "entry_point": null, "selectable": false},
+    {"name": "codira-bundle-official", "path": "packages/codira-bundle-official", "family": null, "entry_point": null, "selectable": false}
+  ]
+}

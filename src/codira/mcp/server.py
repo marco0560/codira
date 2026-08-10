@@ -3,15 +3,125 @@
 from __future__ import annotations
 
 import argparse
+import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import anyio
+from mcp import types
 from mcp.server.fastmcp import FastMCP
+from mcp.shared.message import SessionMessage
+from pydantic import ValidationError
 
 from codira.mcp.proxy import QueryDaemonMCPProxy
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Sequence
+
+    from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
+
+
+@asynccontextmanager
+async def _stdio_transport() -> AsyncIterator[
+    tuple[
+        MemoryObjectReceiveStream[SessionMessage | Exception],
+        MemoryObjectSendStream[SessionMessage],
+    ]
+]:
+    """Bridge MCP JSON-RPC messages over reliable standard input and output.
+
+    Yields
+    ------
+    tuple
+        Receive and send streams accepted by the MCP low-level server.
+
+    Notes
+    -----
+    The SDK's ``stdio_server`` bridge can block before consuming input under
+    the managed Python 3.13 runtime. Reading lines in a worker thread keeps
+    the protocol contract while avoiding that transport defect.
+    """
+    read_sender: MemoryObjectSendStream[SessionMessage | Exception]
+    read_receiver: MemoryObjectReceiveStream[SessionMessage | Exception]
+    write_sender: MemoryObjectSendStream[SessionMessage]
+    write_receiver: MemoryObjectReceiveStream[SessionMessage]
+    read_sender, read_receiver = anyio.create_memory_object_stream(0)
+    write_sender, write_receiver = anyio.create_memory_object_stream(0)
+
+    async def _read_stdin() -> None:
+        """Read newline-delimited client messages into the MCP receive stream.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The coroutine finishes after standard input closes.
+        """
+        try:
+            async with read_sender:
+                while line := await anyio.to_thread.run_sync(sys.stdin.buffer.readline):
+                    try:
+                        message = types.JSONRPCMessage.model_validate_json(line)
+                    except ValidationError as error:  # pragma: no cover - SDK parity
+                        await read_sender.send(error)
+                    else:
+                        await read_sender.send(SessionMessage(message))
+        except anyio.ClosedResourceError:  # pragma: no cover - shutdown race
+            await anyio.lowlevel.checkpoint()
+
+    async def _write_stdout() -> None:
+        """Write MCP server messages as newline-delimited JSON-RPC output.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The coroutine finishes after the MCP send stream closes.
+        """
+        try:
+            async with write_receiver:
+                async for session_message in write_receiver:
+                    payload = session_message.message.model_dump_json(
+                        by_alias=True,
+                        exclude_none=True,
+                    )
+                    await anyio.to_thread.run_sync(sys.stdout.write, payload + "\n")
+                    await anyio.to_thread.run_sync(sys.stdout.flush)
+        except anyio.ClosedResourceError:  # pragma: no cover - shutdown race
+            await anyio.lowlevel.checkpoint()
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(_read_stdin)
+        task_group.start_soon(_write_stdout)
+        yield read_receiver, write_sender
+
+
+async def _run_stdio_server(server: FastMCP) -> None:
+    """Serve one FastMCP instance through Codira's reliable stdio transport.
+
+    Parameters
+    ----------
+    server : mcp.server.fastmcp.FastMCP
+        Fully registered MCP server bound to its trusted repository root.
+
+    Returns
+    -------
+    None
+        The coroutine returns after the client closes the stdio session.
+    """
+    async with _stdio_transport() as (read_stream, write_stream):
+        await server._mcp_server.run(  # noqa: SLF001 - required SDK transport boundary
+            read_stream,
+            write_stream,
+            server._mcp_server.create_initialization_options(),
+        )
 
 
 def create_server(root: Path) -> FastMCP:
@@ -314,5 +424,5 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="trusted repository root fixed for this server process",
     )
     args = parser.parse_args(argv)
-    create_server(args.root).run(transport="stdio")
+    anyio.run(_run_stdio_server, create_server(args.root))
     return 0

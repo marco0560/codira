@@ -107,12 +107,16 @@ adoption; otherwise convert #51 to deferred with those reopening criteria.
 * #40 Rust analyzer
 * #39 Java analyzer
 * #43 PHP analyzer
+* #70 semantic JSON document classification and manifest extraction
 * #54 complete repository architecture report
 * #52 SARIF output
 
-#66 is the early agent-facing slice of #54. This release completes dependency
-graphs and cycles, hotspots, layer rules, DOT/SVG rendering, and the human
-report. SARIF follows rather than precedes agent adoption and benchmark proof.
+#66 is the early agent-facing slice of #54. #70 extends the existing JSON
+analyzer, rather than adding a parser-level JSON-manifest format, so its
+composable document facets and bounded manifest facts are available to #54.
+This release completes dependency graphs and cycles, hotspots, layer rules,
+DOT/SVG rendering, and the human report. SARIF follows rather than precedes
+agent adoption and benchmark proof.
 
 ## v2.20.0 — Universal Baseline
 

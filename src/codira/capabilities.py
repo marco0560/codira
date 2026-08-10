@@ -87,6 +87,12 @@ PLUGIN_FAMILY_CONTRACTS: dict[str, dict[str, object]] = {
 }
 
 COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
+    "setup": {
+        "intent": "guarded_installer_provider_delegation",
+        "channels": [],
+        "guarantee": "core_remains_independent_of_installer_ui_dependencies",
+        "limitations": ["requires the coordinated codira-installer provider"],
+    },
     "help": {
         "intent": "cli_help_rendering",
         "channels": [],

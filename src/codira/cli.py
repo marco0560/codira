@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import importlib
 import io
 import json
 import shutil
@@ -199,6 +200,7 @@ _REPO_PATH_COMMANDS = frozenset(
         "config",
         "daemon",
         "query-daemon",
+        "setup",
     }
 )
 _CONFIG_INSPECTION_ACTIONS = frozenset({"dump", "explain", "validate"})
@@ -935,12 +937,16 @@ def build_parser() -> argparse.ArgumentParser:
         dest="command",
         title="subcommands",
         metavar=(
-            "{help,index,cov,sym,symlist,emb,docs,calls,refs,audit,ctx,plugins,"
+            "{help,setup,index,cov,sym,symlist,emb,docs,calls,refs,audit,ctx,plugins,"
             "caps,config,daemon,query-daemon,calibrate}"
         ),
     )
 
     sub.add_parser("help", help="Show help")
+    setup_parser = sub.add_parser(
+        "setup", help="Launch the optional coordinated Codira installer"
+    )
+    setup_parser.add_argument("setup_args", nargs=argparse.REMAINDER)
     index_parser = sub.add_parser(
         "index",
         help="Build or refresh the repository index",
@@ -6010,6 +6016,39 @@ def _run_calibrate_command(args: argparse.Namespace) -> int:
     raise ConfigError(msg)
 
 
+def _run_setup(arguments: list[str]) -> int:
+    """Delegate setup to the optional coordinated installer provider.
+
+    Parameters
+    ----------
+    arguments : list[str]
+        Arguments forwarded unchanged to the provider.
+
+    Returns
+    -------
+    int
+        Provider exit status, or ``2`` when the provider is unavailable.
+    """
+    try:
+        provider = importlib.import_module("codira_installer.cli")
+    except ModuleNotFoundError as exc:
+        if exc.name != "codira_installer":
+            raise
+        print(
+            "[codira] setup requires the coordinated codira-installer package. "
+            "Install codira-installer with the same Codira version.",
+            file=sys.stderr,
+        )
+        return 2
+    provider_main = getattr(provider, "main", None)
+    if not callable(provider_main):
+        print(
+            "[codira] installed setup provider has no callable main.", file=sys.stderr
+        )
+        return 2
+    return int(provider_main(arguments))
+
+
 def _command_handlers(
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
@@ -6041,6 +6080,7 @@ def _command_handlers(
     """
     return {
         "help": lambda: _run_help(parser),
+        "setup": lambda: _run_setup(args.setup_args),
         "index": lambda: _run_index(
             IndexCommandRequest(
                 root=root,
@@ -6141,7 +6181,11 @@ def main() -> int:
         return 0
 
     parser = build_parser()
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
+    if args.command == "setup":
+        args.setup_args = sys.argv[2:]
+    elif unknown:
+        parser.error(f"unrecognized arguments: {' '.join(unknown)}")
     if args.version:
         return _run_version()
     command = args.command or "help"

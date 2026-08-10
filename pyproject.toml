@@ -34,6 +34,7 @@ dev = [
     "setuptools-scm>=8",
     "wheel",
     "twine>=6.2,<7.0",
+    "codira-installer==1.55.0",
     "codira-analyzer-python==1.55.0",
     "codira-analyzer-json==1.55.0",
     "codira-analyzer-c==1.55.0",
@@ -130,6 +131,7 @@ codira-embedding-sentence-transformers = { path = "packages/codira-embedding-sen
 codira-embedding-onnx = { path = "packages/codira-embedding-onnx", editable = true }
 codira-vector-store-sqlite = { path = "packages/codira-vector-store-sqlite", editable = true }
 codira-vector-store-duckdb = { path = "packages/codira-vector-store-duckdb", editable = true }
+codira-installer = { path = "packages/codira-installer", editable = true }
 codira-bundle-official = { path = "packages/codira-bundle-official", editable = true }
 
 # ============================================================
