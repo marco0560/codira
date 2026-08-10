@@ -1,3 +1,10 @@
+# [1.61.0](https://github.com/marco0560/codira/compare/v1.60.0...v1.61.0) (2026-08-10)
+
+
+### Features
+
+* **package:** add standalone Codira installer ([317bb08](https://github.com/marco0560/codira/commit/317bb087bc785c189355755103b066b1f3ae21e5))
+
 # Unreleased
 
 ### Features
