@@ -1,3 +1,10 @@
+# [1.62.0](https://github.com/marco0560/codira/compare/v1.61.0...v1.62.0) (2026-08-15)
+
+
+### Features
+
+* **contracts:** decouple host runtime from target repositories ([902f711](https://github.com/marco0560/codira/commit/902f7118c9043b7b991025cb4b6def5c8cb634b2))
+
 # [1.61.0](https://github.com/marco0560/codira/compare/v1.60.0...v1.61.0) (2026-08-10)
 
 
