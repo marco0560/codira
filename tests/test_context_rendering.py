@@ -17,7 +17,6 @@ This module belongs to the **context rendering verification layer** that keeps t
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -35,13 +34,13 @@ from codira.query.context import (
     _classify_file_role,
     _find_references,
     _format_symbol,
-    _load_cached_python_file,
+    _load_cached_source_file,
     _load_reference_scan_file,
     _path_bias,
     _rank_signals_with_provenance,
     _ReferenceScanFile,
     _retrieve_documentation_candidates,
-    _snippet_from_node,
+    _snippet_from_source_range,
     _top_matches_payload,
 )
 from codira.query.signals import RetrievalSignal
@@ -56,7 +55,9 @@ if TYPE_CHECKING:
     from codira.types import DocumentationChannelResults, ReferenceSearchRow
 
 
-def test_snippet_from_node_removes_docstring_and_collapses_blank_lines() -> None:
+def test_snippet_from_source_range_removes_docstring_and_collapses_blank_lines() -> (
+    None
+):
     """
     Ensure extracted snippets remain compact after docstring removal.
 
@@ -77,10 +78,11 @@ def test_snippet_from_node_removes_docstring_and_collapses_blank_lines() -> None
         "\n"
         "    return value\n"
     )
-    tree = ast.parse(source)
-    node = tree.body[0]
-
-    snippet = _snippet_from_node(node, source.splitlines())
+    snippet = _snippet_from_source_range(
+        source.splitlines(),
+        (0, 6),
+        (1, 2),
+    )
 
     assert snippet == [
         "def demo(x):",
@@ -205,9 +207,9 @@ def test_append_main_context_sections_separates_enriched_blocks(tmp_path: Path) 
     assert "    Alpha docstring.\n\nfunction beta()" in rendered
 
 
-def test_load_cached_python_file_caches_syntax_error_sources(tmp_path: Path) -> None:
+def test_load_cached_source_file_preserves_first_read_source(tmp_path: Path) -> None:
     """
-    Cache unreadable-AST Python sources after a syntax error.
+    Cache source text without parsing it through the host interpreter.
 
     Parameters
     ----------
@@ -217,18 +219,18 @@ def test_load_cached_python_file_caches_syntax_error_sources(tmp_path: Path) -> 
     Returns
     -------
     None
-        The test asserts syntax-error source text is cached with a ``None`` AST.
+        The test asserts the first source read remains cached after later edits.
     """
 
     source_path = tmp_path / "broken.py"
     source_path.write_text("def broken(:\n", encoding="utf-8")
-    cache: dict[Path, tuple[str, list[str], ast.Module | None]] = {}
+    cache: dict[Path, tuple[str, list[str]]] = {}
 
-    first = _load_cached_python_file(source_path, cache)
+    first = _load_cached_source_file(source_path, cache)
     source_path.write_text("def fixed():\n    return 1\n", encoding="utf-8")
-    second = _load_cached_python_file(source_path, cache)
+    second = _load_cached_source_file(source_path, cache)
 
-    assert first == ("def broken(:\n", ["def broken(:"], None)
+    assert first == ("def broken(:\n", ["def broken(:"])
     assert second == first
     assert cache[source_path] == first
 

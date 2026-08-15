@@ -141,11 +141,14 @@ class QueryDaemonMCPProxy:
         Direct adapter retained for deterministic fallback tests.
     client : codira.query_daemon_ipc.QueryDaemonIpcClient | None, optional
         Repository-identity-bound IPC client retained for tests.
+    startup_provenance : collections.abc.Mapping[str, object] | None, optional
+        Safe fixed startup identity preserved in every response envelope.
     """
 
     root: Path
     direct: MCPAdapter | None = None
     client: QueryDaemonIpcClient | None = None
+    startup_provenance: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         """Resolve the root and construct only repository-local dependencies.
@@ -161,7 +164,11 @@ class QueryDaemonMCPProxy:
         root = self.root.resolve()
         object.__setattr__(self, "root", root)
         if self.direct is None:
-            object.__setattr__(self, "direct", MCPAdapter(root))
+            object.__setattr__(
+                self,
+                "direct",
+                MCPAdapter(root, startup_provenance=self.startup_provenance),
+            )
         if self.client is None:
             identity = QueryDaemonIdentity.from_paths(root, get_storage_root(root))
             object.__setattr__(self, "client", QueryDaemonIpcClient(identity))
@@ -269,8 +276,8 @@ class QueryDaemonMCPProxy:
             resolved[key] = args[0]
         return resolved
 
-    @staticmethod
     def _with_provenance(
+        self,
         envelope: dict[str, object],
         *,
         mode: str,
@@ -307,5 +314,7 @@ class QueryDaemonMCPProxy:
         )
         if fallback_reason is not None:
             provenance["fallback_reason"] = fallback_reason
+        if self.startup_provenance is not None:
+            provenance.update(self.startup_provenance)
         response["provenance"] = provenance
         return response

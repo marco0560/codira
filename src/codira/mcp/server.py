@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,12 +16,113 @@ from mcp.server.fastmcp import FastMCP
 from mcp.shared.message import SessionMessage
 from pydantic import ValidationError
 
+from codira.config import override_repo_config_path
 from codira.mcp.proxy import QueryDaemonMCPProxy
+from codira.storage import override_storage_root
+from codira.workspace_registry import WorkspaceRegistry
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import AsyncIterator, Mapping, Sequence
 
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
+
+
+@dataclass(frozen=True)
+class MCPStartupBinding:
+    """Bind one MCP process to immutable startup-resolved runtime paths.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Canonical repository root fixed for the process lifetime.
+    output_root : pathlib.Path
+        Canonical Codira state root fixed for the process lifetime.
+    config_file : pathlib.Path | None
+        Optional effective repository configuration file fixed at startup.
+    workspace_name : str | None
+        Registered workspace identity, when startup selected one.
+    descriptor_fingerprint : str | None
+        SHA-256 fingerprint of the descriptor read at startup.
+    """
+
+    root: Path
+    output_root: Path
+    config_file: Path | None = None
+    workspace_name: str | None = None
+    descriptor_fingerprint: str | None = None
+
+    def provenance(self) -> Mapping[str, object]:
+        """Return safe immutable startup provenance for response envelopes.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        collections.abc.Mapping[str, object]
+            Empty for direct-root startup, otherwise workspace identity and
+            descriptor fingerprint without exposing filesystem paths.
+        """
+        if self.workspace_name is None or self.descriptor_fingerprint is None:
+            return {}
+        return {
+            "workspace": self.workspace_name,
+            "workspace_descriptor_sha256": self.descriptor_fingerprint,
+        }
+
+
+def resolve_startup_binding(
+    *,
+    root: Path | None = None,
+    workspace: str | None = None,
+    registry: WorkspaceRegistry | None = None,
+) -> MCPStartupBinding:
+    """Resolve one mutually exclusive direct-root or workspace MCP binding.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Direct repository root. ``None`` selects the current directory when no
+        workspace is requested.
+    workspace : str | None, optional
+        Registered workspace identity selected before server construction.
+    registry : codira.workspace_registry.WorkspaceRegistry | None, optional
+        Injected registry used by deterministic callers and tests.
+
+    Returns
+    -------
+    MCPStartupBinding
+        Fully resolved fixed process binding.
+
+    Raises
+    ------
+    ValueError
+        If direct-root and workspace routing are combined or invalid.
+    """
+    if root is not None and workspace is not None:
+        msg = "MCP --workspace cannot be combined with --root."
+        raise ValueError(msg)
+    if workspace is None:
+        selected_root = (root or Path.cwd()).expanduser().resolve(strict=False)
+        if not selected_root.is_dir():
+            msg = f"MCP repository root is not a directory: {selected_root}"
+            raise ValueError(msg)
+        return MCPStartupBinding(root=selected_root, output_root=selected_root)
+    selected_registry = registry or WorkspaceRegistry.default()
+    resolved = selected_registry.validate(workspace)
+    try:
+        fingerprint = hashlib.sha256(resolved.descriptor_path.read_bytes()).hexdigest()
+    except OSError as exc:
+        msg = f"Cannot fingerprint workspace descriptor: {exc}"
+        raise ValueError(msg) from exc
+    return MCPStartupBinding(
+        root=resolved.repository_root,
+        output_root=resolved.state_root,
+        config_file=resolved.config_file,
+        workspace_name=resolved.name,
+        descriptor_fingerprint=fingerprint,
+    )
 
 
 @asynccontextmanager
@@ -124,20 +227,26 @@ async def _run_stdio_server(server: FastMCP) -> None:
         )
 
 
-def create_server(root: Path) -> FastMCP:
+def create_server(
+    root: Path,
+    *,
+    startup_provenance: Mapping[str, object] | None = None,
+) -> FastMCP:
     """Create the local MCP server bound to one startup-trusted repository.
 
     Parameters
     ----------
     root : pathlib.Path
         Repository root selected before the stdio server starts.
+    startup_provenance : collections.abc.Mapping[str, object] | None, optional
+        Safe immutable startup metadata for response provenance.
 
     Returns
     -------
     mcp.server.fastmcp.FastMCP
         Server exposing the implemented read-only Codira tools.
     """
-    adapter = QueryDaemonMCPProxy(root)
+    adapter = QueryDaemonMCPProxy(root, startup_provenance=startup_provenance)
     server = FastMCP(
         "Codira",
         instructions=(
@@ -417,12 +526,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         Zero after the stdio server terminates normally.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    selector = parser.add_mutually_exclusive_group()
+    selector.add_argument(
         "--root",
         type=Path,
-        default=Path.cwd(),
         help="trusted repository root fixed for this server process",
     )
+    selector.add_argument(
+        "--workspace",
+        help="registered workspace fixed for this server process",
+    )
     args = parser.parse_args(argv)
-    anyio.run(_run_stdio_server, create_server(args.root))
+    try:
+        binding = resolve_startup_binding(root=args.root, workspace=args.workspace)
+    except ValueError as exc:
+        parser.error(str(exc))
+    with (
+        override_storage_root(binding.root, binding.output_root),
+        override_repo_config_path(binding.config_file),
+    ):
+        anyio.run(
+            _run_stdio_server,
+            create_server(
+                binding.root,
+                startup_provenance=binding.provenance(),
+            ),
+        )
     return 0

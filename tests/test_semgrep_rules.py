@@ -38,6 +38,12 @@ FIXTURE_FILES = (
     REPO_ROOT
     / "fixtures"
     / "packages"
+    / "codira-analyzer-python"
+    / "src"
+    / "host_ast_violation.py",
+    REPO_ROOT
+    / "fixtures"
+    / "packages"
     / "codira-analyzer-test"
     / "src"
     / "analyzer_backend_import_violation.py",
@@ -108,6 +114,7 @@ FIXTURE_FILES = (
 )
 EXPECTED_FIXTURE_RULE_IDS = {
     "codira.arch.no-backend-import-in-analyzers",
+    "codira.arch.no-host-ast-in-python-analysis",
     "codira.arch.no-backend-package-import-outside-allowed-layers",
     "codira.arch.no-direct-config-load-in-query-hot-path",
     "codira.arch.no-duckdb-executemany-in-support",

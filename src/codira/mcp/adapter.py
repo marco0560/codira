@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from codira.capabilities import build_capability_contract
 from codira.index_generation import IndexGenerationStore
-from codira.indexer import audit_repo_coverage
+from codira.indexer import audit_repo_coverage, persisted_analysis_coverage_issues
 from codira.mcp.contract import (
     DEFAULT_OUTPUT_BUDGET,
     MAX_OUTPUT_BUDGET,
@@ -29,10 +29,11 @@ from codira.query.exact import (
     find_symbol,
     symbol_inventory,
 )
+from codira.registry import active_index_backend
 from codira.storage import _read_metadata_file, get_metadata_path
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from codira.contracts import (
         BackendGraphMetric,
@@ -88,10 +89,13 @@ class MCPAdapter:
     query_executor : QueryExecutor | None, optional
         Warm executor for read operations. When omitted, the adapter preserves
         direct-core execution and opens connections through existing APIs.
+    startup_provenance : collections.abc.Mapping[str, object] | None, optional
+        Safe startup identity metadata supplied by the server binding.
     """
 
     root: Path
     query_executor: QueryExecutor | None = None
+    startup_provenance: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         """Resolve and validate the configured repository root.
@@ -190,6 +194,12 @@ class MCPAdapter:
         """
         metadata = _read_metadata_file(get_metadata_path(self.root))
         issues = audit_repo_coverage(self.root)
+        if metadata:
+            issues.extend(
+                persisted_analysis_coverage_issues(
+                    self.root, active_index_backend(root=self.root)
+                )
+            )
         return self._envelope(
             {
                 "indexed": bool(metadata),
@@ -694,16 +704,19 @@ class MCPAdapter:
         }
         if truncation is not None:
             resolved_truncation.update(truncation)
+        provenance: dict[str, object] = {
+            "source": "codira-core",
+            "repository": self.root.name,
+            "trusted_root": ".",
+            "execution_mode": "direct",
+            "generation": self._generation(),
+        }
+        if self.startup_provenance is not None:
+            provenance.update(self.startup_provenance)
         return {
             "contract_version": MCP_CONTRACT_VERSION,
             "result": result,
-            "provenance": {
-                "source": "codira-core",
-                "repository": self.root.name,
-                "trusted_root": ".",
-                "execution_mode": "direct",
-                "generation": self._generation(),
-            },
+            "provenance": provenance,
             "freshness": _read_metadata_file(get_metadata_path(self.root)),
             "page": {} if page is None else page,
             "truncation": resolved_truncation,

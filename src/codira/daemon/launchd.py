@@ -288,11 +288,8 @@ class LaunchdUserAgent:
         arguments = [
             str(self._executable),
             *self._specification.command[:-1],
-            "--path",
-            str(self._root),
+            *self._specification.startup_arguments(),
         ]
-        if self._specification.kind == "query-daemon":
-            arguments.extend(("--output-dir", str(self._specification.output_root)))
         arguments.append(self._specification.command[-1])
         return plistlib.dumps(
             {
@@ -327,6 +324,7 @@ class LaunchdUserAgent:
         self.plist_path.write_bytes(self.render_plist())
         self._run_launchctl(["bootout", self.target])
         self._require_success(["bootstrap", self.domain, str(self.plist_path)])
+        self._specification.write_definition()
         return self.plist_path
 
     def uninstall(self) -> None:
@@ -348,6 +346,7 @@ class LaunchdUserAgent:
         """
         self._run_launchctl(["bootout", self.target])
         self.plist_path.unlink(missing_ok=True)
+        self._specification.remove_definition()
 
     def start(self) -> None:
         """Start or restart this repository's installed launchd user agent.
@@ -366,6 +365,7 @@ class LaunchdUserAgent:
         LaunchdServiceError
             If launchctl rejects the start request.
         """
+        self._specification.require_current_definition()
         if self.status().active:
             self._require_success(["kickstart", "-k", self.target])
         else:
@@ -397,6 +397,7 @@ class LaunchdUserAgent:
         LaunchdServiceStatus
             Immutable active/inactive result for the repository agent.
         """
+        self._specification.require_current_definition()
         result = self._run_launchctl(["print", self.target])
         return LaunchdServiceStatus(label=self.label, active=result.returncode == 0)
 
@@ -434,7 +435,14 @@ class LaunchdUserAgent:
 class QueryDaemonLaunchdUserAgent(LaunchdUserAgent):
     """Manage a launchd user agent for one warm query-daemon identity."""
 
-    def __init__(self, root: Path, output_root: Path, **kwargs: object) -> None:
+    def __init__(
+        self,
+        root: Path,
+        output_root: Path,
+        *,
+        specification: ServiceSpecification | None = None,
+        **kwargs: object,
+    ) -> None:
         """Initialize a query-daemon agent with fixed repository/output paths.
 
         Parameters
@@ -443,6 +451,8 @@ class QueryDaemonLaunchdUserAgent(LaunchdUserAgent):
             Repository root.
         output_root : pathlib.Path
             Effective output root.
+        specification : codira.daemon.service_spec.ServiceSpecification | None, optional
+            Fixed direct-path or workspace service definition.
         **kwargs : object
             Existing launchd adapter keyword arguments.
 
@@ -452,6 +462,7 @@ class QueryDaemonLaunchdUserAgent(LaunchdUserAgent):
         """
         super().__init__(
             root,
-            specification=ServiceSpecification.query(root, output_root),
+            specification=specification
+            or ServiceSpecification.query(root, output_root),
             **kwargs,  # type: ignore[arg-type]
         )

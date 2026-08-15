@@ -18,7 +18,7 @@ definitions for SQLite persistence actions.
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 DDL = [
     """
@@ -38,6 +38,17 @@ DDL = [
         backend_name TEXT NOT NULL,
         backend_version TEXT NOT NULL,
         coverage_complete INTEGER NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS analysis_status (
+        path TEXT PRIMARY KEY,
+        grammar TEXT NOT NULL,
+        target_contract TEXT NOT NULL,
+        diagnostics TEXT NOT NULL,
+        reliable_categories TEXT NOT NULL,
+        omitted_categories TEXT NOT NULL,
+        coverage_state TEXT NOT NULL
     );
     """,
     """

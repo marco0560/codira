@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from codira_analyzer_python import PythonAnalyzer
 from codira_backend_sqlite import SQLiteIndexBackend
 from memory_backend import MemoryIndexBackend, build_backend
 
@@ -17,8 +18,6 @@ from codira.contracts import (
 )
 from codira.indexer import index_repo
 from codira.models import FileMetadataSnapshot
-from codira.normalization import analysis_result_from_parsed
-from codira.parser_ast import parse_file
 from codira.semantic.embeddings import EMBEDDING_DIM, get_embedding_backend
 
 if TYPE_CHECKING:
@@ -623,10 +622,7 @@ def test_memory_backend_matches_sqlite_for_overload_metadata(
                 mtime=1.0,
                 size=sqlite_module.stat().st_size,
             ),
-            analysis=analysis_result_from_parsed(
-                sqlite_module,
-                parse_file(sqlite_module, sqlite_root),
-            ),
+            analysis=PythonAnalyzer().analyze_file(sqlite_module, sqlite_root),
         )
     )
     memory_backend.persist_analysis(
@@ -638,10 +634,7 @@ def test_memory_backend_matches_sqlite_for_overload_metadata(
                 mtime=1.0,
                 size=memory_module.stat().st_size,
             ),
-            analysis=analysis_result_from_parsed(
-                memory_module,
-                parse_file(memory_module, memory_root),
-            ),
+            analysis=PythonAnalyzer().analyze_file(memory_module, memory_root),
             embedding_backend=get_embedding_backend(),
         )
     )

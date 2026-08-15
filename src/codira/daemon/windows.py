@@ -27,11 +27,13 @@ from pathlib import Path
 from threading import Event
 from typing import Protocol, cast
 
-from codira.config import load_effective_config
+from codira.config import load_effective_config, override_repo_config_path
 from codira.daemon.runtime import run_foreground_daemon
 from codira.daemon.service_spec import ServiceSpecification
 from codira.query_daemon import QueryDaemonIdentity
 from codira.query_daemon_lifecycle import run_foreground_query_daemon
+from codira.storage import override_storage_root
+from codira.workspace_registry import WorkspaceRegistry
 
 
 class _ServiceUtilModule(Protocol):
@@ -201,6 +203,9 @@ class _Win32ServiceModule(Protocol):
     SERVICE_STOP_PENDING: int
 
 
+_serviceutil: _ServiceUtilModule | None = None
+
+
 @dataclass(frozen=True)
 class WindowsScmApi:
     """Hold pywin32 service APIs required by one SCM adapter instance.
@@ -257,6 +262,59 @@ class WindowsScmServiceStatus:
     active: bool
 
 
+def _resolve_workspace_service_paths(
+    service: object,
+    root: Path,
+    output_root: Path,
+) -> tuple[Path, Path, Path | None]:
+    """Validate SCM workspace identity and return fixed runtime paths.
+
+    Parameters
+    ----------
+    service : object
+        SCM service instance used to read persisted custom options.
+    root : pathlib.Path
+        Repository root persisted when the service was installed.
+    output_root : pathlib.Path
+        State root persisted when the service was installed.
+
+    Returns
+    -------
+    tuple[pathlib.Path, pathlib.Path, pathlib.Path | None]
+        Canonical repository root, state root, and optional workspace config.
+
+    Raises
+    ------
+    RuntimeError
+        If a workspace descriptor has drifted or no longer matches the SCM
+        service's persisted paths.
+    """
+    serviceutil = _serviceutil
+    if serviceutil is None:
+        msg = "Windows service utility is unavailable"
+        raise RuntimeError(msg)
+    workspace_name = serviceutil.GetServiceCustomOption(service, "workspace")
+    expected_fingerprint = serviceutil.GetServiceCustomOption(
+        service, "workspace_fingerprint"
+    )
+    if workspace_name is None and expected_fingerprint is None:
+        return root, output_root, None
+    if not isinstance(workspace_name, str) or not isinstance(expected_fingerprint, str):
+        msg = "Windows service workspace identity is incomplete"
+        raise TypeError(msg)
+    workspace = WorkspaceRegistry.default().validate(workspace_name)
+    observed_fingerprint = hashlib.sha256(
+        workspace.descriptor_path.read_bytes()
+    ).hexdigest()
+    if observed_fingerprint != expected_fingerprint:
+        msg = "Workspace descriptor drift detected; regenerate the service definition"
+        raise RuntimeError(msg)
+    if workspace.repository_root != root or workspace.state_root != output_root:
+        msg = "Workspace descriptor no longer matches the installed service paths"
+        raise RuntimeError(msg)
+    return workspace.repository_root, workspace.state_root, workspace.config_file
+
+
 def _load_windows_scm_api() -> WindowsScmApi:
     """Load pywin32 SCM modules only when a Windows adapter is requested.
 
@@ -311,13 +369,21 @@ class WindowsScmService:
     repository root from SCM parameters on each launch.
     """
 
-    def __init__(self, root: Path, *, api: WindowsScmApi | None = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        specification: ServiceSpecification | None = None,
+        api: WindowsScmApi | None = None,
+    ) -> None:
         """Initialize one repository-scoped Windows SCM service adapter.
 
         Parameters
         ----------
         root : pathlib.Path
             Repository root served by the foreground daemon command.
+        specification : codira.daemon.service_spec.ServiceSpecification | None, optional
+            Fixed direct-path or workspace service definition.
         api : WindowsScmApi | None, optional
             pywin32 API override used by deterministic tests.
 
@@ -326,7 +392,8 @@ class WindowsScmService:
         None
             The adapter retains deterministic service identity and API access.
         """
-        self._root = root.resolve()
+        self._specification = specification or ServiceSpecification.indexing(root)
+        self._root = self._specification.root
         self._api = api or _load_windows_scm_api()
 
     @property
@@ -342,6 +409,8 @@ class WindowsScmService:
         str
             Stable SCM service name for the canonical repository root.
         """
+        if self._specification.workspace_name is not None:
+            return f"CodiraDaemon_{self._specification.identity}"
         digest = hashlib.sha256(str(self._root).encode("utf-8")).hexdigest()[:16]
         return f"CodiraDaemon_{digest}"
 
@@ -384,6 +453,24 @@ class WindowsScmService:
             "root",
             str(self._root),
         )
+        self._api.serviceutil.SetServiceCustomOption(
+            self.service_name,
+            "output_root",
+            str(self._specification.output_root),
+        )
+        if self._specification.workspace_name is not None:
+            assert self._specification.descriptor_fingerprint is not None
+            self._api.serviceutil.SetServiceCustomOption(
+                self.service_name,
+                "workspace",
+                self._specification.workspace_name,
+            )
+            self._api.serviceutil.SetServiceCustomOption(
+                self.service_name,
+                "workspace_fingerprint",
+                self._specification.descriptor_fingerprint,
+            )
+        self._specification.write_definition()
         return self._root
 
     def uninstall(self) -> None:
@@ -399,6 +486,7 @@ class WindowsScmService:
             The SCM service and its repository parameters are removed.
         """
         self._api.serviceutil.RemoveService(self.service_name)
+        self._specification.remove_definition()
 
     def start(self) -> None:
         """Start this repository's installed SCM service.
@@ -412,6 +500,7 @@ class WindowsScmService:
         None
             The command returns after SCM accepts the start request.
         """
+        self._specification.require_current_definition()
         self._api.serviceutil.StartService(self.service_name)
 
     def stop(self) -> None:
@@ -426,6 +515,7 @@ class WindowsScmService:
         None
             The command returns after SCM accepts the stop request.
         """
+        self._specification.require_current_definition()
         self._api.serviceutil.StopService(self.service_name)
 
     def status(self) -> WindowsScmServiceStatus:
@@ -440,6 +530,7 @@ class WindowsScmService:
         WindowsScmServiceStatus
             Immutable active/inactive result for the repository service.
         """
+        self._specification.require_current_definition()
         status = self._api.serviceutil.QueryServiceStatus(self.service_name)
         current_state = status[1]
         return WindowsScmServiceStatus(
@@ -452,7 +543,12 @@ class QueryDaemonWindowsScmService(WindowsScmService):
     """Manage one output-isolated Windows SCM query-daemon service."""
 
     def __init__(
-        self, root: Path, output_root: Path, *, api: WindowsScmApi | None = None
+        self,
+        root: Path,
+        output_root: Path,
+        *,
+        specification: ServiceSpecification | None = None,
+        api: WindowsScmApi | None = None,
     ) -> None:
         """Initialize fixed repository/output SCM query service identity.
 
@@ -462,6 +558,8 @@ class QueryDaemonWindowsScmService(WindowsScmService):
             Repository root.
         output_root : pathlib.Path
             Effective output root.
+        specification : codira.daemon.service_spec.ServiceSpecification | None, optional
+            Fixed direct-path or workspace service definition.
         api : WindowsScmApi | None, optional
             pywin32 adapter override.
 
@@ -469,8 +567,12 @@ class QueryDaemonWindowsScmService(WindowsScmService):
         -------
         None
         """
-        super().__init__(root, api=api)
-        self._specification = ServiceSpecification.query(root, output_root)
+        super().__init__(
+            root,
+            specification=specification
+            or ServiceSpecification.query(root, output_root),
+            api=api,
+        )
 
     @property
     def service_name(self) -> str:
@@ -512,11 +614,26 @@ class QueryDaemonWindowsScmService(WindowsScmService):
         self._api.serviceutil.SetServiceCustomOption(
             self.service_name, "output_root", str(self._specification.output_root)
         )
+        if self._specification.workspace_name is not None:
+            assert self._specification.descriptor_fingerprint is not None
+            self._api.serviceutil.SetServiceCustomOption(
+                self.service_name,
+                "workspace",
+                self._specification.workspace_name,
+            )
+            self._api.serviceutil.SetServiceCustomOption(
+                self.service_name,
+                "workspace_fingerprint",
+                self._specification.descriptor_fingerprint,
+            )
+        self._specification.write_definition()
         return self._specification.output_root
 
 
 if sys.platform == "win32":
-    _serviceutil = importlib.import_module("win32serviceutil")
+    _serviceutil = cast(
+        "_ServiceUtilModule", importlib.import_module("win32serviceutil")
+    )
     _win32service = importlib.import_module("win32service")
 
     class CodiraWindowsService(_serviceutil.ServiceFramework):  # type: ignore[misc]
@@ -590,8 +707,21 @@ if sys.platform == "win32":
                 msg = "Windows service has no configured repository root"
                 raise TypeError(msg)
             root = Path(root_value)
-            config = load_effective_config(root=root)
-            run_foreground_daemon(root, config.daemon, stop_event=self._stop_event)
+            output_value = _serviceutil.GetServiceCustomOption(
+                self, "output_root", root_value
+            )
+            if not isinstance(output_value, str) or not output_value:
+                msg = "Windows service has no configured output root"
+                raise TypeError(msg)
+            root, output_root, config_file = _resolve_workspace_service_paths(
+                self, root, Path(output_value)
+            )
+            with (
+                override_storage_root(root, output_root),
+                override_repo_config_path(config_file),
+            ):
+                config = load_effective_config(root=root)
+                run_foreground_daemon(root, config.daemon, stop_event=self._stop_event)
 
     class CodiraQueryWindowsService(CodiraWindowsService):  # type: ignore[misc]
         """Host one warm query daemon under Windows Service Control Manager."""
@@ -617,10 +747,18 @@ if sys.platform == "win32":
             if not isinstance(root_value, str) or not isinstance(output_value, str):
                 msg = "Windows query service has no configured repository/output roots"
                 raise TypeError(msg)
-            root = Path(root_value)
-            config = load_effective_config(root=root)
-            identity = QueryDaemonIdentity.from_paths(root, Path(output_value))
-            run_foreground_query_daemon(identity, config, stop_event=self._stop_event)
+            root, output_root, config_file = _resolve_workspace_service_paths(
+                self, Path(root_value), Path(output_value)
+            )
+            with (
+                override_storage_root(root, output_root),
+                override_repo_config_path(config_file),
+            ):
+                config = load_effective_config(root=root)
+                identity = QueryDaemonIdentity.from_paths(root, output_root)
+                run_foreground_query_daemon(
+                    identity, config, stop_event=self._stop_event
+                )
 
 else:
 

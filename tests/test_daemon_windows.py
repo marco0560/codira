@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from codira.daemon.service_spec import ServiceSpecification
 from codira.daemon.windows import WindowsScmApi, WindowsScmService
 
 if TYPE_CHECKING:
@@ -264,6 +265,11 @@ def test_windows_scm_service_persists_repository_root_and_lifecycle(
             },
         ),
         ("set-option", (service.service_name, "root", str(root.resolve())), {}),
+        (
+            "set-option",
+            (service.service_name, "output_root", str(root.resolve())),
+            {},
+        ),
         ("start", (service.service_name,), {}),
         ("stop", (service.service_name,), {}),
         ("status", (service.service_name,), {}),
@@ -294,3 +300,45 @@ def test_windows_scm_service_reports_nonrunning_status(tmp_path: Path) -> None:
 
     assert status.active is False
     assert status.service_name == service.service_name
+
+
+def test_windows_workspace_service_persists_drift_guard(tmp_path: Path) -> None:
+    """Persist workspace identity before the SCM service is installed.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository and state roots.
+
+    Returns
+    -------
+    None
+        The test asserts Windows hosts receive the workspace drift guard.
+    """
+    root = tmp_path / "repository"
+    root.mkdir()
+    specification = ServiceSpecification.workspace(
+        kind="daemon",
+        root=root,
+        output_root=tmp_path / "state",
+        workspace_name="sample",
+        descriptor_fingerprint="a" * 64,
+        effective_config={"daemon": {"enabled": True}},
+    )
+    serviceutil = _FakeServiceUtil((0, _FakeWin32Service.SERVICE_RUNNING))
+    service = WindowsScmService(
+        root,
+        specification=specification,
+        api=WindowsScmApi(serviceutil=serviceutil, service=_FakeWin32Service()),
+    )
+
+    service.install()
+
+    assert ("set-option", (service.service_name, "workspace", "sample"), {}) in (
+        serviceutil.calls
+    )
+    assert (
+        "set-option",
+        (service.service_name, "workspace_fingerprint", "a" * 64),
+        {},
+    ) in serviceutil.calls

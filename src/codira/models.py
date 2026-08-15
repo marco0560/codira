@@ -18,6 +18,7 @@ This module belongs to the **modeling layer** that decouples normalized artifact
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -460,6 +461,71 @@ class DocumentationArtifact:
     attachment_confidence: DocumentationAttachmentConfidence | None = None
 
 
+class AnalysisCoverageState(StrEnum):
+    """Classify whether one file has complete trustworthy analysis."""
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+
+
+@dataclass(frozen=True)
+class AnalysisDiagnostic:
+    """One parser or target-compatibility diagnostic for an analyzed file.
+
+    Parameters
+    ----------
+    category : str
+        Stable diagnostic category such as ``grammar_error`` or
+        ``target_version``.
+    message : str
+        Human-readable deterministic explanation.
+    line : int | None, optional
+        One-based source line when the diagnostic has a location.
+    column : int | None, optional
+        Zero-based source column when the diagnostic has a location.
+    """
+
+    category: str
+    message: str
+    line: int | None = None
+    column: int | None = None
+
+
+@dataclass(frozen=True)
+class AnalysisStatus:
+    """Durable provenance describing the trustworthiness of one file analysis.
+
+    Parameters
+    ----------
+    grammar : str
+        Parser grammar identity used for analysis.
+    target_contract : dict[str, object]
+        Normalized target-language contract used for compatibility checks.
+    diagnostics : tuple[codira.models.AnalysisDiagnostic, ...], optional
+        Parser and target-version diagnostics in deterministic order.
+    reliable_categories : tuple[str, ...], optional
+        Artifact categories safe to consume from this result.
+    omitted_categories : tuple[str, ...], optional
+        Artifact categories intentionally withheld from this result.
+    coverage_state : codira.models.AnalysisCoverageState, optional
+        Whether the analysis is complete enough for strict coverage.
+    """
+
+    grammar: str
+    target_contract: dict[str, object]
+    diagnostics: tuple[AnalysisDiagnostic, ...] = ()
+    reliable_categories: tuple[str, ...] = (
+        "module",
+        "class",
+        "function",
+        "declaration",
+        "import",
+        "documentation",
+    )
+    omitted_categories: tuple[str, ...] = ()
+    coverage_state: AnalysisCoverageState = AnalysisCoverageState.COMPLETE
+
+
 @dataclass(frozen=True)
 class AnalysisResult:
     """
@@ -499,6 +565,7 @@ class AnalysisResult:
     imports: tuple[ImportArtifact, ...]
     documentation: tuple[DocumentationArtifact, ...] = ()
     index_symbols: bool = True
+    status: AnalysisStatus | None = None
 
     def iter_functions(self) -> tuple[FunctionArtifact, ...]:
         """

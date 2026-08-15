@@ -20,12 +20,18 @@ It exists to:
 - `codira.arch.no-backend-import-in-analyzers`
 - `codira.arch.no-sqlite3-in-analyzers`
 - `codira.arch.require-analyzer-capability-declaration`
+- `codira.arch.no-host-ast-in-python-analysis`
 - `codira.arch.no-duckdb-executemany-in-support`
 - `codira.arch.no-duckdb-returning-id-in-support`
 - `codira.arch.no-store-analysis-in-duckdb-full-index-bulk`
 - `codira.arch.no-vector-store-normal-path-in-duckdb-full-index-bulk`
+- `codira.arch.no-core-schema-ddl-import-in-backends`
+- `codira.arch.require-fresh-full-index-embedding-flush`
+- `codira.arch.require-duckdb-full-index-vector-preservation`
 - `codira.arch.no-direct-config-load-in-query-hot-path`
 - `codira.plugins.no-broad-except-exception`
+- `codira.plugins.require-shared-plugin-json-schema-helper`
+- `codira.det.no-random-without-explicit-seed`
 
 ### Enforced with allowlist
 
@@ -78,6 +84,10 @@ Removal condition:
 No removal planned while DuckDB remains a supported vector-store backend.
 
 ## Allowlisted Exceptions
+
+The complete current lint, external-Semgrep exception, and rule review is in
+[lint and Semgrep hygiene policy](lint-and-semgrep-hygiene.md). This document
+retains the architectural-debt rationale for the three allowlisted rules.
 
 ### `codira.plugins.no-core-storage-import`
 
@@ -151,6 +161,16 @@ Removal condition:
 Remove this allowlist entry when the backend module no longer needs a separate
 package-local helper module.
 
+#### DuckDB backend and query modules
+
+Rationale:
+`codira_backend_duckdb.__init__` and `duckdb_query_backend` are the production
+DuckDB package seams that import their own package-local backend modules.
+
+Removal condition:
+Remove these allowlist entries when the DuckDB implementation no longer has
+separate backend and query modules.
+
 #### `examples/plugins/codira_demo_backend/src/codira_demo_backend/__init__.py`
 
 Rationale:
@@ -172,5 +192,5 @@ uv run python scripts/validate_repo.py
 Direct Semgrep scan:
 
 ```bash
-uv run python scripts/run_repo_tool.py semgrep scan --config semgrep/rules --metrics=off --disable-version-check .
+uv run python scripts/run_repo_tool.py semgrep scan --config semgrep/rules --metrics=off --disable-version-check --exclude fixtures .
 ```

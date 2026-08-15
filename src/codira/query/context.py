@@ -17,8 +17,7 @@ This module belongs to the **context rendering layer** that consolidates retriev
 
 from __future__ import annotations
 
-import ast
-import contextlib
+import inspect
 import json
 import re
 from dataclasses import dataclass, field, replace
@@ -918,52 +917,189 @@ def _dedupe_channel_results(channel: ChannelResults) -> ChannelResults:
     return deduped
 
 
-def _render_signature(
-    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
-    source: str,
-) -> str:
+def _source_indentation(line: str) -> int:
     """
-    Render a compact signature string for a class or callable node.
+    Return the leading indentation width for one source line.
 
     Parameters
     ----------
-    node : ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
-        AST node to render.
-    source : str
-        Source text used to recover argument and return annotations.
+    line : str
+        Source line whose indentation is measured.
 
     Returns
     -------
-    str
-        Compact display signature for the supplied node.
+    int
+        Count of leading whitespace characters.
     """
-    if isinstance(node, ast.ClassDef):
-        return f"{node.name}"
+    return len(line) - len(line.lstrip())
 
-    try:
-        params = ast.get_source_segment(source, node.args)
-    except ValueError:
-        params = None
 
-    if not params:
-        arg_names = [arg.arg for arg in node.args.args]
-        if node.args.vararg is not None:
-            arg_names.append(f"*{node.args.vararg.arg}")
-        if node.args.kwarg is not None:
-            arg_names.append(f"**{node.args.kwarg.arg}")
-        params = ", ".join(arg_names)
+def _source_header_end(source_lines: Sequence[str], start: int) -> int:
+    """Return the exclusive source-line boundary of one declaration header.
 
-    returns = ""
-    if node.returns is not None:
-        try:
-            ret = ast.get_source_segment(source, node.returns)
-        except ValueError:
-            ret = None
-        if ret:
-            returns = f" -> {ret}"
+    Parameters
+    ----------
+    source_lines : collections.abc.Sequence[str]
+        Complete source file split into lines.
+    start : int
+        Zero-based declaration start line.
 
-    prefix = "async " if isinstance(node, ast.AsyncFunctionDef) else ""
-    return f"{prefix}{node.name}({params}){returns}"
+    Returns
+    -------
+    int
+        Exclusive line index containing the declaration header.
+    """
+    depth = 0
+    for index in range(start, len(source_lines)):
+        for character in source_lines[index]:
+            if character in "([{":
+                depth += 1
+            elif character in ")]}":
+                depth = max(depth - 1, 0)
+            elif character == ":" and depth == 0:
+                return index + 1
+    return min(start + 1, len(source_lines))
+
+
+def _source_docstring(
+    source_lines: Sequence[str], start: int, end: int
+) -> tuple[str | None, tuple[int, int] | None]:
+    """Return a leading triple-quoted documentation block from source text.
+
+    Parameters
+    ----------
+    source_lines : collections.abc.Sequence[str]
+        Complete source file split into lines.
+    start : int
+        Zero-based line at which to begin looking for documentation.
+    end : int
+        Exclusive source boundary for the owning module or declaration.
+
+    Returns
+    -------
+    tuple[str | None, tuple[int, int] | None]
+        Cleaned documentation text and its zero-based half-open line range, or
+        ``(None, None)`` when no leading documentation block exists.
+    """
+    candidate = start
+    while candidate < end and (
+        not source_lines[candidate].strip()
+        or source_lines[candidate].lstrip().startswith("#")
+    ):
+        candidate += 1
+    if candidate >= end:
+        return (None, None)
+    match = re.match(r"^\s*(?:[rubRUB]{0,2})?(\"\"\"|''')", source_lines[candidate])
+    if match is None:
+        return (None, None)
+    delimiter = match.group(1)
+    content_start = source_lines[candidate].find(delimiter) + len(delimiter)
+    remaining = source_lines[candidate][content_start:]
+    closing = remaining.find(delimiter)
+    if closing >= 0:
+        return (inspect.cleandoc(remaining[:closing]), (candidate, candidate + 1))
+    content = [remaining]
+    for index in range(candidate + 1, end):
+        closing = source_lines[index].find(delimiter)
+        if closing >= 0:
+            content.append(source_lines[index][:closing])
+            return (inspect.cleandoc("\n".join(content)), (candidate, index + 1))
+        content.append(source_lines[index])
+    return (None, None)
+
+
+def _source_declaration_range(
+    source_lines: Sequence[str], lineno: int
+) -> tuple[int, int] | None:
+    """Return the source range occupied by an indexed declaration.
+
+    Parameters
+    ----------
+    source_lines : collections.abc.Sequence[str]
+        Complete source file split into lines.
+    lineno : int
+        One-based declaration line from the persisted artifact.
+
+    Returns
+    -------
+    tuple[int, int] | None
+        Zero-based half-open declaration range, or ``None`` when the indexed
+        line no longer identifies a declaration in the current source.
+    """
+    start = lineno - 1
+    if start < 0 or start >= len(source_lines):
+        return None
+    declaration = source_lines[start].lstrip()
+    if not re.match(r"(?:async\s+def|def|class)\s+", declaration):
+        return None
+    indentation = _source_indentation(source_lines[start])
+    header_end = _source_header_end(source_lines, start)
+    end = len(source_lines)
+    for index in range(header_end, len(source_lines)):
+        line = source_lines[index]
+        if line.strip() and _source_indentation(line) <= indentation:
+            end = index
+            break
+    return (start, end)
+
+
+def _source_decorator_start(source_lines: Sequence[str], start: int) -> int:
+    """Return the first contiguous decorator line before a declaration.
+
+    Parameters
+    ----------
+    source_lines : collections.abc.Sequence[str]
+        Complete source file split into lines.
+    start : int
+        Zero-based declaration start line.
+
+    Returns
+    -------
+    int
+        Zero-based start line including contiguous decorators at the declaration
+        indentation level.
+    """
+    indentation = _source_indentation(source_lines[start])
+    decorator_start = start
+    while decorator_start > 0:
+        previous = source_lines[decorator_start - 1]
+        if _source_indentation(
+            previous
+        ) != indentation or not previous.lstrip().startswith("@"):
+            break
+        decorator_start -= 1
+    return decorator_start
+
+
+def _render_source_signature(source_lines: Sequence[str], start: int) -> str | None:
+    """Render a compact class or callable signature from its source header.
+
+    Parameters
+    ----------
+    source_lines : collections.abc.Sequence[str]
+        Complete source file split into lines.
+    start : int
+        Zero-based declaration start line.
+
+    Returns
+    -------
+    str | None
+        Compact signature text, or ``None`` when the line is not a supported
+        declaration header.
+    """
+    header_end = _source_header_end(source_lines, start)
+    header = " ".join(line.strip() for line in source_lines[start:header_end])
+    if header.startswith("class "):
+        match = re.match(r"class\s+([A-Za-z_]\w*)", header)
+        return None if match is None else match.group(1)
+    match = re.match(r"(?:(async)\s+)?def\s+([A-Za-z_]\w*)\s*(.*)", header)
+    if match is None:
+        return None
+    suffix = match.group(3)
+    if suffix.endswith(":"):
+        suffix = suffix[:-1].rstrip()
+    prefix = "async " if match.group(1) else ""
+    return f"{prefix}{match.group(2)}{suffix}"
 
 
 def _truncate_lines(text: str | None, limit: int) -> str | None:
@@ -1058,20 +1194,23 @@ def _normalize_snippet_lines(lines: Sequence[str], limit: int) -> list[str]:
     return normalized[:limit]
 
 
-def _snippet_from_node(
-    node: ast.AST,
+def _snippet_from_source_range(
     source_lines: Sequence[str],
+    source_range: tuple[int, int],
+    docstring_range: tuple[int, int] | None,
     limit: int = SNIPPET_LINE_LIMIT,
 ) -> list[str]:
     """
-    Extract a compact snippet for a node using AST positions.
+    Extract a compact snippet from persisted source ranges.
 
     Parameters
     ----------
-    node : ast.AST
-        AST node whose source snippet should be extracted.
     source_lines : collections.abc.Sequence[str]
         Source file split into lines.
+    source_range : tuple[int, int]
+        Zero-based half-open declaration range.
+    docstring_range : tuple[int, int] | None
+        Optional zero-based half-open range to omit from the snippet.
     limit : int, optional
         Maximum number of snippet lines to retain.
 
@@ -1082,319 +1221,58 @@ def _snippet_from_node(
 
     Notes
     -----
-    Decorators are included when present. Leading docstring blocks are removed
-    from the snippet so the reader sees executable structure first.
+    Leading documentation blocks are removed from the snippet so the reader
+    sees executable structure first.
     """
-    # Determine start (include decorators if present)
-    start = getattr(node, "lineno", 1) - 1
-
-    # --- include decorators if present ---
-    if (
-        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-        and node.decorator_list
-    ):
-        with contextlib.suppress(AttributeError, ValueError):
-            start = min(d.lineno for d in node.decorator_list) - 1
-
-    # Determine end (best-effort)
-    end = getattr(node, "end_lineno", None)
-    if end is None:
-        end = getattr(node, "lineno", 1)
-
-    # Slice and truncate
+    start, end = source_range
     snippet = source_lines[start:end]
-
-    # --- remove docstring if present ---
-    body = getattr(node, "body", None)
-    if body:
-        doc = ast.get_docstring(
-            cast(
-                "ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Module",
-                node,
-            ),
-            clean=False,
-        )
-        if doc is not None and isinstance(body[0], ast.Expr):
-            doc_node = body[0]
-
-            # absolute positions
-            doc_start = doc_node.lineno - 1
-            doc_end = getattr(doc_node, "end_lineno", doc_start + 1)
-
-            # snippet base offset
-            snippet_start = start
-
-            # convert to snippet-local indices
-            local_start = doc_start - snippet_start
-            local_end = doc_end - snippet_start
-
-            snippet = [
-                line
-                for i, line in enumerate(snippet)
-                if not (local_start <= i < local_end)
-            ]
-
-    # --- truncate ---
+    if docstring_range is not None:
+        doc_start, doc_end = docstring_range
+        snippet = [
+            line
+            for index, line in enumerate(snippet, start=start)
+            if not (doc_start <= index < doc_end)
+        ]
     return _normalize_snippet_lines(snippet, limit)
 
 
-def _load_cached_python_file(
+def _load_cached_source_file(
     path: Path,
-    cache: dict[Path, tuple[str, list[str], ast.Module | None]],
-) -> tuple[str, list[str], ast.Module | None] | None:
+    cache: dict[Path, tuple[str, list[str]]],
+) -> tuple[str, list[str]] | None:
     """
-    Load and cache one Python source file used for context rendering.
+    Load and cache one source file used for context rendering.
 
     Parameters
     ----------
     path : pathlib.Path
         Absolute source path to load.
-    cache : dict[pathlib.Path, tuple[str, list[str], ast.Module | None]]
+    cache : dict[pathlib.Path, tuple[str, list[str]]]
         Parsed-file cache shared across multiple lookups.
 
     Returns
     -------
-    tuple[str, list[str], ast.Module | None] | None
-        Cached source, split lines, and parsed AST when available. Returns
-        ``None`` when the file cannot be read.
+    tuple[str, list[str]] | None
+        Cached source and split lines. Returns ``None`` when the file cannot
+        be read.
     """
     if path in cache:
-        source, source_lines, tree = cache[path]
-        return (source, source_lines, tree)
+        return cache[path]
 
     try:
         source = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
 
-    source_lines = source.splitlines()
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        cache[path] = (source, source_lines, None)
-        return (source, source_lines, None)
-
-    cache[path] = (source, source_lines, tree)
-    return (source, source_lines, tree)
-
-
-def _nearest_ast_node(
-    candidates: Sequence[ast.AST],
-    lineno: int,
-) -> ast.AST | None:
-    """
-    Return the candidate node closest to the indexed line number.
-
-    Parameters
-    ----------
-    candidates : collections.abc.Sequence[ast.AST]
-        Candidate AST nodes sharing the same symbol name.
-    lineno : int
-        Indexed line number used for deterministic disambiguation.
-
-    Returns
-    -------
-    ast.AST | None
-        Nearest candidate node, or ``None`` when no candidates exist.
-    """
-    if not candidates:
-        return None
-    return min(
-        candidates,
-        key=lambda node: abs(getattr(node, "lineno", 0) - lineno),
-    )
-
-
-def _module_code_context(
-    tree: ast.Module,
-    source_lines: list[str],
-    lineno: int,
-) -> CodeContext:
-    """
-    Build module-level code context from one parsed AST.
-
-    Parameters
-    ----------
-    tree : ast.Module
-        Parsed module AST.
-    source_lines : list[str]
-        Source file split into lines.
-    lineno : int
-        Indexed line number used for fallback snippets.
-
-    Returns
-    -------
-    codira.types.CodeContext
-        Module-level signature, docstring preview, and snippet.
-    """
-    return (
-        None,
-        _truncate_lines(
-            ast.get_docstring(tree, clean=True),
-            DOCSTRING_PREVIEW_LINE_LIMIT,
-        ),
-        _snippet_from_lines(source_lines, lineno),
-    )
-
-
-def _context_from_ast_node(
-    node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
-    source: str,
-    source_lines: list[str],
-) -> CodeContext:
-    """
-    Build code context for one resolved class or callable AST node.
-
-    Parameters
-    ----------
-    node : ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
-        Resolved AST node for the indexed symbol.
-    source : str
-        Full source text used for signature rendering.
-    source_lines : list[str]
-        Source file split into lines.
-
-    Returns
-    -------
-    codira.types.CodeContext
-        Signature, truncated docstring preview, and source snippet.
-    """
-    return (
-        _render_signature(node, source),
-        _truncate_lines(
-            ast.get_docstring(node, clean=True),
-            DOCSTRING_PREVIEW_LINE_LIMIT,
-        ),
-        _snippet_from_node(node, source_lines),
-    )
-
-
-def _class_symbol_candidates(
-    tree: ast.Module,
-    name: str,
-) -> list[ast.ClassDef]:
-    """
-    Collect top-level class candidates matching one symbol name.
-
-    Parameters
-    ----------
-    tree : ast.Module
-        Parsed module AST.
-    name : str
-        Symbol name to match.
-
-    Returns
-    -------
-    list[ast.ClassDef]
-        Matching top-level class definitions.
-    """
-    return [
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == name
-    ]
-
-
-def _function_symbol_candidates(
-    tree: ast.Module,
-    name: str,
-) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
-    """
-    Collect top-level function candidates matching one symbol name.
-
-    Parameters
-    ----------
-    tree : ast.Module
-        Parsed module AST.
-    name : str
-        Symbol name to match.
-
-    Returns
-    -------
-    list[ast.FunctionDef | ast.AsyncFunctionDef]
-        Matching top-level function definitions.
-    """
-    return [
-        node
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == name
-    ]
-
-
-def _method_symbol_candidates(
-    tree: ast.Module,
-    name: str,
-) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
-    """
-    Collect method candidates matching one symbol name.
-
-    Parameters
-    ----------
-    tree : ast.Module
-        Parsed module AST.
-    name : str
-        Method name to match.
-
-    Returns
-    -------
-    list[ast.FunctionDef | ast.AsyncFunctionDef]
-        Matching methods across top-level classes.
-    """
-    return [
-        child
-        for node in tree.body
-        if isinstance(node, ast.ClassDef)
-        for child in node.body
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and child.name == name
-    ]
-
-
-def _symbol_context_candidate(
-    tree: ast.Module,
-    symbol_type: str,
-    name: str,
-    lineno: int,
-) -> ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef | None:
-    """
-    Resolve the nearest AST node for one indexed symbol.
-
-    Parameters
-    ----------
-    tree : ast.Module
-        Parsed module AST.
-    symbol_type : str
-        Indexed symbol kind.
-    name : str
-        Symbol name to match.
-    lineno : int
-        Indexed line number used for deterministic disambiguation.
-
-    Returns
-    -------
-    ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef | None
-        Resolved AST node, or ``None`` when no candidate matches.
-    """
-    candidates: Sequence[ast.AST]
-    if symbol_type == "class":
-        candidates = _class_symbol_candidates(tree, name)
-    elif symbol_type == "function":
-        candidates = _function_symbol_candidates(tree, name)
-    elif symbol_type == "method":
-        candidates = _method_symbol_candidates(tree, name)
-    else:
-        return None
-    node = _nearest_ast_node(candidates, lineno)
-    if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-        return node
-    return None
+    cached = (source, source.splitlines())
+    cache[path] = cached
+    return cached
 
 
 def _extract_code_context(
     root: Path,
     symbol: SymbolRow,
-    cache: dict[Path, tuple[str, list[str], ast.Module | None]],
+    cache: dict[Path, tuple[str, list[str]]],
 ) -> CodeContext:
     """
     Extract signature, docstring, and snippet data for a symbol.
@@ -1405,8 +1283,8 @@ def _extract_code_context(
         Repository root used to resolve file paths.
     symbol : codira.types.SymbolRow
         Indexed symbol row to expand.
-    cache : dict[pathlib.Path, tuple[str, list[str], ast.Module | None]]
-        Parsed-file cache shared across multiple lookups.
+    cache : dict[pathlib.Path, tuple[str, list[str]]]
+        Source-file cache shared across multiple lookups.
 
     Returns
     -------
@@ -1418,20 +1296,40 @@ def _extract_code_context(
     if not path.is_absolute():
         path = root / path
 
-    loaded = _load_cached_python_file(path, cache)
+    loaded = _load_cached_source_file(path, cache)
     if loaded is None:
         return (None, None, [])
 
-    source, source_lines, tree = loaded
-    if tree is None:
-        return (None, None, _snippet_from_lines(source_lines, lineno))
+    _source, source_lines = loaded
 
     if symbol_type == "module":
-        return _module_code_context(tree, source_lines, lineno)
+        docstring, _docstring_range = _source_docstring(
+            source_lines, 0, len(source_lines)
+        )
+        return (
+            None,
+            _truncate_lines(docstring, DOCSTRING_PREVIEW_LINE_LIMIT),
+            _snippet_from_lines(source_lines, lineno),
+        )
 
-    candidate = _symbol_context_candidate(tree, symbol_type, name, lineno)
-    if candidate is not None:
-        return _context_from_ast_node(candidate, source, source_lines)
+    if symbol_type in {"class", "function", "method"}:
+        source_range = _source_declaration_range(source_lines, lineno)
+        if source_range is not None:
+            start, end = source_range
+            docstring, docstring_range = _source_docstring(
+                source_lines,
+                _source_header_end(source_lines, start),
+                end,
+            )
+            return (
+                _render_source_signature(source_lines, start),
+                _truncate_lines(docstring, DOCSTRING_PREVIEW_LINE_LIMIT),
+                _snippet_from_source_range(
+                    source_lines,
+                    (_source_decorator_start(source_lines, start), end),
+                    docstring_range,
+                ),
+            )
 
     return (None, None, _snippet_from_lines(source_lines, lineno))
 
@@ -2210,7 +2108,7 @@ def _format_symbol(root: Path, symbol: SymbolRow, *, include_path: bool) -> str:
 def _format_enriched_symbol(
     root: Path,
     symbol: SymbolRow,
-    cache: dict[Path, tuple[str, list[str], ast.Module | None]],
+    cache: dict[Path, tuple[str, list[str]]],
 ) -> list[str]:
     """
     Format a symbol with location, snippet, and docstring details.
@@ -2221,8 +2119,8 @@ def _format_enriched_symbol(
         Repository root used to relativize paths.
     symbol : codira.types.SymbolRow
         Symbol row to render.
-    cache : dict[pathlib.Path, tuple[str, list[str], ast.Module | None]]
-        Parsed-file cache shared across multiple symbols.
+    cache : dict[pathlib.Path, tuple[str, list[str]]]
+        Source-file cache shared across multiple symbols.
 
     Returns
     -------
@@ -5989,7 +5887,7 @@ def _append_suggested_context_section(request: MainContextSectionsRequest) -> No
         Enriched context is appended to ``request.lines`` in place.
     """
     request.lines.append("\n=== SUGGESTED CONTEXT ===")
-    cache: dict[Path, tuple[str, list[str], ast.Module | None]] = {}
+    cache: dict[Path, tuple[str, list[str]]] = {}
     for index, symbol in enumerate(request.top_matches[:ENRICHED_CONTEXT_LIMIT]):
         if index > 0:
             request.lines.append("")

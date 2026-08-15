@@ -14,6 +14,10 @@ from codira_installer.models import (
     InstallerRequest,
     InstallSource,
     PackageManager,
+    RuntimeKind,
+    RuntimeOperation,
+    RuntimeTarget,
+    WorkspaceRegistration,
 )
 from codira_installer.plan import render_plan, resolve_plan, validate_plan
 
@@ -96,6 +100,86 @@ def test_local_checkout_uses_explicit_cloned_root() -> None:
     assert "/clone/codira" in install_step.command
     assert "/clone/codira/packages/codira-backend-sqlite" in install_step.command
     assert install_step.command[:3] == ("uv", "pip", "install")
+
+
+def test_managed_runtime_is_independent_of_workspace_repository(tmp_path: Path) -> None:
+    """Install a managed runtime without selecting the repository environment.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary runtime and analyzed repository roots.
+
+    Returns
+    -------
+    None
+        The test asserts runtime installation and workspace registration differ.
+    """
+    runtime = tmp_path / "runtime"
+    repository = tmp_path / "python-3-8-repository"
+    repository.mkdir()
+    plan = resolve_plan(
+        InstallerRequest(
+            target=EnvironmentTarget(EnvironmentKind.EXISTING, repository / ".venv"),
+            runtime=RuntimeTarget(RuntimeKind.MANAGED, runtime),
+            workspace=WorkspaceRegistration("sample", repository),
+        ),
+        installed_packages=(),
+    )
+
+    install = next(step for step in plan.steps if step.identifier == "install-packages")
+    workspace = next(
+        step for step in plan.steps if step.identifier == "register-workspace"
+    )
+    assert str(runtime / "bin" / "python") in install.command
+    assert str(repository / ".venv") not in install.command
+    assert workspace.command == (
+        "codira",
+        "workspace",
+        "add",
+        "sample",
+        "--path",
+        str(repository),
+    )
+
+
+def test_runtime_update_requires_matching_receipt(tmp_path: Path) -> None:
+    """Reject update requests that could silently change runtime provenance.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary receipt location.
+
+    Returns
+    -------
+    None
+        The test asserts receipt presence and source/profile matching.
+    """
+    with pytest.raises(ValueError, match="require a runtime receipt"):
+        resolve_plan(
+            InstallerRequest(
+                target=EnvironmentTarget(EnvironmentKind.CURRENT),
+                operation=RuntimeOperation.UPDATE,
+            ),
+            installed_packages=(),
+        )
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(
+        '{"packages": [], "profile": "recommended", "source": "pypi", "version": "1.55.0"}',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="forbids changing"):
+        resolve_plan(
+            InstallerRequest(
+                target=EnvironmentTarget(EnvironmentKind.CURRENT),
+                operation=RuntimeOperation.UPDATE,
+                source=InstallSource.LOCAL_CHECKOUT,
+                checkout=Path("/clone"),
+                receipt_path=receipt,
+            ),
+            installed_packages=(),
+        )
 
 
 def test_deselected_installed_packages_are_retained_and_reported() -> None:

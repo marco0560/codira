@@ -91,3 +91,18 @@ Rules:
 - `codira cov` is the operator-facing way to verify whether your
   analyzer closes those gaps
 - analyzers must not own storage or query persistence
+
+## Python target compatibility
+
+The first-party Python analyzer is a host-installed plugin. It reads target
+Python source as data through its package-owned Tree-sitter grammar; it does
+not import target modules or use the target interpreter. Its host runtime and
+target-source contracts are intentionally separate.
+
+The target declaration resolves `[plugins.analyzer-python] target_python`
+before `[project].requires-python`. `codira caps --json` reports the selected
+specifier, declaration source, bounded supported minors, tested fixture
+minors, and grammar identity. A declaration outside that published matrix is
+not silently treated as supported. When a file contains syntax unavailable for
+the declared target, indexing records partial analysis and diagnostics rather
+than executing the file or falling back to the host parser.

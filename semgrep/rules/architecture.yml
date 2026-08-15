@@ -96,6 +96,23 @@ rules:
             def analyzer_capability_declaration(...):
               ...
 
+  - id: codira.arch.no-host-ast-in-python-analysis
+    message: >
+      Production Python analysis must use the package-owned Tree-sitter layer,
+      not the host interpreter ast module.
+    severity: ERROR
+    languages:
+      - python
+    paths:
+      include:
+        - /src/codira/**/*.py
+        - /packages/codira-analyzer-python/src/**/*.py
+        - /fixtures/packages/codira-analyzer-python/src/**/*.py
+    patterns:
+      - pattern-either:
+          - pattern: import ast
+          - pattern: from ast import $IMPORT
+
   - id: codira.arch.no-sqlite3-outside-allowed-layers
     message: >
       sqlite3 imports outside documented allowlists are architectural debt.

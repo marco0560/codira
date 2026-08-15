@@ -17,7 +17,6 @@ This module belongs to the **typing infrastructure layer** that glues codira mod
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 SymbolRow = tuple[str, str, str, str, int]
@@ -53,4 +52,4 @@ ReferenceRow = tuple[str, int]
 ReferenceSearchRow = tuple[str, int, str]
 IncludeEdgeRow = tuple[str, str, str, int]
 CodeContext = tuple[str | None, str | None, list[str]]
-CacheType = dict[Path, tuple[str, list[str], ast.Module | None]]
+CacheType = dict[Path, tuple[str, list[str]]]

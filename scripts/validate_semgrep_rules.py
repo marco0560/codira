@@ -44,6 +44,7 @@ FIXTURES = (
             "codira.arch.no-sqlite3-in-analyzers",
             "codira.arch.no-backend-import-in-analyzers",
             "codira.arch.require-analyzer-capability-declaration",
+            "codira.arch.no-host-ast-in-python-analysis",
             "codira.plugins.no-core-storage-import",
         ),
     ),

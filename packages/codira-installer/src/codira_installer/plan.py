@@ -24,9 +24,14 @@ from codira_installer.models import (
     InstallSource,
     PackageManager,
     PlanStep,
+    RuntimeKind,
+    RuntimeOperation,
+    RuntimeTarget,
+    WorkspaceRegistration,
 )
+from codira_installer.runtime import RuntimeReceipt
 
-PLAN_SCHEMA_VERSION = 1
+PLAN_SCHEMA_VERSION = 2
 CORE_DISTRIBUTION = "codira"
 RECOMMENDED_PACKAGES = ("codira-analyzer-python", "codira-backend-sqlite")
 
@@ -79,6 +84,31 @@ def validate_request(request: InstallerRequest) -> None:
             raise ValueError("pip cannot create environments")
         if request.source is InstallSource.LOCAL_CHECKOUT:
             raise ValueError("pip cannot install from local checkouts")
+    if (
+        request.operation is not RuntimeOperation.INSTALL
+        and request.runtime.kind is RuntimeKind.NEW
+    ):
+        raise ValueError("update, repair, and modify require an existing runtime")
+    if (
+        request.operation is not RuntimeOperation.INSTALL
+        and request.receipt_path is None
+    ):
+        raise ValueError("update, repair, and modify require a runtime receipt")
+    if request.receipt_path is not None:
+        payload = json.loads(request.receipt_path.read_text(encoding="utf-8"))
+        receipt = RuntimeReceipt(
+            source=str(payload["source"]),
+            profile=str(payload["profile"]),
+            version=str(payload["version"]),
+            packages=tuple(str(item) for item in payload["packages"]),
+        )
+        if (
+            receipt.source != request.source.value
+            or receipt.profile != request.profile.value
+        ):
+            raise ValueError(
+                "runtime receipt forbids changing install source or package profile"
+            )
 
 
 def _selected_packages(
@@ -145,11 +175,18 @@ def _target_python(request: InstallerRequest) -> str:
     str
         Python executable path or current interpreter.
     """
-    if request.target.kind is EnvironmentKind.CURRENT:
+    if request.runtime.kind is RuntimeKind.CURRENT:
         return sys.executable
-    assert request.target.path is not None
+    runtime_path = request.runtime.path
+    if runtime_path is None and request.runtime.kind is RuntimeKind.MANAGED:
+        runtime_path = (
+            Path.home() / ".local" / "share" / "codira" / "runtimes" / "default"
+        )
+    if runtime_path is None:
+        runtime_path = request.target.path
+    assert runtime_path is not None
     executable = "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
-    return str(request.target.path / executable)
+    return str(runtime_path / executable)
 
 
 def _install_command(
@@ -224,12 +261,16 @@ def _steps(
         Stable sequence of plan steps.
     """
     steps = [PlanStep("preflight", (), "selected environment is compatible")]
-    if request.target.kind is EnvironmentKind.NEW:
-        assert request.target.path is not None
+    if request.runtime.kind in {RuntimeKind.MANAGED, RuntimeKind.NEW}:
+        runtime_path = request.runtime.path
+        if runtime_path is None:
+            runtime_path = (
+                Path.home() / ".local" / "share" / "codira" / "runtimes" / "default"
+            )
         steps.append(
             PlanStep(
                 "create-environment",
-                ("uv", "venv", str(request.target.path)),
+                ("uv", "venv", str(runtime_path)),
                 "target environment exists",
             )
         )
@@ -240,6 +281,86 @@ def _steps(
             "selected distributions match the plan version",
         )
     )
+    if request.runtime.kind is RuntimeKind.MANAGED:
+        runtime_root = request.runtime.path or (
+            Path.home() / ".local" / "share" / "codira" / "runtimes" / "default"
+        )
+        steps.extend(
+            (
+                PlanStep(
+                    "write-runtime-receipt",
+                    (
+                        sys.executable,
+                        "-m",
+                        "codira_installer.runtime",
+                        "write-receipt",
+                        "--root",
+                        str(runtime_root),
+                        "--source",
+                        request.source.value,
+                        "--profile",
+                        request.profile.value,
+                        "--version",
+                        version,
+                        *(
+                            item
+                            for package in packages
+                            for item in ("--package", package)
+                        ),
+                    ),
+                    "runtime receipt matches the installation choices",
+                ),
+                PlanStep(
+                    "write-runtime-launchers",
+                    (
+                        sys.executable,
+                        "-m",
+                        "codira_installer.runtime",
+                        "write-launchers",
+                        "--root",
+                        str(runtime_root),
+                    ),
+                    "deterministic managed-runtime launchers exist",
+                ),
+            )
+        )
+    if request.workspace is not None:
+        workspace = request.workspace
+        migration_command: tuple[str, ...] = (
+            "codira",
+            "workspace",
+            "migrate",
+            workspace.name,
+            "--path",
+            str(workspace.repository_root),
+        )
+        command: tuple[str, ...] = (
+            "codira",
+            "workspace",
+            "add",
+            workspace.name,
+            "--path",
+            str(workspace.repository_root),
+        )
+        if workspace.state_root is not None:
+            migration_command += ("--state-root", str(workspace.state_root))
+            command += ("--state-root", str(workspace.state_root))
+        if workspace.config_file is not None:
+            migration_command += (
+                "--config-file",
+                str(workspace.config_file),
+                "--config-mode",
+                "reference",
+            )
+            command += ("--config-file", str(workspace.config_file))
+        steps.append(
+            PlanStep(
+                "preview-workspace-migration",
+                migration_command,
+                "workspace migration is previewed before registration",
+            )
+        )
+        steps.append(PlanStep("register-workspace", command, "workspace is registered"))
     return tuple(steps)
 
 
@@ -370,6 +491,67 @@ def load_plan(payload: Mapping[str, object]) -> InstallPlan:
                 for item in cast("Sequence[object]", request_payload["packages"])
             ),
             runtime_profile=str(request_payload["runtime_profile"]),
+            runtime=RuntimeTarget(
+                RuntimeKind(
+                    str(
+                        cast("Mapping[str, object]", request_payload["runtime"])["kind"]
+                    )
+                ),
+                None
+                if cast("Mapping[str, object]", request_payload["runtime"])["path"]
+                is None
+                else Path(
+                    str(
+                        cast("Mapping[str, object]", request_payload["runtime"])["path"]
+                    )
+                ),
+            ),
+            operation=RuntimeOperation(str(request_payload["operation"])),
+            workspace=(
+                None
+                if request_payload["workspace"] is None
+                else WorkspaceRegistration(
+                    name=str(
+                        cast("Mapping[str, object]", request_payload["workspace"])[
+                            "name"
+                        ]
+                    ),
+                    repository_root=Path(
+                        str(
+                            cast("Mapping[str, object]", request_payload["workspace"])[
+                                "repository_root"
+                            ]
+                        )
+                    ),
+                    state_root=None
+                    if cast("Mapping[str, object]", request_payload["workspace"])[
+                        "state_root"
+                    ]
+                    is None
+                    else Path(
+                        str(
+                            cast("Mapping[str, object]", request_payload["workspace"])[
+                                "state_root"
+                            ]
+                        )
+                    ),
+                    config_file=None
+                    if cast("Mapping[str, object]", request_payload["workspace"])[
+                        "config_file"
+                    ]
+                    is None
+                    else Path(
+                        str(
+                            cast("Mapping[str, object]", request_payload["workspace"])[
+                                "config_file"
+                            ]
+                        )
+                    ),
+                )
+            ),
+            model_store=None
+            if request_payload["model_store"] is None
+            else Path(str(request_payload["model_store"])),
         )
         steps = tuple(
             PlanStep(

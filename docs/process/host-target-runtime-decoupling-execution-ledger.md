@@ -463,13 +463,14 @@ ownership.
 
 All completed branches
 └── 17 documentation and release readiness
+    └── 18 lint and Semgrep hygiene
 ```
 
 ## Slice ledger
 
 ### Slice 1 — Architecture baseline and behavioral characterization
 
-Status: `pending`
+Status: `complete`
 
 Goal:
 
@@ -506,11 +507,24 @@ Acceptance:
 
 Commit intent: `docs(architecture): define host target runtime separation`
 
-Evidence: pending.
+Evidence:
+
+```text
+Validation report: green
+Focused tests: uv run pytest -q tests/test_host_target_runtime_baseline.py packages/codira-analyzer-python/tests/test_python_package.py (6 passed)
+Generated/package checks: not applicable; package-local analyzer fixture covered
+Codira index: indexed 1, reused 316, failed 0, coverage issues 0
+Codira audit: No docstring issues found
+Repository validation: uv run python scripts/validate_repo.py, observed exit code 0, 694 passed, 1 skipped
+Diff check: passed
+Commit: this atomic commit, docs(architecture): define host target runtime separation
+Final worktree: clean after this commit
+Notes: The fixture import uses a rule-specific F401 suppression because its unused alias is the import-artifact characterization subject. Slice 18 adds the follow-up repository-wide suppression and Semgrep hygiene review.
+```
 
 ### Slice 2 — Platform directories and workspace domain
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slice 1.
 
@@ -545,11 +559,24 @@ Acceptance:
 
 Commit intent: `feat(config): add workspace domain contracts`
 
-Evidence: pending.
+Evidence:
+
+```text
+Validation report: green
+Focused tests: uv run pytest -q tests/test_workspace.py tests/test_config.py tests/test_incremental_indexing.py (121 passed)
+Generated/package checks: not applicable
+Codira index: indexed 3, reused 317, failed 0, coverage issues 0
+Codira audit: No docstring issues found
+Repository validation: uv run python scripts/validate_repo.py, observed exit code 0, 703 passed, 1 skipped
+Diff check: passed
+Commit: this atomic commit, feat(config): add workspace domain contracts
+Final worktree: clean after this commit
+Notes: platformdirs paths are injected in Linux, macOS, and Windows model tests; direct-path CLI routing remains unchanged.
+```
 
 ### Slice 3 — Workspace registry and administration CLI
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slice 2.
 
@@ -575,11 +602,24 @@ Acceptance:
 
 Commit intent: `feat(cli): add workspace administration`
 
-Evidence: pending.
+Evidence:
+
+```text
+Validation report: green
+Focused tests: workspace registry, CLI JSON, workspace contracts, and capability schema tests passed
+Generated/package checks: not applicable
+Codira index: no coverage issues
+Codira audit: No docstring issues found
+Repository validation: uv run python scripts/validate_repo.py, green (operator confirmed)
+Diff check: passed
+Commit: this atomic commit, feat(cli): add workspace administration
+Final worktree: clean after this commit
+Notes: remove unregisters only the descriptor and retains repository, configuration, state, and model data.
+```
 
 ### Slice 4 — Workspace-aware CLI and configuration routing
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slice 3.
 
@@ -615,11 +655,24 @@ Acceptance:
 
 Commit intent: `feat(cli): route commands through named workspaces`
 
-Evidence: pending.
+Evidence:
+
+```text
+Validation report: green
+Focused tests: uv run pytest -q tests/test_workspace_registry.py tests/test_incremental_indexing.py (72 passed)
+Generated/package checks: not applicable
+Codira index: indexed 1, reused 324, failed 0, coverage issues 0
+Codira audit: No docstring issues found
+Repository validation: uv run python scripts/validate_repo.py, observed exit code 0, 707 passed, 1 skipped
+Diff check: passed
+Commit: this atomic commit, feat(cli): route commands through named workspaces
+Final worktree: clean after this commit
+Notes: workspace and direct paths resolve through the same runtime resolver; mixed routing is rejected before configuration or storage access.
+```
 
 ### Slice 5 — Shared content-addressed model store
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slice 2.
 
@@ -655,11 +708,20 @@ Acceptance:
 
 Commit intent: `feat(embedding): add shared verified model store`
 
-Evidence: pending.
+Evidence:
+
+```text
+Focused tests: uv run pytest -q tests/test_model_store.py packages/codira-embedding-onnx/tests/test_onnx_package.py packages/codira-embedding-sentence-transformers/tests/test_sentence_transformers_package.py packages/codira-installer/tests/test_operations.py tests/test_config.py tests/test_embeddings.py (89 passed)
+Focused lint: uv run ruff check ... (passed)
+Acceptance evidence: deterministic root precedence; two store instances reuse one verified SHA-256 blob; concurrent provisioning invokes one fetch; incomplete and checksum-failed candidates do not publish a manifest; legacy artifact import preserves its source.
+Codira index: indexed 1, reused 324, failed 0, coverage issues 0.
+Codira audit: No docstring issues found.
+Repository validation: uv run python scripts/validate_repo.py, observed exit code 0, 718 passed, 1 skipped.
+```
 
 ### Slice 6 — MCP workspace startup and presets
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slice 4.
 
@@ -694,11 +756,20 @@ Acceptance:
 
 Commit intent: `feat(mcp): support workspace scoped startup`
 
-Evidence: pending.
+Evidence:
+
+```text
+Focused tests: uv run pytest -q tests/test_mcp_contract.py tests/test_mcp_server.py tests/test_mcp_presets.py tests/test_capabilities.py (32 passed)
+Focused lint and typing: passed for MCP server, proxy, adapter, presets, contract, and tests.
+Acceptance evidence: fixed workspace binding resolves root/state/config once; direct and workspace servers return equivalent read-only results for the same bound paths; descriptor mutation yields a new fingerprinted binding without retargeting an existing server; responses expose only workspace name and descriptor SHA-256; all preset formats retain --root and support --workspace.
+Codira index: indexed 1, reused 326, failed 0, coverage issues 0.
+Codira audit: No docstring issues found.
+Repository validation: uv run python scripts/validate_repo.py, observed exit code 0, 725 passed, 1 skipped.
+```
 
 ### Slice 7 — Workspace-scoped services and daemons
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slices 4 and 6.
 
@@ -729,13 +800,22 @@ Acceptance:
 - Service install/start remains previewable and does not elevate privileges.
 - Direct-path service definitions remain supported.
 
-Commit intent: `feat(service): bind managed services to workspaces`
+Commit intent: `feat(contracts): bind managed services to workspaces`
 
-Evidence: pending.
+Evidence:
+
+```text
+Focused checks: ruff format/check and mypy passed for all changed Python surfaces.
+Focused tests: 20 passed for daemon CLI status, systemd, launchd, Windows SCM, workspace routing, and installer service planning.
+Acceptance evidence: workspace service definitions persist canonical roots, effective configuration, workspace name, and descriptor fingerprint; systemd and launchd start with a fingerprint-checked workspace selector; Windows SCM persists and verifies the same workspace identity. Descriptor drift blocks service launch or lifecycle checks until explicit install/regeneration, while direct-path services retain their existing command layout.
+Codira index: indexed 11, reused 316, failed 0, coverage issues 0.
+Codira audit: No docstring issues found.
+Repository validation: standalone `uv run python scripts/validate_repo.py` exited 0.
+```
 
 ### Slice 8 — Installer runtime/repository domain separation
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slices 2, 3, and 5.
 
@@ -770,13 +850,19 @@ Acceptance:
 - Repair/update uses receipts and cannot silently change install source or
   package profile.
 
-Commit intent: `feat(installer): separate runtime and repository targets`
+Commit intent: `feat(package): separate runtime and repository targets`
 
-Evidence: pending.
+Evidence:
+
+```text
+Focused tests: 21 passed for installer catalog, plans, operations, runtime artifacts, and TUI parity.
+Acceptance evidence: managed runtime placement is independent of optional workspace registration; plans serialize and fingerprint runtime, workspace, model-store, and operation choices; managed plans create receipts and deterministic launchers; update, repair, and modify reject missing or mismatched receipt provenance; current, existing, and new environment targets remain available.
+Repository validation: standalone `uv run python scripts/validate_repo.py` exited 0.
+```
 
 ### Slice 9 — Standalone-first TUI and headless parity
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slice 8.
 
@@ -800,13 +886,19 @@ Acceptance:
 - No widget performs filesystem or subprocess mutations directly.
 - Final instructions work without activating the target repository environment.
 
-Commit intent: `feat(installer): make standalone workspace flow default`
+Commit intent: `feat(package): make standalone workspace flow default`
 
-Evidence: pending.
+Evidence:
+
+```text
+Focused tests: 21 passed for the installer catalog, plans, operations, runtime artifacts, and Textual/headless flow.
+Acceptance evidence: the target screen defaults to a managed standalone runtime, collects the same runtime destination used by the headless request, and keeps environment targets explicit Advanced fields; controller resolution remains the single immutable-plan boundary.
+Repository validation: standalone `uv run python scripts/validate_repo.py` exited 0.
+```
 
 ### Slice 10 — Explicit non-destructive migration tooling
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slices 4, 5, and 8.
 
@@ -832,13 +924,21 @@ Acceptance:
 - Interrupted migration can resume without duplicating state or model blobs.
 - Reapplying a completed plan is a no-op.
 
-Commit intent: `feat(cli): add non destructive workspace migration`
+Commit intent: `feat(contracts): add non destructive workspace migration`
 
-Evidence: pending.
+Evidence:
+
+```text
+Focused checks: ruff, formatting, and mypy passed; 12 migration and installer-plan tests passed.
+Acceptance evidence: the JSON dry-run lists every source, destination, retained original, and estimated state/model payload; apply can reference or atomically copy configuration, reuse/copy/rebuild state, and import model artifacts into the shared store. Durable journals resume completed operations, overlapping copies are rejected, and completed reapplication is a no-op. No repository, configuration, state, environment, or model source is deleted.
+Installer integration: exported workspace plans include the same no-write migration preview before registration.
+Codira index: indexed 3, reused 328, failed 0, coverage issues 0. Codira audit: no docstring issues found.
+Repository validation: standalone `uv run python scripts/validate_repo.py` exited 0; 736 passed, 1 skipped.
+```
 
 ### Slice 11 — Target Python detection and capability contract
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slice 1.
 
@@ -865,11 +965,18 @@ Acceptance:
 
 Commit intent: `feat(analyzer): declare target Python compatibility`
 
-Evidence: pending.
+Evidence:
+
+```text
+Focused checks: ruff, formatting, and mypy passed; 24 target-contract, capability, Python-analyzer, installer-catalog, and AST-baseline tests passed.
+Acceptance evidence: explicit Python analyzer configuration wins over [project].requires-python; bounded, open, excluded, invalid, unknown, and non-intersecting declarations have deterministic outcomes. Capability schema 1.5 reports target provenance and normalized minors separately from the host minor and host_ast_dependent parser limitation.
+Codira index: indexed 2, reused 329, failed 0, coverage issues 0. Codira audit: no docstring issues found. MkDocs strict: passed.
+Repository validation: standalone `uv run python scripts/validate_repo.py` exited 0; 741 passed, 1 skipped.
+```
 
 ### Slice 12 — Tree-sitter parser and normalized syntax layer
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slice 11.
 
@@ -899,11 +1006,25 @@ Acceptance:
 
 Commit intent: `feat(analyzer): add normalized Tree-sitter syntax layer`
 
-Evidence: pending.
+Evidence:
+
+- Added the package-local normalized Tree-sitter contract with UTF-8 byte
+  spans, provider-neutral node kinds, isolated parser construction, and stable
+  error/missing-node diagnostics.
+- Documented the syntax boundary in
+  `docs/architecture/python-normalized-syntax.md` and the Python analyzer
+  package README.
+- Focused validation: `uv run pytest -q packages/codira-analyzer-python/tests`
+  (12 passed), `uv run ruff check ...`, `uv run ruff format --check ...`, and
+  `uv run mypy packages/codira-analyzer-python/src/codira_analyzer_python/syntax.py`.
+- Repository gate: `uv run codira index` (coverage issues: 0),
+  `uv run codira audit` (no docstring issues), and standalone
+  `uv run python scripts/validate_repo.py` (observed exit 0; 748 passed,
+  1 skipped).
 
 ### Slice 13 — Python analyzer artifact migration
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slice 12.
 
@@ -930,11 +1051,30 @@ Acceptance:
 
 Commit intent: `feat(analyzer): migrate Python artifacts to Tree-sitter`
 
-Evidence: pending.
+Evidence:
+
+- Migrated the Python analyzer's production extraction path from host AST to
+  the package-owned Tree-sitter adapter while retaining the existing artifact
+  normalization and backend contracts.
+- Preserved the Slice 1 golden artifact fixture and added production-path and
+  shebang-prefixed module-documentation regression tests.
+- Bumped the Python analyzer to version `7`, its distribution to `1.57.0`, and
+  included the syntax-artifact revision in its configuration fingerprint;
+  incremental-index coverage verifies version changes reprocess unchanged
+  Python files.
+- Focused validation: Python analyzer, artifact-contract, incremental-index,
+  and capability tests (171 passed), Ruff, and strict mypy for the modified
+  package sources.
+- Regression closure: call graph, callable-reference, prefix-filter, symbol
+  inventory, and host-AST inventory tests (46 passed).
+- Full rebuild: `uv run codira index --full` (336 indexed, 0 failed, coverage
+  issues: 0); `uv run codira audit` (no docstring issues).
+- Repository validation: standalone `uv run python scripts/validate_repo.py`
+  observed exit 0 (750 passed, 1 skipped).
 
 ### Slice 14 — Remove remaining production host-AST consumers
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slice 13.
 
@@ -961,11 +1101,29 @@ Acceptance:
 
 Commit intent: `refactor(core): remove host AST target parsing`
 
-Evidence: pending.
+Evidence:
+
+- Removed the core host-AST parser utility and migrated its test-only fixtures
+  to normalized Python analyzer artifacts.
+- Replaced CLI constant presentation and context enrichment with indexed
+  source-location recovery, preserving signatures, documentation previews,
+  and snippets without a target-language parser in core.
+- Updated target capability metadata to declare the package-owned Tree-sitter
+  parser, bumped the capability schema to `1.7`, exposed plugin distribution
+  versions through MCP capability listings, and strengthened the
+  production inventory to reject every host-AST import or reference.
+- Focused validation: Ruff, strict mypy, and 123 Python-analyzer, context,
+  contract, backend-parity, target-compatibility, capability, and host-AST
+  regression tests passed.
+- Repository index: 17 indexed, 318 reused, 1 obsolete parser module deleted,
+  0 failed, and 0 coverage issues; `uv run codira audit` found no docstring
+  issues.
+- Repository validation: standalone `uv run python scripts/validate_repo.py`
+  observed exit 0 (751 passed, 1 skipped).
 
 ### Slice 15 — Version rules and degraded-analysis persistence
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slice 14.
 
@@ -995,11 +1153,24 @@ Acceptance:
 
 Commit intent: `feat(analyzer): persist version aware partial analysis`
 
-Evidence: pending.
+Evidence:
+
+- Added focused Python feature rules for `match` (3.10), `except*` (3.11),
+  and `type` aliases (3.12), evaluated against the normalized target contract.
+- Persisted grammar identity, target contract, diagnostics, reliable and
+  omitted artifact categories, and coverage state for every analyzed file in
+  both first-party structural backends.
+- Grammar errors now retain only degraded provenance; no documentation or
+  structural artifacts are persisted, while unrelated files continue indexing.
+- Exposed feature rules in capabilities and persisted partial-analysis issues
+  through `codira cov` and MCP `index_status`.
+- Bumped the Python analyzer implementation to `8` and distribution to
+  `1.58.0`; bumped both structural backend distributions to `1.56.0` for their
+  schema changes.
 
 ### Slice 16 — Python 3.8-to-latest compatibility matrix
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slice 15.
 
@@ -1027,11 +1198,31 @@ Acceptance:
 
 Commit intent: `test(analyzer): enforce target Python compatibility matrix`
 
-Evidence: pending.
+Evidence:
+
+```text
+Implementation: package-owned source-data fixtures cover every advertised
+Python target minor from 3.8 through 3.14, plus invalid syntax. The Python
+3.14 template-string fixture parses through bundled tree-sitter-python-0.25.0
+on the Python 3.13 Codira host without using host ast. Exact target requirements
+produce complete analysis; a 3.13 requirement makes that valid future source a
+target-version partial analysis while retaining trustworthy artifacts.
+Contract: capability schema 1.9 publishes tested minors, grammar identity, and
+grammar maximum. The matrix test requires the advertised, tested, and fixture
+minor sets to match, so increasing the advertised maximum without its fixture
+fails validation. Slice 17 corrected a template-string heuristic false
+positive and therefore raised the analyzer distribution to 1.60.0 and its
+implementation version to 10.
+Documentation: the analyzer package includes a grammar-upgrade checklist, and
+the host-target boundary describes the fixture-backed release claim.
+Verification: focused target, syntax, analyzer-package, capability, MCP, and
+package-contract tests passed; final repository validation, index, and audit
+are recorded by the slice commit validation.
+```
 
 ### Slice 17 — Documentation, packaging, and release readiness
 
-Status: `pending`
+Status: `complete`
 
 Depends on: Slices 1–16.
 
@@ -1065,7 +1256,92 @@ Acceptance:
 
 Commit intent: `docs(release): publish standalone host target architecture`
 
-Evidence: pending.
+Evidence:
+
+```text
+Documentation: README and getting-started guidance now recommend a dedicated
+standalone host environment. Repository-local installation is retained and
+labelled Advanced compatibility mode. MCP, analyzer, architecture, ADR, and
+release documents separately describe direct/workspace routing, shared
+host-user model storage, parser-owned target Python compatibility, partial
+analysis, and retained non-goals.
+Packaging: the Python analyzer's escaped-tab template false-positive fix is
+released as implementation version 10 / distribution 1.60.0, with core extras,
+contract, capability, MCP, incremental-index tests, and the lockfile updated.
+Other first-party distributions intentionally retain independent versions;
+coordinated catalog and bundle version alignment is a separate release decision
+and is not inferred from this architecture slice.
+Rehearsal: scripts/rehearse_release_installs.py builds every local wheel and
+runs only from the installed target directory. Its probe indexes a Python
+3.8-declared walrus-expression target through direct CLI routing with deferred
+embeddings, queries that indexed target through the workspace-scoped MCP
+server, and verifies two isolated SharedModelStore instances reuse the same
+SHA-256-verified blob. The real rehearsal passed from
+/tmp/codira-slice17-rehearsal.VIENjW.
+Verification: focused analyzer, target-compatibility, capability, MCP,
+incremental-index, rehearsal, documentation, and repository gates are recorded
+by the slice commit validation.
+```
+
+### Slice 18 — Lint and Semgrep hygiene review
+
+Status: `complete`
+
+Depends on: Slice 17.
+
+Goal:
+
+- Confirm that every remaining lint suppression and Semgrep policy remains
+  justified by current production behavior and repository architecture.
+
+Scope:
+
+- Inventory every `# noqa` suppression, classify its rule and owner, and
+  remove or narrow every suppression no longer required.
+- Review every maintained Semgrep rule against current source, tests, and
+  architectural boundaries.
+- Review each Semgrep exception, exclusion, and ignore entry; remove stale
+  exceptions and document retained exceptions with their concrete reason.
+- Add deterministic Semgrep rules when an observed architectural or safety
+  invariant lacks an effective existing guard.
+- Keep rules precise, test each added or changed rule with compliant and
+  violating fixtures, and avoid broad false-positive suppression.
+
+Acceptance:
+
+- Every remaining `# noqa` is necessary, rule-specific where practical, and
+  explained by source context or maintained policy.
+- Every active Semgrep rule has a current purpose and at least one meaningful
+  regression test or fixture.
+- Every retained Semgrep exception or ignore entry has a documented current
+  justification; obsolete exceptions are removed.
+- New rules, when added, enforce a demonstrated gap without weakening existing
+  architectural boundaries.
+- Focused lint and Semgrep tests, full repository validation, and documentation
+  audit are green.
+
+Commit intent: `chore(process): review lint and Semgrep hygiene`
+
+Evidence:
+
+```text
+Inventory: reviewed 39 `# noqa` locations and removed the two obsolete E501
+line-length suppressions in tests/test_contracts.py. The remaining 37 are all
+rule-specific and catalogued by exact source location and rationale in
+docs/process/lint-and-semgrep-hygiene.md; its regression test rejects an
+undocumented future location. The same policy names every source that carries
+an external-rule `nosemgrep` exception. No .semgrepignore file exists.
+Rules: reviewed all 20 repository-owned Semgrep rules, their local path
+exclusions, and their violating fixtures. Updated the architecture guardrail
+matrix to include the current complete rule set and corrected the DuckDB
+package-seam exception record. Added codira.arch.no-host-ast-in-python-analysis
+because production host-AST imports would violate the completed package-owned
+Tree-sitter boundary. Its dedicated fixture is scanned by
+scripts/validate_semgrep_rules.py and asserted by tests/test_semgrep_rules.py.
+Verification: focused quality-policy and Semgrep tests, fixture validator,
+repository-owned Semgrep scan, Ruff, index, audit, and full repository
+validation are recorded by the slice commit validation.
+```
 
 ## Per-slice evidence template
 
@@ -1086,7 +1362,7 @@ Notes: <reviewed deviations, retries, or none>
 
 ## Global completion gate
 
-- All seventeen slices are `complete` in order.
+- All eighteen slices are `complete` in order.
 - Every slice records a green validation report and atomic commit.
 - Workspace and equivalent direct-path runs have tested parity.
 - Managed standalone CLI, MCP, and services do not use target environments.

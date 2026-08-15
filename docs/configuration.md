@@ -227,6 +227,14 @@ codira daemon uninstall
 `install` creates the platform-specific service definition; use `start` when
 you want to start an installed service immediately.
 
+When installed with `--workspace NAME`, the service definition records the
+workspace name, canonical repository and state roots, effective configuration,
+and descriptor fingerprint. Its launch command selects that workspace and
+checks the fingerprint before it runs, so a changed descriptor cannot retarget
+an automatic restart. `start` and `status` report definition drift and require
+`install` followed by `start` to regenerate the definition. Direct `--path`
+service definitions remain supported.
+
 Every foreground daemon writes a current snapshot to
 `.codira/daemon-status.json` and appends state-transition snapshots to
 `.codira/daemon-activity.jsonl` below Codira's effective storage root. By
@@ -273,6 +281,10 @@ and Windows installs an SCM service. Each service name includes the resolved
 repository root, effective output directory, and daemon kind, so it cannot
 operate on a different repository's service. Installed commands use absolute
 executable, repository, and output-directory arguments.
+
+Workspace-installed query services use the same persisted identity and drift
+check as indexing services. Regenerate the service with `install` after a
+workspace descriptor changes; direct-path query services remain compatible.
 
 The indexing daemon and query daemon have distinct platform-service names and
 status records. MCP always discovers the compatible local daemon

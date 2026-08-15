@@ -344,7 +344,7 @@ def test_sqlite_resolve_documentation_scores_chunks_large_score_sets(
     assert [row[1][6] for row in results] == ["Doc 949", "Doc 948", "Doc 947"]
 
 
-class _PythonAnalyzerV7:
+class _PythonAnalyzerV11:
     """
     Python analyzer stub with a bumped version for staleness tests.
 
@@ -354,7 +354,7 @@ class _PythonAnalyzerV7:
     """
 
     name = "python"
-    version = "7"
+    version = "11"
     discovery_globs: tuple[str, ...] = ("*.py",)
 
     def supports_path(self, path: Path) -> bool:
@@ -2680,7 +2680,7 @@ def test_index_repo_reindexes_unchanged_files_when_analyzer_changes(
 
     monkeypatch.setattr(
         "codira.indexer.active_language_analyzers",
-        lambda *, root=None: [_PythonAnalyzerV7()],
+        lambda *, root=None: [_PythonAnalyzerV11()],
     )
     report = index_repo(tmp_path)
 
@@ -2700,7 +2700,7 @@ def test_index_repo_reindexes_unchanged_files_when_analyzer_changes(
         and decision.reason == "analyzer plugin or version changed"
         for decision in report.decisions
     )
-    assert owners == [("python", "7")]
+    assert owners == [("python", "11")]
 
 
 def test_index_cli_reports_summary_and_decisions(
@@ -4244,11 +4244,11 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(
         "codira.cli.active_language_analyzers",
-        lambda *, root=None: [_PythonAnalyzerV7()],
+        lambda *, root=None: [_PythonAnalyzerV11()],
     )
     monkeypatch.setattr(
         "codira.indexer.active_language_analyzers",
-        lambda *, root=None: [_PythonAnalyzerV7()],
+        lambda *, root=None: [_PythonAnalyzerV11()],
     )
 
     _ensure_index(tmp_path)
@@ -4257,7 +4257,7 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
 
     assert "Index stale (analyzer plugin inventory changed)" in captured.err
     assert backend.load_analyzer_inventory(tmp_path) == [
-        _analyzer_inventory_row(_PythonAnalyzerV7())
+        _analyzer_inventory_row(_PythonAnalyzerV11())
     ]
 
 
@@ -4617,3 +4617,92 @@ def test_lock_file_handle_uses_windows_locking_api(
         storage_module._unlock_file_handle(handle)
 
     assert calls == [(1, 1), (2, 1)]
+
+
+def test_index_persists_degraded_python_analysis_without_symbols(
+    tmp_path: Path,
+) -> None:
+    """Persist grammar provenance while leaving unrelated files queryable.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts partial analysis is a coverage issue, not a run abort.
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'sample'\nrequires-python = '>=3.9,<3.10'\n",
+        encoding="utf-8",
+    )
+    _write_module(tmp_path / "pkg" / "valid.py", "def answer():\n    return 42\n")
+    _write_module(tmp_path / "pkg" / "broken.py", "def broken(:\n    pass\n")
+
+    init_db(tmp_path)
+    report = index_repo(tmp_path)
+
+    conn = sqlite3.connect(get_db_path(tmp_path))
+    try:
+        status = conn.execute(
+            "SELECT coverage_state, diagnostics, reliable_categories "
+            "FROM analysis_status WHERE path = ?",
+            (str(tmp_path / "pkg" / "broken.py"),),
+        ).fetchone()
+        symbols = conn.execute("SELECT name FROM functions ORDER BY name").fetchall()
+    finally:
+        conn.close()
+
+    assert report.failed == 0
+    assert len(report.coverage_issues) == 1
+    assert status is not None
+    assert status[0] == "partial"
+    assert "grammar_error" in status[1]
+    assert status[2] == "[]"
+    assert symbols == [("answer",)]
+
+    (tmp_path / "pkg" / "broken.py").unlink()
+    index_repo(tmp_path)
+    conn = sqlite3.connect(get_db_path(tmp_path))
+    try:
+        remaining_statuses = conn.execute(
+            "SELECT COUNT(*) FROM analysis_status"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert remaining_statuses == (1,)
+
+
+def test_strict_index_coverage_rejects_persisted_partial_analysis(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return strict-coverage failure after persisting degraded provenance.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate CLI process arguments and the current root.
+
+    Returns
+    -------
+    None
+        The test asserts unrelated files are indexed before strict failure.
+    """
+    _write_module(tmp_path / "pkg" / "valid.py", "def answer():\n    return 42\n")
+    _write_module(tmp_path / "pkg" / "broken.py", "def broken(:\n    pass\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["codira", "index", "--require-full-coverage"])
+
+    assert main() == 2
+
+    conn = sqlite3.connect(get_db_path(tmp_path))
+    try:
+        functions = conn.execute("SELECT name FROM functions ORDER BY name").fetchall()
+    finally:
+        conn.close()
+    assert functions == [("answer",)]

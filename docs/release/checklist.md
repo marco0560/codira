@@ -60,3 +60,19 @@ uv run python -m build --no-isolation --wheel --sdist --outdir /tmp/codira-insta
 uv run python -m build --no-isolation --wheel --sdist --outdir /tmp/codira-installer-artifacts packages/codira-bundle-official
 uv run python -m twine check /tmp/codira-installer-artifacts/*
 ```
+
+## Standalone host-target rehearsal
+
+Before publishing the core and first-party wheels, rehearse their installation
+outside the checkout:
+
+```bash
+uv run python scripts/rehearse_release_installs.py \
+  --wheel-dir /tmp/codira-release-wheels \
+  --install-dir /tmp/codira-release-site-packages
+```
+
+The probe runs only from the installed wheel directory. It verifies first-party
+discovery, analyzes a Python 3.8-declared target fixture from the host runtime,
+resolves a workspace-scoped MCP startup binding, and proves two isolated
+runtimes reuse one verified shared-model blob.

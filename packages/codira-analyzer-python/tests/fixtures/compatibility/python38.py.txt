@@ -1,0 +1,4 @@
+def first_positive(values):
+    if (first := values[0]) > 0:
+        return first
+    return 0

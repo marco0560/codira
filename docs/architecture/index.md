@@ -22,3 +22,4 @@ These documents describe the current architecture produced by the accepted
 - [Core contracts](core-contracts.md)
 - [Storage backends](storage-backends.md)
 - [Language analyzers](language-analyzers.md)
+- [Host-target runtime boundary](host-target-runtime-boundary.md)

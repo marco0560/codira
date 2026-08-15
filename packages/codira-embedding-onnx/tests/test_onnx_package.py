@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tomllib
+import hashlib
 from pathlib import Path
 from typing import Any, cast
 
@@ -10,6 +11,7 @@ import pytest
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 from codira.contracts import EmbeddingEngine, EmbeddingEngineError
+from codira.model_store import ModelIdentity, SharedModelStore
 from codira_embedding_onnx import (
     OnnxEmbeddingEngine,
     _engine_config,
@@ -199,6 +201,101 @@ def test_onnx_engine_config_reads_runtime_knobs() -> None:
     assert config.batch_size == 8
     assert config.intra_op_num_threads == 4
     assert config.inter_op_num_threads == 1
+
+
+def test_onnx_engine_resolves_relative_artifacts_under_shared_model_root(
+    tmp_path: Path,
+) -> None:
+    """Route relative ONNX artifacts through the injected shared model root.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary absolute model-store root.
+
+    Returns
+    -------
+    None
+        The test asserts no workspace-relative artifact paths are used.
+    """
+    config = _engine_config(
+        {
+            "model_path": "onnx/model.onnx",
+            "tokenizer_path": "onnx/tokenizer.json",
+            "_codira_model_root": str(tmp_path),
+        }
+    )
+
+    assert config.model_path == tmp_path / "onnx" / "model.onnx"
+    assert config.tokenizer_path == tmp_path / "onnx" / "tokenizer.json"
+
+
+def test_onnx_engine_keeps_legacy_workspace_paths_for_migration(tmp_path: Path) -> None:
+    """Preserve historical explicit paths until existing artifacts are migrated.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary absolute model-store root.
+
+    Returns
+    -------
+    None
+        The test asserts legacy state remains readable without relocation.
+    """
+    config = _engine_config(
+        {
+            "model_path": ".codira/models/model.onnx",
+            "tokenizer_path": ".codira/models/tokenizer.json",
+            "_codira_model_root": str(tmp_path),
+        }
+    )
+
+    assert config.model_path == Path(".codira/models/model.onnx")
+    assert config.tokenizer_path == Path(".codira/models/tokenizer.json")
+
+
+def test_onnx_engine_resolves_verified_artifacts_from_the_shared_store(
+    tmp_path: Path,
+) -> None:
+    """Use store manifests instead of workspace artifact paths when configured.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary absolute model-store root.
+
+    Returns
+    -------
+    None
+        The test asserts both ONNX artifacts resolve to verified blob paths.
+    """
+    store = SharedModelStore(tmp_path)
+    model_payload = b"onnx model"
+    tokenizer_payload = b"tokenizer"
+    model = store.ensure(
+        ModelIdentity("onnx", "example/model", "r1", "model.onnx"),
+        lambda target: target.write_bytes(model_payload),
+        expected_sha256=hashlib.sha256(model_payload).hexdigest(),
+    )
+    tokenizer = store.ensure(
+        ModelIdentity("onnx", "example/model", "r1", "tokenizer.json"),
+        lambda target: target.write_bytes(tokenizer_payload),
+        expected_sha256=hashlib.sha256(tokenizer_payload).hexdigest(),
+    )
+
+    config = _engine_config(
+        {
+            "model_artifact": "model.onnx",
+            "tokenizer_artifact": "tokenizer.json",
+            "_codira_model_root": str(tmp_path),
+            "_codira_model": "example/model",
+            "_codira_model_version": "r1",
+        }
+    )
+
+    assert config.model_path == model
+    assert config.tokenizer_path == tokenizer
 
 
 def test_onnx_engine_config_rejects_invalid_runtime_knobs() -> None:

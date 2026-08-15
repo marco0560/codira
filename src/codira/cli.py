@@ -18,11 +18,11 @@ This module belongs to the **CLI layer** that wraps storage, indexing, and query
 from __future__ import annotations
 
 import argparse
-import ast
 import contextlib
 import importlib
 import io
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -73,6 +73,7 @@ from codira.daemon import (
     WindowsScmService,
     run_foreground_daemon,
 )
+from codira.daemon.service_spec import ServiceSpecification
 from codira.git import read_head_commit
 from codira.indexer import (
     CoverageIssue,
@@ -81,12 +82,23 @@ from codira.indexer import (
     IndexWarning,
     audit_repo_coverage,
     index_repo,
+    persisted_analysis_coverage_issues,
     validate_index_concurrency_preflight,
 )
+from codira.migration import (
+    ConfigMigrationMode,
+    ModelImport,
+    StateMigrationMode,
+    apply_workspace_migration,
+    migration_payload,
+    preview_workspace_migration,
+)
+from codira.model_store import ModelIdentity
 from codira.path_resolution import (
     CODIRA_CONFIG_FILE_ENV,
     CODIRA_OUTPUT_DIR_ENV,
     CODIRA_TARGET_DIR_ENV,
+    ResolvedRuntimePaths,
     resolve_runtime_paths,
 )
 from codira.plugin_config import analyzer_inventory_discovery_json
@@ -142,6 +154,8 @@ from codira.storage import (
 )
 from codira.vector_store import active_vector_store_context
 from codira.version import installed_distribution_version, package_version
+from codira.workspace import ResolvedWorkspace, WorkspaceDefinition, WorkspaceError
+from codira.workspace_registry import WorkspaceRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -524,36 +538,31 @@ class RelationSubcommandRequest:
     command: str = ""
 
 
-def _collapsed_ast_source(source: str, node: ast.AST) -> str:
+def _collapsed_source_text(source: str) -> str:
     """
-    Return one AST node's source text collapsed to stable single spacing.
+    Return source text collapsed to stable single spacing.
 
     Parameters
     ----------
     source : str
-        Full source text containing the node.
-    node : ast.AST
-        Syntax node whose source should be rendered.
+        Source text to normalize.
 
     Returns
     -------
     str
-        Source segment with whitespace collapsed deterministically.
+        Source text with whitespace collapsed deterministically.
     """
-    segment = ast.get_source_segment(source, node)
-    if segment is None:
-        segment = ast.unparse(node)
-    return " ".join(segment.split())
+    return " ".join(source.split())
 
 
-def _python_constant_json_detail(
+def _source_constant_json_detail(
     *,
     file_path: str,
     symbol_name: str,
     lineno: int,
 ) -> dict[str, object] | None:
     """
-    Return detail metadata for one indexed Python constant symbol.
+    Return detail metadata for one indexed constant symbol.
 
     Parameters
     ----------
@@ -568,49 +577,28 @@ def _python_constant_json_detail(
     -------
     dict[str, object] | None
         Constant detail payload when the current source still contains a
-        matching module-level constant declaration at the indexed location.
+        matching declaration at the indexed location.
     """
     path = Path(file_path)
-    if path.suffix != ".py":
-        return None
-
     try:
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=file_path)
-    except (OSError, SyntaxError, UnicodeDecodeError):
+        source_line = path.read_text(encoding="utf-8").splitlines()[lineno - 1]
+    except (IndexError, OSError, SyntaxError, UnicodeDecodeError):
         return None
-
-    for node in tree.body:
-        target: ast.expr | None = None
-        value: ast.expr | None = None
-
-        if isinstance(node, ast.Assign):
-            if len(node.targets) != 1:
-                continue
-            target = node.targets[0]
-            value = node.value
-        elif isinstance(node, ast.AnnAssign):
-            target = node.target
-            value = node.value
-        else:
-            continue
-
-        if not isinstance(target, ast.Name):
-            continue
-        if target.id != symbol_name or node.lineno != lineno or value is None:
-            continue
-
-        annotation: str | None = None
-        if isinstance(node, ast.AnnAssign):
-            annotation = _collapsed_ast_source(source, node.annotation)
-
-        return {
-            "kind": "constant_detail",
-            "annotation": annotation,
-            "value": _collapsed_ast_source(source, value),
-        }
-
-    return None
+    match = re.match(
+        rf"^\s*{re.escape(symbol_name)}\s*(?::\s*(?P<annotation>[^=]+))?="
+        r"\s*(?P<value>.+?)\s*$",
+        source_line,
+    )
+    if match is None:
+        return None
+    annotation = match.group("annotation")
+    return {
+        "kind": "constant_detail",
+        "annotation": None
+        if annotation is None
+        else _collapsed_source_text(annotation),
+        "value": _collapsed_source_text(match.group("value")),
+    }
 
 
 def _current_analyzer_inventory(
@@ -837,6 +825,15 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         )
         command_parser.add_argument(
+            "-w",
+            "--workspace",
+            help="Named workspace routing selection (env: CODIRA_WORKSPACE)",
+        )
+        command_parser.add_argument(
+            "--workspace-fingerprint",
+            help=argparse.SUPPRESS,
+        )
+        command_parser.add_argument(
             "-o",
             "--output-dir",
             help=(
@@ -938,7 +935,7 @@ def build_parser() -> argparse.ArgumentParser:
         title="subcommands",
         metavar=(
             "{help,setup,index,cov,sym,symlist,emb,docs,calls,refs,audit,ctx,plugins,"
-            "caps,config,daemon,query-daemon,calibrate}"
+            "caps,config,workspace,daemon,query-daemon,calibrate}"
         ),
     )
 
@@ -1632,6 +1629,58 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output structured JSON for machine consumption",
     )
 
+    workspace_parser = sub.add_parser(
+        "workspace",
+        help="Manage named workspace registrations",
+        description="Register, inspect, validate, update, or unregister one named workspace.",
+    )
+    workspace_sub = workspace_parser.add_subparsers(dest="workspace_action")
+    for action, help_text in (
+        ("add", "Register one workspace"),
+        ("list", "List registered workspaces"),
+        ("show", "Show one workspace descriptor"),
+        ("validate", "Validate one workspace routing definition"),
+        ("update", "Update one registered workspace"),
+        ("remove", "Unregister one workspace without deleting its data"),
+        ("migrate", "Preview or apply a non-destructive workspace migration"),
+    ):
+        action_parser = workspace_sub.add_parser(action, help=help_text)
+        action_parser.add_argument("-j", "--json", action="store_true")
+        if action in {"add", "update", "migrate"}:
+            action_parser.add_argument("name")
+            action_parser.add_argument("--path", required=True)
+            action_parser.add_argument("--state-root")
+            action_parser.add_argument("--config-file")
+        if action == "migrate":
+            action_parser.add_argument(
+                "--config-mode",
+                choices=tuple(ConfigMigrationMode),
+                default=ConfigMigrationMode.NONE,
+                help="Preserve, reference, or atomically copy the configuration",
+            )
+            action_parser.add_argument("--state-source")
+            action_parser.add_argument(
+                "--state-mode",
+                choices=tuple(StateMigrationMode),
+                default=StateMigrationMode.REBUILD,
+                help="Reuse, atomically copy, or rebuild Codira state",
+            )
+            action_parser.add_argument(
+                "--model-import",
+                action="append",
+                default=[],
+                metavar="ENGINE|MODEL|VERSION|ARTIFACT|PATH",
+                help="Import one existing model artifact into the shared store",
+            )
+            action_parser.add_argument("--model-root")
+            action_parser.add_argument(
+                "--apply",
+                action="store_true",
+                help="Apply the previewed plan; default is a no-write dry run",
+            )
+        elif action in {"show", "validate", "remove"}:
+            action_parser.add_argument("name")
+
     daemon_parser = sub.add_parser(
         "daemon",
         help="Run or inspect the optional automatic-indexing daemon",
@@ -2214,8 +2263,10 @@ def _run_index(request: IndexCommandRequest) -> int:  # noqa: C901, PLR0912
                 )
             )
         )
-        return 0
+        return 2 if require_full_coverage and report.coverage_issues else 0
     _render_index_report(root, report)
+    if require_full_coverage and report.coverage_issues:
+        return 2
     if explain:
         for decision in report.decisions:
             rel_path = Path(decision.path)
@@ -2612,6 +2663,10 @@ def _run_coverage(root: Path, *, as_json: bool = False) -> int:
         key=lambda item: str(item.name),
     )
     issues = audit_repo_coverage(root)
+    if get_metadata_path(root).exists():
+        issues.extend(
+            persisted_analysis_coverage_issues(root, active_index_backend(root=root))
+        )
     coverage_config = load_effective_config(root=root).coverage
     configured_roots = coverage_config.roots
     if configured_roots == ("-",):
@@ -2796,7 +2851,7 @@ def _run_symbol(
                         ) in enum_members
                     ]
                 if symbol_type == "constant":
-                    constant_detail = _python_constant_json_detail(
+                    constant_detail = _source_constant_json_detail(
                         file_path=file_path,
                         symbol_name=symbol_name,
                         lineno=lineno,
@@ -5774,7 +5829,199 @@ def _run_config_command(args: argparse.Namespace, root: Path) -> int:
     raise ConfigError(msg)
 
 
-def _run_daemon_command(args: argparse.Namespace, root: Path) -> int:
+def _workspace_payload(
+    definition: WorkspaceDefinition | ResolvedWorkspace,
+    *,
+    status: str,
+) -> dict[str, object]:
+    """Render one workspace definition as deterministic JSON-compatible data.
+
+    Parameters
+    ----------
+    definition : object
+        Workspace definition or resolved workspace object.
+    status : str
+        Stable operation status.
+
+    Returns
+    -------
+    dict[str, object]
+        Versioned workspace operation payload.
+    """
+    return {
+        "schema_version": "1.0",
+        "status": status,
+        "workspace": {
+            "name": definition.name,
+            "repository_root": str(definition.repository_root),
+            "state_root": str(definition.state_root),
+            "config_file": (
+                str(definition.config_file)
+                if definition.config_file is not None
+                else None
+            ),
+        },
+    }
+
+
+def _run_workspace_command(args: argparse.Namespace) -> int:
+    """Dispatch deterministic named workspace administration.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed workspace subcommand arguments.
+
+    Returns
+    -------
+    int
+        Zero after a successful workspace operation.
+    """
+    registry = WorkspaceRegistry.default()
+    action = args.workspace_action or "list"
+    if action == "list":
+        definitions = registry.list_definitions()
+        payload: dict[str, object] = {
+            "schema_version": "1.0",
+            "status": "ok",
+            "workspaces": [
+                _workspace_payload(definition, status="ok")["workspace"]
+                for definition in definitions
+            ],
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            for definition in definitions:
+                print(f"{definition.name}\t{definition.repository_root}")
+        return 0
+    if action == "migrate":
+        plan = preview_workspace_migration(
+            registry,
+            name=args.name,
+            repository_root=Path(args.path),
+            state_root=Path(args.state_root) if args.state_root else None,
+            config_source=Path(args.config_file) if args.config_file else None,
+            config_mode=ConfigMigrationMode(args.config_mode),
+            state_source=Path(args.state_source) if args.state_source else None,
+            state_mode=StateMigrationMode(args.state_mode),
+            model_imports=tuple(
+                _parse_model_import(value) for value in args.model_import
+            ),
+            model_root=Path(args.model_root) if args.model_root else None,
+        )
+        if args.apply:
+            apply_workspace_migration(registry, plan)
+        payload = {
+            "schema_version": "1.0",
+            "status": "applied" if args.apply else "preview",
+            "migration": migration_payload(plan),
+        }
+    elif action in {"add", "update"}:
+        definition = registry.with_defaults(
+            name=args.name,
+            repository_root=Path(args.path),
+            state_root=Path(args.state_root) if args.state_root else None,
+            config_file=Path(args.config_file) if args.config_file else None,
+        )
+        if action == "add":
+            definition, created = registry.add(definition)
+            status = "created" if created else "unchanged"
+        else:
+            definition = registry.update(definition)
+            status = "updated"
+        payload = _workspace_payload(definition, status=status)
+    elif action == "show":
+        payload = _workspace_payload(registry.show(args.name), status="ok")
+    elif action == "validate":
+        payload = _workspace_payload(registry.validate(args.name), status="valid")
+    elif action == "remove":
+        payload = _workspace_payload(registry.remove(args.name), status="removed")
+    else:
+        msg = f"Unsupported workspace action: {action}"
+        raise WorkspaceError(msg)
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        workspace = payload["workspace"]
+        assert isinstance(workspace, dict)
+        print(f"{payload['status']}: {workspace['name']}")
+    return 0
+
+
+def _parse_model_import(value: str) -> ModelImport:
+    """Parse one explicit model-import CLI value.
+
+    Parameters
+    ----------
+    value : str
+        ``ENGINE|MODEL|VERSION|ARTIFACT|PATH`` import specification.
+
+    Returns
+    -------
+    codira.migration.ModelImport
+        Typed immutable model import request.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If the value does not contain exactly five non-empty components.
+    """
+    parts = value.split("|", maxsplit=4)
+    if len(parts) != 5 or any(not part.strip() for part in parts):
+        msg = "model import must be ENGINE|MODEL|VERSION|ARTIFACT|PATH"
+        raise argparse.ArgumentTypeError(msg)
+    engine, model, version, artifact, source = parts
+    return ModelImport(ModelIdentity(engine, model, version, artifact), Path(source))
+
+
+def _service_specification(
+    *,
+    kind: str,
+    root: Path,
+    runtime_paths: ResolvedRuntimePaths | None,
+) -> ServiceSpecification:
+    """Build one current direct-path or workspace-bound service specification.
+
+    Parameters
+    ----------
+    kind : {"daemon", "query-daemon"}
+        Foreground service family to specify.
+    root : pathlib.Path
+        Canonical repository root selected for the command.
+    runtime_paths : codira.path_resolution.ResolvedRuntimePaths | None
+        Fully resolved command routing, including workspace fingerprint when
+        startup selected a workspace.
+
+    Returns
+    -------
+    codira.daemon.service_spec.ServiceSpecification
+        Fixed service definition suitable for rendering and drift checks.
+    """
+    output_root = get_storage_root(root)
+    if (
+        runtime_paths is not None
+        and runtime_paths.workspace_name is not None
+        and runtime_paths.workspace_descriptor_fingerprint is not None
+    ):
+        return ServiceSpecification.workspace(
+            kind=kind,
+            root=root,
+            output_root=output_root,
+            workspace_name=runtime_paths.workspace_name,
+            descriptor_fingerprint=runtime_paths.workspace_descriptor_fingerprint,
+            effective_config=config_to_mapping(load_effective_config(root=root)),
+        )
+    if kind == "daemon":
+        return ServiceSpecification.indexing(root, output_root)
+    return ServiceSpecification.query(root, output_root)
+
+
+def _run_daemon_command(
+    args: argparse.Namespace,
+    root: Path,
+    specification: ServiceSpecification,
+) -> int:
     """Run foreground daemon mode or report unavailable service operations.
 
     Parameters
@@ -5807,13 +6054,25 @@ def _run_daemon_command(args: argparse.Namespace, root: Path) -> int:
         print(f"[codira] Unsupported daemon action: {action}", file=sys.stderr)
         return 2
     if sys.platform.startswith("linux"):
-        service = SystemdUserService(root)
+        service = (
+            SystemdUserService(root, specification=specification)
+            if specification.workspace_name is not None
+            else SystemdUserService(root)
+        )
         service_kind = "systemd user unit"
     elif sys.platform == "darwin":
-        service = LaunchdUserAgent(root)
+        service = (
+            LaunchdUserAgent(root, specification=specification)
+            if specification.workspace_name is not None
+            else LaunchdUserAgent(root)
+        )
         service_kind = "launchd user agent"
     elif sys.platform == "win32":
-        service = WindowsScmService(root)
+        service = (
+            WindowsScmService(root, specification=specification)
+            if specification.workspace_name is not None
+            else WindowsScmService(root)
+        )
         service_kind = "Windows SCM service"
     else:
         print(
@@ -5862,7 +6121,11 @@ def _run_daemon_command(args: argparse.Namespace, root: Path) -> int:
     return 0
 
 
-def _run_query_daemon_command(args: argparse.Namespace, root: Path) -> int:
+def _run_query_daemon_command(
+    args: argparse.Namespace,
+    root: Path,
+    specification: ServiceSpecification,
+) -> int:
     """Run or inspect the repository-local foreground query daemon.
 
     Parameters
@@ -5882,6 +6145,7 @@ def _run_query_daemon_command(args: argparse.Namespace, root: Path) -> int:
     config = load_effective_config(root=root)
     identity = QueryDaemonIdentity.from_paths(root, get_storage_root(root))
     if action == "status":
+        specification.require_current_definition()
         try:
             status = QueryDaemonStatusStore(identity).read()
         except ValueError as error:
@@ -5932,11 +6196,27 @@ def _run_query_daemon_command(args: argparse.Namespace, root: Path) -> int:
         return 2
     output_root = get_storage_root(root)
     if sys.platform.startswith("linux"):
-        service = QueryDaemonSystemdUserService(root, output_root)
+        service = (
+            SystemdUserService(root, specification=specification)
+            if specification.workspace_name is not None
+            else QueryDaemonSystemdUserService(root, output_root)
+        )
     elif sys.platform == "darwin":
-        service = QueryDaemonLaunchdUserAgent(root, output_root)
+        service = (
+            LaunchdUserAgent(root, specification=specification)
+            if specification.workspace_name is not None
+            else QueryDaemonLaunchdUserAgent(root, output_root)
+        )
     elif sys.platform == "win32":
-        service = QueryDaemonWindowsScmService(root, output_root)
+        service = (
+            QueryDaemonWindowsScmService(
+                root,
+                output_root,
+                specification=specification,
+            )
+            if specification.workspace_name is not None
+            else QueryDaemonWindowsScmService(root, output_root)
+        )
     else:
         print(
             "[codira] query-daemon services require Linux, macOS, or Windows.",
@@ -6049,13 +6329,14 @@ def _run_setup(arguments: list[str]) -> int:
     return int(provider_main(arguments))
 
 
-def _command_handlers(
+def _command_handlers(  # noqa: PLR0913
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
     root: Path,
     *,
     prefix: str | None,
     raw_prefix: str | None,
+    runtime_paths: ResolvedRuntimePaths | None = None,
 ) -> dict[str, Callable[[], int]]:
     """
     Build the subcommand dispatch table for the CLI.
@@ -6072,6 +6353,8 @@ def _command_handlers(
         Normalized absolute prefix used for backend filtering.
     raw_prefix : str | None
         User-facing repo-root-relative prefix echoed in JSON output.
+    runtime_paths : codira.path_resolution.ResolvedRuntimePaths | None, optional
+        Resolved service routing retained for workspace-aware daemon commands.
 
     Returns
     -------
@@ -6153,8 +6436,25 @@ def _command_handlers(
             prefix=prefix,
         ),
         "config": lambda: _run_config_command(args, root),
-        "daemon": lambda: _run_daemon_command(args, root),
-        "query-daemon": lambda: _run_query_daemon_command(args, root),
+        "workspace": lambda: _run_workspace_command(args),
+        "daemon": lambda: _run_daemon_command(
+            args,
+            root,
+            _service_specification(
+                kind="daemon",
+                root=root,
+                runtime_paths=runtime_paths,
+            ),
+        ),
+        "query-daemon": lambda: _run_query_daemon_command(
+            args,
+            root,
+            _service_specification(
+                kind="query-daemon",
+                root=root,
+                runtime_paths=runtime_paths,
+            ),
+        ),
         "calibrate": lambda: _run_calibrate_command(args),
     }
 
@@ -6190,6 +6490,7 @@ def main() -> int:
         return _run_version()
     command = args.command or "help"
     storage_context: contextlib.AbstractContextManager[None]
+    resolved_paths: ResolvedRuntimePaths | None = None
     if command in _REPO_PATH_COMMANDS:
         resolved_paths = resolve_runtime_paths(parser, args)
         root = resolved_paths.target_root
@@ -6203,7 +6504,7 @@ def main() -> int:
     prefix = _resolve_prefix_argument(parser, root, raw_prefix)
 
     try:
-        if command not in {"help", "config", "calibrate"}:
+        if command not in {"help", "config", "workspace", "calibrate"}:
             ensure_user_config()
         with (
             storage_context,
@@ -6217,6 +6518,7 @@ def main() -> int:
                 root,
                 prefix=prefix,
                 raw_prefix=raw_prefix,
+                runtime_paths=resolved_paths,
             )
             handler = handlers.get(command)
             if handler is not None:

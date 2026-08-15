@@ -253,16 +253,13 @@ class SystemdUserService:
         arguments = [
             _quote_unit_argument(str(self._executable)),
             *self._specification.command[:-1],
-            "--path",
-            _quote_unit_argument(str(self._root)),
+            *(
+                argument
+                if argument.startswith("--")
+                else _quote_unit_argument(argument)
+                for argument in self._specification.startup_arguments()
+            ),
         ]
-        if self._specification.kind == "query-daemon":
-            arguments.extend(
-                (
-                    "--output-dir",
-                    _quote_unit_argument(str(self._specification.output_root)),
-                )
-            )
         arguments.append(self._specification.command[-1])
         command = " ".join(arguments)
         return "\n".join(
@@ -305,6 +302,7 @@ class SystemdUserService:
         self.unit_path.write_text(self.render_unit(), encoding="utf-8")
         self._require_success(["daemon-reload"])
         self._require_success(["enable", self.unit_name])
+        self._specification.write_definition()
         return self.unit_path
 
     def uninstall(self) -> None:
@@ -327,6 +325,7 @@ class SystemdUserService:
         self._run_systemctl(["disable", "--now", self.unit_name])
         self.unit_path.unlink(missing_ok=True)
         self._require_success(["daemon-reload"])
+        self._specification.remove_definition()
 
     def start(self) -> None:
         """Start this repository's installed systemd user service.
@@ -345,6 +344,7 @@ class SystemdUserService:
         SystemdServiceError
             If systemctl rejects the start request.
         """
+        self._specification.require_current_definition()
         self._require_success(["start", self.unit_name])
 
     def stop(self) -> None:
@@ -364,6 +364,7 @@ class SystemdUserService:
         SystemdServiceError
             If systemctl rejects the stop request.
         """
+        self._specification.require_current_definition()
         self._require_success(["stop", self.unit_name])
 
     def status(self) -> SystemdServiceStatus:
@@ -378,6 +379,7 @@ class SystemdUserService:
         SystemdServiceStatus
             Immutable active/inactive result for the repository unit.
         """
+        self._specification.require_current_definition()
         result = self._run_systemctl(["is-active", "--quiet", self.unit_name])
         return SystemdServiceStatus(
             unit_name=self.unit_name,
@@ -418,7 +420,14 @@ class SystemdUserService:
 class QueryDaemonSystemdUserService(SystemdUserService):
     """Manage a systemd user unit for one warm query-daemon identity."""
 
-    def __init__(self, root: Path, output_root: Path, **kwargs: object) -> None:
+    def __init__(
+        self,
+        root: Path,
+        output_root: Path,
+        *,
+        specification: ServiceSpecification | None = None,
+        **kwargs: object,
+    ) -> None:
         """Initialize a query-daemon unit with fixed repository/output paths.
 
         Parameters
@@ -427,6 +436,8 @@ class QueryDaemonSystemdUserService(SystemdUserService):
             Repository root.
         output_root : pathlib.Path
             Effective output root.
+        specification : codira.daemon.service_spec.ServiceSpecification | None, optional
+            Fixed direct-path or workspace service definition.
         **kwargs : object
             Existing systemd adapter keyword arguments.
 
@@ -436,6 +447,7 @@ class QueryDaemonSystemdUserService(SystemdUserService):
         """
         super().__init__(
             root,
-            specification=ServiceSpecification.query(root, output_root),
+            specification=specification
+            or ServiceSpecification.query(root, output_root),
             **kwargs,  # type: ignore[arg-type]
         )

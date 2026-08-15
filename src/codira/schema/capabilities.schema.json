@@ -14,6 +14,7 @@
     "plugins",
     "mcp",
     "query_daemon",
+    "python_target",
     "analyzers",
     "validation"
   ],
@@ -170,6 +171,7 @@
           "source",
           "status",
           "version",
+          "distribution_version",
           "entry_point",
           "detail"
         ],
@@ -196,6 +198,9 @@
             "enum": ["loaded", "skipped", "duplicate"]
           },
           "version": { "type": "string", "minLength": 1 },
+          "distribution_version": {
+            "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
+          },
           "entry_point": {
             "anyOf": [{ "type": "string" }, { "type": "null" }]
           },
@@ -248,6 +253,51 @@
       },
       "additionalProperties": false
     },
+    "python_target": {
+      "type": "object",
+      "required": ["source", "specifier", "outcome", "supported_minors", "tested_minors", "grammar", "host_python", "parser_compatibility", "detail", "feature_rules", "provenance"],
+      "properties": {
+        "source": { "enum": ["override", "pyproject", "none"] },
+        "specifier": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "outcome": { "enum": ["override", "detected", "invalid", "unknown", "partial", "unsupported"] },
+        "supported_minors": { "type": "array", "items": { "pattern": "^3\\.[0-9]+$" }, "uniqueItems": true },
+        "tested_minors": { "type": "array", "items": { "pattern": "^3\\.[0-9]+$" }, "uniqueItems": true },
+        "grammar": {
+          "type": "object",
+          "required": ["identity", "maximum_target_minor"],
+          "properties": {
+            "identity": { "type": "string", "minLength": 1 },
+            "maximum_target_minor": { "pattern": "^3\\.[0-9]+$" }
+          },
+          "additionalProperties": false
+        },
+        "host_python": { "pattern": "^3\\.[0-9]+$" },
+        "parser_compatibility": { "const": "plugin_owned_tree_sitter" },
+        "detail": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "feature_rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["feature", "minimum_version"],
+            "properties": {
+              "feature": { "type": "string", "minLength": 1 },
+              "minimum_version": { "pattern": "^3\\.[0-9]+$" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "required": ["source", "key"],
+          "properties": {
+            "source": { "enum": ["override", "pyproject", "none"] },
+            "key": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "analyzers": {
       "type": "array",
       "items": {
@@ -294,6 +344,23 @@
             "type": "array",
             "items": { "type": "string" },
             "uniqueItems": true
+          },
+          "target_compatibility": {
+            "anyOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "required": ["language", "configuration_key", "metadata_key", "declared_minors", "parser_compatibility"],
+                "properties": {
+                  "language": { "const": "python" },
+                  "configuration_key": { "const": "plugins.analyzer-python.target_python" },
+                  "metadata_key": { "const": "project.requires-python" },
+                  "declared_minors": { "type": "array", "items": { "pattern": "^3\\.[0-9]+$" }, "uniqueItems": true },
+                  "parser_compatibility": { "const": "plugin_owned_tree_sitter" }
+                },
+                "additionalProperties": false
+              }
+            ]
           },
           "concurrency": {
             "type": "object",

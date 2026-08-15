@@ -40,6 +40,7 @@ from codira.contracts import (
     BackendPersistAnalysisRequest,
     BackendPersistFullIndexFile,
     BackendPersistFullIndexRequest,
+    BackendQueryConnection,
     BackendRuntimeInventoryRequest,
     ConcurrencyDeclaringAnalyzer,
     EmbeddingIndexingMetrics,
@@ -1017,6 +1018,84 @@ def _collect_indexed_file_analyses(
     return parsed_files, failures, collected_warnings
 
 
+def _analysis_status_coverage_issues(
+    parsed_files: list[ParsedFile],
+) -> list[CoverageIssue]:
+    """Return strict-coverage issues for degraded analyzed files.
+
+    Parameters
+    ----------
+    parsed_files : list[codira.indexer.ParsedFile]
+        Successfully returned analyzer results before backend persistence.
+
+    Returns
+    -------
+    list[codira.indexer.CoverageIssue]
+        Deterministic provenance-aware coverage diagnostics.
+    """
+    issues: list[CoverageIssue] = []
+    for path, _metadata, analysis in parsed_files:
+        status = analysis.status
+        if status is None or status.coverage_state.value == "complete":
+            continue
+        reason = "; ".join(diagnostic.message for diagnostic in status.diagnostics)
+        issues.append(
+            CoverageIssue(
+                path=str(path),
+                directory=path.parts[0] if path.parts else ".",
+                suffix=path.suffix,
+                reason=reason or "analysis is partial",
+            )
+        )
+    return issues
+
+
+def persisted_analysis_coverage_issues(
+    root: Path,
+    backend: IndexBackend,
+) -> list[CoverageIssue]:
+    """Load persisted partial-analysis coverage diagnostics from one backend.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root owning the index.
+    backend : codira.contracts.IndexBackend
+        Active structural backend containing analysis-status rows.
+
+    Returns
+    -------
+    list[codira.indexer.CoverageIssue]
+        Deterministic degraded-analysis issues persisted by completed indexing.
+    """
+    conn = cast("BackendQueryConnection", backend.open_connection(root))
+    try:
+        rows = conn.execute(
+            "SELECT path, diagnostics FROM analysis_status "
+            "WHERE coverage_state = 'partial' ORDER BY path"
+        ).fetchall()
+    finally:
+        backend.close_connection(conn)
+    issues: list[CoverageIssue] = []
+    for path_text, diagnostics_text in rows:
+        path = Path(str(path_text))
+        try:
+            directory = path.relative_to(root).parts[0]
+        except ValueError:
+            directory = path.parts[0] if path.parts else "."
+        diagnostics = json.loads(str(diagnostics_text))
+        reasons = [item.get("message", "analysis is partial") for item in diagnostics]
+        issues.append(
+            CoverageIssue(
+                path=str(path),
+                directory=directory,
+                suffix=path.suffix,
+                reason="; ".join(str(reason) for reason in reasons),
+            )
+        )
+    return issues
+
+
 def _duplicate_analysis_stable_ids(analysis: AnalysisResult) -> list[str]:
     """
     Return duplicate artifact stable IDs emitted by one analysis result.
@@ -1811,6 +1890,7 @@ def _index_repo_unlocked(
         analyzers,
         resolved_analysis_concurrency,
     )
+    coverage_issues.extend(_analysis_status_coverage_issues(parsed_files))
     if full and isinstance(index_backend, FullIndexBulkBackend):
         (
             embeddings_recomputed,

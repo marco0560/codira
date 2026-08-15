@@ -2,9 +2,10 @@
 
 ## Install the published package
 
-For normal use, install Codira from PyPI into the virtual environment of the
-repository you want to analyze. This is the simplest path when you only need to
-use `codira` and do not need unreleased plugins or features:
+For normal use, install Codira from PyPI into a dedicated host environment,
+separate from the repository you want to analyze. This is the simplest path
+when you only need to use `codira` and do not need unreleased plugins or
+features:
 
 ```bash
 source .venv/bin/activate
@@ -77,11 +78,13 @@ Developer automation is uv-based for dependency resolution and lockfile
 maintenance, while the actual checks run from the uv-managed `.venv` against
 the editable first-party package set.
 
-## Install into another repository
+## Advanced compatibility mode: install into a target repository
 
-Use this source-tree install path only when you want the target repository to
-run against this checkout, for example while developing Codira, testing
-bleeding-edge plugins, or validating unreleased features.
+Use this source-tree install path only when a local policy requires Codira in
+the target environment, or when you are developing Codira, testing
+bleeding-edge plugins, or validating unreleased features. Normal operation
+runs the standalone host runtime against target files; it does not execute,
+import, or require the target project's interpreter.
 
 Example:
 
@@ -106,9 +109,12 @@ Use `codira plugins` after installation if you want to verify whether a
 capability came from the core package, an official extracted package, or a
 third-party plugin.
 
-On first indexing run, `codira` provisions the configured local model
-artifact automatically if it is missing. If automatic provisioning cannot
-complete, the CLI fails with a concise remediation message.
+On first indexing run, `codira` provisions the configured local model artifact
+automatically if it is missing. Model artifacts belong to the host user and
+can be shared by isolated Codira environments through `CODIRA_MODEL_ROOT` or
+`[embeddings].model_root`; they are not target-repository dependencies. If
+automatic provisioning cannot complete, the CLI fails with a concise
+remediation message.
 
 You can still prefetch the model explicitly:
 

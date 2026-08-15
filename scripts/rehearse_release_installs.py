@@ -32,6 +32,99 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WHEEL_DIR = REPO_ROOT / ".artifacts" / "release-wheels"
 DEFAULT_INSTALL_DIR = REPO_ROOT / ".artifacts" / "release-site-packages"
+_PROBE_CODE = """
+import asyncio
+import contextlib
+import hashlib
+import io
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+import codira
+import codira.cli as cli
+import codira.registry as registry
+from codira.mcp.server import create_server, resolve_startup_binding
+from codira.model_store import ModelIdentity, SharedModelStore
+from codira.storage import override_storage_root
+from codira.workspace_registry import WorkspaceRegistry
+
+site_root = Path(os.environ["CODIRA_REHEARSAL_INSTALL_DIR"]).resolve()
+assert Path(codira.__file__).resolve().is_relative_to(site_root)
+backend = registry.active_index_backend()
+analyzers = registry.active_language_analyzers()
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    target = root / "target"
+    target.mkdir()
+    (target / "pyproject.toml").write_text(
+        '[project]\\nrequires-python = ">=3.8,<3.9"\\n', encoding="utf-8"
+    )
+    source = target / "legacy.py"
+    source.write_text(
+        "def legacy() -> int:\\n    return (value := 1)\\n", encoding="utf-8"
+    )
+    workspace_registry = WorkspaceRegistry(
+        root / "workspace-config", root / "workspace-state"
+    )
+    definition = workspace_registry.with_defaults(
+        name="target", repository_root=target
+    )
+    workspace_registry.add(definition)
+    saved_argv = sys.argv
+    try:
+        sys.argv = [
+            "codira",
+            "index",
+            "--path",
+            str(target),
+            "--output-dir",
+            str(definition.state_root),
+            "--defer-embeddings",
+        ]
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert cli.main() == 0
+    finally:
+        sys.argv = saved_argv
+    binding = resolve_startup_binding(workspace="target", registry=workspace_registry)
+    assert binding.root == target and binding.output_root == definition.state_root
+    with override_storage_root(binding.root, binding.output_root):
+        _, mcp_result = asyncio.run(
+            create_server(
+                binding.root, startup_provenance=binding.provenance()
+            ).call_tool("symbol", {"name": "legacy"})
+        )
+    assert mcp_result["result"]["symbols"][0]["name"] == "legacy"
+    model_root = root / "models"
+    first = SharedModelStore(model_root)
+    second = SharedModelStore(model_root)
+    identity = ModelIdentity(
+        engine="rehearsal", model="fixture", version="1", artifact="model.bin"
+    )
+    payload = b"codira release rehearsal"
+    digest = hashlib.sha256(payload).hexdigest()
+    artifact_one = first.ensure(
+        identity, lambda path: path.write_bytes(payload), expected_sha256=digest
+    )
+    artifact_two = second.ensure(
+        identity, lambda path: path.write_bytes(payload), expected_sha256=digest
+    )
+    assert artifact_one == artifact_two
+print(
+    json.dumps(
+        {
+            "codira_file": codira.__file__,
+            "backend_module": type(backend).__module__,
+            "analyzers": [analyzer.name for analyzer in analyzers],
+            "target_python": ">=3.8,<3.9",
+            "workspace": binding.workspace_name,
+            "shared_model_reused": artifact_one == artifact_two,
+        }
+    )
+)
+"""
 
 
 def _path_text(path: Path) -> str:
@@ -176,7 +269,7 @@ def build_install_wheels_argv(
 
 def build_probe_argv(*, python: str) -> tuple[str, ...]:
     """
-    Build the command that probes installed-wheel plugin discovery.
+    Build the command that probes installed-wheel host-target behavior.
 
     Parameters
     ----------
@@ -186,21 +279,12 @@ def build_probe_argv(*, python: str) -> tuple[str, ...]:
     Returns
     -------
     tuple[str, ...]
-        Deterministic command arguments for the discovery probe.
+        Deterministic command arguments for the installed-artifact probe.
     """
     return (
         python,
         "-c",
-        (
-            "import json, codira, codira.registry as registry; "
-            "backend = registry.active_index_backend(); "
-            "analyzers = registry.active_language_analyzers(); "
-            "print(json.dumps({"
-            "'codira_file': codira.__file__, "
-            "'backend_module': type(backend).__module__, "
-            "'analyzers': [analyzer.name for analyzer in analyzers]"
-            "}))"
-        ),
+        _PROBE_CODE,
     )
 
 
@@ -363,6 +447,7 @@ def main(argv: list[str] | None = None) -> int:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(args.install_dir)
     env["PYTHONNOUSERSITE"] = "1"
+    env["CODIRA_REHEARSAL_INSTALL_DIR"] = str(args.install_dir.resolve())
     result = subprocess.run(
         probe_command,
         cwd=args.install_dir,

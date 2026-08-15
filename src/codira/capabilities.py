@@ -21,6 +21,7 @@ This module belongs to the **capability contract layer** described by issue #7.
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 from typing import TYPE_CHECKING, assert_never
 
 from codira.config import load_effective_config
@@ -48,12 +49,18 @@ from codira.registry import (
     plugin_config_key,
     plugin_registrations,
 )
+from codira.target_python import (
+    PYTHON_TARGET_GRAMMAR,
+    PYTHON_TARGET_GRAMMAR_MAXIMUM_MINOR,
+    TESTED_TARGET_PYTHON_MINORS,
+    resolve_target_python_contract,
+)
+from codira.version import installed_distribution_version
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from pathlib import Path
 
-CAPABILITY_SCHEMA_VERSION = "1.4"
+CAPABILITY_SCHEMA_VERSION = "1.9"
 ONTOLOGY_VERSION = "2"
 
 PLUGIN_FAMILY_CONTRACTS: dict[str, dict[str, object]] = {
@@ -87,6 +94,23 @@ PLUGIN_FAMILY_CONTRACTS: dict[str, dict[str, object]] = {
 }
 
 COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
+    "workspace": {
+        "intent": "workspace_registration_administration",
+        "channels": [],
+        "guarantee": "atomic_descriptor_registration_and_deterministic_output",
+        "limitations": [
+            "workspace routing is introduced by a later CLI routing slice",
+            "remove unregisters descriptors and never deletes repository or state data",
+        ],
+        "subcommands": {
+            "administration": {
+                "intent": "workspace_registry_management",
+                "modes": ["add", "list", "show", "validate", "update", "remove"],
+                "options": ["-j", "--json", "--path", "--state-root", "--config-file"],
+                "guarantee": "versioned_deterministic_workspace_administration_output",
+            }
+        },
+    },
     "setup": {
         "intent": "guarded_installer_provider_delegation",
         "channels": [],
@@ -425,6 +449,14 @@ def _declaration_payload(
     payload["does_not_support"] = list(declaration.does_not_support)
     payload["mappings"] = dict(sorted(declaration.mappings.items()))
     payload["default_coverage_roots"] = list(declaration.default_coverage_roots)
+    payload["target_compatibility"] = (
+        None
+        if declaration.target_compatibility is None
+        else {
+            **asdict(declaration.target_compatibility),
+            "declared_minors": list(declaration.target_compatibility.declared_minors),
+        }
+    )
     return payload
 
 
@@ -453,6 +485,7 @@ def _missing_declaration_payload(analyzer: LanguageAnalyzer) -> dict[str, object
         "mappings": {},
         "checksum": None,
         "default_coverage_roots": [],
+        "target_compatibility": None,
     }
 
 
@@ -641,6 +674,9 @@ def _plugin_payloads(*, root: Path | None = None) -> list[dict[str, object]]:
             "source": registration.source,
             "status": registration.status,
             "version": registration.version,
+            "distribution_version": installed_distribution_version(
+                registration.provider
+            ),
             "entry_point": registration.entry_point,
             "detail": registration.detail,
         }
@@ -746,6 +782,15 @@ def build_capability_contract(
         msg = f"Invalid capability declarations: {joined}"
         raise ValueError(msg)
     validation_status = "degraded" if validation_issues else "ok"
+    capability_root = root or Path.cwd()
+    effective_config = load_effective_config(root=capability_root)
+    plugin_configs = effective_config.plugins.configs or {}
+    python_config = plugin_configs.get("analyzer-python") or {}
+    override = python_config.get("target_python")
+    target_contract = resolve_target_python_contract(
+        capability_root,
+        override=override if isinstance(override, str) else None,
+    )
 
     return {
         "schema_version": CAPABILITY_SCHEMA_VERSION,
@@ -794,6 +839,32 @@ def build_capability_contract(
         "plugins": _plugin_payloads(root=root),
         "mcp": _mcp_payload(),
         "query_daemon": _query_daemon_payload(root),
+        "python_target": {
+            **target_contract.payload(),
+            "tested_minors": list(TESTED_TARGET_PYTHON_MINORS),
+            "grammar": {
+                "identity": PYTHON_TARGET_GRAMMAR,
+                "maximum_target_minor": PYTHON_TARGET_GRAMMAR_MAXIMUM_MINOR,
+            },
+            "feature_rules": [
+                {"feature": "match_statement", "minimum_version": "3.10"},
+                {"feature": "except_star", "minimum_version": "3.11"},
+                {"feature": "type_alias_statement", "minimum_version": "3.12"},
+                {"feature": "template_string", "minimum_version": "3.14"},
+            ],
+            "provenance": {
+                "source": target_contract.source,
+                "key": (
+                    "plugins.analyzer-python.target_python"
+                    if target_contract.source == "override"
+                    else (
+                        "project.requires-python"
+                        if target_contract.source == "pyproject"
+                        else None
+                    )
+                ),
+            },
+        },
         "analyzers": analyzer_payloads,
         "validation": {
             "status": validation_status,

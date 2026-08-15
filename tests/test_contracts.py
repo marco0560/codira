@@ -80,8 +80,6 @@ from codira.models import (
     FunctionArtifact,
     ModuleArtifact,
 )
-from codira.normalization import analysis_result_from_parsed
-from codira.parser_ast import parse_file
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.query.producers import (
     CALL_GRAPH_RETRIEVAL_PRODUCER,
@@ -188,8 +186,7 @@ class _FakeAnalyzer:
         codira.models.AnalysisResult
             Normalized analysis result for the file.
         """
-        parsed = parse_file(path, root)
-        return analysis_result_from_parsed(path, parsed)
+        return PythonAnalyzer().analyze_file(path, root)
 
 
 class _FakeEmbeddingEngine:
@@ -1830,8 +1827,7 @@ def test_analysis_result_from_parsed_normalizes_python_artifacts(
         encoding="utf-8",
     )
 
-    parsed = parse_file(module, tmp_path)
-    result = analysis_result_from_parsed(module, parsed)
+    result = PythonAnalyzer().analyze_file(module, tmp_path)
 
     assert result.module.name == "pkg.sample"
     assert tuple(import_row.name for import_row in result.imports) == (
@@ -1893,8 +1889,7 @@ def test_analysis_result_from_parsed_ignores_python_overload_stubs(
         encoding="utf-8",
     )
 
-    parsed = parse_file(module, tmp_path)
-    result = analysis_result_from_parsed(module, parsed)
+    result = PythonAnalyzer().analyze_file(module, tmp_path)
 
     assert [(function.name, function.lineno) for function in result.functions] == [
         ("build", 10)
@@ -1972,8 +1967,7 @@ def test_analysis_result_from_parsed_extracts_python_type_alias_declarations(
         encoding="utf-8",
     )
 
-    parsed = parse_file(module, tmp_path)
-    result = analysis_result_from_parsed(module, parsed)
+    result = PythonAnalyzer().analyze_file(module, tmp_path)
 
     assert [(decl.kind, decl.name, decl.lineno) for decl in result.declarations] == [
         ("type_alias", "UserId", 4),
@@ -2039,8 +2033,7 @@ def test_sqlite_backend_persists_python_overload_metadata(
     backend = SQLiteIndexBackend()
     backend.initialize(tmp_path)
 
-    parsed = parse_file(module, tmp_path)
-    analysis = analysis_result_from_parsed(module, parsed)
+    analysis = PythonAnalyzer().analyze_file(module, tmp_path)
     snapshot = FileMetadataSnapshot(
         path=module,
         sha256="overload123",
@@ -2113,8 +2106,7 @@ def test_run_symbol_json_includes_overload_metadata(
 
     backend = SQLiteIndexBackend()
     backend.initialize(tmp_path)
-    parsed = parse_file(module, tmp_path)
-    analysis = analysis_result_from_parsed(module, parsed)
+    analysis = PythonAnalyzer().analyze_file(module, tmp_path)
     snapshot = FileMetadataSnapshot(
         path=module,
         sha256="json-overload",
@@ -2332,8 +2324,7 @@ def test_analysis_result_from_parsed_disambiguates_property_accessors(
         encoding="utf-8",
     )
 
-    parsed = parse_file(module, tmp_path)
-    result = analysis_result_from_parsed(module, parsed)
+    result = PythonAnalyzer().analyze_file(module, tmp_path)
 
     methods = result.classes[0].methods
     assert tuple(method.name for method in methods) == ("value", "value")
@@ -2373,14 +2364,20 @@ def test_python_analyzer_reads_pep_263_encoded_sources(tmp_path: Path) -> None:
     assert [
         (declaration.name, declaration.signature)
         for declaration in latin1_result.declarations
-    ] == [  # noqa: E501
-        ("TITLE", 'TITLE = "café"'),
+    ] == [
+        (
+            "TITLE",
+            'TITLE = "café"',
+        ),
     ]
     assert [
         (declaration.name, declaration.signature)
         for declaration in koi8r_result.declarations
-    ] == [  # noqa: E501
-        ("MESSAGE", 'MESSAGE = "привет"'),
+    ] == [
+        (
+            "MESSAGE",
+            'MESSAGE = "привет"',
+        ),
     ]
 
 
@@ -2522,13 +2519,12 @@ def test_parse_file_excludes_nested_helper_control_flow_from_outer_metadata(
         encoding="utf-8",
     )
 
-    parsed = parse_file(module, tmp_path)
-    function = parsed["functions"][0]
+    function = PythonAnalyzer().analyze_file(module, tmp_path).functions[0]
 
-    assert function["name"] == "outer"
-    assert function["returns_value"] == 0
-    assert function["yields_value"] == 0
-    assert function["raises"] == 0
+    assert function.name == "outer"
+    assert function.returns_value == 0
+    assert function.yields_value == 0
+    assert function.raises == 0
 
 
 def test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_checkable() -> (
@@ -2644,7 +2640,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
     assert optional_dependencies["bundle-official"] == [
         "sentence-transformers>=5.4,<6.0",
         "einops>=0.8,<1.0",
-        "codira-analyzer-python==1.55.0",
+        "codira-analyzer-python==1.60.0",
         "codira-analyzer-json==1.55.0",
         "codira-analyzer-c==1.55.0",
         "codira-analyzer-cpp==1.55.0",
@@ -2654,8 +2650,8 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-documentation-audit-numpy==1.55.0",
         "codira-documentation-audit-google==1.55.0",
         "codira-documentation-audit-doxygen==1.55.0",
-        "codira-backend-sqlite==1.55.0",
-        "codira-backend-duckdb==1.55.0",
+        "codira-backend-sqlite==1.56.0",
+        "codira-backend-duckdb==1.56.0",
         "codira-embedding-sentence-transformers==1.55.0",
         "codira-embedding-onnx==1.55.0",
         "codira-vector-store-sqlite==1.55.0",
@@ -5003,8 +4999,7 @@ def test_sqlite_index_backend_persists_and_deletes_normalized_analysis(
     backend.initialize(tmp_path)
     vector_store_context = active_vector_store_context(tmp_path)
 
-    parsed = parse_file(module, tmp_path)
-    analysis = analysis_result_from_parsed(module, parsed)
+    analysis = PythonAnalyzer().analyze_file(module, tmp_path)
     snapshot = FileMetadataSnapshot(
         path=module,
         sha256="abc123",

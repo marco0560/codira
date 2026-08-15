@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from codira.config import DEFAULT_EMBEDDING_BATCH_SIZE, load_effective_config
 from codira.contracts import EmbeddingEngineError, EmbeddingEngineSpec
+from codira.model_store import ModelIdentity, SharedModelStore
 from codira.plugin_config import plugin_json_schema
 
 if TYPE_CHECKING:
@@ -264,9 +265,27 @@ def _engine_config(config: Mapping[str, object]) -> _OnnxEngineConfig:
     _OnnxEngineConfig
         Normalized ONNX runtime settings.
     """
+    model_root = _string_config(config, "_codira_model_root", default="")
+    root = Path(model_root) if model_root else None
+    model_path = _managed_artifact_path(config, "model")
+    tokenizer_path = _managed_artifact_path(config, "tokenizer")
+    if model_path is None:
+        model_path = Path(_string_config(config, "model_path", required=True))
+    if tokenizer_path is None:
+        tokenizer_path = Path(_string_config(config, "tokenizer_path", required=True))
+    if root is not None:
+        if not root.is_absolute():
+            msg = "plugins.embedding-onnx._codira_model_root must be absolute."
+            raise EmbeddingEngineError(msg)
+        if not model_path.is_absolute() and not _is_legacy_workspace_path(model_path):
+            model_path = root / model_path
+        if not tokenizer_path.is_absolute() and not _is_legacy_workspace_path(
+            tokenizer_path
+        ):
+            tokenizer_path = root / tokenizer_path
     return _OnnxEngineConfig(
-        model_path=Path(_string_config(config, "model_path", required=True)),
-        tokenizer_path=Path(_string_config(config, "tokenizer_path", required=True)),
+        model_path=model_path,
+        tokenizer_path=tokenizer_path,
         provider=_string_config(config, "provider", default=DEFAULT_PROVIDER),
         precision=_string_config(config, "precision", default=DEFAULT_PRECISION),
         normalize=_bool_config(config, "normalize", default=True),
@@ -275,6 +294,60 @@ def _engine_config(config: Mapping[str, object]) -> _OnnxEngineConfig:
         intra_op_num_threads=_int_config(config, "intra_op_num_threads"),
         inter_op_num_threads=_int_config(config, "inter_op_num_threads"),
     )
+
+
+def _is_legacy_workspace_path(path: Path) -> bool:
+    """Return whether a path uses the retained legacy workspace convention.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Relative artifact path supplied by an existing configuration.
+
+    Returns
+    -------
+    bool
+        ``True`` only for the historical ``.codira/...`` migration shape.
+    """
+    return path.parts[:1] == (".codira",)
+
+
+def _managed_artifact_path(
+    config: Mapping[str, object], artifact_kind: str
+) -> Path | None:
+    """Resolve one verified ONNX artifact from the Codira shared store.
+
+    Parameters
+    ----------
+    config : collections.abc.Mapping[str, object]
+        Plugin configuration enriched with Codira model metadata.
+    artifact_kind : {"model", "tokenizer"}
+        Logical artifact role to resolve.
+
+    Returns
+    -------
+    pathlib.Path | None
+        Verified blob path when a managed artifact is configured, otherwise
+        ``None`` to preserve the explicit-path compatibility mode.
+
+    Raises
+    ------
+    codira.contracts.EmbeddingEngineError
+        If managed artifact metadata is incomplete or not verified.
+    """
+    artifact = _string_config(config, f"{artifact_kind}_artifact", default="")
+    if not artifact:
+        return None
+    root = _string_config(config, "_codira_model_root", required=True)
+    model = _string_config(config, "_codira_model", required=True)
+    version = _string_config(config, "_codira_model_version", required=True)
+    store = SharedModelStore(Path(root))
+    identity = ModelIdentity("onnx", model, version, artifact)
+    resolved = store.artifact_path(identity)
+    if resolved is None:
+        msg = f"Missing verified ONNX {artifact_kind} artifact: {artifact}"
+        raise EmbeddingEngineError(msg)
+    return resolved
 
 
 def _l2_normalize(vector: list[float]) -> list[float]:
@@ -520,6 +593,16 @@ class OnnxEmbeddingEngine:
                     "type": "string",
                     "default": "",
                     "description": "Path to the local tokenizer JSON artifact.",
+                },
+                "model_artifact": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Verified shared-store ONNX model artifact role.",
+                },
+                "tokenizer_artifact": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Verified shared-store tokenizer artifact role.",
                 },
                 "provider": {
                     "type": "string",

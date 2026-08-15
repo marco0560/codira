@@ -42,11 +42,14 @@ class ModelProvisionPlan:
         Shell-free provisioning command.
     postcondition : str
         State checked before a repeat provisioning attempt.
+    model_root : pathlib.Path | None
+        Optional shared model store selected for the target runtime.
     """
 
     python: Path
     command: tuple[str, ...]
     postcondition: str
+    model_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,8 @@ class ServicePlan:
         Shell-free command vector.
     config_delta : dict[str, object]
         Configuration required before install or start.
+    workspace_name : str | None
+        Registered workspace selected for the service command, when applicable.
     """
 
     kind: ServiceKind
@@ -113,6 +118,23 @@ class ServicePlan:
     action: str
     command: tuple[str, ...]
     config_delta: dict[str, object]
+    workspace_name: str | None = None
+
+
+@dataclass(frozen=True)
+class ServicePlanOptions:
+    """Select deterministic platform and workspace service-plan routing.
+
+    Parameters
+    ----------
+    platform : str | None
+        Explicit platform override for deterministic planning.
+    workspace_name : str | None
+        Registered workspace selected instead of direct path routing.
+    """
+
+    platform: str | None = None
+    workspace_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -138,24 +160,39 @@ CommandRunner = Callable[[tuple[str, ...]], None]
 ReadinessProbe = Callable[[], bool]
 
 
-def model_provision_plan(python: Path) -> ModelProvisionPlan:
+def model_provision_plan(
+    python: Path, *, model_root: Path | None = None
+) -> ModelProvisionPlan:
     """Build a target-environment model provisioning plan.
 
     Parameters
     ----------
     python : pathlib.Path
         Target environment Python executable.
+    model_root : pathlib.Path | None, optional
+        Explicit user-owned shared store for the target runtime. ``None`` lets
+        Codira resolve its configured, environment, or platform default root.
 
     Returns
     -------
     ModelProvisionPlan
         Idempotent provisioning command and postcondition.
     """
-    script = "from codira.semantic.embeddings import provision_embedding_model; provision_embedding_model(quiet=True)"
+    script = (
+        "from codira.semantic.embeddings import provision_embedding_model; "
+        "provision_embedding_model(quiet=True)"
+    )
+    if model_root is not None:
+        script = (
+            "import os; "
+            f"os.environ['CODIRA_MODEL_ROOT'] = {str(model_root)!r}; "
+            f"{script}"
+        )
     return ModelProvisionPlan(
         python=python,
         command=(str(python), "-c", script),
-        postcondition="configured embedding model artifacts are available",
+        postcondition="configured embedding artifacts are in the shared model store",
+        model_root=model_root,
     )
 
 
@@ -263,7 +300,7 @@ def service_plan(
     output_root: Path,
     action: str,
     *,
-    platform: str | None = None,
+    options: ServicePlanOptions = ServicePlanOptions(),
 ) -> ServicePlan:
     """Build an explicit repository-scoped platform service command.
 
@@ -277,8 +314,8 @@ def service_plan(
         Output root fixed by the service.
     action : {"configure", "install", "start", "status"}
         Explicit lifecycle action.
-    platform : str | None, optional
-        Platform override for deterministic planning.
+    options : ServicePlanOptions, optional
+        Platform override and optional registered workspace selection.
 
     Returns
     -------
@@ -290,13 +327,23 @@ def service_plan(
     ValueError
         If the action or platform is unsupported.
     """
-    resolved_platform = sys.platform if platform is None else platform
+    resolved_platform = sys.platform if options.platform is None else options.platform
     if resolved_platform not in {"linux", "darwin", "win32"}:
         raise ValueError("services require Linux, macOS, or Windows")
     if action not in {"configure", "install", "start", "status"}:
         raise ValueError("service action must be configure, install, start, or status")
     config_key = "daemon" if kind is ServiceKind.INDEXING else "query_daemon"
     config_delta: dict[str, object] = {config_key: {"enabled": True}}
+    routing = (
+        ("--workspace", options.workspace_name)
+        if options.workspace_name is not None
+        else (
+            "--path",
+            str(root.resolve()),
+            "--output-dir",
+            str(output_root.resolve()),
+        )
+    )
     command = (
         ()
         if action == "configure"
@@ -304,10 +351,7 @@ def service_plan(
             "codira",
             kind.value,
             action,
-            "--path",
-            str(root.resolve()),
-            "--output-dir",
-            str(output_root.resolve()),
+            *routing,
         )
     )
     return ServicePlan(
@@ -318,6 +362,7 @@ def service_plan(
         action=action,
         command=command,
         config_delta=config_delta,
+        workspace_name=options.workspace_name,
     )
 
 

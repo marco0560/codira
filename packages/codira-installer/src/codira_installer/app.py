@@ -17,6 +17,8 @@ from codira_installer.models import (
     EnvironmentTarget,
     InstallationProfile,
     InstallSource,
+    RuntimeKind,
+    RuntimeTarget,
 )
 
 if TYPE_CHECKING:
@@ -91,6 +93,10 @@ class InstallerScreen(Screen[None]):
             "environment": ""
             if request.target.path is None
             else str(request.target.path),
+            "runtime": str(request.runtime.kind),
+            "runtime_root": ""
+            if request.runtime.path is None
+            else str(request.runtime.path),
             "profile": str(request.profile),
             "packages": ",".join(request.packages),
         }
@@ -109,14 +115,14 @@ class SourceScreen(InstallerScreen):
 
 
 class TargetScreen(InstallerScreen):
-    """Present the current, existing, or new-environment target stage."""
+    """Present the standalone runtime destination and Advanced environment mode."""
 
-    heading = "2. Environment target"
-    detail = (
-        "Review whether Codira is installed here, in another environment, or a new one."
-    )
+    heading = "2. Runtime destination"
+    detail = "Managed standalone is recommended; environment targets remain Advanced."
     position = 1
     fields = (
+        ("runtime", "managed, current, existing, or new"),
+        ("runtime_root", "managed, existing, or new runtime root"),
         ("target", "current, existing, or new"),
         ("environment", "environment root for existing or new"),
     )
@@ -422,8 +428,17 @@ class InstallerApp(App[None]):
                 kind = EnvironmentKind(screen.query_one("#target", Input).value)
                 environment_text = screen.query_one("#environment", Input).value.strip()
                 environment = Path(environment_text) if environment_text else None
+                runtime_kind = RuntimeKind(screen.query_one("#runtime", Input).value)
+                runtime_root_text = screen.query_one(
+                    "#runtime_root", Input
+                ).value.strip()
+                runtime_root = Path(runtime_root_text) if runtime_root_text else None
                 self.controller.update_request(
-                    replace(request, target=EnvironmentTarget(kind, environment))
+                    replace(
+                        request,
+                        target=EnvironmentTarget(kind, environment),
+                        runtime=RuntimeTarget(runtime_kind, runtime_root),
+                    )
                 )
             elif isinstance(screen, ProfileScreen):
                 profile = InstallationProfile(screen.query_one("#profile", Input).value)

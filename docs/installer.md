@@ -30,6 +30,42 @@ deselected packages, or accepts arbitrary third-party plugins. Cancellation is
 cooperative between commands, so an atomic journal or configuration
 replacement is never interrupted midway.
 
+## Standalone runtime and workspace registration
+
+The default runtime destination is a managed per-user standalone environment,
+separate from any repository being analyzed. Use `--runtime-root` to select its
+location and `--workspace NAME --repository PATH` to register that repository
+after installation. The exported plan writes a receipt containing its source
+and package profile plus deterministic `codira`, `codira-mcp`, and
+`codira-installer` launchers; no repository environment activation is needed.
+
+`--target current|existing|new` remains available for Advanced
+environment-bound installation. Update, repair, and modify requests require a
+runtime receipt and reject a changed source or package profile.
+
+Existing repositories can instead be brought into the standalone workspace
+contract through an explicit migration preview. The installer exports this
+preview before its normal registration step, so plan review shows the target
+repository and workspace destination without changing either. Run the same
+command directly to inspect or apply a migration:
+
+```bash
+codira workspace migrate legacy --path /work/legacy --json
+codira workspace migrate legacy --path /work/legacy \
+  --config-file /work/legacy/.codira/config.toml --config-mode copy \
+  --state-source /work/legacy/.codira --state-mode copy --apply --json
+```
+
+Migration is dry-run-first. `--config-mode reference` retains the original
+configuration in place; `copy` writes a new configuration under the selected
+workspace state root. State can be `reuse`d, atomically `copy`ied, or
+`rebuild`ed. `--model-import ENGINE|MODEL|VERSION|ARTIFACT|PATH` imports a
+legacy model file into the shared content-addressed model store, retaining its
+source. Every apply records a durable journal, rejects source/destination
+overlaps, resumes completed operations, and treats a completed reapply as a
+no-op. It never deletes repository, configuration, state, environment, or
+model files.
+
 ## Targets and sources
 
 The source and target choices cover the four normal situations:

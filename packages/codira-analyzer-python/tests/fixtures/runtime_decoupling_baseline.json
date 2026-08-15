@@ -1,0 +1,144 @@
+{
+  "classes": [
+    {
+      "docstring": "Run a callback through a representative method.",
+      "end_lineno": 23,
+      "has_docstring": 1,
+      "lineno": 17,
+      "methods": [
+        {
+          "callable_refs": [
+            {
+              "base": "",
+              "col_offset": 19,
+              "external_target_kind": "Python:<external>",
+              "external_target_name": "helper",
+              "kind": "name",
+              "lineno": 22,
+              "ref_kind": "assignment_value",
+              "target": "helper"
+            }
+          ],
+          "calls": [
+            {
+              "base": "",
+              "col_offset": 15,
+              "external_target_kind": "Python:<external>",
+              "external_target_name": "callback",
+              "kind": "name",
+              "lineno": 23,
+              "target": "callback"
+            }
+          ],
+          "decorators": [],
+          "docstring": "Call the helper through a callable reference.",
+          "end_lineno": 23,
+          "has_asserts": 0,
+          "has_docstring": 1,
+          "is_method": 1,
+          "is_public": 1,
+          "lineno": 20,
+          "name": "run",
+          "overloads": [],
+          "parameters": ["value"],
+          "raises": 0,
+          "returns_value": 1,
+          "signature": "run(self, value)",
+          "stable_id": "python:method:runtime_decoupling_baseline:Worker.run",
+          "yields_value": 0
+        }
+      ],
+      "name": "Worker",
+      "stable_id": "python:class:runtime_decoupling_baseline:Worker"
+    }
+  ],
+  "declarations": [
+    {
+      "docstring": null,
+      "enum_members": [],
+      "kind": "constant",
+      "lineno": 6,
+      "name": "MAXIMUM",
+      "signature": "MAXIMUM = 3",
+      "stable_id": "python:constant:runtime_decoupling_baseline:MAXIMUM"
+    }
+  ],
+  "documentation": [
+    {
+      "attachment_confidence": null,
+      "end_lineno": 1,
+      "heading_path": [],
+      "kind": "module",
+      "lineno": 1,
+      "owner_kind": null,
+      "owner_stable_id": "python:module:runtime_decoupling_baseline",
+      "source_format": "module_docstring",
+      "source_path": "runtime_decoupling_baseline.py",
+      "stable_id": "doc:module:python:module:runtime_decoupling_baseline:module_docstring",
+      "text": "Representative Python analyzer characterization fixture.",
+      "title": "runtime_decoupling_baseline"
+    }
+  ],
+  "functions": [
+    {
+      "callable_refs": [],
+      "calls": [
+        {
+          "base": "",
+          "col_offset": 14,
+          "external_target_kind": "Python:<builtin>",
+          "external_target_name": "ValueError",
+          "kind": "name",
+          "lineno": 13,
+          "target": "ValueError"
+        },
+        {
+          "base": "paths",
+          "col_offset": 17,
+          "external_target_kind": "Python:<stdlib>",
+          "external_target_name": "os.path.join",
+          "kind": "attribute",
+          "lineno": 14,
+          "target": "join"
+        },
+        {
+          "base": "",
+          "col_offset": 22,
+          "external_target_kind": "Python:<builtin>",
+          "external_target_name": "str",
+          "kind": "name",
+          "lineno": 14,
+          "target": "str"
+        }
+      ],
+      "decorators": [],
+      "docstring": "Build a stable string value.",
+      "end_lineno": 14,
+      "has_asserts": 0,
+      "has_docstring": 1,
+      "is_method": 0,
+      "is_public": 1,
+      "lineno": 10,
+      "name": "helper",
+      "overloads": [],
+      "parameters": ["item", "flag"],
+      "raises": 1,
+      "returns_value": 1,
+      "signature": "helper()",
+      "stable_id": "python:function:runtime_decoupling_baseline:helper",
+      "yields_value": 0
+    }
+  ],
+  "imports": [
+    {"alias": "Queue", "kind": "import", "lineno": 3, "name": "collections.deque"},
+    {"alias": "paths", "kind": "import", "lineno": 4, "name": "os.path"}
+  ],
+  "index_symbols": true,
+  "module": {
+    "docstring": "Representative Python analyzer characterization fixture.",
+    "has_docstring": 1,
+    "name": "runtime_decoupling_baseline",
+    "stable_id": "python:module:runtime_decoupling_baseline"
+  },
+  "source_path": "runtime_decoupling_baseline.py"
+}

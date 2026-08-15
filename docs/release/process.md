@@ -28,6 +28,13 @@ That audit checks:
 - `CHANGELOG.md` consistency
 - semantic-release baseline visibility
 
+Before a coordinated package publication, also run the installed-wheel
+host-target rehearsal documented in the
+[release checklist](checklist.md#standalone-host-target-rehearsal). It is the
+release evidence that the standalone host model still supports workspace MCP
+routing, old declared target Python syntax, and shared model reuse without
+monorepo imports.
+
 Direct `git push` to `main` is blocked by the pre-push hook once the repo-local
 hooks are installed.
 

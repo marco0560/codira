@@ -2,10 +2,378 @@
 
 from __future__ import annotations
 
+import ast
+from dataclasses import asdict
+import json
+import sys
 import tomllib
 from pathlib import Path
+from typing import cast
+
+import pytest
 
 from codira_analyzer_python import PythonAnalyzer, build_analyzer
+from codira.models import AnalysisCoverageState, AnalysisResult
+from codira.target_python import (
+    PYTHON_TARGET_GRAMMAR,
+    PYTHON_TARGET_GRAMMAR_MAXIMUM_MINOR,
+    SUPPORTED_TARGET_PYTHON_MINORS,
+    TESTED_TARGET_PYTHON_MINORS,
+)
+
+_COMPATIBILITY_FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "compatibility"
+_COMPATIBILITY_FIXTURES = {
+    "3.8": "python38.py.txt",
+    "3.9": "python39.py.txt",
+    "3.10": "python310.py.txt",
+    "3.11": "python311.py.txt",
+    "3.12": "python312.py.txt",
+    "3.13": "python313.py.txt",
+    "3.14": "python314.py.txt",
+}
+
+
+def _golden_analysis_payload(
+    result: AnalysisResult,
+    root: Path,
+) -> dict[str, object]:
+    """
+    Convert one analyzer result into a portable golden-fixture payload.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Analysis result emitted for the characterization source.
+    root : pathlib.Path
+        Fixture directory used to make source paths portable.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-compatible result with fixture-relative source paths.
+    """
+    payload = cast(
+        "dict[str, object]",
+        json.loads(json.dumps(asdict(result), default=str)),
+    )
+    payload.pop("status")
+    payload["source_path"] = str(
+        Path(cast("str", payload["source_path"])).relative_to(root)
+    )
+    documentation = payload["documentation"]
+    assert isinstance(documentation, list)
+    for artifact in documentation:
+        assert isinstance(artifact, dict)
+        artifact["source_path"] = str(
+            Path(cast("str", artifact["source_path"])).relative_to(root)
+        )
+    return payload
+
+
+def test_python_analyzer_matches_runtime_decoupling_golden_fixture() -> None:
+    """
+    Preserve normalized Python artifacts across the parser migration.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the frozen artifact payload matches the fixture.
+    """
+    fixture_root = Path(__file__).parent / "fixtures"
+    source = fixture_root / "runtime_decoupling_baseline.py"
+    expected = json.loads(
+        (fixture_root / "runtime_decoupling_baseline.json").read_text(encoding="utf-8")
+    )
+
+    result = PythonAnalyzer().analyze_file(source, fixture_root)
+
+    assert _golden_analysis_payload(result, fixture_root) == expected
+
+
+def test_python_analyzer_production_path_avoids_host_ast_parser() -> None:
+    """Keep persisted Python analysis on the package-owned Tree-sitter path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the analyzer package has no host-AST parser import.
+    """
+    package_root = (
+        Path(__file__).resolve().parents[1] / "src" / "codira_analyzer_python"
+    )
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(package_root.glob("*.py"))
+    )
+
+    assert "import ast" not in production_source
+    assert "codira.parser_ast" not in production_source
+
+
+def test_python_analyzer_keeps_shebang_prefixed_module_documentation(
+    tmp_path: Path,
+) -> None:
+    """Recognize a module docstring after the script shebang comment.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts the syntax adapter preserves module documentation.
+    """
+    source = tmp_path / "scripts" / "sample.py"
+    source.parent.mkdir()
+    source.write_text(
+        '#!/usr/bin/env python3\n"""Run the sample utility."""\n',
+        encoding="utf-8",
+    )
+
+    result = PythonAnalyzer().analyze_file(source, tmp_path)
+
+    assert result.module.docstring == "Run the sample utility."
+    assert result.documentation[0].lineno == 2
+
+
+def test_python_analyzer_reports_target_version_feature_diagnostics(
+    tmp_path: Path,
+) -> None:
+    """Report parseable syntax that exceeds a declared target version.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts target compatibility is independent of host parsing.
+    """
+    source = tmp_path / "sample.py"
+    source.write_text("match value:\n    case _: pass\n", encoding="utf-8")
+    analyzer = PythonAnalyzer()
+    analyzer.configure({"target_python": ">=3.9,<3.10"})
+
+    result = analyzer.analyze_file(source, tmp_path)
+
+    assert result.status is not None
+    assert result.status.coverage_state is AnalysisCoverageState.PARTIAL
+    assert result.status.diagnostics[0].category == "target_version"
+    assert result.functions == ()
+
+
+@pytest.mark.parametrize("minor", SUPPORTED_TARGET_PYTHON_MINORS)
+def test_python_analyzer_accepts_every_advertised_target_fixture(
+    minor: str,
+    tmp_path: Path,
+) -> None:
+    """Parse each explicit target-minor fixture under its compatible contract.
+
+    Parameters
+    ----------
+    minor : str
+        Advertised Python target minor whose fixture is analyzed.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts valid syntax retains complete analysis status.
+    """
+    fixture = _COMPATIBILITY_FIXTURE_ROOT / _COMPATIBILITY_FIXTURES[minor]
+    source = tmp_path / "target.py"
+    source.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+    analyzer = PythonAnalyzer()
+    analyzer.configure({"target_python": f"=={minor}.*"})
+
+    result = analyzer.analyze_file(source, tmp_path)
+
+    assert result.status is not None
+    assert result.status.grammar == PYTHON_TARGET_GRAMMAR
+    assert result.status.coverage_state is AnalysisCoverageState.COMPLETE
+    assert result.status.diagnostics == ()
+    assert result.index_symbols is True
+
+
+def test_target_matrix_cannot_advertise_an_unfixtureed_or_unbounded_minor() -> None:
+    """Keep target release claims exactly aligned to the explicit fixtures.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test fails when an advertised or tested minor lacks a fixture, or
+        when the declared grammar maximum differs from the tested maximum.
+    """
+    fixture_names = {
+        path.name for path in _COMPATIBILITY_FIXTURE_ROOT.glob("python*.py.txt")
+    }
+
+    assert SUPPORTED_TARGET_PYTHON_MINORS == TESTED_TARGET_PYTHON_MINORS
+    assert tuple(_COMPATIBILITY_FIXTURES) == TESTED_TARGET_PYTHON_MINORS
+    assert set(_COMPATIBILITY_FIXTURES.values()) == fixture_names
+    assert PYTHON_TARGET_GRAMMAR_MAXIMUM_MINOR == TESTED_TARGET_PYTHON_MINORS[-1]
+
+
+def test_minimum_codira_host_parses_future_target_syntax_without_host_ast(
+    tmp_path: Path,
+) -> None:
+    """Analyze the Python 3.14 fixture from the supported Python 3.13 host.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts Tree-sitter accepts future target syntax even when
+        the host ``ast`` parser rejects it.
+    """
+    source_text = (_COMPATIBILITY_FIXTURE_ROOT / "python314.py.txt").read_text(
+        encoding="utf-8"
+    )
+    source = tmp_path / "future_target.py"
+    source.write_text(source_text, encoding="utf-8")
+
+    result = PythonAnalyzer().analyze_file(source, tmp_path)
+
+    assert result.status is not None
+    assert result.status.coverage_state is AnalysisCoverageState.COMPLETE
+    if sys.version_info[:2] == (3, 13):
+        with pytest.raises(SyntaxError):
+            ast.parse(source_text)
+
+
+def test_python_analyzer_reports_future_fixture_for_conflicting_requirement(
+    tmp_path: Path,
+) -> None:
+    """Classify valid newer grammar syntax as partial for an older target.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts parseability and target compatibility remain distinct.
+    """
+    source = tmp_path / "future_target.py"
+    source.write_text(
+        (_COMPATIBILITY_FIXTURE_ROOT / "python314.py.txt").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    analyzer = PythonAnalyzer()
+    analyzer.configure({"target_python": "==3.13.*"})
+
+    result = analyzer.analyze_file(source, tmp_path)
+
+    assert result.status is not None
+    assert result.status.coverage_state is AnalysisCoverageState.PARTIAL
+    assert result.status.diagnostics[0].category == "target_version"
+    assert result.index_symbols is True
+
+
+def test_python_analyzer_does_not_mistake_escaped_tab_literals_for_templates(
+    tmp_path: Path,
+) -> None:
+    """Avoid classifying an escaped tab string as Python 3.14 syntax.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts ordinary escaped-string syntax stays compatible with
+        the declared Python 3.13 target.
+    """
+    source = tmp_path / "tabs.py"
+    source.write_text('separator = "\\t"\n', encoding="utf-8")
+    analyzer = PythonAnalyzer()
+    analyzer.configure({"target_python": "==3.13.*"})
+
+    result = analyzer.analyze_file(source, tmp_path)
+
+    assert result.status is not None
+    assert result.status.coverage_state is AnalysisCoverageState.COMPLETE
+    assert result.status.diagnostics == ()
+
+
+def test_python_analyzer_withholds_artifacts_for_invalid_matrix_fixture(
+    tmp_path: Path,
+) -> None:
+    """Keep invalid matrix source as a partial analysis without artifacts.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts the fixture preserves the grammar-error contract.
+    """
+    source = tmp_path / "invalid.py"
+    source.write_text(
+        (_COMPATIBILITY_FIXTURE_ROOT / "invalid.py.txt").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    result = PythonAnalyzer().analyze_file(source, tmp_path)
+
+    assert result.status is not None
+    assert result.status.coverage_state is AnalysisCoverageState.PARTIAL
+    assert result.status.reliable_categories == ()
+    assert result.documentation == ()
+    assert result.index_symbols is False
+
+
+def test_python_analyzer_withholds_artifacts_after_grammar_error(
+    tmp_path: Path,
+) -> None:
+    """Withhold structural artifacts when Tree-sitter reports grammar errors.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts parser recovery does not create trustworthy symbols.
+    """
+    source = tmp_path / "broken.py"
+    source.write_text("def broken(:\n    pass\n", encoding="utf-8")
+
+    result = PythonAnalyzer().analyze_file(source, tmp_path)
+
+    assert result.status is not None
+    assert result.status.coverage_state is AnalysisCoverageState.PARTIAL
+    assert result.status.reliable_categories == ()
+    assert result.index_symbols is False
 
 
 def test_python_package_declares_expected_entry_point() -> None:
@@ -24,8 +392,12 @@ def test_python_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.55.0"
-    assert project["project"]["dependencies"] == ["codira>=1.5.0,<2.0.0"]
+    assert project["project"]["version"] == "1.60.0"
+    assert project["project"]["dependencies"] == [
+        "codira>=1.5.0,<2.0.0",
+        "tree-sitter>=0.25.2",
+        "tree-sitter-python>=0.25.0",
+    ]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "python": "codira_analyzer_python:build_analyzer"
     }

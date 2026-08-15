@@ -19,6 +19,7 @@ policy out of individual command handlers.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 CODIRA_TARGET_DIR_ENV = "CODIRA_TARGET_DIR"
 CODIRA_OUTPUT_DIR_ENV = "CODIRA_OUTPUT_DIR"
 CODIRA_CONFIG_FILE_ENV = "CODIRA_CONFIG_FILE"
+CODIRA_WORKSPACE_ENV = "CODIRA_WORKSPACE"
 
 
 @dataclass(frozen=True)
@@ -45,11 +47,15 @@ class ResolvedRuntimePaths:
         Absolute directory under which ``.codira`` state is stored.
     repo_config_file : pathlib.Path | None
         Explicit repository config file override.
+    workspace_descriptor_fingerprint : str | None
+        SHA-256 digest of the descriptor consumed for workspace routing.
     """
 
     target_root: Path
     output_root: Path
     repo_config_file: Path | None = None
+    workspace_name: str | None = None
+    workspace_descriptor_fingerprint: str | None = None
 
 
 def _resolve_candidate_directory(raw_path: str, *, must_exist: bool) -> Path:
@@ -233,6 +239,42 @@ def resolve_runtime_paths(
     raw_config_file = getattr(args, "config_file", None) or os.environ.get(
         CODIRA_CONFIG_FILE_ENV
     )
+    raw_workspace = getattr(args, "workspace", None) or os.environ.get(
+        CODIRA_WORKSPACE_ENV
+    )
+    expected_workspace_fingerprint = getattr(args, "workspace_fingerprint", None)
+    if raw_workspace is not None:
+        if any((raw_target, raw_output, raw_config_file)):
+            parser.error(
+                "--workspace or CODIRA_WORKSPACE cannot be combined with direct "
+                "path, output, or config routing."
+            )
+        from codira.workspace_registry import WorkspaceRegistry
+
+        workspace = WorkspaceRegistry.default().validate(raw_workspace)
+        try:
+            fingerprint = hashlib.sha256(
+                workspace.descriptor_path.read_bytes()
+            ).hexdigest()
+        except OSError as exc:
+            parser.error(f"Cannot fingerprint workspace descriptor: {exc}")
+        if (
+            expected_workspace_fingerprint is not None
+            and expected_workspace_fingerprint != fingerprint
+        ):
+            parser.error(
+                "Workspace descriptor drift detected; regenerate the service "
+                "definition before restarting it."
+            )
+        return ResolvedRuntimePaths(
+            target_root=workspace.repository_root,
+            output_root=workspace.state_root,
+            repo_config_file=workspace.config_file,
+            workspace_name=workspace.name,
+            workspace_descriptor_fingerprint=fingerprint,
+        )
+    if expected_workspace_fingerprint is not None:
+        parser.error("--workspace-fingerprint requires --workspace.")
 
     try:
         target_root = (

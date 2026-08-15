@@ -36,6 +36,7 @@ from codira.config import (
     DEFAULT_EMBEDDING_VERSION,
     load_effective_config,
 )
+from codira.model_store import SharedModelStore, resolve_model_root
 from codira.registry import active_embedding_engine
 
 if TYPE_CHECKING:
@@ -70,6 +71,7 @@ if TYPE_CHECKING:
             model_name: str,
             *,
             device: str,
+            cache_folder: str,
             local_files_only: bool,
             trust_remote_code: bool,
         ) -> _EmbeddingModel: ...
@@ -308,6 +310,25 @@ def _configured_embedding_device(root: Path | None = None) -> str:
     return DEFAULT_EMBEDDING_DEVICE
 
 
+def _shared_model_store(root: Path | None = None) -> SharedModelStore:
+    """Return the configured user-owned shared model store.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Repository root used only to select effective configuration.
+
+    Returns
+    -------
+    codira.model_store.SharedModelStore
+        Shared store independent from repository state and host runtimes.
+    """
+    config = load_effective_config(root=_effective_root(root))
+    return SharedModelStore(
+        resolve_model_root(configured_root=config.embeddings.model_root)
+    )
+
+
 def _configured_trust_remote_code(root: Path | None = None) -> bool:
     """
     Return whether SentenceTransformers should trust remote model code.
@@ -476,6 +497,7 @@ def _load_sentence_transformer(
         return factory(
             get_embedding_backend(root=_effective_root(root)).name,
             device=_configured_embedding_device(root=_effective_root(root)),
+            cache_folder=str(_shared_model_store(root).sentence_transformers_cache()),
             local_files_only=offline,
             trust_remote_code=_configured_trust_remote_code(root),
         )
@@ -649,6 +671,9 @@ def provision_embedding_model(
         )
     )
     engine_config["_codira_batch_size"] = config.embeddings.batch_size
+    engine_config["_codira_model"] = config.embeddings.model
+    engine_config["_codira_model_version"] = config.embeddings.version
+    engine_config["_codira_model_root"] = str(_shared_model_store(effective_root).root)
     token = _ACTIVE_EMBEDDING_ROOT.set(effective_root)
     try:
         active_embedding_engine(root=effective_root).provision(
@@ -763,6 +788,9 @@ def embed_texts(
         )
     )
     engine_config["_codira_batch_size"] = config.embeddings.batch_size
+    engine_config["_codira_model"] = config.embeddings.model
+    engine_config["_codira_model_version"] = config.embeddings.version
+    engine_config["_codira_model_root"] = str(_shared_model_store(effective_root).root)
     token = _ACTIVE_EMBEDDING_ROOT.set(effective_root)
     try:
         return active_embedding_engine(root=effective_root).embed_texts(

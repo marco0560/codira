@@ -1293,7 +1293,7 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
         (
             "backend: sqlite [active, loaded] "
             "provider=codira-backend-sqlite origin=first_party "
-            "source=entry_point version=23 entry_point=sqlite"
+            "source=entry_point version=24 entry_point=sqlite"
         ),
         (
             "backend: duckdb [loaded] "
@@ -1318,7 +1318,7 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
             "origin": "first_party",
             "source": "entry_point",
             "status": "loaded",
-            "version": "23",
+            "version": "24",
             "entry_point": "sqlite",
             "detail": None,
         },

@@ -351,6 +351,7 @@ def _clear_index_tables(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM classes")
     conn.execute("DELETE FROM modules")
     conn.execute("DELETE FROM files")
+    conn.execute("DELETE FROM analysis_status")
 
 
 def _purge_skipped_docstring_issues(conn: sqlite3.Connection) -> None:
@@ -2768,6 +2769,26 @@ def _store_analysis(
     )
     assert cur.lastrowid is not None
     file_id = int(cur.lastrowid)
+    if analysis.status is not None:
+        conn.execute(
+            "INSERT OR REPLACE INTO analysis_status "
+            "(path, grammar, target_contract, diagnostics, reliable_categories, "
+            "omitted_categories, coverage_state) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(file_metadata.path),
+                analysis.status.grammar,
+                json.dumps(analysis.status.target_contract, sort_keys=True),
+                json.dumps(
+                    [diagnostic.__dict__ for diagnostic in analysis.status.diagnostics],
+                    sort_keys=True,
+                ),
+                json.dumps(analysis.status.reliable_categories),
+                json.dumps(analysis.status.omitted_categories),
+                analysis.status.coverage_state.value,
+            ),
+        )
+    if analysis.status is not None and not analysis.index_symbols:
+        return (0, 0)
     _persist_documentation_artifacts(
         conn,
         file_id=file_id,
@@ -3093,6 +3114,7 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
     conn.execute("DELETE FROM callable_ref_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM reference_scan_lines WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM files WHERE path = ?", (file_path,))
+    conn.execute("DELETE FROM analysis_status WHERE path = ?", (file_path,))
 
 
 def _load_previous_symbol_embeddings(

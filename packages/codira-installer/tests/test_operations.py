@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from codira_installer.operations import (
     ServiceKind,
+    ServicePlanOptions,
     apply_calibration,
     calibration_proposal,
     model_provision_plan,
@@ -37,6 +38,26 @@ def test_model_provisioning_plan_targets_one_environment() -> None:
     assert not provision_model(plan, is_ready=lambda: True, runner=commands.append)
     assert provision_model(plan, is_ready=lambda: False, runner=commands.append)
     assert commands == [plan.command]
+
+
+def test_model_provisioning_plan_selects_a_shared_model_root() -> None:
+    """Pass the selected user-owned store to the target runtime explicitly.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts provisioning does not target the environment itself.
+    """
+    model_root = Path("/shared/models")
+    plan = model_provision_plan(Path("/target/bin/python"), model_root=model_root)
+
+    assert plan.model_root == model_root
+    assert "CODIRA_MODEL_ROOT" in plan.command[2]
+    assert str(model_root) in plan.command[2]
 
 
 def test_calibration_requires_second_confirmation() -> None:
@@ -78,13 +99,38 @@ def test_service_plans_are_platform_and_repository_scoped(tmp_path: Path) -> Non
         tmp_path / "repo",
         tmp_path / "output",
         "install",
-        platform="darwin",
+        options=ServicePlanOptions(platform="darwin"),
     )
 
     assert plan.platform == "darwin"
     assert "sudo" not in plan.command
     assert plan.command[:3] == ("codira", "query-daemon", "install")
     assert plan.config_delta == {"query_daemon": {"enabled": True}}
+
+
+def test_workspace_service_plan_preserves_workspace_routing(tmp_path: Path) -> None:
+    """Preview a workspace service without adding conflicting path options.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository and output roots.
+
+    Returns
+    -------
+    None
+        The test asserts the explicit workspace selector is retained.
+    """
+    plan = service_plan(
+        ServiceKind.INDEXING,
+        tmp_path / "repo",
+        tmp_path / "state",
+        "install",
+        options=ServicePlanOptions(platform="linux", workspace_name="sample"),
+    )
+
+    assert plan.workspace_name == "sample"
+    assert plan.command == ("codira", "daemon", "install", "--workspace", "sample")
 
 
 def test_service_failure_is_isolated_with_remediation(tmp_path: Path) -> None:
@@ -100,7 +146,11 @@ def test_service_failure_is_isolated_with_remediation(tmp_path: Path) -> None:
     None
     """
     plan = service_plan(
-        ServiceKind.INDEXING, tmp_path, tmp_path, "status", platform="linux"
+        ServiceKind.INDEXING,
+        tmp_path,
+        tmp_path,
+        "status",
+        options=ServicePlanOptions(platform="linux"),
     )
 
     def unavailable(command: tuple[str, ...]) -> None:

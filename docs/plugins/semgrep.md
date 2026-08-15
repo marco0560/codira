@@ -61,7 +61,7 @@ instead of inheriting the Codira allowlist unchanged.
 Run the Codira-owned rules from the repository root with:
 
 ```bash
-uv run python scripts/run_repo_tool.py semgrep scan --config semgrep/rules --metrics=off --disable-version-check .
+uv run python scripts/run_repo_tool.py semgrep scan --config semgrep/rules --metrics=off --disable-version-check --exclude fixtures .
 ```
 
 ## Recommendation for Plugin Authors

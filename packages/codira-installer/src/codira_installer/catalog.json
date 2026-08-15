@@ -44,6 +44,11 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "target_python": {
+            "description": "PEP 440 target override taking precedence over pyproject metadata.",
+            "minLength": 1,
+            "type": "string"
           }
         },
         "type": "object"
@@ -513,6 +518,11 @@
             "minimum": 0,
             "type": "integer"
           },
+          "model_artifact": {
+            "default": "",
+            "description": "Verified shared-store ONNX model artifact role.",
+            "type": "string"
+          },
           "model_path": {
             "default": "",
             "description": "Path to the local ONNX model artifact.",
@@ -531,6 +541,11 @@
           "provider": {
             "default": "CPUExecutionProvider",
             "description": "ONNX Runtime execution provider name.",
+            "type": "string"
+          },
+          "tokenizer_artifact": {
+            "default": "",
+            "description": "Verified shared-store tokenizer artifact role.",
             "type": "string"
           },
           "tokenizer_path": {

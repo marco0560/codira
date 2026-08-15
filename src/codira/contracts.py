@@ -1275,6 +1275,31 @@ CANONICAL_ONTOLOGY_TYPES: tuple[OntologyObjectType, ...] = (
 
 
 @dataclass(frozen=True)
+class TargetLanguageCapabilityDeclaration:
+    """Declare an analyzer's target-language compatibility metadata contract.
+
+    Parameters
+    ----------
+    language : str
+        Target language whose metadata is described.
+    configuration_key : str
+        Explicit analyzer configuration key that overrides repository metadata.
+    metadata_key : str
+        Repository metadata key consulted when no override is configured.
+    declared_minors : tuple[str, ...]
+        Bounded target-minor normalization vocabulary.
+    parser_compatibility : str
+        Current parser compatibility limitation reported to users.
+    """
+
+    language: str
+    configuration_key: str
+    metadata_key: str
+    declared_minors: tuple[str, ...]
+    parser_compatibility: str
+
+
+@dataclass(frozen=True)
 class AnalyzerCapabilityDeclaration:
     """
     Machine-readable declaration of one analyzer's ontology coverage.
@@ -1299,6 +1324,8 @@ class AnalyzerCapabilityDeclaration:
         Optional stable implementation checksum when available.
     default_coverage_roots : tuple[str, ...], optional
         Analyzer-declared repository-relative default coverage roots.
+    target_compatibility : TargetLanguageCapabilityDeclaration | None, optional
+        Target-language metadata contract, when the analyzer supports one.
     """
 
     analyzer_name: str
@@ -1310,6 +1337,7 @@ class AnalyzerCapabilityDeclaration:
     mappings: dict[str, OntologyObjectType]
     checksum: str | None = None
     default_coverage_roots: tuple[str, ...] = ()
+    target_compatibility: TargetLanguageCapabilityDeclaration | None = None
 
 
 @runtime_checkable

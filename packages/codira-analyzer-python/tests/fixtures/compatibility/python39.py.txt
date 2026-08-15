@@ -1,0 +1,2 @@
+def merged(left, right):
+    return left | right

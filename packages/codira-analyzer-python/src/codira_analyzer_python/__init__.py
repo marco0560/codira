@@ -3,8 +3,8 @@
 Responsibilities
 ----------------
 - Declare analyzer metadata such as name, version, and discovery globs.
-- Parse Python files via `codira.parser_ast` and normalize them into
-  `AnalysisResult` objects.
+- Parse Python files through the package-owned normalized Tree-sitter adapter
+  and normalize them into `AnalysisResult` objects.
 - Expose the package entry-point factory used by the plugin registry.
 
 Design principles
@@ -21,7 +21,7 @@ first-party Python analyzer distribution for Phase 2 packaging.
 from __future__ import annotations
 
 import builtins
-import ast
+import re
 import sys
 import tokenize
 from collections import Counter
@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 from codira.contracts import (
     AnalyzerCapabilityDeclaration,
     AnalyzerConcurrencyDeclaration,
+    TargetLanguageCapabilityDeclaration,
 )
 from codira.plugin_config import (
     AnalyzerPathFilters,
@@ -55,14 +56,84 @@ from codira.plugin_config import (
     plugin_configuration_fingerprint,
 )
 from codira.models import DocumentationArtifact
+from codira.models import AnalysisCoverageState, AnalysisDiagnostic, AnalysisStatus
 from codira.normalization import analysis_result_from_parsed
-from codira.parser_ast import parse_source
+from codira.target_python import (
+    PYTHON_TARGET_GRAMMAR,
+    SUPPORTED_TARGET_PYTHON_MINORS,
+    resolve_target_python_contract,
+)
+
+from codira_analyzer_python.syntax import (
+    module_docstring_location,
+    parse_python_artifacts,
+    parse_python_source,
+)
 
 __all__ = ["PythonAnalyzer", "build_analyzer"]
 
 ArtifactT = TypeVar("ArtifactT")
 _PYTHON_BUILTINS = frozenset(dir(builtins))
 _PYTHON_STDLIB_MODULES = frozenset(sys.stdlib_module_names)
+_SYNTAX_ARTIFACT_REVISION = "tree-sitter-python-0.25.0-artifacts-v1"
+_GRAMMAR_IDENTITY = PYTHON_TARGET_GRAMMAR
+_ALL_ARTIFACT_CATEGORIES = (
+    "module",
+    "class",
+    "function",
+    "declaration",
+    "import",
+    "documentation",
+)
+
+
+def _target_feature_diagnostics(
+    source: str, root: Path, override: str | None
+) -> tuple[AnalysisDiagnostic, ...]:
+    """Return diagnostics for syntax newer than the declared Python target.
+
+    Parameters
+    ----------
+    source : str
+        Decoded Python source text.
+    root : pathlib.Path
+        Repository root used to resolve the target contract.
+    override : str | None
+        Optional analyzer target override.
+
+    Returns
+    -------
+    tuple[codira.models.AnalysisDiagnostic, ...]
+        Deterministic feature diagnostics ordered by source position.
+    """
+    contract = resolve_target_python_contract(root, override=override)
+    if not contract.supported_minors:
+        return ()
+    rules = (
+        (r"(?m)^\s*match\s+.+:", "match_statement", "3.10"),
+        (r"except\s*\*", "except_star", "3.11"),
+        (r"(?m)^\s*type\s+[A-Za-z_]", "type_alias_statement", "3.12"),
+        (r"(?<![A-Za-z0-9_\\])t[\"']", "template_string", "3.14"),
+    )
+    diagnostics: list[AnalysisDiagnostic] = []
+    for pattern, feature, minimum in rules:
+        match = re.search(pattern, source)
+        lowest_target = min(
+            (tuple(map(int, value.split("."))) for value in contract.supported_minors),
+        )
+        if match is None or lowest_target >= tuple(map(int, minimum.split("."))):
+            continue
+        line = source.count("\n", 0, match.start()) + 1
+        column = match.start() - source.rfind("\n", 0, match.start()) - 1
+        diagnostics.append(
+            AnalysisDiagnostic(
+                "target_version",
+                f"{feature} requires Python {minimum} but the declared target includes older versions",
+                line,
+                column,
+            )
+        )
+    return tuple(diagnostics)
 
 
 def _read_python_source(path: Path) -> str:
@@ -81,6 +152,24 @@ def _read_python_source(path: Path) -> str:
     """
     with tokenize.open(path) as handle:
         return handle.read()
+
+
+def _artifact_configuration_fingerprint(config: Mapping[str, object]) -> str:
+    """Return a configuration fingerprint that includes parser semantics.
+
+    Parameters
+    ----------
+    config : collections.abc.Mapping[str, object]
+        Effective Python analyzer configuration.
+
+    Returns
+    -------
+    str
+        Stable fingerprint invalidated by configuration or syntax extraction changes.
+    """
+    fingerprint_input = dict(config)
+    fingerprint_input["syntax_artifact_revision"] = _SYNTAX_ARTIFACT_REVISION
+    return plugin_configuration_fingerprint(fingerprint_input)
 
 
 def _rewrite_colliding_stable_ids(
@@ -825,16 +914,7 @@ def _module_docstring_location(source: str) -> tuple[int, int | None] | None:
         Start and inclusive end line for the module docstring, or ``None``
         when no syntactic module docstring exists.
     """
-    tree = ast.parse(source)
-    if not tree.body:
-        return None
-    first_node = tree.body[0]
-    if not isinstance(first_node, ast.Expr):
-        return None
-    value = first_node.value
-    if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
-        return None
-    return first_node.lineno, first_node.end_lineno
+    return module_docstring_location(source)
 
 
 def _module_documentation_artifacts(
@@ -898,7 +978,7 @@ class PythonAnalyzer:
     """
 
     name = "python"
-    version = "6"
+    version = "10"
     discovery_globs: tuple[str, ...] = ("*.py",)
     default_coverage_roots: tuple[str, ...] = ("src", "tests", "scripts")
 
@@ -908,7 +988,8 @@ class PythonAnalyzer:
         self._emit_imports = True
         self._emit_constants = True
         self._emit_type_aliases = True
-        self.configuration_fingerprint = plugin_configuration_fingerprint({})
+        self._target_python_override: str | None = None
+        self.configuration_fingerprint = _artifact_configuration_fingerprint({})
 
     def configuration_json_schema(self) -> Mapping[str, object]:
         """
@@ -930,6 +1011,11 @@ class PythonAnalyzer:
                 "emit_imports": boolean_property(True),
                 "emit_constants": boolean_property(True),
                 "emit_type_aliases": boolean_property(True),
+                "target_python": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "PEP 440 target override taking precedence over pyproject metadata.",
+                },
             }
         )
 
@@ -955,7 +1041,11 @@ class PythonAnalyzer:
         self._emit_imports = bool(config.get("emit_imports", True))
         self._emit_constants = bool(config.get("emit_constants", True))
         self._emit_type_aliases = bool(config.get("emit_type_aliases", True))
-        self.configuration_fingerprint = plugin_configuration_fingerprint(config)
+        target_python = config.get("target_python")
+        self._target_python_override = (
+            target_python if isinstance(target_python, str) else None
+        )
+        self.configuration_fingerprint = _artifact_configuration_fingerprint(config)
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
         """
@@ -994,6 +1084,13 @@ class PythonAnalyzer:
                 "import": "import",
                 "module_docstring": "documentation",
             },
+            target_compatibility=TargetLanguageCapabilityDeclaration(
+                language="python",
+                configuration_key="plugins.analyzer-python.target_python",
+                metadata_key="project.requires-python",
+                declared_minors=SUPPORTED_TARGET_PYTHON_MINORS,
+                parser_compatibility="plugin_owned_tree_sitter",
+            ),
         )
 
     def analyzer_concurrency_declaration(self) -> AnalyzerConcurrencyDeclaration:
@@ -1070,7 +1167,41 @@ class PythonAnalyzer:
             Normalized analysis result for the file.
         """
         source = _read_python_source(path)
-        analysis = analysis_result_from_parsed(path, parse_source(path, root, source))
+        syntax = parse_python_source(source)
+        target_contract = resolve_target_python_contract(
+            root, override=self._target_python_override
+        ).payload()
+        grammar_diagnostics = tuple(
+            AnalysisDiagnostic(
+                "grammar_error",
+                f"Tree-sitter reported {diagnostic.kind.value} syntax",
+                diagnostic.start_line,
+                diagnostic.start_column,
+            )
+            for diagnostic in syntax.diagnostics
+        )
+        target_diagnostics = _target_feature_diagnostics(
+            source, root, self._target_python_override
+        )
+        diagnostics = grammar_diagnostics + target_diagnostics
+        if grammar_diagnostics:
+            parsed = {
+                "module": {
+                    "name": path.with_suffix("")
+                    .relative_to(root)
+                    .as_posix()
+                    .replace("/", "."),
+                    "docstring": None,
+                    "has_docstring": 0,
+                },
+                "classes": [],
+                "functions": [],
+                "declarations": [],
+                "imports": [],
+            }
+        else:
+            parsed = parse_python_artifacts(path, root, source)
+        analysis = analysis_result_from_parsed(path, parsed)
         analysis = _disambiguate_shadowed_module_file(analysis, path=path, root=root)
         analysis = _classify_python_relation_targets(analysis)
         analysis = _disambiguate_analysis_stable_ids(analysis)
@@ -1089,11 +1220,25 @@ class PythonAnalyzer:
             if self._emit_module_documentation
             else ()
         )
+        status = AnalysisStatus(
+            grammar=_GRAMMAR_IDENTITY,
+            target_contract=target_contract,
+            diagnostics=diagnostics,
+            reliable_categories=() if grammar_diagnostics else _ALL_ARTIFACT_CATEGORIES,
+            omitted_categories=_ALL_ARTIFACT_CATEGORIES if grammar_diagnostics else (),
+            coverage_state=(
+                AnalysisCoverageState.PARTIAL
+                if diagnostics
+                else AnalysisCoverageState.COMPLETE
+            ),
+        )
         return replace(
             analysis,
             declarations=declarations,
             imports=analysis.imports if self._emit_imports else (),
             documentation=documentation,
+            index_symbols=not grammar_diagnostics,
+            status=status,
         )
 
 

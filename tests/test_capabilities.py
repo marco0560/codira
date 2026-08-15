@@ -83,6 +83,13 @@ def test_python_analyzer_declares_explicit_ontology_mapping() -> None:
         "import": "import",
         "module_docstring": "documentation",
     }
+    assert declaration.target_compatibility is not None
+    assert declaration.target_compatibility.configuration_key == (
+        "plugins.analyzer-python.target_python"
+    )
+    assert declaration.target_compatibility.parser_compatibility == (
+        "plugin_owned_tree_sitter"
+    )
 
 
 def test_c_analyzer_declares_explicit_ontology_mapping() -> None:
@@ -184,7 +191,7 @@ def test_capability_contract_validates_against_schema() -> None:
     payload = build_capability_contract([PythonAnalyzer()])
 
     jsonschema.validate(payload, _capabilities_schema())
-    assert payload["schema_version"] == "1.4"
+    assert payload["schema_version"] == "1.9"
     assert payload["ontology"] == {
         "version": "2",
         "types": [
@@ -208,6 +215,14 @@ def test_capability_contract_validates_against_schema() -> None:
     retrieval_capabilities = cast("list[str]", payload["retrieval_capabilities"])
     assert [item["analyzer_name"] for item in analyzers] == ["python"]
     assert [item["declaration_status"] for item in analyzers] == ["declared"]
+    python_plugin = next(
+        item
+        for item in plugins
+        if item["family"] == "analyzer" and item["name"] == "python"
+    )
+    assert python_plugin["provider"] == "codira-analyzer-python"
+    assert python_plugin["version"] == "10"
+    assert python_plugin["distribution_version"] == "1.60.0"
     assert "symbol" in channels
     assert "docs" in channels
     assert "help" in commands
@@ -236,7 +251,7 @@ def test_capability_contract_validates_against_schema() -> None:
     assert mcp == {
         "server_command": "codira-mcp",
         "config_command": "codira-mcp-config",
-        "contract_version": "1.1.0",
+        "contract_version": "1.2.0",
         "transport": "stdio",
         "read_only": True,
         "tools": [
@@ -438,6 +453,7 @@ def test_capability_contract_degrades_analyzers_without_declarations() -> None:
             "mappings": {},
             "checksum": None,
             "default_coverage_roots": [],
+            "target_compatibility": None,
             "concurrency": {
                 "declaration_status": "missing",
                 "process_workers": False,

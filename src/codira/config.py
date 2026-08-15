@@ -27,6 +27,8 @@ from typing import Literal, cast
 import platformdirs
 import tomlkit
 
+from codira.platform_paths import platform_paths
+
 CONFIG_VERSION = 1
 APP_NAME = "codira"
 CONFIG_FILENAME = "config.toml"
@@ -35,6 +37,7 @@ DEFAULT_EMBEDDING_ENGINE_NAME = "sentence-transformers"
 DEFAULT_VECTOR_STORE_NAME = "sqlite"
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_EMBEDDING_VERSION = "1"
+DEFAULT_EMBEDDING_MODEL_ROOT = ""
 DEFAULT_EMBEDDING_DIMENSION = 384
 DEFAULT_EMBEDDING_DEVICE = "cpu"
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
@@ -229,6 +232,9 @@ class EmbeddingsConfig:
         Embedding model identifier.
     version : str
         Explicit embedding backend version stored with persisted vectors.
+    model_root : str
+        Optional absolute user-level root for shared model artifacts. An empty
+        value selects the platform default or ``CODIRA_MODEL_ROOT``.
     dimension : int
         Expected vector dimension for the configured model.
     device : str
@@ -250,6 +256,7 @@ class EmbeddingsConfig:
     vector_store: str = DEFAULT_VECTOR_STORE_NAME
     model: str = DEFAULT_EMBEDDING_MODEL
     version: str = DEFAULT_EMBEDDING_VERSION
+    model_root: str = DEFAULT_EMBEDDING_MODEL_ROOT
     dimension: int = DEFAULT_EMBEDDING_DIMENSION
     device: str = DEFAULT_EMBEDDING_DEVICE
     batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE
@@ -407,6 +414,7 @@ DEFAULT_CONFIG: dict[str, object] = {
         "vector_store": DEFAULT_VECTOR_STORE_NAME,
         "model": DEFAULT_EMBEDDING_MODEL,
         "version": DEFAULT_EMBEDDING_VERSION,
+        "model_root": DEFAULT_EMBEDDING_MODEL_ROOT,
         "dimension": DEFAULT_EMBEDDING_DIMENSION,
         "device": DEFAULT_EMBEDDING_DEVICE,
         "batch_size": DEFAULT_EMBEDDING_BATCH_SIZE,
@@ -574,6 +582,7 @@ _SCHEMA: dict[str, object] = {
         "vector_store": str,
         "model": str,
         "version": str,
+        "model_root": str,
         "dimension": int,
         "device": str,
         "batch_size": int,
@@ -624,7 +633,7 @@ def user_config_path() -> Path:
         User-level Codira configuration path.
     """
 
-    return Path(platformdirs.user_config_dir(APP_NAME)) / CONFIG_FILENAME
+    return platform_paths().config_root / CONFIG_FILENAME
 
 
 def system_config_path() -> Path:
@@ -2292,6 +2301,7 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
             "vector_store": config.embeddings.vector_store,
             "model": config.embeddings.model,
             "version": config.embeddings.version,
+            "model_root": config.embeddings.model_root,
             "dimension": config.embeddings.dimension,
             "device": config.embeddings.device,
             "batch_size": config.embeddings.batch_size,
@@ -2443,6 +2453,7 @@ def _config_from_mapping(
             vector_store=cast("str", embeddings["vector_store"]).strip(),
             model=cast("str", embeddings["model"]).strip(),
             version=cast("str", embeddings["version"]).strip(),
+            model_root=cast("str", embeddings["model_root"]).strip(),
             dimension=cast("int", embeddings["dimension"]),
             device=cast("str", embeddings["device"]).strip(),
             batch_size=cast("int", embeddings["batch_size"]),

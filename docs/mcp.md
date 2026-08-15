@@ -4,7 +4,9 @@ Codira exposes local, read-only repository intelligence through a standard-input
 
 ## Start in under five minutes
 
-From the repository you want to inspect, build its local index and generate a client configuration:
+From the repository you want to inspect, build its local index and generate a
+client configuration. This is direct-path routing; the Codira host runtime can
+live in a separate environment from the repository:
 
 ```bash
 uv run codira index
@@ -23,7 +25,25 @@ uv run codira-mcp-config codex --root /path/to/repository --output config.toml
 uv run codira-mcp-config cursor --root /path/to/repository --output mcp.json
 ```
 
-All three presets launch `codira-mcp --root /path/to/repository`. The server is local and read-only; it has no network transport, shell tool, or repository-path request parameter.
+All three presets launch `codira-mcp --root /path/to/repository`. The server is
+local and read-only; it has no network transport, shell tool, or
+repository-path request parameter.
+
+## Named workspace startup
+
+For a persistent host installation, register the target once and start MCP by
+workspace name. The workspace fixes the target repository, Codira state root,
+and optional configuration file before the server accepts requests:
+
+```bash
+codira workspace add sample --path /path/to/repository
+codira index --workspace sample
+codira-mcp --workspace sample
+```
+
+`--workspace` and `--root` are mutually exclusive. A live MCP process never
+accepts a later path or workspace selector, which keeps its target binding
+stable and provenance-safe.
 
 ## Verify the server directly
 

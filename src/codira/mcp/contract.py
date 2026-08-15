@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-MCP_CONTRACT_VERSION: Final = "1.1.0"
+MCP_CONTRACT_VERSION: Final = "1.2.0"
 MAX_OUTPUT_BUDGET: Final = 16_000
 DEFAULT_OUTPUT_BUDGET: Final = 4_000
 
@@ -133,6 +133,11 @@ def _response_schema() -> dict[str, object]:
                     "execution_mode": {"enum": ["warm", "direct", "fallback"]},
                     "generation": {"type": ["integer", "null"]},
                     "fallback_reason": {"type": "string"},
+                    "workspace": {"type": "string", "minLength": 1},
+                    "workspace_descriptor_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$",
+                    },
                 },
                 "additionalProperties": False,
             },

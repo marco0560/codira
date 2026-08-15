@@ -29,10 +29,9 @@ The Python analysis path currently performs:
 - callable-reference extraction
 - docstring validation integration
 
-Today these responsibilities are concentrated in the analyzer packages and
-shared parser helpers:
+These responsibilities are concentrated in analyzer packages and their owned
+parsing integrations:
 
-- `src/codira/parser_ast.py`
 - `packages/codira-analyzer-python/`
 - `packages/codira-analyzer-json/`
 - `packages/codira-analyzer-c/`
@@ -171,3 +170,13 @@ analyzer-specific dependencies.
 When those plugin packages are absent, registry activation skips the matching
 analyzer deterministically and indexing a matching path fails with an explicit
 installation hint instead of an import-time crash.
+
+## Python parser ownership
+
+The Python analyzer normalizes its artifacts through its package-owned
+Tree-sitter adapter. The characterization fixture in
+`packages/codira-analyzer-python/tests/fixtures/` freezes representative module,
+symbol, span, import, call, reference, signature, and docstring output while
+the grammar migration evolves. The repository-wide host-AST inventory test
+rejects every production host-AST consumer, while core remains independent of
+the optional Python analyzer package.

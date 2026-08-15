@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -16,10 +17,12 @@ from codira.indexer import index_repo
 from codira.mcp.adapter import MCPAdapter
 from codira.mcp.contract import MCP_CONTRACT_VERSION
 from codira.mcp.proxy import QueryDaemonMCPProxy, build_mcp_operations
-from codira.mcp.server import create_server
+from codira.mcp.server import create_server, resolve_startup_binding
 from codira.query_daemon import QueryDaemonIdentity, QueryRuntime, WarmQuerySession
 from codira.query_daemon_ipc import QueryDaemonIpcServer
 from codira.registry import active_index_backend
+from codira.storage import override_storage_root
+from codira.workspace_registry import WorkspaceRegistry
 
 
 async def _subprocess_tool_names(root: Path) -> set[str]:
@@ -65,6 +68,141 @@ def _indexed_repository(root: Path) -> None:
     )
     active_index_backend().initialize(root)
     index_repo(root)
+
+
+def _workspace_registry(root: Path) -> WorkspaceRegistry:
+    """Build an isolated registry for MCP workspace-startup tests.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Temporary root containing descriptor and workspace state directories.
+
+    Returns
+    -------
+    codira.workspace_registry.WorkspaceRegistry
+        Isolated workspace registry.
+    """
+    return WorkspaceRegistry(root / "descriptors", root / "state")
+
+
+def test_workspace_startup_binding_is_fixed_and_provenance_safe(
+    tmp_path: Path,
+) -> None:
+    """Resolve workspace routing once and expose only safe identity metadata.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository, state, and descriptor roots.
+
+    Returns
+    -------
+    None
+        The test asserts descriptor changes cannot retarget an existing binding.
+    """
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    config_file = tmp_path / "workspace.toml"
+    config_file.write_text("[embeddings]\nbatch_size = 8\n", encoding="utf-8")
+    registry = _workspace_registry(tmp_path)
+    registry.add(
+        registry.with_defaults(
+            name="sample",
+            repository_root=repository,
+            config_file=config_file,
+        )
+    )
+
+    binding = resolve_startup_binding(workspace="sample", registry=registry)
+    expected_fingerprint = hashlib.sha256(
+        registry.descriptor_path("sample").read_bytes()
+    ).hexdigest()
+    _, structured = cast(
+        "tuple[object, dict[str, object]]",
+        asyncio.run(
+            create_server(
+                binding.root,
+                startup_provenance=binding.provenance(),
+            ).call_tool("capabilities", {})
+        ),
+    )
+
+    registry.update(registry.with_defaults(name="sample", repository_root=alternate))
+    replacement = resolve_startup_binding(workspace="sample", registry=registry)
+
+    provenance = cast("dict[str, object]", structured["provenance"])
+    assert binding.root == repository
+    assert binding.output_root == registry.state_root / "sample"
+    assert binding.config_file == config_file
+    assert provenance["workspace"] == "sample"
+    assert provenance["workspace_descriptor_sha256"] == expected_fingerprint
+    assert replacement.root == alternate
+    assert replacement.descriptor_fingerprint != binding.descriptor_fingerprint
+
+
+def test_workspace_startup_rejects_direct_root_ambiguity(tmp_path: Path) -> None:
+    """Reject startup choices that could change a live MCP target.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Existing temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts workspace and root selection are mutually exclusive.
+    """
+    with pytest.raises(ValueError, match="cannot be combined"):
+        resolve_startup_binding(root=tmp_path, workspace="sample")
+
+
+def test_workspace_and_direct_servers_share_read_only_behavior(
+    tmp_path: Path,
+) -> None:
+    """Keep server tools equivalent after startup paths have been resolved.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository, state, and descriptor roots.
+
+    Returns
+    -------
+    None
+        The test asserts only workspace provenance differs between bindings.
+    """
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    registry = _workspace_registry(tmp_path)
+    registry.add(registry.with_defaults(name="sample", repository_root=repository))
+    binding = resolve_startup_binding(workspace="sample", registry=registry)
+    with override_storage_root(repository, binding.output_root):
+        _indexed_repository(repository)
+        direct_result = cast(
+            "tuple[object, dict[str, object]]",
+            asyncio.run(
+                create_server(repository).call_tool("symbol", {"name": "answer"})
+            ),
+        )[1]
+        workspace_result = cast(
+            "tuple[object, dict[str, object]]",
+            asyncio.run(
+                create_server(
+                    binding.root,
+                    startup_provenance=binding.provenance(),
+                ).call_tool("symbol", {"name": "answer"})
+            ),
+        )[1]
+
+    assert direct_result["result"] == workspace_result["result"]
+    assert direct_result["page"] == workspace_result["page"]
+    assert direct_result["truncation"] == workspace_result["truncation"]
+    workspace_provenance = cast("dict[str, object]", workspace_result["provenance"])
+    assert workspace_provenance["workspace"] == "sample"
 
 
 def test_adapter_returns_direct_core_symbol_result(tmp_path: Path) -> None:
@@ -269,6 +407,7 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     _indexed_repository(tmp_path)
     adapter = MCPAdapter(tmp_path)
 
+    capabilities = adapter.capabilities()
     status = adapter.index_status()
     inventory = adapter.symbols(limit=2)
     callees = adapter.callees("answer")
@@ -284,8 +423,19 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     assert status_result["indexed"] is True
     assert status_result["coverage"] == {"status": "complete", "issues": []}
     status_metadata = cast("dict[str, str]", status_result["metadata"])
-    assert status_metadata["schema_version"] == "23"
+    assert status_metadata["schema_version"] == "24"
     assert status_metadata["backend_name"] == "sqlite"
+    codira_capabilities = cast(
+        "dict[str, object]", cast("dict[str, object]", capabilities["result"])["codira"]
+    )
+    plugins = cast("list[dict[str, object]]", codira_capabilities["plugins"])
+    python_plugin = next(
+        plugin
+        for plugin in plugins
+        if plugin["family"] == "analyzer" and plugin["name"] == "python"
+    )
+    assert python_plugin["version"] == "10"
+    assert python_plugin["distribution_version"] == "1.60.0"
     assert inventory["result"] == {
         "symbols": [
             {
@@ -434,7 +584,7 @@ def test_server_symbol_tool_invokes_the_direct_adapter(tmp_path: Path) -> None:
         "generation": 1,
     }
     freshness = cast("dict[str, str]", structured["freshness"])
-    assert freshness["schema_version"] == "23"
+    assert freshness["schema_version"] == "24"
     assert freshness["backend_name"] == "sqlite"
     assert structured["page"] == {"limit": 100, "next_cursor": None}
     truncation = cast("dict[str, object]", structured["truncation"])

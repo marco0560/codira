@@ -44,6 +44,42 @@ class EnvironmentKind(StrEnum):
     NEW = "new"
 
 
+class RuntimeKind(StrEnum):
+    """Supported Codira runtime destinations.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+
+    MANAGED = "managed"
+    CURRENT = "current"
+    EXISTING = "existing"
+    NEW = "new"
+
+
+class RuntimeOperation(StrEnum):
+    """Explicit lifecycle operation for one Codira runtime.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+    """
+
+    INSTALL = "install"
+    UPDATE = "update"
+    REPAIR = "repair"
+    MODIFY = "modify"
+
+
 class PackageManager(StrEnum):
     """Bounded package-manager backends.
 
@@ -115,6 +151,82 @@ class EnvironmentTarget:
 
 
 @dataclass(frozen=True)
+class RuntimeTarget:
+    """Select the independent destination that executes Codira.
+
+    Parameters
+    ----------
+    kind : RuntimeKind
+        Managed standalone, current, existing, or new runtime destination.
+    path : pathlib.Path | None
+        Runtime root for managed, existing, and new destinations.
+    """
+
+    kind: RuntimeKind = RuntimeKind.MANAGED
+    path: Path | None = None
+
+    def __post_init__(self) -> None:
+        """Validate runtime-root cardinality.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If the runtime kind and path are incompatible.
+        """
+        if self.kind is RuntimeKind.CURRENT and self.path is not None:
+            raise ValueError("current runtime cannot contain a runtime path")
+
+
+@dataclass(frozen=True)
+class WorkspaceRegistration:
+    """Optionally register one analyzed repository after runtime installation.
+
+    Parameters
+    ----------
+    name : str
+        Stable workspace name.
+    repository_root : pathlib.Path
+        Analyzed repository selected independently of the runtime destination.
+    state_root : pathlib.Path | None
+        Optional external workspace state root.
+    config_file : pathlib.Path | None
+        Optional workspace configuration source.
+    """
+
+    name: str
+    repository_root: Path
+    state_root: Path | None = None
+    config_file: Path | None = None
+
+    def __post_init__(self) -> None:
+        """Reject an empty workspace identity before planning.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If the workspace name is blank.
+        """
+        if not self.name.strip():
+            raise ValueError("workspace registration requires a name")
+
+
+@dataclass(frozen=True)
 class InstallerRequest:
     """Declarative user choices before plan resolution.
 
@@ -134,6 +246,16 @@ class InstallerRequest:
         Explicit Advanced package override.
     runtime_profile : str
         Existing runtime-tuning profile name.
+    runtime : RuntimeTarget
+        Independent Codira runtime destination; managed is the default.
+    operation : RuntimeOperation
+        Explicit install, update, repair, or modify lifecycle request.
+    workspace : WorkspaceRegistration | None
+        Optional analyzed repository registration, never an environment target.
+    model_store : pathlib.Path | None
+        Optional shared model-store location for the runtime.
+    receipt_path : pathlib.Path | None
+        Existing managed-runtime receipt required for non-install operations.
     """
 
     target: EnvironmentTarget
@@ -143,6 +265,11 @@ class InstallerRequest:
     profile: InstallationProfile = InstallationProfile.RECOMMENDED
     packages: tuple[str, ...] = ()
     runtime_profile: str = "balanced"
+    runtime: RuntimeTarget = field(default_factory=RuntimeTarget)
+    operation: RuntimeOperation = RuntimeOperation.INSTALL
+    workspace: WorkspaceRegistration | None = None
+    model_store: Path | None = None
+    receipt_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -213,6 +340,18 @@ class InstallPlan:
             target["path"] = str(target["path"])
         if request["checkout"] is not None:
             request["checkout"] = str(request["checkout"])
+        runtime = request["runtime"]
+        if runtime["path"] is not None:
+            runtime["path"] = str(runtime["path"])
+        workspace = request["workspace"]
+        if workspace is not None:
+            workspace["repository_root"] = str(workspace["repository_root"])
+            if workspace["state_root"] is not None:
+                workspace["state_root"] = str(workspace["state_root"])
+            if workspace["config_file"] is not None:
+                workspace["config_file"] = str(workspace["config_file"])
+        if request["model_store"] is not None:
+            request["model_store"] = str(request["model_store"])
         return payload
 
 

@@ -79,8 +79,9 @@ uses the small badge as the MkDocs favicon.
 
 ## Install
 
-For the official runtime with the first-party analyzers and default SQLite
-backend:
+For the official standalone host runtime with the first-party analyzers and
+default SQLite backend, create a dedicated environment that is separate from
+the repository being analyzed:
 
 ```bash
 pip install codira-bundle-official
@@ -102,10 +103,12 @@ For a core-only install:
 pip install codira
 ```
 
-## Install for Local Development
+## Advanced compatibility mode: install in a target environment
 
-Install `codira` into the virtual environment of the repository you want to
-analyze.
+Installing Codira into a target repository's virtual environment is supported
+for compatibility, but is not the normal deployment model. It couples the tool
+to the target interpreter and dependencies, so use it only when a local policy
+requires it or when testing an unreleased checkout.
 
 Example: from a target repository such as Fontshow:
 
@@ -114,9 +117,10 @@ source .venv/bin/activate
 pip install -e ../codira
 ```
 
-The editable install keeps the `codira` CLI available in the target
-repository's virtual environment while still using the live source tree from
-this repository.
+The editable install keeps the `codira` CLI available in that environment while
+still using the live source tree from this repository. For the normal
+standalone model, see `docs/getting_started.md` and
+`docs/architecture/host-target-runtime-boundary.md`.
 
 Developer automation is uv-based for dependency resolution and lockfile
 maintenance. Local validation and CI execute against the uv-managed `.venv`

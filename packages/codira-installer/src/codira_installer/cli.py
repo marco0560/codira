@@ -19,6 +19,10 @@ from codira_installer.models import (
     InstallerRequest,
     InstallSource,
     PackageManager,
+    RuntimeKind,
+    RuntimeOperation,
+    RuntimeTarget,
+    WorkspaceRegistration,
 )
 from codira_installer.plan import load_plan, render_plan, validate_plan
 
@@ -70,6 +74,18 @@ def _parser() -> argparse.ArgumentParser:
         "--environment", type=Path, help="existing or new environment root"
     )
     parser.add_argument(
+        "--runtime", choices=tuple(RuntimeKind), default=RuntimeKind.MANAGED
+    )
+    parser.add_argument("--runtime-root", type=Path)
+    parser.add_argument(
+        "--operation", choices=tuple(RuntimeOperation), default=RuntimeOperation.INSTALL
+    )
+    parser.add_argument("--workspace")
+    parser.add_argument("--repository", type=Path)
+    parser.add_argument("--workspace-state-root", type=Path)
+    parser.add_argument("--workspace-config-file", type=Path)
+    parser.add_argument("--model-store", type=Path)
+    parser.add_argument(
         "--manager", choices=tuple(PackageManager), default=PackageManager.UV
     )
     parser.add_argument(
@@ -103,6 +119,16 @@ def _request(args: argparse.Namespace) -> InstallerRequest:
     """
     target_kind = EnvironmentKind(args.target)
     target = EnvironmentTarget(target_kind, args.environment)
+    workspace = None
+    if args.workspace is not None:
+        if args.repository is None:
+            raise ValueError("--workspace requires --repository")
+        workspace = WorkspaceRegistration(
+            args.workspace,
+            args.repository,
+            args.workspace_state_root,
+            args.workspace_config_file,
+        )
     source = InstallSource(args.source)
     checkout = args.checkout
     if source is InstallSource.LOCAL_CHECKOUT and checkout is None:
@@ -114,6 +140,10 @@ def _request(args: argparse.Namespace) -> InstallerRequest:
         manager=PackageManager(args.manager),
         profile=InstallationProfile(args.profile),
         packages=tuple(args.package),
+        runtime=RuntimeTarget(RuntimeKind(args.runtime), args.runtime_root),
+        operation=RuntimeOperation(args.operation),
+        workspace=workspace,
+        model_store=args.model_store,
     )
 
 

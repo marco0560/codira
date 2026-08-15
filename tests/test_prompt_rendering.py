@@ -20,12 +20,8 @@ default agent-facing prompt helpers.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from codira.prompts.default import PromptBuildRequest, build_prompt
-
-if TYPE_CHECKING:
-    import ast
 
 
 def _prompt_symbol_line(root: Path, symbol: tuple[str, str, str, str, int]) -> str:
@@ -52,7 +48,7 @@ def _prompt_symbol_line(root: Path, symbol: tuple[str, str, str, str, int]) -> s
 def _format_enriched_symbol(
     root: Path,
     symbol: tuple[str, str, str, str, int],
-    cache: dict[Path, tuple[str, list[str], ast.Module | None]],
+    cache: dict[Path, tuple[str, list[str]]],
 ) -> list[str]:
     """
     Render one deterministic enriched symbol block for prompt tests.
@@ -63,7 +59,7 @@ def _format_enriched_symbol(
         Repository root passed by the prompt builder.
     symbol : tuple[str, str, str, str, int]
         Symbol row rendered by the prompt builder.
-    cache : dict[pathlib.Path, tuple[str, list[str], ast.Module | None]]
+    cache : dict[pathlib.Path, tuple[str, list[str]]]
         Source cache shared across enriched prompt formatting.
 
     Returns

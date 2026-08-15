@@ -3041,9 +3041,11 @@ def test_release_install_rehearsal_installs_sorted_wheels_into_target_directory(
     )
 
 
-def test_release_install_rehearsal_probe_stays_focused_on_discovery_contract() -> None:
+def test_release_install_rehearsal_probe_covers_standalone_host_target_contract() -> (
+    None
+):
     """
-    Keep the release rehearsal probe aligned to the plugin discovery contract.
+    Keep the release rehearsal probe aligned to the standalone host contract.
 
     Parameters
     ----------
@@ -3052,8 +3054,8 @@ def test_release_install_rehearsal_probe_stays_focused_on_discovery_contract() -
     Returns
     -------
     None
-        The test asserts the release probe inspects the installed codira
-        location, backend module, and analyzer names.
+        The test asserts the release probe exercises installed artifacts,
+        target-source analysis, workspace MCP routing, and model reuse.
     """
     helper = _load_release_install_rehearsal_helper()
 
@@ -3061,8 +3063,17 @@ def test_release_install_rehearsal_probe_stays_focused_on_discovery_contract() -
 
     assert probe_argv[0] == "python"
     assert probe_argv[1] == "-c"
-    assert "'backend_module': type(backend).__module__" in probe_argv[2]
-    assert "'analyzers': [analyzer.name for analyzer in analyzers]" in probe_argv[2]
+    assert "CODIRA_REHEARSAL_INSTALL_DIR" in probe_argv[2]
+    assert '"backend_module": type(backend).__module__' in probe_argv[2]
+    assert '"analyzers": [analyzer.name for analyzer in analyzers]' in probe_argv[2]
+    assert "requires-python" in probe_argv[2]
+    assert '"index",' in probe_argv[2]
+    assert '"--path",' in probe_argv[2]
+    assert '"--output-dir",' in probe_argv[2]
+    assert '"--defer-embeddings",' in probe_argv[2]
+    assert 'resolve_startup_binding(workspace="target"' in probe_argv[2]
+    assert '.call_tool("symbol", {"name": "legacy"})' in probe_argv[2]
+    assert "SharedModelStore(model_root)" in probe_argv[2]
 
 
 def test_release_artifact_helper_covers_core_and_all_first_party_packages() -> None:
