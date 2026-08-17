@@ -1,3 +1,10 @@
+## [1.62.1](https://github.com/marco0560/codira/compare/v1.62.0...v1.62.1) (2026-08-17)
+
+
+### Bug Fixes
+
+* harden tooling compatibility ([5eaee3e](https://github.com/marco0560/codira/commit/5eaee3eb6f30a520280081eb10a07a6aaf239a6a))
+
 # [1.62.0](https://github.com/marco0560/codira/compare/v1.61.0...v1.62.0) (2026-08-15)
 
 
