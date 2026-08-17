@@ -1,3 +1,10 @@
+## [1.62.2](https://github.com/marco0560/codira/compare/v1.62.1...v1.62.2) (2026-08-17)
+
+
+### Bug Fixes
+
+* **analyzer:** avoid false target-version diagnostics in python analyzer ([c146c7e](https://github.com/marco0560/codira/commit/c146c7e6247d5a40415d197fe427a0d22ccaa68e))
+
 ## [1.62.1](https://github.com/marco0560/codira/compare/v1.62.0...v1.62.1) (2026-08-17)
 
 
