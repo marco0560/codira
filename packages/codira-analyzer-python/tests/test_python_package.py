@@ -292,10 +292,10 @@ def test_python_analyzer_reports_future_fixture_for_conflicting_requirement(
     assert result.index_symbols is True
 
 
-def test_python_analyzer_does_not_mistake_escaped_tab_literals_for_templates(
+def test_python_analyzer_ignores_target_syntax_text_in_strings_and_comments(
     tmp_path: Path,
 ) -> None:
-    """Avoid classifying an escaped tab string as Python 3.14 syntax.
+    """Ignore target-syntax-looking text outside parsed syntax constructs.
 
     Parameters
     ----------
@@ -305,11 +305,17 @@ def test_python_analyzer_does_not_mistake_escaped_tab_literals_for_templates(
     Returns
     -------
     None
-        The test asserts ordinary escaped-string syntax stays compatible with
-        the declared Python 3.13 target.
+    The test asserts ordinary strings, comments, and docstrings stay
+    compatible with the declared Python 3.13 target.
     """
-    source = tmp_path / "tabs.py"
-    source.write_text('separator = "\\t"\n', encoding="utf-8")
+    source = tmp_path / "ordinary_text.py"
+    source.write_text(
+        'option = "-t"\n'
+        'text = "except * is mentioned here"\n'
+        'description = """\\nmatch something:\ntype T = int\n"""\n'
+        "# except * and match subject: are comments\n",
+        encoding="utf-8",
+    )
     analyzer = PythonAnalyzer()
     analyzer.configure({"target_python": "==3.13.*"})
 
@@ -318,6 +324,49 @@ def test_python_analyzer_does_not_mistake_escaped_tab_literals_for_templates(
     assert result.status is not None
     assert result.status.coverage_state is AnalysisCoverageState.COMPLETE
     assert result.status.diagnostics == ()
+
+
+@pytest.mark.parametrize(
+    ("target_python", "coverage_state"),
+    (
+        ("==3.13.*", AnalysisCoverageState.PARTIAL),
+        ("==3.14.*", AnalysisCoverageState.COMPLETE),
+    ),
+)
+def test_python_analyzer_classifies_real_template_strings_by_target(
+    tmp_path: Path,
+    target_python: str,
+    coverage_state: AnalysisCoverageState,
+) -> None:
+    """Classify parsed template strings against the declared target.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+    target_python : str
+        Explicit Python target contract for the analyzer.
+    coverage_state : codira.models.AnalysisCoverageState
+        Expected analysis coverage state.
+
+    Returns
+    -------
+    None
+        The test asserts real t-strings remain target-version-sensitive.
+    """
+    source = tmp_path / "template.py"
+    source.write_text('template = t"Hello {name}"\n', encoding="utf-8")
+    analyzer = PythonAnalyzer()
+    analyzer.configure({"target_python": target_python})
+
+    result = analyzer.analyze_file(source, tmp_path)
+
+    assert result.status is not None
+    assert result.status.coverage_state is coverage_state
+    if coverage_state is AnalysisCoverageState.PARTIAL:
+        assert result.status.diagnostics[0].category == "target_version"
+    else:
+        assert result.status.diagnostics == ()
 
 
 def test_python_analyzer_withholds_artifacts_for_invalid_matrix_fixture(
@@ -392,7 +441,7 @@ def test_python_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.60.0"
+    assert project["project"]["version"] == "1.61.0"
     assert project["project"]["dependencies"] == [
         "codira>=1.5.0,<2.0.0",
         "tree-sitter>=0.25.2",

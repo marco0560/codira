@@ -43,6 +43,7 @@ from codira.cli import (
     IndexRebuildRequest,
     _ensure_index,
     _read_index_metadata,
+    _render_coverage_issues,
     _write_index_metadata,
     main,
 )
@@ -56,7 +57,7 @@ from codira.contracts import (
     StoredEmbeddingRow,
     VectorSimilarityScore,
 )
-from codira.indexer import audit_repo_coverage, index_repo
+from codira.indexer import CoverageIssue, audit_repo_coverage, index_repo
 from codira.models import (
     AnalysisResult,
     CallableReference,
@@ -344,7 +345,7 @@ def test_sqlite_resolve_documentation_scores_chunks_large_score_sets(
     assert [row[1][6] for row in results] == ["Doc 949", "Doc 948", "Doc 947"]
 
 
-class _PythonAnalyzerV11:
+class _PythonAnalyzerV12:
     """
     Python analyzer stub with a bumped version for staleness tests.
 
@@ -354,7 +355,7 @@ class _PythonAnalyzerV11:
     """
 
     name = "python"
-    version = "11"
+    version = "12"
     discovery_globs: tuple[str, ...] = ("*.py",)
 
     def supports_path(self, path: Path) -> bool:
@@ -2680,7 +2681,7 @@ def test_index_repo_reindexes_unchanged_files_when_analyzer_changes(
 
     monkeypatch.setattr(
         "codira.indexer.active_language_analyzers",
-        lambda *, root=None: [_PythonAnalyzerV11()],
+        lambda *, root=None: [_PythonAnalyzerV12()],
     )
     report = index_repo(tmp_path)
 
@@ -2700,7 +2701,7 @@ def test_index_repo_reindexes_unchanged_files_when_analyzer_changes(
         and decision.reason == "analyzer plugin or version changed"
         for decision in report.decisions
     )
-    assert owners == [("python", "11")]
+    assert owners == [("python", "12")]
 
 
 def test_index_cli_reports_summary_and_decisions(
@@ -3255,6 +3256,52 @@ def test_coverage_cli_groups_text_output_by_suffix_and_directory(
         "coverage: .json x1 in src "
         "(.json, no registered analyzer accepts this file type/content combination)"
     ) in captured.out
+
+
+def test_coverage_renderer_groups_distinct_reasons_separately(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Preserve distinct coverage causes in human-readable output.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Repository root used for relative report paths.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture rendered coverage output.
+
+    Returns
+    -------
+    None
+        The test asserts each suffix-and-reason group is rendered accurately.
+    """
+    _render_coverage_issues(
+        tmp_path,
+        [
+            CoverageIssue(
+                path=str(tmp_path / "src" / "partial.py"),
+                directory="src",
+                suffix=".py",
+                reason="template_string requires Python 3.14 but the declared target includes older versions",
+            ),
+            CoverageIssue(
+                path=str(tmp_path / "tests" / "unclaimed.py"),
+                directory="tests",
+                suffix=".py",
+                reason="no registered analyzer accepts this file type/content combination",
+            ),
+        ],
+    )
+
+    captured = capsys.readouterr()
+    assert (
+        "coverage: .py x1 in src (.py, template_string requires Python 3.14"
+        in captured.out
+    )
+    assert (
+        "coverage: .py x1 in tests (.py, no registered analyzer accepts" in captured.out
+    )
 
 
 def test_audit_repo_coverage_ignores_suppressed_suffixes(tmp_path: Path) -> None:
@@ -4244,11 +4291,11 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
     monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
     monkeypatch.setattr(
         "codira.cli.active_language_analyzers",
-        lambda *, root=None: [_PythonAnalyzerV11()],
+        lambda *, root=None: [_PythonAnalyzerV12()],
     )
     monkeypatch.setattr(
         "codira.indexer.active_language_analyzers",
-        lambda *, root=None: [_PythonAnalyzerV11()],
+        lambda *, root=None: [_PythonAnalyzerV12()],
     )
 
     _ensure_index(tmp_path)
@@ -4257,7 +4304,7 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
 
     assert "Index stale (analyzer plugin inventory changed)" in captured.err
     assert backend.load_analyzer_inventory(tmp_path) == [
-        _analyzer_inventory_row(_PythonAnalyzerV11())
+        _analyzer_inventory_row(_PythonAnalyzerV12())
     ]
 
 

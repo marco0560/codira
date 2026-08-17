@@ -35,6 +35,7 @@ __all__ = [
     "SyntaxKind",
     "SyntaxNode",
     "SyntaxTree",
+    "TargetSyntaxFeature",
     "module_docstring_location",
     "parse_python_artifacts",
     "parse_python_source",
@@ -128,11 +129,49 @@ class SyntaxDiagnostic:
 
 
 @dataclass(frozen=True)
+class TargetSyntaxFeature:
+    """One target-version-sensitive construct found in parsed Python source.
+
+    Parameters
+    ----------
+    feature : str
+        Stable, provider-neutral name for the Python syntax feature.
+    minimum_version : str
+        Earliest Python minor version that accepts the feature.
+    line : int
+        One-based source line of the construct.
+    column : int
+        Zero-based UTF-8 byte column of the construct.
+
+    Notes
+    -----
+    Tree-sitter node names remain private to this adapter. Consumers compare
+    these semantic feature records to their target-version contract.
+    """
+
+    feature: str
+    minimum_version: str
+    line: int
+    column: int
+
+
+@dataclass(frozen=True)
 class SyntaxTree:
-    """One normalized Python syntax tree and its recovery diagnostics."""
+    """One normalized Python syntax tree and its recovery diagnostics.
+
+    Parameters
+    ----------
+    root : SyntaxNode
+        Provider-neutral root node.
+    diagnostics : tuple[SyntaxDiagnostic, ...]
+        Parser recovery observations in source order.
+    target_features : tuple[TargetSyntaxFeature, ...]
+        Version-sensitive syntax facts in source order.
+    """
 
     root: SyntaxNode
     diagnostics: tuple[SyntaxDiagnostic, ...]
+    target_features: tuple[TargetSyntaxFeature, ...]
 
 
 _LANGUAGE = Language(language())
@@ -248,6 +287,58 @@ def _diagnostics(node: Node) -> tuple[SyntaxDiagnostic, ...]:
     )
 
 
+def _target_syntax_features(
+    root: Node, source: bytes
+) -> tuple[TargetSyntaxFeature, ...]:
+    """Extract version-sensitive constructs from the provider syntax tree.
+
+    Parameters
+    ----------
+    root : tree_sitter.Node
+        Parsed provider root node.
+    source : bytes
+        UTF-8 source bytes used to inspect string-start prefixes.
+
+    Returns
+    -------
+    tuple[TargetSyntaxFeature, ...]
+        Provider-neutral features sorted by their source locations.
+    """
+    features: list[TargetSyntaxFeature] = []
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        feature: tuple[str, str] | None = None
+        if node.type == "match_statement":
+            feature = ("match_statement", "3.10")
+        elif node.type == "type_alias_statement":
+            feature = ("type_alias_statement", "3.12")
+        elif node.type == "except_clause" and any(
+            child.type == "*" for child in node.children
+        ):
+            feature = ("except_star", "3.11")
+        elif node.type == "string_start":
+            prefix = _text(node, source).rstrip("'\"")
+            if "t" in prefix.lower():
+                feature = ("template_string", "3.14")
+        if feature is not None:
+            features.append(
+                TargetSyntaxFeature(
+                    feature=feature[0],
+                    minimum_version=feature[1],
+                    line=node.start_point.row + 1,
+                    column=node.start_point.column,
+                )
+            )
+        pending.extend(reversed(node.children))
+    return tuple(
+        sorted(
+            features,
+            key=lambda item: (item.line, item.column, item.feature),
+        )
+    )
+
+
 def parse_python_source(source: str | bytes) -> SyntaxTree:
     """Parse Python source independently of the host ``ast`` implementation.
 
@@ -263,7 +354,11 @@ def parse_python_source(source: str | bytes) -> SyntaxTree:
     """
     source_bytes = source.encode("utf-8") if isinstance(source, str) else source
     root = _new_parser().parse(source_bytes).root_node
-    return SyntaxTree(root=_normalized_node(root), diagnostics=_diagnostics(root))
+    return SyntaxTree(
+        root=_normalized_node(root),
+        diagnostics=_diagnostics(root),
+        target_features=_target_syntax_features(root, source_bytes),
+    )
 
 
 def _text(node: Node | None, source: bytes) -> str:

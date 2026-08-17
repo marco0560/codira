@@ -2620,7 +2620,9 @@ def _render_coverage_issues(root: Path, issues: list[CoverageIssue]) -> None:
         Coverage diagnostics are printed to standard output.
     """
     print(f"Coverage issues: {len(issues)}")
-    grouped: OrderedDict[str, tuple[int, OrderedDict[str, None]]] = OrderedDict()
+    grouped: OrderedDict[tuple[str, str], tuple[int, OrderedDict[str, None]]] = (
+        OrderedDict()
+    )
     for issue in issues:
         rel_path = Path(str(issue.path))
         try:
@@ -2628,17 +2630,13 @@ def _render_coverage_issues(root: Path, issues: list[CoverageIssue]) -> None:
         except ValueError:
             rel_text = str(issue.path)
         top_level_directory = rel_text.split("/", 1)[0]
-        count, directories = grouped.setdefault(issue.suffix, (0, OrderedDict()))
+        key = (issue.suffix, issue.reason)
+        count, directories = grouped.setdefault(key, (0, OrderedDict()))
         directories[top_level_directory] = None
-        grouped[issue.suffix] = (count + 1, directories)
-    for suffix, (count, directories) in grouped.items():
+        grouped[key] = (count + 1, directories)
+    for (suffix, reason), (count, directories) in grouped.items():
         directory_list = ", ".join(directories)
-        print(
-            "coverage: "
-            f"{suffix} x{count} in {directory_list} "
-            f"({suffix}, no registered analyzer accepts this file "
-            "type/content combination)"
-        )
+        print(f"coverage: {suffix} x{count} in {directory_list} ({suffix}, {reason})")
 
 
 def _run_coverage(root: Path, *, as_json: bool = False) -> int:

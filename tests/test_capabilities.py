@@ -221,8 +221,8 @@ def test_capability_contract_validates_against_schema() -> None:
         if item["family"] == "analyzer" and item["name"] == "python"
     )
     assert python_plugin["provider"] == "codira-analyzer-python"
-    assert python_plugin["version"] == "10"
-    assert python_plugin["distribution_version"] == "1.60.0"
+    assert python_plugin["version"] == "11"
+    assert python_plugin["distribution_version"] == "1.61.0"
     assert "symbol" in channels
     assert "docs" in channels
     assert "help" in commands

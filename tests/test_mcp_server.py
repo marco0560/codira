@@ -434,8 +434,8 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
         for plugin in plugins
         if plugin["family"] == "analyzer" and plugin["name"] == "python"
     )
-    assert python_plugin["version"] == "10"
-    assert python_plugin["distribution_version"] == "1.60.0"
+    assert python_plugin["version"] == "11"
+    assert python_plugin["distribution_version"] == "1.61.0"
     assert inventory["result"] == {
         "symbols": [
             {

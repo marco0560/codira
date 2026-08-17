@@ -21,7 +21,6 @@ first-party Python analyzer distribution for Phase 2 packaging.
 from __future__ import annotations
 
 import builtins
-import re
 import sys
 import tokenize
 from collections import Counter
@@ -68,6 +67,7 @@ from codira_analyzer_python.syntax import (
     module_docstring_location,
     parse_python_artifacts,
     parse_python_source,
+    TargetSyntaxFeature,
 )
 
 __all__ = ["PythonAnalyzer", "build_analyzer"]
@@ -88,14 +88,14 @@ _ALL_ARTIFACT_CATEGORIES = (
 
 
 def _target_feature_diagnostics(
-    source: str, root: Path, override: str | None
+    features: tuple[TargetSyntaxFeature, ...], root: Path, override: str | None
 ) -> tuple[AnalysisDiagnostic, ...]:
     """Return diagnostics for syntax newer than the declared Python target.
 
     Parameters
     ----------
-    source : str
-        Decoded Python source text.
+    features : tuple[codira_analyzer_python.syntax.TargetSyntaxFeature, ...]
+        Version-sensitive parsed syntax facts.
     root : pathlib.Path
         Repository root used to resolve the target contract.
     override : str | None
@@ -109,28 +109,20 @@ def _target_feature_diagnostics(
     contract = resolve_target_python_contract(root, override=override)
     if not contract.supported_minors:
         return ()
-    rules = (
-        (r"(?m)^\s*match\s+.+:", "match_statement", "3.10"),
-        (r"except\s*\*", "except_star", "3.11"),
-        (r"(?m)^\s*type\s+[A-Za-z_]", "type_alias_statement", "3.12"),
-        (r"(?<![A-Za-z0-9_\\])t[\"']", "template_string", "3.14"),
+    lowest_target = min(
+        tuple(map(int, value.split("."))) for value in contract.supported_minors
     )
     diagnostics: list[AnalysisDiagnostic] = []
-    for pattern, feature, minimum in rules:
-        match = re.search(pattern, source)
-        lowest_target = min(
-            (tuple(map(int, value.split("."))) for value in contract.supported_minors),
-        )
-        if match is None or lowest_target >= tuple(map(int, minimum.split("."))):
+    for feature in features:
+        minimum = tuple(map(int, feature.minimum_version.split(".")))
+        if lowest_target >= minimum:
             continue
-        line = source.count("\n", 0, match.start()) + 1
-        column = match.start() - source.rfind("\n", 0, match.start()) - 1
         diagnostics.append(
             AnalysisDiagnostic(
                 "target_version",
-                f"{feature} requires Python {minimum} but the declared target includes older versions",
-                line,
-                column,
+                f"{feature.feature} requires Python {feature.minimum_version} but the declared target includes older versions",
+                feature.line,
+                feature.column,
             )
         )
     return tuple(diagnostics)
@@ -978,7 +970,7 @@ class PythonAnalyzer:
     """
 
     name = "python"
-    version = "10"
+    version = "11"
     discovery_globs: tuple[str, ...] = ("*.py",)
     default_coverage_roots: tuple[str, ...] = ("src", "tests", "scripts")
 
@@ -1181,7 +1173,7 @@ class PythonAnalyzer:
             for diagnostic in syntax.diagnostics
         )
         target_diagnostics = _target_feature_diagnostics(
-            source, root, self._target_python_override
+            syntax.target_features, root, self._target_python_override
         )
         diagnostics = grammar_diagnostics + target_diagnostics
         if grammar_diagnostics:
