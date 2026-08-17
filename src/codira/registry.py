@@ -643,7 +643,28 @@ def _entry_point_provider(entry_point: metadata.EntryPoint) -> str:
         Distribution name, or ``"<unknown>"`` when metadata is unavailable.
     """
 
-    return getattr(getattr(entry_point, "dist", None), "name", "") or "<unknown>"
+    return _entry_point_distribution_name(entry_point) or "<unknown>"
+
+
+def _entry_point_distribution_name(entry_point: metadata.EntryPoint) -> str:
+    """
+    Return an entry point's distribution name when its metadata is readable.
+
+    Parameters
+    ----------
+    entry_point : importlib.metadata.EntryPoint
+        Entry point whose owning distribution metadata may be incomplete.
+
+    Returns
+    -------
+    str
+        Distribution name, or an empty string when the metadata cannot be read.
+    """
+
+    try:
+        return getattr(getattr(entry_point, "dist", None), "name", "") or ""
+    except (AttributeError, KeyError, TypeError):
+        return ""
 
 
 def _disabled_third_party_registration(
@@ -815,7 +836,7 @@ def _entry_points_for_group(group: str) -> list[metadata.EntryPoint]:
     discovered.sort(
         key=lambda entry: (
             entry.name,
-            getattr(getattr(entry, "dist", None), "name", "") or "",
+            _entry_point_distribution_name(entry),
             entry.value,
         )
     )

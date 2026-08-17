@@ -178,7 +178,7 @@ install-repo-config: ## Git alias: install repo-local Git config
 	@$(UV) run python scripts/install_repo_git_config.py
 
 docs-build: ## Git alias: build MkDocs documentation strictly
-	@$(UV) run mkdocs build --strict
+	@NO_MKDOCS_2_WARNING=1 $(UV) run mkdocs build --strict
 
 gen-issues: ## Git alias: write issues.json snapshot
 	@$(UV) run python scripts/generate_github_snapshot.py issues --output issues.json

@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
 from typing import cast
 
@@ -142,6 +143,32 @@ class _FakeEntryPoint:
         if isinstance(self.loaded, Exception):
             raise self.loaded
         return self.loaded
+
+
+class _UnreadableDistribution:
+    """Distribution stub whose malformed metadata prevents name lookup."""
+
+    @property
+    def name(self) -> str:
+        """
+        Raise the error produced by malformed installed distribution metadata.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        str
+            This property never returns because metadata is malformed.
+
+        Raises
+        ------
+        TypeError
+            Always raised to emulate ``importlib.metadata.PathDistribution``.
+        """
+
+        raise TypeError
 
 
 FIRST_PARTY_PLUGIN_FACTORIES = (
@@ -540,6 +567,51 @@ def _patch_entry_points(
         return []
 
     monkeypatch.setattr(registry, "_entry_points_for_group", fake_group_loader)
+
+
+def test_entry_point_discovery_tolerates_malformed_distribution_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Keep discovery operational when an installed distribution has no Name field.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to provide malformed entry-point metadata.
+
+    Returns
+    -------
+    None
+        The test asserts discovery and provider reporting remain deterministic.
+    """
+    broken_entry_point = _FakeEntryPoint(
+        name="broken",
+        value="broken_plugin:build",
+        dist=cast("_FakeDistribution", _UnreadableDistribution()),
+        loaded=object(),
+    )
+    valid_entry_point = _FakeEntryPoint(
+        name="valid",
+        value="valid_plugin:build",
+        dist=_FakeDistribution("valid-plugin"),
+        loaded=object(),
+    )
+
+    def fake_entry_points(*, group: str) -> tuple[_FakeEntryPoint, ...]:
+        assert group == registry.BACKEND_ENTRY_POINT_GROUP
+        return (valid_entry_point, broken_entry_point)
+
+    monkeypatch.setattr(metadata, "entry_points", fake_entry_points)
+    registry.reset_plugin_registry_caches()
+
+    discovered = registry._entry_points_for_group(registry.BACKEND_ENTRY_POINT_GROUP)
+
+    assert [entry.name for entry in discovered] == ["broken", "valid"]
+    assert (
+        registry._entry_point_provider(cast("metadata.EntryPoint", broken_entry_point))
+        == "<unknown>"
+    )
 
 
 def _patch_user_config(

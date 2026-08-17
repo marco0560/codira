@@ -2059,7 +2059,9 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
         "!uv run python scripts/run_repo_tool.py ruff check . --fix "
         "&& uv run python scripts/run_repo_tool.py ruff format ."
     )
-    assert entries["alias.docs-build"] == "!uv run mkdocs build --strict"
+    assert entries["alias.docs-build"] == (
+        "!NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict"
+    )
     assert entries["alias.gen-issues"] == (
         "!uv run python scripts/generate_github_snapshot.py issues --output issues.json"
     )

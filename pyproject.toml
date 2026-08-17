@@ -31,7 +31,7 @@ dev = [
     "packaging",
     "build",
     "setuptools>=68",
-    "setuptools-scm>=8",
+    "setuptools-scm>=8,<10",
     "wheel",
     "twine>=6.2,<7.0",
     "codira-installer==1.55.0",
@@ -92,7 +92,7 @@ docs = [
 ]
 
 [build-system]
-requires = ["setuptools>=68", "wheel", "setuptools-scm>=8"]
+requires = ["setuptools>=68", "wheel", "setuptools-scm>=8,<10"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

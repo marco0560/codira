@@ -100,7 +100,7 @@ def git_alias_entries() -> list[tuple[str, str]]:
         ),
         (
             "alias.docs-build",
-            "!uv run mkdocs build --strict",
+            "!NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict",
         ),
         (
             "alias.gen-issues",
