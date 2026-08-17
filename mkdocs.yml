@@ -34,6 +34,8 @@ extra_css:
 nav:
   - Home: index.md
   - Getting started: getting_started.md
+  - From downloading Codira to effectively using it: from-downloading-to-effective-use.md
+  - How to use Codira with my coding agent: coding-agents.md
   - Local MCP: mcp.md
   - Configuration: configuration.md
   - Installer: installer.md
