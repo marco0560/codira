@@ -1,3 +1,10 @@
+## [1.63.1](https://github.com/marco0560/codira/compare/v1.63.0...v1.63.1) (2026-08-22)
+
+
+### Bug Fixes
+
+* **hooks:** run package tests before push ([6f5e0f9](https://github.com/marco0560/codira/commit/6f5e0f9f81ab741354551f384eb4ff8ae50fed64))
+
 # [1.63.0](https://github.com/marco0560/codira/compare/v1.62.2...v1.63.0) (2026-08-22)
 
 
