@@ -1,3 +1,10 @@
+# [1.63.0](https://github.com/marco0560/codira/compare/v1.62.2...v1.63.0) (2026-08-22)
+
+
+### Features
+
+* add architecture reports and read-only MCP retrieval ([107f522](https://github.com/marco0560/codira/commit/107f522c20cc6ba80ea71a2df60c5f7562a7add2)), closes [#54](https://github.com/marco0560/codira/issues/54) [#70](https://github.com/marco0560/codira/issues/70)
+
 ## [1.62.2](https://github.com/marco0560/codira/compare/v1.62.1...v1.62.2) (2026-08-17)
 
 
