@@ -260,3 +260,19 @@ surface. Before squash merge, run all of the following with observed outcomes:
 Use `commit-block-generator` to prepare each branch commit and the final squash
 commit. The final squash commit closes #70 and #54 with separate closing
 footers.
+
+## Published squash-message correction
+
+The published squash commit `107f522 feat: add architecture reports and
+read-only MCP retrieval` contains shell-substituted prose in its body. The
+implementation is unaffected; this correction records the intended terms
+without rewriting released `main` history:
+
+- the renamed command is `codira arch`, not `x86_64`;
+- the read-only MCP retrieval tools are `emb` and `docs`;
+- the validator recovery command is `ruff check . --fix`.
+
+The original substitutions resulted from passing Markdown backticks through a
+shell while creating the squash message. Future long commit messages should be
+entered through the commit editor or read from a quoted message file, never
+interpolated by a shell.
