@@ -319,6 +319,9 @@ def test_proxy_routes_every_approved_tool_through_warm_daemon(tmp_path: Path) ->
                 "helper", limit=1
             ),
             "repository_map": lambda adapter: adapter.repository_map(limit=1),
+            "arch": lambda adapter: adapter.arch(limit=1),
+            "emb": lambda adapter: adapter.emb("answer", limit=1),
+            "docs": lambda adapter: adapter.docs("answer", limit=1),
         }
         for name, call in calls.items():
             warm = call(proxy)  # type: ignore[no-untyped-call]
@@ -360,6 +363,9 @@ def test_server_exposes_initial_approved_tools(tmp_path: Path) -> None:
         "symbol",
         "symbols",
         "repository_map",
+        "arch",
+        "emb",
+        "docs",
     }
 
 
@@ -388,6 +394,9 @@ def test_stdio_entry_point_completes_mcp_initialization(tmp_path: Path) -> None:
         "symbol",
         "symbols",
         "repository_map",
+        "arch",
+        "emb",
+        "docs",
     }
 
 
@@ -418,12 +427,16 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     impact = adapter.impact_analysis("helper")
     repository_map = adapter.repository_map()
     truncated_map = adapter.repository_map(output_budget=1)
+    architecture = adapter.arch()
+    truncated_architecture = adapter.arch(output_budget=1)
+    embedding_matches = adapter.emb("answer")
+    documentation_matches = adapter.docs("answer")
 
     status_result = cast("dict[str, object]", status["result"])
     assert status_result["indexed"] is True
     assert status_result["coverage"] == {"status": "complete", "issues": []}
     status_metadata = cast("dict[str, str]", status_result["metadata"])
-    assert status_metadata["schema_version"] == "24"
+    assert status_metadata["schema_version"] == "25"
     assert status_metadata["backend_name"] == "sqlite"
     codira_capabilities = cast(
         "dict[str, object]", cast("dict[str, object]", capabilities["result"])["codira"]
@@ -514,6 +527,31 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     assert truncated_map_result == {"modules": []}
     assert truncated_map_truncation["truncated"] is True
     assert truncated_map_truncation["reasons"] == ["output_budget"]
+    architecture_result = cast("dict[str, object]", architecture["result"])
+    architecture_truncation = cast("dict[str, object]", architecture["truncation"])
+    truncated_architecture_result = cast(
+        "dict[str, object]", truncated_architecture["result"]
+    )
+    truncated_architecture_truncation = cast(
+        "dict[str, object]", truncated_architecture["truncation"]
+    )
+    assert architecture_result["summary"] == {
+        "modules": 1,
+        "dependencies": 1,
+        "cycles": 1,
+    }
+    architecture_modules = cast(
+        "list[dict[str, object]]", architecture_result["modules"]
+    )
+    assert [module["name"] for module in architecture_modules] == ["sample"]
+    assert architecture_truncation["truncated"] is False
+    assert truncated_architecture_result["modules"] == []
+    assert truncated_architecture_truncation["truncated"] is True
+    assert truncated_architecture_truncation["reasons"] == ["output_budget"]
+    assert "matches" in cast("dict[str, object]", embedding_matches["result"])
+    assert "matches" in cast("dict[str, object]", documentation_matches["result"])
+    with pytest.raises(ValueError, match="stay under"):
+        adapter.emb("answer", prefix="../outside")
 
 
 def test_adapter_paginates_and_rejects_path_like_cursors(tmp_path: Path) -> None:
@@ -584,7 +622,7 @@ def test_server_symbol_tool_invokes_the_direct_adapter(tmp_path: Path) -> None:
         "generation": 1,
     }
     freshness = cast("dict[str, str]", structured["freshness"])
-    assert freshness["schema_version"] == "24"
+    assert freshness["schema_version"] == "25"
     assert freshness["backend_name"] == "sqlite"
     assert structured["page"] == {"limit": 100, "next_cursor": None}
     truncation = cast("dict[str, object]", structured["truncation"])

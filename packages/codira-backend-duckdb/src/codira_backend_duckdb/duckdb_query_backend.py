@@ -845,6 +845,54 @@ class DuckDBQueryBackend:
             if owns_connection:
                 conn.close()
 
+    def module_imports(
+        self,
+        root: Path,
+        module: str,
+        *,
+        conn: object | None = None,
+    ) -> list[tuple[str, str, int]]:
+        """Return normalized imports owned by one indexed module.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        module : str
+            Indexed module name that owns the imports.
+        conn : object | None, optional
+            Existing DuckDB connection to reuse.
+
+        Returns
+        -------
+        list[tuple[str, str, int]]
+            Ordered ``(name, kind, lineno)`` import rows.
+        """
+        owns_connection = conn is None
+        connection = (
+            self.open_connection(root)
+            if conn is None
+            else cast("_BackendCompatibleConnection", conn)
+        )
+        try:
+            rows = connection.execute(
+                """
+                SELECT i.name, i.kind, i.lineno
+                FROM imports i
+                JOIN modules m ON i.module_id = m.id
+                WHERE m.name = ?
+                ORDER BY i.name, i.kind, i.lineno
+                """,
+                (module,),
+            ).fetchall()
+            return [
+                (str(name), str(kind), _backend_int(lineno))
+                for name, kind, lineno in rows
+            ]
+        finally:
+            if owns_connection:
+                connection.close()
+
     def _symbol_metric(
         self,
         conn: _BackendCompatibleConnection,

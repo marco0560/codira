@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-MCP_CONTRACT_VERSION: Final = "1.2.0"
+MCP_CONTRACT_VERSION: Final = "1.4.0"
 MAX_OUTPUT_BUDGET: Final = 16_000
 DEFAULT_OUTPUT_BUDGET: Final = 4_000
 
@@ -54,6 +54,22 @@ _TOOLS: Final = (
         "impact_analysis", "Inspect structural impact for a symbol.", ("name",)
     ),
     ToolContract("repository_map", "Return a compact agent-oriented repository map."),
+    ToolContract(
+        "arch",
+        "Return a bounded read-only repository architecture model.",
+    ),
+    ToolContract(
+        "emb",
+        "Search stored symbol embeddings without maintenance operations.",
+        ("query",),
+        ("prefix",),
+    ),
+    ToolContract(
+        "docs",
+        "Search stored documentation embeddings.",
+        ("query",),
+        ("prefix",),
+    ),
 )
 
 

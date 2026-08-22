@@ -29,6 +29,7 @@ It exists to:
 - `codira.arch.require-fresh-full-index-embedding-flush`
 - `codira.arch.require-duckdb-full-index-vector-preservation`
 - `codira.arch.no-direct-config-load-in-query-hot-path`
+- `codira.arch.no-mutation-in-mcp`
 - `codira.plugins.no-broad-except-exception`
 - `codira.plugins.require-shared-plugin-json-schema-helper`
 - `codira.det.no-random-without-explicit-seed`
@@ -60,6 +61,18 @@ files directly.
 
 Removal condition:
 No removal planned while query commands remain performance-sensitive.
+
+### `codira.arch.no-mutation-in-mcp`
+
+Rationale:
+The local MCP contract is read-only. Its request handlers must not refresh an
+index, purge vectors, mutate filesystem state, invoke OS mutation APIs, or
+launch subprocesses. Configuration-preset generation is intentionally outside
+this guard because it is an explicit local CLI file-writing workflow, not an
+MCP request handler.
+
+Removal condition:
+No removal planned while MCP advertises a read-only contract.
 
 ### `codira.arch.no-store-analysis-in-duckdb-full-index-bulk`
 

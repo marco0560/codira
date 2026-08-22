@@ -2,6 +2,15 @@
 
 Codira exposes local, read-only repository intelligence through a standard-input/output MCP server. The selected repository is fixed when the server starts; MCP requests never accept repository paths.
 
+The `arch` tool returns a bounded, read-only architecture-model snapshot for
+the trusted repository. It does not write report files; use `codira arch` when
+you need the DOT, Markdown, JSON, or optional SVG artifact set.
+
+`emb` searches stored symbol embeddings and `docs` searches stored
+documentation embeddings. Both accept a query, optional repository-relative
+`prefix`, and bounded `limit`; neither exposes `emb purge` or any other
+vector-store maintenance operation.
+
 ## Start in under five minutes
 
 From the repository you want to inspect, build its local index and generate a

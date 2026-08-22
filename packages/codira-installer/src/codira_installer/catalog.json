@@ -67,6 +67,10 @@
             "default": true,
             "type": "boolean"
           },
+          "emit_generic_facts": {
+            "default": true,
+            "type": "boolean"
+          },
           "emit_schema_properties": {
             "default": true,
             "type": "boolean"
@@ -84,13 +88,15 @@
             "default": [
               "schema",
               "package",
-              "release"
+              "release",
+              "manifest"
             ],
             "items": {
               "enum": [
                 "schema",
                 "package",
-                "release"
+                "release",
+                "manifest"
               ],
               "type": "string"
             },

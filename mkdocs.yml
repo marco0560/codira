@@ -41,6 +41,7 @@ nav:
   - Installer: installer.md
   - Architecture:
       - Index: architecture/index.md
+      - Repository architecture reports: architecture/architecture-report.md
       - System overview: architecture/system-overview.md
       - Indexing pipeline: architecture/indexing-pipeline.md
       - Query pipeline: architecture/query-pipeline.md

@@ -40,9 +40,9 @@ src/codira/query_daemon_lifecycle.py:579 PLR0913 — service lifecycle inputs ar
     explicit to preserve platform-independent restart behavior.
 src/codira/query_daemon_ipc.py:887 PLR0913 — IPC server construction exposes its
     authentication, runtime, and connection-boundary dependencies.
-src/codira/cli.py:2054 C901,PLR0912 — index CLI failure/reporting branches are
+src/codira/cli.py:2093 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
-src/codira/cli.py:6330 PLR0913 — command dispatch receives parsed arguments and
+src/codira/cli.py:6449 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
 src/codira/docstring.py:836,947 PLC0415 — lazy imports avoid a configuration or
     registry import cycle on the optional documentation-plugin path.

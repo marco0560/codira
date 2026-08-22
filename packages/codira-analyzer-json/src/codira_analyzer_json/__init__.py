@@ -20,6 +20,7 @@ first-party JSON analyzer distribution for Phase 2 packaging.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -33,7 +34,12 @@ from codira.contracts import (
     AnalyzerCapabilityDeclaration,
     AnalyzerConcurrencyDeclaration,
 )
-from codira.models import AnalysisResult, DeclarationArtifact, ModuleArtifact
+from codira.models import (
+    AnalysisResult,
+    DeclarationArtifact,
+    DeclarationKind,
+    ModuleArtifact,
+)
 from codira.plugin_config import (
     AnalyzerPathFilters,
     analyzer_json_schema,
@@ -48,12 +54,23 @@ JsonFamily = Literal[
     "json_schema",
     "npm_package_manifest",
     "semantic_release_config",
+    "generic_manifest",
 ]
 JsonFamilyOrNone = JsonFamily | None
+JsonFacet = Literal[
+    "json",
+    "schema",
+    "manifest",
+    "package_metadata",
+    "build_configuration",
+    "configuration",
+]
+JsonKnownEcosystem = Literal["npm", "semantic_release"]
 _CONFIG_FAMILY_TO_JSON_FAMILY: dict[str, JsonFamily] = {
     "schema": "json_schema",
     "package": "npm_package_manifest",
     "release": "semantic_release_config",
+    "manifest": "generic_manifest",
 }
 JsonScalar = str | int | float | bool | None
 _JSON_SNIFF_BYTES = 8192
@@ -79,6 +96,46 @@ _SEMANTIC_RELEASE_MARKERS = (
     '"branches"',
     '"tagFormat"',
 )
+_GENERIC_MANIFEST_CONTEXT_DIRECTORIES = frozenset(
+    {".github", "config", "deploy", "infra", "manifests", "packages"}
+)
+_GENERIC_MANIFEST_FILENAME_TOKENS = ("manifest", "descriptor")
+_GENERIC_MANIFEST_SCORE_THRESHOLD = 3
+_GENERIC_FACT_MAX_DEPTH = 4
+_GENERIC_FACT_MAX_CONTAINER_ENTRIES = 32
+_GENERIC_FACT_MAX_SCALAR_LENGTH = 256
+_GENERIC_FACT_MAX_DECLARATIONS = 200
+
+
+@dataclass(frozen=True)
+class JsonClassification:
+    """
+    Deterministic semantic classification for one JSON document.
+
+    Parameters
+    ----------
+    primary_family : JsonFamily
+        Existing analyzer family that owns family-specific declaration output.
+    facets : tuple[JsonFacet, ...]
+        Ordered semantic facets supported by the document evidence.
+    known_ecosystem : JsonKnownEcosystem | None
+        Known ecosystem identity when deterministic recognizers establish one.
+    evidence : tuple[str, ...]
+        Ordered evidence identifiers contributing to the classification.
+    score : int
+        Deterministic generic-manifest evidence score.
+
+    Returns
+    -------
+    None
+        Instances describe classification results only.
+    """
+
+    primary_family: JsonFamily
+    facets: tuple[JsonFacet, ...]
+    known_ecosystem: JsonKnownEcosystem | None
+    evidence: tuple[str, ...]
+    score: int
 
 
 def _sanitize_module_segment(segment: str) -> str:
@@ -208,7 +265,7 @@ def _classify_json_path(path: Path) -> JsonFamilyOrNone:
 
     Returns
     -------
-    {"json_schema", "npm_package_manifest", "semantic_release_config"} | None
+    {"json_schema", "npm_package_manifest", "semantic_release_config", "generic_manifest"} | None
         Deterministic family chosen by the path rule, or ``None`` when the path
         is not conclusive.
     """
@@ -261,7 +318,11 @@ def _sniff_json_path_candidate(path: Path) -> bool:
         _PACKAGE_MANIFEST_MARKERS,
         _SEMANTIC_RELEASE_MARKERS,
     )
-    return any(marker in sniff for group in marker_groups for marker in group)
+    if any(marker in sniff for group in marker_groups for marker in group):
+        return True
+    compound_value_markers = ('": {', '":[', '":{', '": [')
+    compound_count = sum(sniff.count(marker) for marker in compound_value_markers)
+    return compound_count >= 2 or '"$ref"' in sniff
 
 
 def _is_json_schema_document(payload: dict[str, object]) -> bool:
@@ -342,6 +403,114 @@ def _is_semantic_release_config(payload: dict[str, object]) -> bool:
     return "plugins" in payload and ("branches" in payload or "tagFormat" in payload)
 
 
+def _generic_manifest_evidence(
+    path: Path,
+    payload: dict[str, object],
+) -> tuple[tuple[str, ...], int, bool, bool]:
+    """
+    Score bounded, inspectable evidence for an unknown JSON manifest.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Candidate JSON file path.
+    payload : dict[str, object]
+        Parsed object-root JSON payload.
+
+    Returns
+    -------
+    tuple[tuple[str, ...], int, bool, bool]
+        Ordered evidence, score, structural-signal flag, and corroboration flag.
+
+    Notes
+    -----
+    Generic manifests require both structural evidence and independent
+    corroboration. Filename evidence is intentionally corroborating only.
+    """
+    evidence: list[str] = []
+    score = 0
+    structural = False
+    corroboration = False
+
+    compound_values = [
+        value for value in payload.values() if isinstance(value, (dict, list))
+    ]
+    if len(compound_values) >= 2:
+        evidence.append("structural:multiple_compound_top_level_values")
+        score += 2
+        structural = True
+    elif len(compound_values) == 1 and len(payload) >= 3:
+        evidence.append("structural:compound_top_level_value")
+        score += 1
+        structural = True
+
+    if "$ref" in payload and isinstance(payload["$ref"], str):
+        evidence.append("structural:top_level_reference")
+        score += 1
+        structural = True
+
+    schema_uri = payload.get("$schema")
+    if isinstance(schema_uri, str) and schema_uri.strip():
+        evidence.append("corroboration:schema_uri")
+        score += 2
+        corroboration = True
+
+    if any(part in _GENERIC_MANIFEST_CONTEXT_DIRECTORIES for part in path.parts):
+        evidence.append("corroboration:repository_context")
+        score += 1
+        corroboration = True
+
+    normalized_name = path.stem.lower()
+    if any(token in normalized_name for token in _GENERIC_MANIFEST_FILENAME_TOKENS):
+        evidence.append("corroboration:filename")
+        score += 1
+        corroboration = True
+
+    for value in payload.values():
+        if isinstance(value, str) and (
+            value.startswith(("http://", "https://", "./", "../")) or "/" in value
+        ):
+            evidence.append("corroboration:meaningful_url_or_path")
+            score += 1
+            corroboration = True
+            break
+
+    return tuple(evidence), score, structural, corroboration
+
+
+def _classify_generic_manifest(
+    path: Path,
+    payload: dict[str, object],
+) -> JsonClassification | None:
+    """
+    Classify an unknown JSON document as a conservative generic manifest.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Candidate JSON file path.
+    payload : dict[str, object]
+        Parsed object-root JSON payload.
+
+    Returns
+    -------
+    JsonClassification | None
+        Generic-manifest classification when the evidence contract is met.
+    """
+    evidence, score, structural, corroboration = _generic_manifest_evidence(
+        path, payload
+    )
+    if score < _GENERIC_MANIFEST_SCORE_THRESHOLD or not structural or not corroboration:
+        return None
+    return JsonClassification(
+        primary_family="generic_manifest",
+        facets=("json", "manifest"),
+        known_ecosystem=None,
+        evidence=evidence,
+        score=score,
+    )
+
+
 def _classify_json_payload(payload: dict[str, object]) -> JsonFamilyOrNone:
     """
     Classify one parsed JSON object through strong structural markers.
@@ -353,7 +522,7 @@ def _classify_json_payload(payload: dict[str, object]) -> JsonFamilyOrNone:
 
     Returns
     -------
-    {"json_schema", "npm_package_manifest", "semantic_release_config"} | None
+    {"json_schema", "npm_package_manifest", "semantic_release_config", "generic_manifest"} | None
         Deterministic family chosen by content, or ``None`` when the payload is
         not a supported JSON family.
     """
@@ -379,7 +548,7 @@ def _classify_json_document(path: Path, payload: dict[str, object]) -> JsonFamil
 
     Returns
     -------
-    {"json_schema", "npm_package_manifest", "semantic_release_config"} | None
+    {"json_schema", "npm_package_manifest", "semantic_release_config", "generic_manifest"} | None
         Deterministic supported family, or ``None`` when the file stays
         intentionally unsupported.
     """
@@ -393,6 +562,56 @@ def _classify_json_document(path: Path, payload: dict[str, object]) -> JsonFamil
     ):
         return path_family
     return _classify_json_payload(payload)
+
+
+def _classify_json_document_with_facets(
+    path: Path,
+    payload: dict[str, object],
+) -> JsonClassification | None:
+    """
+    Classify one JSON document into composable semantic facets.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Candidate JSON file path.
+    payload : dict[str, object]
+        Parsed object-root JSON payload.
+
+    Returns
+    -------
+    JsonClassification | None
+        Faceted classification, or ``None`` when the document is unsupported.
+    """
+    family = _classify_json_document(path, payload)
+    if family == "json_schema":
+        return JsonClassification(
+            primary_family=family,
+            facets=("json", "schema"),
+            known_ecosystem=None,
+            evidence=("recognizer:json_schema",),
+            score=0,
+        )
+    if family == "npm_package_manifest":
+        facets: tuple[JsonFacet, ...] = ("json", "manifest", "package_metadata")
+        if "scripts" in payload:
+            facets = (*facets, "build_configuration")
+        return JsonClassification(
+            primary_family=family,
+            facets=facets,
+            known_ecosystem="npm",
+            evidence=("recognizer:npm_package_manifest",),
+            score=0,
+        )
+    if family == "semantic_release_config":
+        return JsonClassification(
+            primary_family=family,
+            facets=("json", "configuration", "build_configuration"),
+            known_ecosystem="semantic_release",
+            evidence=("recognizer:semantic_release_config",),
+            score=0,
+        )
+    return _classify_generic_manifest(path, payload)
 
 
 def _scalar_text(value: object) -> str | None:
@@ -709,6 +928,291 @@ def _extract_package_declarations(
     return tuple(declarations)
 
 
+def _generic_fact_scalar(value: object) -> str | None:
+    """
+    Normalize one bounded scalar value for generic manifest facts.
+
+    Parameters
+    ----------
+    value : object
+        Candidate JSON scalar.
+
+    Returns
+    -------
+    str | None
+        Normalized scalar within the fact-size limit, or ``None`` when omitted.
+    """
+    scalar = _scalar_text(value)
+    if scalar is None or len(scalar) > _GENERIC_FACT_MAX_SCALAR_LENGTH:
+        return None
+    return scalar
+
+
+def _is_meaningful_manifest_path(value: str) -> bool:
+    """
+    Decide whether a scalar is a repository-oriented relative path value.
+
+    Parameters
+    ----------
+    value : str
+        Normalized scalar candidate.
+
+    Returns
+    -------
+    bool
+        ``True`` when the value is a non-URL path-like relative locator.
+    """
+    return not value.startswith(("http://", "https://")) and (
+        value.startswith(("./", "../")) or "/" in value
+    )
+
+
+def _extract_generic_manifest_declarations(
+    path: Path,
+    payload: dict[str, object],
+) -> tuple[DeclarationArtifact, ...]:
+    """
+    Extract bounded structural facts from one recognized generic manifest.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Generic manifest file being analyzed.
+    payload : dict[str, object]
+        Parsed generic-manifest payload.
+
+    Returns
+    -------
+    tuple[codira.models.DeclarationArtifact, ...]
+        Deterministically ordered structural declarations capped by module limits.
+
+    Notes
+    -----
+    The extractor reports structure and explicit locator values only. It never
+    promotes arbitrary field names into ecosystem-specific semantics.
+    """
+    declarations: list[DeclarationArtifact] = []
+    source = path.as_posix()
+    truncated = False
+
+    def append_fact(
+        *,
+        kind: str,
+        name: str,
+        signature: str,
+        identity: str,
+    ) -> None:
+        """
+        Append one bounded generic fact when declaration capacity remains.
+
+        Parameters
+        ----------
+        kind : str
+            Generic JSON declaration kind.
+        name : str
+            Canonical JSON path used as the fact name.
+        signature : str
+            Deterministic semantic text for the fact.
+        identity : str
+            Stable-ID suffix that differentiates facts at one JSON path.
+
+        Returns
+        -------
+        None
+            The declaration is appended only while the fixed capacity remains.
+        """
+        nonlocal truncated
+        if len(declarations) >= _GENERIC_FACT_MAX_DECLARATIONS - 1:
+            truncated = True
+            return
+        declarations.append(
+            DeclarationArtifact(
+                name=name,
+                stable_id=f"json:generic_manifest:{kind}:{source}:{identity}",
+                kind=cast("DeclarationKind", kind),
+                lineno=1,
+                signature=signature,
+                docstring=None,
+            )
+        )
+
+    for top_level_key in sorted(payload):
+        append_fact(
+            kind="json_manifest_top_level_key",
+            name=top_level_key,
+            signature=f"manifest top-level key {top_level_key}",
+            identity=f"top_level:{top_level_key}",
+        )
+    if len(payload) > _GENERIC_FACT_MAX_CONTAINER_ENTRIES:
+        truncated = True
+
+    def walk(value: object, segments: tuple[str, ...], depth: int) -> None:
+        """
+        Traverse bounded JSON containers and emit generic structural facts.
+
+        Parameters
+        ----------
+        value : object
+            Current parsed JSON value.
+        segments : tuple[str, ...]
+            Canonical path to the current value.
+        depth : int
+            Current container depth beneath the document root.
+
+        Returns
+        -------
+        None
+            Facts are appended through the enclosing bounded collector.
+        """
+        nonlocal truncated
+        if len(declarations) >= _GENERIC_FACT_MAX_DECLARATIONS - 1:
+            truncated = True
+            return
+        dotted_path = _join_path_segments(segments)
+        if isinstance(value, dict):
+            if depth > 1:
+                append_fact(
+                    kind="json_manifest_object_path",
+                    name=dotted_path,
+                    signature=f"manifest object path={dotted_path}",
+                    identity=f"object:{dotted_path}",
+                )
+            if depth >= _GENERIC_FACT_MAX_DEPTH:
+                if value:
+                    truncated = True
+                return
+            sorted_keys = sorted(value)
+            if len(sorted_keys) > _GENERIC_FACT_MAX_CONTAINER_ENTRIES:
+                truncated = True
+            for key in sorted_keys[:_GENERIC_FACT_MAX_CONTAINER_ENTRIES]:
+                child = value[key]
+                child_segments = (*segments, str(key))
+                child_path = _join_path_segments(child_segments)
+                if key == "$ref":
+                    reference = _generic_fact_scalar(child)
+                    if reference is not None:
+                        append_fact(
+                            kind="json_manifest_reference",
+                            name=child_path,
+                            signature=(
+                                f"manifest reference path={child_path} target={reference}"
+                            ),
+                            identity=f"reference:{child_path}:{reference}",
+                        )
+                walk(child, child_segments, depth + 1)
+            return
+
+        if isinstance(value, list):
+            append_fact(
+                kind="json_manifest_array",
+                name=dotted_path,
+                signature=f"manifest array path={dotted_path} entries={len(value)}",
+                identity=f"array:{dotted_path}",
+            )
+            if depth >= _GENERIC_FACT_MAX_DEPTH:
+                if value:
+                    truncated = True
+                return
+            if len(value) > _GENERIC_FACT_MAX_CONTAINER_ENTRIES:
+                truncated = True
+            for index, child in enumerate(value[:_GENERIC_FACT_MAX_CONTAINER_ENTRIES]):
+                walk(child, (*segments, f"[{index}]"), depth + 1)
+            return
+
+        raw_scalar = _scalar_text(value)
+        if raw_scalar is not None and len(raw_scalar) > _GENERIC_FACT_MAX_SCALAR_LENGTH:
+            truncated = True
+            return
+        scalar = _generic_fact_scalar(value)
+        if scalar is None:
+            return
+        if scalar.startswith(("http://", "https://")):
+            append_fact(
+                kind="json_manifest_url",
+                name=dotted_path,
+                signature=f"manifest URL path={dotted_path} value={scalar}",
+                identity=f"url:{dotted_path}:{scalar}",
+            )
+        elif _is_meaningful_manifest_path(scalar):
+            append_fact(
+                kind="json_manifest_path",
+                name=dotted_path,
+                signature=f"manifest path path={dotted_path} value={scalar}",
+                identity=f"path:{dotted_path}:{scalar}",
+            )
+
+    walk(payload, (), 0)
+    if truncated:
+        declarations.append(
+            DeclarationArtifact(
+                name="truncated",
+                stable_id=f"json:generic_manifest:truncation:{source}",
+                kind="json_manifest_truncation",
+                lineno=1,
+                signature=(
+                    "manifest fact extraction truncated "
+                    f"depth={_GENERIC_FACT_MAX_DEPTH} "
+                    f"container_entries={_GENERIC_FACT_MAX_CONTAINER_ENTRIES} "
+                    f"scalar_length={_GENERIC_FACT_MAX_SCALAR_LENGTH} "
+                    f"declarations={_GENERIC_FACT_MAX_DECLARATIONS}"
+                ),
+                docstring=None,
+            )
+        )
+    return tuple(declarations)
+
+
+def _extract_classification_declarations(
+    path: Path,
+    classification: JsonClassification,
+) -> tuple[DeclarationArtifact, ...]:
+    """Persist generic JSON facets and known ecosystem identity as facts.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Classified JSON document path.
+    classification : JsonClassification
+        Deterministic faceted classification result.
+
+    Returns
+    -------
+    tuple[codira.models.DeclarationArtifact, ...]
+        Ordered analyzer-owned facet and ecosystem declarations.
+
+    Notes
+    -----
+    These declarations make facets available to ordinary indexed consumers
+    without teaching those consumers JSON-family-specific rendering behavior.
+    """
+    source = path.as_posix()
+    declarations = [
+        DeclarationArtifact(
+            name=facet,
+            stable_id=f"json:facet:{source}:{facet}",
+            kind="json_manifest_facet",
+            lineno=1,
+            signature=f"json facet {facet}",
+            docstring=None,
+        )
+        for facet in classification.facets
+    ]
+    if classification.known_ecosystem is not None:
+        declarations.append(
+            DeclarationArtifact(
+                name=classification.known_ecosystem,
+                stable_id=(
+                    f"json:known_ecosystem:{source}:{classification.known_ecosystem}"
+                ),
+                kind="json_manifest_ecosystem",
+                lineno=1,
+                signature=f"json known ecosystem {classification.known_ecosystem}",
+                docstring=None,
+            )
+        )
+    return tuple(declarations)
+
+
 def _release_plugin_name(entry: object) -> str | None:
     """
     Extract one semantic-release plugin name from a plugin entry.
@@ -835,7 +1339,7 @@ def _module_docstring_for_family(
 
     Parameters
     ----------
-    family : {"json_schema", "npm_package_manifest", "semantic_release_config"}
+    family : {"json_schema", "npm_package_manifest", "semantic_release_config", "generic_manifest"}
         Resolved JSON family for the file.
     payload : dict[str, object]
         Parsed family payload.
@@ -849,7 +1353,9 @@ def _module_docstring_for_family(
         return _schema_docstring(payload)
     if family == "npm_package_manifest":
         return _package_docstring(payload)
-    return _release_docstring(payload)
+    if family == "semantic_release_config":
+        return _release_docstring(payload)
+    return "Generic JSON manifest with conservative structural evidence."
 
 
 def _declarations_for_family(
@@ -863,7 +1369,7 @@ def _declarations_for_family(
 
     Parameters
     ----------
-    family : {"json_schema", "npm_package_manifest", "semantic_release_config"}
+    family : {"json_schema", "npm_package_manifest", "semantic_release_config", "generic_manifest"}
         Resolved JSON family for the file.
     path : pathlib.Path
         JSON file being analyzed.
@@ -882,7 +1388,9 @@ def _declarations_for_family(
         )
     if family == "npm_package_manifest":
         return _extract_package_declarations(path, payload)
-    return _extract_release_declarations(path, payload)
+    if family == "semantic_release_config":
+        return _extract_release_declarations(path, payload)
+    return ()
 
 
 class JsonAnalyzer:
@@ -900,13 +1408,14 @@ class JsonAnalyzer:
     - JSON Schema documents
     - npm-style ``package.json`` manifests
     - semantic-release ``.releaserc.json`` files
+    - conservatively recognized generic manifests
 
     Explicitly unsupported inputs include lockfiles, VS Code workspace JSONC
-    files, and unclassified generic JSON blobs.
+    files, and generic JSON blobs without sufficient structural evidence.
     """
 
     name = "json"
-    version = "3"
+    version = "5"
     discovery_globs: tuple[str, ...] = ("*.json",)
     default_coverage_roots: tuple[str, ...] = ("config", ".github", "scripts")
 
@@ -916,6 +1425,7 @@ class JsonAnalyzer:
         self._emit_dependencies = True
         self._emit_scripts = True
         self._emit_schema_properties = True
+        self._emit_generic_facts = True
         self.configuration_fingerprint = plugin_configuration_fingerprint({})
 
     def configuration_json_schema(self) -> Mapping[str, object]:
@@ -940,6 +1450,7 @@ class JsonAnalyzer:
                 "emit_dependencies": boolean_property(True),
                 "emit_scripts": boolean_property(True),
                 "emit_schema_properties": boolean_property(True),
+                "emit_generic_facts": boolean_property(True),
             }
         )
 
@@ -967,6 +1478,7 @@ class JsonAnalyzer:
         self._emit_dependencies = bool(config.get("emit_dependencies", True))
         self._emit_scripts = bool(config.get("emit_scripts", True))
         self._emit_schema_properties = bool(config.get("emit_schema_properties", True))
+        self._emit_generic_facts = bool(config.get("emit_generic_facts", True))
         self.configuration_fingerprint = plugin_configuration_fingerprint(config)
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
@@ -1003,6 +1515,15 @@ class JsonAnalyzer:
                 "json_manifest_name": "constant",
                 "json_manifest_script": "callable",
                 "json_manifest_dependency": "import",
+                "json_manifest_facet": "constant",
+                "json_manifest_ecosystem": "constant",
+                "json_manifest_top_level_key": "constant",
+                "json_manifest_object_path": "variable",
+                "json_manifest_array": "variable",
+                "json_manifest_reference": "import",
+                "json_manifest_url": "constant",
+                "json_manifest_path": "constant",
+                "json_manifest_truncation": "constant",
                 "json_release_plugin": "import",
                 "json_release_branch": "constant",
             },
@@ -1054,8 +1575,11 @@ class JsonAnalyzer:
         except (TypeError, ValueError):
             return False
 
-        family = _classify_json_document(path, payload)
-        return family is not None and family in self._enabled_families
+        classification = _classify_json_document_with_facets(path, payload)
+        return (
+            classification is not None
+            and classification.primary_family in self._enabled_families
+        )
 
     def allows_path(self, path: Path, root: Path) -> bool:
         """
@@ -1100,16 +1624,29 @@ class JsonAnalyzer:
             If ``path`` does not hold a supported JSON family.
         """
         payload = _load_json_mapping(path)
-        family = _classify_json_document(path, payload)
-        if family is None:
+        classification = _classify_json_document_with_facets(path, payload)
+        if classification is None:
             msg = f"Unsupported JSON document in {path}: no recognized JSON family"
             raise ValueError(msg)
 
-        if family not in self._enabled_families:
+        if classification.primary_family not in self._enabled_families:
             msg = f"Unsupported JSON document in {path}: JSON family disabled"
             raise ValueError(msg)
 
-        declarations = _declarations_for_family(family, path=path, payload=payload)
+        declarations = _declarations_for_family(
+            classification.primary_family,
+            path=path,
+            payload=payload,
+        )
+        if (
+            classification.primary_family == "generic_manifest"
+            and self._emit_generic_facts
+        ):
+            declarations = _extract_generic_manifest_declarations(path, payload)
+        declarations = (
+            *declarations,
+            *_extract_classification_declarations(path, classification),
+        )
         declarations = tuple(
             declaration
             for declaration in declarations
@@ -1128,7 +1665,10 @@ class JsonAnalyzer:
             module=ModuleArtifact(
                 name=_module_name_for_path(path, root),
                 stable_id=_module_stable_id(path, root),
-                docstring=_module_docstring_for_family(family, payload),
+                docstring=_module_docstring_for_family(
+                    classification.primary_family,
+                    payload,
+                ),
                 has_docstring=1,
             ),
             classes=(),

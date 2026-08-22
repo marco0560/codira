@@ -3050,6 +3050,31 @@ class IndexBackend(Protocol):
         """
         ...
 
+    def module_imports(
+        self,
+        root: Path,
+        module: str,
+        *,
+        conn: object | None = None,
+    ) -> list[tuple[str, str, int]]:
+        """Return normalized imports owned by one indexed module.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        module : str
+            Indexed module name that owns the imports.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        list[tuple[str, str, int]]
+            Ordered ``(name, kind, lineno)`` import rows.
+        """
+        ...
+
     def find_symbol_overloads(
         self,
         root: Path,

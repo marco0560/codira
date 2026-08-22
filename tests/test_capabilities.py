@@ -251,7 +251,7 @@ def test_capability_contract_validates_against_schema() -> None:
     assert mcp == {
         "server_command": "codira-mcp",
         "config_command": "codira-mcp-config",
-        "contract_version": "1.2.0",
+        "contract_version": "1.4.0",
         "transport": "stdio",
         "read_only": True,
         "tools": [
@@ -266,6 +266,9 @@ def test_capability_contract_validates_against_schema() -> None:
             "context_for_task",
             "impact_analysis",
             "repository_map",
+            "arch",
+            "emb",
+            "docs",
         ],
     }
     emb_command = cast("Mapping[str, object]", commands["emb"])

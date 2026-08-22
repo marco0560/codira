@@ -3125,6 +3125,48 @@ def test_index_repo_indexes_package_and_release_json_families(tmp_path: Path) ->
     ]
 
 
+def test_index_repo_indexes_generic_manifest_facts(tmp_path: Path) -> None:
+    """
+    Persist bounded generic-manifest facts through the normal query path.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts generic JSON facts become exact-query symbols.
+    """
+    source = tmp_path / "config" / "service-manifest.json"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps(
+            {
+                "services": {"api": {"path": "src/api"}},
+                "deployments": [{"name": "production"}],
+                "homepage": "https://example.invalid/service",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    init_db(tmp_path)
+    report = index_repo(tmp_path)
+
+    assert report.coverage_issues == []
+    assert find_symbol(tmp_path, "services.api.path") == [
+        (
+            "json_manifest_path",
+            "config.service_manifest",
+            "services.api.path",
+            str(source),
+            1,
+        )
+    ]
+
+
 def test_index_cli_prints_coverage_issues(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

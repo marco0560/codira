@@ -508,6 +508,98 @@ def create_server(
             output_budget=output_budget,
         )
 
+    @server.tool(name="arch")
+    def arch(
+        cursor: str | None = None,
+        limit: int = 100,
+        output_budget: int = 4_000,
+    ) -> dict[str, object]:
+        """Return a bounded architecture model for the trusted repository.
+
+        Parameters
+        ----------
+        cursor : str | None, optional
+            Continuation cursor emitted by a prior response.
+        limit : int, optional
+            Maximum number of module inventory entries to return.
+        output_budget : int, optional
+            Maximum serialized character count for the model payload.
+
+        Returns
+        -------
+        dict[str, object]
+            Versioned response envelope containing an architecture model.
+        """
+        return adapter.arch(
+            cursor=cursor,
+            limit=limit,
+            output_budget=output_budget,
+        )
+
+    @server.tool(name="emb")
+    def emb(
+        query: str,
+        prefix: str | None = None,
+        limit: int = 100,
+        output_budget: int = 4_000,
+    ) -> dict[str, object]:
+        """Search stored symbol embeddings without maintenance operations.
+
+        Parameters
+        ----------
+        query : str
+            Natural-language text to score against indexed symbols.
+        prefix : str | None, optional
+            Repository-relative path prefix restricting candidate files.
+        limit : int, optional
+            Maximum number of ranked embedding matches to return.
+        output_budget : int, optional
+            Maximum serialized character count for the result payload.
+
+        Returns
+        -------
+        dict[str, object]
+            Versioned response envelope containing embedding matches.
+        """
+        return adapter.emb(
+            query,
+            prefix=prefix,
+            limit=limit,
+            output_budget=output_budget,
+        )
+
+    @server.tool(name="docs")
+    def docs(
+        query: str,
+        prefix: str | None = None,
+        limit: int = 100,
+        output_budget: int = 4_000,
+    ) -> dict[str, object]:
+        """Search stored documentation embeddings without mutating the index.
+
+        Parameters
+        ----------
+        query : str
+            Natural-language text to score against indexed documentation.
+        prefix : str | None, optional
+            Repository-relative path prefix restricting candidate documents.
+        limit : int, optional
+            Maximum number of ranked documentation matches to return.
+        output_budget : int, optional
+            Maximum serialized character count for the result payload.
+
+        Returns
+        -------
+        dict[str, object]
+            Versioned response envelope containing documentation matches.
+        """
+        return adapter.docs(
+            query,
+            prefix=prefix,
+            limit=limit,
+            output_budget=output_budget,
+        )
+
     return server
 
 

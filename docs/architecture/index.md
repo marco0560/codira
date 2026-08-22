@@ -15,6 +15,7 @@ These documents describe the current architecture produced by the accepted
 `ADR-004` migration work and later backend/analyzer extensions.
 
 - [System overview](system-overview.md)
+- [Repository architecture reports](architecture-report.md)
 - [Indexing pipeline](indexing-pipeline.md)
 - [Query pipeline](query-pipeline.md)
 - [Query-daemon local IPC](query-daemon-ipc.md)

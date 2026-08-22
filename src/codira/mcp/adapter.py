@@ -7,10 +7,15 @@ requests never accept repository paths and delegate directly to core APIs.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
+from codira.architecture import (
+    ArchitectureModel,
+    ArchitectureModule,
+    build_architecture_model_from_index,
+)
 from codira.capabilities import build_capability_contract
 from codira.index_generation import IndexGenerationStore
 from codira.indexer import audit_repo_coverage, persisted_analysis_coverage_issues
@@ -20,6 +25,7 @@ from codira.mcp.contract import (
     MCP_CONTRACT_VERSION,
     build_contract_document,
 )
+from codira.prefix import normalize_prefix
 from codira.query.context import ContextRequest, context_for
 from codira.query.exact import (
     EdgeQueryRequest,
@@ -30,6 +36,12 @@ from codira.query.exact import (
     symbol_inventory,
 )
 from codira.registry import active_index_backend
+from codira.semantic.search import (
+    DocumentationCandidatesRequest,
+    EmbeddingCandidatesRequest,
+    documentation_candidates,
+    embedding_candidates,
+)
 from codira.storage import _read_metadata_file, get_metadata_path
 
 if TYPE_CHECKING:
@@ -41,7 +53,12 @@ if TYPE_CHECKING:
         BackendSymbolInventoryItem,
     )
     from codira.indexer import CoverageIssue
-    from codira.types import DocstringIssueRow, SymbolRow
+    from codira.types import (
+        DocstringIssueRow,
+        ScoredDocumentation,
+        ScoredSymbol,
+        SymbolRow,
+    )
 
 
 _MIN_RESULT_LIMIT = 1
@@ -593,6 +610,254 @@ class MCPAdapter:
             },
         )
 
+    def arch(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 100,
+        output_budget: int = DEFAULT_OUTPUT_BUDGET,
+    ) -> dict[str, object]:
+        """Return a bounded, read-only architecture model from the index.
+
+        Parameters
+        ----------
+        cursor : str | None, optional
+            Continuation cursor emitted by a prior response.
+        limit : int, optional
+            Maximum number of module inventory entries to return.
+        output_budget : int, optional
+            Maximum serialized character count for the result payload.
+
+        Returns
+        -------
+        dict[str, object]
+            Contract envelope containing a paginated architecture model.
+
+        Raises
+        ------
+        ValueError
+            If ``limit`` or ``output_budget`` is outside the contract bounds.
+
+        Notes
+        -----
+        This method never writes report artifacts. The CLI ``codira arch``
+        command remains the file-producing interface.
+        """
+        self._validate_limit(limit)
+        self._validate_output_budget(output_budget)
+        model = self._query(
+            lambda conn: build_architecture_model_from_index(self.root, conn=conn)
+        )
+        modules, page = self._page_rows(list(model.modules), cursor, limit)
+        result, budget_truncated = self._budgeted_architecture_model(
+            model,
+            tuple(modules),
+            output_budget,
+        )
+        reasons = [
+            reason
+            for truncated, reason in (
+                (page["next_cursor"] is not None, "page_limit"),
+                (budget_truncated, "output_budget"),
+            )
+            if truncated
+        ]
+        return self._envelope(
+            result,
+            page=page,
+            truncation={
+                "truncated": bool(reasons),
+                "reasons": reasons,
+                "output_budget": output_budget,
+                "estimated_output_size": len(json.dumps(result, sort_keys=True)),
+            },
+        )
+
+    def emb(
+        self,
+        query: str,
+        *,
+        prefix: str | None = None,
+        limit: int = 100,
+        output_budget: int = DEFAULT_OUTPUT_BUDGET,
+    ) -> dict[str, object]:
+        """Search stored symbol embeddings without vector-store maintenance.
+
+        Parameters
+        ----------
+        query : str
+            Natural-language text to score against indexed symbols.
+        prefix : str | None, optional
+            Repository-relative path prefix restricting candidate files.
+        limit : int, optional
+            Maximum number of ranked embedding matches to return.
+        output_budget : int, optional
+            Maximum serialized character count reported for the result payload.
+
+        Returns
+        -------
+        dict[str, object]
+            Contract envelope containing ranked embedding matches.
+
+        Raises
+        ------
+        ValueError
+            If ``limit`` or ``output_budget`` is outside contract bounds, or
+            ``prefix`` escapes the trusted repository root.
+
+        Notes
+        -----
+        This is intentionally search-only. It does not expose ``emb purge`` or
+        any vector-store maintenance operation.
+        """
+        self._validate_limit(limit)
+        normalized_prefix = normalize_prefix(self.root, prefix)
+        matches = self._query(
+            lambda conn: embedding_candidates(
+                EmbeddingCandidatesRequest(
+                    root=self.root,
+                    query=query,
+                    limit=limit,
+                    min_score=0.0,
+                    prefix=normalized_prefix,
+                    conn=conn,
+                )
+            )
+        )
+        return self._envelope(
+            {"matches": [self._embedding_payload(match) for match in matches]},
+            output_budget=output_budget,
+        )
+
+    def docs(
+        self,
+        query: str,
+        *,
+        prefix: str | None = None,
+        limit: int = 100,
+        output_budget: int = DEFAULT_OUTPUT_BUDGET,
+    ) -> dict[str, object]:
+        """Search stored documentation embeddings without mutating the index.
+
+        Parameters
+        ----------
+        query : str
+            Natural-language text to score against indexed documentation.
+        prefix : str | None, optional
+            Repository-relative path prefix restricting candidate documents.
+        limit : int, optional
+            Maximum number of ranked documentation matches to return.
+        output_budget : int, optional
+            Maximum serialized character count reported for the result payload.
+
+        Returns
+        -------
+        dict[str, object]
+            Contract envelope containing ranked documentation matches.
+
+        Raises
+        ------
+        ValueError
+            If ``limit`` or ``output_budget`` is outside contract bounds, or
+            ``prefix`` escapes the trusted repository root.
+        """
+        self._validate_limit(limit)
+        normalized_prefix = normalize_prefix(self.root, prefix)
+        matches = self._query(
+            lambda conn: documentation_candidates(
+                DocumentationCandidatesRequest(
+                    root=self.root,
+                    query=query,
+                    limit=limit,
+                    min_score=0.0,
+                    prefix=normalized_prefix,
+                    conn=conn,
+                )
+            )
+        )
+        return self._envelope(
+            {"matches": [self._documentation_payload(match) for match in matches]},
+            output_budget=output_budget,
+        )
+
+    @staticmethod
+    def _architecture_result(
+        model: ArchitectureModel,
+        modules: tuple[ArchitectureModule, ...],
+    ) -> dict[str, object]:
+        """Build a self-contained architecture payload for selected modules.
+
+        Parameters
+        ----------
+        model : codira.architecture.ArchitectureModel
+            Architecture model with deterministic dataclass collections.
+        modules : tuple[codira.architecture.ArchitectureModule, ...]
+            Selected architecture module entries.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-compatible model summary and relations scoped to the modules.
+        """
+        selected_names = {module.name for module in modules}
+        dependencies = tuple(
+            dependency
+            for dependency in model.dependencies
+            if dependency.source in selected_names
+            and dependency.destination in selected_names
+        )
+        cycles = tuple(
+            cycle for cycle in model.cycles if set(cycle.members) <= selected_names
+        )
+        metrics = tuple(
+            metric for metric in model.metrics if metric.module in selected_names
+        )
+        result = {
+            "summary": {
+                "modules": len(model.modules),
+                "dependencies": len(model.dependencies),
+                "cycles": len(model.cycles),
+            },
+            "modules": [asdict(module) for module in modules],
+            "dependencies": [asdict(dependency) for dependency in dependencies],
+            "cycles": [asdict(cycle) for cycle in cycles],
+            "metrics": [asdict(metric) for metric in metrics],
+        }
+        return cast("dict[str, object]", json.loads(json.dumps(result)))
+
+    @classmethod
+    def _budgeted_architecture_model(
+        cls,
+        model: ArchitectureModel,
+        modules: tuple[ArchitectureModule, ...],
+        output_budget: int,
+    ) -> tuple[dict[str, object], bool]:
+        """Fit a deterministic architecture-module prefix into an MCP budget.
+
+        Parameters
+        ----------
+        model : codira.architecture.ArchitectureModel
+            Complete deterministic architecture model.
+        modules : tuple[codira.architecture.ArchitectureModule, ...]
+            One paginated module selection in deterministic order.
+        output_budget : int
+            Maximum serialized character count requested by the client.
+
+        Returns
+        -------
+        tuple[dict[str, object], bool]
+            Self-contained payload and whether any selected module was omitted.
+        """
+        included: list[ArchitectureModule] = []
+        for module in modules:
+            candidate = cls._architecture_result(model, tuple([*included, module]))
+            if len(json.dumps(candidate, sort_keys=True)) > output_budget:
+                break
+            included.append(module)
+        return cls._architecture_result(model, tuple(included)), len(included) < len(
+            modules
+        )
+
     def _call_edges(
         self,
         name: str,
@@ -798,6 +1063,72 @@ class MCPAdapter:
             msg = "cursor must be an MCP continuation cursor"
             raise ValueError(msg)
         return int(value)
+
+    def _embedding_payload(self, match: ScoredSymbol) -> dict[str, object]:
+        """Normalize one ranked symbol embedding match for MCP.
+
+        Parameters
+        ----------
+        match : codira.types.ScoredSymbol
+            Similarity score and indexed symbol row.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-compatible score and trusted symbol location fields.
+        """
+        score, (symbol_type, module, name, file_path, lineno) = match
+        return {
+            "score": round(score, 2),
+            "type": symbol_type,
+            "module": module,
+            "name": name,
+            "file": self._trusted_relative_path(file_path),
+            "line": lineno,
+        }
+
+    def _documentation_payload(
+        self,
+        match: ScoredDocumentation,
+    ) -> dict[str, object]:
+        """Normalize one ranked documentation embedding match for MCP.
+
+        Parameters
+        ----------
+        match : codira.types.ScoredDocumentation
+            Similarity score and indexed documentation row.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-compatible score, source, and documentation fields.
+        """
+        (
+            score,
+            (
+                stable_id,
+                kind,
+                source_format,
+                file_path,
+                lineno,
+                end_lineno,
+                title,
+                heading_path,
+                text,
+            ),
+        ) = match
+        return {
+            "score": round(score, 2),
+            "stable_id": stable_id,
+            "kind": kind,
+            "source_format": source_format,
+            "file": self._trusted_relative_path(file_path),
+            "line": lineno,
+            "end_line": end_lineno,
+            "title": title,
+            "heading_path": list(heading_path),
+            "text": text,
+        }
 
     def _symbol_payload(self, row: SymbolRow) -> dict[str, object]:
         """Normalize a structural symbol row for the MCP response payload.

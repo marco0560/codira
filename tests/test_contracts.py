@@ -1037,6 +1037,32 @@ class _FakeBackend:
         del root, prefix, include_tests, limit, conn
         return []
 
+    def module_imports(
+        self,
+        root: Path,
+        module: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[tuple[str, str, int]]:
+        """Return no imports for protocol validation.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        module : str
+            Indexed module name.
+        conn : sqlite3.Connection | None, optional
+            Optional SQLite connection.
+
+        Returns
+        -------
+        list[tuple[str, str, int]]
+            Empty import rows for protocol validation.
+        """
+        del root, module, conn
+        return []
+
     def find_symbol_overloads(
         self,
         root: Path,
@@ -2641,7 +2667,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "sentence-transformers>=5.4,<6.0",
         "einops>=0.8,<1.0",
         "codira-analyzer-python==1.61.0",
-        "codira-analyzer-json==1.55.0",
+        "codira-analyzer-json==1.56.0",
         "codira-analyzer-c==1.55.0",
         "codira-analyzer-cpp==1.55.0",
         "codira-analyzer-bash==1.55.0",
@@ -2650,8 +2676,8 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-documentation-audit-numpy==1.55.0",
         "codira-documentation-audit-google==1.55.0",
         "codira-documentation-audit-doxygen==1.55.0",
-        "codira-backend-sqlite==1.56.0",
-        "codira-backend-duckdb==1.56.0",
+        "codira-backend-sqlite==1.57.0",
+        "codira-backend-duckdb==1.57.0",
         "codira-embedding-sentence-transformers==1.55.0",
         "codira-embedding-onnx==1.55.0",
         "codira-vector-store-sqlite==1.55.0",
@@ -2819,7 +2845,12 @@ def test_json_analyzer_extracts_module_metadata_from_json_schema(
     )
     assert result.classes == ()
     assert result.functions == ()
-    assert result.declarations == ()
+    assert [
+        (declaration.kind, declaration.name) for declaration in result.declarations
+    ] == [
+        ("json_manifest_facet", "json"),
+        ("json_manifest_facet", "schema"),
+    ]
     assert result.imports == ()
 
 

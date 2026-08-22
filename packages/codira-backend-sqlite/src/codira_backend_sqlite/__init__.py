@@ -1056,6 +1056,48 @@ class SQLiteIndexBackend:
             if owns_connection:
                 conn.close()
 
+    def module_imports(
+        self,
+        root: Path,
+        module: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[tuple[str, str, int]]:
+        """Return normalized imports owned by one indexed module.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        module : str
+            Indexed module name that owns the imports.
+        conn : sqlite3.Connection | None, optional
+            Existing SQLite connection to reuse.
+
+        Returns
+        -------
+        list[tuple[str, str, int]]
+            Ordered ``(name, kind, lineno)`` import rows.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            rows = conn.execute(
+                """
+                SELECT i.name, i.kind, i.lineno
+                FROM imports i
+                JOIN modules m ON i.module_id = m.id
+                WHERE m.name = ?
+                ORDER BY i.name, i.kind, i.lineno
+                """,
+                (module,),
+            ).fetchall()
+            return [(str(name), str(kind), int(lineno)) for name, kind, lineno in rows]
+        finally:
+            if owns_connection:
+                conn.close()
+
     def _symbol_metric(
         self,
         conn: sqlite3.Connection,

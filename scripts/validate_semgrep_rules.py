@@ -55,6 +55,7 @@ FIXTURES = (
             "codira.arch.no-sqlite3-outside-allowed-layers",
             "codira.arch.no-backend-package-import-outside-allowed-layers",
             "codira.arch.no-direct-config-load-in-query-hot-path",
+            "codira.arch.no-mutation-in-mcp",
         ),
     ),
     (

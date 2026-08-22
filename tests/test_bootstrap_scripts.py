@@ -2414,6 +2414,79 @@ def test_validation_helper_returns_first_failing_exit_status() -> None:
     assert helper.run_validation((failing_command, skipped_command)) == 7
 
 
+def test_validation_helper_retries_failed_ruff_check_with_fix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Repair a failed standard Ruff check before advancing validation.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to script delegated validation outcomes.
+
+    Returns
+    -------
+    None
+        The test asserts the recovery invocation includes ``--fix``.
+    """
+    helper = _load_validation_helper()
+    command = ("python", str(helper.RUN_REPO_TOOL), "ruff", "check", ".")
+    next_command = ("python", str(helper.RUN_REPO_TOOL), "mypy", ".")
+    seen: list[tuple[str, ...]] = []
+
+    def fake_run(
+        argv: tuple[str, ...],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        """Return a failure only for the initial Ruff check."""
+
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, int(argv == command), "", "")
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    assert helper.run_validation((command, next_command)) == 0
+    assert seen == [command, (*command, "--fix"), next_command]
+
+
+def test_validation_helper_reports_unrepaired_ruff_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Surface a Ruff recovery failure to the validator operator.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to force both Ruff attempts to fail.
+    capsys : pytest.CaptureFixture[str]
+        Captured validator diagnostics.
+
+    Returns
+    -------
+    None
+        The test asserts the retry status is reported before returning.
+    """
+    helper = _load_validation_helper()
+    command = ("python", str(helper.RUN_REPO_TOOL), "ruff", "check", ".")
+
+    monkeypatch.setattr(
+        helper.subprocess,
+        "run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 2, "", ""),
+    )
+
+    assert helper.run_validation((command,)) == 2
+    output = capsys.readouterr().out
+    assert "Ruff check failed; retrying with --fix." in output
+    assert (
+        "Ruff --fix failed; review the command output above and exit status 2."
+        in output
+    )
+
+
 def test_validation_helper_help_mentions_new_flags() -> None:
     """
     Document the validator's opt-in execution modes in the CLI help text.

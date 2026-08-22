@@ -18,7 +18,7 @@ definitions for SQLite persistence actions.
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 DDL = [
     """

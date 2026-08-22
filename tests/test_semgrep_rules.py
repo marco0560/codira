@@ -86,6 +86,7 @@ FIXTURE_FILES = (
     REPO_ROOT / "fixtures" / "src" / "core_backend_import_violation.py",
     REPO_ROOT / "fixtures" / "src" / "core_sqlite_outside_allowlist_violation.py",
     REPO_ROOT / "fixtures" / "src" / "query_config_resolution_violation.py",
+    REPO_ROOT / "fixtures" / "src" / "codira" / "mcp" / "mutation_violation.py",
     REPO_ROOT / "fixtures" / "src" / "random_violation.py",
     REPO_ROOT
     / "fixtures"
@@ -117,6 +118,7 @@ EXPECTED_FIXTURE_RULE_IDS = {
     "codira.arch.no-host-ast-in-python-analysis",
     "codira.arch.no-backend-package-import-outside-allowed-layers",
     "codira.arch.no-direct-config-load-in-query-hot-path",
+    "codira.arch.no-mutation-in-mcp",
     "codira.arch.no-duckdb-executemany-in-support",
     "codira.arch.no-duckdb-returning-id-in-support",
     "codira.arch.no-store-analysis-in-duckdb-full-index-bulk",

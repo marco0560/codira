@@ -2300,6 +2300,39 @@ class MemoryIndexBackend:
             ]
         ]
 
+    def module_imports(
+        self,
+        root: Path,
+        module: str,
+        *,
+        conn: object | None = None,
+    ) -> list[tuple[str, str, int]]:
+        """Return normalized imports owned by one indexed module.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        module : str
+            Indexed module name that owns the imports.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[tuple[str, str, int]]
+            Ordered ``(name, kind, lineno)`` import rows.
+        """
+        state = self._conn_state(root, conn)
+        return sorted(
+            (
+                (item.name, item.kind, item.lineno)
+                for item in state.imports
+                if item.module_name == module
+            ),
+            key=lambda row: (row[0], row[1], row[2]),
+        )
+
     def _inventory_metric(
         self,
         rows: Sequence[CallEdgeRow],

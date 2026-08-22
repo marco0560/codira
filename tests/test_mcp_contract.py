@@ -40,9 +40,15 @@ def test_contract_exposes_approved_local_read_only_surface() -> None:
     tools = {
         tool["name"]: tool for tool in cast("list[dict[str, Any]]", document["tools"])
     }
-    assert {"capabilities", "symbol", "context_for_task", "repository_map"} <= set(
-        tools
-    )
+    assert {
+        "capabilities",
+        "symbol",
+        "context_for_task",
+        "repository_map",
+        "arch",
+        "emb",
+        "docs",
+    } <= set(tools)
     assert "repository_path" not in tools["symbol"]["request_schema"]["properties"]
 
 

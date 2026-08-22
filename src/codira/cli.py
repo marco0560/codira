@@ -32,6 +32,14 @@ from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING, cast
 
+from codira.architecture import (
+    ArchitectureForbiddenDependencyRule,
+    ArchitectureLayer,
+    ArchitecturePolicy,
+    analyze_architecture_policy,
+    build_architecture_model_from_index,
+)
+from codira.architecture_report import write_architecture_artifacts
 from codira.calibration import (
     calibrate_embeddings,
     embeddings_config_update,
@@ -205,6 +213,7 @@ _REPO_PATH_COMMANDS = frozenset(
         "cov",
         "sym",
         "symlist",
+        "arch",
         "emb",
         "docs",
         "calls",
@@ -909,6 +918,8 @@ def build_parser() -> argparse.ArgumentParser:
             '  codira emb "schema migration rules"  # inspect embedding-only matches\n'
             '  codira docs "release process"  # inspect documentation-only matches\n'
             "  codira symlist --limit 20  # list the top 20 indexed symbols\n"
+            "  codira arch  # write a repository architecture artifact set\n"
+            "  codira arch --output /tmp/architecture  # choose an artifact directory\n"
             '  codira ctx "find schema migration logic"  # retrieve task-focused context\n'
             "  codira ctx --prompt "
             '"add a regression test for symbol lookup"  # render a Codex-ready prompt\n'
@@ -934,7 +945,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="command",
         title="subcommands",
         metavar=(
-            "{help,setup,index,cov,sym,symlist,emb,docs,calls,refs,audit,ctx,plugins,"
+            "{help,setup,index,cov,sym,symlist,arch,emb,docs,calls,refs,audit,ctx,plugins,"
             "caps,config,workspace,daemon,query-daemon,calibrate}"
         ),
     )
@@ -1106,6 +1117,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum number of symbols to print after sorting (default: 1000)",
     )
     _add_repo_path_arguments(symlist_parser)
+
+    architecture_parser = sub.add_parser(
+        "arch",
+        help="Render repository architecture artifacts",
+        description=(
+            "Build an analyzer-independent architecture report from the current "
+            "repository index."
+        ),
+    )
+    architecture_parser.add_argument(
+        "--output",
+        help="Artifact directory (default: <repo>/.codira/architecture-report)",
+    )
+    architecture_parser.add_argument(
+        "--layer",
+        action="append",
+        default=[],
+        metavar="NAME=PATH_PREFIX",
+        help="Ordered path-prefix layer; repeat to define additional layers",
+    )
+    architecture_parser.add_argument(
+        "--forbid",
+        action="append",
+        default=[],
+        metavar="RULE:SOURCE_LAYER:DESTINATION_LAYER:SEVERITY",
+        help="Forbidden directed layer dependency; repeat to define additional rules",
+    )
+    _add_repo_path_arguments(architecture_parser)
 
     embeddings_parser = sub.add_parser(
         "emb",
@@ -4830,6 +4869,86 @@ def _run_symbol_command(
     )
 
 
+def _run_architecture_report_command(args: argparse.Namespace, root: Path) -> int:
+    """Render architecture-report artifacts from the current repository index.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed architecture-report command arguments.
+    root : pathlib.Path
+        Repository root containing the index and default output location.
+
+    Returns
+    -------
+    int
+        Zero after all mandatory report artifacts are written.
+    """
+    _ensure_index(root)
+    model = build_architecture_model_from_index(root)
+    policy = _architecture_policy_from_arguments(args)
+    analysis = analyze_architecture_policy(model, policy)
+    output = (
+        Path(args.output)
+        if args.output is not None
+        else root / ".codira" / "architecture-report"
+    )
+    result = write_architecture_artifacts(model, analysis, output)
+    print(f"Wrote architecture report: {result.output_dir}")
+    if result.warning is not None:
+        print(f"[codira] {result.warning}", file=sys.stderr)
+    return 0
+
+
+def _architecture_policy_from_arguments(args: argparse.Namespace) -> ArchitecturePolicy:
+    """Parse strict architecture layer policy arguments.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed architecture-report command arguments.
+
+    Returns
+    -------
+    codira.architecture.ArchitecturePolicy
+        Ordered layers and explicit forbidden dependency rules.
+
+    Raises
+    ------
+    ConfigError
+        If one layer or forbidden-rule argument is malformed.
+    """
+    layers: list[ArchitectureLayer] = []
+    for value in args.layer:
+        name, separator, path_prefix = value.partition("=")
+        if not separator or not name or not path_prefix:
+            msg = "Architecture layers must use NAME=PATH_PREFIX."
+            raise ConfigError(msg)
+        layers.append(ArchitectureLayer(name=name, path_prefix=path_prefix))
+    rules: list[ArchitectureForbiddenDependencyRule] = []
+    for value in args.forbid:
+        fields = value.split(":")
+        if len(fields) != 4 or any(not field for field in fields):
+            msg = (
+                "Architecture forbidden rules must use "
+                "RULE:SOURCE_LAYER:DESTINATION_LAYER:SEVERITY."
+            )
+            raise ConfigError(msg)
+        rule_id, source_layer, destination_layer, severity = fields
+        rules.append(
+            ArchitectureForbiddenDependencyRule(
+                rule_id=rule_id,
+                source_layer=source_layer,
+                destination_layer=destination_layer,
+                severity=severity,
+            )
+        )
+    return ArchitecturePolicy(
+        layers=tuple(layers),
+        forbidden_dependencies=tuple(rules),
+    )
+
+
 def _run_embeddings_command(
     args: argparse.Namespace,
     root: Path,
@@ -6388,6 +6507,7 @@ def _command_handlers(  # noqa: PLR0913
             prefix=prefix,
             raw_prefix=raw_prefix,
         ),
+        "arch": lambda: _run_architecture_report_command(args, root),
         "emb": lambda: _run_embeddings_command(
             args,
             root,
