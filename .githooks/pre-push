@@ -33,7 +33,7 @@ echo "▶ Running mypy"
 "$PYTHON_BIN" "$REPO_ROOT/scripts/run_repo_tool.py" mypy .
 
 echo "▶ Running test suite"
-"$PYTHON_BIN" "$REPO_ROOT/scripts/run_repo_tool.py" pytest -q
+"$PYTHON_BIN" "$REPO_ROOT/scripts/run_repo_tool.py" pytest -q tests packages
 
 echo "▶ Running release audit"
 if [ -z "${SKIP_RELEASE_AUDIT:-}" ]; then

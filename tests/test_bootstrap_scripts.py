@@ -2716,6 +2716,7 @@ def test_git_hooks_route_validation_through_repo_tool_runner() -> None:
     assert ".venv/bin/pre-commit" not in pre_push_hook
     assert "-m mypy" not in pre_push_hook
     assert "-m pytest" not in pre_push_hook
+    assert "pytest -q tests packages" in pre_push_hook
 
 
 def test_install_helper_can_target_exported_split_repositories() -> None:
