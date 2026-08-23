@@ -1,3 +1,10 @@
+# [1.66.0](https://github.com/marco0560/codira/compare/v1.65.0...v1.66.0) (2026-08-23)
+
+
+### Features
+
+* **analyzer:** add TypeScript and TSDoc plugins ([6b76431](https://github.com/marco0560/codira/commit/6b76431b26f30909d2b6c8b659cfce2c457f9040)), closes [#37](https://github.com/marco0560/codira/issues/37) [#37](https://github.com/marco0560/codira/issues/37)
+
 # [1.65.0](https://github.com/marco0560/codira/compare/v1.64.0...v1.65.0) (2026-08-23)
 
 
