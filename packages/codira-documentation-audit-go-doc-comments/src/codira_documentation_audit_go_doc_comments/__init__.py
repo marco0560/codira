@@ -8,6 +8,10 @@ __all__ = ["GoDocCommentsDocumentationAuditPlugin", "build_audit_plugin"]
 def build_audit_plugin() -> GoDocCommentsDocumentationAuditPlugin:
     """Build a stateless Go documentation-comment audit plugin.
 
+    Parameters
+    ----------
+    None
+
     Returns
     -------
     codira.docstring.GoDocCommentsDocumentationAuditPlugin

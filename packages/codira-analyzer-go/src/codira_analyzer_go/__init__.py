@@ -411,6 +411,10 @@ class GoAnalyzer:
     def configuration_json_schema(self) -> Mapping[str, object]:
         """Return strict Go analyzer configuration.
 
+        Parameters
+        ----------
+        None
+
         Returns
         -------
         collections.abc.Mapping[str, object]
@@ -437,6 +441,10 @@ class GoAnalyzer:
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
         """Declare syntax-only Go coverage.
+
+        Parameters
+        ----------
+        None
 
         Returns
         -------
@@ -473,6 +481,10 @@ class GoAnalyzer:
 
     def analyzer_concurrency_declaration(self) -> AnalyzerConcurrencyDeclaration:
         """Declare parser worker safety.
+
+        Parameters
+        ----------
+        None
 
         Returns
         -------
@@ -645,6 +657,10 @@ class GoAnalyzer:
 
 def build_analyzer() -> LanguageAnalyzer:
     """Build a fresh Go analyzer.
+
+    Parameters
+    ----------
+    None
 
     Returns
     -------

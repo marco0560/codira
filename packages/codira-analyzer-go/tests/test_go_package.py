@@ -11,6 +11,10 @@ from codira_analyzer_go import GoAnalyzer, build_analyzer
 def test_go_package_declares_expected_entry_point() -> None:
     """Keep Go package metadata aligned with analyzer discovery.
 
+    Parameters
+    ----------
+    None
+
     Returns
     -------
     None
@@ -74,6 +78,10 @@ def test_go_analyzer_extracts_issue_38_constructs(tmp_path: Path) -> None:
 
 def test_go_factory_builds_expected_analyzer() -> None:
     """Keep factory construction and suffix discovery stable.
+
+    Parameters
+    ----------
+    None
 
     Returns
     -------
