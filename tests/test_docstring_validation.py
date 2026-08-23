@@ -433,6 +433,49 @@ documentation_audit_routes = [
     ]
 
 
+def test_documentation_audit_routes_jsdoc_plugin(tmp_path: Path) -> None:
+    """Route JavaScript artifacts to the JSDoc documentation audit plugin.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        Missing JSDoc receives the convention-specific routed diagnostic.
+    """
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[plugins]
+documentation_audit_routes = [
+  { language = "javascript", convention = "jsdoc", plugin = "jsdoc", include_paths = ["src/**"] },
+]
+""".strip(),
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "src" / "widget.js"
+    source_path.parent.mkdir()
+    source_path.write_text("export function build() {}\n", encoding="utf-8")
+
+    reset_plugin_registry_caches()
+    with override_repo_config_path(config_path):
+        issues = validate_documentation_with_configured_plugin(
+            root=tmp_path,
+            source_path=source_path,
+            stable_id="javascript:function:src/widget.js:build",
+            symbol_name="build",
+            artifact_kind="function",
+            label="Function build",
+            doc=None,
+            is_public=1,
+        )
+
+    assert issues == [("missing_jsdoc", "Function build: Missing JSDoc documentation")]
+
+
 def test_documentation_audit_routes_skip_private_rust_artifacts(tmp_path: Path) -> None:
     """Keep private Rust items outside configured documentation audits.
 

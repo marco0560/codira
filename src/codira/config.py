@@ -493,6 +493,13 @@ FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
         "exclude_paths": [],
         "emit_macros": True,
     },
+    "analyzer-javascript": {
+        "enabled": True,
+        "include_paths": [],
+        "exclude_paths": [],
+        "emit_variables": True,
+        "emit_jsdoc_documentation": True,
+    },
     "analyzer-bash": {
         "enabled": True,
         "include_paths": [],

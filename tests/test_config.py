@@ -624,6 +624,7 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
         "[plugins.analyzer-bash]",
         "[plugins.analyzer-markdown]",
         "[plugins.analyzer-text]",
+        "[plugins.analyzer-javascript]",
     ]
     assert "exclude_suffixes = []" in rendered
     assert "[plugins.analyzer-python]" in rendered
@@ -632,9 +633,12 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
     assert 'enabled_families = ["schema", "package", "release"]' in rendered
     assert "[plugins.analyzer-c]" in rendered
     assert "emit_macros = true" in rendered
+    assert "[plugins.analyzer-javascript]" in rendered
+    assert "emit_jsdoc_documentation = true" in rendered
     assert "[plugins.analyzer-cpp]" in rendered
     assert "emit_namespaces = true" in rendered
     assert "[plugins.analyzer-rust]" in rendered
+    assert "[plugins.analyzer-javascript]" in rendered
     assert "emit_macros = true" in rendered
     assert "[plugins.backend-sqlite]" in rendered
     assert "[plugins.backend-duckdb]" in rendered

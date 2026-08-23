@@ -2673,6 +2673,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-c==1.55.0",
         "codira-analyzer-cpp==1.55.0",
         "codira-analyzer-rust==1.56.0",
+        "codira-analyzer-javascript==1.65.0",
         "codira-analyzer-bash==1.55.0",
         "codira-analyzer-markdown==1.55.0",
         "codira-analyzer-text==1.55.0",
@@ -2680,6 +2681,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-documentation-audit-google==1.55.0",
         "codira-documentation-audit-doxygen==1.55.0",
         "codira-documentation-audit-rustdoc==1.55.0",
+        "codira-documentation-audit-jsdoc==1.65.0",
         "codira-backend-sqlite==1.57.0",
         "codira-backend-duckdb==1.57.0",
         "codira-embedding-sentence-transformers==1.55.0",
@@ -2717,6 +2719,7 @@ def test_active_phase_8_registries_expose_default_backend_and_analyzers() -> Non
         "bash",
         "markdown",
         "text",
+        "javascript",
     ]
 
 

@@ -40,6 +40,7 @@ dev = [
     "codira-analyzer-c==1.55.0",
     "codira-analyzer-cpp==1.55.0",
     "codira-analyzer-rust==1.56.0",
+    "codira-analyzer-javascript==1.65.0",
     "codira-analyzer-bash==1.55.0",
     "codira-analyzer-markdown==1.55.0",
     "codira-analyzer-text==1.55.0",
@@ -47,6 +48,7 @@ dev = [
     "codira-documentation-audit-google==1.55.0",
     "codira-documentation-audit-doxygen==1.55.0",
     "codira-documentation-audit-rustdoc==1.55.0",
+    "codira-documentation-audit-jsdoc==1.65.0",
     "codira-backend-sqlite==1.57.0",
     "codira-backend-duckdb==1.57.0",
     "codira-embedding-sentence-transformers==1.55.0",
@@ -73,6 +75,7 @@ bundle-official = [
     "codira-analyzer-c==1.55.0",
     "codira-analyzer-cpp==1.55.0",
     "codira-analyzer-rust==1.56.0",
+    "codira-analyzer-javascript==1.65.0",
     "codira-analyzer-bash==1.55.0",
     "codira-analyzer-markdown==1.55.0",
     "codira-analyzer-text==1.55.0",
@@ -80,6 +83,7 @@ bundle-official = [
     "codira-documentation-audit-google==1.55.0",
     "codira-documentation-audit-doxygen==1.55.0",
     "codira-documentation-audit-rustdoc==1.55.0",
+    "codira-documentation-audit-jsdoc==1.65.0",
     "codira-backend-sqlite==1.57.0",
     "codira-backend-duckdb==1.57.0",
     "codira-embedding-sentence-transformers==1.55.0",
@@ -124,6 +128,7 @@ codira-analyzer-json = { path = "packages/codira-analyzer-json", editable = true
 codira-analyzer-c = { path = "packages/codira-analyzer-c", editable = true }
 codira-analyzer-cpp = { path = "packages/codira-analyzer-cpp", editable = true }
 codira-analyzer-rust = { path = "packages/codira-analyzer-rust", editable = true }
+codira-analyzer-javascript = { path = "packages/codira-analyzer-javascript", editable = true }
 codira-analyzer-bash = { path = "packages/codira-analyzer-bash", editable = true }
 codira-analyzer-markdown = { path = "packages/codira-analyzer-markdown", editable = true }
 codira-analyzer-text = { path = "packages/codira-analyzer-text", editable = true }
@@ -131,6 +136,7 @@ codira-documentation-audit-numpy = { path = "packages/codira-documentation-audit
 codira-documentation-audit-google = { path = "packages/codira-documentation-audit-google", editable = true }
 codira-documentation-audit-doxygen = { path = "packages/codira-documentation-audit-doxygen", editable = true }
 codira-documentation-audit-rustdoc = { path = "packages/codira-documentation-audit-rustdoc", editable = true }
+codira-documentation-audit-jsdoc = { path = "packages/codira-documentation-audit-jsdoc", editable = true }
 codira-backend-sqlite = { path = "packages/codira-backend-sqlite", editable = true }
 codira-backend-duckdb = { path = "packages/codira-backend-duckdb", editable = true }
 codira-embedding-sentence-transformers = { path = "packages/codira-embedding-sentence-transformers", editable = true }

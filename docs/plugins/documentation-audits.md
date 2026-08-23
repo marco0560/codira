@@ -80,6 +80,7 @@ documentation_audit_routes = [
   { language = "python", convention = "google", plugin = "google", include_paths = ["tests/**/*.py"] },
   { language = "c", convention = "doxygen", plugin = "doxygen", include_paths = ["src/**/*.c", "include/**/*.h"] },
   { language = "cpp", convention = "doxygen", plugin = "doxygen", include_paths = ["src/**/*.cpp", "include/**/*.hpp"] },
+  { language = "javascript", convention = "jsdoc", plugin = "jsdoc", include_paths = ["src/**/*.js", "src/**/*.jsx"] },
 ]
 ```
 

@@ -1791,6 +1791,7 @@ def test_core_can_discover_installed_first_party_packages_from_built_wheels(
         "bash",
         "markdown",
         "text",
+        "javascript",
     ]
 
 

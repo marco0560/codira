@@ -35,6 +35,7 @@ ImportKind = Literal["import", "include_local", "include_system"]
 DeclarationKind = Literal[
     "type_alias",
     "constant",
+    "variable",
     "macro",
     "namespace",
     "struct",
@@ -65,6 +66,7 @@ DocumentationSourceFormat = Literal[
     "plain_text_document",
     "doxygen",
     "rustdoc",
+    "jsdoc",
 ]
 DocumentationAttachmentConfidence = Literal["explicit"]
 

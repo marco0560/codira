@@ -142,9 +142,9 @@ documentation convention.
 
 Routes live in `plugins.documentation_audit_routes`. Each route declares:
 
-- `language`: analyzer language such as `python`, `c`, or `cpp`
+- `language`: analyzer language such as `python`, `c`, `cpp`, or `javascript`
 - `convention`: convention label passed to the plugin, such as `numpy`,
-  `google`, or `doxygen`
+  `google`, `doxygen`, or `jsdoc`
 - `plugin`: plugin name selected from the documentation-audit registry
 - optional `include_paths` and `exclude_paths` repo-relative glob patterns
 
@@ -160,6 +160,7 @@ The first release scope supports:
 - NumPy-style Python docstrings through plugin `numpy`
 - Google-style Python docstrings through plugin `google`
 - Doxygen-style C and C++ comments through plugin `doxygen`
+- JSDoc-style JavaScript documentation through plugin `jsdoc`
 
 ## Phase-9 Analyzer Proof
 

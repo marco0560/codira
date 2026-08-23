@@ -517,6 +517,7 @@ First-party analyzer options:
 | `[plugins.analyzer-c]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_macros` |
 | `[plugins.analyzer-cpp]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_namespaces`, `emit_macros` |
 | `[plugins.analyzer-rust]` | `include_paths`, `exclude_paths`, `emit_macros` |
+| `[plugins.analyzer-javascript]` | `include_paths`, `exclude_paths`, `emit_variables`, `emit_jsdoc_documentation` |
 
 Rustdoc audits are opt-in through an explicit route, for example:
 
@@ -524,6 +525,15 @@ Rustdoc audits are opt-in through an explicit route, for example:
 [plugins]
 documentation_audit_routes = [
   { language = "rust", convention = "rustdoc", plugin = "rustdoc", include_paths = ["src/**"] },
+]
+```
+
+JSDoc audits use the same explicit routing model for JavaScript artifacts:
+
+```toml
+[plugins]
+documentation_audit_routes = [
+  { language = "javascript", convention = "jsdoc", plugin = "jsdoc", include_paths = ["src/**"] },
 ]
 ```
 | `[plugins.analyzer-bash]` | `emit_functions` |

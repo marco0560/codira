@@ -298,6 +298,7 @@ bundle-official = [
     { name = "codira-analyzer-bash" },
     { name = "codira-analyzer-c" },
     { name = "codira-analyzer-cpp" },
+    { name = "codira-analyzer-javascript" },
     { name = "codira-analyzer-json" },
     { name = "codira-analyzer-markdown" },
     { name = "codira-analyzer-python" },
@@ -307,6 +308,7 @@ bundle-official = [
     { name = "codira-backend-sqlite" },
     { name = "codira-documentation-audit-doxygen" },
     { name = "codira-documentation-audit-google" },
+    { name = "codira-documentation-audit-jsdoc" },
     { name = "codira-documentation-audit-numpy" },
     { name = "codira-documentation-audit-rustdoc" },
     { name = "codira-embedding-onnx" },
@@ -337,6 +339,7 @@ dev = [
     { name = "codira-analyzer-bash" },
     { name = "codira-analyzer-c" },
     { name = "codira-analyzer-cpp" },
+    { name = "codira-analyzer-javascript" },
     { name = "codira-analyzer-json" },
     { name = "codira-analyzer-markdown" },
     { name = "codira-analyzer-python" },
@@ -346,6 +349,7 @@ dev = [
     { name = "codira-backend-sqlite" },
     { name = "codira-documentation-audit-doxygen" },
     { name = "codira-documentation-audit-google" },
+    { name = "codira-documentation-audit-jsdoc" },
     { name = "codira-documentation-audit-numpy" },
     { name = "codira-documentation-audit-rustdoc" },
     { name = "codira-embedding-onnx" },
@@ -373,6 +377,7 @@ requires-dist = [
     { name = "codira-analyzer-bash", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-bash" },
     { name = "codira-analyzer-c", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-c" },
     { name = "codira-analyzer-cpp", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-cpp" },
+    { name = "codira-analyzer-javascript", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-javascript" },
     { name = "codira-analyzer-json", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-json" },
     { name = "codira-analyzer-markdown", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-markdown" },
     { name = "codira-analyzer-python", marker = "extra == 'bundle-official'", editable = "packages/codira-analyzer-python" },
@@ -382,6 +387,7 @@ requires-dist = [
     { name = "codira-backend-sqlite", marker = "extra == 'bundle-official'", editable = "packages/codira-backend-sqlite" },
     { name = "codira-documentation-audit-doxygen", marker = "extra == 'bundle-official'", editable = "packages/codira-documentation-audit-doxygen" },
     { name = "codira-documentation-audit-google", marker = "extra == 'bundle-official'", editable = "packages/codira-documentation-audit-google" },
+    { name = "codira-documentation-audit-jsdoc", marker = "extra == 'bundle-official'", editable = "packages/codira-documentation-audit-jsdoc" },
     { name = "codira-documentation-audit-numpy", marker = "extra == 'bundle-official'", editable = "packages/codira-documentation-audit-numpy" },
     { name = "codira-documentation-audit-rustdoc", marker = "extra == 'bundle-official'", editable = "packages/codira-documentation-audit-rustdoc" },
     { name = "codira-embedding-onnx", marker = "extra == 'bundle-official'", editable = "packages/codira-embedding-onnx" },
@@ -415,6 +421,7 @@ dev = [
     { name = "codira-analyzer-bash", editable = "packages/codira-analyzer-bash" },
     { name = "codira-analyzer-c", editable = "packages/codira-analyzer-c" },
     { name = "codira-analyzer-cpp", editable = "packages/codira-analyzer-cpp" },
+    { name = "codira-analyzer-javascript", editable = "packages/codira-analyzer-javascript" },
     { name = "codira-analyzer-json", editable = "packages/codira-analyzer-json" },
     { name = "codira-analyzer-markdown", editable = "packages/codira-analyzer-markdown" },
     { name = "codira-analyzer-python", editable = "packages/codira-analyzer-python" },
@@ -424,6 +431,7 @@ dev = [
     { name = "codira-backend-sqlite", editable = "packages/codira-backend-sqlite" },
     { name = "codira-documentation-audit-doxygen", editable = "packages/codira-documentation-audit-doxygen" },
     { name = "codira-documentation-audit-google", editable = "packages/codira-documentation-audit-google" },
+    { name = "codira-documentation-audit-jsdoc", editable = "packages/codira-documentation-audit-jsdoc" },
     { name = "codira-documentation-audit-numpy", editable = "packages/codira-documentation-audit-numpy" },
     { name = "codira-documentation-audit-rustdoc", editable = "packages/codira-documentation-audit-rustdoc" },
     { name = "codira-embedding-onnx", editable = "packages/codira-embedding-onnx" },
@@ -509,6 +517,27 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'test'" },
     { name = "tree-sitter", specifier = ">=0.25.2" },
     { name = "tree-sitter-cpp", specifier = ">=0.23.4" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "codira-analyzer-javascript"
+version = "1.65.0"
+source = { editable = "packages/codira-analyzer-javascript" }
+dependencies = [
+    { name = "codira" },
+    { name = "tree-sitter" },
+    { name = "tree-sitter-javascript" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "codira", specifier = ">=1.5.0,<2.0.0" },
+    { name = "mypy", marker = "extra == 'test'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "ruff", marker = "extra == 'test'" },
+    { name = "tree-sitter", specifier = ">=0.25.2" },
+    { name = "tree-sitter-javascript", specifier = ">=0.23.1" },
 ]
 provides-extras = ["test"]
 
@@ -678,6 +707,23 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'test'" },
+    { name = "codira", specifier = ">=1.5.0,<2.0.0" },
+    { name = "mypy", marker = "extra == 'test'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "ruff", marker = "extra == 'test'" },
+]
+provides-extras = ["test"]
+
+[[package]]
+name = "codira-documentation-audit-jsdoc"
+version = "1.65.0"
+source = { editable = "packages/codira-documentation-audit-jsdoc" }
+dependencies = [
+    { name = "codira" },
+]
+
+[package.metadata]
+requires-dist = [
     { name = "codira", specifier = ">=1.5.0,<2.0.0" },
     { name = "mypy", marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'" },
@@ -3447,6 +3493,22 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/32/c7/b94a7e0e803af9d3bd4608fb4f0cfb2e9e233abaf0a38c928bfb0b1a025d/tree_sitter_cpp-0.23.4-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:247d127f0eb6574b0f6b30c0151e0bd0774e2e7acf9c558bdf9fbb8adc2e80c0", size = 308242, upload-time = "2024-11-11T06:59:21.466Z" },
     { url = "https://files.pythonhosted.org/packages/37/7e/909e52b3dec09c475140b0e175511e275d0d00ba2dbd7c68102d377ae0f6/tree_sitter_cpp-0.23.4-cp39-abi3-win_amd64.whl", hash = "sha256:68606a45bea92669d155399e1239f771a7767d8683cd8f8e30e7d813107030ca", size = 290997, upload-time = "2024-11-11T06:59:22.432Z" },
     { url = "https://files.pythonhosted.org/packages/d4/6a/65435d4d1f4c735be7ffe52d7c2e7b8a7f7c2790343a2719c60c548611c8/tree_sitter_cpp-0.23.4-cp39-abi3-win_arm64.whl", hash = "sha256:712f84f18be94cbe2a148fa4fdf40fcf4a8c25a8f7670efb9f8a47ddec2fc281", size = 288203, upload-time = "2024-11-11T06:59:23.404Z" },
+]
+
+[[package]]
+name = "tree-sitter-javascript"
+version = "0.25.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/59/e0/e63103c72a9d3dfd89a31e02e660263ad84b7438e5f44ee82e443e65bbde/tree_sitter_javascript-0.25.0.tar.gz", hash = "sha256:329b5414874f0588a98f1c291f1b28138286617aa907746ffe55adfdcf963f38", size = 132338, upload-time = "2025-09-01T07:13:44.792Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2c/df/5106ac250cd03661ebc3cc75da6b3d9f6800a3606393a0122eca58038104/tree_sitter_javascript-0.25.0-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:b70f887fb269d6e58c349d683f59fa647140c410cfe2bee44a883b20ec92e3dc", size = 64052, upload-time = "2025-09-01T07:13:36.865Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/8f/6b4b2bc90d8ab3955856ce852cc9d1e82c81d7ab9646385f0e75ffd5b5d3/tree_sitter_javascript-0.25.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:8264a996b8845cfce06965152a013b5d9cbb7d199bc3503e12b5682e62bb1de1", size = 66440, upload-time = "2025-09-01T07:13:37.962Z" },
+    { url = "https://files.pythonhosted.org/packages/5f/c4/7da74ecdcd8a398f88bd003a87c65403b5fe0e958cdd43fbd5fd4a398fcf/tree_sitter_javascript-0.25.0-cp310-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:9dc04ba91fc8583344e57c1f1ed5b2c97ecaaf47480011b92fbeab8dda96db75", size = 99728, upload-time = "2025-09-01T07:13:38.755Z" },
+    { url = "https://files.pythonhosted.org/packages/96/c8/97da3af4796495e46421e9344738addb3602fa6426ea695be3fcbadbee37/tree_sitter_javascript-0.25.0-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:199d09985190852e0912da2b8d26c932159be314bc04952cf917ed0e4c633e6b", size = 106072, upload-time = "2025-09-01T07:13:39.798Z" },
+    { url = "https://files.pythonhosted.org/packages/13/be/c964e8130be08cc9bd6627d845f0e4460945b158429d39510953bbcb8fcc/tree_sitter_javascript-0.25.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:dfcf789064c58dc13c0a4edb550acacfc6f0f280577f1e7a00de3e89fc7f8ddc", size = 104388, upload-time = "2025-09-01T07:13:40.866Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/89/9b773dee0f8961d1bb8d7baf0a204ab587618df19897c1ef260916f318ec/tree_sitter_javascript-0.25.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:1b852d3aee8a36186dbcc32c798b11b4869f9b5041743b63b65c2ef793db7a54", size = 98377, upload-time = "2025-09-01T07:13:41.838Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/dc/d90cb1790f8cec9b4878d278ad9faf7c8f893189ce0f855304fd704fc274/tree_sitter_javascript-0.25.0-cp310-abi3-win_amd64.whl", hash = "sha256:e5ed840f5bd4a3f0272e441d19429b26eedc257abe5574c8546da6b556865e3c", size = 62975, upload-time = "2025-09-01T07:13:42.828Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/1f/f9eba1038b7d4394410f3c0a6ec2122b590cd7acb03f196e52fa57ebbe72/tree_sitter_javascript-0.25.0-cp310-abi3-win_arm64.whl", hash = "sha256:622a69d677aa7f6ee2931d8c77c981a33f0ebb6d275aa9d43d3397c879a9bb0b", size = 61668, upload-time = "2025-09-01T07:13:43.803Z" },
 ]
 
 [[package]]
