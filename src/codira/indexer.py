@@ -1721,32 +1721,8 @@ def index_repo(
             embedding_index_mode=embedding_index_mode,
             analysis_concurrency=analysis_concurrency,
         )
-        if (
-            previous is not None
-            and previous.state == "ready"
-            and report.indexed == 0
-            and report.deleted == 0
-            and report.failed == 0
-        ):
-            store.write(previous)
-            return report
         backend = active_index_backend(root=root)
         analyzers = _active_language_analyzers(root=root)
-        store.write(
-            transition_record(
-                generation=generation,
-                state="ready",
-                last_successful_generation=generation,
-                git_commit=read_head_commit(root),
-                backend_name=str(backend.name),
-                backend_version=str(backend.version),
-                analyzer_inventory=[
-                    {"name": str(analyzer.name), "version": str(analyzer.version)}
-                    for analyzer in analyzers
-                ],
-                indexed_file_count=report.indexed + report.reused,
-            )
-        )
         metadata = _read_metadata_file(get_metadata_path(root))
         metadata.update(
             {
@@ -1763,6 +1739,30 @@ def index_repo(
         if commit:
             metadata["commit"] = commit
         _write_metadata_file(get_metadata_path(root), metadata)
+        if (
+            previous is not None
+            and previous.state == "ready"
+            and report.indexed == 0
+            and report.deleted == 0
+            and report.failed == 0
+        ):
+            store.write(previous)
+            return report
+        store.write(
+            transition_record(
+                generation=generation,
+                state="ready",
+                last_successful_generation=generation,
+                git_commit=read_head_commit(root),
+                backend_name=str(backend.name),
+                backend_version=str(backend.version),
+                analyzer_inventory=[
+                    {"name": str(analyzer.name), "version": str(analyzer.version)}
+                    for analyzer in analyzers
+                ],
+                indexed_file_count=report.indexed + report.reused,
+            )
+        )
         return report
 
 

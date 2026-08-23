@@ -388,6 +388,94 @@ documentation_audit_routes = [
     assert issues == [("missing_doxygen", "Function f: Missing Doxygen documentation")]
 
 
+def test_documentation_audit_routes_rustdoc_plugin(tmp_path: Path) -> None:
+    """Route Rust artifacts to the Rustdoc documentation audit plugin.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        Missing Rustdocs receive the convention-specific routed diagnostic.
+    """
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[plugins]
+documentation_audit_routes = [
+  { language = "rust", convention = "rustdoc", plugin = "rustdoc", include_paths = ["src/**"] },
+]
+""".strip(),
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "src" / "lib.rs"
+    source_path.parent.mkdir()
+    source_path.write_text("pub fn run() {}\n", encoding="utf-8")
+
+    reset_plugin_registry_caches()
+    with override_repo_config_path(config_path):
+        issues = validate_documentation_with_configured_plugin(
+            root=tmp_path,
+            source_path=source_path,
+            stable_id="rust:function:src/lib.rs:run",
+            symbol_name="run",
+            artifact_kind="function",
+            label="Function run",
+            doc=None,
+            is_public=1,
+        )
+
+    assert issues == [
+        ("missing_rustdoc", "Function run: Missing Rustdoc documentation")
+    ]
+
+
+def test_documentation_audit_routes_skip_private_rust_artifacts(tmp_path: Path) -> None:
+    """Keep private Rust items outside configured documentation audits.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        Private Rust items do not produce missing-Rustdoc diagnostics.
+    """
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[plugins]
+documentation_audit_routes = [
+  { language = "rust", convention = "rustdoc", plugin = "rustdoc", include_paths = ["src/**"] },
+]
+""".strip(),
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "src" / "lib.rs"
+    source_path.parent.mkdir()
+    source_path.write_text("fn private_helper() {}\n", encoding="utf-8")
+
+    reset_plugin_registry_caches()
+    with override_repo_config_path(config_path):
+        issues = validate_documentation_with_configured_plugin(
+            root=tmp_path,
+            source_path=source_path,
+            stable_id="rust:function:src/lib.rs:private_helper",
+            symbol_name="private_helper",
+            artifact_kind="function",
+            label="Function private_helper",
+            doc=None,
+            is_public=0,
+        )
+
+    assert issues == []
+
+
 def test_validate_docstring_reports_malformed_section_heading() -> None:
     """
     Ensure malformed NumPy section headings are detected.

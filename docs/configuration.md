@@ -516,6 +516,16 @@ First-party analyzer options:
 | `[plugins.analyzer-json]` | `enabled_families = ["schema", "package", "release"]`, `emit_dependencies`, `emit_scripts`, `emit_schema_properties` |
 | `[plugins.analyzer-c]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_macros` |
 | `[plugins.analyzer-cpp]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_namespaces`, `emit_macros` |
+| `[plugins.analyzer-rust]` | `include_paths`, `exclude_paths`, `emit_macros` |
+
+Rustdoc audits are opt-in through an explicit route, for example:
+
+```toml
+[plugins]
+documentation_audit_routes = [
+  { language = "rust", convention = "rustdoc", plugin = "rustdoc", include_paths = ["src/**"] },
+]
+```
 | `[plugins.analyzer-bash]` | `emit_functions` |
 | `[plugins.analyzer-markdown]` | `strip_front_matter`, `emit_file_artifact_without_headings`, `min_heading_level`, `max_heading_level` |
 | `[plugins.analyzer-text]` | `include_root_files`, `include_docs_directories`, `exclude_generated`, `exclude_fixtures_logs` |

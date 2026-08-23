@@ -122,6 +122,16 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
             stays_in_core=(),
         ),
         FutureRepoSplitManifest(
+            repository="codira-analyzer-rust",
+            owned_paths=(
+                "packages/codira-analyzer-rust/README.md",
+                "packages/codira-analyzer-rust/pyproject.toml",
+                "packages/codira-analyzer-rust/src/",
+                "packages/codira-analyzer-rust/tests/",
+            ),
+            stays_in_core=(),
+        ),
+        FutureRepoSplitManifest(
             repository="codira-analyzer-bash",
             owned_paths=(
                 "packages/codira-analyzer-bash/README.md",
@@ -148,6 +158,16 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
                 "packages/codira-analyzer-text/pyproject.toml",
                 "packages/codira-analyzer-text/src/",
                 "packages/codira-analyzer-text/tests/",
+            ),
+            stays_in_core=(),
+        ),
+        FutureRepoSplitManifest(
+            repository="codira-documentation-audit-rustdoc",
+            owned_paths=(
+                "packages/codira-documentation-audit-rustdoc/README.md",
+                "packages/codira-documentation-audit-rustdoc/pyproject.toml",
+                "packages/codira-documentation-audit-rustdoc/src/",
+                "packages/codira-documentation-audit-rustdoc/tests/",
             ),
             stays_in_core=(),
         ),

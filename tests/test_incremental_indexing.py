@@ -57,6 +57,7 @@ from codira.contracts import (
     StoredEmbeddingRow,
     VectorSimilarityScore,
 )
+from codira.index_generation import IndexGenerationStore
 from codira.indexer import CoverageIssue, audit_repo_coverage, index_repo
 from codira.models import (
     AnalysisResult,
@@ -2998,13 +2999,13 @@ def test_index_repo_reports_uncovered_canonical_files(tmp_path: Path) -> None:
         report without blocking covered-file indexing.
     """
     python_module = tmp_path / "src" / "sample.py"
-    rust_module = tmp_path / "src" / "lib.rs"
+    uncovered_module = tmp_path / "src" / "main.go"
     _write_module(
         python_module,
         'def py_helper():\n    """Return a constant."""\n    return 1\n',
     )
-    rust_module.parent.mkdir(parents=True, exist_ok=True)
-    rust_module.write_text("pub fn helper() {}\n", encoding="utf-8")
+    uncovered_module.parent.mkdir(parents=True, exist_ok=True)
+    uncovered_module.write_text("func helper() {}\n", encoding="utf-8")
 
     init_db(tmp_path)
     report = index_repo(tmp_path)
@@ -3012,9 +3013,9 @@ def test_index_repo_reports_uncovered_canonical_files(tmp_path: Path) -> None:
     assert report.indexed == 1
     assert report.coverage_issues == [
         type(report.coverage_issues[0])(
-            path=str(rust_module),
+            path=str(uncovered_module),
             directory="src",
-            suffix=".rs",
+            suffix=".go",
             reason="no registered analyzer accepts this file type/content combination",
         )
     ]
@@ -3420,9 +3421,9 @@ def test_coverage_cli_emits_json(
         The test asserts the JSON coverage envelope includes analyzer and issue
         metadata without making coverage findings a command failure.
     """
-    rust_module = tmp_path / "src" / "lib.rs"
-    rust_module.parent.mkdir(parents=True, exist_ok=True)
-    rust_module.write_text("pub fn helper() {}\n", encoding="utf-8")
+    uncovered_module = tmp_path / "src" / "main.go"
+    uncovered_module.parent.mkdir(parents=True, exist_ok=True)
+    uncovered_module.write_text("func helper() {}\n", encoding="utf-8")
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["codira", "cov", "--json"])
@@ -3435,6 +3436,7 @@ def test_coverage_cli_emits_json(
         "source": "analyzer-defaults",
         "patterns": [
             ".github",
+            "benches",
             "config",
             "docs",
             "examples",
@@ -3448,9 +3450,9 @@ def test_coverage_cli_emits_json(
     }
     assert payload["results"] == [
         {
-            "path": str(rust_module),
+            "path": str(uncovered_module),
             "directory": "src",
-            "suffix": ".rs",
+            "suffix": ".go",
             "reason": "no registered analyzer accepts this file type/content combination",
         }
     ]
@@ -3471,9 +3473,9 @@ def test_coverage_config_can_disable_auditing(tmp_path: Path) -> None:
         The assertion verifies disabled auditing emits no gaps.
     """
 
-    source = tmp_path / "src" / "unclaimed.rs"
+    source = tmp_path / "src" / "unclaimed.go"
     source.parent.mkdir(parents=True)
-    source.write_text("fn main() {}\n", encoding="utf-8")
+    source.write_text("func main() {}\n", encoding="utf-8")
     config = tmp_path / ".codira" / "config.toml"
     config.parent.mkdir()
     config.write_text('[index.coverage]\nroots = ["-"]\n', encoding="utf-8")
@@ -3495,12 +3497,12 @@ def test_coverage_config_overrides_analyzer_defaults(tmp_path: Path) -> None:
         The assertion verifies only configured roots are audited.
     """
 
-    covered = tmp_path / "custom" / "unclaimed.rs"
-    ignored = tmp_path / "src" / "unclaimed.rs"
+    covered = tmp_path / "custom" / "unclaimed.go"
+    ignored = tmp_path / "src" / "unclaimed.go"
     covered.parent.mkdir(parents=True)
     ignored.parent.mkdir(parents=True)
-    covered.write_text("fn main() {}\n", encoding="utf-8")
-    ignored.write_text("fn main() {}\n", encoding="utf-8")
+    covered.write_text("func main() {}\n", encoding="utf-8")
+    ignored.write_text("func main() {}\n", encoding="utf-8")
     config = tmp_path / ".codira" / "config.toml"
     config.parent.mkdir()
     config.write_text('[index.coverage]\nroots = ["custom/**"]\n', encoding="utf-8")
@@ -3523,10 +3525,10 @@ def test_coverage_config_excludes_uncovered_suffixes(tmp_path: Path) -> None:
         coverage diagnostics only.
     """
 
-    rust_file = tmp_path / "src" / "unclaimed.rs"
+    uncovered_file = tmp_path / "src" / "unclaimed.go"
     yaml_file = tmp_path / "src" / "workflow.yml"
-    rust_file.parent.mkdir(parents=True)
-    rust_file.write_text("fn main() {}\n", encoding="utf-8")
+    uncovered_file.parent.mkdir(parents=True)
+    uncovered_file.write_text("func main() {}\n", encoding="utf-8")
     yaml_file.write_text("name: demo\n", encoding="utf-8")
     config = tmp_path / ".codira" / "config.toml"
     config.parent.mkdir()
@@ -3535,7 +3537,9 @@ def test_coverage_config_excludes_uncovered_suffixes(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert [issue.path for issue in audit_repo_coverage(tmp_path)] == [str(rust_file)]
+    assert [issue.path for issue in audit_repo_coverage(tmp_path)] == [
+        str(uncovered_file)
+    ]
 
 
 def test_index_cli_can_require_full_coverage(
@@ -3561,13 +3565,13 @@ def test_index_cli_can_require_full_coverage(
         The test asserts strict coverage mode exits before creating the index.
     """
     python_module = tmp_path / "src" / "sample.py"
-    rust_module = tmp_path / "src" / "lib.rs"
+    uncovered_module = tmp_path / "src" / "main.go"
     _write_module(
         python_module,
         'def demo():\n    """Return a constant."""\n    return 1\n',
     )
-    rust_module.parent.mkdir(parents=True, exist_ok=True)
-    rust_module.write_text("pub fn helper() {}\n", encoding="utf-8")
+    uncovered_module.parent.mkdir(parents=True, exist_ok=True)
+    uncovered_module.write_text("func helper() {}\n", encoding="utf-8")
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
@@ -3691,9 +3695,9 @@ def test_index_cli_emits_json_for_required_coverage_failure(
         The test asserts strict coverage mode returns JSON without creating the
         index when uncovered canonical files are present.
     """
-    rust_module = tmp_path / "src" / "lib.rs"
-    rust_module.parent.mkdir(parents=True, exist_ok=True)
-    rust_module.write_text("pub fn helper() {}\n", encoding="utf-8")
+    uncovered_module = tmp_path / "src" / "main.go"
+    uncovered_module.parent.mkdir(parents=True, exist_ok=True)
+    uncovered_module.write_text("func helper() {}\n", encoding="utf-8")
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
@@ -3733,9 +3737,9 @@ def test_index_cli_emits_json_for_required_coverage_failure(
     }
     assert payload["coverage_issues"] == [
         {
-            "path": str(rust_module),
+            "path": str(uncovered_module),
             "directory": "src",
-            "suffix": ".rs",
+            "suffix": ".go",
             "reason": "no registered analyzer accepts this file type/content combination",
         }
     ]
@@ -4478,6 +4482,48 @@ def test_ensure_index_missing_db_writes_schema_and_commit_metadata(
         "indexed_file_count": "1",
         "schema_version": str(SCHEMA_VERSION),
     }
+
+
+def test_noop_index_refreshes_commit_metadata_without_publishing_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Refresh freshness metadata when a completed index reuses every file.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory provided by pytest.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to change the observed Git commit between index passes.
+
+    Returns
+    -------
+    None
+        The test asserts a no-op updates commit metadata without notifying
+        generation-based readers of a content change.
+    """
+    module = tmp_path / "pkg" / "sample.py"
+    _write_module(
+        module,
+        'def demo():\n    """Return a constant."""\n    return 1\n',
+    )
+    head = "first"
+    monkeypatch.setattr("codira.indexer.read_head_commit", lambda root: head)
+
+    index_repo(tmp_path)
+    first_generation = IndexGenerationStore(tmp_path).read()
+    assert first_generation is not None
+    assert first_generation.git_commit == "first"
+
+    head = "second"
+    report = index_repo(tmp_path)
+
+    assert report.indexed == 0
+    assert report.reused == 1
+    assert _read_index_metadata(tmp_path)["commit"] == "second"
+    assert IndexGenerationStore(tmp_path).read() == first_generation
 
 
 def test_open_connection_does_not_clear_commit_metadata(

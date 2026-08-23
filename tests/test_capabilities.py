@@ -11,6 +11,7 @@ import pytest
 from codira_analyzer_c import CAnalyzer
 from codira_analyzer_cpp import CppAnalyzer
 from codira_analyzer_python import PythonAnalyzer
+from codira_analyzer_rust import RustAnalyzer
 
 from codira.capabilities import build_capability_contract
 from codira.cli import main
@@ -172,6 +173,48 @@ def test_cpp_analyzer_declares_explicit_ontology_mapping() -> None:
         "include_local": "import",
         "include_system": "import",
         "doxygen": "documentation",
+    }
+
+
+def test_rust_analyzer_declares_explicit_ontology_mapping() -> None:
+    """Keep Rust syntax-only extraction aligned to the ontology contract.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Modules, type-like owners, functions, imports, and constants are
+        asserted as explicit Rust capability mappings.
+    """
+    declaration = RustAnalyzer().analyzer_capability_declaration()
+
+    assert declaration.analyzer_name == "rust"
+    assert declaration.supports == (
+        "module",
+        "type",
+        "callable",
+        "import",
+        "constant",
+        "namespace",
+        "documentation",
+    )
+    assert declaration.does_not_support == ("variable",)
+    assert declaration.mappings == {
+        "module": "module",
+        "rust_module": "namespace",
+        "struct": "type",
+        "enum": "type",
+        "trait": "type",
+        "impl": "type",
+        "function": "callable",
+        "method": "callable",
+        "use": "import",
+        "const": "constant",
+        "macro_rules": "constant",
+        "rustdoc": "documentation",
     }
 
 
@@ -570,12 +613,12 @@ def test_capabilities_cli_exports_json_contract(
     assert payload["mcp"]["server_command"] == "codira-mcp"
 
 
-def test_capabilities_cli_human_summary_includes_embedding_plugins_and_mcp(
+def test_capabilities_cli_human_summary_includes_plugin_families_and_mcp(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """
-    Expose embedding plugin state and MCP discovery in human ``caps`` output.
+    Expose all plugin-family state and MCP discovery in human ``caps`` output.
 
     Parameters
     ----------
@@ -587,15 +630,18 @@ def test_capabilities_cli_human_summary_includes_embedding_plugins_and_mcp(
     Returns
     -------
     None
-        The test asserts the summary includes both human-facing surfaces.
+        The test asserts the summary includes plugin inventories and MCP details.
     """
     monkeypatch.setattr("sys.argv", ["codira", "caps"])
 
     assert main() == 0
     output = capsys.readouterr().out
 
-    assert "embedding_plugins: onnx" in output
+    assert "backend_plugins: duckdb [loaded, inactive]" in output
+    assert "documentation_audit_plugins: doxygen [loaded, inactive]" in output
+    assert "embedding_plugins: onnx [loaded, active]" in output
     assert "sentence-transformers" in output
+    assert "vector_store_plugins: duckdb [loaded, inactive]" in output
     assert "mcp: codira-mcp (stdio, read-only, tools: capabilities" in output
 
 

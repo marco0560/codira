@@ -40,13 +40,13 @@ src/codira/query_daemon_lifecycle.py:579 PLR0913 — service lifecycle inputs ar
     explicit to preserve platform-independent restart behavior.
 src/codira/query_daemon_ipc.py:887 PLR0913 — IPC server construction exposes its
     authentication, runtime, and connection-boundary dependencies.
-src/codira/cli.py:2093 C901,PLR0912 — index CLI failure/reporting branches are
+src/codira/cli.py:2102 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
-src/codira/cli.py:6449 PLR0913 — command dispatch receives parsed arguments and
+src/codira/cli.py:6458 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
-src/codira/docstring.py:836,947 PLC0415 — lazy imports avoid a configuration or
+src/codira/docstring.py:908,1019 PLC0415 — lazy imports avoid a configuration or
     registry import cycle on the optional documentation-plugin path.
-src/codira/docstring.py:890,1042 PLR0913 — documentation validation preserves
+src/codira/docstring.py:962,1114 PLR0913 — documentation validation preserves
     source, configuration, visibility, and plugin-routing provenance.
 src/codira/query_daemon.py:348,365 BLE001 — worker initialization and operation
     failures must cross the future boundary as their original exception.
@@ -72,7 +72,7 @@ scripts/run_final_embedding_model_campaign.py:575,
 scripts/run_final_embedding_model_campaign.py:640,
 scripts/run_final_embedding_model_campaign.py:791,
 scripts/run_retrieval_quality_benchmark.py:874,
-src/codira/docstring.py:947, src/codira/docstring.py:1042,
+src/codira/docstring.py:1019, src/codira/docstring.py:1114,
 src/codira/index_generation.py:109,
 src/codira/query_daemon.py:365, src/codira/query_daemon_lifecycle.py:737, and
 src/codira/query_daemon_ipc.py:1352 retain the same category-specific reasons

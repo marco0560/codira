@@ -731,6 +731,76 @@ class DoxygenDocumentationAuditPlugin:
         )
 
 
+class RustdocDocumentationAuditPlugin:
+    """Documentation audit plugin for native Rustdoc artifacts.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances are stateless.
+    """
+
+    name = "rustdoc"
+    version = "1"
+    languages = ("rust",)
+    conventions = ("rustdoc",)
+
+    def configuration_json_schema(self) -> dict[str, object]:
+        """Return the strict plugin configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, object]
+            JSON Schema accepted by the plugin config table.
+        """
+        return _documentation_audit_config_schema()
+
+    def audit_documentation(
+        self, request: DocumentationAuditRequest
+    ) -> DocumentationAuditResult:
+        """Validate one attached Rustdoc artifact.
+
+        Parameters
+        ----------
+        request : codira.contracts.DocumentationAuditRequest
+            Rust artifact selected by the configured audit route.
+
+        Returns
+        -------
+        codira.contracts.DocumentationAuditResult
+            Missing-documentation or empty-documentation diagnostics.
+        """
+        if request.doc is None:
+            diagnostic = DocumentationAuditDiagnostic(
+                code="missing_rustdoc",
+                message="Missing Rustdoc documentation",
+                severity="warning",
+                plugin_name=self.name,
+                plugin_version=self.version,
+                convention=request.convention,
+            )
+            return DocumentationAuditResult(diagnostics=(diagnostic,))
+        if request.doc.strip():
+            return DocumentationAuditResult(diagnostics=())
+        diagnostic = DocumentationAuditDiagnostic(
+            code="empty_rustdoc",
+            message="Rustdoc documentation is empty",
+            severity="warning",
+            plugin_name=self.name,
+            plugin_version=self.version,
+            convention=request.convention,
+        )
+        return DocumentationAuditResult(diagnostics=(diagnostic,))
+
+
 def _language_for_path(source_path: Path) -> str:
     """
     Infer the analyzer language for a source path.
@@ -753,6 +823,8 @@ def _language_for_path(source_path: Path) -> str:
         return "c"
     if suffix in {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".ipp"}:
         return "cpp"
+    if suffix == ".rs":
+        return "rust"
     return suffix.lstrip(".")
 
 

@@ -487,6 +487,12 @@ FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
         "emit_namespaces": True,
         "emit_macros": True,
     },
+    "analyzer-rust": {
+        "enabled": True,
+        "include_paths": [],
+        "exclude_paths": [],
+        "emit_macros": True,
+    },
     "analyzer-bash": {
         "enabled": True,
         "include_paths": [],
@@ -528,6 +534,7 @@ FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
     "documentation-audit-numpy": {"enabled": True},
     "documentation-audit-google": {"enabled": True},
     "documentation-audit-doxygen": {"enabled": True},
+    "documentation-audit-rustdoc": {"enabled": True},
 }
 PLUGIN_CONFIG_RENDER_ORDER: tuple[str, ...] = (
     "backend-sqlite",
@@ -539,10 +546,12 @@ PLUGIN_CONFIG_RENDER_ORDER: tuple[str, ...] = (
     "documentation-audit-numpy",
     "documentation-audit-google",
     "documentation-audit-doxygen",
+    "documentation-audit-rustdoc",
     "analyzer-python",
     "analyzer-json",
     "analyzer-c",
     "analyzer-cpp",
+    "analyzer-rust",
     "analyzer-bash",
     "analyzer-markdown",
     "analyzer-text",

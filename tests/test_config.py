@@ -615,10 +615,12 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
         "[plugins.documentation-audit-numpy]",
         "[plugins.documentation-audit-google]",
         "[plugins.documentation-audit-doxygen]",
+        "[plugins.documentation-audit-rustdoc]",
         "[plugins.analyzer-python]",
         "[plugins.analyzer-json]",
         "[plugins.analyzer-c]",
         "[plugins.analyzer-cpp]",
+        "[plugins.analyzer-rust]",
         "[plugins.analyzer-bash]",
         "[plugins.analyzer-markdown]",
         "[plugins.analyzer-text]",
@@ -632,6 +634,8 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
     assert "emit_macros = true" in rendered
     assert "[plugins.analyzer-cpp]" in rendered
     assert "emit_namespaces = true" in rendered
+    assert "[plugins.analyzer-rust]" in rendered
+    assert "emit_macros = true" in rendered
     assert "[plugins.backend-sqlite]" in rendered
     assert "[plugins.backend-duckdb]" in rendered
     assert "profiling_enabled = false" in rendered
@@ -1081,6 +1085,7 @@ def test_config_cli_init_full_writes_plugin_defaults(
 
     rendered = config_module.user_config_path().read_text(encoding="utf-8")
     assert "[plugins.analyzer-cpp]" in rendered
+    assert "[plugins.analyzer-rust]" in rendered
     assert "# emit_macros = true" in rendered
     assert "# include_paths = []" in rendered
     assert "[plugins.backend-sqlite]" in rendered

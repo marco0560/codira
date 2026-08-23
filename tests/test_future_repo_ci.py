@@ -75,9 +75,11 @@ def test_future_repo_ci_specs_cover_the_accepted_repository_set() -> None:
         "codira-analyzer-json",
         "codira-analyzer-c",
         "codira-analyzer-cpp",
+        "codira-analyzer-rust",
         "codira-analyzer-bash",
         "codira-analyzer-markdown",
         "codira-analyzer-text",
+        "codira-documentation-audit-rustdoc",
         "codira-backend-sqlite",
         "codira-backend-duckdb",
         "codira-installer",
@@ -146,7 +148,7 @@ def test_package_future_repo_ci_keeps_package_local_validation_uniform() -> None
     None
         The test asserts package CI specs share the same validation commands.
     """
-    package_specs = _load_future_repo_ci_helper().future_repo_ci_specs()[1:7]
+    package_specs = _load_future_repo_ci_helper().future_repo_ci_specs()[1:10]
 
     assert all(
         spec.install == (("uv", "sync", "--frozen", "--extra", "test"),)

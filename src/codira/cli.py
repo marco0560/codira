@@ -2019,6 +2019,7 @@ def _run_capabilities(
     ontology = payload["ontology"]
     commands = payload["commands"]
     analyzers = payload["analyzers"]
+    plugin_families = payload["plugin_families"]
     plugins = payload["plugins"]
     mcp = payload["mcp"]
     validation = payload["validation"]
@@ -2035,16 +2036,24 @@ def _run_capabilities(
             if isinstance(item, dict) and "analyzer_name" in item
         ]
         print("analyzers: " + ", ".join(sorted(analyzer_names)))
-    if isinstance(plugins, list):
-        embedding_plugins = sorted(
-            f"{item['name']} ({'active' if item['active'] else 'inactive'})"
-            for item in plugins
-            if isinstance(item, dict)
-            and item.get("family") == "embedding"
-            and isinstance(item.get("name"), str)
-            and isinstance(item.get("active"), bool)
+    if isinstance(plugin_families, list) and isinstance(plugins, list):
+        families = sorted(
+            str(item["family"])
+            for item in plugin_families
+            if isinstance(item, dict) and isinstance(item.get("family"), str)
         )
-        print("embedding_plugins: " + ", ".join(embedding_plugins))
+        for family in families:
+            family_plugins = sorted(
+                f"{item['name']} [{item['status']}, "
+                f"{'active' if item['active'] else 'inactive'}]"
+                for item in plugins
+                if isinstance(item, dict)
+                and item.get("family") == family
+                and isinstance(item.get("name"), str)
+                and isinstance(item.get("active"), bool)
+                and isinstance(item.get("status"), str)
+            )
+            print(f"{family.replace('-', '_')}_plugins: " + ", ".join(family_plugins))
     if isinstance(mcp, dict):
         tools = mcp.get("tools")
         if isinstance(tools, list):

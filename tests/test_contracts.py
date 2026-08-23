@@ -32,6 +32,7 @@ from codira_analyzer_c import CAnalyzer, _disambiguate_function_stable_ids
 from codira_analyzer_cpp import CppAnalyzer
 from codira_analyzer_json import JsonAnalyzer
 from codira_analyzer_python import PythonAnalyzer
+from codira_analyzer_rust import RustAnalyzer
 from codira_backend_sqlite import SQLiteIndexBackend
 from codira_backend_sqlite.schema import SCHEMA_VERSION
 from codira_backend_sqlite.sqlite_storage import get_db_path
@@ -2572,6 +2573,7 @@ def test_language_analyzer_index_backend_and_retrieval_protocols_are_runtime_che
     assert isinstance(PythonAnalyzer(), LanguageAnalyzer)
     assert isinstance(CAnalyzer(), LanguageAnalyzer)
     assert isinstance(CppAnalyzer(), LanguageAnalyzer)
+    assert isinstance(RustAnalyzer(), LanguageAnalyzer)
     assert isinstance(_FakeAnalyzer(), LanguageAnalyzer)
     assert isinstance(_FakeEmbeddingEngine(), EmbeddingEngine)
     assert isinstance(_FakeVectorStore(), VectorStore)
@@ -2670,12 +2672,14 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-json==1.56.0",
         "codira-analyzer-c==1.55.0",
         "codira-analyzer-cpp==1.55.0",
+        "codira-analyzer-rust==1.56.0",
         "codira-analyzer-bash==1.55.0",
         "codira-analyzer-markdown==1.55.0",
         "codira-analyzer-text==1.55.0",
         "codira-documentation-audit-numpy==1.55.0",
         "codira-documentation-audit-google==1.55.0",
         "codira-documentation-audit-doxygen==1.55.0",
+        "codira-documentation-audit-rustdoc==1.55.0",
         "codira-backend-sqlite==1.57.0",
         "codira-backend-duckdb==1.57.0",
         "codira-embedding-sentence-transformers==1.55.0",
@@ -2709,6 +2713,7 @@ def test_active_phase_8_registries_expose_default_backend_and_analyzers() -> Non
         "json",
         "c",
         "cpp",
+        "rust",
         "bash",
         "markdown",
         "text",
