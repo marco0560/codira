@@ -7,7 +7,18 @@ from codira_documentation_audit_tsdoc import build_audit_plugin
 
 
 def test_tsdoc_plugin_reports_missing_required_tags(tmp_path: Path) -> None:
-    """Report stable TSDoc diagnostics from analyzer-emitted documentation."""
+    """Report stable TSDoc diagnostics from analyzer-emitted documentation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source location.
+
+    Returns
+    -------
+    None
+        Stable diagnostics are asserted.
+    """
     result = build_audit_plugin().audit_documentation(
         DocumentationAuditRequest(
             source_path=tmp_path / "widget.ts",

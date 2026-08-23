@@ -507,6 +507,12 @@ FIRST_PARTY_PLUGIN_DEFAULT_CONFIGS: dict[str, dict[str, object]] = {
         "emit_variables": True,
         "emit_tsdoc_documentation": True,
     },
+    "analyzer-go": {
+        "enabled": True,
+        "include_paths": [],
+        "exclude_paths": [],
+        "emit_variables": True,
+    },
     "analyzer-bash": {
         "enabled": True,
         "include_paths": [],

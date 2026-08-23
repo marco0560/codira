@@ -8,6 +8,10 @@ __all__ = ["TSDocDocumentationAuditPlugin", "build_audit_plugin"]
 def build_audit_plugin() -> TSDocDocumentationAuditPlugin:
     """Build a fresh stateless TSDoc audit plugin.
 
+    Parameters
+    ----------
+    None
+
     Returns
     -------
     codira.docstring.TSDocDocumentationAuditPlugin

@@ -152,6 +152,16 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
             stays_in_core=(),
         ),
         FutureRepoSplitManifest(
+            repository="codira-analyzer-go",
+            owned_paths=(
+                "packages/codira-analyzer-go/README.md",
+                "packages/codira-analyzer-go/pyproject.toml",
+                "packages/codira-analyzer-go/src/",
+                "packages/codira-analyzer-go/tests/",
+            ),
+            stays_in_core=(),
+        ),
+        FutureRepoSplitManifest(
             repository="codira-analyzer-bash",
             owned_paths=(
                 "packages/codira-analyzer-bash/README.md",
@@ -208,6 +218,16 @@ def future_repo_split_manifests() -> tuple[FutureRepoSplitManifest, ...]:
                 "packages/codira-documentation-audit-tsdoc/pyproject.toml",
                 "packages/codira-documentation-audit-tsdoc/src/",
                 "packages/codira-documentation-audit-tsdoc/tests/",
+            ),
+            stays_in_core=(),
+        ),
+        FutureRepoSplitManifest(
+            repository="codira-documentation-audit-go-doc-comments",
+            owned_paths=(
+                "packages/codira-documentation-audit-go-doc-comments/README.md",
+                "packages/codira-documentation-audit-go-doc-comments/pyproject.toml",
+                "packages/codira-documentation-audit-go-doc-comments/src/",
+                "packages/codira-documentation-audit-go-doc-comments/tests/",
             ),
             stays_in_core=(),
         ),

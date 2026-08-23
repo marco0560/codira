@@ -68,6 +68,7 @@ DocumentationSourceFormat = Literal[
     "rustdoc",
     "jsdoc",
     "tsdoc",
+    "go_doc_comment",
 ]
 DocumentationAttachmentConfidence = Literal["explicit"]
 

@@ -2999,7 +2999,7 @@ def test_index_repo_reports_uncovered_canonical_files(tmp_path: Path) -> None:
         report without blocking covered-file indexing.
     """
     python_module = tmp_path / "src" / "sample.py"
-    uncovered_module = tmp_path / "src" / "main.go"
+    uncovered_module = tmp_path / "src" / "main.swift"
     _write_module(
         python_module,
         'def py_helper():\n    """Return a constant."""\n    return 1\n',
@@ -3015,7 +3015,7 @@ def test_index_repo_reports_uncovered_canonical_files(tmp_path: Path) -> None:
         type(report.coverage_issues[0])(
             path=str(uncovered_module),
             directory="src",
-            suffix=".go",
+            suffix=".swift",
             reason="no registered analyzer accepts this file type/content combination",
         )
     ]
@@ -3421,7 +3421,7 @@ def test_coverage_cli_emits_json(
         The test asserts the JSON coverage envelope includes analyzer and issue
         metadata without making coverage findings a command failure.
     """
-    uncovered_module = tmp_path / "src" / "main.go"
+    uncovered_module = tmp_path / "src" / "main.swift"
     uncovered_module.parent.mkdir(parents=True, exist_ok=True)
     uncovered_module.write_text("func helper() {}\n", encoding="utf-8")
 
@@ -3438,12 +3438,15 @@ def test_coverage_cli_emits_json(
             ".github",
             "app",
             "benches",
+            "cmd",
             "config",
             "docs",
             "examples",
             "include",
+            "internal",
             "lib",
             "pages",
+            "pkg",
             "scripts",
             "src",
             "test",
@@ -3456,7 +3459,7 @@ def test_coverage_cli_emits_json(
         {
             "path": str(uncovered_module),
             "directory": "src",
-            "suffix": ".go",
+            "suffix": ".swift",
             "reason": "no registered analyzer accepts this file type/content combination",
         }
     ]
@@ -3477,7 +3480,7 @@ def test_coverage_config_can_disable_auditing(tmp_path: Path) -> None:
         The assertion verifies disabled auditing emits no gaps.
     """
 
-    source = tmp_path / "src" / "unclaimed.go"
+    source = tmp_path / "src" / "unclaimed.swift"
     source.parent.mkdir(parents=True)
     source.write_text("func main() {}\n", encoding="utf-8")
     config = tmp_path / ".codira" / "config.toml"
@@ -3501,8 +3504,8 @@ def test_coverage_config_overrides_analyzer_defaults(tmp_path: Path) -> None:
         The assertion verifies only configured roots are audited.
     """
 
-    covered = tmp_path / "custom" / "unclaimed.go"
-    ignored = tmp_path / "src" / "unclaimed.go"
+    covered = tmp_path / "custom" / "unclaimed.swift"
+    ignored = tmp_path / "src" / "unclaimed.swift"
     covered.parent.mkdir(parents=True)
     ignored.parent.mkdir(parents=True)
     covered.write_text("func main() {}\n", encoding="utf-8")
@@ -3529,7 +3532,7 @@ def test_coverage_config_excludes_uncovered_suffixes(tmp_path: Path) -> None:
         coverage diagnostics only.
     """
 
-    uncovered_file = tmp_path / "src" / "unclaimed.go"
+    uncovered_file = tmp_path / "src" / "unclaimed.swift"
     yaml_file = tmp_path / "src" / "workflow.yml"
     uncovered_file.parent.mkdir(parents=True)
     uncovered_file.write_text("func main() {}\n", encoding="utf-8")
@@ -3569,7 +3572,7 @@ def test_index_cli_can_require_full_coverage(
         The test asserts strict coverage mode exits before creating the index.
     """
     python_module = tmp_path / "src" / "sample.py"
-    uncovered_module = tmp_path / "src" / "main.go"
+    uncovered_module = tmp_path / "src" / "main.swift"
     _write_module(
         python_module,
         'def demo():\n    """Return a constant."""\n    return 1\n',
@@ -3699,7 +3702,7 @@ def test_index_cli_emits_json_for_required_coverage_failure(
         The test asserts strict coverage mode returns JSON without creating the
         index when uncovered canonical files are present.
     """
-    uncovered_module = tmp_path / "src" / "main.go"
+    uncovered_module = tmp_path / "src" / "main.swift"
     uncovered_module.parent.mkdir(parents=True, exist_ok=True)
     uncovered_module.write_text("func helper() {}\n", encoding="utf-8")
 
@@ -3743,7 +3746,7 @@ def test_index_cli_emits_json_for_required_coverage_failure(
         {
             "path": str(uncovered_module),
             "directory": "src",
-            "suffix": ".go",
+            "suffix": ".swift",
             "reason": "no registered analyzer accepts this file type/content combination",
         }
     ]

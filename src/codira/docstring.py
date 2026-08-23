@@ -880,6 +880,10 @@ class TSDocDocumentationAuditPlugin:
     def configuration_json_schema(self) -> dict[str, object]:
         """Return the strict common audit-plugin configuration schema.
 
+        Parameters
+        ----------
+        None
+
         Returns
         -------
         dict[str, object]
@@ -969,6 +973,96 @@ class TSDocDocumentationAuditPlugin:
                 )
             )
         return DocumentationAuditResult(diagnostics=diagnostics)
+
+
+class GoDocCommentsDocumentationAuditPlugin:
+    """Audit explicit Go documentation comments.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances validate only analyzer-emitted comment text.
+    """
+
+    name = "go-doc-comments"
+    version = "1"
+    languages = ("go",)
+    conventions = ("go_doc_comment",)
+
+    def configuration_json_schema(self) -> dict[str, object]:
+        """Return the strict common audit-plugin configuration schema.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, object]
+            Schema accepting the shared enabled property.
+        """
+        return _documentation_audit_config_schema()
+
+    def audit_documentation(
+        self, request: DocumentationAuditRequest
+    ) -> DocumentationAuditResult:
+        """Validate Go comment presence and declaration-name convention.
+
+        Parameters
+        ----------
+        request : codira.contracts.DocumentationAuditRequest
+            Analyzer-emitted Go documentation request.
+
+        Returns
+        -------
+        codira.contracts.DocumentationAuditResult
+            Deterministic diagnostics for missing, empty, or misnamed comments.
+        """
+        if request.doc is None:
+            return DocumentationAuditResult(
+                diagnostics=(
+                    DocumentationAuditDiagnostic(
+                        code="missing_go_doc_comment",
+                        message="Missing Go documentation comment",
+                        severity="warning",
+                        plugin_name=self.name,
+                        plugin_version=self.version,
+                        convention=request.convention,
+                    ),
+                )
+            )
+        text = inspect.cleandoc(request.doc)
+        if not text:
+            return DocumentationAuditResult(
+                diagnostics=(
+                    DocumentationAuditDiagnostic(
+                        code="empty_go_doc_comment",
+                        message="Go documentation comment is empty",
+                        severity="warning",
+                        plugin_name=self.name,
+                        plugin_version=self.version,
+                        convention=request.convention,
+                    ),
+                )
+            )
+        if request.symbol_name and not text.startswith(request.symbol_name):
+            return DocumentationAuditResult(
+                diagnostics=(
+                    DocumentationAuditDiagnostic(
+                        code="go_doc_comment_name",
+                        message=f"Go documentation comment should begin with: {request.symbol_name}",
+                        severity="warning",
+                        plugin_name=self.name,
+                        plugin_version=self.version,
+                        convention=request.convention,
+                    ),
+                )
+            )
+        return DocumentationAuditResult(diagnostics=())
 
 
 class RustdocDocumentationAuditPlugin:
@@ -1065,6 +1159,8 @@ def _language_for_path(source_path: Path) -> str:
         return "cpp"
     if suffix == ".rs":
         return "rust"
+    if suffix == ".go":
+        return "go"
     if suffix in {".js", ".jsx", ".mjs", ".cjs"}:
         return "javascript"
     if suffix in {".ts", ".tsx", ".mts", ".cts"}:

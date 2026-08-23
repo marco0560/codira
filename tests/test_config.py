@@ -624,6 +624,7 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
         "[plugins.analyzer-bash]",
         "[plugins.analyzer-markdown]",
         "[plugins.analyzer-text]",
+        "[plugins.analyzer-go]",
         "[plugins.analyzer-javascript]",
         "[plugins.analyzer-typescript]",
     ]
@@ -638,6 +639,7 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
     assert "emit_jsdoc_documentation = true" in rendered
     assert "[plugins.analyzer-cpp]" in rendered
     assert "emit_namespaces = true" in rendered
+    assert "[plugins.analyzer-go]" in rendered
     assert "[plugins.analyzer-rust]" in rendered
     assert "[plugins.analyzer-javascript]" in rendered
     assert "emit_macros = true" in rendered
