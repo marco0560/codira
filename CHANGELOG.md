@@ -1,3 +1,10 @@
+# [1.65.0](https://github.com/marco0560/codira/compare/v1.64.0...v1.65.0) (2026-08-23)
+
+
+### Features
+
+* **analyzer:** add JavaScript and JSDoc plugins ([d36a6c2](https://github.com/marco0560/codira/commit/d36a6c216884659cb5ea0f20ccc72a7b83cbfe74)), closes [#36](https://github.com/marco0560/codira/issues/36) [#36](https://github.com/marco0560/codira/issues/36)
+
 # [1.64.0](https://github.com/marco0560/codira/compare/v1.63.1...v1.64.0) (2026-08-23)
 
 
