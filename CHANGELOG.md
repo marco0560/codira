@@ -1,3 +1,10 @@
+## [1.67.1](https://github.com/marco0560/codira/compare/v1.67.0...v1.67.1) (2026-08-23)
+
+
+### Bug Fixes
+
+* **docs:** fixed docstring for missing parameters ([d5893be](https://github.com/marco0560/codira/commit/d5893be71af0c183e6150fba9d88487e7f3541a6))
+
 # [1.67.0](https://github.com/marco0560/codira/compare/v1.66.0...v1.67.0) (2026-08-23)
 
 
