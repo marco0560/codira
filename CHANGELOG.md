@@ -1,3 +1,10 @@
+# [1.64.0](https://github.com/marco0560/codira/compare/v1.63.1...v1.64.0) (2026-08-23)
+
+
+### Features
+
+* **analyzer:** add Rust analysis and documentation audit ([7337803](https://github.com/marco0560/codira/commit/7337803c6853df140214fa8099a20f5479a1001d)), closes [#40](https://github.com/marco0560/codira/issues/40)
+
 ## [1.63.1](https://github.com/marco0560/codira/compare/v1.63.0...v1.63.1) (2026-08-22)
 
 
