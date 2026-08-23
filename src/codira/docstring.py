@@ -59,6 +59,7 @@ JSDOC_PARAM_RE = re.compile(
 )
 JSDOC_RETURN_RE = re.compile(r"^\s*@returns?\b")
 JSDOC_THROWS_RE = re.compile(r"^\s*@throws?\b")
+TSDOC_PARAM_RE = re.compile(r"^\s*@param\s+(?P<name>[A-Za-z_$][\w$]*)\b", re.MULTILINE)
 
 
 def _documentation_audit_config_schema() -> dict[str, object]:
@@ -858,6 +859,118 @@ class JSDocDocumentationAuditPlugin:
         return DocumentationAuditResult(diagnostics=diagnostics)
 
 
+class TSDocDocumentationAuditPlugin:
+    """Audit explicit TSDoc fields emitted by the TypeScript analyzer.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances are stateless and validate explicit documentation only.
+    """
+
+    name = "tsdoc"
+    version = "1"
+    languages = ("typescript",)
+    conventions = ("tsdoc",)
+
+    def configuration_json_schema(self) -> dict[str, object]:
+        """Return the strict common audit-plugin configuration schema.
+
+        Returns
+        -------
+        dict[str, object]
+            Schema accepting only the shared enabled property.
+        """
+        return _documentation_audit_config_schema()
+
+    def audit_documentation(
+        self, request: DocumentationAuditRequest
+    ) -> DocumentationAuditResult:
+        """Validate one analyzer-emitted TypeScript documentation artifact.
+
+        Parameters
+        ----------
+        request : codira.contracts.DocumentationAuditRequest
+            Routed TSDoc artifact and callable metadata.
+
+        Returns
+        -------
+        codira.contracts.DocumentationAuditResult
+            Stable diagnostics for missing or incomplete TSDoc fields.
+        """
+        if request.doc is None:
+            return DocumentationAuditResult(
+                diagnostics=(
+                    DocumentationAuditDiagnostic(
+                        code="missing_tsdoc",
+                        message="Missing TSDoc documentation",
+                        severity="warning",
+                        plugin_name=self.name,
+                        plugin_version=self.version,
+                        convention=request.convention,
+                    ),
+                )
+            )
+        text = inspect.cleandoc(request.doc)
+        if not text:
+            return DocumentationAuditResult(
+                diagnostics=(
+                    DocumentationAuditDiagnostic(
+                        code="empty_tsdoc",
+                        message="TSDoc documentation is empty",
+                        severity="warning",
+                        plugin_name=self.name,
+                        plugin_version=self.version,
+                        convention=request.convention,
+                    ),
+                )
+            )
+        documented = {match.group("name") for match in TSDOC_PARAM_RE.finditer(text)}
+        diagnostics = [
+            DocumentationAuditDiagnostic(
+                code="missing_tsdoc_param",
+                message=f"Parameter not documented: {parameter}",
+                severity="warning",
+                plugin_name=self.name,
+                plugin_version=self.version,
+                convention=request.convention,
+            )
+            for parameter in request.parameters
+            if parameter not in documented
+        ]
+        if (
+            request.require_callable_sections
+            and request.returns_value
+            and JSDOC_RETURN_RE.search(text) is None
+        ):
+            diagnostics.append(
+                DocumentationAuditDiagnostic(
+                    code="missing_tsdoc_returns",
+                    message="Missing TSDoc tag: @returns",
+                    severity="warning",
+                    plugin_name=self.name,
+                    plugin_version=self.version,
+                    convention=request.convention,
+                )
+            )
+        if request.raises_exception and JSDOC_THROWS_RE.search(text) is None:
+            diagnostics.append(
+                DocumentationAuditDiagnostic(
+                    code="missing_tsdoc_throws",
+                    message="Missing TSDoc tag: @throws",
+                    severity="warning",
+                    plugin_name=self.name,
+                    plugin_version=self.version,
+                    convention=request.convention,
+                )
+            )
+        return DocumentationAuditResult(diagnostics=diagnostics)
+
+
 class RustdocDocumentationAuditPlugin:
     """Documentation audit plugin for native Rustdoc artifacts.
 
@@ -954,6 +1067,8 @@ def _language_for_path(source_path: Path) -> str:
         return "rust"
     if suffix in {".js", ".jsx", ".mjs", ".cjs"}:
         return "javascript"
+    if suffix in {".ts", ".tsx", ".mts", ".cts"}:
+        return "typescript"
     return suffix.lstrip(".")
 
 

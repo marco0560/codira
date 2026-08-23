@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codira-analyzer-typescript"
+version = "1.66.0"
+description = "First-party TypeScript analyzer plugin for codira"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "codira>=1.5.0,<2.0.0",
+    "tree-sitter>=0.25.2",
+    "tree-sitter-typescript>=0.23.2",
+]
+
+[project.optional-dependencies]
+test = ["mypy", "pytest", "ruff"]
+
+[project.entry-points."codira.analyzers"]
+typescript = "codira_analyzer_typescript:build_analyzer"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+codira_analyzer_typescript = ["py.typed"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true

@@ -518,6 +518,7 @@ First-party analyzer options:
 | `[plugins.analyzer-cpp]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_namespaces`, `emit_macros` |
 | `[plugins.analyzer-rust]` | `include_paths`, `exclude_paths`, `emit_macros` |
 | `[plugins.analyzer-javascript]` | `include_paths`, `exclude_paths`, `emit_variables`, `emit_jsdoc_documentation` |
+| `[plugins.analyzer-typescript]` | `include_paths`, `exclude_paths`, `emit_variables`, `emit_tsdoc_documentation` |
 
 Rustdoc audits are opt-in through an explicit route, for example:
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-bundle-official"
-version = "1.65.0"
+version = "1.66.0"
 description = "Curated first-party plugin bundle for codira"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -17,6 +17,7 @@ dependencies = [
     "codira-analyzer-cpp==1.55.0",
     "codira-analyzer-rust==1.56.0",
     "codira-analyzer-javascript==1.65.0",
+    "codira-analyzer-typescript==1.66.0",
     "codira-analyzer-bash==1.55.0",
     "codira-analyzer-markdown==1.55.0",
     "codira-analyzer-text==1.55.0",
@@ -25,6 +26,7 @@ dependencies = [
     "codira-documentation-audit-doxygen==1.55.0",
     "codira-documentation-audit-rustdoc==1.55.0",
     "codira-documentation-audit-jsdoc==1.65.0",
+    "codira-documentation-audit-tsdoc==1.66.0",
     "codira-backend-sqlite==1.57.0",
     "codira-backend-duckdb==1.57.0",
     "codira-embedding-sentence-transformers==1.55.0",

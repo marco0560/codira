@@ -625,6 +625,7 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
         "[plugins.analyzer-markdown]",
         "[plugins.analyzer-text]",
         "[plugins.analyzer-javascript]",
+        "[plugins.analyzer-typescript]",
     ]
     assert "exclude_suffixes = []" in rendered
     assert "[plugins.analyzer-python]" in rendered

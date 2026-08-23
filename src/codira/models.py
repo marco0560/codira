@@ -67,6 +67,7 @@ DocumentationSourceFormat = Literal[
     "doxygen",
     "rustdoc",
     "jsdoc",
+    "tsdoc",
 ]
 DocumentationAttachmentConfidence = Literal["explicit"]
 

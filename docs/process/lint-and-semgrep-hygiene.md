@@ -44,9 +44,9 @@ src/codira/cli.py:2102 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
 src/codira/cli.py:6458 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
-src/codira/docstring.py:1037, src/codira/docstring.py:1148 PLC0415 — lazy imports avoid a configuration or
+src/codira/docstring.py:1152, src/codira/docstring.py:1263 PLC0415 — lazy imports avoid a configuration or
     registry import cycle on the optional documentation-plugin path.
-src/codira/docstring.py:1091, src/codira/docstring.py:1243 PLR0913 — documentation validation preserves
+src/codira/docstring.py:1206, src/codira/docstring.py:1358 PLR0913 — documentation validation preserves
     source, configuration, visibility, and plugin-routing provenance.
 src/codira/query_daemon.py:348,365 BLE001 — worker initialization and operation
     failures must cross the future boundary as their original exception.

@@ -136,6 +136,12 @@ def future_repo_ci_specs() -> tuple[FutureRepoCISpec, ...]:
             validate=package_validate,
         ),
         FutureRepoCISpec(
+            repository="codira-analyzer-typescript",
+            purpose="first-party TypeScript analyzer plugin",
+            install=(("uv", "sync", "--frozen", "--extra", "test"),),
+            validate=package_validate,
+        ),
+        FutureRepoCISpec(
             repository="codira-analyzer-bash",
             purpose="first-party Bash analyzer plugin",
             install=(("uv", "sync", "--frozen", "--extra", "test"),),
@@ -162,6 +168,12 @@ def future_repo_ci_specs() -> tuple[FutureRepoCISpec, ...]:
         FutureRepoCISpec(
             repository="codira-documentation-audit-jsdoc",
             purpose="first-party JSDoc documentation audit plugin",
+            install=(("uv", "sync", "--frozen", "--extra", "test"),),
+            validate=package_validate,
+        ),
+        FutureRepoCISpec(
+            repository="codira-documentation-audit-tsdoc",
+            purpose="first-party TSDoc documentation audit plugin",
             install=(("uv", "sync", "--frozen", "--extra", "test"),),
             validate=package_validate,
         ),

@@ -325,6 +325,50 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "emit_tsdoc_documentation": {
+            "default": true,
+            "type": "boolean"
+          },
+          "emit_variables": {
+            "default": true,
+            "type": "boolean"
+          },
+          "enabled": {
+            "default": true,
+            "description": "Whether this plugin participates in runtime discovery.",
+            "type": "boolean"
+          },
+          "exclude_paths": {
+            "default": [],
+            "items": {
+              "minLength": 1,
+              "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "include_paths": {
+            "default": [],
+            "items": {
+              "minLength": 1,
+              "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+",
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "family": "analyzer",
+      "name": "codira-analyzer-typescript",
+      "path": "packages/codira-analyzer-typescript",
+      "selectable": true
+    },
+    {
+      "configuration_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
           "emit_functions": {
             "default": true,
             "type": "boolean"
@@ -546,6 +590,22 @@
       "family": "documentation-audit",
       "name": "codira-documentation-audit-jsdoc",
       "path": "packages/codira-documentation-audit-jsdoc",
+      "selectable": true
+    },
+    {
+      "configuration_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "family": "documentation-audit",
+      "name": "codira-documentation-audit-tsdoc",
+      "path": "packages/codira-documentation-audit-tsdoc",
       "selectable": true
     },
     {
