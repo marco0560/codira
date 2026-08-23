@@ -1,3 +1,10 @@
+# [1.67.0](https://github.com/marco0560/codira/compare/v1.66.0...v1.67.0) (2026-08-23)
+
+
+### Features
+
+* **analyzer:** add Go and doc-comment plugins ([f497b9f](https://github.com/marco0560/codira/commit/f497b9ffd2526dd91319d9cb583f2909f29753e1)), closes [#38](https://github.com/marco0560/codira/issues/38) [#38](https://github.com/marco0560/codira/issues/38)
+
 # [1.66.0](https://github.com/marco0560/codira/compare/v1.65.0...v1.66.0) (2026-08-23)
 
 
