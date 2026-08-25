@@ -244,6 +244,7 @@ EXPECTED_FIRST_PARTY_PACKAGE_DIRS: tuple[str, ...] = (
     "packages/codira-embedding-onnx",
     "packages/codira-vector-store-sqlite",
     "packages/codira-vector-store-duckdb",
+    "packages/codira-similarity-index-faiss",
     "packages/codira-installer",
     "packages/codira-bundle-official",
 )
@@ -3158,6 +3159,10 @@ def test_release_install_rehearsal_probe_covers_standalone_host_target_contract(
     assert 'resolve_startup_binding(workspace="target"' in probe_argv[2]
     assert '.call_tool("symbol", {"name": "legacy"})' in probe_argv[2]
     assert "SharedModelStore(model_root)" in probe_argv[2]
+    assert "codira_similarity_index_faiss" in probe_argv[2]
+    assert "FaissSimilarityIndex" in probe_argv[2]
+    assert '"index_type": "hnsw"' in probe_argv[2]
+    assert "stale FAISS artifact must fail closed" in probe_argv[2]
 
 
 def test_release_artifact_helper_covers_core_and_all_first_party_packages() -> None:

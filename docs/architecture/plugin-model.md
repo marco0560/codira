@@ -1,16 +1,18 @@
 # Plugin Model
 
 `ADR-004` landed the analyzer/backend plugin surface. `ADR-022` extends that
-model with embedding engine and vector-store plugin families.
+model with embedding engine and vector-store plugin families. ADR-031 further
+separates durable vector storage from derived similarity indexing.
 
 ## Accepted Target Model
 
-The accepted migration now distinguishes five extension families:
+The accepted migration now distinguishes six extension families:
 
 - `IndexBackend`: exactly one active storage/query backend per repository index
 - `LanguageAnalyzer`: zero or more analyzers participating in one indexing run
 - `EmbeddingEngine`: exactly one active text-to-vector runtime
-- `VectorStore`: exactly one active vector persistence/similarity store
+- `VectorStore`: exactly one active durable vector persistence store
+- `SimilarityIndex`: exactly one active derived candidate-ranking implementation
 - `DocumentationAuditPlugin`: zero or more convention-specific documentation
   validators selected by explicit routes
 
@@ -19,7 +21,10 @@ This asymmetry is deliberate:
 - storage selection is an instance-level policy
 - analyzers represent repository-content capabilities
 - embedding engines and vector stores are singleton runtime/storage choices
-  because vector identity and query ranking depend on the active pair
+  because durable vector identity depends on the active pair
+- similarity indexes are singleton query choices; core exact search is always
+  available, while optional indexes own only rebuildable artifacts and runtime
+  search policy
 - documentation audit plugins may overlap by language, so activation is an
   explicit language/convention/path routing decision instead of an implicit
   analyzer side effect
@@ -35,7 +40,7 @@ The current codebase now exposes:
 - optional explicit configuration injection through `configure(config)`
 - optional plugin-owned JSON Schema publication through
   `configuration_json_schema()`
-- machine-readable capability reporting for all five plugin families through
+- machine-readable capability reporting for all six plugin families through
   `codira caps --json`
 
 ## Phase-3 Baseline
@@ -85,7 +90,7 @@ exclude_paths = ["tests/fixtures"]
 ```
 
 The table name is `plugins.<family>-<plugin-name>`, where `<family>` is
-`analyzer`, `backend`, `embedding`, `vector-store`, or
+`analyzer`, `backend`, `embedding`, `vector-store`, `similarity-index`, or
 `documentation-audit`.
 
 Plugins may expose:
@@ -129,9 +134,13 @@ The current packaging boundary is also now explicit:
   `codira-documentation-audit-doxygen`
 - documentation audit plugin implementations are loaded from package entry
   points; core only owns the shared contract and route execution boundary
+- core supplies the always-available `exact` similarity index; optional
+  derived indexes such as `codira-similarity-index-faiss` are separate
+  first-party distributions
 - third-party plugins live in separate distributions and are discovered from
   `codira.analyzers`, `codira.backends`, `codira.embedding_engines`,
-  `codira.vector_stores`, and `codira.documentation_audits` entry-point groups
+  `codira.vector_stores`, `codira.similarity_indexes`, and
+  `codira.documentation_audits` entry-point groups
 
 ## Documentation Audit Routing
 

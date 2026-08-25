@@ -2,6 +2,7 @@
 
 **Date:** 19/06/2026
 **Status:** Accepted
+**Superseded in part by:** [ADR-031](ADR-031-similarity-index-plugin-family.md)
 
 ## Context
 
@@ -205,6 +206,12 @@ The branch does not run the full campaign by default.
 - Multi-vector retrieval fusion can be evaluated later from benchmark evidence.
 - External vector databases remain optional future vector-store plugins, not a
   prerequisite for the local architecture.
+
+## Partial supersession
+
+ADR-031 supersedes this ADR only where it assigns similarity candidate search
+and external vector-database classification to vector stores. This ADR remains
+authoritative for embedding-engine plugins and durable vector-store ownership.
 
 ## Relationship to existing ADRs
 

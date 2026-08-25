@@ -8,6 +8,7 @@ Current groups:
 - `codira.backends`
 - `codira.embedding_engines`
 - `codira.vector_stores`
+- `codira.similarity_indexes`
 - `codira.documentation_audits`
 
 Install model:
@@ -48,6 +49,7 @@ Repository-owned first-party distributions now live under:
 - `packages/codira-embedding-onnx`
 - `packages/codira-vector-store-sqlite`
 - `packages/codira-vector-store-duckdb`
+- `packages/codira-similarity-index-faiss`
 - `packages/codira-documentation-audit-numpy`
 - `packages/codira-documentation-audit-google`
 - `packages/codira-documentation-audit-doxygen`
@@ -67,6 +69,11 @@ extracted packages from `packages/` through the helper above.
 
 For optional dependencies inside a plugin package, declare them in the plugin's
 own `pyproject.toml`. The core package should not need to know about them.
+
+The core package provides `exact`, so a usable semantic candidate-ranking
+backend exists without an optional similarity package. The official bundle's
+`faiss` extra installs `codira-similarity-index-faiss`; its `faiss-cpu`
+dependency remains isolated from the core and vector-store packages.
 
 If a plugin fails to load, `codira plugins` reports the failure without
 requiring you to inspect internal registry code.

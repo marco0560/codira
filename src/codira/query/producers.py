@@ -119,7 +119,7 @@ class QueryChannelSpec:
     name : codira.types.ChannelName
         Stable channel name used by planning and explain output.
     retrieve : collections.abc.Callable[
-        [pathlib.Path, str, object, QueryIntent, str | None],
+        [pathlib.Path, str, object, QueryIntent, str | None, str | None],
         codira.types.ChannelResults,
     ]
         Retrieval function implementing the channel.
@@ -129,7 +129,7 @@ class QueryChannelSpec:
 
     name: ChannelName
     retrieve: Callable[
-        [Path, str, BackendQueryConnection, QueryIntent, str | None],
+        [Path, str, BackendQueryConnection, QueryIntent, str | None, str | None],
         ChannelResults,
     ]
     producer: QueryProducerSpec
@@ -152,6 +152,8 @@ class EmbeddingRetrievalRequest:
         Minimum similarity threshold for emitted results.
     prefix : str | None
         Repo-root-relative path prefix used to restrict matched symbol files.
+    search_profile : str | None, optional
+        Named similarity-index runtime profile. ``None`` selects ``default``.
     conn : object | None
         Existing database connection to reuse.
     """
@@ -161,6 +163,7 @@ class EmbeddingRetrievalRequest:
     limit: int
     min_score: float
     prefix: str | None = None
+    search_profile: str | None = None
     conn: BackendQueryConnection | None = None
 
 
@@ -242,6 +245,7 @@ class EmbeddingRetrievalProducer(QueryProducerSpec):
                 limit=request.limit,
                 min_score=request.min_score,
                 prefix=request.prefix,
+                search_profile=request.search_profile,
                 conn=request.conn,
             )
         )

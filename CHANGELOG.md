@@ -1,3 +1,18 @@
+# Unreleased
+
+### Features
+
+* **semantic!:** separate durable vector stores from derived similarity indexes;
+  add core exact search, optional FAISS flat/HNSW search, named runtime search
+  profiles, and rebuild/reset operations ([#20](https://github.com/marco0560/codira/issues/20))
+
+### Breaking Changes
+
+* Configurations must use `config_version = 2` and declare
+  `embeddings.similarity_index`. Regenerate old files with
+  `codira config init --force`; reset incompatible derived similarity state
+  with `codira emb reset` before indexing.
+
 ## [1.67.1](https://github.com/marco0560/codira/compare/v1.67.0...v1.67.1) (2026-08-23)
 
 

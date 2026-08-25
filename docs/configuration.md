@@ -57,7 +57,7 @@ configuration source. When both are provided, state is written under
 The default generated file is:
 
 ```toml
-config_version = 1
+config_version = 2
 
 [backend]
 name = "sqlite"
@@ -71,6 +71,10 @@ documentation_audit_routes = []
 enabled = true
 engine = "sentence-transformers"
 vector_store = "sqlite"
+similarity_index = "exact"
+similarity_profiles = [
+  { name = "default", ef_search = 64, candidate_limit = 256, default_result_limit = 20, max_result_limit = 256 },
+]
 model = "sentence-transformers/all-MiniLM-L6-v2"
 version = "1"
 dimension = 384
@@ -138,6 +142,55 @@ engines are `"sentence-transformers"` and `"onnx"`.
 `embeddings.vector_store` selects the active vector-store plugin. The
 first-party local stores are `"sqlite"` and `"duckdb"` and use separated files
 under `.codira/embeddings.db` or `.codira/embeddings.duckdb`.
+
+### Similarity index and query profiles
+
+`embeddings.similarity_index` selects the one derived candidate-ranking
+implementation for the repository. `"exact"` is implemented in core and is
+always available. Install `codira-similarity-index-faiss` (or use the official
+bundle's `faiss` extra) before selecting `"faiss"`.
+
+`embeddings.similarity_profiles` owns *query-time* policy. Every configuration
+must define `default`; callers may select another name with
+`codira emb --search-profile NAME QUERY`, `codira docs --search-profile NAME
+QUERY`, or `codira ctx --search-profile NAME QUERY`. A profile has:
+
+- `ef_search`: the HNSW graph exploration breadth. It is **not score
+  fuzziness**; larger values inspect more graph neighbors and can improve
+  recall at higher latency. Exact indexes accept the value but do not need it.
+- `candidate_limit`: the number of similarity candidates requested before
+  structural filtering such as a path prefix.
+- `default_result_limit` and `max_result_limit`: the output-result policy after
+  structural filtering; command `--limit` values cannot exceed the maximum.
+
+For example, keep the default interactive profile and add a more thorough
+batch profile:
+
+```toml
+[embeddings]
+similarity_index = "faiss"
+similarity_profiles = [
+  { name = "default", ef_search = 64, candidate_limit = 256, default_result_limit = 20, max_result_limit = 256 },
+  { name = "thorough", ef_search = 160, candidate_limit = 800, default_result_limit = 50, max_result_limit = 800 },
+]
+
+[plugins.similarity-index-faiss]
+index_type = "hnsw"
+M = 32
+efConstruction = 160
+```
+
+`M` and `efConstruction` are **build-time** HNSW parameters; changing either,
+or changing `index_type`, requires `codira emb rebuild`. Changing only a named
+profile does not rebuild the artifact. The selected similarity-index identity
+is persisted with its derived artifact. After changing an incompatible index
+or vector-store format, discard the derived state with `codira emb reset` and
+then run `codira index` (or `codira emb rebuild` once durable vectors exist).
+Do not attempt to reuse or hand-edit old artifact files.
+
+This is a breaking configuration format. Configurations with
+`config_version = 1` are rejected: run `codira config init --force`, then
+select `similarity_index = "exact"` or an installed alternative explicitly.
 
 Vector stores can retain vectors for older embedding or vector-store
 identities. Use `codira emb purge` to inspect or delete retained sets:
@@ -615,16 +668,7 @@ inter_op_num_threads = 0
 ONNX batching is controlled by the shared `[embeddings].batch_size` key, not by
 a plugin-local option.
 
-The SQLite vector store bounds each sqlite-vec nearest-neighbor request before
-structural filtering. Tune that window only when retrieval recall requires it;
-larger values increase query latency and must remain supported by the installed
-sqlite-vec build.
-
-```toml
-[plugins.vector-store-sqlite]
-enabled = true
-candidate_limit = 256
-
-[plugins.vector-store-duckdb]
-enabled = true
-```
+Vector stores own durable snapshots only. Candidate breadth belongs to named
+`embeddings.similarity_profiles`, so legacy
+`plugins.vector-store-*.candidate_limit` settings are invalid. Keep vector
+store tables limited to store-specific options such as `enabled`.

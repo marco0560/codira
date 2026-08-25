@@ -32,6 +32,7 @@ The repository currently tracks these architecture decision records:
 - [ADR-028 — Host-target runtime decoupling](ADR-028-host-target-runtime-decoupling.md)
 - [ADR-029 — Receipt-scoped uninstallation](ADR-029-receipt-scoped-uninstallation.md)
 - [ADR-030 — Syntax-only macro analysis](ADR-030-syntax-only-macro-analysis.md)
+- [ADR-031 — Similarity-index plugin family](ADR-031-similarity-index-plugin-family.md)
 
 `ADR-004` is the active migration record for the current architecture branch
 and should be read together with the documents under `docs/architecture/`.

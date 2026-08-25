@@ -39,6 +39,7 @@ import hashlib
 import io
 import json
 import os
+import struct
 import sys
 import tempfile
 from pathlib import Path
@@ -46,10 +47,24 @@ from pathlib import Path
 import codira
 import codira.cli as cli
 import codira.registry as registry
+from codira.contracts import (
+    EmbeddingEngineSpec,
+    SimilarityIndexIdentity,
+    SimilaritySearchProfile,
+    SimilaritySearchRequest,
+    StoredVectorRow,
+    VectorSetIdentity,
+    VectorSnapshot,
+    VectorSnapshotMetadata,
+    VectorStoreSpec,
+)
 from codira.mcp.server import create_server, resolve_startup_binding
 from codira.model_store import ModelIdentity, SharedModelStore
+from codira.similarity import ExactSimilarityIndex
 from codira.storage import override_storage_root
 from codira.workspace_registry import WorkspaceRegistry
+import codira_similarity_index_faiss
+from codira_similarity_index_faiss import FaissSimilarityIndex
 
 site_root = Path(os.environ["CODIRA_REHEARSAL_INSTALL_DIR"]).resolve()
 assert Path(codira.__file__).resolve().is_relative_to(site_root)
@@ -112,6 +127,64 @@ with tempfile.TemporaryDirectory() as temporary:
         identity, lambda path: path.write_bytes(payload), expected_sha256=digest
     )
     assert artifact_one == artifact_two
+    assert Path(codira_similarity_index_faiss.__file__).resolve().is_relative_to(site_root)
+    vector_set = VectorSetIdentity(
+        engine=EmbeddingEngineSpec("rehearsal", "1", "fixture", "1", 2),
+        vector_store=VectorStoreSpec("rehearsal", "1", "1"),
+    )
+    snapshot = VectorSnapshot(
+        VectorSnapshotMetadata(vector_set, 1, "symbol", 3),
+        (
+            StoredVectorRow("symbol", "alpha", "a", 2, struct.pack("<2f", 1.0, 0.0)),
+            StoredVectorRow("symbol", "beta", "b", 2, struct.pack("<2f", 0.0, 1.0)),
+            StoredVectorRow("symbol", "gamma", "c", 2, struct.pack("<2f", 1.0, 1.0)),
+        ),
+    )
+    exact_identity = SimilarityIndexIdentity(
+        root, vector_set, ExactSimilarityIndex().spec({})
+    )
+    exact_request = SimilaritySearchRequest(
+        exact_identity,
+        snapshot,
+        (1.0, 1.0),
+        SimilaritySearchProfile("exact", 8, 3, 3, 3),
+    )
+    exact_ids = [score.stable_id for score in ExactSimilarityIndex().search(exact_request)]
+    assert exact_ids == ["gamma", "alpha", "beta"]
+    for config in (
+        {"index_type": "flat"},
+        {"index_type": "hnsw", "M": 8, "efConstruction": 32},
+    ):
+        similarity = FaissSimilarityIndex()
+        similarity.initialize(root, config)
+        similarity_identity = SimilarityIndexIdentity(root, vector_set, similarity.spec(config))
+        similarity.rebuild(snapshot, similarity_identity)
+        for profile in (
+            SimilaritySearchProfile("fast", 4, 3, 3, 3),
+            SimilaritySearchProfile("thorough", 16, 3, 3, 3),
+        ):
+            request = SimilaritySearchRequest(
+                similarity_identity, snapshot, (1.0, 1.0), profile
+            )
+            assert [score.stable_id for score in similarity.search(request)] == exact_ids
+        stale = VectorSnapshot(
+            VectorSnapshotMetadata(vector_set, 2, "symbol", 3), snapshot.rows
+        )
+        try:
+            similarity.search(
+                SimilaritySearchRequest(
+                    similarity_identity,
+                    stale,
+                    (1.0, 1.0),
+                    SimilaritySearchProfile("stale", 8, 3, 3, 3),
+                )
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("stale FAISS artifact must fail closed")
+        similarity.reset_runtime_caches()
+        assert [score.stable_id for score in similarity.search(request)] == exact_ids
 print(
     json.dumps(
         {
@@ -121,6 +194,8 @@ print(
             "target_python": ">=3.8,<3.9",
             "workspace": binding.workspace_name,
             "shared_model_reused": artifact_one == artifact_two,
+            "faiss_wheel": codira_similarity_index_faiss.__file__,
+            "faiss_modes": ["flat", "hnsw"],
         }
     )
 )

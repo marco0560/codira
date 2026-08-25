@@ -8,8 +8,9 @@ you need the DOT, Markdown, JSON, or optional SVG artifact set.
 
 `emb` searches stored symbol embeddings and `docs` searches stored
 documentation embeddings. Both accept a query, optional repository-relative
-`prefix`, and bounded `limit`; neither exposes `emb purge` or any other
-vector-store maintenance operation.
+`prefix`, bounded `limit`, and optional `search_profile`; neither exposes
+`emb purge`, `emb rebuild`, `emb reset`, or any other vector-store maintenance
+operation.
 
 ## Start in under five minutes
 

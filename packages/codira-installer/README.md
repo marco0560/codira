@@ -31,3 +31,10 @@ Optional model provisioning runs inside the selected target environment. Hardwar
 inspection yields a reviewable recommendation, while calibration changes require
 a separate confirmation. Indexing and query daemon service actions are explicit,
 repository-scoped, and never elevate privileges.
+
+When the catalog offers `codira-similarity-index-faiss`, selecting it adds the
+optional FAISS similarity-index package; the core exact index is always
+available. The installer configures packages, not repository-specific HNSW
+build choices: select `embeddings.similarity_index` and profiles in the target
+repository config, then rebuild or reset derived artifacts as documented in
+the main configuration guide.

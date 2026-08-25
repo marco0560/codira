@@ -234,7 +234,7 @@ def test_capability_contract_validates_against_schema() -> None:
     payload = build_capability_contract([PythonAnalyzer()])
 
     jsonschema.validate(payload, _capabilities_schema())
-    assert payload["schema_version"] == "1.9"
+    assert payload["schema_version"] == "1.11"
     assert payload["ontology"] == {
         "version": "2",
         "types": [
@@ -323,6 +323,15 @@ def test_capability_contract_validates_against_schema() -> None:
     assert {"-n", "--dry-run", "-b", "--backend"} <= set(emb_purge_options)
     assert {"-O", "--older-than"} <= set(emb_purge_options)
     assert {"-K", "--keep", "-y", "--yes"} <= set(emb_purge_options)
+    emb_rebuild = cast("Mapping[str, object]", emb_subcommands["rebuild"])
+    assert emb_rebuild["options"] == ["-j", "--json"]
+    emb_reset = cast("Mapping[str, object]", emb_subcommands["reset"])
+    assert set(cast("list[str]", emb_reset["options"])) == {
+        "-y",
+        "--yes",
+        "-j",
+        "--json",
+    }
     declared_channels = set(channels)
     referenced_channels: set[str] = set()
     for command in commands.values():

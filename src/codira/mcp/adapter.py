@@ -679,6 +679,7 @@ class MCPAdapter:
         *,
         prefix: str | None = None,
         limit: int = 100,
+        search_profile: str | None = None,
         output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Search stored symbol embeddings without vector-store maintenance.
@@ -691,6 +692,8 @@ class MCPAdapter:
             Repository-relative path prefix restricting candidate files.
         limit : int, optional
             Maximum number of ranked embedding matches to return.
+        search_profile : str | None, optional
+            Named similarity-index profile, or the configured default.
         output_budget : int, optional
             Maximum serialized character count reported for the result payload.
 
@@ -720,6 +723,7 @@ class MCPAdapter:
                     limit=limit,
                     min_score=0.0,
                     prefix=normalized_prefix,
+                    search_profile=search_profile,
                     conn=conn,
                 )
             )
@@ -735,6 +739,7 @@ class MCPAdapter:
         *,
         prefix: str | None = None,
         limit: int = 100,
+        search_profile: str | None = None,
         output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Search stored documentation embeddings without mutating the index.
@@ -747,6 +752,8 @@ class MCPAdapter:
             Repository-relative path prefix restricting candidate documents.
         limit : int, optional
             Maximum number of ranked documentation matches to return.
+        search_profile : str | None, optional
+            Named similarity-index profile, or the configured default.
         output_budget : int, optional
             Maximum serialized character count reported for the result payload.
 
@@ -771,6 +778,7 @@ class MCPAdapter:
                     limit=limit,
                     min_score=0.0,
                     prefix=normalized_prefix,
+                    search_profile=search_profile,
                     conn=conn,
                 )
             )

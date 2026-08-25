@@ -445,6 +445,7 @@ def test_retrieve_documentation_candidates_renders_explicit_provenance(
         cast("BackendQueryConnection", object()),
         classify_query("architecture plugin loading docs"),
         None,
+        None,
     )
 
     assert results == [

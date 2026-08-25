@@ -145,6 +145,7 @@
               "backend",
               "embedding",
               "vector-store",
+              "similarity-index",
               "documentation-audit"
             ]
           },
@@ -182,6 +183,7 @@
               "backend",
               "embedding",
               "vector-store",
+              "similarity-index",
               "documentation-audit"
             ]
           },

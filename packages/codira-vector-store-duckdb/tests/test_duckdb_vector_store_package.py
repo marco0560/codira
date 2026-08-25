@@ -14,7 +14,8 @@ from codira.contracts import (
     PendingEmbeddingRow,
     PreparedVectorIdentityRow,
     PreparedVectorRow,
-    VectorSimilarityRequest,
+    VectorSnapshotRequest,
+    VectorStoreError,
     VectorSetIdentity,
     VectorStore,
     VectorStoreFullIndexRequest,
@@ -117,7 +118,7 @@ def test_duckdb_vector_store_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.55.0"
+    assert project["project"]["version"] == "1.57.0"
     assert project["project"]["entry-points"]["codira.vector_stores"] == {
         "duckdb": "codira_vector_store_duckdb:build_vector_store"
     }
@@ -207,6 +208,28 @@ def test_duckdb_vector_store_initializes_separated_database(tmp_path: Path) -> N
             ).fetchall()
         }
     assert {"vector_sets", "vectors", "vector_cache", "pending_vectors"} <= tables
+
+
+def test_duckdb_vector_store_rejects_pre_revision_state(tmp_path: Path) -> None:
+    """Fail closed instead of altering a legacy DuckDB vector store.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing a pre-revision schema.
+
+    Returns
+    -------
+    None
+        The test verifies recovery requires an explicit semantic reset.
+    """
+    path = get_vector_store_path(tmp_path)
+    path.parent.mkdir()
+    with duckdb.connect(str(path)) as conn:
+        conn.execute("CREATE TABLE vector_sets (id UBIGINT PRIMARY KEY)")
+
+    with pytest.raises(VectorStoreError, match="codira emb reset --yes"):
+        DuckDBVectorStore().initialize(tmp_path, {})
 
 
 def test_duckdb_vector_store_persists_vector_rows(tmp_path: Path) -> None:
@@ -565,11 +588,11 @@ def test_duckdb_vector_store_caches_vector_set_identity(
     assert initialize_calls == 2
 
 
-def test_duckdb_vector_store_scores_native_and_legacy_vectors(
+def test_duckdb_vector_store_snapshots_native_and_blob_vectors(
     tmp_path: Path,
 ) -> None:
     """
-    Score native vector-value rows and legacy blob-only rows together.
+    Snapshot native vector-value rows and blob payloads together.
 
     Parameters
     ----------
@@ -579,8 +602,8 @@ def test_duckdb_vector_store_scores_native_and_legacy_vectors(
     Returns
     -------
     None
-        The test asserts DuckDB returns deterministic similarity scores for
-        both current and legacy vector encodings.
+        The test asserts DuckDB returns deterministic source rows regardless
+        of its derived vector-value representation.
     """
     store = DuckDBVectorStore()
     identity = _vector_identity(store)
@@ -609,19 +632,24 @@ def test_duckdb_vector_store_scores_native_and_legacy_vectors(
             ),
         )
 
-    scores = store.similarity_scores(
-        VectorSimilarityRequest(
+    snapshot = store.vector_snapshot(
+        VectorSnapshotRequest(
             root=tmp_path,
             identity=identity,
             object_type="symbol",
-            query_vector=[1.0, 0.0, 0.0],
-            min_score=0.4,
             config={},
         )
     )
 
-    assert [score.stable_id for score in scores] == ["symbol:one", "symbol:legacy"]
-    assert [score.score for score in scores] == pytest.approx([1.0, 0.5])
+    assert [row.stable_id for row in snapshot.rows] == ["symbol:legacy", "symbol:one"]
+    assert snapshot.metadata.revision == 1
+    store.store_vectors(tmp_path, identity, _prepared_rows(), {})
+    assert (
+        store.vector_snapshot(
+            VectorSnapshotRequest(tmp_path, identity, "symbol", {})
+        ).metadata.revision
+        == 1
+    )
 
 
 def test_duckdb_vector_store_purges_stale_sets_with_retention(

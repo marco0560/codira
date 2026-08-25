@@ -60,6 +60,8 @@ from codira.contracts import (
     VectorSetIdentity,
     VectorSimilarityRequest,
     VectorSimilarityScore,
+    VectorSnapshot,
+    VectorSnapshotRequest,
     VectorStore,
     VectorStorePurgeRequest,
     VectorStorePurgeResult,
@@ -511,6 +513,29 @@ class _FakeVectorStore:
             The fake vector store has no materialized vectors.
         """
         del root, identity, rows, config
+
+    def vector_snapshot(self, request: VectorSnapshotRequest) -> VectorSnapshot:
+        """Reject snapshots because this fake only supports indexing tests.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorSnapshotRequest
+            Ignored snapshot request.
+
+        Returns
+        -------
+        codira.contracts.VectorSnapshot
+            This method never returns a snapshot.
+
+        Raises
+        ------
+        RuntimeError
+            Always raised because snapshots are not exercised by this fake.
+        """
+
+        del request
+        message = "snapshot not configured"
+        raise RuntimeError(message)
 
     def similarity_scores(
         self,
@@ -2690,8 +2715,8 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-backend-duckdb==1.57.0",
         "codira-embedding-sentence-transformers==1.55.0",
         "codira-embedding-onnx==1.55.0",
-        "codira-vector-store-sqlite==1.55.0",
-        "codira-vector-store-duckdb==1.55.0",
+        "codira-vector-store-sqlite==1.57.0",
+        "codira-vector-store-duckdb==1.57.0",
     ]
     assert pyproject.get("tool", {}).get("poetry") is None
 

@@ -185,6 +185,7 @@ FIRST_PARTY_PLUGIN_FACTORIES = (
     ("codira_embedding_sentence_transformers", "build_engine"),
     ("codira_vector_store_duckdb", "build_vector_store"),
     ("codira_vector_store_sqlite", "build_vector_store"),
+    ("codira_similarity_index_faiss", "build_similarity_index"),
     ("codira_documentation_audit_doxygen", "build_audit_plugin"),
     ("codira_documentation_audit_google", "build_audit_plugin"),
     ("codira_documentation_audit_numpy", "build_audit_plugin"),
@@ -980,6 +981,40 @@ def test_plugin_configuration_schema_validation_rejects_invalid_values(
         registry.validate_plugin_configuration()
 
 
+def test_explicit_faiss_similarity_index_never_falls_back_to_exact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Report the missing configured index instead of silently using exact.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that makes the configured FAISS provider unavailable.
+    tmp_path : pathlib.Path
+        Temporary repository root containing the explicit selection.
+
+    Returns
+    -------
+    None
+        The test verifies missing FAISS has an installation-specific failure.
+    """
+
+    config_path = tmp_path / ".codira" / "config.toml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        '[embeddings]\nsimilarity_index = "faiss"\n', encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        registry,
+        "_plugin_snapshot",
+        lambda _family, *, root=None: ([], []),
+    )
+    with pytest.raises(ValueError, match="codira-similarity-index-faiss"):
+        registry.active_similarity_index(root=tmp_path)
+
+
 def test_embedding_onnx_config_validation_rejects_unknown_keys(tmp_path: Path) -> None:
     """
     Reject typoed ONNX embedding plugin options before indexing starts.
@@ -1373,6 +1408,10 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
             "source=entry_point version=24 entry_point=duckdb"
         ),
         (
+            "similarity-index: exact [active, loaded] provider=codira origin=core "
+            "source=builtin version=1"
+        ),
+        (
             "documentation-audit: numpy [loaded] "
             "provider=codira-documentation-audit-numpy origin=first_party "
             "source=entry_point version=1 entry_point=numpy"
@@ -1404,6 +1443,18 @@ def test_plugins_cli_marks_only_the_configured_backend_active(
             "status": "loaded",
             "version": "24",
             "entry_point": "duckdb",
+            "detail": None,
+        },
+        {
+            "family": "similarity-index",
+            "name": "exact",
+            "active": True,
+            "provider": "codira",
+            "origin": "core",
+            "source": "builtin",
+            "status": "loaded",
+            "version": "1",
+            "entry_point": None,
             "detail": None,
         },
         {
@@ -1443,6 +1494,7 @@ def test_plugin_snapshot_cache_reuses_entry_point_discovery(
         registry.BACKEND_ENTRY_POINT_GROUP: 0,
         registry.EMBEDDING_ENGINE_ENTRY_POINT_GROUP: 0,
         registry.VECTOR_STORE_ENTRY_POINT_GROUP: 0,
+        registry.SIMILARITY_INDEX_ENTRY_POINT_GROUP: 0,
         registry.DOCUMENTATION_AUDIT_ENTRY_POINT_GROUP: 0,
     }
 
@@ -1480,6 +1532,7 @@ def test_plugin_snapshot_cache_reuses_entry_point_discovery(
         registry.BACKEND_ENTRY_POINT_GROUP: 1,
         registry.EMBEDDING_ENGINE_ENTRY_POINT_GROUP: 1,
         registry.VECTOR_STORE_ENTRY_POINT_GROUP: 1,
+        registry.SIMILARITY_INDEX_ENTRY_POINT_GROUP: 1,
         registry.DOCUMENTATION_AUDIT_ENTRY_POINT_GROUP: 1,
     }
 

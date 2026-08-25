@@ -51,6 +51,13 @@ temporary bypass variables.
 
 Releases are created by GitHub Actions after commits land on `main`.
 
+For a release that changes similarity-index configuration or artifact formats,
+the release notes must lead with the breaking reset path: regenerate a v1
+configuration with `codira config init --force`, select an installed similarity
+index, run `codira emb reset` for incompatible derived state, and index again.
+Profile-only changes are not persisted-artifact migrations and do not require a
+rebuild.
+
 The current release workflow:
 
 1. runs on pushes to `main`

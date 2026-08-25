@@ -1,5 +1,5 @@
 {
-  "coordinated_version": "1.55.0",
+  "coordinated_version": "1.68.0",
   "packages": [
     {
       "configuration_schema": {
@@ -804,12 +804,6 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
-          "candidate_limit": {
-            "default": 256,
-            "description": "Maximum nearest vector payloads retrieved per sqlite-vec similarity request before structural filtering.",
-            "minimum": 1,
-            "type": "integer"
-          },
           "enabled": {
             "default": true,
             "description": "Whether this plugin participates in runtime discovery.",
@@ -839,6 +833,45 @@
       "family": "vector-store",
       "name": "codira-vector-store-duckdb",
       "path": "packages/codira-vector-store-duckdb",
+      "selectable": true
+    },
+    {
+      "configuration_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "M": {
+            "default": 32,
+            "description": "HNSW graph degree used when index_type is hnsw.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "efConstruction": {
+            "default": 200,
+            "description": "HNSW construction exploration used when index_type is hnsw.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "enabled": {
+            "default": true,
+            "description": "Whether this plugin participates in runtime discovery.",
+            "type": "boolean"
+          },
+          "index_type": {
+            "default": "flat",
+            "description": "FAISS build strategy; hnsw is approximate.",
+            "enum": [
+              "flat",
+              "hnsw"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "family": "similarity-index",
+      "name": "codira-similarity-index-faiss",
+      "path": "packages/codira-similarity-index-faiss",
       "selectable": true
     },
     {

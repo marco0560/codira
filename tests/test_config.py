@@ -133,6 +133,45 @@ def test_effective_config_merges_with_env_precedence(
     assert config.origins["plugins.disabled_analyzers"].path == repo_path
 
 
+def test_effective_config_requires_default_similarity_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Reject a configured profile set that omits the default profile.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate platform configuration paths.
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts unqualified semantic searches always have a policy.
+    """
+
+    _isolate_config_paths(monkeypatch, tmp_path)
+    root = tmp_path / "repo"
+    config_path = root / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "[embeddings]\n"
+        "\n"
+        "[[embeddings.similarity_profiles]]\n"
+        'name = "fast"\n'
+        "ef_search = 16\n"
+        "candidate_limit = 32\n"
+        "default_result_limit = 10\n"
+        "max_result_limit = 32\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="must include a profile named 'default'"):
+        load_effective_config(root=root)
+
+
 def test_effective_config_cache_reuses_file_backed_loads(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -237,6 +276,59 @@ def test_config_validation_rejects_unknown_keys() -> None:
 
     with pytest.raises(ConfigError, match="Unknown configuration key"):
         validate_config_mapping({"embeddings": {"unknown": True}})
+
+
+def test_config_version_one_requires_regeneration() -> None:
+    """Reject v1 configuration with the concrete v2 remediation.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test verifies the failure tells operators how to regenerate.
+    """
+
+    with pytest.raises(ConfigError, match="codira config init --force"):
+        validate_config_mapping({"config_version": 1})
+
+
+def test_config_version_two_requires_similarity_index() -> None:
+    """Reject partial v2 embedding configuration without an index selection.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test verifies the required v2 setting is named in the failure.
+    """
+
+    with pytest.raises(ConfigError, match="embeddings.similarity_index"):
+        validate_config_mapping({"config_version": 2, "embeddings": {"enabled": True}})
+
+
+def test_config_rejects_legacy_vector_store_candidate_limit() -> None:
+    """Keep retrieval candidate limits out of durable vector-store tables.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test verifies the migration points to named index profiles.
+    """
+
+    with pytest.raises(ConfigError, match="similarity-index search profile"):
+        validate_config_mapping(
+            {"plugins": {"vector-store-sqlite": {"candidate_limit": 20}}}
+        )
 
 
 def test_daemon_config_round_trips_and_tracks_repo_origin(
@@ -532,7 +624,7 @@ def test_profile_rendering_includes_gpu_profile_values() -> None:
 
     rendered = render_config_toml(profile_config("gpu"))
 
-    assert "config_version = 1" in rendered
+    assert "config_version = 2" in rendered
     assert 'device = "cuda"' in rendered
     assert "batch_size = 64" in rendered
     assert "[embeddings.gpu]" in rendered
@@ -600,6 +692,7 @@ def test_full_profile_rendering_includes_first_party_plugin_defaults() -> None:
         "[backend]",
         "[plugins]",
         "[embeddings]",
+        "[[embeddings.similarity_profiles]]",
         "[embeddings.gpu]",
         "[embeddings.indexing]",
         "[index.concurrency]",
@@ -697,7 +790,7 @@ def test_config_cli_init_and_dump_json(
     assert payload["status"] == "ok"
     assert payload["results"]["embeddings"]["batch_size"] == 8
     rendered = config_module.user_config_path().read_text(encoding="utf-8")
-    assert "# config_version = 1" in rendered
+    assert "# config_version = 2" in rendered
     assert "# enabled = true" in rendered
     assert "batch_size = 8" in rendered
     assert "# batch_size = 32" not in rendered
@@ -734,7 +827,7 @@ def test_config_cli_init_defaults_to_repo_config(
     repo_config = repo_root / ".codira" / "config.toml"
     assert repo_config.exists()
     assert not config_module.user_config_path().exists()
-    assert "# config_version = 1" in repo_config.read_text(encoding="utf-8")
+    assert "# config_version = 2" in repo_config.read_text(encoding="utf-8")
 
 
 def test_daemon_cli_reports_windows_scm_dependency_boundary(

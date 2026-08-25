@@ -139,6 +139,7 @@ from codira.registry import (
     active_index_backend,
     active_language_analyzers,
     active_plugin_instance_cache,
+    active_similarity_index,
     configured_index_backend_name,
     plugin_registrations,
     validate_plugin_configuration,
@@ -152,10 +153,12 @@ from codira.semantic.search import (
     documentation_candidates,
     embedding_candidates,
 )
+from codira.similarity_lifecycle import rebuild_active_similarity_index
 from codira.storage import (
     _read_metadata_file,
     _write_metadata_file,
     acquire_index_lock,
+    get_codira_dir,
     get_metadata_path,
     get_storage_root,
     override_storage_root,
@@ -341,6 +344,8 @@ class EmbeddingCommandRequest:
         Whether to render structured JSON output.
     query_prefix : str | None, optional
         User-facing repo-root-relative prefix echoed in JSON output.
+    search_profile : str | None, optional
+        Named similarity-index runtime profile.
     """
 
     root: Path
@@ -349,6 +354,7 @@ class EmbeddingCommandRequest:
     prefix: str | None = None
     as_json: bool = False
     query_prefix: str | None = None
+    search_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -372,6 +378,8 @@ class DocumentationCommandRequest:
         Whether to render inspection details for the docs-only retrieval pass.
     query_prefix : str | None, optional
         User-facing repo-root-relative prefix echoed in JSON output.
+    search_profile : str | None, optional
+        Named similarity-index runtime profile.
     """
 
     root: Path
@@ -381,6 +389,7 @@ class DocumentationCommandRequest:
     as_json: bool = False
     explain: bool = False
     query_prefix: str | None = None
+    search_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -698,7 +707,7 @@ def _plugin_is_active_backend(
     root: Path | None = None,
 ) -> bool:
     """
-    Return whether one plugin row is the configured active backend.
+    Return whether one plugin row is the configured active singleton.
 
     Parameters
     ----------
@@ -713,10 +722,14 @@ def _plugin_is_active_backend(
     Returns
     -------
     bool
-        ``True`` when the row represents the currently configured backend.
+        ``True`` when the row represents the currently configured singleton.
     """
 
-    return family == "backend" and name == configured_index_backend_name(root=root)
+    if family == "backend":
+        return name == configured_index_backend_name(root=root)
+    if family == "similarity-index":
+        return name == load_effective_config(root=root).embeddings.similarity_index
+    return False
 
 
 def _render_version_report(*, root: Path | None = None) -> str:
@@ -1169,8 +1182,12 @@ def build_parser() -> argparse.ArgumentParser:
     embeddings_parser.add_argument(
         "query",
         nargs="?",
-        metavar="{query,purge}",
+        metavar="{query,purge,rebuild,reset}",
         help="Natural-language query to score against stored embeddings",
+    )
+    embeddings_parser.add_argument(
+        "--search-profile",
+        help="Named similarity-index search profile (default: configured default)",
     )
     embeddings_parser.add_argument(
         "-l",
@@ -1263,6 +1280,10 @@ def build_parser() -> argparse.ArgumentParser:
     docs_parser.add_argument(
         "query",
         help="Natural-language query to score against stored documentation",
+    )
+    docs_parser.add_argument(
+        "--search-profile",
+        help="Named similarity-index search profile (default: configured default)",
     )
     docs_parser.add_argument(
         "-l",
@@ -1510,6 +1531,10 @@ def build_parser() -> argparse.ArgumentParser:
         "-x",
         "--prefix",
         help="Restrict retrieval to files under this repo-root-relative path prefix",
+    )
+    context_parser.add_argument(
+        "--search-profile",
+        help="Use a named similarity-index search profile for semantic channels",
     )
     _add_repo_path_arguments(context_parser)
 
@@ -2226,6 +2251,8 @@ def _run_index(request: IndexCommandRequest) -> int:  # noqa: C901, PLR0912
                 vector_store_context.identity,
                 vector_store_context.config,
             )
+            if recomputed:
+                rebuild_active_similarity_index(root)
         report = IndexReport(
             indexed=0,
             reused=0,
@@ -3262,6 +3289,7 @@ def _run_embeddings(
             limit=request.limit,
             min_score=0.0,
             prefix=request.prefix,
+            search_profile=request.search_profile,
         )
     )
     if request.as_json:
@@ -3380,6 +3408,7 @@ def _run_documentation_lookup(
             limit=request.limit,
             min_score=0.0,
             prefix=request.prefix,
+            search_profile=request.search_profile,
         )
     )
 
@@ -4987,13 +5016,17 @@ def _run_embeddings_command(
     Raises
     ------
     ConfigError
-        If no query or purge submode is supplied, or if purge-only options are
-        combined with a search query.
+        If no query or maintenance submode is supplied, or if maintenance-only
+        options are combined with a search query.
     """
     if args.query == "purge":
         return _run_embedding_purge_command(args, root)
+    if args.query == "rebuild":
+        return _run_embedding_rebuild_command(args, root)
+    if args.query == "reset":
+        return _run_embedding_reset_command(args, root)
     if args.query is None:
-        msg = "codira emb requires a query or `purge`"
+        msg = "codira emb requires a query, `purge`, `rebuild`, or `reset`"
         raise ConfigError(msg)
     if (
         args.stale
@@ -5012,6 +5045,7 @@ def _run_embeddings_command(
         {
             "query": args.query,
             "limit": args.limit,
+            "search_profile": args.search_profile,
             "as_json": args.json,
             "prefix": None if prefix is None else None,
             "query_prefix": raw_prefix,
@@ -5031,6 +5065,7 @@ def _run_embeddings_command(
             prefix=prefix,
             as_json=args.json,
             query_prefix=raw_prefix,
+            search_profile=args.search_profile,
         )
     )
     emit_execution_mode(routing, requested=args.execution_mode)
@@ -5067,6 +5102,125 @@ def _purge_result_payload(result: VectorStorePurgeResult) -> dict[str, object]:
         "size_after_bytes": result.size_after_bytes,
         "note": result.note,
     }
+
+
+def _run_embedding_rebuild_command(args: argparse.Namespace, root: Path) -> int:
+    """Rebuild configured derived similarity state without embedding inference.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed embedding command arguments.
+    root : pathlib.Path
+        Repository root whose derived semantic state is rebuilt.
+
+    Returns
+    -------
+    int
+        Zero after every authoritative snapshot was rebuilt consistently.
+
+    Raises
+    ------
+    ConfigError
+        If the source vector revision changes while the rebuild is running.
+    """
+    if (
+        args.stale
+        or args.all_sets
+        or args.dry_run
+        or args.backend
+        or args.older_than
+        or args.keep
+        or args.yes
+    ):
+        msg = "emb rebuild does not accept purge options"
+        raise ConfigError(msg)
+    with acquire_index_lock(root):
+        result = rebuild_active_similarity_index(root)
+    if args.json:
+        _emit_json(
+            {
+                "schema_version": QUERY_JSON_SCHEMA_VERSION,
+                "command": "emb rebuild",
+                "status": "ok",
+                "index": result.index,
+                "source_revisions": result.source_revisions,
+            }
+        )
+    else:
+        print(f"Rebuilt similarity index: {result.index}")
+        print(f"Source revisions: {result.source_revisions}")
+    return 0
+
+
+def _run_embedding_reset_command(args: argparse.Namespace, root: Path) -> int:
+    """Remove confirmed repository-local semantic storage without migration.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed embedding command arguments.
+    root : pathlib.Path
+        Repository root whose semantic state may be removed.
+
+    Returns
+    -------
+    int
+        Zero after confirmed known vector-store files are removed.
+
+    Raises
+    ------
+    ConfigError
+        If the destructive operation lacks explicit confirmation.
+    """
+    if not args.yes:
+        msg = "codira emb reset requires --yes; semantic state is unrecoverable."
+        raise ConfigError(msg)
+    if (
+        args.stale
+        or args.all_sets
+        or args.dry_run
+        or args.backend
+        or args.older_than
+        or args.keep
+    ):
+        msg = "emb reset does not accept purge options"
+        raise ConfigError(msg)
+    state_root = get_codira_dir(root)
+    candidates = (
+        state_root / "embeddings.db",
+        state_root / "embeddings.db-shm",
+        state_root / "embeddings.db-wal",
+        state_root / "embeddings.duckdb",
+    )
+    removed: list[str] = []
+    with acquire_index_lock(root):
+        for path in candidates:
+            if path.exists():
+                path.unlink()
+                removed.append(str(path.relative_to(root)))
+        derived_root = state_root / "similarity-indexes"
+        if derived_root.exists():
+            shutil.rmtree(derived_root)
+            removed.append(str(derived_root.relative_to(root)))
+        # Reset is the recovery path for an unavailable or incompatible
+        # configured plugin; the command process owns no lasting cache.
+        with contextlib.suppress(ValueError):
+            active_similarity_index(root=root).reset_runtime_caches()
+    if args.json:
+        _emit_json(
+            {
+                "schema_version": QUERY_JSON_SCHEMA_VERSION,
+                "command": "emb reset",
+                "status": "ok",
+                "removed": removed,
+                "next": "codira index --full",
+            }
+        )
+    else:
+        print("Removed semantic state: " + (", ".join(removed) or "none"))
+        print("Next: codira index --full")
+    return 0
 
 
 def _run_embedding_purge_command(args: argparse.Namespace, root: Path) -> int:
@@ -5191,6 +5345,7 @@ def _run_docs_command(
             as_json=args.json,
             explain=args.explain,
             query_prefix=raw_prefix,
+            search_profile=args.search_profile,
         )
     )
 
@@ -5377,6 +5532,7 @@ def _run_context_command(
             "as_json": args.json,
             "as_prompt": args.prompt,
             "explain": args.explain,
+            "search_profile": args.search_profile,
         },
         supported=prefix is None,
     )
@@ -5393,6 +5549,7 @@ def _run_context_command(
             as_json=args.json,
             as_prompt=args.prompt,
             explain=args.explain,
+            search_profile=args.search_profile,
         )
     )
     print(result)
@@ -5548,6 +5705,7 @@ def build_query_daemon_cli_operations(
                 as_json=optional_bool(arguments, "as_json"),
                 as_prompt=optional_bool(arguments, "as_prompt"),
                 explain=optional_bool(arguments, "explain"),
+                search_profile=cast("str | None", arguments.get("search_profile")),
             )
         )
 
@@ -5581,6 +5739,7 @@ def build_query_daemon_cli_operations(
                     prefix=None,
                     as_json=optional_bool(arguments, "as_json"),
                     query_prefix=cast("str | None", arguments.get("query_prefix")),
+                    search_profile=cast("str | None", arguments.get("search_profile")),
                 )
             )
         )
@@ -5641,13 +5800,14 @@ def build_query_daemon_cli_operations(
     }
 
 
-def _run_context_without_freshness_check(
+def _run_context_without_freshness_check(  # noqa: PLR0913
     root: Path,
     *,
     query: str,
     as_json: bool,
     as_prompt: bool,
     explain: bool,
+    search_profile: str | None,
 ) -> int:
     """Render context in the daemon after its generation check already passed.
 
@@ -5663,6 +5823,8 @@ def _run_context_without_freshness_check(
         Whether to render a prompt.
     explain : bool
         Whether to render retrieval diagnostics.
+    search_profile : str | None
+        Named similarity-index runtime profile for semantic retrieval channels.
 
     Returns
     -------
@@ -5678,6 +5840,7 @@ def _run_context_without_freshness_check(
                 as_json=as_json,
                 as_prompt=as_prompt,
                 explain=explain,
+                search_profile=search_profile,
             )
         )
     )

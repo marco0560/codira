@@ -75,6 +75,7 @@ from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
     get_embedding_backend,
 )
+from codira.similarity_lifecycle import rebuild_active_similarity_index
 from codira.storage import (
     _read_metadata_file,
     _write_metadata_file,
@@ -1721,6 +1722,8 @@ def index_repo(
             embedding_index_mode=embedding_index_mode,
             analysis_concurrency=analysis_concurrency,
         )
+        if report.embedding_complete and (report.indexed > 0 or report.deleted > 0):
+            rebuild_active_similarity_index(root)
         backend = active_index_backend(root=root)
         analyzers = _active_language_analyzers(root=root)
         metadata = _read_metadata_file(get_metadata_path(root))

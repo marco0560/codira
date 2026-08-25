@@ -18,19 +18,27 @@
 1. Verify every distribution version is the intended coordinated release
    version.
 2. Align `codira-bundle-official` pins to the coordinated package set.
-3. Verify `README.md` uses absolute HTTPS image URLs for PyPI-rendered images;
+3. Publish the core version before a similarity-index plugin that declares the
+   new core lower bound; publish the optional FAISS plugin before the bundle
+   `faiss` extra. Verify its wheel and the bundle-extra smoke install.
+4. Put the breaking configuration-v2 and derived-artifact recovery instructions
+   (`codira config init --force`, `codira emb reset`, then indexing) in the
+   release notes; do not describe a staged migration.
+5. Verify `README.md` uses absolute HTTPS image URLs for PyPI-rendered images;
    relative repository paths such as `docs/badges/*.png` break on PyPI project
    pages.
-4. Confirm `codira -V` reports the core package and installed plugin
+6. Confirm `codira -V` reports the core package and installed plugin
    distribution versions.
-5. Build wheel and sdist artifacts for every distribution.
-6. Run `twine check` for every artifact.
-7. Upload to TestPyPI in dependency order.
-8. Run a fresh TestPyPI smoke test with `codira-bundle-official`.
-9. Verify TestPyPI metadata for `codira` includes the absolute badge URL in
+7. Build wheel and sdist artifacts for every distribution.
+8. Run `twine check` for every artifact.
+9. Upload to TestPyPI in dependency order.
+10. Run a fresh TestPyPI smoke test with `codira-bundle-official` and its
+    `faiss` extra.
+11. Verify TestPyPI metadata for `codira` includes the absolute badge URL in
    the long description before uploading the same artifacts to PyPI.
-10. Upload to PyPI in dependency order.
-11. Run a fresh PyPI smoke test with `codira-bundle-official`.
+12. Upload to PyPI in dependency order.
+13. Run a fresh PyPI smoke test with `codira-bundle-official` and its `faiss`
+    extra.
 
 ## Installer release rehearsal
 

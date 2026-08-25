@@ -152,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
                 as_json=True,
                 as_prompt=False,
                 explain=False,
+                search_profile=None,
             ),
             "emb": lambda: _run_embeddings(
                 EmbeddingCommandRequest(

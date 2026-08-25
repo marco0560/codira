@@ -27,14 +27,19 @@ from typing import Literal, cast
 import platformdirs
 import tomlkit
 
+from codira.contracts import (
+    SimilaritySearchProfile,
+    validate_similarity_search_profiles,
+)
 from codira.platform_paths import platform_paths
 
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 APP_NAME = "codira"
 CONFIG_FILENAME = "config.toml"
 DEFAULT_BACKEND_NAME = "sqlite"
 DEFAULT_EMBEDDING_ENGINE_NAME = "sentence-transformers"
 DEFAULT_VECTOR_STORE_NAME = "sqlite"
+DEFAULT_SIMILARITY_INDEX_NAME = "exact"
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_EMBEDDING_VERSION = "1"
 DEFAULT_EMBEDDING_MODEL_ROOT = ""
@@ -46,6 +51,9 @@ DEFAULT_EMBEDDING_GPU_MEMORY_LIMIT_MB = 0
 DEFAULT_EMBEDDING_INDEX_MODE = "immediate"
 DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES = ("symbol", "documentation")
 DEFAULT_EMBEDDING_INDEX_WORK_BATCH_MULTIPLIER = 256
+DEFAULT_SIMILARITY_SEARCH_PROFILES = (
+    SimilaritySearchProfile("default", 64, 256, 20, 256),
+)
 DEFAULT_INDEX_CONCURRENCY_STRATEGY = "auto"
 DEFAULT_INDEX_CONCURRENCY_MAX_WORKERS = 0
 DEFAULT_INDEX_CONCURRENCY_MIN_FILES = 16
@@ -228,6 +236,10 @@ class EmbeddingsConfig:
         Active embedding engine plugin name.
     vector_store : str
         Active vector-store plugin name.
+    similarity_index : str
+        Mandatory selected similarity-index implementation.
+    similarity_profiles : tuple[SimilaritySearchProfile, ...]
+        Named runtime candidate and result policies.
     model : str
         Embedding model identifier.
     version : str
@@ -254,6 +266,10 @@ class EmbeddingsConfig:
     enabled: bool = True
     engine: str = DEFAULT_EMBEDDING_ENGINE_NAME
     vector_store: str = DEFAULT_VECTOR_STORE_NAME
+    similarity_index: str = DEFAULT_SIMILARITY_INDEX_NAME
+    similarity_profiles: tuple[SimilaritySearchProfile, ...] = (
+        DEFAULT_SIMILARITY_SEARCH_PROFILES
+    )
     model: str = DEFAULT_EMBEDDING_MODEL
     version: str = DEFAULT_EMBEDDING_VERSION
     model_root: str = DEFAULT_EMBEDDING_MODEL_ROOT
@@ -412,6 +428,17 @@ DEFAULT_CONFIG: dict[str, object] = {
         "enabled": True,
         "engine": DEFAULT_EMBEDDING_ENGINE_NAME,
         "vector_store": DEFAULT_VECTOR_STORE_NAME,
+        "similarity_index": DEFAULT_SIMILARITY_INDEX_NAME,
+        "similarity_profiles": [
+            {
+                "name": profile.name,
+                "ef_search": profile.ef_search,
+                "candidate_limit": profile.candidate_limit,
+                "default_result_limit": profile.default_result_limit,
+                "max_result_limit": profile.max_result_limit,
+            }
+            for profile in DEFAULT_SIMILARITY_SEARCH_PROFILES
+        ],
         "model": DEFAULT_EMBEDDING_MODEL,
         "version": DEFAULT_EMBEDDING_VERSION,
         "model_root": DEFAULT_EMBEDDING_MODEL_ROOT,
@@ -609,6 +636,8 @@ _SCHEMA: dict[str, object] = {
         "enabled": bool,
         "engine": str,
         "vector_store": str,
+        "similarity_index": str,
+        "similarity_profiles": list,
         "model": str,
         "version": str,
         "model_root": str,
@@ -779,10 +808,14 @@ def _deep_copy_mapping(value: Mapping[str, object]) -> dict[str, object]:
 
     copied: dict[str, object] = {}
     for key, item in value.items():
-        if isinstance(item, Mapping):
+        if isinstance(item, (list, tuple)):
+            copied_items = [
+                _deep_copy_mapping(value) if isinstance(value, Mapping) else value
+                for value in item
+            ]
+            copied[key] = [value for value in copied_items if value != {}]
+        elif isinstance(item, Mapping):
             copied[key] = _deep_copy_mapping(item)
-        elif isinstance(item, list):
-            copied[key] = list(item)
         else:
             copied[key] = item
     return copied
@@ -1053,19 +1086,27 @@ def _validate_plugin_semantics(plugins: Mapping[str, object]) -> None:
                 "backend-",
                 "embedding-",
                 "vector-store-",
+                "similarity-index-",
                 "documentation-audit-",
             )
         ):
             msg = (
                 "Plugin configuration tables must be named "
                 "plugins.analyzer-*, plugins.backend-*, "
-                "plugins.embedding-*, plugins.vector-store-*, "
+                "plugins.embedding-*, plugins.vector-store-*, plugins.similarity-index-*, "
                 "or plugins.documentation-audit-*: "
                 f"plugins.{key}"
             )
             raise ConfigError(msg)
         if not isinstance(item, Mapping):
             msg = f"Configuration key plugins.{key} must be a table."
+            raise ConfigError(msg)
+        if key.startswith("vector-store-") and "candidate_limit" in item:
+            msg = (
+                f"Configuration key plugins.{key}.candidate_limit is no longer "
+                "supported. Define candidate_limit in a named "
+                "similarity-index search profile instead."
+            )
             raise ConfigError(msg)
         enabled = item.get("enabled")
         if enabled is not None and not isinstance(enabled, bool):
@@ -1352,7 +1393,7 @@ def _validate_daemon_semantics(daemon: Mapping[str, object]) -> None:
             raise ConfigError(msg)
 
 
-def _validate_semantics(value: Mapping[str, object]) -> None:
+def _validate_semantics(value: Mapping[str, object]) -> None:  # noqa: C901
     """
     Validate semantic constraints after type validation.
 
@@ -1374,7 +1415,11 @@ def _validate_semantics(value: Mapping[str, object]) -> None:
 
     config_version = value.get("config_version")
     if config_version is not None and config_version != CONFIG_VERSION:
-        msg = f"Unsupported config_version {config_version}; expected {CONFIG_VERSION}."
+        msg = (
+            f"Unsupported config_version {config_version}; expected {CONFIG_VERSION}. "
+            "Regenerate the configuration with `codira config init --force`, then "
+            'select embeddings.similarity_index = "exact" or another installed index.'
+        )
         raise ConfigError(msg)
 
     backend = value.get("backend")
@@ -1390,7 +1435,21 @@ def _validate_semantics(value: Mapping[str, object]) -> None:
 
     embeddings = value.get("embeddings")
     if isinstance(embeddings, Mapping):
-        for key in ("engine", "vector_store", "model", "version", "device"):
+        if config_version == CONFIG_VERSION and "similarity_index" not in embeddings:
+            msg = (
+                "Configuration version 2 requires embeddings.similarity_index. "
+                "Regenerate the configuration with `codira config init --force` "
+                'or add similarity_index = "exact" explicitly.'
+            )
+            raise ConfigError(msg)
+        for key in (
+            "engine",
+            "vector_store",
+            "similarity_index",
+            "model",
+            "version",
+            "device",
+        ):
             item = embeddings.get(key)
             if isinstance(item, str) and not item.strip():
                 msg = f"Configuration key embeddings.{key} must be non-empty."
@@ -1509,7 +1568,21 @@ def _merge_config(
 
     for key, item in incoming.items():
         dotted = key if not prefix else f"{prefix}.{key}"
-        if isinstance(item, Mapping):
+        if isinstance(item, (list, tuple)):
+            copied_items = [
+                _deep_copy_mapping(value) if isinstance(value, Mapping) else value
+                for value in item
+            ]
+            non_empty_items = [value for value in copied_items if value != {}]
+            if (
+                (item and not non_empty_items)
+                or dotted == "embeddings.similarity_profiles"
+                and not non_empty_items
+            ):
+                continue
+            target[key] = non_empty_items
+            origins[dotted] = origin
+        elif isinstance(item, Mapping):
             current = target.get(key)
             if not isinstance(current, dict):
                 current = {}
@@ -1521,9 +1594,6 @@ def _merge_config(
                 origin=origin,
                 prefix=dotted,
             )
-        elif isinstance(item, list):
-            target[key] = list(item)
-            origins[dotted] = origin
         else:
             target[key] = item
             origins[dotted] = origin
@@ -2328,6 +2398,17 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
             "enabled": config.embeddings.enabled,
             "engine": config.embeddings.engine,
             "vector_store": config.embeddings.vector_store,
+            "similarity_index": config.embeddings.similarity_index,
+            "similarity_profiles": [
+                {
+                    "name": profile.name,
+                    "ef_search": profile.ef_search,
+                    "candidate_limit": profile.candidate_limit,
+                    "default_result_limit": profile.default_result_limit,
+                    "max_result_limit": profile.max_result_limit,
+                }
+                for profile in config.embeddings.similarity_profiles
+            ],
             "model": config.embeddings.model,
             "version": config.embeddings.version,
             "model_root": config.embeddings.model_root,
@@ -2457,6 +2538,54 @@ def _config_from_mapping(
             )
         )
     embeddings = cast("Mapping[str, object]", value["embeddings"])
+    profile_values = cast("list[object]", embeddings["similarity_profiles"])
+    try:
+        similarity_profiles = validate_similarity_search_profiles(
+            tuple(
+                SimilaritySearchProfile(
+                    name=cast(
+                        "str",
+                        _require_table(item, key="embeddings.similarity_profiles")[
+                            "name"
+                        ],
+                    ),
+                    ef_search=cast(
+                        "int",
+                        _require_table(item, key="embeddings.similarity_profiles")[
+                            "ef_search"
+                        ],
+                    ),
+                    candidate_limit=cast(
+                        "int",
+                        _require_table(item, key="embeddings.similarity_profiles")[
+                            "candidate_limit"
+                        ],
+                    ),
+                    default_result_limit=cast(
+                        "int",
+                        _require_table(item, key="embeddings.similarity_profiles")[
+                            "default_result_limit"
+                        ],
+                    ),
+                    max_result_limit=cast(
+                        "int",
+                        _require_table(item, key="embeddings.similarity_profiles")[
+                            "max_result_limit"
+                        ],
+                    ),
+                )
+                for item in profile_values
+            )
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        message = f"Invalid embeddings.similarity_profiles: {error}"
+        raise ConfigError(message) from error
+    if not similarity_profiles:
+        msg = "embeddings.similarity_profiles must declare a default profile."
+        raise ConfigError(msg)
+    if not any(profile.name == "default" for profile in similarity_profiles):
+        msg = "embeddings.similarity_profiles must include a profile named 'default'."
+        raise ConfigError(msg)
     gpu = cast("Mapping[str, object]", embeddings["gpu"])
     indexing = cast("Mapping[str, object]", embeddings["indexing"])
     index = cast("Mapping[str, object]", value["index"])
@@ -2480,6 +2609,8 @@ def _config_from_mapping(
             enabled=cast("bool", embeddings["enabled"]),
             engine=cast("str", embeddings["engine"]).strip(),
             vector_store=cast("str", embeddings["vector_store"]).strip(),
+            similarity_index=cast("str", embeddings["similarity_index"]).strip(),
+            similarity_profiles=similarity_profiles,
             model=cast("str", embeddings["model"]).strip(),
             version=cast("str", embeddings["version"]).strip(),
             model_root=cast("str", embeddings["model_root"]).strip(),

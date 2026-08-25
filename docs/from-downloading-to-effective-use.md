@@ -223,6 +223,14 @@ predictable choice. The separate query daemon keeps read queries warm; it does
 not watch files or replace indexing. See [Configuration](configuration.md) for
 watch scope, service support, and both daemon contracts.
 
+For optional semantic acceleration, keep the index and both daemons scoped to
+the same repository/output identity. Install the FAISS plugin only when needed,
+select it in `[embeddings]`, then use `codira emb rebuild`; a profile-only
+change is query-time and does not rebuild. `ef_search` explores more HNSW graph
+neighbors rather than making scores fuzzier. See
+[Configuration](configuration.md#similarity-index-and-query-profiles) for the
+breaking configuration-v2 reset path.
+
 ## Make it a habit
 
 The satisfying workflow is a short loop:

@@ -122,7 +122,9 @@ or arbitrary-path access.
 
 When `[query_daemon].enabled` is true, the CLI opportunistically sends only
 eligible, path-free reads to the same identity-bound endpoint: `ctx`, embedding
-search, `plugins`, and `caps`. The daemon captures the existing command
+search, `plugins`, and `caps`. `ctx` and `emb` carry an optional named
+similarity search profile; MCP `emb` and `docs` expose the same field. The
+daemon captures the existing command
 renderer so warm output and exit codes match direct execution. Prefix-filtered
 queries and every write-oriented command remain direct. A missing, stale,
 incompatible, or failed endpoint performs one direct retry; the optional

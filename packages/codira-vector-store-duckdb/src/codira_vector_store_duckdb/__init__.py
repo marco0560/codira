@@ -10,12 +10,15 @@ import duckdb
 from codira.contracts import (
     PreparedVectorIdentityRow,
     PreparedVectorRow,
+    StoredVectorRow,
     VectorSetIdentity,
+    VectorSnapshot,
+    VectorSnapshotMetadata,
+    VectorSnapshotRequest,
     VectorStoreFullIndexRequest,
     VectorStorePurgeRequest,
     VectorStorePurgeResult,
-    VectorSimilarityRequest,
-    VectorSimilarityScore,
+    VectorStoreError,
     VectorStoreSpec,
 )
 from codira.plugin_config import plugin_json_schema
@@ -36,8 +39,8 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.8"
-FORMAT_VERSION = "1"
+PACKAGE_VERSION = "1.0.10"
+FORMAT_VERSION = "2"
 _CACHE_LOOKUP_HASH_BATCH_SIZE = 900
 
 
@@ -381,12 +384,30 @@ class DuckDBVectorStore:
         -------
         None
             The schema exists after this call.
+
+        Raises
+        ------
+        VectorStoreError
+            If existing semantic state uses the retired storage format.
         """
         del config
         path = get_vector_store_path(root)
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = _connect(path)
         try:
+            existing_columns = {
+                str(row[0])
+                for row in conn.execute(
+                    """SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = 'main' AND table_name = 'vector_sets'"""
+                ).fetchall()
+            }
+            if existing_columns and "revision" not in existing_columns:
+                raise VectorStoreError(
+                    f"DuckDB vector-store state at {path} uses an unsupported "
+                    "format. Run `codira emb reset --yes` from this repository, "
+                    "then run `codira index --full`."
+                )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS vector_sets (
@@ -400,6 +421,7 @@ class DuckDBVectorStore:
                     store TEXT NOT NULL,
                     store_version TEXT NOT NULL,
                     format_version TEXT NOT NULL,
+                    revision UBIGINT NOT NULL DEFAULT 0,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE (
                         engine,
@@ -459,6 +481,31 @@ class DuckDBVectorStore:
             )
         finally:
             conn.close()
+
+    @staticmethod
+    def _bump_revision(
+        conn: duckdb.DuckDBPyConnection,
+        vector_set_id: int,
+    ) -> None:
+        """Advance one durable materialized-vector revision.
+
+        Parameters
+        ----------
+        conn : duckdb.DuckDBPyConnection
+            Transaction-owned vector-store connection.
+        vector_set_id : int
+            Vector set whose materialized membership changed.
+
+        Returns
+        -------
+        None
+            The vector-set source revision increases by one.
+        """
+
+        conn.execute(
+            "UPDATE vector_sets SET revision = revision + 1 WHERE id = ?",
+            (vector_set_id,),
+        )
 
     def ensure_vector_set(
         self,
@@ -913,32 +960,48 @@ class DuckDBVectorStore:
         import pyarrow as pa
 
         vector_set_id = self.ensure_vector_set(root, identity, config)
+        conn = _connect(get_vector_store_path(root))
+        try:
+            changed = [
+                (prepared, vector)
+                for prepared, vector in materialized
+                if conn.execute(
+                    """SELECT content_hash FROM vectors
+                    WHERE vector_set_id = ? AND object_type = ? AND stable_id = ?""",
+                    (vector_set_id, prepared.row.object_type, prepared.row.stable_id),
+                ).fetchone()
+                != (prepared.content_hash,)
+            ]
+            if not changed:
+                return
+        finally:
+            conn.close()
         table = pa.table(
             {
                 "vector_set_id": pa.array(
-                    [vector_set_id for _prepared, _vector in materialized],
+                    [vector_set_id for _prepared, _vector in changed],
                     type=pa.uint64(),
                 ),
                 "object_type": pa.array(
-                    [prepared.row.object_type for prepared, _vector in materialized],
+                    [prepared.row.object_type for prepared, _vector in changed],
                     type=pa.string(),
                 ),
                 "stable_id": pa.array(
-                    [prepared.row.stable_id for prepared, _vector in materialized],
+                    [prepared.row.stable_id for prepared, _vector in changed],
                     type=pa.string(),
                 ),
                 "content_hash": pa.array(
-                    [prepared.content_hash for prepared, _vector in materialized],
+                    [prepared.content_hash for prepared, _vector in changed],
                     type=pa.string(),
                 ),
                 "vector": pa.array(
-                    [vector for _prepared, vector in materialized],
+                    [vector for _prepared, vector in changed],
                     type=pa.binary(),
                 ),
                 "vector_values": pa.array(
                     [
                         deserialize_vector(vector, dim=identity.engine.dimension)
-                        for _prepared, vector in materialized
+                        for _prepared, vector in changed
                     ],
                     type=pa.list_(pa.float64()),
                 ),
@@ -969,6 +1032,7 @@ class DuckDBVectorStore:
                 FROM __codira_vector_rows
                 """,
             )
+            self._bump_revision(conn, vector_set_id)
         finally:
             conn.close()
 
@@ -1013,6 +1077,18 @@ class DuckDBVectorStore:
         try:
             conn.execute("BEGIN TRANSACTION")
             transaction_open = True
+            existing_bindings = {
+                (str(object_type), str(stable_id), str(content_hash))
+                for object_type, stable_id, content_hash in conn.execute(
+                    """SELECT object_type, stable_id, content_hash
+                    FROM vectors WHERE vector_set_id = ?""",
+                    (vector_set_id,),
+                ).fetchall()
+            }
+            desired_bindings = {
+                (row.object_type, row.stable_id, row.content_hash)
+                for row in identity_rows
+            }
             preserved_keys: set[tuple[str, str, str]] = set()
             if request.preserve_existing:
                 preserved_keys = _matching_materialized_keys(
@@ -1168,6 +1244,8 @@ class DuckDBVectorStore:
                     FROM __codira_full_index_vector_rows
                     """,
                 )
+            if existing_bindings != desired_bindings:
+                self._bump_revision(conn, vector_set_id)
             conn.execute("COMMIT")
             transaction_open = False
         except BaseException:
@@ -1177,85 +1255,63 @@ class DuckDBVectorStore:
         finally:
             conn.close()
 
-    def similarity_scores(
-        self,
-        request: VectorSimilarityRequest,
-    ) -> list[VectorSimilarityScore]:
-        """
-        Return DuckDB-backed vector similarity scores.
+    def vector_snapshot(self, request: VectorSnapshotRequest) -> VectorSnapshot:
+        """Return a deterministic authoritative DuckDB vector snapshot.
 
         Parameters
         ----------
-        request : codira.contracts.VectorSimilarityRequest
-            Vector-store similarity request.
+        request : VectorSnapshotRequest
+            Requested authoritative vector rows.
 
         Returns
         -------
-        list[codira.contracts.VectorSimilarityScore]
-            Scores ordered by descending score and stable identity.
+        VectorSnapshot
+            Rows ordered by stable identity and their durable source revision.
+
+        Raises
+        ------
+        VectorStoreError
+            If the configured durable vector set is no longer available.
         """
         vector_set_id = self.ensure_vector_set(
-            request.root,
-            request.identity,
-            request.config,
+            request.root, request.identity, request.config
         )
         conn = _connect(get_vector_store_path(request.root), read_only=True)
         try:
-            scored_rows = conn.execute(
+            revision_row = conn.execute(
+                "SELECT revision FROM vector_sets WHERE id = ?", (vector_set_id,)
+            ).fetchone()
+            if revision_row is None:
+                raise VectorStoreError("Configured DuckDB vector set disappeared.")
+            rows = conn.execute(
                 """
-                SELECT stable_id, list_dot_product(vector_values, ?) AS score
+                SELECT object_type, stable_id, content_hash, vector
                 FROM vectors
-                WHERE vector_set_id = ?
-                  AND object_type = ?
-                  AND vector_values IS NOT NULL
-                  AND list_dot_product(vector_values, ?) >= ?
-                ORDER BY score DESC, stable_id
-                """,
-                (
-                    list(request.query_vector),
-                    vector_set_id,
-                    request.object_type,
-                    list(request.query_vector),
-                    request.min_score,
-                ),
-            ).fetchall()
-            legacy_rows = conn.execute(
-                """
-                SELECT stable_id, vector
-                FROM vectors
-                WHERE vector_set_id = ?
-                  AND object_type = ?
-                  AND vector_values IS NULL
-                ORDER BY stable_id
+                WHERE vector_set_id = ? AND object_type = ?
+                ORDER BY object_type, stable_id
                 """,
                 (vector_set_id, request.object_type),
             ).fetchall()
         finally:
             conn.close()
-        scores = [
-            VectorSimilarityScore(stable_id=str(stable_id), score=float(score))
-            for stable_id, score in scored_rows
-        ]
-        scores.extend(
-            VectorSimilarityScore(
+        snapshot_rows = tuple(
+            StoredVectorRow(
+                object_type=str(object_type),
                 stable_id=str(stable_id),
-                score=sum(
-                    left * right
-                    for left, right in zip(
-                        request.query_vector,
-                        deserialize_vector(
-                            bytes(vector),
-                            dim=request.identity.engine.dimension,
-                        ),
-                        strict=True,
-                    )
-                ),
+                content_hash=str(content_hash),
+                dimension=request.identity.engine.dimension,
+                vector=bytes(vector),
             )
-            for stable_id, vector in legacy_rows
+            for object_type, stable_id, content_hash, vector in rows
         )
-        return sorted(
-            (score for score in scores if score.score >= request.min_score),
-            key=lambda item: (-item.score, item.stable_id),
+        return VectorSnapshot(
+            metadata=VectorSnapshotMetadata(
+                identity=request.identity,
+                revision=int(revision_row[0]),
+                object_type=request.object_type,
+                row_count=len(snapshot_rows),
+            ),
+            rows=snapshot_rows,
         )
 
     def purge_vector_sets(

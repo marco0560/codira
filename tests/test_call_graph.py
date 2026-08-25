@@ -1145,6 +1145,15 @@ def test_short_cli_option_aliases_parse_for_representative_commands() -> None:
     assert purge_args.keep == 1
     assert purge_args.yes is True
 
+    rebuild_args = parser.parse_args(["emb", "rebuild", "--json"])
+    assert rebuild_args.query == "rebuild"
+    assert rebuild_args.json is True
+
+    reset_args = parser.parse_args(["emb", "reset", "--yes", "--json"])
+    assert reset_args.query == "reset"
+    assert reset_args.yes is True
+    assert reset_args.json is True
+
 
 def test_calls_cli_tree_json_reports_truncation(
     tmp_path: Path,

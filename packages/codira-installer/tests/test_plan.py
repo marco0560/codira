@@ -102,6 +102,33 @@ def test_local_checkout_uses_explicit_cloned_root() -> None:
     assert install_step.command[:3] == ("uv", "pip", "install")
 
 
+def test_explicit_faiss_selection_is_a_catalog_install_target() -> None:
+    """Include the optional FAISS distribution in a selected-feature plan.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the installer emits the coordinated FAISS package pin.
+    """
+
+    plan = resolve_plan(
+        InstallerRequest(
+            target=EnvironmentTarget(EnvironmentKind.CURRENT),
+            packages=("codira-similarity-index-faiss",),
+        ),
+        installed_packages=(),
+    )
+
+    install_step = next(
+        step for step in plan.steps if step.identifier == "install-packages"
+    )
+    assert "codira-similarity-index-faiss==1.68.0" in install_step.command
+
+
 def test_managed_runtime_is_independent_of_workspace_repository(tmp_path: Path) -> None:
     """Install a managed runtime without selecting the repository environment.
 

@@ -59,12 +59,26 @@ returned `IndexWriteSession`:
 - prepare full or incremental storage replacement
 - persist analyzed file snapshots
 - queue deferred embedding rows when embedding indexing is deferred
-- rebuild derived indexes
 - write runtime inventory
 - commit, abort, and close
 
 This contract exists to make warm read-heavy command paths cheap while keeping
 mutation ownership explicit and backend-local.
+
+## Durable vectors and derived similarity artifacts
+
+Vector stores are the authoritative, identity-versioned durable vector layer.
+Similarity indexes are separate, repository-local *derived* artifacts built
+from one vector-store snapshot. The indexer publishes a new durable generation;
+the selected similarity index rebuilds or discards its own artifact from that
+snapshot. A similarity plugin must never make itself authoritative storage.
+
+That separation makes exact core search always available and makes optional
+FAISS/HNSW artifacts safely rebuildable. A change to HNSW `M`,
+`efConstruction`, or index type requires `codira emb rebuild`; a runtime search
+profile change does not. When a vector-store or similarity-index format is
+incompatible, use `codira emb reset` and reindex instead of attempting an
+in-place migration.
 
 ## Full-Index Bulk Contract
 

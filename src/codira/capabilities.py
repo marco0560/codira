@@ -60,7 +60,7 @@ from codira.version import installed_distribution_version
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-CAPABILITY_SCHEMA_VERSION = "1.9"
+CAPABILITY_SCHEMA_VERSION = "1.11"
 ONTOLOGY_VERSION = "2"
 
 PLUGIN_FAMILY_CONTRACTS: dict[str, dict[str, object]] = {
@@ -83,6 +83,11 @@ PLUGIN_FAMILY_CONTRACTS: dict[str, dict[str, object]] = {
         "selection": "single_active",
         "configuration": "embeddings.vector_store and plugins.vector-store-*",
         "role": "embedding vector persistence",
+    },
+    "similarity-index": {
+        "selection": "single_active",
+        "configuration": ("embeddings.similarity_index and plugins.similarity-index-*"),
+        "role": "derived semantic candidate ranking",
     },
     "documentation-audit": {
         "selection": "route_active",
@@ -163,13 +168,15 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
         ],
     },
     "emb": {
-        "intent": "embedding_similarity_lookup_and_vector_store_maintenance",
+        "intent": "similarity_index_lookup_and_semantic_maintenance",
         "channels": ["embedding"],
-        "guarantee": "embedding_backend_similarity_order_and_deterministic_purge_reporting",
+        "guarantee": "profiled_similarity_index_order_and_deterministic_maintenance",
         "limitations": [
             "approximate natural-language relevance",
             "requires persisted embeddings for indexed artifacts",
             "purge submode deletes vector-store rows only after explicit confirmation",
+            "rebuild verifies the durable source revision under the repository lock",
+            "reset removes semantic state only after explicit confirmation",
             "database files may reuse freed space before shrinking",
         ],
         "subcommands": {
@@ -193,7 +200,19 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
                     "--yes",
                 ],
                 "guarantee": "deterministic_vector_set_selection_and_row_counts",
-            }
+            },
+            "rebuild": {
+                "intent": "derived_similarity_index_rebuild",
+                "modes": [],
+                "options": ["-j", "--json"],
+                "guarantee": "source_revision_rechecked_before_rebuild_completion",
+            },
+            "reset": {
+                "intent": "confirmed_repository_semantic_state_reset",
+                "modes": [],
+                "options": ["-y", "--yes", "-j", "--json"],
+                "guarantee": "root_scoped_no_migration_semantic_state_removal",
+            },
         },
     },
     "docs": {
@@ -618,6 +637,8 @@ def _plugin_is_active(
         return registration.name == config.embeddings.engine
     if registration.family == "vector-store":
         return registration.name == config.embeddings.vector_store
+    if registration.family == "similarity-index":
+        return registration.name == config.embeddings.similarity_index
     if registration.family == "documentation-audit":
         if registration.name not in {
             route.plugin for route in config.plugins.documentation_audit_routes

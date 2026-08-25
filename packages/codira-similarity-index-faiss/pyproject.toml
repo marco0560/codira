@@ -3,26 +3,22 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codira-vector-store-sqlite"
-version = "1.57.0"
-description = "First-party SQLite vector-store plugin for codira"
+name = "codira-similarity-index-faiss"
+version = "1.68.0"
+description = "First-party FAISS similarity-index plugin for codira"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "codira>=1.5.0,<2.0.0",
-    "sqlite-vec==0.1.9",
+    "codira>=1.68.0,<2.0.0",
+    "faiss-cpu==1.15.0",
+    "numpy>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]
-test = [
-    "black",
-    "mypy",
-    "pytest",
-    "ruff",
-]
+test = ["mypy", "pytest", "ruff"]
 
-[project.entry-points."codira.vector_stores"]
-sqlite = "codira_vector_store_sqlite:build_vector_store"
+[project.entry-points."codira.similarity_indexes"]
+faiss = "codira_similarity_index_faiss:build_similarity_index"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -31,11 +27,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-codira_vector_store_sqlite = ["py.typed"]
-
-[tool.black]
-line-length = 88
-target-version = ["py313"]
+codira_similarity_index_faiss = ["py.typed"]
 
 [tool.ruff]
 line-length = 88

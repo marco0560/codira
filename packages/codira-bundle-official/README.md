@@ -15,6 +15,10 @@ Install it with `python -m pip install codira-bundle-official`, then run
 `codira-installer` for guided setup. The installer is documented in the
 [installer guide](https://marco0560.github.io/codira/installer/).
 
+The optional `faiss` extra installs the first-party FAISS similarity-index
+plugin: `python -m pip install "codira-bundle-official[faiss]"`. Exact core
+similarity is installed in every bundle and remains the default.
+
 Package-local verification:
 
 ```bash

@@ -32,12 +32,15 @@ The checked-in first-party plugin catalog currently includes:
 - SQLite and DuckDB structural backends
 - ONNX and Sentence Transformers embedding engines
 - SQLite and DuckDB vector stores
+- the always-available core exact similarity index; optional similarity-index
+  packages add alternative candidate-ranking implementations
 
 The `codira-installer` and `codira-bundle-official` packages provide the
 interactive installer and the curated end-user distribution, respectively.
 Use `codira plugins` to inspect the plugins installed and active in a specific
 runtime. Storage and query persistence are provided through the selected
-backend and vector-store plugins.
+backend and vector-store plugins; semantic candidate ranking is provided by the
+selected similarity index.
 
 ## Why It Helps Agent Workflows
 
@@ -83,6 +86,15 @@ the repository being analyzed:
 ```bash
 pip install codira-bundle-official
 ```
+
+For the optional FAISS similarity-index plugin, install the bundle extra:
+
+```bash
+pip install "codira-bundle-official[faiss]"
+```
+
+Core exact ranking is always available. FAISS adds an opt-in exact-flat or
+approximate HNSW derived index; it never replaces the durable vector store.
 
 `codira` and the official bundle are published on PyPI. If you only need to
 use the tool and do not need a development branch, prefer the published package
@@ -151,6 +163,23 @@ checkout, install the extracted first-party analyzers and backend from
 
 Use `codira plugins` to inspect discovery. The report marks each plugin as
 `origin=core`, `origin=first_party`, or `origin=third_party`.
+
+## Similarity search, safely configured
+
+New project configurations are version 2 and select the core exact index by
+default. To select FAISS, install it and configure `similarity_index = "faiss"`
+under `[embeddings]`. HNSW uses build parameters `M` and `efConstruction` in
+`[plugins.similarity-index-faiss]`; runtime profiles hold `ef_search`,
+`candidate_limit`, and result limits. `ef_search` controls how much of the
+HNSW graph is explored, not the fuzziness of scores. Candidate limits apply
+before structural filters; result limits apply afterwards.
+
+Use `codira emb rebuild` after changing HNSW build settings. Profile-only
+changes take effect on the next query and do not rebuild. If changing between
+incompatible persisted formats, run `codira emb reset` and reindex. Old
+`config_version = 1` files are deliberately rejected; regenerate with
+`codira config init --force` and select an index explicitly. See
+[Configuration](docs/configuration.md#similarity-index-and-query-profiles).
 
 ## Architecture Status
 

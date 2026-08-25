@@ -34,6 +34,8 @@ from codira.contracts import (
     VectorSetIdentity,
     VectorSimilarityRequest,
     VectorSimilarityScore,
+    VectorSnapshot,
+    VectorSnapshotRequest,
     VectorStorePurgeRequest,
     VectorStorePurgeResult,
     VectorStoreSpec,
@@ -327,6 +329,29 @@ class _CacheOnlyVectorStore:
             No pending state is stored by this fake.
         """
         del root, identity, config
+
+    def vector_snapshot(self, request: VectorSnapshotRequest) -> VectorSnapshot:
+        """Reject snapshots because this test double exercises persistence only.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorSnapshotRequest
+            Ignored snapshot request.
+
+        Returns
+        -------
+        codira.contracts.VectorSnapshot
+            This method never returns a snapshot.
+
+        Raises
+        ------
+        RuntimeError
+            Always raised because snapshots are outside this test double scope.
+        """
+
+        del request
+        message = "snapshot not configured"
+        raise RuntimeError(message)
 
     def similarity_scores(
         self,

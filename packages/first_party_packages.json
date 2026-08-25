@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "coordinated_version": "1.55.0",
+  "coordinated_version": "1.68.0",
   "packages": [
     {"name": "codira-analyzer-python", "path": "packages/codira-analyzer-python", "family": "analyzer", "entry_point": "codira_analyzer_python:build_analyzer", "selectable": true},
     {"name": "codira-analyzer-json", "path": "packages/codira-analyzer-json", "family": "analyzer", "entry_point": "codira_analyzer_json:build_analyzer", "selectable": true},
@@ -26,6 +26,7 @@
     {"name": "codira-embedding-onnx", "path": "packages/codira-embedding-onnx", "family": "embedding", "entry_point": "codira_embedding_onnx:build_engine", "selectable": true},
     {"name": "codira-vector-store-sqlite", "path": "packages/codira-vector-store-sqlite", "family": "vector-store", "entry_point": "codira_vector_store_sqlite:build_vector_store", "selectable": true},
     {"name": "codira-vector-store-duckdb", "path": "packages/codira-vector-store-duckdb", "family": "vector-store", "entry_point": "codira_vector_store_duckdb:build_vector_store", "selectable": true},
+    {"name": "codira-similarity-index-faiss", "path": "packages/codira-similarity-index-faiss", "family": "similarity-index", "entry_point": "codira_similarity_index_faiss:build_similarity_index", "selectable": true},
     {"name": "codira-installer", "path": "packages/codira-installer", "family": null, "entry_point": null, "selectable": false},
     {"name": "codira-bundle-official", "path": "packages/codira-bundle-official", "family": null, "entry_point": null, "selectable": false}
   ]

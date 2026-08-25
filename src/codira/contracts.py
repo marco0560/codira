@@ -14,6 +14,7 @@ Architectural role
 ------------------
 This module belongs to the **contract definition layer** that governs pluggable language analysis and storage backends.
 """
+# ruff: noqa: EM101, TRY003
 
 from __future__ import annotations
 
@@ -389,6 +390,249 @@ class VectorSetIdentity:
 
     engine: EmbeddingEngineSpec
     vector_store: VectorStoreSpec
+
+
+@dataclass(frozen=True)
+class StoredVectorRow:
+    """One authoritative materialized vector exposed to a similarity index.
+
+    Parameters
+    ----------
+    object_type : str
+        Persisted owner kind.
+    stable_id : str
+        Stable owner identity.
+    content_hash : str
+        Hash of the embedded semantic payload.
+    dimension : int
+        Float-vector dimensionality.
+    vector : bytes
+        Serialized float32 vector payload.
+    """
+
+    object_type: str
+    stable_id: str
+    content_hash: str
+    dimension: int
+    vector: bytes
+
+
+@dataclass(frozen=True)
+class VectorSnapshotMetadata:
+    """Identity and freshness metadata for one durable vector snapshot.
+
+    Parameters
+    ----------
+    identity : VectorSetIdentity
+        Authoritative vector-set identity.
+    revision : int
+        Monotonic durable membership/content revision.
+    object_type : str
+        Owner kind represented by the snapshot.
+    row_count : int
+        Number of rows in deterministic snapshot order.
+    """
+
+    identity: VectorSetIdentity
+    revision: int
+    object_type: str
+    row_count: int
+
+
+@dataclass(frozen=True)
+class VectorSnapshotRequest:
+    """Request an ordered authoritative vector snapshot from a vector store.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root that owns the durable state.
+    identity : VectorSetIdentity
+        Vector set to read.
+    object_type : str
+        Owner kind to materialize.
+    config : collections.abc.Mapping[str, object]
+        Vector-store-specific configuration.
+    """
+
+    root: Path
+    identity: VectorSetIdentity
+    object_type: str
+    config: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class VectorSnapshot:
+    """Deterministic authoritative vector rows plus their source revision.
+
+    Parameters
+    ----------
+    metadata : VectorSnapshotMetadata
+        Identity and revision verified by the vector store.
+    rows : tuple[StoredVectorRow, ...]
+        Rows sorted by object type and stable identity.
+    """
+
+    metadata: VectorSnapshotMetadata
+    rows: tuple[StoredVectorRow, ...]
+
+
+@dataclass(frozen=True)
+class SimilarityIndexSpec:
+    """Stable identity for one similarity-index implementation and build.
+
+    Parameters
+    ----------
+    index : str
+        Stable index implementation name.
+    index_version : str
+        Index implementation version.
+    format_version : str
+        Derived-artifact format version.
+    build_fingerprint : str
+        Canonical fingerprint of build-time configuration only.
+    """
+
+    index: str
+    index_version: str
+    format_version: str
+    build_fingerprint: str
+
+
+@dataclass(frozen=True)
+class SimilarityIndexIdentity:
+    """Repository-scoped identity for one derived similarity index.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root bound to the derived state.
+    vector_set : VectorSetIdentity
+        Authoritative source vector-set identity.
+    index : SimilarityIndexSpec
+        Index implementation and build identity.
+    """
+
+    root: Path
+    vector_set: VectorSetIdentity
+    index: SimilarityIndexSpec
+
+
+@dataclass(frozen=True)
+class SimilaritySearchProfile:
+    """Named, validated runtime candidate and result policy.
+
+    Parameters
+    ----------
+    name : str
+        Non-empty operator-selected profile name.
+    ef_search : int
+        Positive graph-exploration budget; ignored by exact implementations.
+    candidate_limit : int
+        Maximum candidates requested before structural filtering.
+    default_result_limit : int
+        Result cap used when callers provide no explicit cap.
+    max_result_limit : int
+        Maximum accepted explicit result cap.
+    """
+
+    name: str
+    ef_search: int
+    candidate_limit: int
+    default_result_limit: int
+    max_result_limit: int
+
+    def __post_init__(self) -> None:
+        """Reject invalid profile names and result-policy bounds.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If profile fields violate the core result-policy invariants.
+        """
+
+        if not self.name.strip():
+            raise ValueError("Similarity search profile name must be non-empty.")
+        if any(
+            value <= 0
+            for value in (
+                self.ef_search,
+                self.candidate_limit,
+                self.default_result_limit,
+                self.max_result_limit,
+            )
+        ):
+            raise ValueError(
+                "Similarity search profile limits must be positive integers."
+            )
+        if self.candidate_limit < self.max_result_limit:
+            raise ValueError(
+                "candidate_limit must be greater than or equal to max_result_limit."
+            )
+        if self.max_result_limit < self.default_result_limit:
+            raise ValueError(
+                "max_result_limit must be greater than or equal to default_result_limit."
+            )
+
+
+def validate_similarity_search_profiles(
+    profiles: Sequence[SimilaritySearchProfile],
+) -> tuple[SimilaritySearchProfile, ...]:
+    """Return profiles after rejecting duplicate names deterministically.
+
+    Parameters
+    ----------
+    profiles : collections.abc.Sequence[SimilaritySearchProfile]
+        Profiles supplied by an index plugin.
+
+    Returns
+    -------
+    tuple[SimilaritySearchProfile, ...]
+        Profiles in supplied order.
+
+    Raises
+    ------
+    ValueError
+        If a profile name is duplicated.
+    """
+
+    names = [profile.name.strip() for profile in profiles]
+    if len(names) != len(set(names)):
+        raise ValueError("Similarity search profile names must be unique.")
+    return tuple(profiles)
+
+
+@dataclass(frozen=True)
+class SimilaritySearchRequest:
+    """Search one authoritative snapshot through a selected index.
+
+    Parameters
+    ----------
+    identity : SimilarityIndexIdentity
+        Repository-scoped selected index identity.
+    snapshot : VectorSnapshot
+        Authoritative source rows and revision.
+    query_vector : collections.abc.Sequence[float]
+        Query vector generated by the active embedding engine.
+    profile : SimilaritySearchProfile
+        Immutable per-query runtime policy.
+    min_score : float
+        Minimum accepted similarity score.
+    """
+
+    identity: SimilarityIndexIdentity
+    snapshot: VectorSnapshot
+    query_vector: Sequence[float]
+    profile: SimilaritySearchProfile
+    min_score: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -772,7 +1016,7 @@ class VectorStore(Protocol):
     Contract for pluggable embedding vector stores.
 
     Implementations own vector persistence, reusable vector-cache persistence,
-    deferred embedding queue persistence, and similarity lookup. They must not
+    deferred embedding queue persistence, and deterministic snapshots. They must not
     own language analysis or text-to-vector inference.
     """
 
@@ -1003,22 +1247,18 @@ class VectorStore(Protocol):
         """
         ...
 
-    def similarity_scores(
-        self,
-        request: VectorSimilarityRequest,
-    ) -> list[VectorSimilarityScore]:
-        """
-        Return vector similarity scores keyed by stable object identity.
+    def vector_snapshot(self, request: VectorSnapshotRequest) -> VectorSnapshot:
+        """Return one deterministic materialized-vector snapshot.
 
         Parameters
         ----------
-        request : codira.contracts.VectorSimilarityRequest
-            Vector-store similarity request.
+        request : VectorSnapshotRequest
+            Root, identity, object type, and vector-store configuration.
 
         Returns
         -------
-        list[codira.contracts.VectorSimilarityScore]
-            Scores ordered by descending score and stable identity.
+        VectorSnapshot
+            Ordered authoritative rows and their source revision.
         """
         ...
 
@@ -1053,6 +1293,115 @@ class VectorStore(Protocol):
         -------
         None
             Cached vector-store state is discarded.
+        """
+        ...
+
+
+@runtime_checkable
+class SimilarityIndex(Protocol):
+    """Contract for derived similarity-index implementations.
+
+    Similarity indexes consume authoritative snapshots and may cache or persist
+    rebuildable candidate-ranking state. They never own durable vectors.
+    """
+
+    name: str
+    version: str
+
+    def spec(self, config: Mapping[str, object]) -> SimilarityIndexSpec:
+        """Return the selected implementation and build identity.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Index-specific configuration.
+
+        Returns
+        -------
+        SimilarityIndexSpec
+            Build-time identity only.
+        """
+        ...
+
+    def initialize(self, root: Path, config: Mapping[str, object]) -> None:
+        """Initialize repository-scoped derived state.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        config : collections.abc.Mapping[str, object]
+            Index-specific configuration.
+
+        Returns
+        -------
+        None
+            The index is ready for rebuild or search.
+        """
+        ...
+
+    def rebuild(
+        self, snapshot: VectorSnapshot, identity: SimilarityIndexIdentity
+    ) -> None:
+        """Rebuild derived state from one authoritative snapshot.
+
+        Parameters
+        ----------
+        snapshot : VectorSnapshot
+            Source rows and revision.
+        identity : SimilarityIndexIdentity
+            Selected derived-index identity.
+
+        Returns
+        -------
+        None
+            Derived state is published by the implementation.
+        """
+        ...
+
+    def search(self, request: SimilaritySearchRequest) -> list[VectorSimilarityScore]:
+        """Return bounded candidates for one immutable search request.
+
+        Parameters
+        ----------
+        request : SimilaritySearchRequest
+            Selected identity, source snapshot, query vector, and profile.
+
+        Returns
+        -------
+        list[VectorSimilarityScore]
+            Descending score, stable-ID ordered candidates.
+        """
+        ...
+
+    def purge(self, root: Path, identity: SimilarityIndexIdentity) -> None:
+        """Purge derived state for one repository-scoped identity.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        identity : SimilarityIndexIdentity
+            Derived state to remove.
+
+        Returns
+        -------
+        None
+            Matching derived state is removed.
+        """
+        ...
+
+    def reset_runtime_caches(self) -> None:
+        """Clear process-local index caches.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Runtime-only cached state is discarded.
         """
         ...
 
@@ -1465,6 +1814,8 @@ class BackendEmbeddingCandidatesRequest:
         Minimum similarity threshold for emitted results.
     prefix : str | None, optional
         Repo-root-relative path prefix used to restrict matched symbol files.
+    search_profile : str | None, optional
+        Named similarity-index runtime profile. ``None`` selects ``default``.
     conn : object | None, optional
         Existing backend connection to reuse.
     """
@@ -1474,6 +1825,7 @@ class BackendEmbeddingCandidatesRequest:
     limit: int
     min_score: float
     prefix: str | None = None
+    search_profile: str | None = None
     conn: object | None = None
 
 
@@ -1494,6 +1846,8 @@ class BackendDocumentationCandidatesRequest:
         Minimum similarity threshold for emitted results.
     prefix : str | None, optional
         Repo-root-relative path prefix used to restrict matched documents.
+    search_profile : str | None, optional
+        Named similarity-index runtime profile. ``None`` selects ``default``.
     conn : object | None, optional
         Existing backend connection to reuse.
     """
@@ -1503,6 +1857,7 @@ class BackendDocumentationCandidatesRequest:
     limit: int
     min_score: float
     prefix: str | None = None
+    search_profile: str | None = None
     conn: object | None = None
 
 

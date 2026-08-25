@@ -6,12 +6,15 @@ import sqlite3
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from codira.contracts import (
     EmbeddingEngineSpec,
     PendingEmbeddingRow,
     PreparedVectorRow,
     VectorSetIdentity,
-    VectorSimilarityRequest,
+    VectorSnapshotRequest,
+    VectorStoreError,
     VectorStore,
     VectorStorePurgeRequest,
 )
@@ -109,7 +112,7 @@ def test_sqlite_vector_store_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.55.0"
+    assert project["project"]["version"] == "1.57.0"
     assert project["project"]["entry-points"]["codira.vector_stores"] == {
         "sqlite": "codira_vector_store_sqlite:build_vector_store"
     }
@@ -133,7 +136,7 @@ def test_sqlite_vector_store_exposes_configuration_schema() -> None:
     assert isinstance(properties, dict)
 
     assert schema["additionalProperties"] is False
-    assert sorted(properties) == ["candidate_limit", "enabled"]
+    assert sorted(properties) == ["enabled"]
 
 
 def test_sqlite_vector_store_initializes_separated_database(tmp_path: Path) -> None:
@@ -171,6 +174,28 @@ def test_sqlite_vector_store_initializes_separated_database(tmp_path: Path) -> N
         "vector_bindings",
         "pending_vectors",
     } <= tables
+
+
+def test_sqlite_vector_store_rejects_pre_revision_state(tmp_path: Path) -> None:
+    """Fail closed instead of migrating a legacy vector-store database.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing a pre-revision schema.
+
+    Returns
+    -------
+    None
+        The test verifies recovery requires an explicit semantic reset.
+    """
+    path = get_vector_store_path(tmp_path)
+    path.parent.mkdir()
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE vector_sets (id INTEGER PRIMARY KEY)")
+
+    with pytest.raises(VectorStoreError, match="codira emb reset --yes"):
+        SQLiteVectorStore().initialize(tmp_path, {})
 
 
 def test_sqlite_vector_store_persists_vector_rows(tmp_path: Path) -> None:
@@ -312,14 +337,12 @@ def test_sqlite_vector_store_indexes_one_payload_for_multiple_bindings(
     ]
 
     store.store_vectors(tmp_path, identity, rows, {})
-    scores = store.similarity_scores(
-        VectorSimilarityRequest(
+    snapshot = store.vector_snapshot(
+        VectorSnapshotRequest(
             root=tmp_path,
             identity=identity,
             config={},
             object_type="symbol",
-            query_vector=[1.0, 0.0, 0.0],
-            min_score=0.0,
         )
     )
 
@@ -328,13 +351,21 @@ def test_sqlite_vector_store_indexes_one_payload_for_multiple_bindings(
         binding_count = conn.execute("SELECT COUNT(*) FROM vector_bindings").fetchone()
     assert payload_count == (1,)
     assert binding_count == (2,)
-    assert [score.stable_id for score in scores] == ["symbol:1", "symbol:2"]
+    assert [row.stable_id for row in snapshot.rows] == ["symbol:1", "symbol:2"]
+    assert snapshot.metadata.revision == 1
+    store.store_vectors(tmp_path, identity, rows, {})
+    assert (
+        store.vector_snapshot(
+            VectorSnapshotRequest(tmp_path, identity, "symbol", {})
+        ).metadata.revision
+        == 1
+    )
 
 
-def test_sqlite_vector_store_bounds_large_similarity_requests(
+def test_sqlite_vector_store_snapshots_all_large_materialized_vectors(
     tmp_path: Path,
 ) -> None:
-    """Keep a large vector set inside the configured candidate window.
+    """Expose all authoritative rows without a store-owned candidate window.
 
     Parameters
     ----------
@@ -344,7 +375,7 @@ def test_sqlite_vector_store_bounds_large_similarity_requests(
     Returns
     -------
     None
-        The test asserts retrieval does not request every stored binding.
+        The test asserts snapshot ownership is complete and deterministic.
     """
     store = SQLiteVectorStore()
     identity = _vector_identity(store)
@@ -358,19 +389,18 @@ def test_sqlite_vector_store_bounds_large_similarity_requests(
     ]
 
     store.store_vectors(tmp_path, identity, rows, {})
-    scores = store.similarity_scores(
-        VectorSimilarityRequest(
+    snapshot = store.vector_snapshot(
+        VectorSnapshotRequest(
             root=tmp_path,
             identity=identity,
-            config={"candidate_limit": 64},
+            config={},
             object_type="symbol",
-            query_vector=[1.0, 0.0, 0.0],
-            min_score=-10_000.0,
         )
     )
 
-    assert len(scores) == 64
-    assert scores[0].stable_id == "symbol:00000"
+    assert len(snapshot.rows) == 5_000
+    assert snapshot.rows[0].stable_id == "symbol:00000"
+    assert snapshot.rows[-1].stable_id == "symbol:04999"
 
 
 def test_sqlite_vector_store_purges_stale_sets_with_retention(

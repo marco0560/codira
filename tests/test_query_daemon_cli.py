@@ -98,6 +98,7 @@ def test_cli_reads_route_warmly_with_direct_output_parity(tmp_path: Path) -> Non
                     "as_json": True,
                     "as_prompt": False,
                     "explain": False,
+                    "search_profile": "default",
                 },
                 lambda: _run_context_without_freshness_check(
                     tmp_path,
@@ -105,6 +106,7 @@ def test_cli_reads_route_warmly_with_direct_output_parity(tmp_path: Path) -> Non
                     as_json=True,
                     as_prompt=False,
                     explain=False,
+                    search_profile="default",
                 ),
             ),
             "cli.plugins": (

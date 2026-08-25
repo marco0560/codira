@@ -22,9 +22,12 @@ import sqlite_vec  # type: ignore[import-untyped]
 from codira.contracts import (
     PreparedVectorIdentityRow,
     PreparedVectorRow,
+    StoredVectorRow,
     VectorSetIdentity,
-    VectorSimilarityRequest,
-    VectorSimilarityScore,
+    VectorSnapshot,
+    VectorSnapshotMetadata,
+    VectorSnapshotRequest,
+    VectorStoreError,
     VectorStorePurgeRequest,
     VectorStorePurgeResult,
     VectorStoreSpec,
@@ -48,10 +51,9 @@ __all__ = [
     "get_vector_store_path",
 ]
 
-PACKAGE_VERSION = "1.0.4"
-FORMAT_VERSION = "3"
+PACKAGE_VERSION = "1.0.6"
+FORMAT_VERSION = "4"
 _CACHE_LOOKUP_HASH_BATCH_SIZE = 900
-_DEFAULT_SIMILARITY_CANDIDATE_LIMIT = 256
 
 
 def _parse_sqlite_timestamp(value: str) -> datetime | None:
@@ -129,27 +131,6 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _similarity_candidate_limit(config: Mapping[str, object]) -> int:
-    """Return the configured bounded sqlite-vec candidate window.
-
-    Parameters
-    ----------
-    config : collections.abc.Mapping[str, object]
-        SQLite vector-store configuration table.
-
-    Returns
-    -------
-    int
-        Positive number of nearest payloads retrieved before structural
-        resolution.
-    """
-    configured = config.get("candidate_limit", _DEFAULT_SIMILARITY_CANDIDATE_LIMIT)
-    if isinstance(configured, int) and not isinstance(configured, bool):
-        if configured > 0:
-            return configured
-    return _DEFAULT_SIMILARITY_CANDIDATE_LIMIT
-
-
 class SQLiteVectorStore:
     """
     SQLite-backed vector store.
@@ -175,20 +156,7 @@ class SQLiteVectorStore:
         collections.abc.Mapping[str, object]
             Strict JSON Schema for vector-store options.
         """
-        return plugin_json_schema(
-            {
-                "candidate_limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "default": _DEFAULT_SIMILARITY_CANDIDATE_LIMIT,
-                    "description": (
-                        "Maximum nearest vector payloads retrieved per "
-                        "sqlite-vec similarity request before structural "
-                        "filtering."
-                    ),
-                }
-            }
-        )
+        return plugin_json_schema({})
 
     def spec(self, config: Mapping[str, object]) -> VectorStoreSpec:
         """
@@ -226,11 +194,26 @@ class SQLiteVectorStore:
         -------
         None
             The schema exists after this call.
+
+        Raises
+        ------
+        VectorStoreError
+            If existing semantic state uses the retired storage format.
         """
         del config
         path = get_vector_store_path(root)
         path.parent.mkdir(parents=True, exist_ok=True)
         with _connect(path) as conn:
+            existing_columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(vector_sets)").fetchall()
+            }
+            if existing_columns and "revision" not in existing_columns:
+                raise VectorStoreError(
+                    f"SQLite vector-store state at {path} uses an unsupported "
+                    "format. Run `codira emb reset --yes` from this repository, "
+                    "then run `codira index --full`."
+                )
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS vector_sets (
@@ -244,6 +227,7 @@ class SQLiteVectorStore:
                     store TEXT NOT NULL,
                     store_version TEXT NOT NULL,
                     format_version TEXT NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE (
                         engine,
@@ -284,6 +268,28 @@ class SQLiteVectorStore:
                 );
                 """
             )
+
+    @staticmethod
+    def _bump_revision(conn: sqlite3.Connection, vector_set_id: int) -> None:
+        """Advance one vector-set revision inside the active transaction.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Transaction-owned vector-store connection.
+        vector_set_id : int
+            Materialized vector-set row to advance.
+
+        Returns
+        -------
+        None
+            The durable source revision increases by one.
+        """
+
+        conn.execute(
+            "UPDATE vector_sets SET revision = revision + 1 WHERE id = ?",
+            (vector_set_id,),
+        )
 
     def ensure_vector_set(
         self,
@@ -685,75 +691,100 @@ class SQLiteVectorStore:
                     if prepared.vector is not None
                 },
             )
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO vector_bindings(
-                    vector_set_id, object_type, stable_id, content_hash
-                ) VALUES (?, ?, ?, ?)
-                """,
-                [
+            changed = [
+                prepared
+                for prepared in materialized
+                if conn.execute(
+                    """SELECT content_hash FROM vector_bindings
+                    WHERE vector_set_id = ? AND object_type = ? AND stable_id = ?""",
                     (
                         vector_set_id,
                         prepared.row.object_type,
                         prepared.row.stable_id,
-                        prepared.content_hash,
-                    )
-                    for prepared in materialized
-                ],
-            )
+                    ),
+                ).fetchone()
+                != (prepared.content_hash,)
+            ]
+            if changed:
+                conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO vector_bindings(
+                        vector_set_id, object_type, stable_id, content_hash
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            vector_set_id,
+                            prepared.row.object_type,
+                            prepared.row.stable_id,
+                            prepared.content_hash,
+                        )
+                        for prepared in changed
+                    ],
+                )
+                self._bump_revision(conn, vector_set_id)
 
-    def similarity_scores(
-        self,
-        request: VectorSimilarityRequest,
-    ) -> list[VectorSimilarityScore]:
-        """
-        Return SQLite-backed vector similarity scores.
+    def vector_snapshot(self, request: VectorSnapshotRequest) -> VectorSnapshot:
+        """Return a deterministic authoritative SQLite vector snapshot.
 
         Parameters
         ----------
-        request : codira.contracts.VectorSimilarityRequest
-            Vector-store similarity request.
+        request : VectorSnapshotRequest
+            Requested authoritative vector rows.
 
         Returns
         -------
-        list[codira.contracts.VectorSimilarityScore]
-            Scores ordered by descending score and stable identity.
+        VectorSnapshot
+            Rows ordered by stable identity and their durable source revision.
+
+        Raises
+        ------
+        VectorStoreError
+            If the configured durable vector set is no longer available.
         """
         vector_set_id = self.ensure_vector_set(
-            request.root,
-            request.identity,
-            request.config,
+            request.root, request.identity, request.config
         )
         table_name = _payload_table_name(vector_set_id)
-        candidate_limit = _similarity_candidate_limit(request.config)
         with _connect(get_vector_store_path(request.root)) as conn:
+            revision_row = conn.execute(
+                "SELECT revision FROM vector_sets WHERE id = ?", (vector_set_id,)
+            ).fetchone()
+            if revision_row is None:
+                raise VectorStoreError("Configured SQLite vector set disappeared.")
             rows = conn.execute(
                 f"""
-                WITH nearest_payloads AS (
-                    SELECT content_hash, distance
-                    FROM {table_name}
-                    WHERE embedding MATCH ?
-                    LIMIT {candidate_limit}
-                )
-                SELECT bindings.stable_id, 1.0 - nearest_payloads.distance AS score
-                FROM nearest_payloads
-                JOIN vector_bindings bindings
-                  ON bindings.vector_set_id = ?
-                 AND bindings.content_hash = nearest_payloads.content_hash
-                WHERE bindings.object_type = ?
+                SELECT bindings.object_type, bindings.stable_id,
+                       bindings.content_hash, payload_index.embedding
+                FROM vector_bindings bindings
+                JOIN vector_payloads payloads
+                  ON payloads.vector_set_id = bindings.vector_set_id
+                 AND payloads.content_hash = bindings.content_hash
+                JOIN {table_name} payload_index ON payload_index.rowid = payloads.id
+                WHERE bindings.vector_set_id = ? AND bindings.object_type = ?
+                ORDER BY bindings.object_type, bindings.stable_id
                 """,
-                (
-                    sqlite_vec.serialize_float32(request.query_vector),
-                    vector_set_id,
-                    request.object_type,
-                ),
+                (vector_set_id, request.object_type),
             ).fetchall()
-        scores = [
-            VectorSimilarityScore(stable_id=str(stable_id), score=float(score))
-            for stable_id, score in rows
-            if score is not None and float(score) >= request.min_score
-        ]
-        return sorted(scores, key=lambda item: (-item.score, item.stable_id))
+        snapshot_rows = tuple(
+            StoredVectorRow(
+                object_type=str(object_type),
+                stable_id=str(stable_id),
+                content_hash=str(content_hash),
+                dimension=request.identity.engine.dimension,
+                vector=bytes(vector),
+            )
+            for object_type, stable_id, content_hash, vector in rows
+        )
+        return VectorSnapshot(
+            metadata=VectorSnapshotMetadata(
+                identity=request.identity,
+                revision=int(revision_row[0]),
+                object_type=request.object_type,
+                row_count=len(snapshot_rows),
+            ),
+            rows=snapshot_rows,
+        )
 
     def store_vectors_for_full_index(
         self,
@@ -783,9 +814,30 @@ class SQLiteVectorStore:
             request.root, request.identity, request.config
         )
         materialized = [row for row in request.rows if row.vector is not None]
+        desired = request.identity_rows or tuple(
+            PreparedVectorIdentityRow(
+                object_type=row.row.object_type,
+                stable_id=row.row.stable_id,
+                content_hash=row.content_hash,
+                vector=row.vector,
+            )
+            for row in materialized
+        )
         with _connect(get_vector_store_path(request.root)) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                existing_bindings = {
+                    (str(object_type), str(stable_id), str(content_hash))
+                    for object_type, stable_id, content_hash in conn.execute(
+                        """SELECT object_type, stable_id, content_hash
+                        FROM vector_bindings WHERE vector_set_id = ?""",
+                        (vector_set_id,),
+                    ).fetchall()
+                }
+                desired_bindings = {
+                    (row.object_type, row.stable_id, row.content_hash)
+                    for row in desired
+                }
                 self._store_payloads(
                     conn,
                     vector_set_id=vector_set_id,
@@ -803,15 +855,6 @@ class SQLiteVectorStore:
                     },
                 )
                 if request.preserve_existing:
-                    desired = request.identity_rows or tuple(
-                        PreparedVectorIdentityRow(
-                            object_type=row.row.object_type,
-                            stable_id=row.row.stable_id,
-                            content_hash=row.content_hash,
-                            vector=row.vector,
-                        )
-                        for row in materialized
-                    )
                     conn.execute(
                         "CREATE TEMP TABLE desired_bindings(object_type TEXT, stable_id TEXT)"
                     )
@@ -849,6 +892,8 @@ class SQLiteVectorStore:
                     "DELETE FROM pending_vectors WHERE vector_set_id = ?",
                     (vector_set_id,),
                 )
+                if existing_bindings != desired_bindings:
+                    self._bump_revision(conn, vector_set_id)
                 conn.commit()
             except BaseException:
                 conn.rollback()

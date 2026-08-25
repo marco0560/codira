@@ -304,6 +304,8 @@ class ChannelBundleRequest:
         Deterministic retrieval plan derived from the query intent.
     prefix : str | None
         Absolute normalized prefix used to restrict candidate files.
+    search_profile : str | None
+        Named similarity-index runtime profile for semantic retrieval channels.
     """
 
     root: Path
@@ -312,6 +314,7 @@ class ChannelBundleRequest:
     intent: QueryIntent
     plan: RetrievalPlan
     prefix: str | None
+    search_profile: str | None
 
 
 @dataclass(frozen=True)
@@ -626,6 +629,9 @@ class ContextRequest:
         Whether to emit the prompt-oriented representation.
     explain : bool, optional
         Whether to include retrieval diagnostics.
+    search_profile : str | None, optional
+        Named similarity-index runtime profile for embedding and documentation
+        retrieval channels. ``None`` selects ``default``.
     conn : codira.contracts.BackendQueryConnection | None, optional
         Existing read connection to reuse. When omitted, context retrieval owns
         and closes a direct backend connection.
@@ -637,6 +643,7 @@ class ContextRequest:
     as_json: bool = False
     as_prompt: bool = False
     explain: bool = False
+    search_profile: str | None = None
     conn: BackendQueryConnection | None = None
 
 
@@ -2177,12 +2184,13 @@ def _format_enriched_symbol(
     return lines
 
 
-def _retrieve_symbol_candidates(
+def _retrieve_symbol_candidates(  # noqa: PLR0913
     root: Path,
     query: str,
     conn: BackendQueryConnection,
     intent: QueryIntent,
     prefix: str | None,
+    search_profile: str | None,
 ) -> ChannelResults:
     """
     Retrieve and score symbol-channel candidates for a query.
@@ -2199,6 +2207,8 @@ def _retrieve_symbol_candidates(
         Structured classification of the query.
     prefix : str | None
         Absolute normalized prefix used to restrict candidate files.
+    search_profile : str | None
+        Unused similarity-index runtime profile.
 
     Returns
     -------
@@ -2210,6 +2220,7 @@ def _retrieve_symbol_candidates(
     This phase applies deterministic scoring only. It does not perform
     final deduplication or pruning.
     """
+    del search_profile
     matches = find_symbol(root, query, prefix=prefix, conn=conn)
     query_tokens = sorted(_tokenize(query))
 
@@ -2315,12 +2326,13 @@ def _retrieve_symbol_candidates(
     return scored
 
 
-def _retrieve_test_candidates(
+def _retrieve_test_candidates(  # noqa: PLR0913
     root: Path,
     query: str,
     conn: BackendQueryConnection,
     intent: QueryIntent,
     prefix: str | None,
+    search_profile: str | None,
 ) -> ChannelResults:
     """
     Retrieve candidates for the test channel.
@@ -2337,22 +2349,25 @@ def _retrieve_test_candidates(
         Structured query classification.
     prefix : str | None
         Absolute normalized prefix used to restrict candidate files.
+    search_profile : str | None
+        Unused similarity-index runtime profile.
 
     Returns
     -------
     codira.types.ChannelResults
         Empty channel results. Test-specific retrieval is not implemented.
     """
-    del root, query, conn, intent, prefix
+    del root, query, conn, intent, prefix, search_profile
     return []
 
 
-def _retrieve_script_candidates(
+def _retrieve_script_candidates(  # noqa: PLR0913
     root: Path,
     query: str,
     conn: BackendQueryConnection,
     intent: QueryIntent,
     prefix: str | None,
+    search_profile: str | None,
 ) -> ChannelResults:
     """
     Retrieve candidates for the script channel.
@@ -2369,13 +2384,15 @@ def _retrieve_script_candidates(
         Structured query classification.
     prefix : str | None
         Absolute normalized prefix used to restrict candidate files.
+    search_profile : str | None
+        Unused similarity-index runtime profile.
 
     Returns
     -------
     codira.types.ChannelResults
         Empty channel results. Script-specific retrieval is not implemented.
     """
-    del root, query, conn, intent, prefix
+    del root, query, conn, intent, prefix, search_profile
     return []
 
 
@@ -3046,6 +3063,7 @@ def _build_channel_bundles(
                 request.conn,
                 request.intent,
                 request.prefix,
+                request.search_profile,
             ),
         )
         for name, fn in channel_fns
@@ -3860,7 +3878,7 @@ def _get_channel_functions(
     tuple[
         ChannelName,
         Callable[
-            [Path, str, BackendQueryConnection, QueryIntent, str | None],
+            [Path, str, BackendQueryConnection, QueryIntent, str | None, str | None],
             ChannelResults,
         ],
     ]
@@ -3885,6 +3903,7 @@ def _get_channel_functions(
                     object,
                     codira.query.classifier.QueryIntent,
                     str | None,
+                    str | None,
                 ],
                 codira.types.ChannelResults,
             ],
@@ -3898,12 +3917,13 @@ def _get_channel_functions(
     ]
 
 
-def _retrieve_semantic_candidates(
+def _retrieve_semantic_candidates(  # noqa: PLR0913
     root: Path,
     query: str,
     conn: BackendQueryConnection,
     intent: QueryIntent,
     prefix: str | None,
+    search_profile: str | None,
 ) -> ChannelResults:
     """
     Deterministic semantic channel with independent candidate retrieval.
@@ -3922,6 +3942,8 @@ def _retrieve_semantic_candidates(
         use it directly.
     prefix : str | None
         Absolute normalized prefix used to restrict candidate files.
+    search_profile : str | None
+        Unused similarity-index runtime profile.
 
     Returns
     -------
@@ -3935,7 +3957,7 @@ def _retrieve_semantic_candidates(
     consulting legacy auxiliary compatibility tables.
     """
 
-    del root
+    del root, search_profile
 
     tokens = [t.lower() for t in _tokenize(query) if len(t) >= 3]
     if not tokens:
@@ -3998,12 +4020,13 @@ def _retrieve_semantic_candidates(
     return results[:SEMANTIC_RESULT_LIMIT]
 
 
-def _retrieve_embedding_candidates(
+def _retrieve_embedding_candidates(  # noqa: PLR0913
     root: Path,
     query: str,
     conn: BackendQueryConnection,
     intent: QueryIntent,
     prefix: str | None,
+    search_profile: str | None,
 ) -> ChannelResults:
     """
     Retrieve ranked candidates from the stored embedding channel.
@@ -4020,6 +4043,8 @@ def _retrieve_embedding_candidates(
         Structured query classification used to apply role-aware ranking bias.
     prefix : str | None
         Absolute normalized prefix used to restrict candidate files.
+    search_profile : str | None
+        Named similarity-index runtime profile.
 
     Returns
     -------
@@ -4033,6 +4058,7 @@ def _retrieve_embedding_candidates(
             limit=EMBEDDING_RESULT_LIMIT,
             min_score=EMBEDDING_MIN_SCORE,
             prefix=prefix,
+            search_profile=search_profile,
             conn=conn,
         )
     )
@@ -4041,12 +4067,13 @@ def _retrieve_embedding_candidates(
     return sorted_results
 
 
-def _retrieve_documentation_candidates(
+def _retrieve_documentation_candidates(  # noqa: PLR0913
     root: Path,
     query: str,
     conn: BackendQueryConnection,
     intent: QueryIntent,
     prefix: str | None,
+    search_profile: str | None,
 ) -> ChannelResults:
     """
     Retrieve ranked candidates from the documentation channel.
@@ -4063,6 +4090,8 @@ def _retrieve_documentation_candidates(
         Structured query classification used to weight documentation results.
     prefix : str | None
         Absolute normalized prefix used to restrict candidate files.
+    search_profile : str | None
+        Named similarity-index runtime profile.
 
     Returns
     -------
@@ -4077,6 +4106,7 @@ def _retrieve_documentation_candidates(
             limit=DOCUMENTATION_RESULT_LIMIT,
             min_score=EMBEDDING_MIN_SCORE,
             prefix=prefix,
+            search_profile=search_profile,
             conn=conn,
         )
     )
@@ -6023,6 +6053,7 @@ def _initial_context_state(
             intent=intent,
             plan=plan,
             prefix=normalized_prefix,
+            search_profile=request.search_profile,
         )
     )
     ordered_channels: list[ChannelName] | None = [

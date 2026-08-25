@@ -35,6 +35,8 @@ from codira.contracts import (
     IndexBackend,
     LanguageAnalyzer,
     PluginConfigurationSchemaProvider,
+    SimilarityIndex,
+    SimilaritySearchProfile,
     VectorStore,
 )
 from codira.plugin_config import plugin_configuration_fingerprint, plugin_enabled
@@ -46,6 +48,7 @@ if TYPE_CHECKING:
     from codira.contracts import (
         DocumentationAuditPlugin as DocumentationAuditPluginProtocol,
         EmbeddingEngine as EmbeddingEngineProtocol,
+        SimilarityIndex as SimilarityIndexProtocol,
         VectorStore as VectorStoreProtocol,
     )
 
@@ -56,6 +59,7 @@ ANALYZER_ENTRY_POINT_GROUP = "codira.analyzers"
 BACKEND_ENTRY_POINT_GROUP = "codira.backends"
 EMBEDDING_ENGINE_ENTRY_POINT_GROUP = "codira.embedding_engines"
 VECTOR_STORE_ENTRY_POINT_GROUP = "codira.vector_stores"
+SIMILARITY_INDEX_ENTRY_POINT_GROUP = "codira.similarity_indexes"
 DOCUMENTATION_AUDIT_ENTRY_POINT_GROUP = "codira.documentation_audits"
 # These package hints are registry metadata only. SQLite remains the
 # compatibility default by backend name, while schema and connection ownership
@@ -63,6 +67,9 @@ DOCUMENTATION_AUDIT_ENTRY_POINT_GROUP = "codira.documentation_audits"
 OPTIONAL_BACKEND_PACKAGE_BY_NAME: dict[str, str] = {
     "sqlite": "codira-backend-sqlite",
     "duckdb": "codira-backend-duckdb",
+}
+OPTIONAL_SIMILARITY_INDEX_PACKAGE_BY_NAME: dict[str, str] = {
+    "faiss": "codira-similarity-index-faiss",
 }
 OPTIONAL_ANALYZER_PACKAGE_BY_NAME: dict[str, str] = {
     "python": "codira-analyzer-python",
@@ -118,6 +125,7 @@ PluginFamily = Literal[
     "backend",
     "embedding",
     "vector-store",
+    "similarity-index",
     "documentation-audit",
 ]
 PluginSource = Literal["builtin", "entry_point"]
@@ -295,7 +303,7 @@ def _active_plugin_cache_key(
 
     Parameters
     ----------
-    family : {"analyzer", "backend", "embedding", "vector-store"}
+    family : {"analyzer", "backend", "embedding", "vector-store", "similarity-index"}
         Plugin family.
     name : str
         Active plugin name.
@@ -754,6 +762,34 @@ def _builtin_vector_store_plugins() -> list[_LoadedPlugin]:
     return []
 
 
+def _builtin_similarity_index_plugins() -> list[_LoadedPlugin]:
+    """Return the always-available core exact similarity index.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    list[_LoadedPlugin]
+        One core-owned exact implementation registration.
+    """
+
+    from codira.similarity import build_similarity_index
+
+    instance = build_similarity_index()
+    return [
+        _LoadedPlugin(
+            family="similarity-index",
+            name=instance.name,
+            provider="codira",
+            source="builtin",
+            version=instance.version,
+            factory=build_similarity_index,
+        )
+    ]
+
+
 def _builtin_documentation_audit_plugins() -> list[_LoadedPlugin]:
     """
     Return built-in documentation-audit registrations.
@@ -1146,6 +1182,8 @@ def _plugin_contract_error(
         return "factory returned a non-EmbeddingEngine object"
     if family == "vector-store" and not isinstance(instance, VectorStore):
         return "factory returned a non-VectorStore object"
+    if family == "similarity-index" and not isinstance(instance, SimilarityIndex):
+        return "factory returned a non-SimilarityIndex object"
     if family == "documentation-audit" and not isinstance(
         instance, DocumentationAuditPlugin
     ):
@@ -1292,6 +1330,7 @@ def _plugin_snapshot(
             _builtin_backend_plugins,
             _builtin_embedding_engine_plugins,
             _builtin_vector_store_plugins,
+            _builtin_similarity_index_plugins,
             _builtin_documentation_audit_plugins,
         ),
     )
@@ -1304,7 +1343,7 @@ def _cached_plugin_snapshot(
     third_party_disabled: bool,
     disabled_analyzers: tuple[str, ...],
     configured_enabled_plugins: tuple[tuple[str, bool], ...],
-    cache_tokens: tuple[object, object, object, object, object, object],
+    cache_tokens: tuple[object, object, object, object, object, object, object],
 ) -> tuple[tuple[_LoadedPlugin, ...], tuple[PluginRegistration, ...]]:
     """
     Cache the resolved plugin snapshot for one family.
@@ -1358,6 +1397,13 @@ def _cached_plugin_snapshot(
         externals, external_registrations = _discover_entry_point_plugins(
             family="vector-store",
             group=VECTOR_STORE_ENTRY_POINT_GROUP,
+            third_party_disabled=third_party_disabled,
+        )
+    elif family == "similarity-index":
+        builtins = _builtin_similarity_index_plugins()
+        externals, external_registrations = _discover_entry_point_plugins(
+            family="similarity-index",
+            group=SIMILARITY_INDEX_ENTRY_POINT_GROUP,
             third_party_disabled=third_party_disabled,
         )
     else:
@@ -1567,6 +1613,10 @@ def plugin_registrations(*, root: Path | None = None) -> list[PluginRegistration
         root=root,
     )
     vector_plugins, vector_registrations = _plugin_snapshot("vector-store", root=root)
+    similarity_plugins, similarity_registrations = _plugin_snapshot(
+        "similarity-index",
+        root=root,
+    )
     documentation_audit_plugins, documentation_audit_registrations = _plugin_snapshot(
         "documentation-audit",
         root=root,
@@ -1576,6 +1626,7 @@ def plugin_registrations(*, root: Path | None = None) -> list[PluginRegistration
         backend_plugins,
         embedding_plugins,
         vector_plugins,
+        similarity_plugins,
         documentation_audit_plugins,
     )
     return (
@@ -1583,6 +1634,7 @@ def plugin_registrations(*, root: Path | None = None) -> list[PluginRegistration
         + backend_registrations
         + embedding_registrations
         + vector_registrations
+        + similarity_registrations
         + documentation_audit_registrations
     )
 
@@ -1623,6 +1675,10 @@ def validate_plugin_configuration(
         root=root,
     )
     vector_plugins, vector_registrations = _plugin_snapshot("vector-store", root=root)
+    similarity_plugins, similarity_registrations = _plugin_snapshot(
+        "similarity-index",
+        root=root,
+    )
     documentation_audit_plugins, documentation_audit_registrations = _plugin_snapshot(
         "documentation-audit",
         root=root,
@@ -1634,6 +1690,7 @@ def validate_plugin_configuration(
             *backend_plugins,
             *embedding_plugins,
             *vector_plugins,
+            *similarity_plugins,
             *documentation_audit_plugins,
         ]
     }
@@ -1644,6 +1701,7 @@ def validate_plugin_configuration(
             *backend_registrations,
             *embedding_registrations,
             *vector_registrations,
+            *similarity_registrations,
             *documentation_audit_registrations,
         ]
         if registration.status in {"loaded", "skipped"}
@@ -1713,6 +1771,20 @@ def validate_plugin_configuration(
         )
         raise ConfigError(msg)
 
+    configured_similarity_index = config.embeddings.similarity_index.strip()
+    similarity_index_config_key = plugin_config_key(
+        family="similarity-index",
+        name=configured_similarity_index,
+    )
+    if similarity_index_config_key in configured_tables and not plugin_enabled(
+        configured_tables[similarity_index_config_key]
+    ):
+        msg = (
+            f"Configured similarity index '{configured_similarity_index}' is disabled by "
+            f"plugins.{similarity_index_config_key}."
+        )
+        raise ConfigError(msg)
+
     return warnings
 
 
@@ -1766,7 +1838,17 @@ def _active_plugin(
             )
             return configured
     available = ", ".join(sorted(plugin.name for plugin in plugins)) or "<none>"
-    msg = f"Unsupported {family} plugin '{name}'. Available plugins: {available}"
+    package_hint = ""
+    if (
+        family == "similarity-index"
+        and name in OPTIONAL_SIMILARITY_INDEX_PACKAGE_BY_NAME
+    ):
+        package_name = OPTIONAL_SIMILARITY_INDEX_PACKAGE_BY_NAME[name]
+        package_hint = f" Install the first-party `{package_name}` package."
+    msg = (
+        f"Unsupported {family} plugin '{name}'. Available plugins: {available}."
+        f"{package_hint}"
+    )
     raise ValueError(msg)
 
 
@@ -1822,6 +1904,87 @@ def active_vector_store(
         root=root,
     )
     return cast("VectorStoreProtocol", vector_store)
+
+
+def active_similarity_index(*, root: Path | None = None) -> SimilarityIndexProtocol:
+    """Return the mandatory configured similarity-index implementation.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Repository root whose effective configuration selects the index.
+
+    Returns
+    -------
+    codira.contracts.SimilarityIndex
+        Selected similarity index, with no fallback substitution.
+    """
+
+    config = load_effective_config(root=root)
+    index = _active_plugin(
+        family="similarity-index",
+        name=config.embeddings.similarity_index.strip(),
+        root=root,
+    )
+    return cast("SimilarityIndexProtocol", index)
+
+
+def active_similarity_search_profile(
+    *, root: Path, name: str | None = None
+) -> SimilaritySearchProfile:
+    """Return one configured named similarity-search profile.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root selecting the effective configuration.
+    name : str | None, optional
+        Requested profile name, or ``None`` for the mandatory default.
+
+    Returns
+    -------
+    codira.contracts.SimilaritySearchProfile
+        Configured immutable query profile.
+
+    Raises
+    ------
+    ValueError
+        If the selected profile does not exist.
+    """
+
+    selected_name = name or "default"
+    profiles = load_effective_config(root=root).embeddings.similarity_profiles
+    for profile in profiles:
+        if profile.name == selected_name:
+            return profile
+    message = f"Similarity search profile '{selected_name}' is unavailable."
+    raise ValueError(message)
+
+
+def active_similarity_index_config(*, root: Path) -> dict[str, object]:
+    """Return the selected similarity index's namespaced configuration.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root selecting the effective configuration.
+
+    Returns
+    -------
+    dict[str, object]
+        Detached plugin configuration for the selected index.
+    """
+
+    config = load_effective_config(root=root)
+    return dict(
+        (config.plugins.configs or {}).get(
+            plugin_config_key(
+                family="similarity-index",
+                name=config.embeddings.similarity_index,
+            ),
+            {},
+        )
+    )
 
 
 def documentation_audit_plugins(

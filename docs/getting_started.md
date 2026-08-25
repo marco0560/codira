@@ -12,17 +12,15 @@ source .venv/bin/activate
 pip install codira-bundle-official
 ```
 
-That installs `codira`, the first-party analyzer plugins and backends.
+That installs `codira`, the first-party analyzer plugins and backends. To add
+the optional FAISS similarity index, install `pip install
+"codira-bundle-official[faiss]"`; core exact similarity remains available
+without it.
 
 The analyzers currently available are:
 
-- Python
-- C
-- C++
-- JSON
-- Bash
-- Markdown
-- Text
+- Bash, C, C++, Go, JavaScript, TypeScript, JSON, Markdown, Python, Rust, and
+  plain text
 
 the last two being used to analyze doccumentation, while the backend plugins are:
 
@@ -209,6 +207,29 @@ Unset `CODIRA_TORCH_*` values leave PyTorch defaults unchanged. Invalid integer
 values fail fast before embedding inference. These variables change runtime
 scheduling only; they do not change indexed symbols, embedding payloads, or
 query semantics.
+
+### Optional FAISS/HNSW similarity search
+
+The generated version-2 configuration starts with the always-available exact
+index. After installing the FAISS package, select it with
+`embeddings.similarity_index = "faiss"`. Choose `index_type = "flat"` for
+FAISS exact search or `"hnsw"` for approximate graph search. HNSW's `M` and
+`efConstruction` construct the artifact; `ef_search`, `candidate_limit`, and
+result limits live in named `embeddings.similarity_profiles` entries.
+
+`ef_search` means graph exploration breadth, not a fuzzy score setting.
+Candidate limits occur before a prefix or structural filter; result limits
+occur after it. Rebuild after HNSW build-setting changes:
+
+```bash
+codira emb rebuild
+codira emb --search-profile default "where is plugin discovery?"
+```
+
+Changing only a profile does not rebuild. Changing to an incompatible persisted
+format requires `codira emb reset` followed by indexing. Version-1 configs are
+not migrated: regenerate with `codira config init --force`, then select
+`similarity_index` explicitly.
 
 ## First commands
 

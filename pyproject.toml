@@ -34,7 +34,7 @@ dev = [
     "setuptools-scm>=8,<10",
     "wheel",
     "twine>=6.2,<7.0",
-    "codira-installer==1.55.0",
+    "codira-installer==1.55.2",
     "codira-analyzer-python==1.61.0",
     "codira-analyzer-json==1.56.0",
     "codira-analyzer-c==1.55.0",
@@ -57,8 +57,9 @@ dev = [
     "codira-backend-duckdb==1.57.0",
     "codira-embedding-sentence-transformers==1.55.0",
     "codira-embedding-onnx==1.55.0",
-    "codira-vector-store-sqlite==1.55.0",
-    "codira-vector-store-duckdb==1.55.0",
+    "codira-vector-store-sqlite==1.57.0",
+    "codira-vector-store-duckdb==1.57.0",
+    "codira-similarity-index-faiss==1.68.0",
 ]
 
 [project.optional-dependencies]
@@ -67,8 +68,8 @@ semantic = [
     "einops>=0.8,<1.0",
     "codira-embedding-sentence-transformers==1.55.0",
     "codira-embedding-onnx==1.55.0",
-    "codira-vector-store-sqlite==1.55.0",
-    "codira-vector-store-duckdb==1.55.0",
+    "codira-vector-store-sqlite==1.57.0",
+    "codira-vector-store-duckdb==1.57.0",
 ]
 
 bundle-official = [
@@ -96,8 +97,8 @@ bundle-official = [
     "codira-backend-duckdb==1.57.0",
     "codira-embedding-sentence-transformers==1.55.0",
     "codira-embedding-onnx==1.55.0",
-    "codira-vector-store-sqlite==1.55.0",
-    "codira-vector-store-duckdb==1.55.0",
+    "codira-vector-store-sqlite==1.57.0",
+    "codira-vector-store-duckdb==1.57.0",
 ]
 
 docs = [
@@ -155,6 +156,7 @@ codira-embedding-sentence-transformers = { path = "packages/codira-embedding-sen
 codira-embedding-onnx = { path = "packages/codira-embedding-onnx", editable = true }
 codira-vector-store-sqlite = { path = "packages/codira-vector-store-sqlite", editable = true }
 codira-vector-store-duckdb = { path = "packages/codira-vector-store-duckdb", editable = true }
+codira-similarity-index-faiss = { path = "packages/codira-similarity-index-faiss", editable = true }
 codira-installer = { path = "packages/codira-installer", editable = true }
 codira-bundle-official = { path = "packages/codira-bundle-official", editable = true }
 
