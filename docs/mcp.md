@@ -54,6 +54,80 @@ codira-mcp --workspace sample
 accepts a later path or workspace selector, which keeps its target binding
 stable and provenance-safe.
 
+## Parallel repositories
+
+Run one Codex instance per repository with one project-scoped MCP
+configuration per instance. Keep a root-bound Codira entry out of the global
+`~/.codex/config.toml`; generate and copy this entry into the trusted
+repository's `.codex/config.toml` instead:
+
+```bash
+cd /path/to/repository-a
+codira index
+codira-mcp-config codex --root "$PWD"
+```
+
+```toml
+[mcp_servers.codira]
+command = "codira-mcp"
+args = ["--root", "/path/to/repository-a"]
+```
+
+Repeat for repository B with its own absolute root. Codex starts a separate
+STDIO server process for each active configuration. Each process is bound to
+its startup root, so it cannot answer requests against another repository.
+The default Codira state root is the repository root; therefore separate
+repositories also have separate indexes and daemon state by default.
+
+To run automatic indexing and warm reads in each repository, enable the two
+independent daemon roles in that repository's `.codira/config.toml`:
+
+```toml
+[daemon]
+enabled = true
+
+[query_daemon]
+enabled = true
+```
+
+For foreground development, start both processes from each repository:
+
+```bash
+cd /path/to/repository-a
+codira daemon run
+codira query-daemon run
+```
+
+Use `install` followed by `start` in place of `run` to create persistent
+per-user services. The indexing daemon is the sole automatic writer. The
+query daemon is read-only; compatible MCP processes reuse it, while an absent
+or failed daemon causes a direct-core fallback.
+
+### External state roots
+
+When index and daemon state must not live below the repository, use one named
+workspace for each repository. A workspace preserves the repository root,
+state root, and configuration selection as a single fixed identity:
+
+```bash
+codira workspace add repository-a \
+  --path /path/to/repository-a \
+  --state-root /path/to/codira-state/repository-a \
+  --config-file /path/to/repository-a/.codira/config.toml
+
+codira index --workspace repository-a
+codira daemon --workspace repository-a run
+codira query-daemon --workspace repository-a run
+```
+
+Configure the corresponding project-scoped MCP entry with
+`args = ["--workspace", "repository-a"]`. Repeat with different workspace
+names and state roots for all other repositories. Never share an
+`--output-dir`/state root across repositories: endpoint metadata, credentials,
+indexes, and daemon lifecycle records are scoped there. Use `--execution-mode`
+on an eligible read to verify routing: `warm`, `direct`, or `fallback` is
+reported on standard error.
+
 ## Verify the server directly
 
 ```bash

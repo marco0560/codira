@@ -301,6 +301,38 @@ no compatible service was used; `fallback` means one failed daemon request was
 re-run directly. No command is ever routed to another repository or output
 directory identity.
 
+## Parallel repository isolation
+
+An automatic indexing daemon and a warm query daemon are each scoped to the
+resolved repository root and effective output directory. Their persistent
+service identities include those values and the daemon kind. Consequently,
+each repository needs its own effective state root: use the default
+repository-local `.codira` state, or pass a distinct `--output-dir` for every
+direct-path command. Do not point two repositories at the same output
+directory.
+
+For external state, a named workspace is preferred because it binds one
+repository root, state root, and optional repository configuration file before
+starting either daemon or MCP server:
+
+```bash
+codira workspace add repository-a \
+  --path /path/to/repository-a \
+  --state-root /path/to/codira-state/repository-a \
+  --config-file /path/to/repository-a/.codira/config.toml
+
+codira daemon --workspace repository-a install
+codira daemon --workspace repository-a start
+codira query-daemon --workspace repository-a install
+codira query-daemon --workspace repository-a start
+```
+
+Use a different workspace name and state root for repository B. Start Codira
+MCP with the same workspace (`codira-mcp --workspace repository-a`) so it can
+discover only that workspace's compatible warm query daemon. See [Local MCP:
+Parallel repositories](mcp.md#parallel-repositories) for the corresponding
+project-scoped Codex configuration.
+
 ## Repository Performance Profile
 
 This repository commits an explicit `.codira/config.toml` with operational

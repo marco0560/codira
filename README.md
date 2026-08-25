@@ -23,24 +23,21 @@ supports exact symbol lookup, docstring auditing, deterministic local semantic
 embeddings, static call and callable-reference inspection, plugin discovery,
 and deterministic context generation for natural-language queries.
 
-The current release indexes mixed-language repositories through registered
-language analyzers:
+The checked-in first-party plugin catalog currently includes:
 
-- Python via the first-party `codira-analyzer-python` plugin
-- JSON via the first-party `codira-analyzer-json` plugin for JSON Schema,
-  `package.json`, and `.releaserc.json`
-- C `*.c` and `*.h` files via the first-party
-  `codira-analyzer-c` plugin backed by `tree-sitter-c`
-- C++ source and header files via the first-party `codira-analyzer-cpp`
-  plugin backed by `tree-sitter-cpp`
-- Bash scripts via the first-party `codira-analyzer-bash` plugin backed by
-  `tree-sitter-bash`
-- SQLite persistence via the first-party `codira-backend-sqlite` backend
-  plugin
-- DuckDB persistence via the first-party `codira-backend-duckdb` backend
-  plugin
+- language analyzers for Bash, C, C++, Go, JavaScript, TypeScript, JSON,
+  Markdown, Python, Rust, and plain text
+- documentation-audit plugins for NumPy, Google-style, Doxygen, Rustdoc,
+  JSDoc, TSDoc, and Go doc comments
+- SQLite and DuckDB structural backends
+- ONNX and Sentence Transformers embedding engines
+- SQLite and DuckDB vector stores
 
-Storage and query persistence are provided through the active backend registry.
+The `codira-installer` and `codira-bundle-official` packages provide the
+interactive installer and the curated end-user distribution, respectively.
+Use `codira plugins` to inspect the plugins installed and active in a specific
+runtime. Storage and query persistence are provided through the selected
+backend and vector-store plugins.
 
 ## Why It Helps Agent Workflows
 
@@ -214,6 +211,55 @@ codira index
 codira sym build_parser
 codira ctx "schema migration rules"
 ```
+
+### Run several repositories in parallel
+
+Treat every repository as a separate Codira identity: one MCP server, one
+effective state root, one optional indexing daemon, and one optional warm query
+daemon. The default state root is the repository itself, so separate repository
+roots are already isolated. For Codex, put the generated MCP entry in each
+trusted project's `.codex/config.toml`, rather than using one root-bound entry
+in `~/.codex/config.toml`:
+
+```bash
+cd /path/to/repository-a
+codira index
+codira-mcp-config codex --root "$PWD"
+```
+
+The generated configuration starts a fixed-root `codira-mcp` process. Repeat
+the command from repository B, copy each result to that repository's project
+configuration, and start each Codex instance from its own repository. A server
+started for repository A cannot be retargeted to repository B.
+
+To keep indexing and eligible reads warm in each repository, enable both
+optional daemons in that repository's `.codira/config.toml`:
+
+```toml
+[daemon]
+enabled = true
+
+[query_daemon]
+enabled = true
+```
+
+Then run or install one of each daemon in each repository:
+
+```bash
+cd /path/to/repository-a
+codira daemon run
+codira query-daemon run
+```
+
+The indexing daemon is the automatic writer; the query daemon is read-only.
+MCP uses only a daemon with its matching repository and state identity, and
+otherwise falls back safely to direct reads. When state must live outside the
+repository, register a distinct named workspace with its own `--state-root`
+and start the MCP server and both daemons with that workspace. Do not share an
+`--output-dir` or workspace state root between repositories. See [Local
+MCP](docs/mcp.md#parallel-repositories) and
+[Configuration](docs/configuration.md#parallel-repository-isolation) for the
+complete setup and service commands.
 
 Force a full rebuild:
 

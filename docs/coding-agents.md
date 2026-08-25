@@ -45,9 +45,11 @@ repository you want Codex to inspect, generate the entry:
 codira-mcp-config codex --root "$PWD"
 ```
 
-Copy the output into either the user configuration at `~/.codex/config.toml`
-or the project-scoped `.codex/config.toml` for a trusted project. It has this
-shape, with an absolute repository path:
+Copy the output into the project-scoped `.codex/config.toml` for a trusted
+project. This keeps a root-bound Codira server specific to that project; use a
+global configuration only when you deliberately want that one server available
+to every Codex session. The entry has this shape, with an absolute repository
+path:
 
 ```toml
 [mcp_servers.codira]
@@ -67,6 +69,13 @@ Codira's MCP server is local and read-only. It is fixed to one repository when
 it starts, cannot be retargeted by a later request, and has no shell-execution
 tool. After tracked edits, run `codira index` again before relying on the next
 MCP retrieval result.
+
+When working in several repositories simultaneously, repeat this project
+configuration and run the daemon pair independently in each repository. Use a
+distinct named workspace when state is outside the repository; that makes the
+MCP root, index state, indexing daemon, and warm query daemon one fixed
+identity. See [Local MCP: Parallel repositories](mcp.md#parallel-repositories)
+for the complete commands and isolation rules.
 
 Codex can also consume structured command output when you prefer an explicit
 handoff over live tools:
