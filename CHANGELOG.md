@@ -1,3 +1,18 @@
+# [2.0.0](https://github.com/marco0560/codira/compare/v1.67.1...v2.0.0) (2026-08-25)
+
+
+* feat(semantic)!: add pluggable similarity-index retrieval ([b289ced](https://github.com/marco0560/codira/commit/b289ceda3f9ea5560a077016959d88a55cba36df)), closes [#20](https://github.com/marco0560/codira/issues/20) [#20](https://github.com/marco0560/codira/issues/20) [#59](https://github.com/marco0560/codira/issues/59) [#71](https://github.com/marco0560/codira/issues/71) [#20](https://github.com/marco0560/codira/issues/20) [#20](https://github.com/marco0560/codira/issues/20) [#71](https://github.com/marco0560/codira/issues/71) [#59](https://github.com/marco0560/codira/issues/59)
+
+
+### BREAKING CHANGES
+
+* Configuration schema version 2 replaces the prior semantic retrieval configuration.
+* Existing similarity-related persisted artifacts must be reset and rebuilt by reindexing.
+* Vector stores no longer own semantic retrieval implementation or approximate-index configuration.
+* No staged deprecation, automatic migration, or legacy configuration compatibility is provided.
+
+Refs:
+
 # Unreleased
 
 ### Features
