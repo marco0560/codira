@@ -1,17 +1,8 @@
-# [3.0.0](https://github.com/marco0560/codira/compare/v2.0.0...v3.0.0) (2026-08-26)
-
-
-* feat(plugins)!: add authenticated Qdrant similarity index ([a67c6a8](https://github.com/marco0560/codira/commit/a67c6a8a78d4125c37728c1e5ba9f92142f83f23)), closes [#71](https://github.com/marco0560/codira/issues/71)
-
-
-### BREAKING CHANGES
-
-* Similarity search returns typed result envelopes with credential-free provenance.
-
 # [2.0.0](https://github.com/marco0560/codira/compare/v1.67.1...v2.0.0) (2026-08-25)
 
 
-* feat(semantic)!: add pluggable similarity-index retrieval ([b289ced](https://github.com/marco0560/codira/commit/b289ceda3f9ea5560a077016959d88a55cba36df)), closes [#20](https://github.com/marco0560/codira/issues/20) [#20](https://github.com/marco0560/codira/issues/20) [#59](https://github.com/marco0560/codira/issues/59) [#71](https://github.com/marco0560/codira/issues/71) [#20](https://github.com/marco0560/codira/issues/20) [#20](https://github.com/marco0560/codira/issues/20) [#71](https://github.com/marco0560/codira/issues/71) [#59](https://github.com/marco0560/codira/issues/59)
+* feat(semantic)!: add pluggable similarity-index retrieval ([b289ced](https://github.com/marco0560/codira/commit/b289ceda3f9ea5560a077016959d88a55cba36df)), closes [#20](https://github.com/marco0560/codira/issues/20)
+* feat(plugins)!: add authenticated Qdrant similarity index ([a67c6a8](https://github.com/marco0560/codira/commit/a67c6a8a78d4125c37728c1e5ba9f92142f83f23)), closes [#71](https://github.com/marco0560/codira/issues/71)
 
 
 ### BREAKING CHANGES
@@ -20,32 +11,9 @@
 * Existing similarity-related persisted artifacts must be reset and rebuilt by reindexing.
 * Vector stores no longer own semantic retrieval implementation or approximate-index configuration.
 * No staged deprecation, automatic migration, or legacy configuration compatibility is provided.
-
-Refs:
-
-# Unreleased
-
-### Features
-
-* **semantic!:** separate durable vector stores from derived similarity indexes;
-  add core exact search, optional FAISS flat/HNSW search, named runtime search
-  profiles, and rebuild/reset operations ([#20](https://github.com/marco0560/codira/issues/20))
-* **similarity!:** return typed result envelopes with query and candidate
-  provenance, and add previewable, confirmed similarity-artifact purge
-  requests. The first-party Qdrant plugin is released as a standalone
-  server-mode package; it becomes a default official-bundle dependency only
-  with the later bundle-integration phase.
-
-### Breaking Changes
-
-* Configurations must use `config_version = 2` and declare
-  `embeddings.similarity_index`. Regenerate old files with
-  `codira config init --force`; reset incompatible derived similarity state
-  with `codira emb reset` before indexing.
-* First-party distributions now share the `2.0.0` compatibility boundary.
-  Existing installations must resolve matching `2.x` core and plugin wheels;
-  FAISS is included because its former protocol implementation is incompatible
-  with the result envelope and purge contract.
+* Similarity search now returns typed result envelopes with credential-free
+  provenance. First-party distributions must resolve matching `2.x` core and
+  plugin wheels; Qdrant is a strict server-mode, official-bundle dependency.
 
 ## [1.67.1](https://github.com/marco0560/codira/compare/v1.67.0...v1.67.1) (2026-08-23)
 
