@@ -1,3 +1,13 @@
+# [3.0.0](https://github.com/marco0560/codira/compare/v2.0.0...v3.0.0) (2026-08-26)
+
+
+* feat(plugins)!: add authenticated Qdrant similarity index ([a67c6a8](https://github.com/marco0560/codira/commit/a67c6a8a78d4125c37728c1e5ba9f92142f83f23)), closes [#71](https://github.com/marco0560/codira/issues/71)
+
+
+### BREAKING CHANGES
+
+* Similarity search returns typed result envelopes with credential-free provenance.
+
 # [2.0.0](https://github.com/marco0560/codira/compare/v1.67.1...v2.0.0) (2026-08-25)
 
 
