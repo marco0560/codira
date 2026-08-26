@@ -70,6 +70,7 @@ OPTIONAL_BACKEND_PACKAGE_BY_NAME: dict[str, str] = {
 }
 OPTIONAL_SIMILARITY_INDEX_PACKAGE_BY_NAME: dict[str, str] = {
     "faiss": "codira-similarity-index-faiss",
+    "qdrant": "codira-similarity-index-qdrant",
 }
 OPTIONAL_ANALYZER_PACKAGE_BY_NAME: dict[str, str] = {
     "python": "codira-analyzer-python",

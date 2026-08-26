@@ -186,6 +186,7 @@ FIRST_PARTY_PLUGIN_FACTORIES = (
     ("codira_vector_store_duckdb", "build_vector_store"),
     ("codira_vector_store_sqlite", "build_vector_store"),
     ("codira_similarity_index_faiss", "build_similarity_index"),
+    ("codira_similarity_index_qdrant", "build_similarity_index"),
     ("codira_documentation_audit_doxygen", "build_audit_plugin"),
     ("codira_documentation_audit_google", "build_audit_plugin"),
     ("codira_documentation_audit_numpy", "build_audit_plugin"),
@@ -1013,6 +1014,73 @@ def test_explicit_faiss_similarity_index_never_falls_back_to_exact(
     )
     with pytest.raises(ValueError, match="codira-similarity-index-faiss"):
         registry.active_similarity_index(root=tmp_path)
+
+
+def test_explicit_qdrant_similarity_index_never_falls_back_to_exact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Report missing Qdrant instead of selecting the built-in exact index.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that makes the configured Qdrant provider unavailable.
+    tmp_path : pathlib.Path
+        Temporary repository root containing the explicit selection.
+
+    Returns
+    -------
+    None
+        The test verifies missing Qdrant has an installation-specific failure.
+    """
+    config_path = tmp_path / ".codira" / "config.toml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        '[embeddings]\nsimilarity_index = "qdrant"\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        registry,
+        "_plugin_snapshot",
+        lambda _family, *, root=None: ([], []),
+    )
+
+    with pytest.raises(ValueError, match="codira-similarity-index-qdrant"):
+        registry.active_similarity_index(root=tmp_path)
+
+
+def test_qdrant_configuration_schema_rejects_unknown_remote_settings(
+    tmp_path: Path,
+) -> None:
+    """Apply the registered Qdrant schema before any remote client operation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing Qdrant configuration.
+
+    Returns
+    -------
+    None
+        The test asserts entry-point schema publication rejects typoed settings.
+    """
+    config_path = tmp_path / ".codira" / "config.toml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        """
+        [embeddings]
+        similarity_index = "qdrant"
+
+        [plugins.similarity-index-qdrant]
+        url = "https://qdrant.example.test"
+        namespace = "team-a"
+        timeout_secs = 30
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="plugins.similarity-index-qdrant"):
+        registry.validate_plugin_configuration(root=tmp_path)
 
 
 def test_embedding_onnx_config_validation_rejects_unknown_keys(tmp_path: Path) -> None:

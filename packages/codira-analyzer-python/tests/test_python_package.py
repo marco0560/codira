@@ -441,9 +441,9 @@ def test_python_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.61.0"
+    assert project["project"]["version"] == "2.0.0"
     assert project["project"]["dependencies"] == [
-        "codira>=1.5.0,<2.0.0",
+        "codira>=2.0.0,<3.0.0",
         "tree-sitter>=0.25.2",
         "tree-sitter-python>=0.25.0",
     ]

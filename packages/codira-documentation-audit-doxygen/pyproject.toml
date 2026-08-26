@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-documentation-audit-doxygen"
-version = "1.55.0"
+version = "2.0.0"
 description = "First-party Doxygen documentation audit plugin for codira"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "codira>=1.5.0,<2.0.0",
+    "codira>=2.0.0,<3.0.0",
 ]
 
 [project.optional-dependencies]

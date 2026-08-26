@@ -41,6 +41,8 @@ from codira.semantic.search import (
     EmbeddingCandidatesRequest,
     documentation_candidates,
     embedding_candidates,
+    similarity_candidate_provenance_payload,
+    similarity_query_provenance_payload,
 )
 from codira.storage import _read_metadata_file, get_metadata_path
 
@@ -51,6 +53,7 @@ if TYPE_CHECKING:
         BackendGraphMetric,
         BackendQueryConnection,
         BackendSymbolInventoryItem,
+        SimilarityResolvedCandidate,
     )
     from codira.indexer import CoverageIssue
     from codira.types import (
@@ -728,8 +731,22 @@ class MCPAdapter:
                 )
             )
         )
+        similarity = getattr(matches, "search_result", None)
+        resolved = getattr(matches, "resolved", ())
+        if similarity is None:
+            resolved = tuple(None for _ in matches)
         return self._envelope(
-            {"matches": [self._embedding_payload(match) for match in matches]},
+            {
+                "matches": [
+                    self._embedding_payload(match, resolved_candidate)
+                    for match, resolved_candidate in zip(matches, resolved, strict=True)
+                ],
+                "similarity": (
+                    None
+                    if similarity is None
+                    else similarity_query_provenance_payload(similarity)
+                ),
+            },
             output_budget=output_budget,
         )
 
@@ -783,8 +800,22 @@ class MCPAdapter:
                 )
             )
         )
+        similarity = getattr(matches, "search_result", None)
+        resolved = getattr(matches, "resolved", ())
+        if similarity is None:
+            resolved = tuple(None for _ in matches)
         return self._envelope(
-            {"matches": [self._documentation_payload(match) for match in matches]},
+            {
+                "matches": [
+                    self._documentation_payload(match, resolved_candidate)
+                    for match, resolved_candidate in zip(matches, resolved, strict=True)
+                ],
+                "similarity": (
+                    None
+                    if similarity is None
+                    else similarity_query_provenance_payload(similarity)
+                ),
+            },
             output_budget=output_budget,
         )
 
@@ -1072,7 +1103,11 @@ class MCPAdapter:
             raise ValueError(msg)
         return int(value)
 
-    def _embedding_payload(self, match: ScoredSymbol) -> dict[str, object]:
+    def _embedding_payload(
+        self,
+        match: ScoredSymbol,
+        resolved: SimilarityResolvedCandidate | None,
+    ) -> dict[str, object]:
         """Normalize one ranked symbol embedding match for MCP.
 
         Parameters
@@ -1086,7 +1121,7 @@ class MCPAdapter:
             JSON-compatible score and trusted symbol location fields.
         """
         score, (symbol_type, module, name, file_path, lineno) = match
-        return {
+        payload: dict[str, object] = {
             "score": round(score, 2),
             "type": symbol_type,
             "module": module,
@@ -1094,10 +1129,16 @@ class MCPAdapter:
             "file": self._trusted_relative_path(file_path),
             "line": lineno,
         }
+        if resolved is not None:
+            payload["similarity"] = similarity_candidate_provenance_payload(
+                resolved.candidate
+            )
+        return payload
 
     def _documentation_payload(
         self,
         match: ScoredDocumentation,
+        resolved: SimilarityResolvedCandidate | None,
     ) -> dict[str, object]:
         """Normalize one ranked documentation embedding match for MCP.
 
@@ -1125,7 +1166,7 @@ class MCPAdapter:
                 text,
             ),
         ) = match
-        return {
+        payload: dict[str, object] = {
             "score": round(score, 2),
             "stable_id": stable_id,
             "kind": kind,
@@ -1137,6 +1178,11 @@ class MCPAdapter:
             "heading_path": list(heading_path),
             "text": text,
         }
+        if resolved is not None:
+            payload["similarity"] = similarity_candidate_provenance_payload(
+                resolved.candidate
+            )
+        return payload
 
     def _symbol_payload(self, row: SymbolRow) -> dict[str, object]:
         """Normalize a structural symbol row for the MCP response payload.

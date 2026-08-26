@@ -697,7 +697,7 @@ def test_symbol_cli_json_includes_prefix_and_status(
     assert main() == 0
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "2.0"
     assert payload["command"] == "sym"
     assert payload["status"] == "ok"
     assert payload["query"] == {"name": "shared_symbol", "prefix": "pkg"}
@@ -1026,6 +1026,10 @@ def test_embeddings_and_audit_cli_json_emit_shared_envelope(
     assert embeddings_payload["backend"]["name"]
     assert embeddings_payload["inventory"]
     assert embeddings_payload["results"]
+    assert embeddings_payload["similarity"]["plugin"]["name"] == "exact"
+    assert all(
+        row["similarity"]["native"] == {} for row in embeddings_payload["results"]
+    )
     assert all(
         row["file"] == str(tmp_path / "pkg" / "b.py")
         for row in embeddings_payload["results"]

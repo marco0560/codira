@@ -152,8 +152,13 @@ from codira.semantic.search import (
     EmbeddingCandidatesRequest,
     documentation_candidates,
     embedding_candidates,
+    similarity_candidate_provenance_payload,
+    similarity_query_provenance_payload,
 )
-from codira.similarity_lifecycle import rebuild_active_similarity_index
+from codira.similarity_lifecycle import (
+    purge_active_similarity_index,
+    rebuild_active_similarity_index,
+)
 from codira.storage import (
     _read_metadata_file,
     _write_metadata_file,
@@ -205,7 +210,7 @@ if TYPE_CHECKING:
 GIT_EXE = shutil.which("git") or "git"
 __version__ = package_version()
 
-QUERY_JSON_SCHEMA_VERSION = "1.0"
+QUERY_JSON_SCHEMA_VERSION = "2.0"
 INDEX_METADATA_ANALYZER_INVENTORY = "analyzer_inventory"
 INDEX_METADATA_BACKEND_NAME = "backend_name"
 INDEX_METADATA_BACKEND_VERSION = "backend_version"
@@ -1182,7 +1187,7 @@ def build_parser() -> argparse.ArgumentParser:
     embeddings_parser.add_argument(
         "query",
         nargs="?",
-        metavar="{query,purge,rebuild,reset}",
+        metavar="{query,purge,similarity-purge,rebuild,reset}",
         help="Natural-language query to score against stored embeddings",
     )
     embeddings_parser.add_argument(
@@ -1257,6 +1262,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--yes",
         action="store_true",
         help="Confirm destructive purge execution",
+    )
+    purge_options.add_argument(
+        "--allow-remote-orphans",
+        action="store_true",
+        help="Allow emb reset to proceed when verified remote cleanup fails",
     )
     _add_repo_path_arguments(embeddings_parser)
 
@@ -3293,6 +3303,30 @@ def _run_embeddings(
         )
     )
     if request.as_json:
+        similarity = getattr(matches, "search_result", None)
+        resolved = getattr(matches, "resolved", ())
+        if similarity is None:
+            resolved = tuple(None for _ in matches)
+        results: list[dict[str, object]] = []
+        for match, resolved_candidate in zip(matches, resolved, strict=True):
+            score, (symbol_type, module_name, name, file_path, lineno) = match
+            results.append(
+                {
+                    "score": round(score, 2),
+                    "type": symbol_type,
+                    "module": module_name,
+                    "name": name,
+                    "file": file_path,
+                    "lineno": lineno,
+                    "similarity": (
+                        None
+                        if resolved_candidate is None
+                        else similarity_candidate_provenance_payload(
+                            resolved_candidate.candidate
+                        )
+                    ),
+                }
+            )
         _emit_json(
             _query_payload(
                 "emb",
@@ -3302,23 +3336,7 @@ def _run_embeddings(
                     "limit": request.limit,
                     "prefix": request.query_prefix,
                 },
-                [
-                    {
-                        "score": round(score, 2),
-                        "type": symbol_type,
-                        "module": module_name,
-                        "name": name,
-                        "file": file_path,
-                        "lineno": lineno,
-                    }
-                    for score, (
-                        symbol_type,
-                        module_name,
-                        name,
-                        file_path,
-                        lineno,
-                    ) in matches
-                ],
+                results,
                 backend={
                     "name": backend.name,
                     "version": backend.version,
@@ -3333,6 +3351,11 @@ def _run_embeddings(
                     }
                     for stored_backend, stored_version, stored_dim, count in inventory
                 ],
+                similarity=(
+                    None
+                    if similarity is None
+                    else similarity_query_provenance_payload(similarity)
+                ),
             )
         )
         return 0
@@ -3413,6 +3436,47 @@ def _run_documentation_lookup(
     )
 
     if request.as_json:
+        similarity = getattr(matches, "search_result", None)
+        resolved = getattr(matches, "resolved", ())
+        if similarity is None:
+            resolved = tuple(None for _ in matches)
+        results: list[dict[str, object]] = []
+        for match, resolved_candidate in zip(matches, resolved, strict=True):
+            (
+                score,
+                (
+                    stable_id,
+                    kind,
+                    source_format,
+                    file_path,
+                    lineno,
+                    end_lineno,
+                    title,
+                    heading_path,
+                    text,
+                ),
+            ) = match
+            results.append(
+                {
+                    "score": round(score, 2),
+                    "stable_id": stable_id,
+                    "kind": kind,
+                    "source_format": source_format,
+                    "file": file_path,
+                    "lineno": lineno,
+                    "end_lineno": end_lineno,
+                    "title": title,
+                    "heading_path": list(heading_path),
+                    "text": text,
+                    "similarity": (
+                        None
+                        if resolved_candidate is None
+                        else similarity_candidate_provenance_payload(
+                            resolved_candidate.candidate
+                        )
+                    ),
+                }
+            )
         _emit_json(
             _query_payload(
                 "docs",
@@ -3422,36 +3486,17 @@ def _run_documentation_lookup(
                     "limit": request.limit,
                     "prefix": request.query_prefix,
                 },
-                [
-                    {
-                        "score": round(score, 2),
-                        "stable_id": stable_id,
-                        "kind": kind,
-                        "source_format": source_format,
-                        "file": file_path,
-                        "lineno": lineno,
-                        "end_lineno": end_lineno,
-                        "title": title,
-                        "heading_path": list(heading_path),
-                        "text": text,
-                    }
-                    for score, (
-                        stable_id,
-                        kind,
-                        source_format,
-                        file_path,
-                        lineno,
-                        end_lineno,
-                        title,
-                        heading_path,
-                        text,
-                    ) in matches
-                ],
+                results,
                 backend={
                     "name": backend.name,
                     "version": backend.version,
                     "dim": backend.dim,
                 },
+                similarity=(
+                    None
+                    if similarity is None
+                    else similarity_query_provenance_payload(similarity)
+                ),
             )
         )
         return 0
@@ -5021,6 +5066,8 @@ def _run_embeddings_command(
     """
     if args.query == "purge":
         return _run_embedding_purge_command(args, root)
+    if args.query == "similarity-purge":
+        return _run_similarity_purge_command(args, root)
     if args.query == "rebuild":
         return _run_embedding_rebuild_command(args, root)
     if args.query == "reset":
@@ -5036,6 +5083,7 @@ def _run_embeddings_command(
         or args.older_than is not None
         or args.keep
         or args.yes
+        or args.allow_remote_orphans
     ):
         msg = "emb purge options require `codira emb purge`"
         raise ConfigError(msg)
@@ -5132,6 +5180,7 @@ def _run_embedding_rebuild_command(args: argparse.Namespace, root: Path) -> int:
         or args.older_than
         or args.keep
         or args.yes
+        or getattr(args, "allow_remote_orphans", False)
     ):
         msg = "emb rebuild does not accept purge options"
         raise ConfigError(msg)
@@ -5194,12 +5243,25 @@ def _run_embedding_reset_command(args: argparse.Namespace, root: Path) -> int:
         state_root / "embeddings.duckdb",
     )
     removed: list[str] = []
+    remote_orphan_hashes: tuple[str, ...] = ()
     with acquire_index_lock(root):
+        derived_root = state_root / "similarity-indexes"
+        qdrant_ledger = derived_root / "qdrant" / "ownership.json"
+        if qdrant_ledger.exists():
+            try:
+                purge_active_similarity_index(root, preview=False)
+            except (BackendError, ConfigError, OSError, RuntimeError, ValueError):
+                if not getattr(args, "allow_remote_orphans", False):
+                    msg = (
+                        "emb reset stopped because Qdrant remote cleanup failed; "
+                        "retry it or pass --allow-remote-orphans."
+                    )
+                    raise ConfigError(msg) from None
+                remote_orphan_hashes = _qdrant_ledger_artifact_hashes(qdrant_ledger)
         for path in candidates:
             if path.exists():
                 path.unlink()
                 removed.append(str(path.relative_to(root)))
-        derived_root = state_root / "similarity-indexes"
         if derived_root.exists():
             shutil.rmtree(derived_root)
             removed.append(str(derived_root.relative_to(root)))
@@ -5214,12 +5276,113 @@ def _run_embedding_reset_command(args: argparse.Namespace, root: Path) -> int:
                 "command": "emb reset",
                 "status": "ok",
                 "removed": removed,
+                "remote_orphan_artifact_hashes": remote_orphan_hashes,
                 "next": "codira index --full",
             }
         )
     else:
         print("Removed semantic state: " + (", ".join(removed) or "none"))
+        if remote_orphan_hashes:
+            print(
+                "Remote Qdrant artifacts may remain: " + ", ".join(remote_orphan_hashes)
+            )
         print("Next: codira index --full")
+    return 0
+
+
+def _qdrant_ledger_artifact_hashes(path: Path) -> tuple[str, ...]:
+    """Return opaque artifact hashes retained in a local Qdrant ownership ledger.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Local ownership ledger inspected only for explicit reset recovery output.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted opaque artifact hashes, or no hashes when the ledger is unreadable.
+    """
+
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return ()
+    records = document.get("records") if isinstance(document, dict) else None
+    if not isinstance(records, list):
+        return ()
+    hashes = {
+        artifact_hash
+        for record in records
+        if isinstance(record, dict)
+        for collection in (record.get("retained_collections"),)
+        if isinstance(collection, list)
+        for item in collection
+        if isinstance(item, dict)
+        for artifact_hash in (item.get("artifact_hash"),)
+        if isinstance(artifact_hash, str)
+        and artifact_hash
+        and all(marker not in artifact_hash for marker in ("/", "\\", "://"))
+    }
+    return tuple(sorted(hashes))
+
+
+def _run_similarity_purge_command(args: argparse.Namespace, root: Path) -> int:
+    """Inventory or delete selected remote derived similarity-index artifacts.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed embedding maintenance arguments.
+    root : pathlib.Path
+        Repository root owning the selected remote derived artifacts.
+
+    Returns
+    -------
+    int
+        Zero after a preview or explicitly confirmed cleanup.
+
+    Raises
+    ------
+    ConfigError
+        If vector-store purge options are mixed with remote cleanup.
+    """
+
+    if (
+        args.stale
+        or args.all_sets
+        or args.backend is not None
+        or args.older_than is not None
+        or args.keep
+        or getattr(args, "allow_remote_orphans", False)
+    ):
+        msg = "emb similarity-purge does not accept vector purge options"
+        raise ConfigError(msg)
+    preview = bool(args.dry_run or not args.yes)
+    with acquire_index_lock(root):
+        result = purge_active_similarity_index(root, preview=preview)
+    payload = {
+        "index": result.index,
+        "preview": result.preview,
+        "removed_artifact_hashes": result.removed_artifact_hashes,
+        "skipped_artifact_hashes": result.skipped_artifact_hashes,
+    }
+    if args.json:
+        _emit_json(
+            {
+                "schema_version": QUERY_JSON_SCHEMA_VERSION,
+                "command": "emb similarity-purge",
+                "status": "dry_run" if preview else "ok",
+                "result": payload,
+            }
+        )
+    else:
+        verb = "Would delete" if preview else "Deleted"
+        print(f"Similarity index: {result.index}")
+        print(f"{verb} owned remote artifacts: {len(result.removed_artifact_hashes)}")
+        print(f"Skipped remote artifacts: {len(result.skipped_artifact_hashes)}")
+        if preview and not args.dry_run:
+            print("Dry run only; pass --yes to delete.")
     return 0
 
 

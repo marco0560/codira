@@ -19,10 +19,17 @@ import faiss
 import numpy as np
 
 from codira.contracts import (
+    SimilarityCandidate,
     SimilarityIndexIdentity,
+    SimilarityIndexIncompatibleError,
     SimilarityIndexSpec,
+    SimilarityIndexStaleError,
+    SimilarityIndexUnsafeOwnershipError,
+    SimilarityPurgeRequest,
+    SimilarityPurgeResult,
+    SimilarityQueryProvenance,
     SimilaritySearchRequest,
-    VectorSimilarityScore,
+    SimilaritySearchResult,
     VectorSnapshot,
 )
 from codira.plugin_config import plugin_json_schema
@@ -39,7 +46,7 @@ __all__ = [
     "build_similarity_index",
 ]
 
-PACKAGE_VERSION = "1.68.0"
+PACKAGE_VERSION = "2.0.0"
 FORMAT_VERSION = "1"
 _METRIC = "inner_product_cosine"
 _DEFAULT_HNSW_M = 32
@@ -105,7 +112,7 @@ def _build_config(config: Mapping[str, object]) -> _BuildConfig:
 
     unsupported = sorted(set(config) - {"enabled", "index_type", "M", "efConstruction"})
     if unsupported:
-        raise ValueError(
+        raise SimilarityIndexIncompatibleError(
             "FAISS similarity index does not accept configuration keys: "
             + ", ".join(unsupported)
         )
@@ -278,11 +285,11 @@ def _read_json(path: Path, *, repair: str) -> dict[str, object]:
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError(
-            f"FAISS artifact {path} is missing or corrupt. {repair}"
-        ) from error
+        message = f"FAISS artifact {path.name} is missing or corrupt. {repair}"
+        raise SimilarityIndexIncompatibleError(message) from error
     if not isinstance(loaded, dict):
-        raise ValueError(f"FAISS artifact {path} is corrupt. {repair}")
+        message = f"FAISS artifact {path.name} is corrupt. {repair}"
+        raise SimilarityIndexIncompatibleError(message)
     return cast("dict[str, object]", loaded)
 
 
@@ -484,7 +491,7 @@ class FaissSimilarityIndex:
             shutil.rmtree(temporary, ignore_errors=True)
             raise
 
-    def search(self, request: SimilaritySearchRequest) -> list[VectorSimilarityScore]:
+    def search(self, request: SimilaritySearchRequest) -> SimilaritySearchResult:
         """Search one verified FAISS artifact using per-query HNSW settings.
 
         Parameters
@@ -494,8 +501,8 @@ class FaissSimilarityIndex:
 
         Returns
         -------
-        list[codira.contracts.VectorSimilarityScore]
-            Candidate-limited scores with deterministic score/stable-ID ties.
+        codira.contracts.SimilaritySearchResult
+            Candidate-limited scores with native FAISS provenance.
 
         Raises
         ------
@@ -506,14 +513,27 @@ class FaissSimilarityIndex:
         artifact = self._load(request)
         query = np.asarray([request.query_vector], dtype=np.float32)
         if query.shape[1] != request.snapshot.metadata.identity.engine.dimension:
-            raise ValueError(
+            raise SimilarityIndexIncompatibleError(
                 "FAISS query dimension does not match the durable vector set. "
                 "Run `codira emb rebuild`."
             )
         faiss.normalize_L2(query)
         count = min(request.profile.candidate_limit, len(artifact.labels))
+        query_provenance = SimilarityQueryProvenance(
+            plugin_name=self.name,
+            plugin_version=self.version,
+            object_type=request.snapshot.metadata.object_type,
+            source_revision=request.snapshot.metadata.revision,
+            profile_name=request.profile.name,
+            candidate_limit=request.profile.candidate_limit,
+            artifact_hash=_artifact_key(
+                request.identity,
+                object_type=request.snapshot.metadata.object_type,
+            ),
+            native_provenance=(("artifact_format", FORMAT_VERSION),),
+        )
         if count == 0:
-            return []
+            return SimilaritySearchResult(query_provenance, ())
         distances, positions = self._search(
             artifact.index,
             query,
@@ -524,27 +544,32 @@ class FaissSimilarityIndex:
                 cast("Mapping[str, object]", artifact.manifest["build"])["index_type"],
             ),
         )
-        scores = [
-            VectorSimilarityScore(artifact.labels[int(position)], float(distance))
+        candidates = [
+            SimilarityCandidate(
+                artifact.labels[int(position)],
+                float(distance),
+                native_provenance=(("faiss_label", str(int(position))),),
+            )
             for distance, position in zip(distances[0], positions[0], strict=True)
             if int(position) >= 0 and float(distance) >= request.min_score
         ]
-        return sorted(scores, key=lambda item: (-item.score, item.stable_id))
+        return SimilaritySearchResult(
+            query_provenance,
+            tuple(sorted(candidates, key=lambda item: (-item.score, item.stable_id))),
+        )
 
-    def purge(self, root: Path, identity: SimilarityIndexIdentity) -> None:
+    def purge(self, request: SimilarityPurgeRequest) -> SimilarityPurgeResult:
         """Remove all derived FAISS revisions for one exact identity.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root supplied by the lifecycle caller.
-        identity : codira.contracts.SimilarityIndexIdentity
-            Derived index identity to remove.
+        request : codira.contracts.SimilarityPurgeRequest
+            Explicit preview or confirmed persisted-artifact cleanup request.
 
         Returns
         -------
-        None
-            Matching persisted artifacts and warm cache entries are removed.
+        codira.contracts.SimilarityPurgeResult
+            Opaque artifact identities eligible for or removed by cleanup.
 
         Raises
         ------
@@ -552,13 +577,33 @@ class FaissSimilarityIndex:
             If the supplied root differs from the artifact identity root.
         """
 
-        if root.resolve() != identity.root.resolve():
-            raise ValueError("FAISS purge root does not match its index identity.")
+        if request.root.resolve() != request.identity.root.resolve():
+            raise SimilarityIndexUnsafeOwnershipError(
+                "FAISS purge root does not match its index identity."
+            )
+        artifact_hashes = tuple(
+            sorted(
+                _artifact_key(request.identity, object_type=object_type)
+                for object_type in ("symbol", "documentation")
+            )
+        )
+        if request.preview:
+            return SimilarityPurgeResult(
+                index=self.name,
+                preview=True,
+                removed_artifact_hashes=artifact_hashes,
+            )
         for object_type in ("symbol", "documentation"):
             shutil.rmtree(
-                _artifact_root(identity, object_type=object_type), ignore_errors=True
+                _artifact_root(request.identity, object_type=object_type),
+                ignore_errors=True,
             )
         self.reset_runtime_caches()
+        return SimilarityPurgeResult(
+            index=self.name,
+            preview=False,
+            removed_artifact_hashes=artifact_hashes,
+        )
 
     def reset_runtime_caches(self) -> None:
         """Discard every process-local loaded FAISS artifact.
@@ -595,7 +640,9 @@ class FaissSimilarityIndex:
         """
 
         if identity.index.index != self.name:
-            raise ValueError("FAISS identity selects a different similarity index.")
+            raise SimilarityIndexIncompatibleError(
+                "FAISS identity selects a different similarity index."
+            )
         expected = self.spec(
             {
                 "index_type": self._build.index_type,
@@ -604,7 +651,7 @@ class FaissSimilarityIndex:
             }
         )
         if identity.index != expected:
-            raise ValueError(
+            raise SimilarityIndexIncompatibleError(
                 "FAISS build configuration does not match its selected identity. "
                 "Run `codira emb rebuild`."
             )
@@ -635,7 +682,7 @@ class FaissSimilarityIndex:
         for row in snapshot.rows:
             vector = np.frombuffer(row.vector, dtype=np.float32)
             if row.dimension != dimension or vector.size != dimension:
-                raise ValueError(
+                raise SimilarityIndexIncompatibleError(
                     "FAISS source vector does not match durable vector-set dimension."
                 )
             rows.append(vector)
@@ -709,7 +756,7 @@ class FaissSimilarityIndex:
             getattr(faiss, "SearchParameterHNSW", None),
         )
         if parameter_type is None:
-            raise ValueError(
+            raise SimilarityIndexIncompatibleError(
                 "Installed FAISS lacks per-query HNSW parameters. "
                 "Install faiss-cpu==1.15.0 and run `codira emb rebuild`."
             )
@@ -755,12 +802,14 @@ class FaissSimilarityIndex:
             pointer.get("identity") != expected_identity
             or pointer.get("source_revision") != request.snapshot.metadata.revision
         ):
-            raise ValueError(
+            raise SimilarityIndexStaleError(
                 "FAISS artifact is stale for durable vector state. " + repair
             )
         artifact_name = pointer.get("artifact")
         if not isinstance(artifact_name, str) or "/" in artifact_name:
-            raise ValueError("FAISS current artifact pointer is corrupt. " + repair)
+            raise SimilarityIndexIncompatibleError(
+                "FAISS current artifact pointer is corrupt. " + repair
+            )
         artifact_dir = root / artifact_name
         manifest = _read_json(artifact_dir / "manifest.json", repair=repair)
         if (
@@ -768,7 +817,7 @@ class FaissSimilarityIndex:
             or manifest.get("source_revision") != request.snapshot.metadata.revision
             or manifest.get("artifact_format_version") != FORMAT_VERSION
         ):
-            raise ValueError(
+            raise SimilarityIndexStaleError(
                 "FAISS artifact manifest is stale or incompatible. " + repair
             )
         labels_payload = _read_json(artifact_dir / "labels.json", repair=repair)
@@ -776,18 +825,24 @@ class FaissSimilarityIndex:
         if not isinstance(labels, list) or not all(
             isinstance(item, str) for item in labels
         ):
-            raise ValueError("FAISS label map is corrupt. " + repair)
+            raise SimilarityIndexIncompatibleError(
+                "FAISS label map is corrupt. " + repair
+            )
         checksum = hashlib.sha256(_canonical_json(labels_payload).encode()).hexdigest()
         if checksum != manifest.get("labels_checksum"):
-            raise ValueError("FAISS label map checksum is corrupt. " + repair)
+            raise SimilarityIndexIncompatibleError(
+                "FAISS label map checksum is corrupt. " + repair
+            )
         try:
             index = faiss.read_index(str(artifact_dir / "index.faiss"))
         except (OSError, RuntimeError) as error:
-            raise ValueError(
+            raise SimilarityIndexIncompatibleError(
                 "FAISS index artifact is missing or corrupt. " + repair
             ) from error
         if int(index.ntotal) != len(labels):
-            raise ValueError("FAISS label map does not match index size. " + repair)
+            raise SimilarityIndexIncompatibleError(
+                "FAISS label map does not match index size. " + repair
+            )
         loaded = _LoadedArtifact(index, tuple(labels), manifest)
         self._cache[key] = loaded
         return loaded

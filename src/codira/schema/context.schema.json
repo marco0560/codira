@@ -4,7 +4,7 @@
   "type": "object",
   "required": ["schema_version", "status", "top_matches"],
   "properties": {
-    "schema_version": { "type": "string", "enum": ["1.3"] },
+    "schema_version": { "type": "string", "enum": ["2.0"] },
     "status": { "type": "string", "enum": ["ok", "no_matches"] },
     "top_matches": { "type": "array", "items": { "$ref": "#/definitions/symbol" } },
     "doc_issues": { "type": "array", "items": { "$ref": "#/definitions/doc_issue" } },
@@ -103,6 +103,10 @@
             "items": { "$ref": "#/definitions/channel_result" }
           }
         },
+        "similarity": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/similarity_query" }
+        },
         "merge": {
           "type": "array",
           "items": { "$ref": "#/definitions/merge_entry" }
@@ -159,6 +163,54 @@
         "source_format": { "type": "string" },
         "provenance": { "type": "string" },
         "score": { "type": "number" }
+        ,"similarity": { "$ref": "#/definitions/similarity_candidate" }
+      },
+      "additionalProperties": false
+    },
+    "similarity_candidate": {
+      "type": "object",
+      "required": ["stable_id", "native"],
+      "properties": {
+        "stable_id": { "type": "string", "minLength": 1 },
+        "native": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "similarity_query": {
+      "type": "object",
+      "required": [
+        "plugin",
+        "object_type",
+        "source_revision",
+        "profile",
+        "candidate_limit",
+        "artifact_hash",
+        "transport",
+        "native"
+      ],
+      "properties": {
+        "plugin": {
+          "type": "object",
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "version": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "object_type": { "type": "string", "minLength": 1 },
+        "source_revision": { "type": "integer", "minimum": 0 },
+        "profile": { "type": "string", "minLength": 1 },
+        "candidate_limit": { "type": "integer", "minimum": 1 },
+        "artifact_hash": { "type": ["string", "null"] },
+        "transport": { "type": "string", "minLength": 1 },
+        "native": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
       },
       "additionalProperties": false
     },

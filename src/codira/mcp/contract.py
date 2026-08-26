@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-MCP_CONTRACT_VERSION: Final = "1.4.0"
+MCP_CONTRACT_VERSION: Final = "2.0.0"
 MAX_OUTPUT_BUDGET: Final = 16_000
 DEFAULT_OUTPUT_BUDGET: Final = 4_000
 

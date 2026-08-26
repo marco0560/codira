@@ -26,9 +26,9 @@ from codira.contracts import (
     SimilarityIndexIdentity,
     SimilaritySearchProfile,
     SimilaritySearchRequest,
+    SimilaritySearchResult,
     StoredVectorRow,
     VectorSetIdentity,
-    VectorSimilarityScore,
     VectorSnapshot,
     VectorSnapshotMetadata,
     VectorStoreSpec,
@@ -242,20 +242,20 @@ def _artifact_size_bytes(root: Path) -> int:
     )
 
 
-def _top_ids(scores: Sequence[VectorSimilarityScore]) -> tuple[str, ...]:
-    """Return stable IDs from a similarity-score sequence.
+def _top_ids(result: SimilaritySearchResult) -> tuple[str, ...]:
+    """Return stable IDs from a typed similarity result.
 
     Parameters
     ----------
-    scores : collections.abc.Sequence[codira.contracts.VectorSimilarityScore]
-        Ordered similarity scores.
+    result : codira.contracts.SimilaritySearchResult
+        Ordered similarity candidates with query provenance.
 
     Returns
     -------
     tuple[str, ...]
         Ordered stable IDs.
     """
-    return tuple(score.stable_id for score in scores)
+    return tuple(candidate.stable_id for candidate in result.candidates)
 
 
 def _rebuild(
@@ -285,7 +285,7 @@ def _rebuild(
 def _search_all(
     index: FaissSimilarityIndex,
     requests: Sequence[SimilaritySearchRequest],
-) -> list[list[VectorSimilarityScore]]:
+) -> list[SimilaritySearchResult]:
     """Search the deterministic workload through one selected FAISS index.
 
     Parameters
@@ -297,7 +297,7 @@ def _search_all(
 
     Returns
     -------
-    list[list[codira.contracts.VectorSimilarityScore]]
+    list[codira.contracts.SimilaritySearchResult]
         Ordered candidate results for every workload query.
     """
     return [index.search(request) for request in requests]

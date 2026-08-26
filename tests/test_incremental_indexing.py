@@ -54,8 +54,8 @@ from codira.contracts import (
     BackendRuntimeInventoryRequest,
     IndexWriteSession,
     LanguageAnalyzer,
+    SimilarityCandidate,
     StoredEmbeddingRow,
-    VectorSimilarityScore,
 )
 from codira.index_generation import IndexGenerationStore
 from codira.indexer import CoverageIssue, audit_repo_coverage, index_repo
@@ -80,6 +80,8 @@ from codira.storage import acquire_index_lock
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from codira.types import DocumentationRow, SymbolRow
 
 
 def _write_module(path: Path, source: str) -> None:
@@ -295,15 +297,15 @@ def test_sqlite_resolve_embedding_scores_chunks_large_score_sets(
     results = backend.resolve_embedding_scores(
         BackendResolveEmbeddingScoresRequest(
             root=tmp_path,
-            scores=[
-                VectorSimilarityScore(stable_id=f"symbol:{index}", score=float(index))
+            candidates=[
+                SimilarityCandidate(stable_id=f"symbol:{index}", score=float(index))
                 for index in range(950)
             ],
             limit=3,
         )
     )
 
-    assert [row[1][2] for row in results] == [
+    assert [cast("SymbolRow", row.record)[2] for row in results] == [
         "symbol_949",
         "symbol_948",
         "symbol_947",
@@ -335,15 +337,19 @@ def test_sqlite_resolve_documentation_scores_chunks_large_score_sets(
     results = backend.resolve_documentation_scores(
         BackendResolveDocumentationScoresRequest(
             root=tmp_path,
-            scores=[
-                VectorSimilarityScore(stable_id=f"doc:{index}", score=float(index))
+            candidates=[
+                SimilarityCandidate(stable_id=f"doc:{index}", score=float(index))
                 for index in range(950)
             ],
             limit=3,
         )
     )
 
-    assert [row[1][6] for row in results] == ["Doc 949", "Doc 948", "Doc 947"]
+    assert [cast("DocumentationRow", row.record)[6] for row in results] == [
+        "Doc 949",
+        "Doc 948",
+        "Doc 947",
+    ]
 
 
 class _PythonAnalyzerV12:

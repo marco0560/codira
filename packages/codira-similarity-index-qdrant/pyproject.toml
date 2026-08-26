@@ -3,26 +3,21 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codira-vector-store-duckdb"
+name = "codira-similarity-index-qdrant"
 version = "2.0.0"
-description = "First-party DuckDB vector-store plugin for codira"
+description = "First-party authenticated Qdrant similarity-index plugin for codira"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "codira>=2.0.0,<3.0.0",
-    "duckdb>=1.4,<2.0",
+    "qdrant-client==1.19.0",
 ]
 
 [project.optional-dependencies]
-test = [
-    "black",
-    "mypy",
-    "pytest",
-    "ruff",
-]
+test = ["mypy", "pytest", "ruff"]
 
-[project.entry-points."codira.vector_stores"]
-duckdb = "codira_vector_store_duckdb:build_vector_store"
+[project.entry-points."codira.similarity_indexes"]
+qdrant = "codira_similarity_index_qdrant:build_similarity_index"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -31,11 +26,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-codira_vector_store_duckdb = ["py.typed"]
-
-[tool.black]
-line-length = 88
-target-version = ["py313"]
+codira_similarity_index_qdrant = ["py.typed"]
 
 [tool.ruff]
 line-length = 88

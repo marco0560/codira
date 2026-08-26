@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-documentation-audit-go-doc-comments"
-version = "1.67.0"
+version = "2.0.0"
 description = "First-party Go documentation comment audit plugin for codira"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["codira>=1.5.0,<2.0.0"]
+dependencies = ["codira>=2.0.0,<3.0.0"]
 
 [project.optional-dependencies]
 test = ["mypy", "pytest", "ruff"]

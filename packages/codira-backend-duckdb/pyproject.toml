@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-backend-duckdb"
-version = "1.57.0"
+version = "2.0.0"
 description = "First-party DuckDB backend plugin for codira"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "codira>=1.5.0,<2.0.0",
+    "codira>=2.0.0,<3.0.0",
     "duckdb>=1.4,<2.0",
     "pyarrow>=18.0.0",
 ]

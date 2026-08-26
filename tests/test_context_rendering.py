@@ -25,12 +25,14 @@ from codira.query.context import (
     PRIMARY_SYMBOL_AGGREGATION_RULES,
     ExplainSectionsRequest,
     MainContextSectionsRequest,
+    SimilarityContextResults,
     _aggregate_candidate_signals,
     _append_explain_signal_sections,
     _append_main_context_sections,
     _candidate_has_signal,
     _candidate_retrieval_signals,
     _candidate_signal_strength,
+    _channel_results_payload,
     _classify_file_role,
     _find_references,
     _format_symbol,
@@ -40,6 +42,7 @@ from codira.query.context import (
     _rank_signals_with_provenance,
     _ReferenceScanFile,
     _retrieve_documentation_candidates,
+    _similarity_channel_payload,
     _snippet_from_source_range,
     _top_matches_payload,
 )
@@ -91,6 +94,61 @@ def test_snippet_from_source_range_removes_docstring_and_collapses_blank_lines()
         "",
         "    return value",
     ]
+
+
+def test_context_similarity_sidecars_remain_aligned_with_ranked_rows() -> None:
+    """Retain query and candidate provenance after context ranking.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the explain payload keeps the candidate aligned to its
+        rendered row.
+    """
+    from codira.contracts import (
+        SimilarityCandidate,
+        SimilarityQueryProvenance,
+        SimilarityResolvedCandidate,
+        SimilaritySearchResult,
+    )
+
+    candidate = SimilarityCandidate(
+        stable_id="symbol:pkg.sample:validate_docstring:2",
+        score=0.9,
+        native_provenance=(("faiss_label", "7"),),
+    )
+    search_result = SimilaritySearchResult(
+        query=SimilarityQueryProvenance(
+            plugin_name="codira-similarity-index-faiss",
+            plugin_version="1.0.0",
+            object_type="symbol",
+            source_revision=1,
+            profile_name="default",
+            candidate_limit=10,
+            artifact_hash="f" * 64,
+            transport="in_process",
+        ),
+        candidates=(candidate,),
+    )
+    row = ("function", "pkg.sample", "validate_docstring", "pkg/sample.py", 2)
+    results = SimilarityContextResults(
+        search_result,
+        (SimilarityResolvedCandidate(candidate=candidate, record=row),),
+        [(candidate.score, row)],
+    )
+
+    payload = _channel_results_payload([("embedding", results)])
+    similarity = _similarity_channel_payload([("embedding", results)])
+
+    assert payload["embedding"][0]["similarity"] == {
+        "stable_id": candidate.stable_id,
+        "native": {"faiss_label": "7"},
+    }
+    assert similarity["embedding"]["artifact_hash"] == "f" * 64
 
 
 def test_load_reference_scan_file_caches_non_import_lines(tmp_path: Path) -> None:

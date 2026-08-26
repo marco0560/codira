@@ -49,6 +49,7 @@ if TYPE_CHECKING:
         BackendEmbeddingCandidatesRequest,
         BackendResolveDocumentationScoresRequest,
         BackendResolveEmbeddingScoresRequest,
+        SimilarityResolvedCandidate,
         VectorSetIdentity,
         VectorStore,
     )
@@ -2013,7 +2014,7 @@ class MemoryIndexBackend:
     def resolve_embedding_scores(
         self,
         request: BackendResolveEmbeddingScoresRequest,
-    ) -> ChannelResults:
+    ) -> list[SimilarityResolvedCandidate]:
         """
         Resolve scored symbol stable IDs for the memory backend.
 
@@ -2024,7 +2025,7 @@ class MemoryIndexBackend:
 
         Returns
         -------
-        codira.types.ChannelResults
+        list[codira.contracts.SimilarityResolvedCandidate]
             Empty result set for this test backend.
         """
         del request
@@ -2033,7 +2034,7 @@ class MemoryIndexBackend:
     def resolve_documentation_scores(
         self,
         request: BackendResolveDocumentationScoresRequest,
-    ) -> DocumentationChannelResults:
+    ) -> list[SimilarityResolvedCandidate]:
         """
         Resolve scored documentation stable IDs for the memory backend.
 
@@ -2044,7 +2045,7 @@ class MemoryIndexBackend:
 
         Returns
         -------
-        codira.types.DocumentationChannelResults
+        list[codira.contracts.SimilarityResolvedCandidate]
             Empty result set for this test backend.
         """
         del request

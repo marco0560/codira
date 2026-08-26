@@ -38,6 +38,7 @@ from codira.contracts import (
     BackendResolveEmbeddingScoresRequest,
     BackendRuntimeInventoryRequest,
     BackendSymbolInventoryItem,
+    SimilarityResolvedCandidate,
     StoredEmbeddingRow,
 )
 from codira.prefix import normalize_prefix, prefix_clause
@@ -1852,7 +1853,7 @@ class DuckDBQueryBackend:
     def resolve_embedding_scores(
         self,
         request: BackendResolveEmbeddingScoresRequest,
-    ) -> ChannelResults:
+    ) -> list[SimilarityResolvedCandidate]:
         """
         Resolve vector-store symbol scores to structural rows.
 
@@ -1866,7 +1867,7 @@ class DuckDBQueryBackend:
         codira.types.ChannelResults
             Ranked symbol candidates ordered deterministically.
         """
-        if not request.scores:
+        if not request.candidates:
             return []
         conn = cast("_BackendCompatibleConnection | None", request.conn)
         owns_connection = conn is None
@@ -1875,7 +1876,7 @@ class DuckDBQueryBackend:
             conn = self.open_connection(request.root)
         try:
             stable_ids = list(
-                dict.fromkeys(score.stable_id for score in request.scores)
+                dict.fromkeys(candidate.stable_id for candidate in request.candidates)
             )
             placeholders = ",".join("?" for _item in stable_ids)
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
@@ -1901,18 +1902,21 @@ class DuckDBQueryBackend:
                 for stable_id, symbol_type, module_name, symbol_name, file_path, lineno in rows
             }
             resolved = [
-                (score.score, rows_by_stable_id[score.stable_id])
-                for score in request.scores
-                if score.stable_id in rows_by_stable_id
+                SimilarityResolvedCandidate(
+                    candidate,
+                    rows_by_stable_id[candidate.stable_id],
+                )
+                for candidate in request.candidates
+                if candidate.stable_id in rows_by_stable_id
             ]
             resolved.sort(
                 key=lambda item: (
-                    -item[0],
-                    item[1][1],
-                    item[1][2],
-                    item[1][3],
-                    item[1][4],
-                    item[1][0],
+                    -item.candidate.score,
+                    cast("SymbolRow", item.record)[1],
+                    cast("SymbolRow", item.record)[2],
+                    cast("SymbolRow", item.record)[3],
+                    cast("SymbolRow", item.record)[4],
+                    cast("SymbolRow", item.record)[0],
                 )
             )
             return resolved[: request.limit]
@@ -1923,7 +1927,7 @@ class DuckDBQueryBackend:
     def resolve_documentation_scores(
         self,
         request: BackendResolveDocumentationScoresRequest,
-    ) -> DocumentationChannelResults:
+    ) -> list[SimilarityResolvedCandidate]:
         """
         Resolve vector-store documentation scores to structural rows.
 
@@ -1937,7 +1941,7 @@ class DuckDBQueryBackend:
         codira.types.DocumentationChannelResults
             Ranked documentation candidates ordered deterministically.
         """
-        if not request.scores:
+        if not request.candidates:
             return []
         conn = cast("_BackendCompatibleConnection | None", request.conn)
         owns_connection = conn is None
@@ -1946,7 +1950,7 @@ class DuckDBQueryBackend:
             conn = self.open_connection(request.root)
         try:
             stable_ids = list(
-                dict.fromkeys(score.stable_id for score in request.scores)
+                dict.fromkeys(candidate.stable_id for candidate in request.candidates)
             )
             placeholders = ",".join("?" for _item in stable_ids)
             prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
@@ -1995,16 +1999,19 @@ class DuckDBQueryBackend:
                 ) in rows
             }
             resolved = [
-                (score.score, rows_by_stable_id[score.stable_id])
-                for score in request.scores
-                if score.stable_id in rows_by_stable_id
+                SimilarityResolvedCandidate(
+                    candidate,
+                    rows_by_stable_id[candidate.stable_id],
+                )
+                for candidate in request.candidates
+                if candidate.stable_id in rows_by_stable_id
             ]
             resolved.sort(
                 key=lambda item: (
-                    -item[0],
-                    item[1][3],
-                    item[1][4],
-                    item[1][0],
+                    -item.candidate.score,
+                    cast("DocumentationRow", item.record)[3],
+                    cast("DocumentationRow", item.record)[4],
+                    cast("DocumentationRow", item.record)[0],
                 )
             )
             return resolved[: request.limit]

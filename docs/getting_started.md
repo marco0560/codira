@@ -231,6 +231,19 @@ format requires `codira emb reset` followed by indexing. Version-1 configs are
 not migrated: regenerate with `codira config init --force`, then select
 `similarity_index` explicitly.
 
+### Authenticated remote Qdrant similarity search
+
+The official bundle includes Qdrant but keeps exact as the default selected
+index. To opt in, configure a remote HTTPS endpoint, mandatory namespace, and
+an API-key environment variable (with an optional private-file fallback), then
+run `codira emb rebuild`. REST is default; gRPC is explicit. Qdrant retains two
+immutable revisions behind a stable alias and has no fallback when selected.
+
+Use `codira emb similarity-purge` to inspect remote derived artifacts before
+adding `--yes`. Reset blocks on failed remote cleanup unless the explicit
+`--allow-remote-orphans` recovery override is used. See the package README for
+the full configuration and credential-file requirements.
+
 ## First commands
 
 Build or refresh the repository-local index:

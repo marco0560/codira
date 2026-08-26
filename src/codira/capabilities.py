@@ -60,7 +60,7 @@ from codira.version import installed_distribution_version
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-CAPABILITY_SCHEMA_VERSION = "1.11"
+CAPABILITY_SCHEMA_VERSION = "2.0"
 ONTOLOGY_VERSION = "2"
 
 PLUGIN_FAMILY_CONTRACTS: dict[str, dict[str, object]] = {

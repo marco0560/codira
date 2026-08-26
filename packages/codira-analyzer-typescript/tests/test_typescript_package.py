@@ -26,7 +26,7 @@ def test_typescript_package_declares_expected_entry_point() -> None:
         )
     )
 
-    assert project["project"]["version"] == "1.66.0"
+    assert project["project"]["version"] == "2.0.0"
     assert "tree-sitter-typescript>=0.23.2" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "typescript": "codira_analyzer_typescript:build_analyzer"

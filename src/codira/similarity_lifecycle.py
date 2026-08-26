@@ -9,7 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from codira.contracts import SimilarityIndexIdentity, VectorSnapshotRequest
+from codira.contracts import (
+    SimilarityIndexIdentity,
+    SimilarityPurgeRequest,
+    SimilarityPurgeResult,
+    VectorSnapshotRequest,
+)
 from codira.registry import (
     active_similarity_index,
     active_similarity_index_config,
@@ -34,6 +39,34 @@ class SimilarityRebuildResult:
 
     index: str
     source_revisions: dict[str, int]
+
+
+def purge_active_similarity_index(
+    root: Path, *, preview: bool
+) -> SimilarityPurgeResult:
+    """Purge one selected derived index while its repository mutation lock is held.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose configured index owns the derived artifacts.
+    preview : bool
+        Whether to inventory only instead of deleting exact-owned artifacts.
+
+    Returns
+    -------
+    codira.contracts.SimilarityPurgeResult
+        Credential-free selected-plugin cleanup outcome.
+    """
+
+    context = active_vector_store_context(root)
+    index = active_similarity_index(root=root)
+    config = active_similarity_index_config(root=root)
+    index.initialize(root, config)
+    identity = SimilarityIndexIdentity(
+        root.resolve(), context.identity, index.spec(config)
+    )
+    return index.purge(SimilarityPurgeRequest(root, identity, preview=preview))
 
 
 def rebuild_active_similarity_index(root: Path) -> SimilarityRebuildResult:

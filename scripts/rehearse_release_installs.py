@@ -65,6 +65,12 @@ from codira.storage import override_storage_root
 from codira.workspace_registry import WorkspaceRegistry
 import codira_similarity_index_faiss
 from codira_similarity_index_faiss import FaissSimilarityIndex
+import codira_similarity_index_qdrant
+from codira_similarity_index_qdrant import QdrantSimilarityIndex
+
+class FakeQdrantClient:
+    def info(self):
+        return {"version": "fake"}
 
 site_root = Path(os.environ["CODIRA_REHEARSAL_INSTALL_DIR"]).resolve()
 assert Path(codira.__file__).resolve().is_relative_to(site_root)
@@ -128,6 +134,9 @@ with tempfile.TemporaryDirectory() as temporary:
     )
     assert artifact_one == artifact_two
     assert Path(codira_similarity_index_faiss.__file__).resolve().is_relative_to(site_root)
+    assert Path(codira_similarity_index_qdrant.__file__).resolve().is_relative_to(site_root)
+    qdrant = QdrantSimilarityIndex(client_factory=lambda settings, api_key: FakeQdrantClient())
+    qdrant.configure({"url": "https://qdrant.example.invalid", "namespace": "rehearsal", "api_key_env": "QDRANT_API_KEY"})
     vector_set = VectorSetIdentity(
         engine=EmbeddingEngineSpec("rehearsal", "1", "fixture", "1", 2),
         vector_store=VectorStoreSpec("rehearsal", "1", "1"),
@@ -195,6 +204,7 @@ print(
             "workspace": binding.workspace_name,
             "shared_model_reused": artifact_one == artifact_two,
             "faiss_wheel": codira_similarity_index_faiss.__file__,
+            "qdrant_wheel": codira_similarity_index_qdrant.__file__,
             "faiss_modes": ["flat", "hnsw"],
         }
     )

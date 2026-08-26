@@ -30,8 +30,8 @@ def test_jsdoc_package_declares_expected_entry_point() -> None:
         )
     )
 
-    assert project["project"]["version"] == "1.65.0"
-    assert project["project"]["dependencies"] == ["codira>=1.5.0,<2.0.0"]
+    assert project["project"]["version"] == "2.0.0"
+    assert project["project"]["dependencies"] == ["codira>=2.0.0,<3.0.0"]
     assert project["project"]["entry-points"]["codira.documentation_audits"] == {
         "jsdoc": "codira_documentation_audit_jsdoc:build_audit_plugin"
     }

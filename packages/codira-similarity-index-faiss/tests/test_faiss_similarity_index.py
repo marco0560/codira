@@ -13,6 +13,9 @@ import pytest
 from codira.contracts import (
     EmbeddingEngineSpec,
     SimilarityIndexIdentity,
+    SimilarityIndexIncompatibleError,
+    SimilarityIndexStaleError,
+    SimilarityPurgeRequest,
     SimilaritySearchProfile,
     SimilaritySearchRequest,
     StoredVectorRow,
@@ -141,16 +144,18 @@ def test_flat_faiss_matches_exact_and_survives_cache_reset(tmp_path: Path) -> No
     index.initialize(tmp_path, config)
     request = _request(tmp_path, index, config)
     index.rebuild(request.snapshot, request.identity)
-    faiss_scores = index.search(request)
-    exact_scores = ExactSimilarityIndex().search(request)
-    assert [item.stable_id for item in faiss_scores] == [
-        item.stable_id for item in exact_scores
+    faiss_result = index.search(request)
+    exact_result = ExactSimilarityIndex().search(request)
+    assert [item.stable_id for item in faiss_result.candidates] == [
+        item.stable_id for item in exact_result.candidates
     ]
-    assert [item.score for item in faiss_scores] == pytest.approx(
-        [item.score for item in exact_scores]
+    assert [item.score for item in faiss_result.candidates] == pytest.approx(
+        [item.score for item in exact_result.candidates]
     )
+    assert faiss_result.query.artifact_hash
+    assert all(candidate.native_provenance for candidate in faiss_result.candidates)
     index.reset_runtime_caches()
-    assert [item.stable_id for item in index.search(request)] == [
+    assert [item.stable_id for item in index.search(request).candidates] == [
         "gamma",
         "alpha",
         "beta",
@@ -210,7 +215,7 @@ def test_missing_artifact_fails_closed_with_rebuild_guidance(tmp_path: Path) -> 
     index = FaissSimilarityIndex()
     config: dict[str, object] = {}
     index.initialize(tmp_path, config)
-    with pytest.raises(ValueError, match="codira emb rebuild"):
+    with pytest.raises(SimilarityIndexIncompatibleError, match="codira emb rebuild"):
         index.search(_request(tmp_path, index, config))
 
 
@@ -233,14 +238,14 @@ def test_stale_or_corrupt_artifacts_fail_with_rebuild_command(tmp_path: Path) ->
     index.initialize(tmp_path, config)
     request = _request(tmp_path, index, config)
     index.rebuild(request.snapshot, request.identity)
-    with pytest.raises(ValueError, match="codira emb rebuild"):
+    with pytest.raises(SimilarityIndexStaleError, match="codira emb rebuild"):
         index.search(_request(tmp_path, index, config, revision=4))
     index.reset_runtime_caches()
     current = next(
         (tmp_path / ".codira" / "similarity-indexes" / "faiss").rglob("labels.json")
     )
     current.write_text("not-json", encoding="utf-8")
-    with pytest.raises(ValueError, match="codira emb rebuild"):
+    with pytest.raises(SimilarityIndexIncompatibleError, match="codira emb rebuild"):
         index.search(request)
 
 
@@ -327,3 +332,35 @@ def test_faiss_rejects_invalid_build_config(config: dict[str, object]) -> None:
 
     with pytest.raises(ValueError):
         FaissSimilarityIndex().configure(config)
+
+
+def test_faiss_purge_previews_and_confirms_opaque_artifacts(tmp_path: Path) -> None:
+    """Return opaque artifact inventory before deleting FAISS state.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test verifies preview is non-mutating and confirmation removes state.
+    """
+
+    index = FaissSimilarityIndex()
+    config: dict[str, object] = {}
+    index.initialize(tmp_path, config)
+    request = _request(tmp_path, index, config)
+    index.rebuild(request.snapshot, request.identity)
+    preview = index.purge(SimilarityPurgeRequest(tmp_path, request.identity))
+    assert preview.preview
+    assert len(preview.removed_artifact_hashes) == 2
+    assert index.search(request).candidates
+    confirmed = index.purge(
+        SimilarityPurgeRequest(tmp_path, request.identity, preview=False)
+    )
+    assert not confirmed.preview
+    assert confirmed.removed_artifact_hashes == preview.removed_artifact_hashes
+    with pytest.raises(ValueError, match="codira emb rebuild"):
+        index.search(request)

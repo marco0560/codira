@@ -245,6 +245,7 @@ EXPECTED_FIRST_PARTY_PACKAGE_DIRS: tuple[str, ...] = (
     "packages/codira-vector-store-sqlite",
     "packages/codira-vector-store-duckdb",
     "packages/codira-similarity-index-faiss",
+    "packages/codira-similarity-index-qdrant",
     "packages/codira-installer",
     "packages/codira-bundle-official",
 )

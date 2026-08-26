@@ -23,7 +23,7 @@ def test_catalog_load_requires_no_textual_or_plugin_imports() -> None:
     modules_before = set(sys.modules)
     catalog = load_catalog()
 
-    assert catalog["coordinated_version"] == "1.68.0"
+    assert catalog["coordinated_version"] == "2.0.0"
     packages = cast("list[dict[str, object]]", catalog["packages"])
     package = next(
         row for row in packages if row["name"] == "codira-similarity-index-faiss"

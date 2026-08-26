@@ -23,7 +23,7 @@ def test_rust_package_declares_expected_entry_point() -> None:
     project_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(project_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.56.0"
+    assert project["project"]["version"] == "2.0.0"
     assert "tree-sitter-rust>=0.24.0" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "rust": "codira_analyzer_rust:build_analyzer"

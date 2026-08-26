@@ -220,7 +220,7 @@ def test_symlist_json_schema_and_include_tests(
     payload = json.loads(capsys.readouterr().out)
     symbols = {symbol["id"]: symbol for symbol in payload["symbols"]}
 
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "2.0"
     assert payload["status"] == "ok"
     assert "tests.test_sample:test_helper" in symbols
     assert symbols["pkg.a:dynamic"]["calls_out"] == {

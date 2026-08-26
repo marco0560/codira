@@ -32,8 +32,8 @@ The checked-in first-party plugin catalog currently includes:
 - SQLite and DuckDB structural backends
 - ONNX and Sentence Transformers embedding engines
 - SQLite and DuckDB vector stores
-- the always-available core exact similarity index; optional similarity-index
-  packages add alternative candidate-ranking implementations
+- the always-available core exact similarity index plus the installed Qdrant
+  remote derived-index plugin; FAISS remains an optional alternative
 
 The `codira-installer` and `codira-bundle-official` packages provide the
 interactive installer and the curated end-user distribution, respectively.
@@ -95,6 +95,10 @@ pip install "codira-bundle-official[faiss]"
 
 Core exact ranking is always available. FAISS adds an opt-in exact-flat or
 approximate HNSW derived index; it never replaces the durable vector store.
+
+Qdrant is installed with the official bundle but remains opt-in. It requires an
+authenticated remote server and explicit repository configuration; it never
+falls back to a different similarity index.
 
 `codira` and the official bundle are published on PyPI. If you only need to
 use the tool and do not need a development branch, prefer the published package

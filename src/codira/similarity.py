@@ -21,10 +21,16 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from codira.contracts import (
+    SimilarityCandidate,
     SimilarityIndexIdentity,
+    SimilarityIndexIncompatibleError,
     SimilarityIndexSpec,
+    SimilarityIndexUnsafeOwnershipError,
+    SimilarityPurgeRequest,
+    SimilarityPurgeResult,
+    SimilarityQueryProvenance,
     SimilaritySearchRequest,
-    VectorSimilarityScore,
+    SimilaritySearchResult,
 )
 
 if TYPE_CHECKING:
@@ -60,7 +66,9 @@ def _decode_vector(payload: bytes, dimension: int) -> tuple[float, ...]:
 
     expected = dimension * 4
     if dimension <= 0 or len(payload) != expected:
-        raise ValueError("Stored vector payload does not match its declared dimension.")
+        raise SimilarityIndexIncompatibleError(
+            "Stored vector payload does not match its declared dimension."
+        )
     return struct.unpack(f"<{dimension}f", payload)
 
 
@@ -81,7 +89,9 @@ def _cosine(left: tuple[float, ...], right: tuple[float, ...]) -> float:
     """
 
     if len(left) != len(right):
-        raise ValueError("Query vector dimension does not match the stored vector.")
+        raise SimilarityIndexIncompatibleError(
+            "Query vector dimension does not match the stored vector."
+        )
     numerator = sum(first * second for first, second in zip(left, right, strict=True))
     left_norm = math.sqrt(sum(value * value for value in left))
     right_norm = math.sqrt(sum(value * value for value in right))
@@ -173,7 +183,7 @@ class ExactSimilarityIndex:
             snapshot
         )
 
-    def search(self, request: SimilaritySearchRequest) -> list[VectorSimilarityScore]:
+    def search(self, request: SimilaritySearchRequest) -> SimilaritySearchResult:
         """Exhaustively score a snapshot with stable score/tie ordering.
 
         Parameters
@@ -183,8 +193,8 @@ class ExactSimilarityIndex:
 
         Returns
         -------
-        list[VectorSimilarityScore]
-            Candidate-limited descending cosine scores.
+        SimilaritySearchResult
+            Candidate-limited cosine scores with deterministic core provenance.
         """
 
         key = self._cache_key(request.identity, request.snapshot)
@@ -193,36 +203,58 @@ class ExactSimilarityIndex:
             rows = self._decode_snapshot(request.snapshot)
             self._cache[key] = rows
         query = tuple(float(value) for value in request.query_vector)
-        scores = [
-            VectorSimilarityScore(stable_id=stable_id, score=_cosine(vector, query))
+        candidates = [
+            SimilarityCandidate(stable_id=stable_id, score=_cosine(vector, query))
             for stable_id, vector in rows
         ]
-        return [
-            score
-            for score in sorted(scores, key=lambda item: (-item.score, item.stable_id))
-            if score.score >= request.min_score
-        ][: request.profile.candidate_limit]
+        return SimilaritySearchResult(
+            query=SimilarityQueryProvenance(
+                plugin_name=self.name,
+                plugin_version=self.version,
+                object_type=request.snapshot.metadata.object_type,
+                source_revision=request.snapshot.metadata.revision,
+                profile_name=request.profile.name,
+                candidate_limit=request.profile.candidate_limit,
+            ),
+            candidates=tuple(
+                candidate
+                for candidate in sorted(
+                    candidates,
+                    key=lambda item: (-item.score, item.stable_id),
+                )
+                if candidate.score >= request.min_score
+            )[: request.profile.candidate_limit],
+        )
 
-    def purge(self, root: Path, identity: SimilarityIndexIdentity) -> None:
+    def purge(self, request: SimilarityPurgeRequest) -> SimilarityPurgeResult:
         """Remove cached rows for one root-bound derived identity.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        identity : SimilarityIndexIdentity
-            Selected derived identity.
+        request : SimilarityPurgeRequest
+            Explicit preview or confirmed cache cleanup request.
 
         Returns
         -------
-        None
-            Matching runtime cache rows are discarded.
+        SimilarityPurgeResult
+            Empty artifact inventory because exact has no persisted artifacts.
+
+        Raises
+        ------
+        SimilarityIndexUnsafeOwnershipError
+            If the requested cleanup root differs from the index identity root.
         """
 
-        root_key = str(root.resolve())
-        index_key = self._identity_key(identity)
-        for key in [key for key in self._cache if key[:2] == (root_key, index_key)]:
-            del self._cache[key]
+        root_key = str(request.root.resolve())
+        if root_key != str(request.identity.root.resolve()):
+            raise SimilarityIndexUnsafeOwnershipError(
+                "Exact purge root does not match its index identity."
+            )
+        index_key = self._identity_key(request.identity)
+        if not request.preview:
+            for key in [key for key in self._cache if key[:2] == (root_key, index_key)]:
+                del self._cache[key]
+        return SimilarityPurgeResult(index=self.name, preview=request.preview)
 
     def reset_runtime_caches(self) -> None:
         """Discard every decoded-vector runtime cache entry.
@@ -324,18 +356,20 @@ class ExactSimilarityIndex:
         """
 
         if snapshot.metadata.row_count != len(snapshot.rows):
-            raise ValueError("Vector snapshot row count does not match its metadata.")
+            raise SimilarityIndexIncompatibleError(
+                "Vector snapshot row count does not match its metadata."
+            )
         ordered = tuple(
             sorted(snapshot.rows, key=lambda row: (row.object_type, row.stable_id))
         )
         if ordered != snapshot.rows:
-            raise ValueError(
+            raise SimilarityIndexIncompatibleError(
                 "Vector snapshot rows must be ordered by object type and stable ID."
             )
         if any(
             row.object_type != snapshot.metadata.object_type for row in snapshot.rows
         ):
-            raise ValueError(
+            raise SimilarityIndexIncompatibleError(
                 "Vector snapshot rows do not match the requested object type."
             )
         return tuple(

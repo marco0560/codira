@@ -26,9 +26,11 @@ from codira.contracts import (
     BackendEmbeddingCandidatesRequest,
     BackendResolveDocumentationScoresRequest,
     BackendResolveEmbeddingScoresRequest,
+    SimilarityCandidate,
     SimilarityIndexIdentity,
+    SimilarityResolvedCandidate,
     SimilaritySearchRequest,
-    VectorSimilarityScore,
+    SimilaritySearchResult,
 )
 from codira.registry import (
     active_index_backend,
@@ -47,6 +49,147 @@ EmbeddingCandidatesRequest = BackendEmbeddingCandidatesRequest
 DocumentationCandidatesRequest = BackendDocumentationCandidatesRequest
 
 
+def similarity_query_provenance_payload(
+    result: SimilaritySearchResult,
+) -> dict[str, object]:
+    """Render credential-free query provenance from one typed search result.
+
+    Parameters
+    ----------
+    result : SimilaritySearchResult
+        Validated selected-index search result.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-compatible query provenance without source paths or credentials.
+    """
+
+    query = result.query
+    return {
+        "plugin": {"name": query.plugin_name, "version": query.plugin_version},
+        "object_type": query.object_type,
+        "source_revision": query.source_revision,
+        "profile": query.profile_name,
+        "candidate_limit": query.candidate_limit,
+        "artifact_hash": query.artifact_hash,
+        "transport": query.transport,
+        "native": dict(query.native_provenance),
+    }
+
+
+def similarity_candidate_provenance_payload(
+    candidate: SimilarityCandidate,
+) -> dict[str, object]:
+    """Render credential-free native provenance for one resolved candidate.
+
+    Parameters
+    ----------
+    candidate : SimilarityCandidate
+        Validated candidate returned by the selected index.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-compatible stable ID and opaque native identifiers.
+    """
+
+    return {
+        "stable_id": candidate.stable_id,
+        "native": dict(candidate.native_provenance),
+    }
+
+
+class SimilaritySymbolResults(list[tuple[float, tuple[str, str, str, str, int]]]):
+    """List-compatible resolved symbol rows with aligned similarity provenance.
+
+    Parameters
+    ----------
+    search_result : SimilaritySearchResult
+        Selected-index result before structural filtering.
+    resolved : list[SimilarityResolvedCandidate]
+        Structurally resolved candidates in the same order as this list.
+    """
+
+    def __init__(
+        self,
+        search_result: SimilaritySearchResult,
+        resolved: list[SimilarityResolvedCandidate],
+    ) -> None:
+        """Retain typed provenance while presenting legacy scored rows.
+
+        Parameters
+        ----------
+        search_result : SimilaritySearchResult
+            Query and candidate provenance before structural filtering.
+        resolved : list[SimilarityResolvedCandidate]
+            Post-filter candidates with their authoritative records.
+
+        Returns
+        -------
+        None
+            The list is initialized in aligned deterministic order.
+        """
+
+        super().__init__(
+            (item.candidate.score, cast("tuple[str, str, str, str, int]", item.record))
+            for item in resolved
+        )
+        self.search_result = search_result
+        self.resolved = tuple(resolved)
+
+
+class SimilarityDocumentationResults(
+    list[
+        tuple[
+            float, tuple[str, str, str, str, int, int | None, str, tuple[str, ...], str]
+        ]
+    ]
+):
+    """List-compatible resolved documentation rows with aligned provenance.
+
+    Parameters
+    ----------
+    search_result : SimilaritySearchResult
+        Selected-index result before structural filtering.
+    resolved : list[SimilarityResolvedCandidate]
+        Structurally resolved candidates in the same order as this list.
+    """
+
+    def __init__(
+        self,
+        search_result: SimilaritySearchResult,
+        resolved: list[SimilarityResolvedCandidate],
+    ) -> None:
+        """Retain typed provenance while presenting legacy scored rows.
+
+        Parameters
+        ----------
+        search_result : SimilaritySearchResult
+            Query and candidate provenance before structural filtering.
+        resolved : list[SimilarityResolvedCandidate]
+            Post-filter candidates with their authoritative records.
+
+        Returns
+        -------
+        None
+            The list is initialized in aligned deterministic order.
+        """
+
+        super().__init__(
+            (
+                item.candidate.score,
+                cast(
+                    "tuple[str, str, str, str, int, int | None, str, tuple[str, ...], str]",
+                    item.record,
+                ),
+            )
+            for item in resolved
+        )
+        self.search_result = search_result
+        self.resolved = tuple(resolved)
+
+
 def _similarity_candidates(  # noqa: PLR0913
     *,
     root: Path,
@@ -56,7 +199,7 @@ def _similarity_candidates(  # noqa: PLR0913
     min_score: float,
     limit: int,
     profile_name: str | None,
-) -> tuple[list[VectorSimilarityScore], int]:
+) -> tuple[SimilaritySearchResult, int]:
     """Search one durable snapshot through the configured similarity index.
 
     Parameters
@@ -78,8 +221,8 @@ def _similarity_candidates(  # noqa: PLR0913
 
     Returns
     -------
-    tuple[list[object], int]
-        Candidate scores and the validated effective result limit.
+    tuple[SimilaritySearchResult, int]
+        Typed candidates and the validated effective result limit.
     """
     from codira.contracts import VectorSnapshotRequest
     from codira.vector_store import ActiveVectorStoreContext
@@ -102,10 +245,10 @@ def _similarity_candidates(  # noqa: PLR0913
     snapshot = context.store.vector_snapshot(
         VectorSnapshotRequest(root, context.identity, object_type, context.config)
     )
-    scores = index.search(
+    result = index.search(
         SimilaritySearchRequest(identity, snapshot, query_vector, profile, min_score)
     )
-    return list(scores), effective_limit
+    return result, effective_limit
 
 
 @with_effective_config_cache
@@ -133,7 +276,7 @@ def embedding_candidates(
     if not any(query_vector):
         return []
     vector_store_context = active_vector_store_context(request.root)
-    scores, effective_limit = _similarity_candidates(
+    search_result, effective_limit = _similarity_candidates(
         root=request.root,
         vector_store_context=vector_store_context,
         object_type="symbol",
@@ -143,15 +286,16 @@ def embedding_candidates(
         profile_name=request.search_profile,
     )
     backend = active_index_backend(root=request.root)
-    return backend.resolve_embedding_scores(
+    resolved = backend.resolve_embedding_scores(
         BackendResolveEmbeddingScoresRequest(
             root=request.root,
-            scores=scores,
+            candidates=search_result.candidates,
             limit=effective_limit,
             prefix=request.prefix,
             conn=request.conn,
         )
     )
+    return SimilaritySymbolResults(search_result, resolved)
 
 
 @with_effective_config_cache
@@ -179,7 +323,7 @@ def documentation_candidates(
     if not any(query_vector):
         return []
     vector_store_context = active_vector_store_context(request.root)
-    scores, effective_limit = _similarity_candidates(
+    search_result, effective_limit = _similarity_candidates(
         root=request.root,
         vector_store_context=vector_store_context,
         object_type="documentation",
@@ -189,12 +333,13 @@ def documentation_candidates(
         profile_name=request.search_profile,
     )
     backend = active_index_backend(root=request.root)
-    return backend.resolve_documentation_scores(
+    resolved = backend.resolve_documentation_scores(
         BackendResolveDocumentationScoresRequest(
             root=request.root,
-            scores=scores,
+            candidates=search_result.candidates,
             limit=effective_limit,
             prefix=request.prefix,
             conn=request.conn,
         )
     )
+    return SimilarityDocumentationResults(search_result, resolved)

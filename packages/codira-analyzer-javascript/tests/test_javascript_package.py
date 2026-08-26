@@ -26,7 +26,7 @@ def test_javascript_package_declares_expected_entry_point() -> None:
         )
     )
 
-    assert project["project"]["version"] == "1.65.0"
+    assert project["project"]["version"] == "2.0.0"
     assert "tree-sitter-javascript>=0.23.1" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "javascript": "codira_analyzer_javascript:build_analyzer"

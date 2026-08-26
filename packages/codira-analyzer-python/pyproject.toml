@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-analyzer-python"
-version = "1.61.0"
+version = "2.0.0"
 description = "First-party Python analyzer plugin for codira"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "codira>=1.5.0,<2.0.0",
+    "codira>=2.0.0,<3.0.0",
     "tree-sitter>=0.25.2",
     "tree-sitter-python>=0.25.0",
 ]

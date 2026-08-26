@@ -18,6 +18,7 @@ This module belongs to the **contract definition layer** that governs pluggable 
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field as dataclass_field
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
@@ -83,6 +84,118 @@ class VectorStoreError(RuntimeError):
     None
         Instances carry the vector-store failure message through
         ``RuntimeError``.
+    """
+
+
+class SimilarityIndexError(ValueError):
+    """Base error for credential-free similarity-index failures.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances carry only a stable operator-facing diagnostic.
+    """
+
+
+class SimilarityIndexUnavailableError(SimilarityIndexError):
+    """Report an unreachable or unavailable selected similarity index.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The selected implementation could not serve the request.
+    """
+
+
+class SimilarityIndexAuthenticationError(SimilarityIndexError):
+    """Report credential-free authentication failure for a selected index.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Authentication failed without exposing credential material.
+    """
+
+
+class SimilarityIndexStaleError(SimilarityIndexError):
+    """Report a stale derived similarity artifact.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Rebuild is required before the selected index can search.
+    """
+
+
+class SimilarityIndexIncompatibleError(SimilarityIndexError):
+    """Report an incompatible selected similarity artifact or request.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The selected artifact cannot safely serve the request.
+    """
+
+
+class SimilarityIndexUnsafeOwnershipError(SimilarityIndexError):
+    """Report ambiguous ownership for a similarity lifecycle operation.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Derived state is retained because ownership is not exact.
+    """
+
+
+class SimilarityIndexPublicationError(SimilarityIndexError):
+    """Report failure to publish a new similarity artifact revision.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The previous published artifact remains authoritative for candidates.
+    """
+
+
+class SimilarityIndexCleanupError(SimilarityIndexError):
+    """Report failure to clean derived similarity artifacts safely.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Cleanup did not complete and retained state must be reported.
     """
 
 
@@ -633,6 +746,318 @@ class SimilaritySearchRequest:
     query_vector: Sequence[float]
     profile: SimilaritySearchProfile
     min_score: float = 0.0
+
+
+_SIMILARITY_PROVENANCE_FORBIDDEN_TOKENS = frozenset(
+    {
+        "api_key",
+        "authorization",
+        "credential",
+        "endpoint",
+        "header",
+        "namespace",
+        "password",
+        "path",
+        "token",
+        "url",
+    }
+)
+
+
+def _validate_similarity_provenance(
+    provenance: tuple[tuple[str, str], ...],
+    *,
+    label: str,
+) -> None:
+    """Reject malformed or credential-bearing native provenance fields.
+
+    Parameters
+    ----------
+    provenance : tuple[tuple[str, str], ...]
+        Immutable native key/value pairs supplied by an index plugin.
+    label : str
+        Human-readable provenance component being validated.
+
+    Returns
+    -------
+    None
+        Valid provenance remains immutable and safe to render.
+
+    Raises
+    ------
+    ValueError
+        If a field is duplicate, blank, unsafe, or resembles secret material.
+    """
+
+    keys: set[str] = set()
+    for key, value in provenance:
+        normalized_key = key.strip().lower()
+        if not normalized_key or not value.strip():
+            message = f"{label} provenance fields must be non-empty."
+            raise ValueError(message)
+        if normalized_key in keys:
+            message = f"{label} provenance keys must be unique."
+            raise ValueError(message)
+        if any(
+            token in normalized_key for token in _SIMILARITY_PROVENANCE_FORBIDDEN_TOKENS
+        ):
+            message = f"{label} provenance must not contain sensitive fields."
+            raise ValueError(message)
+        if any(marker in value for marker in ("/", "\\", "://", "\n", "\r")):
+            message = f"{label} provenance must contain opaque values only."
+            raise ValueError(message)
+        keys.add(normalized_key)
+
+
+@dataclass(frozen=True)
+class SimilarityCandidate:
+    """One credential-free native candidate returned by a similarity index.
+
+    Parameters
+    ----------
+    stable_id : str
+        Durable structural-record identity to resolve outside the index.
+    score : float
+        Native similarity score for the candidate.
+    native_provenance : tuple[tuple[str, str], ...], optional
+        Opaque immutable native identifiers, such as a point ID or FAISS label.
+    """
+
+    stable_id: str
+    score: float
+    native_provenance: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validate candidate identity, score, and native provenance.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If a candidate would be unsafe or ambiguous to render.
+        """
+
+        if not self.stable_id.strip() or not math.isfinite(self.score):
+            raise ValueError(
+                "Similarity candidates require stable IDs and finite scores."
+            )
+        _validate_similarity_provenance(
+            self.native_provenance,
+            label="Similarity candidate",
+        )
+
+
+@dataclass(frozen=True)
+class SimilarityQueryProvenance:
+    """Credential-free provenance describing one typed similarity search.
+
+    Parameters
+    ----------
+    plugin_name : str
+        Selected similarity-index plugin name.
+    plugin_version : str
+        Selected plugin implementation version.
+    object_type : str
+        Authoritative snapshot owner type.
+    source_revision : int
+        Durable vector-set revision searched by the index.
+    profile_name : str
+        Selected per-query search profile.
+    candidate_limit : int
+        Candidate limit applied before structural filtering.
+    artifact_hash : str | None, optional
+        Opaque artifact or collection identity hash when an implementation has one.
+    transport : str
+        Credential-free transport discriminator.
+    native_provenance : tuple[tuple[str, str], ...], optional
+        Additional opaque immutable implementation metadata.
+    """
+
+    plugin_name: str
+    plugin_version: str
+    object_type: str
+    source_revision: int
+    profile_name: str
+    candidate_limit: int
+    artifact_hash: str | None = None
+    transport: str = "in_process"
+    native_provenance: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validate render-safe query provenance values.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If a field is malformed, unsafe, or exposes sensitive material.
+        """
+
+        required = (
+            self.plugin_name,
+            self.plugin_version,
+            self.object_type,
+            self.profile_name,
+            self.transport,
+        )
+        if not all(value.strip() for value in required):
+            raise ValueError("Similarity query provenance fields must be non-empty.")
+        if self.source_revision < 0 or self.candidate_limit <= 0:
+            raise ValueError("Similarity query provenance limits must be valid.")
+        if self.artifact_hash is not None and (
+            not self.artifact_hash.strip()
+            or any(marker in self.artifact_hash for marker in ("/", "\\", "://"))
+        ):
+            raise ValueError("Similarity artifact provenance must be an opaque hash.")
+        _validate_similarity_provenance(
+            self.native_provenance,
+            label="Similarity query",
+        )
+
+
+@dataclass(frozen=True)
+class SimilaritySearchResult:
+    """Typed candidate envelope that preserves query and native provenance.
+
+    Parameters
+    ----------
+    query : SimilarityQueryProvenance
+        Credential-free selected-index and source-snapshot provenance.
+    candidates : tuple[SimilarityCandidate, ...]
+        Ordered native candidates before structural record resolution.
+    """
+
+    query: SimilarityQueryProvenance
+    candidates: tuple[SimilarityCandidate, ...]
+
+    def __post_init__(self) -> None:
+        """Enforce bounded deterministic candidate ordering and alignment.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If candidates exceed policy, repeat IDs, or lose deterministic order.
+        """
+
+        if len(self.candidates) > self.query.candidate_limit:
+            raise ValueError("Similarity candidates exceed the selected limit.")
+        stable_ids = [candidate.stable_id for candidate in self.candidates]
+        if len(stable_ids) != len(set(stable_ids)):
+            raise ValueError("Similarity candidates must have unique stable IDs.")
+        ordered = tuple(
+            sorted(self.candidates, key=lambda item: (-item.score, item.stable_id))
+        )
+        if ordered != self.candidates:
+            raise ValueError(
+                "Similarity candidates must be ordered by score and stable ID."
+            )
+
+
+@dataclass(frozen=True)
+class SimilarityResolvedCandidate:
+    """One structural record resolved from an index candidate without flattening it.
+
+    Parameters
+    ----------
+    candidate : SimilarityCandidate
+        Candidate and native provenance returned by the selected index.
+    record : object
+        Backend-owned structural record resolved from the candidate stable ID.
+    """
+
+    candidate: SimilarityCandidate
+    record: object
+
+
+@dataclass(frozen=True)
+class SimilarityPurgeRequest:
+    """Request an explicit preview or confirmed similarity-index purge.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root that owns the selected derived state.
+    identity : SimilarityIndexIdentity
+        Exact selected similarity-index identity.
+    preview : bool
+        ``True`` inventories only; ``False`` permits confirmed deletion.
+    """
+
+    root: Path
+    identity: SimilarityIndexIdentity
+    preview: bool = True
+
+
+@dataclass(frozen=True)
+class SimilarityPurgeResult:
+    """Credential-free outcome for a similarity-index purge request.
+
+    Parameters
+    ----------
+    index : str
+        Similarity-index plugin that evaluated the request.
+    preview : bool
+        Whether the request was non-mutating.
+    removed_artifact_hashes : tuple[str, ...]
+        Opaque identities of derived artifacts removed or eligible for removal.
+    skipped_artifact_hashes : tuple[str, ...]
+        Opaque identities retained due to ambiguous or foreign ownership.
+    """
+
+    index: str
+    preview: bool
+    removed_artifact_hashes: tuple[str, ...] = ()
+    skipped_artifact_hashes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Require non-empty opaque artifact hashes in deterministic order.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If purge output could expose unsafe or ambiguous state.
+        """
+
+        if not self.index.strip():
+            raise ValueError("Similarity purge results require an index name.")
+        for values in (self.removed_artifact_hashes, self.skipped_artifact_hashes):
+            if tuple(sorted(set(values))) != values:
+                raise ValueError("Similarity purge hashes must be unique and ordered.")
+            if any(
+                not value or any(marker in value for marker in ("/", "\\", "://"))
+                for value in values
+            ):
+                raise ValueError("Similarity purge results require opaque hashes.")
 
 
 @dataclass(frozen=True)
@@ -1359,7 +1784,7 @@ class SimilarityIndex(Protocol):
         """
         ...
 
-    def search(self, request: SimilaritySearchRequest) -> list[VectorSimilarityScore]:
+    def search(self, request: SimilaritySearchRequest) -> SimilaritySearchResult:
         """Return bounded candidates for one immutable search request.
 
         Parameters
@@ -1369,25 +1794,23 @@ class SimilarityIndex(Protocol):
 
         Returns
         -------
-        list[VectorSimilarityScore]
-            Descending score, stable-ID ordered candidates.
+        SimilaritySearchResult
+            Typed candidate envelope with credential-free native provenance.
         """
         ...
 
-    def purge(self, root: Path, identity: SimilarityIndexIdentity) -> None:
+    def purge(self, request: SimilarityPurgeRequest) -> SimilarityPurgeResult:
         """Purge derived state for one repository-scoped identity.
 
         Parameters
         ----------
-        root : pathlib.Path
-            Repository root.
-        identity : SimilarityIndexIdentity
-            Derived state to remove.
+        request : SimilarityPurgeRequest
+            Explicit preview or confirmed derived-state cleanup request.
 
         Returns
         -------
-        None
-            Matching derived state is removed.
+        SimilarityPurgeResult
+            Credential-free inventory of removable, removed, and skipped state.
         """
         ...
 
@@ -1870,8 +2293,8 @@ class BackendResolveEmbeddingScoresRequest:
     ----------
     root : pathlib.Path
         Repository root whose structural index should be queried.
-    scores : collections.abc.Sequence[codira.contracts.VectorSimilarityScore]
-        Vector-store scores keyed by symbol stable ID.
+    candidates : collections.abc.Sequence[codira.contracts.SimilarityCandidate]
+        Selected-index candidates keyed by symbol stable ID with provenance.
     limit : int
         Maximum number of resolved candidates to return.
     prefix : str | None, optional
@@ -1881,7 +2304,7 @@ class BackendResolveEmbeddingScoresRequest:
     """
 
     root: Path
-    scores: Sequence[VectorSimilarityScore]
+    candidates: Sequence[SimilarityCandidate]
     limit: int
     prefix: str | None = None
     conn: object | None = None
@@ -1896,8 +2319,8 @@ class BackendResolveDocumentationScoresRequest:
     ----------
     root : pathlib.Path
         Repository root whose structural index should be queried.
-    scores : collections.abc.Sequence[codira.contracts.VectorSimilarityScore]
-        Vector-store scores keyed by documentation stable ID.
+    candidates : collections.abc.Sequence[codira.contracts.SimilarityCandidate]
+        Selected-index candidates keyed by documentation stable ID with provenance.
     limit : int
         Maximum number of resolved candidates to return.
     prefix : str | None, optional
@@ -1907,7 +2330,7 @@ class BackendResolveDocumentationScoresRequest:
     """
 
     root: Path
-    scores: Sequence[VectorSimilarityScore]
+    candidates: Sequence[SimilarityCandidate]
     limit: int
     prefix: str | None = None
     conn: object | None = None
@@ -3338,7 +3761,7 @@ class IndexBackend(Protocol):
     def resolve_embedding_scores(
         self,
         request: BackendResolveEmbeddingScoresRequest,
-    ) -> ChannelResults:
+    ) -> list[SimilarityResolvedCandidate]:
         """
         Resolve scored symbol stable IDs to structural candidate rows.
 
@@ -3349,15 +3772,15 @@ class IndexBackend(Protocol):
 
         Returns
         -------
-        codira.types.ChannelResults
-            Ranked symbol candidates ordered deterministically.
+        list[SimilarityResolvedCandidate]
+            Ranked symbol records retaining their source candidates.
         """
         ...
 
     def resolve_documentation_scores(
         self,
         request: BackendResolveDocumentationScoresRequest,
-    ) -> DocumentationChannelResults:
+    ) -> list[SimilarityResolvedCandidate]:
         """
         Resolve scored documentation stable IDs to documentation rows.
 
@@ -3368,8 +3791,8 @@ class IndexBackend(Protocol):
 
         Returns
         -------
-        codira.types.DocumentationChannelResults
-            Ranked documentation candidates ordered deterministically.
+        list[SimilarityResolvedCandidate]
+            Ranked documentation records retaining their source candidates.
         """
         ...
 

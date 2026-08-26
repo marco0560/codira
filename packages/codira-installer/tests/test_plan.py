@@ -126,7 +126,7 @@ def test_explicit_faiss_selection_is_a_catalog_install_target() -> None:
     install_step = next(
         step for step in plan.steps if step.identifier == "install-packages"
     )
-    assert "codira-similarity-index-faiss==1.68.0" in install_step.command
+    assert "codira-similarity-index-faiss==2.0.0" in install_step.command
 
 
 def test_managed_runtime_is_independent_of_workspace_repository(tmp_path: Path) -> None:

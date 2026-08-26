@@ -1,5 +1,5 @@
 {
-  "coordinated_version": "1.68.0",
+  "coordinated_version": "2.0.0",
   "packages": [
     {
       "configuration_schema": {
@@ -872,6 +872,103 @@
       "family": "similarity-index",
       "name": "codira-similarity-index-faiss",
       "path": "packages/codira-similarity-index-faiss",
+      "selectable": true
+    },
+    {
+      "configuration_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "api_key_env": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "api_key_file": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "description": "Whether this plugin participates in runtime discovery.",
+            "type": "boolean"
+          },
+          "grpc_port": {
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "hnsw_ef_construct": {
+            "default": 100,
+            "maximum": 1024,
+            "minimum": 8,
+            "type": "integer"
+          },
+          "hnsw_m": {
+            "default": 16,
+            "maximum": 128,
+            "minimum": 4,
+            "type": "integer"
+          },
+          "namespace": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "on_disk": {
+            "default": false,
+            "type": "boolean"
+          },
+          "read_consistency": {
+            "default": "majority",
+            "enum": [
+              "majority",
+              "quorum",
+              "all"
+            ],
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "default": 30,
+            "maximum": 120,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "transport": {
+            "default": "rest",
+            "enum": [
+              "rest",
+              "grpc"
+            ],
+            "type": "string"
+          },
+          "upload_batch_size": {
+            "default": 256,
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "url": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "write_ordering": {
+            "default": "strong",
+            "enum": [
+              "weak",
+              "medium",
+              "strong"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "namespace"
+        ],
+        "type": "object"
+      },
+      "family": "similarity-index",
+      "name": "codira-similarity-index-qdrant",
+      "path": "packages/codira-similarity-index-qdrant",
       "selectable": true
     },
     {

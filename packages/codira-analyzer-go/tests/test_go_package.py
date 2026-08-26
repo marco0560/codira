@@ -25,7 +25,7 @@ def test_go_package_declares_expected_entry_point() -> None:
             encoding="utf-8"
         )
     )
-    assert project["project"]["version"] == "1.67.0"
+    assert project["project"]["version"] == "2.0.0"
     assert "tree-sitter-go>=0.23.4" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "go": "codira_analyzer_go:build_analyzer"

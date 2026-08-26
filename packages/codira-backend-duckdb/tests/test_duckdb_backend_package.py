@@ -20,8 +20,8 @@ from codira.contracts import (
     BackendRuntimeInventoryRequest,
     EmbeddingEngineSpec,
     PendingEmbeddingRow,
+    SimilarityCandidate,
     VectorSetIdentity,
-    VectorSimilarityScore,
 )
 from codira.models import (
     AnalysisResult,
@@ -524,9 +524,9 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "1.57.0"
+    assert project["project"]["version"] == "2.0.0"
     assert project["project"]["dependencies"] == [
-        "codira>=1.5.0,<2.0.0",
+        "codira>=2.0.0,<3.0.0",
         "duckdb>=1.4,<2.0",
         "pyarrow>=18.0.0",
     ]
@@ -2832,8 +2832,8 @@ def test_duckdb_resolve_embedding_scores_uses_vector_store_scores(
     results = backend.resolve_embedding_scores(
         BackendResolveEmbeddingScoresRequest(
             root=tmp_path,
-            scores=[
-                VectorSimilarityScore(
+            candidates=[
+                SimilarityCandidate(
                     stable_id="python:module:pkg.sample",
                     score=1.0,
                 )
@@ -2842,7 +2842,7 @@ def test_duckdb_resolve_embedding_scores_uses_vector_store_scores(
         )
     )
 
-    assert results == [
+    assert [(item.candidate.score, item.record) for item in results] == [
         (
             1.0,
             (
@@ -2941,8 +2941,8 @@ def test_duckdb_resolve_documentation_scores_uses_vector_store_scores(
         backend.resolve_embedding_scores(
             BackendResolveEmbeddingScoresRequest(
                 root=tmp_path,
-                scores=[
-                    VectorSimilarityScore(
+                candidates=[
+                    SimilarityCandidate(
                         stable_id=artifact.stable_id,
                         score=1.0,
                     )
@@ -2952,18 +2952,16 @@ def test_duckdb_resolve_documentation_scores_uses_vector_store_scores(
         )
         == []
     )
-    assert backend.resolve_documentation_scores(
-        BackendResolveDocumentationScoresRequest(
-            root=tmp_path,
-            scores=[
-                VectorSimilarityScore(
-                    stable_id=artifact.stable_id,
-                    score=1.0,
-                )
-            ],
-            limit=5,
+    assert [
+        (item.candidate.score, item.record)
+        for item in backend.resolve_documentation_scores(
+            BackendResolveDocumentationScoresRequest(
+                root=tmp_path,
+                candidates=[SimilarityCandidate(artifact.stable_id, 1.0)],
+                limit=5,
+            )
         )
-    ) == [
+    ] == [
         (
             1.0,
             (

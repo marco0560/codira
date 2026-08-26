@@ -234,7 +234,7 @@ def test_capability_contract_validates_against_schema() -> None:
     payload = build_capability_contract([PythonAnalyzer()])
 
     jsonschema.validate(payload, _capabilities_schema())
-    assert payload["schema_version"] == "1.11"
+    assert payload["schema_version"] == "2.0"
     assert payload["ontology"] == {
         "version": "2",
         "types": [
@@ -265,7 +265,7 @@ def test_capability_contract_validates_against_schema() -> None:
     )
     assert python_plugin["provider"] == "codira-analyzer-python"
     assert python_plugin["version"] == "11"
-    assert python_plugin["distribution_version"] == "1.61.0"
+    assert python_plugin["distribution_version"] == "2.0.0"
     assert "symbol" in channels
     assert "docs" in channels
     assert "help" in commands
@@ -294,7 +294,7 @@ def test_capability_contract_validates_against_schema() -> None:
     assert mcp == {
         "server_command": "codira-mcp",
         "config_command": "codira-mcp-config",
-        "contract_version": "1.4.0",
+        "contract_version": "2.0.0",
         "transport": "stdio",
         "read_only": True,
         "tools": [

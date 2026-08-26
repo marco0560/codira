@@ -69,7 +69,10 @@ from codira.registry import active_index_backend, with_active_plugin_instance_ca
 from codira.semantic.embeddings import get_embedding_backend
 from codira.semantic.search import (
     DocumentationCandidatesRequest,
+    SimilaritySymbolResults,
     documentation_candidates,
+    similarity_candidate_provenance_payload,
+    similarity_query_provenance_payload,
 )
 from codira.types import (
     ChannelBundle,
@@ -87,8 +90,10 @@ from codira.version import package_version
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from codira.contracts import SimilarityResolvedCandidate, SimilaritySearchResult
+
 # Current schema version
-SCHEMA_VERSION = "1.3"
+SCHEMA_VERSION = "2.0"
 # Minimum accepted score
 _MIN_SCORE = 1
 # Maximum number of rows inspected by the symbol fallback scan.
@@ -102,6 +107,57 @@ SEMANTIC_RESULT_LIMIT = 50
 # Maximum number of embedding results returned.
 EMBEDDING_RESULT_LIMIT = 50
 DOCUMENTATION_RESULT_LIMIT = 50
+
+
+class SimilarityContextResults(list[tuple[float, SymbolRow]]):
+    """List-compatible context rows retaining aligned similarity sidecars.
+
+    Parameters
+    ----------
+    search_result : SimilaritySearchResult
+        Typed selected-index result before structural filtering.
+    resolved : tuple[SimilarityResolvedCandidate, ...]
+        Structurally resolved candidates aligned to the context rows.
+    rows : list[tuple[float, SymbolRow]]
+        Context-ready symbol rows derived from the resolved records.
+    """
+
+    def __init__(
+        self,
+        search_result: SimilaritySearchResult,
+        resolved: tuple[SimilarityResolvedCandidate, ...],
+        rows: list[tuple[float, SymbolRow]],
+    ) -> None:
+        """Initialize the stable list view and immutable provenance sidecar.
+
+        Parameters
+        ----------
+        search_result : SimilaritySearchResult
+            Typed query and candidate provenance.
+        resolved : tuple[SimilarityResolvedCandidate, ...]
+            Post-filter candidates in row-aligned order.
+        rows : list[tuple[float, SymbolRow]]
+            Context-ready score and symbol pairs.
+
+        Returns
+        -------
+        None
+            The list and provenance sidecar are initialized deterministically.
+
+        Raises
+        ------
+        ValueError
+            If structural transformation loses candidate alignment.
+        """
+
+        if len(resolved) != len(rows):
+            message = "Similarity context rows must retain candidate alignment."
+            raise ValueError(message)
+        super().__init__(rows)
+        self.search_result = search_result
+        self.resolved = resolved
+
+
 # Maximum number of merged symbols returned.
 MERGE_RESULT_LIMIT = 10
 MERGE_MAX_PER_FILE = 1
@@ -4062,6 +4118,14 @@ def _retrieve_embedding_candidates(  # noqa: PLR0913
             conn=conn,
         )
     )
+    if isinstance(results, SimilaritySymbolResults):
+        aligned = list(zip(results, results.resolved, strict=True))
+        aligned.sort(key=lambda item: _scored_symbol_sort_key(item[0]))
+        return SimilarityContextResults(
+            results.search_result,
+            tuple(item[1] for item in aligned),
+            [item[0] for item in aligned],
+        )
     sorted_results = list(results)
     sorted_results.sort(key=_scored_symbol_sort_key)
     return sorted_results
@@ -4114,6 +4178,24 @@ def _retrieve_documentation_candidates(  # noqa: PLR0913
         (score, _documentation_symbol(documentation)) for score, documentation in rows
     ]
     results.sort(key=_scored_symbol_sort_key)
+    if hasattr(rows, "search_result") and hasattr(rows, "resolved"):
+        resolved_by_score = {
+            (item.candidate.score, item.candidate.stable_id): item
+            for item in rows.resolved
+        }
+        aligned = [
+            resolved_by_score[(score, documentation[0])]
+            for score, documentation in rows
+        ]
+        by_symbol = {
+            _documentation_symbol(documentation): resolved_item
+            for (_, documentation), resolved_item in zip(rows, aligned, strict=True)
+        }
+        return SimilarityContextResults(
+            rows.search_result,
+            tuple(by_symbol[symbol] for _score, symbol in results),
+            results,
+        )
     return results
 
 
@@ -5062,7 +5144,11 @@ def _channel_results_payload(
 
     for channel_name, channel in bundles:
         rows: list[dict[str, object]] = []
-        for score, (symbol_type, module_name, name, file_path, lineno) in channel[:5]:
+        resolved = getattr(channel, "resolved", ())
+        for position, (
+            score,
+            (symbol_type, module_name, name, file_path, lineno),
+        ) in enumerate(channel[:5]):
             row: dict[str, object] = {
                 "type": symbol_type,
                 "module": module_name,
@@ -5074,10 +5160,38 @@ def _channel_results_payload(
             if symbol_type == "documentation":
                 row["source_format"] = module_name
                 row["provenance"] = module_name
+            if position < len(resolved):
+                row["similarity"] = similarity_candidate_provenance_payload(
+                    resolved[position].candidate
+                )
             rows.append(row)
         channel_results[channel_name] = rows
 
     return channel_results
+
+
+def _similarity_channel_payload(
+    bundles: list[ChannelBundle],
+) -> dict[str, dict[str, object]]:
+    """Serialize typed similarity query provenance retained by context channels.
+
+    Parameters
+    ----------
+    bundles : list[codira.types.ChannelBundle]
+        Raw channels collected before merge and diversification.
+
+    Returns
+    -------
+    dict[str, dict[str, object]]
+        Credential-free query provenance keyed by channels that used similarity.
+    """
+
+    payload: dict[str, dict[str, object]] = {}
+    for channel_name, channel in bundles:
+        search_result = getattr(channel, "search_result", None)
+        if search_result is not None:
+            payload[channel_name] = similarity_query_provenance_payload(search_result)
+    return payload
 
 
 def _merge_explain_payload(
@@ -5250,6 +5364,14 @@ def _update_optional_explain_payload(
             "channel_results",
             (
                 _channel_results_payload(request.bundles)
+                if request.bundles is not None
+                else None
+            ),
+        ),
+        (
+            "similarity",
+            (
+                _similarity_channel_payload(request.bundles)
                 if request.bundles is not None
                 else None
             ),

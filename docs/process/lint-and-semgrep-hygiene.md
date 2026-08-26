@@ -28,7 +28,7 @@ scripts/generate_github_snapshot.py:118 S607 — the fixed `gh` executable is
     intentionally invoked by argument vector; there is no shell interpolation.
 src/codira/indexer.py:1233 PLR0913 — bulk indexing keeps backend, transaction,
     artifact, coverage, and embedding ownership explicit at the orchestration seam.
-src/codira/contracts.py:2923 PLR0913 — the plugin protocol signature is a
+src/codira/contracts.py:3346 PLR0913 — the plugin protocol signature is a
     public compatibility contract and cannot be bundled without breaking providers.
 src/codira/contracts.py:17 EM101,TRY003 — public contract validation keeps
     short, consistent exception messages at the typed boundary.
@@ -46,18 +46,18 @@ src/codira/query_daemon_lifecycle.py:579 PLR0913 — service lifecycle inputs ar
     explicit to preserve platform-independent restart behavior.
 src/codira/query_daemon_ipc.py:887 PLR0913 — IPC server construction exposes its
     authentication, runtime, and connection-boundary dependencies.
-src/codira/cli.py:2127 C901,PLR0912 — index CLI failure/reporting branches are
+src/codira/cli.py:2137 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
-src/codira/cli.py:5803 PLR0913 — daemon context rendering receives the complete
+src/codira/cli.py:5966 PLR0913 — daemon context rendering receives the complete
     explicit query/output/profile request after freshness has been established.
-src/codira/cli.py:6621 PLR0913 — command dispatch receives parsed arguments and
+src/codira/cli.py:6784 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
-src/codira/query/context.py:2187 PLR0913 — channel functions share an explicit
+src/codira/query/context.py:2243 PLR0913 — channel functions share an explicit
     root/query/connection/intent/prefix/profile contract so named similarity
     profiles reach only semantic channels.
-src/codira/query/context.py:2329, src/codira/query/context.py:2364,
-    src/codira/query/context.py:3920, src/codira/query/context.py:4023, and
-    src/codira/query/context.py:4070 retain that same channel-contract reason.
+src/codira/query/context.py:2385, src/codira/query/context.py:2420,
+    src/codira/query/context.py:3976, src/codira/query/context.py:4079, and
+    src/codira/query/context.py:4134 retain that same channel-contract reason.
 src/codira/docstring.py:1248, src/codira/docstring.py:1359 PLC0415 — lazy imports avoid a configuration or
     registry import cycle on the optional documentation-plugin path.
 src/codira/docstring.py:1302, src/codira/docstring.py:1454 PLR0913 — documentation validation preserves
@@ -76,7 +76,7 @@ src/codira/similarity.py:14 EM101,TRY003 — snapshot validation exposes concise
     stable derived-index errors at the plugin contract boundary.
 src/codira/semantic/search.py:20 TC003 — `Path` is a runtime request field at
     the similarity-index boundary.
-src/codira/semantic/search.py:50 PLR0913 — candidate discovery keeps explicit
+src/codira/semantic/search.py:193 PLR0913 — candidate discovery keeps explicit
     root, vector-store, profile, and filtering inputs at the query boundary.
 tests/test_workspace_registry.py:9 TC003 — `Path` creates runtime fixture paths.
 packages/codira-installer/tests/test_tui.py:8 TC003 — `Path` creates runtime TUI

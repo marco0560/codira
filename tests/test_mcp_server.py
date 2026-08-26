@@ -432,6 +432,21 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     embedding_matches = adapter.emb("answer")
     documentation_matches = adapter.docs("answer")
 
+    embedding_result = cast("dict[str, object]", embedding_matches["result"])
+    assert (
+        cast("dict[str, object]", embedding_result["similarity"])["transport"]
+        == "in_process"
+    )
+    assert all(
+        "similarity" in row
+        for row in cast("list[dict[str, object]]", embedding_result["matches"])
+    )
+    documentation_result = cast("dict[str, object]", documentation_matches["result"])
+    assert (
+        cast("dict[str, object]", documentation_result["similarity"])["object_type"]
+        == "documentation"
+    )
+
     status_result = cast("dict[str, object]", status["result"])
     assert status_result["indexed"] is True
     assert status_result["coverage"] == {"status": "complete", "issues": []}
@@ -448,7 +463,7 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
         if plugin["family"] == "analyzer" and plugin["name"] == "python"
     )
     assert python_plugin["version"] == "11"
-    assert python_plugin["distribution_version"] == "1.61.0"
+    assert python_plugin["distribution_version"] == "2.0.0"
     assert inventory["result"] == {
         "symbols": [
             {
