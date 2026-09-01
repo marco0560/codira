@@ -5069,6 +5069,7 @@ def test_build_bootstrap_commands_reuses_shared_first_party_install_command() ->
         "scripts/download_embedding_model.py",
         "--model-id",
         "bge-small-en-v1.5-onnx",
+        "--anonymous",
     )
     install_command = next(
         command

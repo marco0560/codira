@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import cast
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    repository_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(repository_root))
+    sys.path.insert(0, str(repository_root / "src"))
 
 if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
     print(
@@ -26,9 +28,9 @@ if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
     raise SystemExit(0)
 
 from codira.contracts import EmbeddingEngineError
+from scripts.scriptlib import PERSONAL_SECRETS_DIR, sops_exec_env_argv
 
 DEFAULT_MANIFEST = Path("benchmarks/embedding-model-candidates.json")
-DEFAULT_TOKEN_FILE = Path.home() / ".hf_token"
 DEFAULT_INSTALL_ROOT = Path(".codira/models")
 DEFAULT_ONNX_MODEL_FILENAME = "onnx/model.onnx"
 DEFAULT_TOKENIZER_FILENAME = "tokenizer.json"
@@ -64,14 +66,13 @@ class ModelEntry:
     config: dict[str, object]
 
 
-def read_hf_token(token_file: Path = DEFAULT_TOKEN_FILE) -> str | None:
+def read_hf_token() -> str | None:
     """
-    Read the Hugging Face token from a shell-style token file.
+    Read the Hugging Face token provided by a SOPS-scoped environment.
 
     Parameters
     ----------
-    token_file : pathlib.Path, optional
-        File containing an ``HF_TOKEN`` or ``export HF_TOKEN=...`` assignment.
+    None
 
     Returns
     -------
@@ -79,32 +80,12 @@ def read_hf_token(token_file: Path = DEFAULT_TOKEN_FILE) -> str | None:
         Hugging Face access token when configured, otherwise ``None`` for an
         anonymous download.
 
-    Raises
-    ------
-    ValueError
-        If the configured token file cannot be sourced successfully.
+    Notes
+    -----
+    Invoke this script through ``sops exec-env`` with the ``huggingface.env``
+    registry entry when authentication is required. Public model downloads
+    remain anonymous when ``HF_TOKEN`` is absent.
     """
-    if token_file.exists():
-        completed = subprocess.run(
-            [
-                "/usr/bin/env",
-                "bash",
-                "-c",
-                'source "$1"; printf "%s" "${HF_TOKEN:-}"',
-                "codira-hf-token",
-                str(token_file),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if completed.returncode != 0:
-            detail = completed.stderr.strip() or f"exit status {completed.returncode}"
-            msg = f"Failed to source Hugging Face token file {token_file}: {detail}"
-            raise ValueError(msg)
-        token = completed.stdout.strip()
-        if token:
-            return token
     env_token = os.environ.get("HF_TOKEN", "").strip()
     if env_token:
         return env_token
@@ -437,12 +418,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Model id to download. Repeat to select multiple ids. Default: all.",
     )
     parser.add_argument(
-        "--token-file",
-        type=Path,
-        default=DEFAULT_TOKEN_FILE,
-        help=f"Hugging Face token file. Default: {DEFAULT_TOKEN_FILE}",
-    )
-    parser.add_argument(
         "--install-root",
         type=Path,
         default=DEFAULT_INSTALL_ROOT,
@@ -453,6 +428,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Download artifacts without running embedding smoke tests.",
     )
+    parser.add_argument(
+        "--anonymous",
+        action="store_true",
+        help="Download public models without loading Hugging Face credentials.",
+    )
+    parser.add_argument("--sops-exec", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
@@ -470,12 +451,25 @@ def main(argv: list[str] | None = None) -> int:
     int
         Process exit status.
     """
+    raw_argv = sys.argv[1:] if argv is None else argv
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
+    if not args.anonymous and not args.sops_exec:
+        command = (
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--sops-exec",
+            *raw_argv,
+        )
+        return subprocess.run(
+            sops_exec_env_argv(
+                PERSONAL_SECRETS_DIR / "huggingface.env",
+                command,
+            ),
+            check=False,
+        ).returncode
     try:
-        token = read_hf_token(args.token_file)
-        if token is not None:
-            os.environ["HF_TOKEN"] = token
+        token = read_hf_token()
         entries = _selected_entries(
             load_manifest_entries(args.manifest),
             set(args.model_id),

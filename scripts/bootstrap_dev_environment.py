@@ -170,6 +170,7 @@ def build_bootstrap_commands(
                 "scripts/download_embedding_model.py",
                 "--model-id",
                 DEFAULT_EMBEDDING_MODEL_ID,
+                "--anonymous",
             ),
             repo_root,
         ),

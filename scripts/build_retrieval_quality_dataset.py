@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, cast
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.scriptlib import safe_slug
+from scripts.scriptlib import PERSONAL_SECRETS_DIR, safe_slug, sops_exec_env_argv
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -423,7 +423,10 @@ def _gh_api_json(endpoint: str) -> object:
         Raised when the GitHub CLI fails or emits invalid JSON.
     """
 
-    command = ("gh", "api", "--paginate", "--slurp", endpoint)
+    command = sops_exec_env_argv(
+        PERSONAL_SECRETS_DIR / "github.env",
+        ("gh", "api", "--paginate", "--slurp", endpoint),
+    )
     completed = subprocess.run(
         command,
         check=False,

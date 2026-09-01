@@ -2,60 +2,57 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import types
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from scripts import download_embedding_model
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     import pytest
 
 
-def test_read_hf_token_sources_shell_file(tmp_path: Path) -> None:
+def test_read_hf_token_reads_sops_scoped_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
-    Read ``HF_TOKEN`` by sourcing the configured shell file.
+    Read ``HF_TOKEN`` supplied by the SOPS-scoped child environment.
 
     Parameters
     ----------
-    tmp_path : pathlib.Path
-        Temporary directory used for a shell-style token file.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to supply the scoped environment variable.
 
     Returns
     -------
     None
-        The test asserts executable shell syntax is honored.
+        The test asserts the downloader does not source a plaintext token file.
     """
-    token_file = tmp_path / ".hf_token"
-    token_file.write_text(
-        """
-        # test token file
-        TOKEN_SUFFIX="from-shell"
-        export HF_TOKEN="token-${TOKEN_SUFFIX}"
-        """,
-        encoding="utf-8",
-    )
+    monkeypatch.setenv("HF_TOKEN", "token-from-sops")
 
-    assert download_embedding_model.read_hf_token(token_file) == "token-from-shell"
+    assert download_embedding_model.read_hf_token() == "token-from-sops"
 
 
-def test_read_hf_token_allows_anonymous_download(tmp_path: Path) -> None:
+def test_read_hf_token_allows_anonymous_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Allow public model downloads without a configured Hugging Face token.
 
     Parameters
     ----------
-    tmp_path : pathlib.Path
-        Temporary directory without a token file.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to remove the scoped environment variable.
 
     Returns
     -------
     None
         The test asserts missing credentials produce an anonymous request.
     """
-    assert download_embedding_model.read_hf_token(tmp_path / ".hf_token") is None
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    assert download_embedding_model.read_hf_token() is None
 
 
 def test_download_embedding_model_main_selects_manifest_entry(
@@ -100,8 +97,7 @@ def test_download_embedding_model_main_selects_manifest_entry(
         """,
         encoding="utf-8",
     )
-    token_file = tmp_path / ".hf_token"
-    token_file.write_text('export HF_TOKEN="secret-token"\n', encoding="utf-8")
+    monkeypatch.setenv("HF_TOKEN", "secret-token")
     calls: list[tuple[str, str | None]] = []
 
     def fake_download_entry(
@@ -158,10 +154,9 @@ def test_download_embedding_model_main_selects_manifest_entry(
             str(manifest),
             "--model-id",
             "candidate",
-            "--token-file",
-            str(token_file),
             "--install-root",
             str(tmp_path / "models"),
+            "--sops-exec",
         ]
     )
 
@@ -250,13 +245,66 @@ def test_download_embedding_model_main_allows_anonymous_download(
             str(manifest),
             "--model-id",
             "candidate",
-            "--token-file",
-            str(tmp_path / ".hf_token"),
+            "--anonymous",
         ]
     )
 
     assert status == 0
     assert calls == [None]
+
+
+def test_download_embedding_model_main_scopes_huggingface_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Re-execute authenticated downloads through the Hugging Face SOPS file.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace the SOPS subprocess boundary.
+
+    Returns
+    -------
+    None
+        The test asserts the downloader itself does not receive ``HF_TOKEN``.
+    """
+    observed: dict[str, object] = {}
+
+    def fake_run(
+        command: tuple[str, ...], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        """
+        Record the scoped child command.
+
+        Parameters
+        ----------
+        command : tuple[str, ...]
+            Requested subprocess argument vector.
+        _kwargs : object
+            Ignored subprocess keyword arguments.
+
+        Returns
+        -------
+        subprocess.CompletedProcess[str]
+            Controlled non-zero child result.
+        """
+        observed["command"] = command
+        return subprocess.CompletedProcess(command, 7)
+
+    monkeypatch.setattr("scripts.download_embedding_model.subprocess.run", fake_run)
+
+    assert download_embedding_model.main(["--skip-smoke"]) == 7
+    command = observed["command"]
+    assert isinstance(command, tuple)
+    assert command[:3] == (
+        "sops",
+        "exec-env",
+        str(
+            Path.home() / ".config" / "personal-secrets" / "secrets" / "huggingface.env"
+        ),
+    )
+    assert "--sops-exec --skip-smoke" in command[3]
 
 
 def test_download_onnx_entry_keeps_only_manifest_artifacts(

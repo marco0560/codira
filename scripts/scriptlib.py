@@ -20,6 +20,7 @@ This module belongs to the developer tooling layer.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+PERSONAL_SECRETS_DIR = Path.home() / ".config" / "personal-secrets" / "secrets"
 
 
 class RepoConfigRestore:
@@ -156,6 +158,40 @@ def repo_root() -> Path:
     """
 
     return REPO_ROOT
+
+
+def sops_exec_env_argv(secret_file: Path, command: Sequence[str]) -> tuple[str, ...]:
+    """
+    Build a SOPS-scoped command invocation for one encrypted dotenv file.
+
+    Parameters
+    ----------
+    secret_file : pathlib.Path
+        Encrypted dotenv file below the user's personal secrets directory.
+    command : collections.abc.Sequence[str]
+        Shell-free command vector that receives the decrypted environment.
+
+    Returns
+    -------
+    tuple[str, ...]
+        ``sops exec-env`` argument vector that exposes secrets only to the
+        command child process.
+
+    Raises
+    ------
+    ValueError
+        If ``secret_file`` is outside the personal secrets directory or
+        ``command`` is empty.
+    """
+    resolved_secret_file = secret_file.expanduser().resolve()
+    resolved_secrets_dir = PERSONAL_SECRETS_DIR.resolve()
+    if resolved_secrets_dir not in resolved_secret_file.parents:
+        msg = f"Secret file must be below {resolved_secrets_dir}: {secret_file}"
+        raise ValueError(msg)
+    if not command:
+        msg = "Secret-scoped command must not be empty"
+        raise ValueError(msg)
+    return ("sops", "exec-env", str(resolved_secret_file), shlex.join(command))
 
 
 def resolve_python() -> str:

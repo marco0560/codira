@@ -18,6 +18,11 @@ import tempfile
 from pathlib import Path
 from typing import cast
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.scriptlib import PERSONAL_SECRETS_DIR, sops_exec_env_argv
+
 OWNER = "marco0560"
 REPOSITORY = "codira"
 ISSUES_PAGE_SIZE = 100
@@ -114,8 +119,11 @@ def _run_graphql(query: str) -> dict[str, object]:
         Raised when the GitHub CLI command fails or returns malformed JSON.
     """
     try:
-        completed = subprocess.run(  # (trusted fixed binary, no shell)
-            ["gh", "api", "graphql", "-f", f"query={query}"],  # noqa: S607
+        completed = subprocess.run(
+            sops_exec_env_argv(
+                PERSONAL_SECRETS_DIR / "github.env",
+                ("gh", "api", "graphql", "-f", f"query={query}"),
+            ),
             check=True,
             capture_output=True,
             text=True,

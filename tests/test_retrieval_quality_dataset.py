@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from typing import TYPE_CHECKING
 
-from scripts import build_retrieval_quality_dataset as dataset
+from scripts import build_retrieval_quality_dataset as dataset, scriptlib
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -151,6 +152,58 @@ def test_write_examples_serializes_jsonl(tmp_path: Path) -> None:
         "schema_version": 1,
         "source": "git_commit",
     }
+
+
+def test_gh_api_json_scopes_github_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Run GitHub API calls through the dedicated SOPS environment.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to record the subprocess invocation.
+
+    Returns
+    -------
+    None
+        The test asserts only the GitHub CLI child receives GitHub credentials.
+    """
+    observed: dict[str, object] = {}
+
+    def fake_run(
+        command: tuple[str, ...], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        """
+        Record a GitHub API subprocess call.
+
+        Parameters
+        ----------
+        command : tuple[str, ...]
+            Requested subprocess argument vector.
+        _kwargs : object
+            Ignored subprocess keyword arguments.
+
+        Returns
+        -------
+        subprocess.CompletedProcess[str]
+            Successful empty paginated API response.
+        """
+        observed["command"] = command
+        return subprocess.CompletedProcess(command, 0, "[]", "")
+
+    monkeypatch.setattr(
+        "scripts.build_retrieval_quality_dataset.subprocess.run", fake_run
+    )
+
+    assert dataset._gh_api_json("/repos/owner/repo/pulls") == []
+    assert observed["command"] == (
+        "sops",
+        "exec-env",
+        str(scriptlib.PERSONAL_SECRETS_DIR / "github.env"),
+        "gh api --paginate --slurp /repos/owner/repo/pulls",
+    )
 
 
 def test_collect_github_pr_examples_uses_changed_files(

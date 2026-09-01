@@ -301,6 +301,19 @@ def test_scriptlib_restores_configs_and_wraps_process_helpers(
     assert (tmp_path / "log.txt").read_text(encoding="utf-8") == "one\ntwo\n"
     assert capsys.readouterr().out == "one\ntwo\n"
     assert scriptlib.safe_slug("a/b c") == "a_b_c"
+    assert scriptlib.sops_exec_env_argv(
+        scriptlib.PERSONAL_SECRETS_DIR / "github.env",
+        ("gh", "api", "/repos/example/repository?per_page=100"),
+    ) == (
+        "sops",
+        "exec-env",
+        str(scriptlib.PERSONAL_SECRETS_DIR / "github.env"),
+        "gh api '/repos/example/repository?per_page=100'",
+    )
+    with pytest.raises(ValueError, match="must be below"):
+        scriptlib.sops_exec_env_argv(tmp_path / "github.env", ("gh", "api"))
+    with pytest.raises(ValueError, match="must not be empty"):
+        scriptlib.sops_exec_env_argv(scriptlib.PERSONAL_SECRETS_DIR / "github.env", ())
     assert [scriptlib.format_duration(value) for value in (4, 65, 3661)] == [
         "4s",
         "1m 05s",
