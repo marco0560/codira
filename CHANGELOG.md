@@ -1,3 +1,10 @@
+## [2.0.1](https://github.com/marco0560/codira/compare/v2.0.0...v2.0.1) (2026-09-03)
+
+### Bug Fixes
+
+* **release:** configure notes preset ([d8a4b05](https://github.com/marco0560/codira/commit/d8a4b055e058f6ea6fb1aa149590998273315d88))
+* **release:** update GitHub release plugin ([5f2f860](https://github.com/marco0560/codira/commit/5f2f860430e01bf8b02a0cb449c1830f436684fd))
+
 # [2.0.0](https://github.com/marco0560/codira/compare/v1.67.1...v2.0.0) (2026-08-25)
 
 
