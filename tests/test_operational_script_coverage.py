@@ -476,6 +476,29 @@ def test_release_preview_scopes_semantic_release_through_sops(
     ]
 
 
+def test_release_notes_generator_uses_an_explicit_preset() -> None:
+    """Keep the preview config independent from the CLI config-file path.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the release-notes plugin selects its changelog preset
+        instead of inheriting semantic-release's ``--config`` value.
+    """
+    release_config = json.loads(
+        (REPO_ROOT / ".releaserc.json").read_text(encoding="utf-8")
+    )
+
+    assert [
+        "@semantic-release/release-notes-generator",
+        {"preset": "conventionalcommits"},
+    ] in release_config["plugins"]
+
+
 def test_semgrep_fixture_runner_reports_success_and_failure(
     monkeypatch: MonkeyPatch,
     capsys: CaptureFixture[str],
