@@ -21,6 +21,8 @@ import pytest
 from scripts import scriptlib
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from _pytest.capture import CaptureFixture
     from _pytest.monkeypatch import MonkeyPatch
 
@@ -359,6 +361,69 @@ def test_scriptlib_resolves_configured_and_missing_executables(
         scriptlib.resolve_python()
     with pytest.raises(SystemExit, match="Codira executable not found"):
         scriptlib.resolve_codira()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_command"),
+    [
+        ([], "uvx semgrep --config p/security-audit"),
+        (["--deep"], "uvx semgrep scan"),
+    ],
+)
+def test_audit_scopes_semgrep_through_sops(
+    monkeypatch: MonkeyPatch,
+    arguments: list[str],
+    expected_command: str,
+) -> None:
+    """Keep Semgrep credentials scoped to the audit subprocess.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace process execution and command-line arguments.
+    arguments : list[str]
+        Audit command-line arguments for the tested scan mode.
+    expected_command : str
+        Shell-quoted Semgrep command expected inside the SOPS invocation.
+
+    Returns
+    -------
+    None
+        The test asserts the Semgrep child receives ``semgrep.env`` while
+        unrelated audit commands remain unchanged.
+    """
+    from scripts import audit
+
+    observed: list[tuple[str, ...]] = []
+    monkeypatch.setattr(sys, "argv", ["audit.py", *arguments])
+
+    def fake_run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        """
+        Record an audit subprocess without executing it.
+
+        Parameters
+        ----------
+        command : collections.abc.Sequence[str]
+            Command passed to the script helper.
+
+        Returns
+        -------
+        subprocess.CompletedProcess[str]
+            Successful deterministic process result.
+        """
+        observed.append(tuple(command))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(audit, "run", fake_run)
+
+    assert audit.main() == 0
+    assert observed[0] == (
+        "sops",
+        "exec-env",
+        str(scriptlib.PERSONAL_SECRETS_DIR / "semgrep.env"),
+        expected_command,
+    )
+    assert observed[1] == ("uv", "audit", "--frozen")
 
 
 def test_semgrep_fixture_runner_reports_success_and_failure(

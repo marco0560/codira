@@ -30,6 +30,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.scriptlib import PERSONAL_SECRETS_DIR, sops_exec_env_argv
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -238,17 +243,49 @@ def build_validation_commands(
         Ordered command vectors for the validation steps.
     """
 
-    return tuple(
-        (
+    commands: list[tuple[str, ...]] = []
+    for step in build_validation_steps(
+        include_semgrep_complete=include_semgrep_complete
+    ):
+        command = (
             python,
             str(RUN_REPO_TOOL),
             step.tool,
             *step.args,
         )
-        for step in build_validation_steps(
-            include_semgrep_complete=include_semgrep_complete
-        )
+        if step.name == "semgrep-complete":
+            command = sops_exec_env_argv(
+                PERSONAL_SECRETS_DIR / "semgrep.env",
+                command,
+            )
+        commands.append(command)
+    return tuple(commands)
+
+
+def complete_semgrep_report_path(command: tuple[str, ...]) -> Path | None:
+    """
+    Return the complete-Semgrep report path embedded in one command.
+
+    Parameters
+    ----------
+    command : tuple[str, ...]
+        Direct or SOPS-wrapped validation command.
+
+    Returns
+    -------
+    pathlib.Path | None
+        Requested report path, or ``None`` when the command is not the
+        complete Semgrep scan.
+    """
+    command_parts = (
+        tuple(shlex.split(command[-1]))
+        if command[:2] == ("sops", "exec-env")
+        else command
     )
+    if "--output" not in command_parts:
+        return None
+    output_index = command_parts.index("--output") + 1
+    return Path(command_parts[output_index])
 
 
 def run_validation(
@@ -274,9 +311,9 @@ def run_validation(
         commands if commands is not None else build_validation_commands()
     )
     for command in selected_commands:
-        if len(command) >= 8 and command[2] == "semgrep" and "--output" in command:
-            output_index = command.index("--output") + 1
-            Path(command[output_index]).parent.mkdir(parents=True, exist_ok=True)
+        complete_report_path = complete_semgrep_report_path(command)
+        if complete_report_path is not None:
+            complete_report_path.parent.mkdir(parents=True, exist_ok=True)
         capture_output = (
             len(command) >= 5 and command[2] == "coverage" and command[3] == "report"
         )
@@ -318,9 +355,8 @@ def run_validation(
                     for line in lines[2:7]:
                         print(line)
 
-        if len(command) >= 8 and command[2] == "semgrep" and "--output" in command:
-            output_index = command.index("--output") + 1
-            report_label = relative_report_path(Path(command[output_index]))
+        if complete_report_path is not None:
+            report_label = relative_report_path(complete_report_path)
             if completed.returncode != 0:
                 print(f"Complete Semgrep report requires examination: {report_label}")
                 return completed.returncode

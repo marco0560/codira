@@ -1293,6 +1293,7 @@ class _ValidationHelperModule(Protocol):
     REPO_ROOT: Path
     RUN_REPO_TOOL: Path
     COMPLETE_SEMGREP_ARTIFACT_ROOT: Path
+    PERSONAL_SECRETS_DIR: Path
     subprocess: ModuleType
 
     def build_parser(self) -> argparse.ArgumentParser:
@@ -2390,16 +2391,13 @@ def test_validation_helper_can_append_complete_semgrep_scan() -> None:
         python="python",
         include_semgrep_complete=True,
     )[-1] == (
-        "python",
-        str(helper.RUN_REPO_TOOL),
-        "semgrep",
-        "scan",
-        "--json",
-        "--output",
-        str(report_path),
-        "--exclude",
-        "fixtures",
-        ".",
+        "sops",
+        "exec-env",
+        str(helper.PERSONAL_SECRETS_DIR / "semgrep.env"),
+        (
+            f"python {helper.RUN_REPO_TOOL} semgrep scan --json --output "
+            f"{report_path} --exclude fixtures ."
+        ),
     )
 
 
@@ -2634,7 +2632,9 @@ def test_validation_helper_complete_semgrep_creates_parent_and_reports_output(
     assert (
         f"Saved Semgrep report: {helper.relative_report_path(report_path)}"
     ) in output
-    assert any("--output" in command for command in seen_commands)
+    assert any(
+        any("--output" in argument for argument in command) for command in seen_commands
+    )
 
 
 def test_validation_helper_complete_semgrep_failure_reports_repo_relative_path(
@@ -2686,7 +2686,7 @@ def test_validation_helper_complete_semgrep_failure_reports_repo_relative_path(
         text: bool,
     ) -> subprocess.CompletedProcess[str]:
         del cwd, check, capture_output, text
-        if "--output" in argv:
+        if any("--output" in argument for argument in argv):
             return subprocess.CompletedProcess(argv, 1, "", "")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
