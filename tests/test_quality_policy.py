@@ -3,12 +3,40 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = REPO_ROOT / "docs" / "process" / "lint-and-semgrep-hygiene.md"
 NOQA_PATTERN = re.compile(r"#\s*noqa(?:\b|:)")
 NOSEMGREP_PATTERN = re.compile(r"#\s*nosemgrep:")
+
+
+def tracked_python_paths() -> tuple[Path, ...]:
+    """
+    Return Git-tracked Python files under the repository root.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    tuple[pathlib.Path, ...]
+        Existing tracked Python source paths in deterministic order.
+    """
+    completed = subprocess.run(
+        ("git", "ls-files", "-z", "--", "*.py"),
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=True,
+    )
+    return tuple(
+        REPO_ROOT / relative_path
+        for relative_path in sorted(
+            path for path in completed.stdout.decode().split("\0") if path
+        )
+    )
 
 
 def test_every_noqa_location_is_documented_in_quality_policy() -> None:
@@ -26,9 +54,7 @@ def test_every_noqa_location_is_documented_in_quality_policy() -> None:
     """
     policy = POLICY_PATH.read_text(encoding="utf-8")
     locations: list[str] = []
-    for path in sorted(REPO_ROOT.rglob("*.py")):
-        if any(part in {".git", ".venv", "build"} for part in path.parts):
-            continue
+    for path in tracked_python_paths():
         relative = path.relative_to(REPO_ROOT)
         for line_number, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(), 1
@@ -55,9 +81,7 @@ def test_every_nosemgrep_source_is_documented_in_quality_policy() -> None:
     """
     policy = POLICY_PATH.read_text(encoding="utf-8")
     sources: list[str] = []
-    for path in sorted(REPO_ROOT.rglob("*.py")):
-        if any(part in {".git", ".venv", "build"} for part in path.parts):
-            continue
+    for path in tracked_python_paths():
         if NOSEMGREP_PATTERN.search(path.read_text(encoding="utf-8")):
             sources.append(path.relative_to(REPO_ROOT).as_posix())
 

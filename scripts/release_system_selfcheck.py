@@ -41,6 +41,7 @@ def main() -> int:
         Path("scripts/tag_guard.py"),
         Path("scripts/changelog_guard.py"),
         Path("scripts/release_rel.py"),
+        Path("scripts/release_preview.py"),
     ):
         if not path.is_file():
             print(f"FAIL: missing {path}")

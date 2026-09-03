@@ -12,7 +12,7 @@ The review removed two obsolete `E501` suppressions from `tests/test_contracts.p
 All remaining suppressions name the narrow rule they suppress.
 
 ```text
-scripts/scriptlib.py:234 PLR0913 — public process runner keeps explicit
+scripts/scriptlib.py:270 PLR0913 — public process runner keeps explicit
     command, environment, and failure-boundary inputs for reusable scripts.
 scripts/run_manifest_baseline.py:131 PLR0913 — benchmark invocation inputs are
     independently selectable for reproducible comparisons.

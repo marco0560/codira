@@ -44,8 +44,9 @@ Use:
 git rel
 ```
 
-That guarded path runs the release audit and then pushes with the expected
-temporary bypass variables.
+That guarded path runs the release audit, previews semantic-release with the
+scoped GitHub environment, and then pushes with the expected temporary bypass
+variables.
 
 ## Publishing model
 

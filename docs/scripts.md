@@ -48,6 +48,11 @@ Validate commit headers for semantic-release compatibility.
 This script is used by the GitHub commit-message workflow and enforces the
 repository's conventional-commit contract.
 
+## `scripts/release_preview.py`
+
+Run the non-publishing semantic-release preview used by the guarded `git rel`
+path. It exposes `github.env` only to the preview child via `sops exec-env`.
+
 ## `scripts/clean_repo.py`
 
 Clean ignored repository artifacts using Git as the source of truth rather than

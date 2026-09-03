@@ -35,6 +35,11 @@ echo "▶ Running mypy"
 echo "▶ Running test suite"
 "$PYTHON_BIN" "$REPO_ROOT/scripts/run_repo_tool.py" pytest -q tests packages
 
+if [ "${ALLOW_MAIN_PUSH:-}" = "1" ]; then
+    echo "▶ Running semantic-release preview"
+    "$PYTHON_BIN" -m scripts.release_preview
+fi
+
 echo "▶ Running release audit"
 if [ -z "${SKIP_RELEASE_AUDIT:-}" ]; then
     exec "$PYTHON_BIN" -m scripts.release_audit

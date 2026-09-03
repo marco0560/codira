@@ -426,6 +426,56 @@ def test_audit_scopes_semgrep_through_sops(
     assert observed[1] == ("uv", "audit", "--frozen")
 
 
+def test_release_preview_scopes_semantic_release_through_sops(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Keep semantic-release credentials scoped to the preview subprocess.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace the semantic-release process boundary.
+
+    Returns
+    -------
+    None
+        The test asserts the preview is non-publishing and receives only the
+        GitHub secret environment.
+    """
+    from scripts import release_preview
+
+    observed: list[tuple[str, ...]] = []
+
+    def fake_run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        """
+        Record a preview subprocess without executing it.
+
+        Parameters
+        ----------
+        command : collections.abc.Sequence[str]
+            Command passed to the script helper.
+
+        Returns
+        -------
+        subprocess.CompletedProcess[str]
+            Successful deterministic process result.
+        """
+        observed.append(tuple(command))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(release_preview, "run", fake_run)
+
+    assert release_preview.main() == 0
+    assert observed == [
+        (
+            "sops",
+            "exec-env",
+            str(scriptlib.PERSONAL_SECRETS_DIR / "github.env"),
+            "npx semantic-release --dry-run --config .releaserc.json",
+        )
+    ]
+
+
 def test_semgrep_fixture_runner_reports_success_and_failure(
     monkeypatch: MonkeyPatch,
     capsys: CaptureFixture[str],
