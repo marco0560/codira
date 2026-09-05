@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import jsonschema  # type: ignore[import-untyped]
 import pytest
 from codira_installer import cli
 from codira_installer.execution import apply_plan, load_journal
@@ -115,6 +117,36 @@ def test_equivalent_requests_render_byte_identical_plans() -> None:
 
     assert render_plan(first) == render_plan(second)
     validate_plan(first)
+
+
+def test_rendered_plan_validates_against_packaged_schema() -> None:
+    """
+    Keep the distributed JSON Schema aligned with emitted installer plans.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts a resolved plan is accepted by the package-data
+        Draft 2020-12 schema used by external consumers.
+    """
+    plan = resolve_plan(
+        InstallerRequest(
+            target=EnvironmentTarget(EnvironmentKind.EXISTING, Path("/env")),
+            profile=InstallationProfile.FULL_OFFICIAL,
+        ),
+        installed_packages=(),
+    )
+    schema_path = (
+        Path(__file__).parents[1] / "src" / "codira_installer" / "plan.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    payload = json.loads(render_plan(plan))
+
+    jsonschema.Draft202012Validator(schema).validate(payload)
 
 
 def test_pip_rejects_new_and_local_checkout_targets() -> None:
