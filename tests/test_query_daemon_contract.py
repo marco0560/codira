@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from importlib import import_module
+from threading import Event, Thread
 from typing import TYPE_CHECKING
 
 import pytest
@@ -161,6 +162,88 @@ def test_runtime_swaps_only_new_generations_and_closes_previous(tmp_path: Path) 
     assert runtime.refresh(2) is True
     runtime.close()
 
+    assert closed == [1, 2]
+
+
+def test_runtime_discards_superseded_concurrent_refresh(tmp_path: Path) -> None:
+    """Keep concurrent refresh publication monotonic by generation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root used to construct the runtime identity.
+
+    Returns
+    -------
+    None
+        The test asserts a delayed older replacement is closed, not published.
+    """
+    first_started = Event()
+    release_first = Event()
+    closed: list[int] = []
+    outcomes: dict[int, bool] = {}
+
+    class Session:
+        """Minimal warmed session with observable closure."""
+
+        def __init__(self, generation: int) -> None:
+            """Store the represented generation.
+
+            Parameters
+            ----------
+            generation : int
+                Generation represented by the test session.
+            """
+            self.generation = generation
+
+        def close(self) -> None:
+            """Record closure of this test session.
+
+            Parameters
+            ----------
+            None
+
+            Returns
+            -------
+            None
+            """
+            closed.append(self.generation)
+
+    def factory(generation: int) -> Session:
+        """Delay generation one until generation two has published.
+
+        Parameters
+        ----------
+        generation : int
+            Requested warm generation.
+
+        Returns
+        -------
+        Session
+            Constructed test session for the requested generation.
+        """
+        if generation == 1:
+            first_started.set()
+            assert release_first.wait(timeout=5)
+        return Session(generation)
+
+    runtime = QueryRuntime(
+        QueryDaemonIdentity.from_paths(tmp_path / "repo", tmp_path / "state"),
+        factory,
+    )
+    first = Thread(target=lambda: outcomes.__setitem__(1, runtime.refresh(1)))
+    second = Thread(target=lambda: outcomes.__setitem__(2, runtime.refresh(2)))
+    first.start()
+    assert first_started.wait(timeout=5)
+    second.start()
+    second.join(timeout=5)
+    release_first.set()
+    first.join(timeout=5)
+
+    assert outcomes == {1: False, 2: True}
+    assert runtime.generation == 2
+    assert closed == [1]
+    runtime.close()
     assert closed == [1, 2]
 
 

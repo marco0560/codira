@@ -486,6 +486,9 @@ class QueryRuntime:
                 return False
         replacement = self._session_factory(generation)
         with self._lock:
+            if self._session is not None and self._session.generation >= generation:
+                replacement.close()
+                return False
             previous, self._session = self._session, replacement
         if previous is not None:
             previous.close()
