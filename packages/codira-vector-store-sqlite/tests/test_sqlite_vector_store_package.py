@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import tomllib
+from threading import Event, Thread
 from pathlib import Path
 
 import pytest
@@ -359,6 +360,84 @@ def test_sqlite_vector_store_indexes_one_payload_for_multiple_bindings(
             VectorSnapshotRequest(tmp_path, identity, "symbol", {})
         ).metadata.revision
         == 1
+    )
+
+
+def test_sqlite_vector_snapshot_keeps_revision_and_rows_in_one_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Keep a snapshot wholly pre-update while a concurrent writer is pending.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to synchronize the reader at its revision query.
+    tmp_path : pathlib.Path
+        Temporary repository root owning the SQLite vector store.
+
+    Returns
+    -------
+    None
+        The test asserts a writer cannot commit between snapshot revision and
+        row reads, so their durable state is consistent.
+    """
+    store = SQLiteVectorStore()
+    identity = _vector_identity(store)
+    initial_rows = _prepared_rows()
+    replacement = PreparedVectorRow(
+        row=PendingEmbeddingRow("symbol", 1, "symbol:one", "updated text"),
+        content_hash="hash-updated",
+        vector=serialize_vector([0.0, 0.0, 1.0]),
+    )
+    store.store_vectors(tmp_path, identity, initial_rows, {})
+    reader_at_revision = Event()
+    writer_started = Event()
+    writer_errors: list[BaseException] = []
+    original_connect = sqlite_vector_store_module._connect
+
+    def synchronized_connect(path: Path) -> sqlite3.Connection:
+        """Add a synchronization barrier to the snapshot revision query."""
+        connection = original_connect(path)
+
+        def trace(statement: str) -> None:
+            """Release the writer after the reader's snapshot begins."""
+            if statement.startswith("SELECT revision FROM vector_sets"):
+                reader_at_revision.set()
+                assert writer_started.wait(timeout=5)
+
+        connection.set_trace_callback(trace)
+        return connection
+
+    def write_replacement() -> None:
+        """Attempt the normal revision-changing vector write."""
+        try:
+            assert reader_at_revision.wait(timeout=5)
+            writer_started.set()
+            store.store_vectors(tmp_path, identity, [replacement], {})
+        except BaseException as error:  # noqa: BLE001
+            writer_errors.append(error)
+
+    monkeypatch.setattr(sqlite_vector_store_module, "_connect", synchronized_connect)
+    writer = Thread(target=write_replacement)
+    writer.start()
+    snapshot = store.vector_snapshot(
+        VectorSnapshotRequest(tmp_path, identity, "symbol", {})
+    )
+    writer.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert writer_errors == []
+    assert snapshot.metadata.revision == 1
+    assert [(row.stable_id, row.content_hash) for row in snapshot.rows] == [
+        ("symbol:one", "hash-one")
+    ]
+    assert (
+        store.vector_snapshot(
+            VectorSnapshotRequest(tmp_path, identity, "symbol", {})
+        ).metadata.revision
+        == 2
     )
 
 

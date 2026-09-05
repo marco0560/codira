@@ -68,6 +68,9 @@ src/codira/query_daemon_lifecycle.py:721,738 BLE001 — a long-lived service mus
     report any unexpected refresh or foreground failure as degraded state.
 src/codira/query_daemon_ipc.py:1270,1360 BLE001 — the IPC boundary converts any
     unexpected implementation failure into a stable protocol/unavailable result.
+packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py:419
+    BLE001 — the concurrent-writer regression records every thread failure for
+    deterministic assertion in the main test thread.
 src/codira/mcp/server.py:223 SLF001 — FastMCP exposes no public transport hook;
     its private server object is the required stdio transport boundary.
 src/codira/workspace_registry.py:8 TC003 — `Path` is used at runtime in

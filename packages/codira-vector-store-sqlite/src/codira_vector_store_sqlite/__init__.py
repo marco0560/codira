@@ -747,6 +747,7 @@ class SQLiteVectorStore:
         )
         table_name = _payload_table_name(vector_set_id)
         with _connect(get_vector_store_path(request.root)) as conn:
+            conn.execute("BEGIN")
             revision_row = conn.execute(
                 "SELECT revision FROM vector_sets WHERE id = ?", (vector_set_id,)
             ).fetchone()
