@@ -52,10 +52,50 @@ class ValidationStep:
     args: tuple[str, ...]
 
 
+def first_party_package_typecheck_paths(
+    root: Path = REPO_ROOT,
+) -> tuple[str, ...]:
+    """
+    Return deterministic source and test roots for first-party package typing.
+
+    Parameters
+    ----------
+    root : pathlib.Path, optional
+        Repository root containing the ``packages`` directory.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Repository-relative package ``src`` and ``tests`` directories sorted
+        by path.
+
+    Notes
+    -----
+    Mypy needs both roots with explicit package bases: package sources resolve
+    imports from their checkout paths, while package tests become discovered
+    type-check targets.
+    """
+    package_root = root / "packages"
+    if not package_root.is_dir():
+        return ()
+    return tuple(
+        path.relative_to(root).as_posix()
+        for package_path in sorted(package_root.iterdir())
+        if package_path.is_dir()
+        for path in (package_path / "src", package_path / "tests")
+        if path.is_dir()
+    )
+
+
 VALIDATION_STEPS: tuple[ValidationStep, ...] = (
     ValidationStep("ruff", "ruff", ("check", ".")),
     ValidationStep("ruff-format", "ruff", ("format", "--check", ".")),
     ValidationStep("mypy", "mypy", (".",)),
+    ValidationStep(
+        "mypy-packages",
+        "mypy",
+        ("--explicit-package-bases", *first_party_package_typecheck_paths()),
+    ),
     ValidationStep("pre-commit-noncode", "pre-commit-noncode", ("run", "--all-files")),
     ValidationStep(
         "semgrep",

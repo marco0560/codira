@@ -1296,6 +1296,25 @@ class _ValidationHelperModule(Protocol):
     PERSONAL_SECRETS_DIR: Path
     subprocess: ModuleType
 
+    def first_party_package_typecheck_paths(
+        self,
+        root: Path = ...,
+    ) -> tuple[str, ...]:
+        """
+        Return deterministic first-party package source and test roots.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root containing first-party packages.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Repository-relative source and test paths for mypy.
+        """
+        ...
+
     def build_parser(self) -> argparse.ArgumentParser:
         """
         Build the validator command-line parser.
@@ -2315,11 +2334,20 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
             "--check",
             ".",
         ),
-        (
-            "python",
-            str(helper.RUN_REPO_TOOL),
-            "mypy",
-            ".",
+        *(
+            (
+                "python",
+                str(helper.RUN_REPO_TOOL),
+                "mypy",
+                ".",
+            ),
+            (
+                "python",
+                str(helper.RUN_REPO_TOOL),
+                "mypy",
+                "--explicit-package-bases",
+                *helper.first_party_package_typecheck_paths(),
+            ),
         ),
         (
             "python",
