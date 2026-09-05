@@ -4827,6 +4827,7 @@ def _collect_reference_rows(
     *,
     include_references: bool,
     prefix: str | None,
+    conn: BackendQueryConnection,
 ) -> list[ReferenceRow]:
     """
     Collect cross-module reference rows for the primary top matches.
@@ -4841,6 +4842,8 @@ def _collect_reference_rows(
         Whether reference collection is enabled.
     prefix : str | None
         Absolute normalized prefix used to restrict scanned files.
+    conn : codira.contracts.BackendQueryConnection
+        Existing backend connection reused for the batched reference lookup.
 
     Returns
     -------
@@ -4854,17 +4857,18 @@ def _collect_reference_rows(
     code_matches = [
         symbol for symbol in top_matches if not _is_documentation_symbol(symbol)
     ]
-    symbol_names = {name for _, _, name, _, _ in code_matches if name}
+    symbol_names = tuple(sorted({name for _, _, name, _, _ in code_matches if name}))
     top_files = {file_path for _, _, _, file_path, _ in top_matches}
     test_refs: list[ReferenceRow] = []
     other_refs: list[ReferenceRow] = []
 
+    stored_rows = backend.find_reference_rows_for_names(
+        root,
+        symbol_names,
+        prefix=prefix,
+        conn=conn,
+    )
     for name in symbol_names:
-        stored_rows = backend.find_reference_rows(
-            root,
-            name,
-            prefix=prefix,
-        )
         for file_path, lineno in _find_references(name, stored_rows):
             if file_path in top_files:
                 continue
@@ -4941,6 +4945,7 @@ def _expand_and_collect_references(
         request.top_matches,
         include_references=request.include_references,
         prefix=request.prefix,
+        conn=request.conn,
     )
     return expanded, unique_refs, expansion_diagnostics
 

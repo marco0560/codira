@@ -3611,6 +3611,34 @@ class IndexBackend(Protocol):
         """
         ...
 
+    def find_reference_rows_for_names(
+        self,
+        root: Path,
+        names: Sequence[str],
+        *,
+        prefix: str | None = None,
+        conn: object | None = None,
+    ) -> list[ReferenceSearchRow]:
+        """Return rows containing any requested symbol name in one query.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        names : collections.abc.Sequence[str]
+            Symbol names matched with the existing substring semantics.
+        prefix : str | None, optional
+            Repo-root-relative path prefix used to restrict candidate files.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        list[codira.types.ReferenceSearchRow]
+            Matching rows ordered deterministically by file path and line number.
+        """
+        ...
+
     def embedding_candidates(
         self,
         request: BackendEmbeddingCandidatesRequest,

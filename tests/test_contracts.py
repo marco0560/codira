@@ -1347,6 +1347,35 @@ class _FakeBackend:
         del root, name, prefix, conn
         return []
 
+    def find_reference_rows_for_names(
+        self,
+        root: Path,
+        names: Sequence[str],
+        *,
+        prefix: str | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[tuple[str, int, str]]:
+        """Return no batched reference-search rows for protocol validation.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        names : collections.abc.Sequence[str]
+            Symbol names to search.
+        prefix : str | None, optional
+            Optional file prefix restriction.
+        conn : sqlite3.Connection | None, optional
+            Optional SQLite connection.
+
+        Returns
+        -------
+        list[tuple[str, int, str]]
+            Empty stored rows for protocol validation.
+        """
+        del root, names, prefix, conn
+        return []
+
     def embedding_candidates(
         self,
         request: BackendEmbeddingCandidatesRequest,

@@ -34,6 +34,7 @@ from codira.query.context import (
     _candidate_signal_strength,
     _channel_results_payload,
     _classify_file_role,
+    _collect_reference_rows,
     _find_references,
     _format_symbol,
     _load_cached_source_file,
@@ -49,6 +50,8 @@ from codira.query.context import (
 from codira.query.signals import RetrievalSignal
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from pytest import MonkeyPatch
 
     from codira.contracts import (
@@ -94,6 +97,86 @@ def test_snippet_from_source_range_removes_docstring_and_collapses_blank_lines()
         "",
         "    return value",
     ]
+
+
+def test_reference_collection_batches_names_on_existing_connection(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Reuse the context connection for one batched reference retrieval.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root passed through the backend boundary.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to install an observing backend.
+
+    Returns
+    -------
+    None
+        The test asserts batched lookup arguments and retained reference output.
+    """
+    calls: list[tuple[tuple[str, ...], BackendQueryConnection]] = []
+    connection = cast("BackendQueryConnection", object())
+
+    class ReferenceBackend:
+        """Observe the batched reference lookup contract."""
+
+        def find_reference_rows_for_names(
+            self,
+            root: Path,
+            names: Sequence[str],
+            *,
+            prefix: str | None = None,
+            conn: BackendQueryConnection | None = None,
+        ) -> list[ReferenceSearchRow]:
+            """Return deterministic rows while recording the supplied connection.
+
+            Parameters
+            ----------
+            root : pathlib.Path
+                Repository root passed through the query boundary.
+            names : collections.abc.Sequence[str]
+                Requested symbol names.
+            prefix : str | None, optional
+                Optional repository path restriction.
+            conn : codira.contracts.BackendQueryConnection | None, optional
+                Existing connection to reuse.
+
+            Returns
+            -------
+            list[codira.types.ReferenceSearchRow]
+                Stored rows matching the requested names.
+            """
+            del root, prefix
+            assert conn is not None
+            calls.append((tuple(names), conn))
+            return [
+                ("src/other.py", 2, "alpha()"),
+                ("tests/test_other.py", 4, "beta()"),
+                ("src/primary.py", 8, "alpha()"),
+            ]
+
+    monkeypatch.setattr(
+        "codira.query.context.active_index_backend",
+        lambda *, root: ReferenceBackend(),
+    )
+
+    references = _collect_reference_rows(
+        tmp_path,
+        [
+            ("function", "pkg.primary", "alpha", "src/primary.py", 1),
+            ("function", "pkg.secondary", "beta", "src/secondary.py", 1),
+            ("function", "pkg.repeat", "alpha", "src/repeat.py", 1),
+            ("documentation", "docs", "guide", "docs/guide.md", 1),
+        ],
+        include_references=True,
+        prefix=None,
+        conn=connection,
+    )
+
+    assert calls == [(("alpha", "beta"), connection)]
+    assert references == [("src/other.py", 2), ("tests/test_other.py", 4)]
 
 
 def test_context_similarity_sidecars_remain_aligned_with_ranked_rows() -> None:

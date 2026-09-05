@@ -1889,6 +1889,44 @@ class MemoryIndexBackend:
         rows.sort(key=lambda item: (item[0], item[1]))
         return rows[:50]
 
+    def find_reference_rows_for_names(
+        self,
+        root: Path,
+        names: Sequence[str],
+        *,
+        prefix: str | None = None,
+        conn: object | None = None,
+    ) -> list[ReferenceSearchRow]:
+        """Return rows containing any requested symbol name.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose backend state should be queried.
+        names : collections.abc.Sequence[str]
+            Symbol names matched with simple substring semantics.
+        prefix : str | None, optional
+            Repo-root-relative path prefix used to restrict candidate files.
+        conn : object | None, optional
+            Optional backend connection.
+
+        Returns
+        -------
+        list[codira.types.ReferenceSearchRow]
+            Matching rows ordered by file path and line number.
+        """
+        state = self._conn_state(root, conn)
+        normalized_prefix = normalize_prefix(root, prefix)
+        search_names = frozenset(names)
+        rows = [
+            (file_row.path, lineno, line_text)
+            for file_id, lineno, line_text in state.reference_scan_lines
+            if (file_row := state.files.get(file_id)) is not None
+            and path_has_prefix(file_row.path, normalized_prefix)
+            and any(name in line_text for name in search_names)
+        ]
+        return sorted(rows, key=lambda item: (item[0], item[1]))
+
     def embedding_candidates(
         self,
         request: BackendEmbeddingCandidatesRequest,
