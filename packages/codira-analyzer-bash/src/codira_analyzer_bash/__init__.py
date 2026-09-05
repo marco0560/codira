@@ -19,6 +19,7 @@ analysis path for Bash and POSIX-style `.sh` scripts.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -34,7 +35,13 @@ from codira.contracts import (
     AnalyzerCapabilityDeclaration,
     AnalyzerConcurrencyDeclaration,
 )
-from codira.models import AnalysisResult, CallSite, FunctionArtifact, ModuleArtifact
+from codira.models import (
+    AnalysisResult,
+    CallSite,
+    FunctionArtifact,
+    ModuleArtifact,
+    tree_sitter_recovery_status,
+)
 from codira.plugin_config import (
     AnalyzerPathFilters,
     analyzer_json_schema,
@@ -493,22 +500,28 @@ class BashAnalyzer:
         source = path.read_bytes()
         root_node = _new_parser().parse(source).root_node
         module_name = _module_name_for_path(path, root)
-        return AnalysisResult(
-            source_path=path,
-            module=ModuleArtifact(
-                name=module_name,
-                stable_id=_module_stable_id(path, root),
-                docstring=None,
-                has_docstring=0,
+        return replace(
+            AnalysisResult(
+                source_path=path,
+                module=ModuleArtifact(
+                    name=module_name,
+                    stable_id=_module_stable_id(path, root),
+                    docstring=None,
+                    has_docstring=0,
+                ),
+                classes=(),
+                functions=(
+                    _extract_functions(root_node, source, module_name=module_name)
+                    if self._emit_functions
+                    else ()
+                ),
+                declarations=(),
+                imports=(),
             ),
-            classes=(),
-            functions=(
-                _extract_functions(root_node, source, module_name=module_name)
-                if self._emit_functions
-                else ()
+            index_symbols=not root_node.has_error,
+            status=tree_sitter_recovery_status(
+                language="bash", has_error=root_node.has_error
             ),
-            declarations=(),
-            imports=(),
         )
 
 

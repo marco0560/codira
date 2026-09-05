@@ -46,6 +46,7 @@ from codira.models import (
     ImportArtifact,
     ImportKind,
     ModuleArtifact,
+    tree_sitter_recovery_status,
 )
 from codira.plugin_config import (
     AnalyzerPathFilters,
@@ -1957,6 +1958,10 @@ class CAnalyzer:
                 )
                 if self._emit_doxygen_documentation
                 else ()
+            ),
+            index_symbols=not root_node.has_error,
+            status=tree_sitter_recovery_status(
+                language="c", has_error=root_node.has_error
             ),
         )
 

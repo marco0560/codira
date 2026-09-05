@@ -540,6 +540,49 @@ class AnalysisStatus:
     coverage_state: AnalysisCoverageState = AnalysisCoverageState.COMPLETE
 
 
+def tree_sitter_recovery_status(
+    *, language: str, has_error: bool
+) -> AnalysisStatus | None:
+    """Return partial status for a Tree-sitter result recovered from an error.
+
+    Parameters
+    ----------
+    language : str
+        Stable analyzer language whose parser produced the tree.
+    has_error : bool
+        Whether the parsed Tree-sitter root reports an error or missing node.
+
+    Returns
+    -------
+    AnalysisStatus | None
+        Partial status with all artifact categories withheld after recovery, or
+        ``None`` when the parser reported a complete tree.
+    """
+    if not has_error:
+        return None
+    categories = (
+        "module",
+        "class",
+        "function",
+        "declaration",
+        "import",
+        "documentation",
+    )
+    return AnalysisStatus(
+        grammar=f"tree-sitter-{language}",
+        target_contract={"language": language},
+        diagnostics=(
+            AnalysisDiagnostic(
+                "grammar_error",
+                "Tree-sitter recovered from a syntax error",
+            ),
+        ),
+        reliable_categories=(),
+        omitted_categories=categories,
+        coverage_state=AnalysisCoverageState.PARTIAL,
+    )
+
+
 @dataclass(frozen=True)
 class AnalysisResult:
     """

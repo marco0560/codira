@@ -23,6 +23,7 @@ from codira.models import (
     FunctionArtifact,
     ImportArtifact,
     ModuleArtifact,
+    tree_sitter_recovery_status,
 )
 from codira.plugin_config import (
     AnalyzerPathFilters,
@@ -842,7 +843,8 @@ class TypeScriptAnalyzer:
                             )
                         )
 
-        for child in _parser(path).parse(source).root_node.named_children:
+        root_node = _parser(path).parse(source).root_node
+        for child in root_node.named_children:
             visit(child)
         return AnalysisResult(
             source_path=path,
@@ -857,6 +859,10 @@ class TypeScriptAnalyzer:
             declarations=tuple(declarations),
             imports=tuple(imports),
             documentation=tuple(documentation),
+            index_symbols=not root_node.has_error,
+            status=tree_sitter_recovery_status(
+                language="typescript", has_error=root_node.has_error
+            ),
         )
 
 
