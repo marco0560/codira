@@ -48,9 +48,9 @@ src/codira/query_daemon_ipc.py:887 PLR0913 — IPC server construction exposes i
     authentication, runtime, and connection-boundary dependencies.
 src/codira/cli.py:2137 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
-src/codira/cli.py:5966 PLR0913 — daemon context rendering receives the complete
+src/codira/cli.py:5977 PLR0913 — daemon context rendering receives the complete
     explicit query/output/profile request after freshness has been established.
-src/codira/cli.py:6784 PLR0913 — command dispatch receives parsed arguments and
+src/codira/cli.py:6795 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
 src/codira/query/context.py:2243 PLR0913 — channel functions share an explicit
     root/query/connection/intent/prefix/profile contract so named similarity

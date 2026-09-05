@@ -5248,16 +5248,27 @@ def _run_embedding_reset_command(args: argparse.Namespace, root: Path) -> int:
         derived_root = state_root / "similarity-indexes"
         qdrant_ledger = derived_root / "qdrant" / "ownership.json"
         if qdrant_ledger.exists():
-            try:
-                purge_active_similarity_index(root, preview=False)
-            except (BackendError, ConfigError, OSError, RuntimeError, ValueError):
+            active_index = active_similarity_index(root=root)
+            if active_index.name != "qdrant":
                 if not getattr(args, "allow_remote_orphans", False):
                     msg = (
-                        "emb reset stopped because Qdrant remote cleanup failed; "
-                        "retry it or pass --allow-remote-orphans."
+                        "emb reset stopped because Qdrant ownership remains while "
+                        "another similarity index is configured; restore Qdrant for "
+                        "cleanup or pass --allow-remote-orphans."
                     )
-                    raise ConfigError(msg) from None
+                    raise ConfigError(msg)
                 remote_orphan_hashes = _qdrant_ledger_artifact_hashes(qdrant_ledger)
+            else:
+                try:
+                    purge_active_similarity_index(root, preview=False)
+                except (BackendError, ConfigError, OSError, RuntimeError, ValueError):
+                    if not getattr(args, "allow_remote_orphans", False):
+                        msg = (
+                            "emb reset stopped because Qdrant remote cleanup failed; "
+                            "retry it or pass --allow-remote-orphans."
+                        )
+                        raise ConfigError(msg) from None
+                    remote_orphan_hashes = _qdrant_ledger_artifact_hashes(qdrant_ledger)
         for path in candidates:
             if path.exists():
                 path.unlink()

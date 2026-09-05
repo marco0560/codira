@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import struct
 from argparse import Namespace
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from codira.cli import _run_embedding_reset_command
+from codira.config import ConfigError
 from codira.contracts import (
     EmbeddingEngineSpec,
     SimilarityIndexSpec,
@@ -293,3 +295,66 @@ def test_reset_recovers_when_selected_similarity_plugin_is_unavailable(
 
     assert _run_embedding_reset_command(args, tmp_path) == 0
     assert not derived.exists()
+
+
+def test_reset_requires_orphan_acknowledgement_after_qdrant_index_switch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Retain Qdrant ownership evidence after switching to the exact index.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to capture reset JSON output and forbid wrong-plugin purge.
+    tmp_path : pathlib.Path
+        Temporary root containing prior Qdrant ownership evidence.
+
+    Returns
+    -------
+    None
+        The test asserts reset fails closed without acknowledgement and reports
+        opaque Qdrant artifact hashes when orphaning is explicitly accepted.
+    """
+    ledger = (
+        get_codira_dir(tmp_path) / "similarity-indexes" / "qdrant" / "ownership.json"
+    )
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(
+        json.dumps(
+            {
+                "records": [
+                    {"retained_collections": [{"artifact_hash": "opaque-qdrant"}]}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = Namespace(
+        yes=True,
+        stale=False,
+        all_sets=False,
+        dry_run=False,
+        backend=None,
+        older_than=None,
+        keep=None,
+        json=True,
+        allow_remote_orphans=False,
+    )
+    monkeypatch.setattr(
+        "codira.cli.purge_active_similarity_index",
+        lambda root, *, preview: (_ for _ in ()).throw(
+            AssertionError("Qdrant purge must not use the exact index")
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="Qdrant ownership remains"):
+        _run_embedding_reset_command(args, tmp_path)
+    assert ledger.exists()
+
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr("codira.cli._emit_json", emitted.append)
+    args.allow_remote_orphans = True
+
+    assert _run_embedding_reset_command(args, tmp_path) == 0
+    assert emitted[0]["remote_orphan_artifact_hashes"] == ("opaque-qdrant",)
