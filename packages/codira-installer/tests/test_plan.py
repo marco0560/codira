@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from codira_installer import cli
 from codira_installer.execution import apply_plan, load_journal
 from codira_installer.models import (
     EnvironmentKind,
@@ -20,6 +21,38 @@ from codira_installer.models import (
     WorkspaceRegistration,
 )
 from codira_installer.plan import render_plan, resolve_plan, validate_plan
+
+
+def test_target_only_cli_request_installs_into_selected_environment(
+    tmp_path: Path,
+) -> None:
+    """Route documented target-only CLI requests to their selected environment.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary environment roots used in plan-only resolution.
+
+    Returns
+    -------
+    None
+        The test asserts new and existing target requests create or install via
+        the environment passed to ``--environment``.
+    """
+    for target in (EnvironmentKind.NEW, EnvironmentKind.EXISTING):
+        environment = tmp_path / target.value / ".venv"
+        request = cli._request(
+            cli._parser().parse_args(
+                ["--target", target.value, "--environment", str(environment)]
+            )
+        )
+        plan = resolve_plan(request, installed_packages=())
+        install = next(
+            step for step in plan.steps if step.identifier == "install-packages"
+        )
+
+        assert request.runtime == RuntimeTarget(RuntimeKind(target), environment)
+        assert str(environment / "bin" / "python") in install.command
 
 
 def test_equivalent_requests_render_byte_identical_plans() -> None:
