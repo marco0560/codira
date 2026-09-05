@@ -10,7 +10,12 @@ from pathlib import Path
 import pytest
 
 from codira.contracts import BackendPersistAnalysisRequest, PendingEmbeddingRow
-from codira.models import AnalysisResult, FileMetadataSnapshot, ModuleArtifact
+from codira.models import (
+    AnalysisResult,
+    DocumentationArtifact,
+    FileMetadataSnapshot,
+    ModuleArtifact,
+)
 from codira_backend_sqlite.schema import DDL
 from codira.semantic.embeddings import EmbeddingBackendSpec
 from codira_backend_sqlite import SQLiteIndexBackend, build_backend
@@ -505,6 +510,94 @@ def test_sqlite_backend_delete_paths_removes_file_owned_edge_rows(
         assert reopened.execute("SELECT COUNT(*) FROM callable_refs").fetchone() == (0,)
     finally:
         reopened.close()
+
+
+def test_sqlite_delete_paths_removes_deferred_documentation_only_embeddings(
+    tmp_path: Path,
+) -> None:
+    """
+    Remove deferred work when deleting documentation-only indexed files.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts deleted documentation cannot remain in the deferred
+        embedding queue or be processed later.
+    """
+    document = tmp_path / "docs" / "guide.md"
+    artifact = DocumentationArtifact(
+        stable_id="doc:section:docs/guide.md:guide:1",
+        kind="section",
+        source_format="markdown_section",
+        source_path=document,
+        lineno=1,
+        end_lineno=1,
+        title="Guide",
+        heading_path=("Guide",),
+        text="Guide",
+    )
+    analysis = AnalysisResult(
+        source_path=document,
+        module=ModuleArtifact(
+            name="docs.guide",
+            stable_id="module:docs.guide",
+            docstring=None,
+            has_docstring=0,
+        ),
+        classes=(),
+        functions=(),
+        declarations=(),
+        imports=(),
+        documentation=(artifact,),
+        index_symbols=False,
+    )
+    snapshot = FileMetadataSnapshot(
+        path=document,
+        sha256="guide-hash",
+        mtime=1.0,
+        size=5,
+        analyzer_name="markdown",
+        analyzer_version="1",
+    )
+    embedding_backend = EmbeddingBackendSpec(name="test", version="1", dim=384)
+    backend = SQLiteIndexBackend()
+    backend.initialize(tmp_path)
+    backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+            embedding_backend=embedding_backend,
+            defer_embeddings=True,
+        )
+    )
+
+    connection = backend.open_connection(tmp_path)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM pending_embeddings"
+        ).fetchone() == (1,)
+    finally:
+        connection.close()
+
+    backend.delete_paths(tmp_path, paths=[str(document)])
+
+    connection = backend.open_connection(tmp_path)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM pending_embeddings"
+        ).fetchone() == (0,)
+    finally:
+        connection.close()
+    assert backend.process_pending_embeddings(
+        tmp_path,
+        embedding_backend=embedding_backend,
+    ) == (0, 0)
 
 
 def test_sqlite_session_batches_embedding_generation_across_files(
