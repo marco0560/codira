@@ -192,6 +192,7 @@ def test_managed_runtime_is_independent_of_workspace_repository(tmp_path: Path) 
         step for step in plan.steps if step.identifier == "register-workspace"
     )
     assert str(runtime / "bin" / "python") in install.command
+    assert "codira-installer==2.0.0" in install.command
     assert str(repository / ".venv") not in install.command
     assert workspace.command == (
         "codira",
