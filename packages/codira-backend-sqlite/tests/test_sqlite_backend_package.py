@@ -290,6 +290,62 @@ def test_sqlite_backend_full_prepare_clears_populated_database_in_session(
         reopened.close()
 
 
+def test_sqlite_backend_full_prepare_abort_restores_committed_index(
+    tmp_path: Path,
+) -> None:
+    """Roll back SQLite full-rebuild preparation after a prior committed index.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing the SQLite index.
+
+    Returns
+    -------
+    None
+        The test asserts abort restores committed rows and leaves the reopened
+        schema usable after destructive full-rebuild preparation.
+    """
+    backend = SQLiteIndexBackend()
+    db_path = tmp_path / ".codira" / "index.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(db_path)
+    try:
+        for statement in DDL:
+            connection.execute(statement)
+        connection.execute(
+            """
+            INSERT INTO files(
+                id, path, hash, mtime, size, analyzer_name, analyzer_version
+            ) VALUES (1, ?, 'seed-hash', 1.0, 1, 'python', '1.0')
+            """,
+            (str(tmp_path / "pkg" / "sample.py"),),
+        )
+        connection.execute(
+            """
+            INSERT INTO modules(id, file_id, name, docstring, has_docstring)
+            VALUES (1, 1, 'pkg.sample', NULL, 0)
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    session = backend.begin_index_session(tmp_path)
+    try:
+        session.prepare(full=True, indexed_paths=(), deleted_paths=())
+        session.abort()
+    finally:
+        session.close()
+
+    reopened = backend.open_connection(tmp_path)
+    try:
+        assert reopened.execute("SELECT COUNT(*) FROM files").fetchone() == (1,)
+        assert reopened.execute("SELECT COUNT(*) FROM modules").fetchone() == (1,)
+    finally:
+        reopened.close()
+
+
 def test_sqlite_backend_rebuild_keeps_distinct_unresolved_call_edges(
     tmp_path: Path,
 ) -> None:
