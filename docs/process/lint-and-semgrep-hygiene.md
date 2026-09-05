@@ -16,7 +16,7 @@ scripts/scriptlib.py:270 PLR0913 — public process runner keeps explicit
     command, environment, and failure-boundary inputs for reusable scripts.
 scripts/run_manifest_baseline.py:131 PLR0913 — benchmark invocation inputs are
     independently selectable for reproducible comparisons.
-scripts/run_retrieval_quality_benchmark.py:578,874 PLR0913 — result rows and
+scripts/run_retrieval_quality_benchmark.py:617,913 PLR0913 — result rows and
     benchmark groups preserve explicit provenance and execution inputs.
 scripts/run_final_embedding_model_campaign.py:430,575,640,791 PLR0913 — the
     release-campaign artifact functions retain independently auditable inputs.
@@ -91,7 +91,7 @@ Location aliases for the grouped entries above:
 scripts/run_final_embedding_model_campaign.py:575,
 scripts/run_final_embedding_model_campaign.py:640,
 scripts/run_final_embedding_model_campaign.py:791,
-scripts/run_retrieval_quality_benchmark.py:874,
+scripts/run_retrieval_quality_benchmark.py:913,
 src/codira/docstring.py:1019, src/codira/docstring.py:1114,
 src/codira/index_generation.py:109,
 src/codira/query_daemon.py:365, src/codira/query_daemon_lifecycle.py:737, and
