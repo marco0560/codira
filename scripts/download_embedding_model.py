@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
 import subprocess
 import sys
@@ -28,6 +27,7 @@ if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
     raise SystemExit(0)
 
 from codira.contracts import EmbeddingEngineError
+from scripts.embedding_model_manifest import load_manifest
 from scripts.scriptlib import PERSONAL_SECRETS_DIR, sops_exec_env_argv
 
 DEFAULT_MANIFEST = Path("benchmarks/embedding-model-candidates.json")
@@ -106,17 +106,120 @@ def load_manifest_entries(manifest: Path) -> list[ModelEntry]:
     list[ModelEntry]
         Parsed model entries in manifest order.
     """
-    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    entries = load_manifest(manifest)
     return [
         ModelEntry(
-            model_id=str(entry["id"]),
-            engine=str(entry["engine"]),
-            model=str(entry["model"]),
-            dimension=int(entry["dimension"]),
-            config=dict(cast("dict[str, object]", entry.get("config", {}))),
+            model_id=entry.identifier,
+            engine=entry.engine,
+            model=entry.model,
+            dimension=entry.dimension,
+            config=entry.config,
         )
-        for entry in payload["models"]
+        for entry in entries
     ]
+
+
+def _artifact_target(entry: ModelEntry, key: str, install_root: Path) -> Path:
+    """
+    Return a manifest artifact target contained by the installation root.
+
+    Parameters
+    ----------
+    entry : ModelEntry
+        ONNX manifest entry.
+    key : str
+        Artifact configuration key.
+    install_root : pathlib.Path
+        Declared root for all installed artifacts.
+
+    Returns
+    -------
+    pathlib.Path
+        Resolved artifact target under ``install_root``.
+
+    Raises
+    ------
+    ValueError
+        If the configured target is absent, invalid, or outside the root.
+    """
+    value = entry.config.get(key)
+    if not isinstance(value, str) or not value:
+        msg = f"{entry.model_id} requires a non-empty {key!r} path"
+        raise ValueError(msg)
+    root = install_root.resolve()
+    target = Path(value).resolve()
+    if not target.is_relative_to(root):
+        msg = f"{entry.model_id} {key!r} must be under {root}"
+        raise ValueError(msg)
+    return target
+
+
+def _validate_entries(
+    entries: list[ModelEntry],
+    install_root: Path,
+    *,
+    allow_remote_code: bool,
+    anonymous: bool,
+) -> None:
+    """
+    Enforce downloader-specific manifest safety requirements.
+
+    Parameters
+    ----------
+    entries : list[ModelEntry]
+        Selected manifest entries.
+    install_root : pathlib.Path
+        Declared root for locally installed ONNX artifacts.
+    allow_remote_code : bool
+        Whether the operator explicitly permits remote model code.
+    anonymous : bool
+        Whether downloads run without Hugging Face credentials.
+
+    Returns
+    -------
+    None
+        All selected entries satisfy the downloader policy.
+
+    Raises
+    ------
+    ValueError
+        If a target escapes the installation root or remote code lacks the
+        required anonymous acknowledgement.
+    TypeError
+        If a downloader-specific configuration value has the wrong type.
+    """
+    for entry in entries:
+        allowed_config_keys = (
+            {
+                "model_path",
+                "tokenizer_path",
+                "provider",
+                "hf_onnx_model_file",
+                "hf_tokenizer_file",
+            }
+            if entry.engine == "onnx"
+            else {"trust_remote_code"}
+        )
+        unexpected_keys = sorted(set(entry.config).difference(allowed_config_keys))
+        if unexpected_keys:
+            msg = (
+                f"{entry.model_id} has unsupported downloader config keys: "
+                f"{', '.join(unexpected_keys)}"
+            )
+            raise ValueError(msg)
+        if entry.engine == "onnx":
+            _artifact_target(entry, "model_path", install_root)
+            _artifact_target(entry, "tokenizer_path", install_root)
+        trust_remote_code = entry.config.get("trust_remote_code", False)
+        if not isinstance(trust_remote_code, bool):
+            msg = f"{entry.model_id} trust_remote_code must be a boolean"
+            raise TypeError(msg)
+        if trust_remote_code and (not allow_remote_code or not anonymous):
+            msg = (
+                f"{entry.model_id} enables remote model code; pass "
+                "--allow-remote-code together with --anonymous"
+            )
+            raise ValueError(msg)
 
 
 def _entry_destination(entry: ModelEntry, install_root: Path) -> Path:
@@ -135,9 +238,8 @@ def _entry_destination(entry: ModelEntry, install_root: Path) -> Path:
     pathlib.Path
         Local model artifact directory.
     """
-    model_path = entry.config.get("model_path")
-    if isinstance(model_path, str) and model_path:
-        return Path(model_path).parent
+    if "model_path" in entry.config:
+        return _artifact_target(entry, "model_path", install_root).parent
     return install_root / entry.model.rsplit("/", 1)[-1]
 
 
@@ -221,7 +323,7 @@ def _download_onnx_entry(
             local_dir=download_root,
         )
         model_source = download_root / DEFAULT_ONNX_MODEL_FILENAME
-        model_target = Path(str(entry.config["model_path"]))
+        model_target = _artifact_target(entry, "model_path", install_root)
         _install_artifact(model_source, model_target)
         hf_hub_download(
             repo_id=entry.model,
@@ -232,7 +334,7 @@ def _download_onnx_entry(
             local_dir=download_root,
         )
         tokenizer_source = download_root / DEFAULT_TOKENIZER_FILENAME
-        tokenizer_target = Path(str(entry.config["tokenizer_path"]))
+        tokenizer_target = _artifact_target(entry, "tokenizer_path", install_root)
         _install_artifact(tokenizer_source, tokenizer_target)
 
 
@@ -294,7 +396,7 @@ def download_entry(entry: ModelEntry, token: str | None, install_root: Path) -> 
     raise ValueError(msg)
 
 
-def smoke_test_entry(entry: ModelEntry) -> None:
+def smoke_test_entry(entry: ModelEntry, *, allow_remote_code: bool = False) -> None:
     """
     Run a small embedding smoke test for one manifest entry.
 
@@ -302,6 +404,8 @@ def smoke_test_entry(entry: ModelEntry) -> None:
     ----------
     entry : ModelEntry
         Manifest entry to smoke-test.
+    allow_remote_code : bool, optional
+        Whether an anonymous caller explicitly permitted remote model code.
 
     Returns
     -------
@@ -325,10 +429,14 @@ def smoke_test_entry(entry: ModelEntry) -> None:
     elif entry.engine == "sentence-transformers":
         from sentence_transformers import SentenceTransformer
 
+        trust_remote_code = bool(entry.config.get("trust_remote_code", False))
+        if trust_remote_code and not allow_remote_code:
+            msg = f"{entry.model_id} enables remote model code"
+            raise ValueError(msg)
         model = SentenceTransformer(
             entry.model,
             device="cpu",
-            trust_remote_code=bool(entry.config.get("trust_remote_code", False)),
+            trust_remote_code=trust_remote_code,
             local_files_only=True,
         )
         vectors_array = model.encode(
@@ -433,6 +541,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Download public models without loading Hugging Face credentials.",
     )
+    parser.add_argument(
+        "--allow-remote-code",
+        action="store_true",
+        help=(
+            "Permit manifest-selected remote model code only with --anonymous. "
+            "Use only for reviewed models."
+        ),
+    )
     parser.add_argument("--sops-exec", action="store_true", help=argparse.SUPPRESS)
     return parser
 
@@ -454,6 +570,20 @@ def main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else argv
     parser = build_parser()
     args = parser.parse_args(raw_argv)
+    try:
+        entries = _selected_entries(
+            load_manifest_entries(args.manifest),
+            set(args.model_id),
+        )
+        _validate_entries(
+            entries,
+            args.install_root,
+            allow_remote_code=args.allow_remote_code,
+            anonymous=args.anonymous,
+        )
+    except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     if not args.anonymous and not args.sops_exec:
         command = (
             sys.executable,
@@ -469,17 +599,16 @@ def main(argv: list[str] | None = None) -> int:
             check=False,
         ).returncode
     try:
-        token = read_hf_token()
-        entries = _selected_entries(
-            load_manifest_entries(args.manifest),
-            set(args.model_id),
-        )
+        token = None if args.anonymous else read_hf_token()
         for entry in entries:
             print(f"[codira] downloading {entry.model_id}", file=sys.stderr)
             download_entry(entry, token, args.install_root)
             if not args.skip_smoke:
                 print(f"[codira] smoke testing {entry.model_id}", file=sys.stderr)
-                smoke_test_entry(entry)
+                smoke_test_entry(
+                    entry,
+                    allow_remote_code=args.allow_remote_code,
+                )
     except (
         EmbeddingEngineError,
         FileNotFoundError,

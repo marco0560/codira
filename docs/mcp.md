@@ -19,8 +19,8 @@ client configuration. This is direct-path routing; the Codira host runtime can
 live in a separate environment from the repository:
 
 ```bash
-uv run codira index
-uv run codira-mcp-config codex --root "$PWD"
+codira index
+codira-mcp-config codex --root "$PWD"
 ```
 
 Copy the generated block into the matching client configuration file, restart the client, then ask: `What symbols implement the index command?` The server provides a useful structured answer through `symbol`, `symbols`, or `context_for_task`.
@@ -30,14 +30,24 @@ Copy the generated block into the matching client configuration file, restart th
 The generator prints the configuration by default, or writes an explicit output path:
 
 ```bash
-uv run codira-mcp-config claude-desktop --root /path/to/repository --output claude_desktop_config.json
-uv run codira-mcp-config codex --root /path/to/repository --output config.toml
-uv run codira-mcp-config cursor --root /path/to/repository --output mcp.json
+codira-mcp-config claude-desktop --root /path/to/repository --output claude_desktop_config.json
+codira-mcp-config codex --root /path/to/repository --output config.toml
+codira-mcp-config cursor --root /path/to/repository --output mcp.json
 ```
 
 All three presets launch `codira-mcp --root /path/to/repository`. The server is
 local and read-only; it has no network transport, shell tool, or
 repository-path request parameter.
+
+### Codira development checkout
+
+When developing Codira itself, run the equivalent commands from its checkout
+through that checkout's environment:
+
+```bash
+uv run codira index
+uv run codira-mcp-config codex --root /path/to/repository
+```
 
 ## Named workspace startup
 
@@ -132,7 +142,7 @@ reported on standard error.
 ## Verify the server directly
 
 ```bash
-uv run codira-mcp --root "$PWD"
+codira-mcp --root "$PWD"
 ```
 
 MCP clients manage the stdio session themselves. Use the generated configuration instead of starting the server manually during normal client use.

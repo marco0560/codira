@@ -39,6 +39,7 @@ from codira.calibration import (
 )
 from codira.cli import main
 from codira.config import config_to_mapping, load_effective_config
+from codira.contracts import EmbeddingEngineSpec
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -313,6 +314,7 @@ def test_calibration_toml_is_config_compatible() -> None:
     assert embeddings_config_update(result) == {
         "embeddings": {
             "enabled": True,
+            "engine": "sentence-transformers",
             "model": "sentence-transformers/all-MiniLM-L6-v2",
             "version": "1",
             "dimension": 384,
@@ -359,14 +361,15 @@ def test_calibration_cli_prints_toml_without_user_config_write(
         fallback_used=False,
         hardware=HardwareInfo(cpu_count=2, gpu_available=False),
     )
-    monkeypatch.setattr(cli_module, "calibrate_embeddings", lambda: result)
+    monkeypatch.setattr(cli_module, "calibrate_embeddings", lambda **_kwargs: result)
     monkeypatch.setattr(sys, "argv", ["codira", "calibrate", "embeddings"])
 
     assert main() == 0
 
     captured = capsys.readouterr()
     assert "[embeddings]" in captured.out
-    assert 'model = "sentence-transformers/all-MiniLM-L6-v2"' in captured.out
+    assert 'engine = "onnx"' in captured.out
+    assert 'model = "BAAI/bge-small-en-v1.5"' in captured.out
     assert "dimension = 384" in captured.out
     assert "batch_size = 16" in captured.out
     assert not user_path.exists()
@@ -405,7 +408,7 @@ def test_calibration_cli_writes_user_config(
         fallback_used=False,
         hardware=HardwareInfo(cpu_count=8, gpu_available=True),
     )
-    monkeypatch.setattr(cli_module, "calibrate_embeddings", lambda: result)
+    monkeypatch.setattr(cli_module, "calibrate_embeddings", lambda **_kwargs: result)
     monkeypatch.setattr(sys, "argv", ["codira", "calibrate", "embeddings", "--write"])
 
     assert main() == 0
@@ -451,7 +454,7 @@ def test_calibration_cli_writes_output_file(
         fallback_used=False,
         hardware=HardwareInfo(cpu_count=1, gpu_available=False),
     )
-    monkeypatch.setattr(cli_module, "calibrate_embeddings", lambda: result)
+    monkeypatch.setattr(cli_module, "calibrate_embeddings", lambda **_kwargs: result)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -461,3 +464,65 @@ def test_calibration_cli_writes_output_file(
     assert main() == 0
 
     assert output_path.read_text(encoding="utf-8").startswith("[embeddings]")
+
+
+def test_calibration_cli_uses_active_engine_runner_and_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Route calibration through the configured engine and preserve its spec."""
+
+    _isolate_config_paths(monkeypatch, tmp_path)
+    result = CalibrationResult(
+        selected=CalibrationCandidate(device="cpu", batch_size=8, torch_num_threads=1),
+        measurements=(),
+        fallback_used=False,
+        hardware=HardwareInfo(cpu_count=1, gpu_available=False),
+    )
+    runner = _ThroughputRunner()
+
+    class _OnnxEngine:
+        def spec(self, config: dict[str, object]) -> EmbeddingEngineSpec:
+            assert config == {"provider": "CPUExecutionProvider"}
+            return EmbeddingEngineSpec(
+                engine="onnx",
+                engine_version="1.0.2",
+                model="local-minilm.onnx",
+                model_version="artifact-v1",
+                dimension=256,
+            )
+
+        def calibration_runner(self, config: dict[str, object]) -> _ThroughputRunner:
+            assert config == {"provider": "CPUExecutionProvider"}
+            return runner
+
+    engine = _OnnxEngine()
+    captured_runner: list[object] = []
+    monkeypatch.setattr(cli_module, "active_embedding_engine", lambda **_kwargs: engine)
+    monkeypatch.setattr(
+        cli_module,
+        "embedding_engine_config",
+        lambda **_kwargs: {"provider": "CPUExecutionProvider"},
+    )
+
+    def _calibrate(*, runner: object) -> CalibrationResult:
+        """Record the selected plugin runner and return a fixed result."""
+
+        captured_runner.append(runner)
+        return result
+
+    monkeypatch.setattr(
+        cli_module,
+        "calibrate_embeddings",
+        _calibrate,
+    )
+    monkeypatch.setattr(sys, "argv", ["codira", "calibrate", "embeddings"])
+
+    assert main() == 0
+
+    output = capsys.readouterr().out
+    assert captured_runner == [runner]
+    assert 'engine = "onnx"' in output
+    assert 'model = "local-minilm.onnx"' in output
+    assert "dimension = 256" in output

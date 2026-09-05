@@ -29,6 +29,7 @@ from codira.models import (
     FunctionArtifact,
     ImportArtifact,
     ModuleArtifact,
+    tree_sitter_recovery_status,
 )
 from codira.plugin_config import (
     AnalyzerPathFilters,
@@ -780,7 +781,8 @@ class RustAnalyzer:
         functions: list[FunctionArtifact] = []
         imports: list[ImportArtifact] = []
 
-        for node in _parser().parse(source).root_node.named_children:
+        root_node = _parser().parse(source).root_node
+        for node in root_node.named_children:
             name = _identifier(node, source)
             if node.type == "use_declaration":
                 imports.append(_import(node, source))
@@ -872,7 +874,16 @@ class RustAnalyzer:
                     item for item in result.declarations if item.kind != "macro"
                 ),
             )
-        return _with_rustdoc(result, source)
+        return _with_rustdoc(
+            replace(
+                result,
+                index_symbols=not root_node.has_error,
+                status=tree_sitter_recovery_status(
+                    language="rust", has_error=root_node.has_error
+                ),
+            ),
+            source,
+        )
 
 
 def build_analyzer() -> LanguageAnalyzer:

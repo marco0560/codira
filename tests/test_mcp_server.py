@@ -70,6 +70,47 @@ def _indexed_repository(root: Path) -> None:
     index_repo(root)
 
 
+def test_mcp_surfaces_partial_ready_generation_warning(tmp_path: Path) -> None:
+    """
+    Expose partial-index state without rejecting ready query responses.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository used to create one handled analysis failure.
+
+    Returns
+    -------
+    None
+        The test asserts index status and query provenance carry the durable
+        warning while valid-file queries remain available.
+    """
+    (tmp_path / "valid.py").write_text(
+        "def answer() -> int:\n    return 42\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "broken.py").write_text('print "legacy"\n', encoding="utf-8")
+    active_index_backend().initialize(tmp_path)
+    report = index_repo(tmp_path)
+    assert report.failed == 1
+
+    adapter = MCPAdapter(tmp_path)
+    status = cast("dict[str, object]", adapter.index_status()["result"])
+    assert status["generation"] == {
+        "number": 1,
+        "state": "ready",
+        "partial": True,
+        "failed_file_count": 1,
+    }
+    query = adapter.symbol("answer")
+    provenance = cast("dict[str, object]", query["provenance"])
+    assert provenance["generation"] == 1
+    assert provenance["partial_index_warning"] == {
+        "failed_file_count": 1,
+        "message": "The ready index omitted one or more failed source files.",
+    }
+
+
 def _workspace_registry(root: Path) -> WorkspaceRegistry:
     """Build an isolated registry for MCP workspace-startup tests.
 
@@ -642,3 +683,87 @@ def test_server_symbol_tool_invokes_the_direct_adapter(tmp_path: Path) -> None:
     assert structured["page"] == {"limit": 100, "next_cursor": None}
     truncation = cast("dict[str, object]", structured["truncation"])
     assert truncation["truncated"] is False
+
+
+def test_server_embedding_tools_forward_search_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Forward named similarity profiles from public MCP tools to the adapter.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Trusted repository root passed to the MCP server.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to observe adapter arguments without a similarity index.
+
+    Returns
+    -------
+    None
+        The test asserts both public embedding tools preserve the profile name.
+    """
+    received: dict[str, str | None] = {}
+
+    def response() -> dict[str, object]:
+        """Return a minimal adapter envelope for proxy fallback.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, object]
+            Direct-core result shape required by the MCP proxy.
+        """
+        return {
+            "contract_version": MCP_CONTRACT_VERSION,
+            "result": {},
+            "provenance": {
+                "source": "codira-core",
+                "repository": tmp_path.name,
+                "trusted_root": ".",
+                "execution_mode": "direct",
+                "generation": None,
+            },
+            "freshness": {},
+            "page": {},
+            "truncation": {},
+        }
+
+    def fake_emb(
+        self: MCPAdapter,
+        query: str,
+        *,
+        prefix: str | None = None,
+        limit: int = 100,
+        search_profile: str | None = None,
+        output_budget: int = 4_000,
+    ) -> dict[str, object]:
+        del self, query, prefix, limit, output_budget
+        received["emb"] = search_profile
+        return response()
+
+    def fake_docs(
+        self: MCPAdapter,
+        query: str,
+        *,
+        prefix: str | None = None,
+        limit: int = 100,
+        search_profile: str | None = None,
+        output_budget: int = 4_000,
+    ) -> dict[str, object]:
+        del self, query, prefix, limit, output_budget
+        received["docs"] = search_profile
+        return response()
+
+    monkeypatch.setattr(MCPAdapter, "emb", fake_emb)
+    monkeypatch.setattr(MCPAdapter, "docs", fake_docs)
+    server = create_server(tmp_path)
+
+    asyncio.run(server.call_tool("emb", {"query": "symbol", "search_profile": "named"}))
+    asyncio.run(
+        server.call_tool("docs", {"query": "documentation", "search_profile": "named"})
+    )
+
+    assert received == {"emb": "named", "docs": "named"}

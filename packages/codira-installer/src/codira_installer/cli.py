@@ -73,12 +73,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--environment", type=Path, help="existing or new environment root"
     )
-    parser.add_argument(
-        "--runtime", choices=tuple(RuntimeKind), default=RuntimeKind.MANAGED
-    )
+    parser.add_argument("--runtime", choices=tuple(RuntimeKind))
     parser.add_argument("--runtime-root", type=Path)
     parser.add_argument(
         "--operation", choices=tuple(RuntimeOperation), default=RuntimeOperation.INSTALL
+    )
+    parser.add_argument(
+        "--receipt",
+        type=Path,
+        help="managed-runtime receipt required for update, repair, and modify",
     )
     parser.add_argument("--workspace")
     parser.add_argument("--repository", type=Path)
@@ -119,6 +122,16 @@ def _request(args: argparse.Namespace) -> InstallerRequest:
     """
     target_kind = EnvironmentKind(args.target)
     target = EnvironmentTarget(target_kind, args.environment)
+    if args.runtime is None:
+        runtime_kind = (
+            RuntimeKind.MANAGED
+            if target_kind is EnvironmentKind.CURRENT
+            else RuntimeKind(target_kind)
+        )
+        runtime_root = target.path
+    else:
+        runtime_kind = RuntimeKind(args.runtime)
+        runtime_root = args.runtime_root
     workspace = None
     if args.workspace is not None:
         if args.repository is None:
@@ -140,8 +153,9 @@ def _request(args: argparse.Namespace) -> InstallerRequest:
         manager=PackageManager(args.manager),
         profile=InstallationProfile(args.profile),
         packages=tuple(args.package),
-        runtime=RuntimeTarget(RuntimeKind(args.runtime), args.runtime_root),
+        runtime=RuntimeTarget(runtime_kind, runtime_root),
         operation=RuntimeOperation(args.operation),
+        receipt_path=args.receipt,
         workspace=workspace,
         model_store=args.model_store,
     )

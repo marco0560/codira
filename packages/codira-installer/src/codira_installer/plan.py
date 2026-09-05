@@ -33,6 +33,7 @@ from codira_installer.runtime import RuntimeReceipt
 
 PLAN_SCHEMA_VERSION = 2
 CORE_DISTRIBUTION = "codira"
+INSTALLER_DISTRIBUTION = "codira-installer"
 RECOMMENDED_PACKAGES = ("codira-analyzer-python", "codira-backend-sqlite")
 
 
@@ -219,6 +220,11 @@ def _install_command(
         local_projects = (
             str(request.checkout),
             *(str(request.checkout / paths[name]) for name in packages),
+            *(
+                (str(request.checkout / "packages" / "codira-installer"),)
+                if request.runtime.kind is RuntimeKind.MANAGED
+                else ()
+            ),
         )
         return (
             "uv",
@@ -228,9 +234,10 @@ def _install_command(
             _target_python(request),
             *local_projects,
         )
-    requirements = tuple(
-        f"{name}=={version}" for name in (CORE_DISTRIBUTION, *packages)
-    )
+    distributions = (CORE_DISTRIBUTION, *packages)
+    if request.runtime.kind is RuntimeKind.MANAGED:
+        distributions = (*distributions, INSTALLER_DISTRIBUTION)
+    requirements = tuple(f"{name}=={version}" for name in distributions)
     if request.manager is PackageManager.PIP:
         return (sys.executable, "-m", "pip", "install", *requirements)
     return ("uv", "pip", "install", "--python", _target_python(request), *requirements)
@@ -477,6 +484,7 @@ def load_plan(payload: Mapping[str, object]) -> InstallPlan:
         target_payload = cast("Mapping[str, object]", request_payload["target"])
         target_path = target_payload["path"]
         checkout = request_payload["checkout"]
+        receipt_path = request_payload["receipt_path"]
         request = InstallerRequest(
             target=EnvironmentTarget(
                 EnvironmentKind(str(target_payload["kind"])),
@@ -552,6 +560,7 @@ def load_plan(payload: Mapping[str, object]) -> InstallPlan:
             model_store=None
             if request_payload["model_store"] is None
             else Path(str(request_payload["model_store"])),
+            receipt_path=None if receipt_path is None else Path(str(receipt_path)),
         )
         steps = tuple(
             PlanStep(

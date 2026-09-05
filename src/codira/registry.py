@@ -77,6 +77,9 @@ OPTIONAL_ANALYZER_PACKAGE_BY_NAME: dict[str, str] = {
     "json": "codira-analyzer-json",
     "c": "codira-analyzer-c",
     "cpp": "codira-analyzer-cpp",
+    "go": "codira-analyzer-go",
+    "javascript": "codira-analyzer-javascript",
+    "typescript": "codira-analyzer-typescript",
     "rust": "codira-analyzer-rust",
     "bash": "codira-analyzer-bash",
     "markdown": "codira-analyzer-markdown",
@@ -2022,6 +2025,37 @@ def documentation_audit_plugins(
     return configured
 
 
+def documentation_audit_plugin(
+    name: str,
+    *,
+    root: Path | None = None,
+) -> DocumentationAuditPluginProtocol | None:
+    """Return one configured documentation-audit plugin by stable name.
+
+    Parameters
+    ----------
+    name : str
+        Documentation-audit plugin selected by a matching route.
+    root : pathlib.Path | None, optional
+        Repository root whose configuration should configure the plugin.
+
+    Returns
+    -------
+    codira.contracts.DocumentationAuditPlugin | None
+        Configured selected plugin, or ``None`` when it is unavailable.
+    """
+    plugins, _registrations = _plugin_snapshot("documentation-audit", root=root)
+    for plugin in plugins:
+        if plugin.name != name:
+            continue
+        instance = plugin.factory()
+        return cast(
+            "DocumentationAuditPluginProtocol",
+            _configure_plugin_instance(plugin=plugin, instance=instance, root=root),
+        )
+    return None
+
+
 def missing_language_analyzer_hint(path: Path) -> str | None:
     """
     Return an installation hint when a path targets an unavailable analyzer.
@@ -2087,6 +2121,31 @@ def missing_language_analyzer_hint(path: Path) -> str | None:
             f"Install `{package_name}` to enable standard C++ source and header "
             "files, or use `codira[bundle-official]` when the curated bundle is "
             "available."
+        )
+
+    language_by_suffix = {
+        ".go": "go",
+        ".js": "javascript",
+        ".cjs": "javascript",
+        ".mjs": "javascript",
+        ".jsx": "javascript",
+        ".ts": "typescript",
+        ".cts": "typescript",
+        ".mts": "typescript",
+        ".tsx": "typescript",
+    }
+    language_name = language_by_suffix.get(suffix)
+    if language_name is not None and language_name not in analyzer_names:
+        package_name = OPTIONAL_ANALYZER_PACKAGE_BY_NAME[language_name]
+        display_name = {
+            "go": "Go",
+            "javascript": "JavaScript",
+            "typescript": "TypeScript",
+        }[language_name]
+        return (
+            f"{display_name} indexing support is optional. Install "
+            f"`{package_name}` to enable `{suffix}` files, or use "
+            "`codira[bundle-official]` when the curated bundle is available."
         )
 
     if suffix in {".sh", ".bash"} and "bash" not in analyzer_names:

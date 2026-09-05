@@ -920,6 +920,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jsonschema", marker = "extra == 'test'" },
     { name = "mypy", marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'test'" },

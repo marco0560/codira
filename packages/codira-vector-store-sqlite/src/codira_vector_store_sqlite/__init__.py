@@ -30,6 +30,8 @@ from codira.contracts import (
     VectorStoreError,
     VectorStorePurgeRequest,
     VectorStorePurgeResult,
+    VectorStoreResetRequest,
+    VectorStoreResetResult,
     VectorStoreSpec,
     VectorStoreFullIndexRequest,
 )
@@ -747,6 +749,7 @@ class SQLiteVectorStore:
         )
         table_name = _payload_table_name(vector_set_id)
         with _connect(get_vector_store_path(request.root)) as conn:
+            conn.execute("BEGIN")
             revision_row = conn.execute(
                 "SELECT revision FROM vector_sets WHERE id = ?", (vector_set_id,)
             ).fetchone()
@@ -1026,8 +1029,7 @@ class SQLiteVectorStore:
         )
 
     def reset_runtime_caches(self) -> None:
-        """
-        Clear process-local vector-store caches.
+        """Clear process-local vector-store caches.
 
         Parameters
         ----------
@@ -1038,6 +1040,36 @@ class SQLiteVectorStore:
         None
             The SQLite vector store has no process-local cache yet.
         """
+
+    def reset_persistent_state(
+        self,
+        request: VectorStoreResetRequest,
+    ) -> VectorStoreResetResult:
+        """Remove the SQLite database and its write-ahead-log sidecars.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStoreResetRequest
+            Confirmed repository-local teardown request.
+
+        Returns
+        -------
+        codira.contracts.VectorStoreResetResult
+            Removed SQLite artifacts relative to the repository root.
+        """
+
+        path = get_vector_store_path(request.root)
+        removed: list[str] = []
+        for candidate in (
+            path,
+            path.with_name(f"{path.name}-shm"),
+            path.with_name(f"{path.name}-wal"),
+        ):
+            if candidate.exists():
+                candidate.unlink()
+                removed.append(str(candidate.relative_to(request.root)))
+        self.reset_runtime_caches()
+        return VectorStoreResetResult(self.name, tuple(sorted(removed)))
 
 
 def build_vector_store() -> VectorStore:

@@ -27,6 +27,7 @@ from codira.models import (
     FunctionArtifact,
     ImportArtifact,
     ModuleArtifact,
+    tree_sitter_recovery_status,
 )
 from codira.plugin_config import (
     AnalyzerPathFilters,
@@ -553,7 +554,8 @@ class GoAnalyzer:
         classes: dict[str, list[FunctionArtifact]] = {}
         imports: list[ImportArtifact] = []
         package = path.parent.name
-        for node in Parser(_LANGUAGE).parse(source).root_node.named_children:
+        root_node = Parser(_LANGUAGE).parse(source).root_node
+        for node in root_node.named_children:
             if node.type == "package_clause":
                 package = _normalized(next(iter(node.named_children), None), source)
             elif node.type == "import_declaration":
@@ -650,6 +652,10 @@ class GoAnalyzer:
                 functions=tuple(functions),
                 declarations=tuple(declarations),
                 imports=tuple(imports),
+                index_symbols=not root_node.has_error,
+                status=tree_sitter_recovery_status(
+                    language="go", has_error=root_node.has_error
+                ),
             ),
             source,
         )

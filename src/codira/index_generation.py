@@ -12,7 +12,7 @@ from codira.storage import get_codira_dir
 if TYPE_CHECKING:
     from pathlib import Path
 
-IndexGenerationState = Literal["updating", "ready"]
+IndexGenerationState = Literal["updating", "ready", "failed"]
 
 
 @dataclass(frozen=True)
@@ -25,12 +25,16 @@ class IndexGeneration:
         Record schema version.
     generation : int
         Monotonically increasing generation number.
-    state : {"updating", "ready"}
+    state : {"updating", "ready", "failed"}
         Mutation lifecycle state.
     last_successful_generation : int
         Last fully committed generation.
     timestamp : str
         UTC transition timestamp.
+    partial : bool
+        Whether one or more source files failed during this generation.
+    failed_file_count : int
+        Number of source files that failed during this generation.
     """
 
     schema_version: int
@@ -43,6 +47,8 @@ class IndexGeneration:
     backend_version: str | None = None
     analyzer_inventory: list[dict[str, object]] | None = None
     indexed_file_count: int | None = None
+    partial: bool = False
+    failed_file_count: int = 0
 
 
 class IndexGenerationStore:
@@ -116,6 +122,8 @@ def transition_record(  # noqa: PLR0913
     backend_version: str | None = None,
     analyzer_inventory: list[dict[str, object]] | None = None,
     indexed_file_count: int | None = None,
+    partial: bool = False,
+    failed_file_count: int = 0,
 ) -> IndexGeneration:
     """Build a timestamped generation transition record.
 
@@ -123,7 +131,7 @@ def transition_record(  # noqa: PLR0913
     ----------
     generation : int
         Current transition generation.
-    state : {"updating", "ready"}
+    state : {"updating", "ready", "failed"}
         Current transition state.
     last_successful_generation : int
         Last committed generation.
@@ -137,6 +145,10 @@ def transition_record(  # noqa: PLR0913
         Active analyzer identity inventory.
     indexed_file_count : int | None, optional
         Number of indexed file rows after the pass.
+    partial : bool, optional
+        Whether one or more source files failed during this generation.
+    failed_file_count : int, optional
+        Number of source files that failed during this generation.
 
     Returns
     -------
@@ -144,14 +156,16 @@ def transition_record(  # noqa: PLR0913
         Complete immutable transition record.
     """
     return IndexGeneration(
-        1,
-        generation,
-        state,
-        last_successful_generation,
-        datetime.now(UTC).isoformat(),
-        git_commit,
-        backend_name,
-        backend_version,
-        analyzer_inventory,
-        indexed_file_count,
+        schema_version=1,
+        generation=generation,
+        state=state,
+        last_successful_generation=last_successful_generation,
+        timestamp=datetime.now(UTC).isoformat(),
+        git_commit=git_commit,
+        backend_name=backend_name,
+        backend_version=backend_version,
+        analyzer_inventory=analyzer_inventory,
+        indexed_file_count=indexed_file_count,
+        partial=partial,
+        failed_file_count=failed_file_count,
     )

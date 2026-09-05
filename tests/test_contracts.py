@@ -65,6 +65,8 @@ from codira.contracts import (
     VectorStore,
     VectorStorePurgeRequest,
     VectorStorePurgeResult,
+    VectorStoreResetRequest,
+    VectorStoreResetResult,
     VectorStoreSpec,
     split_declared_retrieval_capabilities,
 )
@@ -262,9 +264,27 @@ class _FakeEmbeddingEngine:
         del config
         return [[float(index), 0.0, 0.0] for index, _text in enumerate(texts)]
 
-    def reset_runtime_caches(self) -> None:
+    def calibration_runner(self, config: dict[str, object]) -> object:
         """
-        Perform no-op runtime cache reset.
+        Return a placeholder runner for protocol-surface validation.
+
+        Parameters
+        ----------
+        config : dict[str, object]
+            Engine-specific configuration table.
+
+        Returns
+        -------
+        object
+            The runtime-checkable protocol only verifies the capability is
+            exposed; benchmark execution is not part of this fixture.
+        """
+
+        del config
+        return object()
+
+    def reset_runtime_caches(self) -> None:
+        """Perform no-op runtime cache reset.
 
         Parameters
         ----------
@@ -589,8 +609,7 @@ class _FakeVectorStore:
         )
 
     def reset_runtime_caches(self) -> None:
-        """
-        Perform no-op vector-store cache reset.
+        """Perform no-op vector-store cache reset.
 
         Parameters
         ----------
@@ -601,6 +620,15 @@ class _FakeVectorStore:
         None
             The fake vector store has no process-local caches.
         """
+
+    def reset_persistent_state(
+        self,
+        request: VectorStoreResetRequest,
+    ) -> VectorStoreResetResult:
+        """Return no removed state for the protocol-only fake store."""
+
+        del request
+        return VectorStoreResetResult(self.name)
 
 
 class _FakeBackend:
@@ -1345,6 +1373,35 @@ class _FakeBackend:
             Empty stored rows for protocol validation.
         """
         del root, name, prefix, conn
+        return []
+
+    def find_reference_rows_for_names(
+        self,
+        root: Path,
+        names: Sequence[str],
+        *,
+        prefix: str | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[tuple[str, int, str]]:
+        """Return no batched reference-search rows for protocol validation.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root.
+        names : collections.abc.Sequence[str]
+            Symbol names to search.
+        prefix : str | None, optional
+            Optional file prefix restriction.
+        conn : sqlite3.Connection | None, optional
+            Optional SQLite connection.
+
+        Returns
+        -------
+        list[tuple[str, int, str]]
+            Empty stored rows for protocol validation.
+        """
+        del root, names, prefix, conn
         return []
 
     def embedding_candidates(
@@ -3273,6 +3330,40 @@ def test_select_language_analyzer_reports_cpp_package_hint(
     assert missing_language_analyzer_hint(Path("native/sample.cpp")) is not None
 
 
+def test_missing_language_analyzer_hints_cover_go_javascript_and_typescript(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """
+    Report package install hints for unavailable Go and web-language analyzers.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry-point discovery.
+
+    Returns
+    -------
+    None
+        The test asserts every supported suffix has its first-party package hint.
+    """
+    monkeypatch.setattr(
+        registry_module,
+        "_entry_points_for_group",
+        lambda group: [],
+    )
+
+    expected_packages_by_path = {
+        Path("native/sample.go"): "codira-analyzer-go",
+        Path("web/sample.js"): "codira-analyzer-javascript",
+        Path("web/sample.ts"): "codira-analyzer-typescript",
+    }
+
+    for path, package_name in expected_packages_by_path.items():
+        hint = missing_language_analyzer_hint(path)
+        assert hint is not None
+        assert package_name in hint
+
+
 def test_select_language_analyzer_reports_python_package_hint(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -4346,6 +4437,63 @@ def test_iter_project_files_uses_analyzer_globs_with_git(tmp_path: Path) -> None
     discovered = list(iter_project_files(tmp_path, analyzers=[_DemoAnalyzer()]))
 
     assert discovered == [demo_file]
+
+
+def test_iter_project_files_rejects_tracked_symlinks_outside_repository(
+    tmp_path: Path,
+) -> None:
+    """
+    Reject tracked source symlinks before analyzer reads can follow them.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts a supported tracked symlink targeting an external
+        file is excluded from discovery.
+    """
+
+    class _DemoAnalyzer:
+        name = "demo"
+        version = "1"
+        discovery_globs: tuple[str, ...] = ("*.demo",)
+
+        def supports_path(self, path: Path) -> bool:
+            return path.suffix == ".demo"
+
+        def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
+            del root
+            return AnalysisResult(
+                source_path=path,
+                module=ModuleArtifact(
+                    name=path.stem,
+                    stable_id=f"demo:module:{path.stem}",
+                    docstring=None,
+                    has_docstring=0,
+                ),
+                classes=(),
+                functions=(),
+                declarations=(),
+                imports=(),
+            )
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    external_file = tmp_path.parent / f"{tmp_path.name}-external.demo"
+    external_file.write_text("private content\n", encoding="utf-8")
+    symlink = tmp_path / "leak.demo"
+    symlink.symlink_to(external_file)
+    subprocess.run(
+        ["git", "add", "leak.demo"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
+    assert list(iter_project_files(tmp_path, analyzers=[_DemoAnalyzer()])) == []
 
 
 def test_iter_project_files_filters_broad_globs_by_supports_path(

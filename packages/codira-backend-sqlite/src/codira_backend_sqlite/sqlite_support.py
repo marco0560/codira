@@ -3105,6 +3105,11 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
             f"AND object_id IN ({_placeholders(documentation_ids)})",
             tuple(documentation_ids),
         )
+        conn.execute(
+            "DELETE FROM pending_embeddings WHERE object_type = 'documentation' "
+            f"AND object_id IN ({_placeholders(documentation_ids)})",
+            tuple(documentation_ids),
+        )
 
     conn.execute("DELETE FROM documentation_artifacts WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM symbol_index WHERE file_id = ?", (file_id,))

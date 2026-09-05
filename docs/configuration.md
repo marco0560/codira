@@ -92,6 +92,7 @@ mode = "immediate"
 object_types = ["symbol", "documentation"]
 max_text_chars = 0
 work_batch_multiplier = 256
+max_source_file_bytes = 33554432
 include_paths = []
 exclude_paths = []
 
@@ -197,14 +198,14 @@ identities. Use `codira emb purge` to inspect or delete retained sets:
 
 ```bash
 codira emb purge --stale --dry-run
-codira emb purge --stale --backend duckdb --keep 1 --yes
-codira emb purge --all --backend sqlite --yes
+codira emb purge --stale --backend warehouse --keep 1 --yes
+codira emb purge --all --backend warehouse --yes
 ```
 
-The command defaults to the configured `[embeddings].vector_store`. Pass
-`--backend sqlite` or `--backend duckdb` to target a specific local vector
-store without editing the repository config. Destructive runs require `--yes`;
-without it, purge runs as a dry run.
+The command defaults to the configured `[embeddings].vector_store`. Pass any
+registered vector-store name through `--backend` to target that store without
+editing the repository config. Destructive runs require `--yes`; without it,
+purge runs as a dry run.
 
 `embeddings.indexing.mode = "immediate"` computes embeddings during
 `codira index`. Set it to `"deferred"` to persist structural index rows first
@@ -217,6 +218,11 @@ list skips all embedding rows while leaving structural indexing enabled.
 `embeddings.indexing.max_text_chars = 0` means no text-size limit. Positive
 values skip embedding payloads longer than the configured number of
 characters.
+
+`embeddings.indexing.max_source_file_bytes = 33554432` is the default 32 MiB
+source-ingestion ceiling. Larger supported files are skipped before hashing,
+parsing, or context rereads and appear as deterministic coverage diagnostics.
+Increase it only when the repository requires the additional memory budget.
 
 `embeddings.indexing.work_batch_multiplier` bounds indexing work segments as a
 multiple of `embeddings.batch_size`. With the defaults, Codira processes at
@@ -468,10 +474,10 @@ uv run python scripts/embedding_model_manifest.py \
 ```
 
 The manifest does not contain model weights. Use
-`scripts/download_embedding_model.py` to source `$HOME/.hf_token`, download the
-required Hugging Face artifacts, install ONNX files under the manifest's
-`.codira/models/...` paths, and smoke-test each candidate before launching the
-long campaign.
+`scripts/download_embedding_model.py` to download the required Hugging Face
+artifacts, install ONNX files under the declared `--install-root`, and
+smoke-test each candidate before launching the long campaign. Remote-code
+entries require an explicit anonymous acknowledgement; see `docs/scripts.md`.
 
 The current Jina candidate is ONNX-only because the
 `jinaai/jina-embeddings-v2-base-code` SentenceTransformers remote-code path is

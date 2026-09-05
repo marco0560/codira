@@ -64,6 +64,30 @@ def _relative_parts(path: Path, root: Path) -> tuple[str, ...]:
         return path.parts
 
 
+def _resolves_within_root(path: Path, root: Path) -> bool:
+    """
+    Return whether a path resolves inside the repository root.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Candidate path to resolve, which can be a not-yet-created watcher
+        event path.
+    root : pathlib.Path
+        Repository root that bounds accepted source paths.
+
+    Returns
+    -------
+    bool
+        ``True`` when ``path`` resolves to a location inside ``root``.
+    """
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def path_has_excluded_tree_name(path: Path) -> bool:
     """
     Return whether a path contains a default excluded tree name.
@@ -95,8 +119,11 @@ def is_repository_scope_excluded(path: Path, root: Path) -> bool:
     Returns
     -------
     bool
-        ``True`` when the path is inside a default excluded repository tree.
+        ``True`` when the path is a symlink, escapes the repository root, or
+        is inside a default excluded repository tree.
     """
+    if path.is_symlink() or not _resolves_within_root(path, root):
+        return True
     return any(
         part in DEFAULT_EXCLUDED_TREE_NAMES for part in _relative_parts(path, root)
     )

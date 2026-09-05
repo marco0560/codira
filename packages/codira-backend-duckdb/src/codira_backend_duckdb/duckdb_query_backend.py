@@ -589,6 +589,7 @@ class DuckDBQueryBackend:
                   ON s.file_id = f.id
                 WHERE s.module_name = ?
                 {prefix_sql}
+                ORDER BY s.module_name, s.name, s.type, f.path, s.lineno
                 LIMIT ?
                 """,
                 (module, *prefix_params, limit),
@@ -1802,6 +1803,62 @@ class DuckDBQueryBackend:
             return [
                 (str(file_path), _backend_int(lineno), str(line_text))
                 for file_path, lineno, line_text in rows
+            ]
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def find_reference_rows_for_names(
+        self,
+        root: Path,
+        names: Sequence[str],
+        *,
+        prefix: str | None = None,
+        conn: _BackendCompatibleConnection | None = None,
+    ) -> list[ReferenceSearchRow]:
+        """Return rows containing any requested symbol name in one table scan.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root whose index should be queried.
+        names : collections.abc.Sequence[str]
+            Symbol names matched with simple substring semantics.
+        prefix : str | None, optional
+            Repo-root-relative path prefix used to restrict candidate files.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing DuckDB connection to reuse.
+
+        Returns
+        -------
+        list[codira.types.ReferenceSearchRow]
+            Matching rows ordered by file path and line number.
+        """
+        search_names = tuple(sorted(set(names)))
+        if not search_names:
+            return []
+        owns_connection = conn is None
+        normalized_prefix = normalize_prefix(root, prefix)
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            prefix_sql, prefix_params = prefix_clause(normalized_prefix, "f.path")
+            predicates = " OR ".join(
+                "instr(rsl.line_text, ?) > 0" for _ in search_names
+            )
+            rows = conn.execute(
+                f"""
+                SELECT f.path, rsl.lineno, rsl.line_text
+                FROM reference_scan_lines rsl
+                JOIN files f ON rsl.file_id = f.id
+                WHERE ({predicates})
+                {prefix_sql}
+                ORDER BY f.path, rsl.lineno
+                """,
+                (*search_names, *prefix_params),
+            ).fetchall()
+            return [
+                (str(path), _backend_int(line), str(text)) for path, line, text in rows
             ]
         finally:
             if owns_connection:

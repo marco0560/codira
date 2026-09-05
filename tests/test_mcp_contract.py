@@ -118,3 +118,29 @@ def test_every_tool_request_and_response_schema_is_valid() -> None:
     }
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(invalid, symbol["request_schema"])
+
+
+def test_embedding_tools_accept_named_search_profiles() -> None:
+    """Expose search-profile selection in both embedding tool contracts.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts public request schemas accept the documented field.
+    """
+    tools = {
+        tool["name"]: tool
+        for tool in cast("list[dict[str, Any]]", build_contract_document()["tools"])
+    }
+
+    for name in ("emb", "docs"):
+        schema = cast("dict[str, Any]", tools[name]["request_schema"])
+        assert schema["properties"]["search_profile"] == {
+            "type": "string",
+            "minLength": 1,
+        }
+        jsonschema.validate({"query": "value", "search_profile": "high-recall"}, schema)

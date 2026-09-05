@@ -11,12 +11,13 @@ codira plugins
 codira plugins --json
 ```
 
-The plugin system currently supports five extension families:
+The plugin system currently supports six extension families:
 
 - analyzers through the `codira.analyzers` entry-point group
 - backends through the `codira.backends` entry-point group
 - embedding engines through the `codira.embedding_engines` entry-point group
 - vector stores through the `codira.vector_stores` entry-point group
+- similarity indexes through the `codira.similarity_indexes` entry-point group
 - documentation audits through the `codira.documentation_audits` entry-point
   group
 

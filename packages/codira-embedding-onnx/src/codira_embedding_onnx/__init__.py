@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import time
+import tracemalloc
 from importlib import import_module
 from dataclasses import dataclass
 from functools import lru_cache
@@ -10,6 +12,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from codira.config import DEFAULT_EMBEDDING_BATCH_SIZE, load_effective_config
+from codira.calibration import (
+    BenchmarkMeasurement,
+    CalibrationBenchmarkError,
+    CalibrationCandidate,
+)
 from codira.contracts import EmbeddingEngineError, EmbeddingEngineSpec
 from codira.model_store import ModelIdentity, SharedModelStore
 from codira.plugin_config import plugin_json_schema
@@ -767,6 +774,27 @@ class OnnxEmbeddingEngine:
             )
         return vectors
 
+    def calibration_runner(
+        self,
+        config: Mapping[str, object],
+    ) -> _OnnxCalibrationRunner:
+        """
+        Build the ONNX Runtime calibration runner.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Effective engine configuration and Codira model identity.
+
+        Returns
+        -------
+        _OnnxCalibrationRunner
+            Runner that measures this engine with candidate batch and thread
+            settings.
+        """
+
+        return _OnnxCalibrationRunner(self, config)
+
     def reset_runtime_caches(self) -> None:
         """
         Clear process-local ONNX Runtime caches.
@@ -781,6 +809,54 @@ class OnnxEmbeddingEngine:
             Cached sessions and tokenizers are discarded.
         """
         _load_runtime.cache_clear()
+
+
+class _OnnxCalibrationRunner:
+    """Bounded benchmark runner for the native ONNX embedding engine."""
+
+    def __init__(
+        self, engine: OnnxEmbeddingEngine, config: Mapping[str, object]
+    ) -> None:
+        self._engine = engine
+        self._config = config
+
+    def __call__(
+        self,
+        candidate: CalibrationCandidate,
+        texts: Sequence[str],
+        *,
+        warmup_iterations: int,
+        measured_iterations: int,
+    ) -> BenchmarkMeasurement:
+        """Measure one ONNX Runtime candidate without persisting vectors."""
+
+        if candidate.device != "cpu":
+            msg = "ONNX calibration currently supports CPU execution candidates only."
+            raise CalibrationBenchmarkError(msg)
+        config = dict(self._config)
+        config["_codira_batch_size"] = candidate.batch_size
+        config["intra_op_num_threads"] = candidate.torch_num_threads
+        try:
+            for _index in range(warmup_iterations):
+                self._engine.embed_texts(texts, config)
+            tracemalloc.start()
+            started = time.perf_counter()
+            for _index in range(measured_iterations):
+                self._engine.embed_texts(texts, config)
+            elapsed = max(time.perf_counter() - started, 1e-9)
+            _current, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+        except (OSError, RuntimeError, EmbeddingEngineError) as exc:
+            if tracemalloc.is_tracing():
+                tracemalloc.stop()
+            raise CalibrationBenchmarkError(str(exc)) from exc
+        return BenchmarkMeasurement(
+            candidate=candidate,
+            status="ok",
+            throughput_texts_per_second=(len(texts) * measured_iterations) / elapsed,
+            latency_seconds=elapsed / max(measured_iterations, 1),
+            memory_peak_mb=peak / (1024 * 1024),
+        )
 
 
 @lru_cache(maxsize=4)

@@ -242,6 +242,45 @@ def load_dataset(path: Path) -> tuple[QualityExample, ...]:
     return tuple(examples)
 
 
+def validate_dataset_repositories(
+    *,
+    examples: tuple[QualityExample, ...],
+    repositories: dict[str, RepositoryEntry],
+) -> None:
+    """Validate that every dataset example targets a manifest repository.
+
+    Parameters
+    ----------
+    examples : tuple[QualityExample, ...]
+        Parsed retrieval-quality examples to execute.
+    repositories : dict[str, RepositoryEntry]
+        Repository manifest entries indexed by their stable labels.
+
+    Returns
+    -------
+    None
+        The function returns after confirming the effective dataset is nonempty
+        and every example names a configured repository.
+
+    Raises
+    ------
+    ValueError
+        Raised when the dataset is empty or contains unknown repository labels.
+    """
+    if not examples:
+        msg = "Dataset contains no examples."
+        raise ValueError(msg)
+
+    unknown_repositories = sorted(
+        {example.repo for example in examples} - repositories.keys()
+    )
+    if unknown_repositories:
+        msg = "Dataset repositories absent from manifest: " + ", ".join(
+            unknown_repositories
+        )
+        raise ValueError(msg)
+
+
 def model_by_id(models: tuple[ModelEntry, ...]) -> dict[str, ModelEntry]:
     """
     Index model entries by manifest id.
@@ -1042,16 +1081,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Report: {report_path}")
         return 0
 
-    codira = resolve_codira()
-    stamp = local_stamp()
-    artifact_root = args.artifact_root / stamp
-    results_path = artifact_root / "results.jsonl"
-    summary_path = artifact_root / "summary.json"
-    report_path = artifact_root / "report.md"
-    artifact_root.mkdir(parents=True, exist_ok=True)
-
     examples = load_dataset(args.dataset)
     repos = repo_by_label(read_repositories(args.repo_manifest))
+    validate_dataset_repositories(examples=examples, repositories=repos)
     models = model_by_id(read_models(args.model_manifest))
     selected_model_ids = set(cast("list[str]", args.model_id))
     selected_models = tuple(
@@ -1062,6 +1094,14 @@ def main(argv: list[str] | None = None) -> int:
     if not selected_models:
         msg = "No models selected."
         raise SystemExit(msg)
+
+    codira = resolve_codira()
+    stamp = local_stamp()
+    artifact_root = args.artifact_root / stamp
+    results_path = artifact_root / "results.jsonl"
+    summary_path = artifact_root / "summary.json"
+    report_path = artifact_root / "report.md"
+    artifact_root.mkdir(parents=True, exist_ok=True)
 
     examples_by_repo: dict[str, list[QualityExample]] = {}
     for example in examples:

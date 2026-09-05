@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+import pytest
 
 from scripts import run_retrieval_quality_benchmark as quality
 from scripts.run_final_embedding_model_campaign import ModelEntry, RepositoryEntry
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from pathlib import Path
-
-    import pytest
 
 
 def _model() -> ModelEntry:
@@ -286,6 +286,56 @@ def test_load_dataset_reads_jsonl(tmp_path: Path) -> None:
             expected_paths=("src/parser.py",),
         ),
     )
+
+
+def test_validate_dataset_repositories_rejects_partial_unknown_labels() -> None:
+    """Reject a partially unmatched retrieval-quality dataset.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts an unknown label cannot be silently omitted.
+    """
+    examples = (
+        quality.QualityExample("known", "demo", "git", "known", ("src/a.py",)),
+        quality.QualityExample("unknown", "missing", "git", "unknown", ("src/b.py",)),
+    )
+
+    with pytest.raises(ValueError, match="missing"):
+        quality.validate_dataset_repositories(
+            examples=examples,
+            repositories={
+                "demo": RepositoryEntry(
+                    index=0,
+                    label="demo",
+                    path=Path("repository"),
+                )
+            },
+        )
+
+
+def test_validate_dataset_repositories_rejects_wholly_unknown_labels() -> None:
+    """Reject a wholly unmatched retrieval-quality dataset.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts no effective benchmark can be empty.
+    """
+    examples = (
+        quality.QualityExample("unknown", "missing", "git", "unknown", ("src/a.py",)),
+    )
+
+    with pytest.raises(ValueError, match="missing"):
+        quality.validate_dataset_repositories(examples=examples, repositories={})
 
 
 def test_run_group_uses_isolated_config_and_output_dirs(

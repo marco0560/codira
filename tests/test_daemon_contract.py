@@ -306,3 +306,81 @@ def test_scheduler_marks_expected_index_failure_for_retry(tmp_path: Path) -> Non
     assert status.pending_reconciliation is True
     assert status.last_failure_at == failure_time
     assert status.last_error == "index backend unavailable"
+
+
+def test_scheduler_recovers_after_indexing_status_observer_failure(
+    tmp_path: Path,
+) -> None:
+    """Keep pending work retryable when publishing the indexing state fails.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root provided by pytest.
+
+    Returns
+    -------
+    None
+        The test asserts the reentrancy guard resets and a repaired observer
+        permits the retained reconciliation to run.
+    """
+    calls: list[Path] = []
+    fail_indexing = True
+
+    def reconcile(root: Path) -> None:
+        """Record one reconciliation invocation.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository root supplied by the scheduler.
+
+        Returns
+        -------
+        None
+            The invocation is recorded for retry assertions.
+        """
+        calls.append(root)
+
+    def observe(status: DaemonStatus) -> None:
+        """Fail only while publishing the initial indexing transition.
+
+        Parameters
+        ----------
+        status : codira.daemon.models.DaemonStatus
+            Newly published scheduler state.
+
+        Returns
+        -------
+        None
+            The status is accepted unless the deterministic fault is active.
+
+        Raises
+        ------
+        OSError
+            If the test fault is active for the indexing transition.
+        """
+        if fail_indexing and status.state is DaemonState.INDEXING:
+            message = "status store unavailable"
+            raise OSError(message)
+
+    scheduler = DaemonScheduler(
+        tmp_path,
+        reconcile=reconcile,
+        read_head=lambda root: "main",
+        status_observer=observe,
+    )
+    scheduler.start()
+
+    failed = scheduler.reconcile_pending()
+
+    assert failed.state is DaemonState.FAILED
+    assert failed.pending_reconciliation is True
+    assert calls == []
+
+    fail_indexing = False
+    recovered = scheduler.reconcile_pending()
+
+    assert recovered.state is DaemonState.WATCHING
+    assert recovered.pending_reconciliation is False
+    assert calls == [tmp_path.resolve()]

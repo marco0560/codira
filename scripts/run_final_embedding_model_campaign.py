@@ -981,6 +981,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901, PLR0912
                     "scripts/download_embedding_model.py",
                     "--manifest",
                     str(model_manifest_path),
+                    "--anonymous",
+                    "--allow-remote-code",
                 ],
                 stdout=log_file,
                 stderr=subprocess.STDOUT,

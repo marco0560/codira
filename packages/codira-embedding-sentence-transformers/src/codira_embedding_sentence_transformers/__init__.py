@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from codira.config import load_effective_config
+from codira.calibration import SentenceTransformerBenchmarkRunner
 from codira.contracts import EmbeddingEngineSpec
 from codira.plugin_config import plugin_json_schema
 from codira.semantic import embeddings as _legacy_embeddings
@@ -184,6 +185,26 @@ class SentenceTransformersEmbeddingEngine:
         """
         del config
         return _legacy_embeddings._sentence_transformer_embed_texts(texts)
+
+    def calibration_runner(
+        self,
+        config: Mapping[str, object],
+    ) -> SentenceTransformerBenchmarkRunner:
+        """
+        Build the local SentenceTransformers calibration runner.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Effective engine configuration and Codira model identity.
+
+        Returns
+        -------
+        codira.calibration.SentenceTransformerBenchmarkRunner
+            Offline runner for this engine's configured model.
+        """
+
+        return SentenceTransformerBenchmarkRunner(config)
 
     def reset_runtime_caches(self) -> None:
         """

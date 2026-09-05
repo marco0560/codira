@@ -91,12 +91,16 @@ Download and smoke-test model artifacts named in
 
 ```bash
 uv run python scripts/download_embedding_model.py \
-  --manifest benchmarks/embedding-model-candidates.json
+  --manifest benchmarks/embedding-model-candidates.json \
+  --anonymous --allow-remote-code
 ```
 
-The script sources `$HOME/.hf_token` in a Bash subprocess and reads the
-resulting `HF_TOKEN` environment variable. This keeps the token value in one
-operator-owned file and avoids copying it into commands.
+The script obtains authenticated downloads through the SOPS-scoped Hugging
+Face environment. ONNX artifact paths in the manifest must resolve beneath
+`--install-root`; manifests cannot write elsewhere. A manifest entry that
+enables remote model code requires both `--allow-remote-code` and
+`--anonymous`, so that code never receives the Hugging Face credential. Use
+that acknowledgement only with a reviewed manifest.
 
 For ONNX entries, the script downloads `onnx/model.onnx` and `tokenizer.json`
 from Hugging Face, installs them under the manifest's `.codira/models/...`
@@ -108,7 +112,8 @@ Select one candidate with `--model-id`:
 
 ```bash
 uv run python scripts/download_embedding_model.py \
-  --model-id bge-small-en-v1.5-onnx
+  --model-id bge-small-en-v1.5-onnx \
+  --anonymous
 ```
 
 ## `scripts/build_retrieval_quality_dataset.py`

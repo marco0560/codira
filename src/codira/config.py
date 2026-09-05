@@ -51,6 +51,7 @@ DEFAULT_EMBEDDING_GPU_MEMORY_LIMIT_MB = 0
 DEFAULT_EMBEDDING_INDEX_MODE = "immediate"
 DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES = ("symbol", "documentation")
 DEFAULT_EMBEDDING_INDEX_WORK_BATCH_MULTIPLIER = 256
+DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES = 32 * 1024 * 1024
 DEFAULT_SIMILARITY_SEARCH_PROFILES = (
     SimilaritySearchProfile("default", 64, 256, 20, 256),
 )
@@ -208,6 +209,9 @@ class EmbeddingsIndexingConfig:
     work_batch_multiplier : int
         Multiplier applied to ``embeddings.batch_size`` to bound indexing
         work segments without exposing a second absolute batch size.
+    max_source_file_bytes : int
+        Maximum source-file byte size accepted before hashing, parsing, or
+        context rereads.
     include_paths : tuple[str, ...]
         Repo-root-relative path prefixes included in embedding computation.
         An empty tuple includes all indexed paths.
@@ -219,6 +223,7 @@ class EmbeddingsIndexingConfig:
     object_types: tuple[str, ...] = DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES
     max_text_chars: int = 0
     work_batch_multiplier: int = DEFAULT_EMBEDDING_INDEX_WORK_BATCH_MULTIPLIER
+    max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES
     include_paths: tuple[str, ...] = ()
     exclude_paths: tuple[str, ...] = ()
 
@@ -456,6 +461,7 @@ DEFAULT_CONFIG: dict[str, object] = {
             "object_types": list(DEFAULT_EMBEDDING_INDEX_OBJECT_TYPES),
             "max_text_chars": 0,
             "work_batch_multiplier": DEFAULT_EMBEDDING_INDEX_WORK_BATCH_MULTIPLIER,
+            "max_source_file_bytes": DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES,
             "include_paths": [],
             "exclude_paths": [],
         },
@@ -655,6 +661,7 @@ _SCHEMA: dict[str, object] = {
             "object_types": list,
             "max_text_chars": int,
             "work_batch_multiplier": int,
+            "max_source_file_bytes": int,
             "include_paths": list,
             "exclude_paths": list,
         },
@@ -1481,6 +1488,12 @@ def _validate_semantics(value: Mapping[str, object]) -> None:  # noqa: C901
                 ("max_text_chars",),
                 prefix="embeddings.indexing",
                 minimum=0,
+            )
+            _validate_int_minimums(
+                indexing,
+                ("max_source_file_bytes",),
+                prefix="embeddings.indexing",
+                minimum=1,
             )
             _validate_int_minimums(
                 indexing,
@@ -2428,6 +2441,9 @@ def config_to_mapping(config: CodiraConfig) -> dict[str, object]:
                 "work_batch_multiplier": (
                     config.embeddings.indexing.work_batch_multiplier
                 ),
+                "max_source_file_bytes": (
+                    config.embeddings.indexing.max_source_file_bytes
+                ),
                 "include_paths": list(config.embeddings.indexing.include_paths),
                 "exclude_paths": list(config.embeddings.indexing.exclude_paths),
             },
@@ -2636,6 +2652,10 @@ def _config_from_mapping(
                 work_batch_multiplier=cast(
                     "int",
                     indexing["work_batch_multiplier"],
+                ),
+                max_source_file_bytes=cast(
+                    "int",
+                    indexing["max_source_file_bytes"],
                 ),
                 include_paths=tuple(
                     str(item).strip()

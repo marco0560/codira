@@ -55,13 +55,17 @@ codira caps --json
 
 ## First-Party Plugins
 
-The first release includes:
+The first-party inventory includes:
 
 | Package | Plugin | Languages | Conventions |
 | --- | --- | --- | --- |
 | `codira-documentation-audit-numpy` | `numpy` | `python` | `numpy` |
 | `codira-documentation-audit-google` | `google` | `python` | `google` |
 | `codira-documentation-audit-doxygen` | `doxygen` | `c`, `cpp` | `doxygen` |
+| `codira-documentation-audit-rustdoc` | `rustdoc` | `rust` | `rustdoc` |
+| `codira-documentation-audit-jsdoc` | `jsdoc` | `javascript` | `jsdoc` |
+| `codira-documentation-audit-tsdoc` | `tsdoc` | `typescript` | `tsdoc` |
+| `codira-documentation-audit-go-doc-comments` | `go-doc-comments` | `go` | Go doc comments |
 
 These packages are included in `codira[bundle-official]` and are discovered
 through entry points. The core package defines the shared contract and routing
@@ -80,7 +84,10 @@ documentation_audit_routes = [
   { language = "python", convention = "google", plugin = "google", include_paths = ["tests/**/*.py"] },
   { language = "c", convention = "doxygen", plugin = "doxygen", include_paths = ["src/**/*.c", "include/**/*.h"] },
   { language = "cpp", convention = "doxygen", plugin = "doxygen", include_paths = ["src/**/*.cpp", "include/**/*.hpp"] },
+  { language = "rust", convention = "rustdoc", plugin = "rustdoc", include_paths = ["src/**/*.rs"] },
   { language = "javascript", convention = "jsdoc", plugin = "jsdoc", include_paths = ["src/**/*.js", "src/**/*.jsx"] },
+  { language = "typescript", convention = "tsdoc", plugin = "tsdoc", include_paths = ["src/**/*.ts", "src/**/*.tsx"] },
+  { language = "go", convention = "go-doc-comments", plugin = "go-doc-comments", include_paths = ["src/**/*.go"] },
 ]
 ```
 
@@ -129,6 +136,10 @@ current first-party analyzer set:
 
 - `python` uses NumPy or Google-style audit plugins.
 - `c` and `cpp` use the Doxygen audit plugin.
+- `rust` uses the Rustdoc audit plugin.
+- `javascript` uses the JSDoc audit plugin and `typescript` uses the TSDoc
+  audit plugin.
+- `go` uses the Go-doc-comments audit plugin.
 - `json` does not require an audit plugin because standard JSON has no
   comments.
 - `markdown` and `text` are documentation artifact analyzers, not source

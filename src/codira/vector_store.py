@@ -48,6 +48,14 @@ class ActiveVectorStoreContext:
     config: dict[str, object]
 
 
+@dataclass(frozen=True)
+class ActiveVectorStoreResetContext:
+    """Resolved selected vector store and configuration for persistent reset."""
+
+    store: VectorStore
+    config: dict[str, object]
+
+
 def active_vector_store_context(
     root: Path,
     *,
@@ -101,3 +109,28 @@ def active_vector_store_context(
         ),
         config=vector_store_config,
     )
+
+
+def active_vector_store_reset_context(root: Path) -> ActiveVectorStoreResetContext:
+    """Resolve the selected vector-store teardown contract without initializing it.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose configured vector-store state may be reset.
+
+    Returns
+    -------
+    ActiveVectorStoreResetContext
+        Selected store and its detached configuration table.
+    """
+
+    effective_config = load_effective_config(root=root)
+    name = effective_config.embeddings.vector_store.strip()
+    config = dict(
+        (effective_config.plugins.configs or {}).get(
+            plugin_config_key(family="vector-store", name=name),
+            {},
+        )
+    )
+    return ActiveVectorStoreResetContext(active_vector_store(root=root), config)

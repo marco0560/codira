@@ -16,11 +16,16 @@ This module belongs to the **docstring verification layer** that keeps docstring
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
+import pytest
+
+from codira import registry
 from codira.config import override_repo_config_path
 from codira.docstring import (
     DocstringValidationRequest,
+    _matches_route_path,
     find_missing_sections,
     find_unexpected_sections,
     validate_docstring,
@@ -30,6 +35,108 @@ from codira.registry import reset_plugin_registry_caches
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from pytest import MonkeyPatch
+
+
+def test_selected_documentation_audit_plugin_skips_unrelated_factories(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Construct only the documentation-audit provider selected by name.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root passed to selected-provider configuration.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to expose selected and unrelated provider factories.
+
+    Returns
+    -------
+    None
+        The test asserts an unrelated provider factory is never invoked.
+    """
+    calls: list[str] = []
+    selected = object()
+
+    def selected_factory() -> object:
+        """Return the selected provider test double.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        object
+            Selected provider instance.
+        """
+        calls.append("selected")
+        return selected
+
+    def unrelated_factory() -> object:
+        """Fail if routing constructs an unrelated provider.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        object
+            This function always raises before returning.
+        """
+        msg = "unrelated provider was constructed"
+        raise AssertionError(msg)
+
+    plugins = [
+        SimpleNamespace(
+            name="selected", family="documentation-audit", factory=selected_factory
+        ),
+        SimpleNamespace(
+            name="unrelated", family="documentation-audit", factory=unrelated_factory
+        ),
+    ]
+    monkeypatch.setattr(
+        registry, "_plugin_snapshot", lambda _family, *, root=None: (plugins, [])
+    )
+    monkeypatch.setattr(
+        registry,
+        "_configure_plugin_instance",
+        lambda *, plugin, instance, root=None: instance,
+    )
+
+    assert registry.documentation_audit_plugin("selected", root=tmp_path) is selected
+    assert calls == ["selected"]
+
+
+def test_documentation_audit_route_examples_match_direct_src_files() -> None:
+    """Match direct source files with the published recursive route examples.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts each published ``src/**/*.ext`` pattern accepts a
+        source file directly below ``src``.
+    """
+    examples = (
+        ("src/module.py", "src/**/*.py"),
+        ("src/module.c", "src/**/*.c"),
+        ("src/module.cpp", "src/**/*.cpp"),
+        ("src/widget.js", "src/**/*.js"),
+        ("src/widget.jsx", "src/**/*.jsx"),
+    )
+
+    for relative_path, pattern in examples:
+        assert _matches_route_path(
+            relative_path=relative_path,
+            include_paths=(pattern,),
+            exclude_paths=(),
+        )
 
 
 def _validation_request(
@@ -386,6 +493,69 @@ documentation_audit_routes = [
         )
 
     assert issues == [("missing_doxygen", "Function f: Missing Doxygen documentation")]
+
+
+@pytest.mark.parametrize(
+    ("suffix", "language", "normalized_doc"),
+    (
+        (".c", "c", "Adds one to the value."),
+        (".cpp", "cpp", "Runs the widget."),
+    ),
+)
+def test_documentation_audit_routes_accept_normalized_doxygen_text(
+    tmp_path: Path,
+    suffix: str,
+    language: str,
+    normalized_doc: str,
+) -> None:
+    """
+    Accept C-family Doxygen text after analyzer delimiter normalization.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+    suffix : str
+        Source suffix used to select the routed language.
+    language : str
+        C-family language selected by the route.
+    normalized_doc : str
+        Non-empty text emitted after a valid Doxygen comment is normalized.
+
+    Returns
+    -------
+    None
+        The test asserts both ``///`` C and ``/**`` C++ analyzer outputs are
+        accepted by the selected Doxygen convention.
+    """
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f"""
+[plugins]
+documentation_audit_routes = [
+  {{ language = "{language}", convention = "doxygen", plugin = "doxygen", include_paths = ["src/**"] }},
+]
+""".strip(),
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "src" / f"sample{suffix}"
+    source_path.parent.mkdir()
+    source_path.write_text("int documented(void) { return 1; }\n", encoding="utf-8")
+
+    reset_plugin_registry_caches()
+    with override_repo_config_path(config_path):
+        issues = validate_documentation_with_configured_plugin(
+            root=tmp_path,
+            source_path=source_path,
+            stable_id=f"{language}:function:documented",
+            symbol_name="documented",
+            artifact_kind="function",
+            label="Function documented",
+            doc=normalized_doc,
+            is_public=1,
+        )
+
+    assert issues == []
 
 
 def test_documentation_audit_routes_rustdoc_plugin(tmp_path: Path) -> None:

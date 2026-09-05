@@ -41,10 +41,10 @@ backend. Qdrant points and payloads are derived ranking evidence, never
 authoritative repository records.
 
 Use `codira emb similarity-purge` to preview exact-owned remote artifacts and
-add `--yes` to delete them. `codira emb reset --yes` attempts this remote cleanup
-before removing its local ownership ledger; it stops on cleanup failure unless
-`--allow-remote-orphans` is an explicit recovery choice. That override reports
-only opaque artifact hashes that may remain remotely.
+add `--yes` to delete them. `codira emb reset --yes` delegates selected-index
+cleanup to this plugin and stops if manifest-verified remote cleanup fails. If
+you changed the selected index, restore Qdrant first to clean its ownership
+ledger and remote collections.
 
 The tests use an injectable fake client. They verify the Codira/client boundary,
 not live-server interoperability, recall, latency, capacity, or scalability.

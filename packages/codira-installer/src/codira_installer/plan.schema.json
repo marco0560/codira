@@ -4,7 +4,7 @@
   "type": "object",
   "required": ["schema_version", "coordinated_version", "request", "packages", "steps", "fingerprint"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "coordinated_version": {"type": "string", "minLength": 1},
     "packages": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "deselected_packages": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},

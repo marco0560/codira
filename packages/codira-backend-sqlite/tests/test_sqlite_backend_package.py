@@ -10,7 +10,12 @@ from pathlib import Path
 import pytest
 
 from codira.contracts import BackendPersistAnalysisRequest, PendingEmbeddingRow
-from codira.models import AnalysisResult, FileMetadataSnapshot, ModuleArtifact
+from codira.models import (
+    AnalysisResult,
+    DocumentationArtifact,
+    FileMetadataSnapshot,
+    ModuleArtifact,
+)
 from codira_backend_sqlite.schema import DDL
 from codira.semantic.embeddings import EmbeddingBackendSpec
 from codira_backend_sqlite import SQLiteIndexBackend, build_backend
@@ -194,6 +199,52 @@ def test_sqlite_backend_counts_reusable_embeddings_in_path_batches(
     assert count == 1001
 
 
+def test_sqlite_list_symbols_in_module_orders_bounded_results(
+    tmp_path: Path,
+) -> None:
+    """Order bounded module-symbol results independently of insertion order.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts the first twenty symbols use their logical total
+        order even when rows were inserted in reverse order.
+    """
+    backend = SQLiteIndexBackend()
+    connection = backend.open_connection(tmp_path)
+    try:
+        file_path = tmp_path / "pkg" / "module.py"
+        connection.execute(
+            """
+            INSERT INTO files(path, hash, mtime, size, analyzer_name, analyzer_version)
+            VALUES (?, 'hash', 1.0, 1, 'python', '1')
+            """,
+            (str(file_path),),
+        )
+        file_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+        for index in range(25, 0, -1):
+            name = f"symbol_{index:02d}"
+            connection.execute(
+                """
+                INSERT INTO symbol_index(name, stable_id, type, module_name, file_id, lineno)
+                VALUES (?, ?, 'function', 'pkg.module', ?, ?)
+                """,
+                (name, f"python:function:pkg.module:{name}", file_id, index),
+            )
+        connection.commit()
+
+        rows = backend.list_symbols_in_module(tmp_path, "pkg.module")
+    finally:
+        connection.close()
+
+    assert [row[2] for row in rows] == [f"symbol_{index:02d}" for index in range(1, 21)]
+
+
 def test_sqlite_backend_full_prepare_clears_populated_database_in_session(
     tmp_path: Path,
 ) -> None:
@@ -286,6 +337,62 @@ def test_sqlite_backend_full_prepare_clears_populated_database_in_session(
         assert reopened.execute("SELECT COUNT(*) FROM modules").fetchone() == (0,)
         assert reopened.execute("SELECT COUNT(*) FROM classes").fetchone() == (0,)
         assert reopened.execute("SELECT COUNT(*) FROM functions").fetchone() == (0,)
+    finally:
+        reopened.close()
+
+
+def test_sqlite_backend_full_prepare_abort_restores_committed_index(
+    tmp_path: Path,
+) -> None:
+    """Roll back SQLite full-rebuild preparation after a prior committed index.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing the SQLite index.
+
+    Returns
+    -------
+    None
+        The test asserts abort restores committed rows and leaves the reopened
+        schema usable after destructive full-rebuild preparation.
+    """
+    backend = SQLiteIndexBackend()
+    db_path = tmp_path / ".codira" / "index.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(db_path)
+    try:
+        for statement in DDL:
+            connection.execute(statement)
+        connection.execute(
+            """
+            INSERT INTO files(
+                id, path, hash, mtime, size, analyzer_name, analyzer_version
+            ) VALUES (1, ?, 'seed-hash', 1.0, 1, 'python', '1.0')
+            """,
+            (str(tmp_path / "pkg" / "sample.py"),),
+        )
+        connection.execute(
+            """
+            INSERT INTO modules(id, file_id, name, docstring, has_docstring)
+            VALUES (1, 1, 'pkg.sample', NULL, 0)
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    session = backend.begin_index_session(tmp_path)
+    try:
+        session.prepare(full=True, indexed_paths=(), deleted_paths=())
+        session.abort()
+    finally:
+        session.close()
+
+    reopened = backend.open_connection(tmp_path)
+    try:
+        assert reopened.execute("SELECT COUNT(*) FROM files").fetchone() == (1,)
+        assert reopened.execute("SELECT COUNT(*) FROM modules").fetchone() == (1,)
     finally:
         reopened.close()
 
@@ -449,6 +556,94 @@ def test_sqlite_backend_delete_paths_removes_file_owned_edge_rows(
         assert reopened.execute("SELECT COUNT(*) FROM callable_refs").fetchone() == (0,)
     finally:
         reopened.close()
+
+
+def test_sqlite_delete_paths_removes_deferred_documentation_only_embeddings(
+    tmp_path: Path,
+) -> None:
+    """
+    Remove deferred work when deleting documentation-only indexed files.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts deleted documentation cannot remain in the deferred
+        embedding queue or be processed later.
+    """
+    document = tmp_path / "docs" / "guide.md"
+    artifact = DocumentationArtifact(
+        stable_id="doc:section:docs/guide.md:guide:1",
+        kind="section",
+        source_format="markdown_section",
+        source_path=document,
+        lineno=1,
+        end_lineno=1,
+        title="Guide",
+        heading_path=("Guide",),
+        text="Guide",
+    )
+    analysis = AnalysisResult(
+        source_path=document,
+        module=ModuleArtifact(
+            name="docs.guide",
+            stable_id="module:docs.guide",
+            docstring=None,
+            has_docstring=0,
+        ),
+        classes=(),
+        functions=(),
+        declarations=(),
+        imports=(),
+        documentation=(artifact,),
+        index_symbols=False,
+    )
+    snapshot = FileMetadataSnapshot(
+        path=document,
+        sha256="guide-hash",
+        mtime=1.0,
+        size=5,
+        analyzer_name="markdown",
+        analyzer_version="1",
+    )
+    embedding_backend = EmbeddingBackendSpec(name="test", version="1", dim=384)
+    backend = SQLiteIndexBackend()
+    backend.initialize(tmp_path)
+    backend.persist_analysis(
+        BackendPersistAnalysisRequest(
+            root=tmp_path,
+            file_metadata=snapshot,
+            analysis=analysis,
+            embedding_backend=embedding_backend,
+            defer_embeddings=True,
+        )
+    )
+
+    connection = backend.open_connection(tmp_path)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM pending_embeddings"
+        ).fetchone() == (1,)
+    finally:
+        connection.close()
+
+    backend.delete_paths(tmp_path, paths=[str(document)])
+
+    connection = backend.open_connection(tmp_path)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM pending_embeddings"
+        ).fetchone() == (0,)
+    finally:
+        connection.close()
+    assert backend.process_pending_embeddings(
+        tmp_path,
+        embedding_backend=embedding_backend,
+    ) == (0, 0)
 
 
 def test_sqlite_session_batches_embedding_generation_across_files(

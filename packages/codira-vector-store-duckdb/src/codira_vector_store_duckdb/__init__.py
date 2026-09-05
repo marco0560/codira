@@ -18,6 +18,8 @@ from codira.contracts import (
     VectorStoreFullIndexRequest,
     VectorStorePurgeRequest,
     VectorStorePurgeResult,
+    VectorStoreResetRequest,
+    VectorStoreResetResult,
     VectorStoreError,
     VectorStoreSpec,
 )
@@ -1486,6 +1488,31 @@ class DuckDBVectorStore:
             Process-local vector-set identity cache entries are cleared.
         """
         self._vector_set_ids.clear()
+
+    def reset_persistent_state(
+        self,
+        request: VectorStoreResetRequest,
+    ) -> VectorStoreResetResult:
+        """Remove the DuckDB vector-store database owned by this plugin.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStoreResetRequest
+            Confirmed repository-local teardown request.
+
+        Returns
+        -------
+        codira.contracts.VectorStoreResetResult
+            Removed DuckDB artifact relative to the repository root.
+        """
+
+        path = get_vector_store_path(request.root)
+        removed: tuple[str, ...] = ()
+        if path.exists():
+            path.unlink()
+            removed = (str(path.relative_to(request.root)),)
+        self.reset_runtime_caches()
+        return VectorStoreResetResult(self.name, removed)
 
 
 def build_vector_store() -> VectorStore:

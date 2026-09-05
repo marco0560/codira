@@ -1818,9 +1818,6 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                 coverage_complete=request.coverage_complete,
                 analyzers=list(request.analyzers),
             )
-            with profiler.span("bulk_full_index.commit_structural"):
-                self.commit(request.root, conn=conn)
-            transaction_open = False
             with profiler.span(
                 "bulk_full_index.load_embeddings",
                 rows=len(pending_embedding_rows),
@@ -1875,10 +1872,11 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                         profiler=profiler,
                         fresh_full_index=True,
                     )
-            with profiler.span("bulk_full_index.commit_embeddings"):
-                self.commit(request.root, conn=conn)
             with profiler.span("bulk_full_index.create_indexes"):
                 _create_duckdb_schema_indexes(conn)
+            with profiler.span("bulk_full_index.commit_full_index"):
+                self.commit(request.root, conn=conn)
+            transaction_open = False
             profiler.write(
                 duckdb_profile_path(get_codira_dir(request.root)),
                 backend_name=str(self.name),

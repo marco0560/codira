@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import jsonschema  # type: ignore[import-untyped]
 import pytest
+from codira_installer import cli
 from codira_installer.execution import apply_plan, load_journal
 from codira_installer.models import (
     EnvironmentKind,
@@ -20,6 +23,77 @@ from codira_installer.models import (
     WorkspaceRegistration,
 )
 from codira_installer.plan import render_plan, resolve_plan, validate_plan
+
+
+def test_target_only_cli_request_installs_into_selected_environment(
+    tmp_path: Path,
+) -> None:
+    """Route documented target-only CLI requests to their selected environment.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary environment roots used in plan-only resolution.
+
+    Returns
+    -------
+    None
+        The test asserts new and existing target requests create or install via
+        the environment passed to ``--environment``.
+    """
+    for target in (EnvironmentKind.NEW, EnvironmentKind.EXISTING):
+        environment = tmp_path / target.value / ".venv"
+        request = cli._request(
+            cli._parser().parse_args(
+                ["--target", target.value, "--environment", str(environment)]
+            )
+        )
+        plan = resolve_plan(request, installed_packages=())
+        install = next(
+            step for step in plan.steps if step.identifier == "install-packages"
+        )
+
+        assert request.runtime == RuntimeTarget(RuntimeKind(target), environment)
+        assert str(environment / "bin" / "python") in install.command
+
+
+def test_cli_requests_support_receipt_scoped_runtime_operations(
+    tmp_path: Path,
+) -> None:
+    """Build plans for every non-install operation through the CLI request path.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary receipt location.
+
+    Returns
+    -------
+    None
+        The test asserts CLI parsing preserves the receipt for update, repair,
+        and modify requests accepted by shared planning.
+    """
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(
+        '{"packages": [], "profile": "recommended", "source": "pypi", "version": "1"}',
+        encoding="utf-8",
+    )
+
+    for operation in (
+        RuntimeOperation.UPDATE,
+        RuntimeOperation.REPAIR,
+        RuntimeOperation.MODIFY,
+    ):
+        request = cli._request(
+            cli._parser().parse_args(
+                ["--operation", operation.value, "--receipt", str(receipt)]
+            )
+        )
+
+        plan = resolve_plan(request, installed_packages=())
+
+        assert plan.request.operation is operation
+        assert plan.request.receipt_path == receipt
 
 
 def test_equivalent_requests_render_byte_identical_plans() -> None:
@@ -43,6 +117,36 @@ def test_equivalent_requests_render_byte_identical_plans() -> None:
 
     assert render_plan(first) == render_plan(second)
     validate_plan(first)
+
+
+def test_rendered_plan_validates_against_packaged_schema() -> None:
+    """
+    Keep the distributed JSON Schema aligned with emitted installer plans.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts a resolved plan is accepted by the package-data
+        Draft 2020-12 schema used by external consumers.
+    """
+    plan = resolve_plan(
+        InstallerRequest(
+            target=EnvironmentTarget(EnvironmentKind.EXISTING, Path("/env")),
+            profile=InstallationProfile.FULL_OFFICIAL,
+        ),
+        installed_packages=(),
+    )
+    schema_path = (
+        Path(__file__).parents[1] / "src" / "codira_installer" / "plan.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    payload = json.loads(render_plan(plan))
+
+    jsonschema.Draft202012Validator(schema).validate(payload)
 
 
 def test_pip_rejects_new_and_local_checkout_targets() -> None:
@@ -159,6 +263,7 @@ def test_managed_runtime_is_independent_of_workspace_repository(tmp_path: Path) 
         step for step in plan.steps if step.identifier == "register-workspace"
     )
     assert str(runtime / "bin" / "python") in install.command
+    assert "codira-installer==2.0.0" in install.command
     assert str(repository / ".venv") not in install.command
     assert workspace.command == (
         "codira",

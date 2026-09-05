@@ -34,6 +34,7 @@ from codira.query.context import (
     _candidate_signal_strength,
     _channel_results_payload,
     _classify_file_role,
+    _collect_reference_rows,
     _find_references,
     _format_symbol,
     _load_cached_source_file,
@@ -49,6 +50,8 @@ from codira.query.context import (
 from codira.query.signals import RetrievalSignal
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from pytest import MonkeyPatch
 
     from codira.contracts import (
@@ -94,6 +97,86 @@ def test_snippet_from_source_range_removes_docstring_and_collapses_blank_lines()
         "",
         "    return value",
     ]
+
+
+def test_reference_collection_batches_names_on_existing_connection(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Reuse the context connection for one batched reference retrieval.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root passed through the backend boundary.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to install an observing backend.
+
+    Returns
+    -------
+    None
+        The test asserts batched lookup arguments and retained reference output.
+    """
+    calls: list[tuple[tuple[str, ...], BackendQueryConnection]] = []
+    connection = cast("BackendQueryConnection", object())
+
+    class ReferenceBackend:
+        """Observe the batched reference lookup contract."""
+
+        def find_reference_rows_for_names(
+            self,
+            root: Path,
+            names: Sequence[str],
+            *,
+            prefix: str | None = None,
+            conn: BackendQueryConnection | None = None,
+        ) -> list[ReferenceSearchRow]:
+            """Return deterministic rows while recording the supplied connection.
+
+            Parameters
+            ----------
+            root : pathlib.Path
+                Repository root passed through the query boundary.
+            names : collections.abc.Sequence[str]
+                Requested symbol names.
+            prefix : str | None, optional
+                Optional repository path restriction.
+            conn : codira.contracts.BackendQueryConnection | None, optional
+                Existing connection to reuse.
+
+            Returns
+            -------
+            list[codira.types.ReferenceSearchRow]
+                Stored rows matching the requested names.
+            """
+            del root, prefix
+            assert conn is not None
+            calls.append((tuple(names), conn))
+            return [
+                ("src/other.py", 2, "alpha()"),
+                ("tests/test_other.py", 4, "beta()"),
+                ("src/primary.py", 8, "alpha()"),
+            ]
+
+    monkeypatch.setattr(
+        "codira.query.context.active_index_backend",
+        lambda *, root: ReferenceBackend(),
+    )
+
+    references = _collect_reference_rows(
+        tmp_path,
+        [
+            ("function", "pkg.primary", "alpha", "src/primary.py", 1),
+            ("function", "pkg.secondary", "beta", "src/secondary.py", 1),
+            ("function", "pkg.repeat", "alpha", "src/repeat.py", 1),
+            ("documentation", "docs", "guide", "docs/guide.md", 1),
+        ],
+        include_references=True,
+        prefix=None,
+        conn=connection,
+    )
+
+    assert calls == [(("alpha", "beta"), connection)]
+    assert references == [("src/other.py", 2), ("tests/test_other.py", 4)]
 
 
 def test_context_similarity_sidecars_remain_aligned_with_ranked_rows() -> None:
@@ -284,13 +367,62 @@ def test_load_cached_source_file_preserves_first_read_source(tmp_path: Path) -> 
     source_path.write_text("def broken(:\n", encoding="utf-8")
     cache: dict[Path, tuple[str, list[str]]] = {}
 
-    first = _load_cached_source_file(source_path, cache)
+    first = _load_cached_source_file(
+        source_path,
+        cache,
+        max_source_file_bytes=32 * 1024 * 1024,
+    )
     source_path.write_text("def fixed():\n    return 1\n", encoding="utf-8")
-    second = _load_cached_source_file(source_path, cache)
+    second = _load_cached_source_file(
+        source_path,
+        cache,
+        max_source_file_bytes=32 * 1024 * 1024,
+    )
 
     assert first == ("def broken(:\n", ["def broken(:"])
     assert second == first
     assert cache[source_path] == first
+
+
+def test_load_cached_source_file_skips_files_over_ingestion_limit(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Skip oversized context files without reading their contents.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing the oversized source fixture.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to prevent a source reread.
+
+    Returns
+    -------
+    None
+        The assertion verifies the byte ceiling is applied before ``read_text``.
+    """
+
+    source_path = tmp_path / "oversized.py"
+    source_path.write_text("def large():\n", encoding="utf-8")
+    cache: dict[Path, tuple[str, list[str]]] = {}
+
+    error_message = "oversized context source must not be read"
+
+    def _unexpected_source_read(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError(error_message)
+
+    monkeypatch.setattr(Path, "read_text", _unexpected_source_read)
+
+    assert (
+        _load_cached_source_file(
+            source_path,
+            cache,
+            max_source_file_bytes=1,
+        )
+        is None
+    )
+    assert cache == {}
 
 
 def test_classify_file_role_distinguishes_core_query_roles() -> None:

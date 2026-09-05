@@ -723,7 +723,7 @@ class DoxygenDocumentationAuditPlugin:
             Structured diagnostics emitted for the artifact.
         """
 
-        if request.doc and ("/**" in request.doc or "///" in request.doc):
+        if request.doc and request.doc.strip():
             return DocumentationAuditResult(diagnostics=())
         return DocumentationAuditResult(
             diagnostics=(
@@ -1193,10 +1193,48 @@ def _matches_route_path(
     """
 
     included = not include_paths or any(
-        fnmatch(relative_path, pattern) for pattern in include_paths
+        _matches_route_glob(relative_path=relative_path, pattern=pattern)
+        for pattern in include_paths
     )
-    excluded = any(fnmatch(relative_path, pattern) for pattern in exclude_paths)
+    excluded = any(
+        _matches_route_glob(relative_path=relative_path, pattern=pattern)
+        for pattern in exclude_paths
+    )
     return included and not excluded
+
+
+def _matches_route_glob(*, relative_path: str, pattern: str) -> bool:
+    """Return whether a route glob matches a repository-relative path.
+
+    Parameters
+    ----------
+    relative_path : str
+        POSIX-style repository-relative source path.
+    pattern : str
+        Route glob whose ``**/`` segments also match zero directories.
+
+    Returns
+    -------
+    bool
+        ``True`` when the pattern accepts the path.
+
+    Notes
+    -----
+    ``fnmatch`` treats ``**/`` as requiring a slash.  Iteratively removing
+    such segments preserves existing ``fnmatch`` behavior while adding the
+    recursive-glob zero-directory case.
+    """
+    patterns = [pattern]
+    while patterns:
+        candidate = patterns.pop()
+        if fnmatch(relative_path, candidate):
+            return True
+        recursive_segment = candidate.find("**/")
+        if recursive_segment >= 0:
+            patterns.append(
+                candidate[:recursive_segment] + candidate[recursive_segment + 3 :]
+            )
+    return False
 
 
 def _relative_route_path(*, root: Path, source_path: Path) -> str:
@@ -1356,7 +1394,7 @@ def validate_documentation_issues_with_configured_plugin(  # noqa: PLR0913
     if not is_public:
         return []
 
-    from codira.registry import documentation_audit_plugins  # noqa: PLC0415
+    from codira.registry import documentation_audit_plugin  # noqa: PLC0415
 
     language, matches = _matching_documentation_audit_routes(
         root=root,
@@ -1383,8 +1421,7 @@ def validate_documentation_issues_with_configured_plugin(  # noqa: PLR0913
         ]
 
     route = matches[0]
-    plugins = documentation_audit_plugins(root=root)
-    plugin = plugins.get(route.plugin)
+    plugin = documentation_audit_plugin(route.plugin, root=root)
     if plugin is None:
         return [
             DocumentationAuditIssue(

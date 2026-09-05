@@ -279,6 +279,8 @@ class IndexReport:
         Effective embedding population mode used for the run.
     embedding_complete : bool
         Whether persisted embedding data is complete for the indexed content.
+    publication_ready : bool
+        Whether the completed index result is safe to publish to readers.
     analysis_concurrency : IndexConcurrencyReport
         Requested and effective analysis scheduling details.
     """
@@ -297,6 +299,7 @@ class IndexReport:
     embeddings_pending: int = 0
     embedding_index_mode: str = DEFAULT_EMBEDDING_INDEX_MODE
     embedding_complete: bool = True
+    publication_ready: bool = True
     analysis_concurrency: IndexConcurrencyReport = IndexConcurrencyReport(
         requested_strategy="off",
         effective_strategy="off",
@@ -317,11 +320,14 @@ class ProjectScanState:
         Current raw file metadata snapshots keyed by absolute path.
     paths : list[str]
         Deterministically ordered tracked project paths.
+    coverage_issues : list[CoverageIssue]
+        Supported files excluded before whole-file ingestion.
     """
 
     analyzers_by_path: dict[str, LanguageAnalyzer]
     metadata_by_path: dict[str, dict[str, object]]
     paths: list[str]
+    coverage_issues: list[CoverageIssue]
 
 
 @dataclass(frozen=True)
@@ -441,6 +447,8 @@ class FinalizeIndexReportRequest:
         Effective embedding population mode used for the run.
     embedding_complete : bool
         Whether persisted embedding data is complete for the indexed content.
+    publication_ready : bool
+        Whether the completed index result is safe to publish to readers.
     """
 
     plan: IndexPlan
@@ -454,6 +462,7 @@ class FinalizeIndexReportRequest:
     embeddings_pending: int = 0
     embedding_index_mode: str = DEFAULT_EMBEDDING_INDEX_MODE
     embedding_complete: bool = True
+    publication_ready: bool = True
     analysis_concurrency: IndexConcurrencyReport = IndexConcurrencyReport(
         requested_strategy="off",
         effective_strategy="off",
@@ -1393,10 +1402,28 @@ def _collect_project_scan_state(
     """
     analyzers_by_path: dict[str, LanguageAnalyzer] = {}
     metadata_by_path: dict[str, dict[str, object]] = {}
+    coverage_issues: list[CoverageIssue] = []
+    max_source_file_bytes = load_effective_config(
+        root=root
+    ).embeddings.indexing.max_source_file_bytes
 
     for path in sorted(iter_project_files(root, analyzers=analyzers)):
         path_str = str(path)
         try:
+            if path.stat().st_size > max_source_file_bytes:
+                relative = path.relative_to(root)
+                coverage_issues.append(
+                    CoverageIssue(
+                        path=path_str,
+                        directory=relative.parts[0] if relative.parts else ".",
+                        suffix=path.suffix.lower() or "<no-suffix>",
+                        reason=(
+                            "source file exceeds configured "
+                            f"{max_source_file_bytes}-byte ingestion limit"
+                        ),
+                    )
+                )
+                continue
             metadata_by_path[path_str] = file_metadata(path)
         except FileNotFoundError:
             # Git-backed discovery can briefly enumerate a tracked path that
@@ -1412,6 +1439,10 @@ def _collect_project_scan_state(
         analyzers_by_path=analyzers_by_path,
         metadata_by_path=metadata_by_path,
         paths=sorted(metadata_by_path),
+        coverage_issues=sorted(
+            coverage_issues,
+            key=lambda issue: (issue.directory, issue.suffix, issue.path),
+        ),
     )
 
 
@@ -1657,6 +1688,7 @@ def _finalize_index_report(request: FinalizeIndexReportRequest) -> IndexReport:
         embeddings_pending=request.embeddings_pending,
         embedding_index_mode=request.embedding_index_mode,
         embedding_complete=request.embedding_complete,
+        publication_ready=request.publication_ready,
         analysis_concurrency=request.analysis_concurrency,
     )
 
@@ -1722,8 +1754,21 @@ def index_repo(
             embedding_index_mode=embedding_index_mode,
             analysis_concurrency=analysis_concurrency,
         )
-        if report.embedding_complete and (report.indexed > 0 or report.deleted > 0):
+        if (
+            report.publication_ready
+            and report.embedding_complete
+            and (report.indexed > 0 or report.deleted > 0)
+        ):
             rebuild_active_similarity_index(root)
+        if not report.publication_ready:
+            store.write(
+                transition_record(
+                    generation=generation,
+                    state="failed",
+                    last_successful_generation=last_successful,
+                )
+            )
+            return report
         backend = active_index_backend(root=root)
         analyzers = _active_language_analyzers(root=root)
         metadata = _read_metadata_file(get_metadata_path(root))
@@ -1764,6 +1809,8 @@ def index_repo(
                     for analyzer in analyzers
                 ],
                 indexed_file_count=report.indexed + report.reused,
+                partial=report.failed > 0,
+                failed_file_count=report.failed,
             )
         )
         return report
@@ -1817,6 +1864,7 @@ def _index_repo_unlocked(
     )
     coverage_issues = _audit_canonical_directory_coverage(root, analyzers=analyzers)
     current_state = _collect_project_scan_state(root, analyzers=analyzers)
+    coverage_issues.extend(current_state.coverage_issues)
     planning_conn = index_backend.open_connection(root)
     try:
         existing_state = _load_existing_index_state(
@@ -1930,6 +1978,7 @@ def _index_repo_unlocked(
                 embeddings_pending=changed_file_embeddings_pending,
                 embedding_index_mode=effective_embedding_index_mode,
                 embedding_complete=changed_file_embeddings_pending == 0,
+                publication_ready=not persistence_failures,
                 analysis_concurrency=resolved_analysis_concurrency,
             )
         )

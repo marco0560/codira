@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 from codira.index_generation import IndexGenerationStore
 from codira.mcp.proxy import build_mcp_operations
 from codira.query_daemon import (
+    DEFAULT_QUERY_EXECUTION_TIMEOUT_SECONDS,
     QueryDaemonAlreadyRunningError,
     QueryDaemonIdentity,
     QueryDaemonInstanceRegistry,
@@ -744,7 +745,9 @@ def run_foreground_query_daemon(  # noqa: PLR0913
         if server is not None:
             server.close()
         if runtime is not None:
-            runtime.close()
+            runtime.close_with_timeout(
+                timeout_seconds=DEFAULT_QUERY_EXECUTION_TIMEOUT_SECONDS
+            )
         final = snapshot(QueryDaemonState.STOPPED)
         store.record(final, kind="shutdown")
         store.release_owner(process_id)

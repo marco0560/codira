@@ -17,6 +17,7 @@ from codira.architecture import (
     build_architecture_model_from_index,
 )
 from codira.capabilities import build_capability_contract
+from codira.config import load_effective_config
 from codira.index_generation import IndexGenerationStore
 from codira.indexer import audit_repo_coverage, persisted_analysis_coverage_issues
 from codira.mcp.contract import (
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
         BackendSymbolInventoryItem,
         SimilarityResolvedCandidate,
     )
+    from codira.index_generation import IndexGeneration
     from codira.indexer import CoverageIssue
     from codira.types import (
         DocstringIssueRow,
@@ -213,6 +215,7 @@ class MCPAdapter:
             Contract envelope containing index metadata and coverage findings.
         """
         metadata = _read_metadata_file(get_metadata_path(self.root))
+        generation = IndexGenerationStore(self.root).read()
         issues = audit_repo_coverage(self.root)
         if metadata:
             issues.extend(
@@ -224,6 +227,16 @@ class MCPAdapter:
             {
                 "indexed": bool(metadata),
                 "metadata": metadata,
+                "generation": (
+                    None
+                    if generation is None
+                    else {
+                        "number": generation.generation,
+                        "state": generation.state,
+                        "partial": generation.partial,
+                        "failed_file_count": generation.failed_file_count,
+                    }
+                ),
                 "coverage": {
                     "status": "complete" if not issues else "incomplete",
                     "issues": [self._coverage_payload(issue) for issue in issues],
@@ -454,7 +467,17 @@ class MCPAdapter:
         context = json.loads(
             self._query(
                 lambda conn: context_for(
-                    ContextRequest(root=self.root, query=query, as_json=True, conn=conn)
+                    ContextRequest(
+                        root=self.root,
+                        query=query,
+                        as_json=True,
+                        conn=conn,
+                        max_source_file_bytes=(
+                            load_effective_config(
+                                root=self.root
+                            ).embeddings.indexing.max_source_file_bytes
+                        ),
+                    )
                 )
             )
         )
@@ -1008,13 +1031,19 @@ class MCPAdapter:
         }
         if truncation is not None:
             resolved_truncation.update(truncation)
+        generation = self._ready_generation_record()
         provenance: dict[str, object] = {
             "source": "codira-core",
             "repository": self.root.name,
             "trusted_root": ".",
             "execution_mode": "direct",
-            "generation": self._generation(),
+            "generation": None if generation is None else generation.generation,
         }
+        if generation is not None and generation.partial:
+            provenance["partial_index_warning"] = {
+                "failed_file_count": generation.failed_file_count,
+                "message": "The ready index omitted one or more failed source files.",
+            }
         if self.startup_provenance is not None:
             provenance.update(self.startup_provenance)
         return {
@@ -1038,8 +1067,23 @@ class MCPAdapter:
         int | None
             Ready durable generation, or ``None`` when unavailable.
         """
+        record = self._ready_generation_record()
+        return None if record is None else record.generation
+
+    def _ready_generation_record(self) -> IndexGeneration | None:
+        """Return the current ready generation record when available.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        codira.index_generation.IndexGeneration | None
+            Ready durable generation record, or ``None`` when unavailable.
+        """
         record = IndexGenerationStore(self.root).read()
-        return None if record is None or record.state != "ready" else record.generation
+        return None if record is None or record.state != "ready" else record
 
     def _page_rows(
         self, rows: list[_Row], cursor: str | None, limit: int

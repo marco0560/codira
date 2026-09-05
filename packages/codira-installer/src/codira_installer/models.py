@@ -352,6 +352,8 @@ class InstallPlan:
                 workspace["config_file"] = str(workspace["config_file"])
         if request["model_store"] is not None:
             request["model_store"] = str(request["model_store"])
+        if request["receipt_path"] is not None:
+            request["receipt_path"] = str(request["receipt_path"])
         return payload
 
 
