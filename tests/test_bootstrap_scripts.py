@@ -2450,21 +2450,21 @@ def test_validation_helper_returns_first_failing_exit_status() -> None:
     assert helper.run_validation((failing_command, skipped_command)) == 7
 
 
-def test_validation_helper_retries_failed_ruff_check_with_fix(
+def test_validation_helper_stops_after_failed_ruff_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Repair a failed standard Ruff check before advancing validation.
+    Stop validation after a failed standard Ruff check.
 
     Parameters
     ----------
     monkeypatch : pytest.MonkeyPatch
-        Fixture used to script delegated validation outcomes.
+        Fixture used to script a failed Ruff check.
 
     Returns
     -------
     None
-        The test asserts the recovery invocation includes ``--fix``.
+        The test asserts the validator does not mutate or continue after failure.
     """
     helper = _load_validation_helper()
     command = ("python", str(helper.RUN_REPO_TOOL), "ruff", "check", ".")
@@ -2475,35 +2475,32 @@ def test_validation_helper_retries_failed_ruff_check_with_fix(
         argv: tuple[str, ...],
         **_kwargs: object,
     ) -> subprocess.CompletedProcess[str]:
-        """Return a failure only for the initial Ruff check."""
+        """Return a failure for the Ruff check."""
 
         seen.append(argv)
         return subprocess.CompletedProcess(argv, int(argv == command), "", "")
 
     monkeypatch.setattr(helper.subprocess, "run", fake_run)
 
-    assert helper.run_validation((command, next_command)) == 0
-    assert seen == [command, (*command, "--fix"), next_command]
+    assert helper.run_validation((command, next_command)) == 1
+    assert seen == [command]
 
 
-def test_validation_helper_reports_unrepaired_ruff_failure(
+def test_validation_helper_reports_ruff_failure(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """
-    Surface a Ruff recovery failure to the validator operator.
+    Return a Ruff failure to the validator operator.
 
     Parameters
     ----------
     monkeypatch : pytest.MonkeyPatch
-        Fixture used to force both Ruff attempts to fail.
-    capsys : pytest.CaptureFixture[str]
-        Captured validator diagnostics.
+        Fixture used to force a Ruff failure.
 
     Returns
     -------
     None
-        The test asserts the retry status is reported before returning.
+        The test asserts the Ruff status is returned without a repair attempt.
     """
     helper = _load_validation_helper()
     command = ("python", str(helper.RUN_REPO_TOOL), "ruff", "check", ".")
@@ -2515,12 +2512,6 @@ def test_validation_helper_reports_unrepaired_ruff_failure(
     )
 
     assert helper.run_validation((command,)) == 2
-    output = capsys.readouterr().out
-    assert "Ruff check failed; retrying with --fix." in output
-    assert (
-        "Ruff --fix failed; review the command output above and exit status 2."
-        in output
-    )
 
 
 def test_validation_helper_help_mentions_new_flags() -> None:

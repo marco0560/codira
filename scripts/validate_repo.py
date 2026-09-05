@@ -366,22 +366,6 @@ def run_validation(
             text=capture_output,
         )
 
-        if completed.returncode != 0 and command[2:5] == ("ruff", "check", "."):
-            retry_command = (*command, "--fix")
-            print("Ruff check failed; retrying with --fix.")
-            completed = subprocess.run(
-                retry_command,
-                cwd=REPO_ROOT,
-                check=False,
-                capture_output=False,
-                text=False,
-            )
-            if completed.returncode != 0:
-                print(
-                    "Ruff --fix failed; review the command output above and "
-                    f"exit status {completed.returncode}."
-                )
-
         if capture_output:
             output = completed.stdout.strip()
 
