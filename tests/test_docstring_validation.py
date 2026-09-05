@@ -19,6 +19,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
+import pytest
+
 from codira import registry
 from codira.config import override_repo_config_path
 from codira.docstring import (
@@ -491,6 +493,69 @@ documentation_audit_routes = [
         )
 
     assert issues == [("missing_doxygen", "Function f: Missing Doxygen documentation")]
+
+
+@pytest.mark.parametrize(
+    ("suffix", "language", "normalized_doc"),
+    (
+        (".c", "c", "Adds one to the value."),
+        (".cpp", "cpp", "Runs the widget."),
+    ),
+)
+def test_documentation_audit_routes_accept_normalized_doxygen_text(
+    tmp_path: Path,
+    suffix: str,
+    language: str,
+    normalized_doc: str,
+) -> None:
+    """
+    Accept C-family Doxygen text after analyzer delimiter normalization.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+    suffix : str
+        Source suffix used to select the routed language.
+    language : str
+        C-family language selected by the route.
+    normalized_doc : str
+        Non-empty text emitted after a valid Doxygen comment is normalized.
+
+    Returns
+    -------
+    None
+        The test asserts both ``///`` C and ``/**`` C++ analyzer outputs are
+        accepted by the selected Doxygen convention.
+    """
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f"""
+[plugins]
+documentation_audit_routes = [
+  {{ language = "{language}", convention = "doxygen", plugin = "doxygen", include_paths = ["src/**"] }},
+]
+""".strip(),
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "src" / f"sample{suffix}"
+    source_path.parent.mkdir()
+    source_path.write_text("int documented(void) { return 1; }\n", encoding="utf-8")
+
+    reset_plugin_registry_caches()
+    with override_repo_config_path(config_path):
+        issues = validate_documentation_with_configured_plugin(
+            root=tmp_path,
+            source_path=source_path,
+            stable_id=f"{language}:function:documented",
+            symbol_name="documented",
+            artifact_kind="function",
+            label="Function documented",
+            doc=normalized_doc,
+            is_public=1,
+        )
+
+    assert issues == []
 
 
 def test_documentation_audit_routes_rustdoc_plugin(tmp_path: Path) -> None:

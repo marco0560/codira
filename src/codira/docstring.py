@@ -723,7 +723,7 @@ class DoxygenDocumentationAuditPlugin:
             Structured diagnostics emitted for the artifact.
         """
 
-        if request.doc and ("/**" in request.doc or "///" in request.doc):
+        if request.doc and request.doc.strip():
             return DocumentationAuditResult(diagnostics=())
         return DocumentationAuditResult(
             diagnostics=(
