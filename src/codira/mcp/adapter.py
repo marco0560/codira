@@ -17,6 +17,7 @@ from codira.architecture import (
     build_architecture_model_from_index,
 )
 from codira.capabilities import build_capability_contract
+from codira.config import load_effective_config
 from codira.index_generation import IndexGenerationStore
 from codira.indexer import audit_repo_coverage, persisted_analysis_coverage_issues
 from codira.mcp.contract import (
@@ -466,7 +467,17 @@ class MCPAdapter:
         context = json.loads(
             self._query(
                 lambda conn: context_for(
-                    ContextRequest(root=self.root, query=query, as_json=True, conn=conn)
+                    ContextRequest(
+                        root=self.root,
+                        query=query,
+                        as_json=True,
+                        conn=conn,
+                        max_source_file_bytes=(
+                            load_effective_config(
+                                root=self.root
+                            ).embeddings.indexing.max_source_file_bytes
+                        ),
+                    )
                 )
             )
         )

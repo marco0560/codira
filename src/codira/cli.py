@@ -5647,6 +5647,11 @@ def _run_context_command(
             as_prompt=args.prompt,
             explain=args.explain,
             search_profile=args.search_profile,
+            max_source_file_bytes=(
+                load_effective_config(
+                    root=root
+                ).embeddings.indexing.max_source_file_bytes
+            ),
         )
     )
     print(result)
@@ -5938,6 +5943,11 @@ def _run_context_without_freshness_check(  # noqa: PLR0913
                 as_prompt=as_prompt,
                 explain=explain,
                 search_profile=search_profile,
+                max_source_file_bytes=(
+                    load_effective_config(
+                        root=root
+                    ).embeddings.indexing.max_source_file_bytes
+                ),
             )
         )
     )

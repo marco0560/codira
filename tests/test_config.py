@@ -1400,6 +1400,7 @@ def test_config_to_mapping_round_trips_defaults(
         "object_types": ["symbol", "documentation"],
         "max_text_chars": 0,
         "work_batch_multiplier": 256,
+        "max_source_file_bytes": 33554432,
         "include_paths": [],
         "exclude_paths": [],
     }
@@ -1452,6 +1453,13 @@ def test_config_validation_rejects_invalid_embedding_indexing_values() -> None:
     with pytest.raises(ConfigError, match="embeddings.indexing.max_text_chars"):
         validate_config_mapping(
             {"embeddings": {"indexing": {"max_text_chars": -1}}},
+        )
+    with pytest.raises(
+        ConfigError,
+        match="embeddings.indexing.max_source_file_bytes",
+    ):
+        validate_config_mapping(
+            {"embeddings": {"indexing": {"max_source_file_bytes": 0}}},
         )
     with pytest.raises(ConfigError, match="embeddings.indexing.exclude_paths"):
         validate_config_mapping(

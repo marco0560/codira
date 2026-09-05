@@ -367,13 +367,62 @@ def test_load_cached_source_file_preserves_first_read_source(tmp_path: Path) -> 
     source_path.write_text("def broken(:\n", encoding="utf-8")
     cache: dict[Path, tuple[str, list[str]]] = {}
 
-    first = _load_cached_source_file(source_path, cache)
+    first = _load_cached_source_file(
+        source_path,
+        cache,
+        max_source_file_bytes=32 * 1024 * 1024,
+    )
     source_path.write_text("def fixed():\n    return 1\n", encoding="utf-8")
-    second = _load_cached_source_file(source_path, cache)
+    second = _load_cached_source_file(
+        source_path,
+        cache,
+        max_source_file_bytes=32 * 1024 * 1024,
+    )
 
     assert first == ("def broken(:\n", ["def broken(:"])
     assert second == first
     assert cache[source_path] == first
+
+
+def test_load_cached_source_file_skips_files_over_ingestion_limit(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Skip oversized context files without reading their contents.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing the oversized source fixture.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to prevent a source reread.
+
+    Returns
+    -------
+    None
+        The assertion verifies the byte ceiling is applied before ``read_text``.
+    """
+
+    source_path = tmp_path / "oversized.py"
+    source_path.write_text("def large():\n", encoding="utf-8")
+    cache: dict[Path, tuple[str, list[str]]] = {}
+
+    error_message = "oversized context source must not be read"
+
+    def _unexpected_source_read(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError(error_message)
+
+    monkeypatch.setattr(Path, "read_text", _unexpected_source_read)
+
+    assert (
+        _load_cached_source_file(
+            source_path,
+            cache,
+            max_source_file_bytes=1,
+        )
+        is None
+    )
+    assert cache == {}
 
 
 def test_classify_file_role_distinguishes_core_query_roles() -> None:

@@ -4828,6 +4828,68 @@ def test_index_persists_degraded_python_analysis_without_symbols(
     assert remaining_statuses == (1,)
 
 
+@pytest.mark.parametrize(
+    ("relative_path", "contents"),
+    [
+        ("src/oversized.py", b"def large():\n    return 1\n"),
+        ("docs/oversized.md", b"\x00binary-like markdown payload\n"),
+    ],
+)
+def test_index_skips_sources_over_configured_ingestion_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative_path: str,
+    contents: bytes,
+) -> None:
+    """Report oversized supported files without reading them for metadata.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing the oversized source fixture.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to fail the test if metadata hashing is attempted.
+    relative_path : str
+        Repository-relative supported source path to exclude.
+    contents : bytes
+        Text or binary-like fixture contents exceeding the configured ceiling.
+
+    Returns
+    -------
+    None
+        The assertions verify deterministic coverage reporting without a read.
+    """
+
+    source = tmp_path / relative_path
+    source.parent.mkdir(parents=True)
+    source.write_bytes(contents)
+    config = tmp_path / ".codira" / "config.toml"
+    config.parent.mkdir()
+    config.write_text(
+        "[embeddings.indexing]\nmax_source_file_bytes = 1\n",
+        encoding="utf-8",
+    )
+
+    error_message = "oversized source must not be hashed"
+
+    def _unexpected_metadata_read(_path: Path) -> dict[str, object]:
+        raise AssertionError(error_message)
+
+    monkeypatch.setattr(indexer_module, "file_metadata", _unexpected_metadata_read)
+
+    report = index_repo(tmp_path)
+
+    assert report.failed == 0
+    assert report.coverage_issues == [
+        CoverageIssue(
+            path=str(source),
+            directory=source.parent.name,
+            suffix=source.suffix,
+            reason="source file exceeds configured 1-byte ingestion limit",
+        )
+    ]
+
+
 def test_strict_index_coverage_rejects_persisted_partial_analysis(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

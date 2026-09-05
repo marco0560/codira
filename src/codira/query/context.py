@@ -21,10 +21,14 @@ import inspect
 import json
 import re
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
-from codira.config import with_effective_config_cache
+from codira.config import (
+    DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES,
+    with_effective_config_cache,
+)
 from codira.contracts import (
     BackendQueryConnection,
     split_declared_retrieval_capabilities,
@@ -413,6 +417,8 @@ class PromptRenderRequest:
         Secondary symbols collected by module expansion.
     unique_refs : list[codira.types.ReferenceRow]
         Cross-reference locations for the selected symbols.
+    max_source_file_bytes : int, optional
+        Command-scoped source-ingestion byte ceiling.
     """
 
     root: Path
@@ -421,6 +427,7 @@ class PromptRenderRequest:
     doc_issues: list[tuple[str, str]]
     expanded: list[SymbolRow]
     unique_refs: list[ReferenceRow]
+    max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES
 
 
 @dataclass(frozen=True)
@@ -442,6 +449,8 @@ class ContextJsonRenderRequest:
         Cross-reference locations for selected symbols.
     confidence_map : dict[codira.types.SymbolRow, float] | None, optional
         Confidence values keyed by symbol.
+    max_source_file_bytes : int, optional
+        Command-scoped source-ingestion byte ceiling.
     explain : bool, optional
         Whether explain metadata should be included.
     intent : codira.query.classifier.QueryIntent | None, optional
@@ -492,6 +501,7 @@ class ContextJsonRenderRequest:
     provenance: MergeDiagnostics | None = None
     diversity: DiversityDiagnostics | None = None
     expansion: ExpansionDiagnostics | None = None
+    max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES
 
 
 @dataclass(frozen=True)
@@ -576,6 +586,8 @@ class MainContextSectionsRequest:
         Secondary symbols collected by module expansion.
     unique_refs : list[codira.types.ReferenceRow]
         Cross-reference locations for selected symbols.
+    max_source_file_bytes : int, optional
+        Command-scoped source-ingestion byte ceiling.
     """
 
     lines: list[str]
@@ -584,6 +596,7 @@ class MainContextSectionsRequest:
     doc_issues: list[tuple[str, str]]
     expanded: list[SymbolRow]
     unique_refs: list[ReferenceRow]
+    max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES
 
 
 @dataclass(frozen=True)
@@ -639,6 +652,8 @@ class ContextRenderRequest:
         Diversity-selection diagnostics for merged symbols.
     expansion : codira.query.context.ExpansionDiagnostics | None, optional
         Expansion diagnostics for graph-derived module expansion.
+    max_source_file_bytes : int, optional
+        Command-scoped source-ingestion byte ceiling.
     """
 
     root: Path
@@ -664,6 +679,7 @@ class ContextRenderRequest:
     provenance: MergeDiagnostics | None = None
     diversity: DiversityDiagnostics | None = None
     expansion: ExpansionDiagnostics | None = None
+    max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES
 
 
 @dataclass(frozen=True)
@@ -691,6 +707,8 @@ class ContextRequest:
     conn : codira.contracts.BackendQueryConnection | None, optional
         Existing read connection to reuse. When omitted, context retrieval owns
         and closes a direct backend connection.
+    max_source_file_bytes : int, optional
+        Command-scoped source-ingestion byte ceiling used for context rereads.
     """
 
     root: Path
@@ -701,6 +719,7 @@ class ContextRequest:
     explain: bool = False
     search_profile: str | None = None
     conn: BackendQueryConnection | None = None
+    max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES
 
 
 @dataclass(frozen=True)
@@ -1302,6 +1321,8 @@ def _snippet_from_source_range(
 def _load_cached_source_file(
     path: Path,
     cache: dict[Path, tuple[str, list[str]]],
+    *,
+    max_source_file_bytes: int,
 ) -> tuple[str, list[str]] | None:
     """
     Load and cache one source file used for context rendering.
@@ -1312,6 +1333,8 @@ def _load_cached_source_file(
         Absolute source path to load.
     cache : dict[pathlib.Path, tuple[str, list[str]]]
         Parsed-file cache shared across multiple lookups.
+    max_source_file_bytes : int
+        Command-scoped source-ingestion byte ceiling.
 
     Returns
     -------
@@ -1323,6 +1346,8 @@ def _load_cached_source_file(
         return cache[path]
 
     try:
+        if path.stat().st_size > max_source_file_bytes:
+            return None
         source = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
@@ -1336,6 +1361,8 @@ def _extract_code_context(
     root: Path,
     symbol: SymbolRow,
     cache: dict[Path, tuple[str, list[str]]],
+    *,
+    max_source_file_bytes: int,
 ) -> CodeContext:
     """
     Extract signature, docstring, and snippet data for a symbol.
@@ -1348,6 +1375,8 @@ def _extract_code_context(
         Indexed symbol row to expand.
     cache : dict[pathlib.Path, tuple[str, list[str]]]
         Source-file cache shared across multiple lookups.
+    max_source_file_bytes : int
+        Command-scoped source-ingestion byte ceiling.
 
     Returns
     -------
@@ -1359,7 +1388,11 @@ def _extract_code_context(
     if not path.is_absolute():
         path = root / path
 
-    loaded = _load_cached_source_file(path, cache)
+    loaded = _load_cached_source_file(
+        path,
+        cache,
+        max_source_file_bytes=max_source_file_bytes,
+    )
     if loaded is None:
         return (None, None, [])
 
@@ -2172,6 +2205,8 @@ def _format_enriched_symbol(
     root: Path,
     symbol: SymbolRow,
     cache: dict[Path, tuple[str, list[str]]],
+    *,
+    max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES,
 ) -> list[str]:
     """
     Format a symbol with location, snippet, and docstring details.
@@ -2184,6 +2219,8 @@ def _format_enriched_symbol(
         Symbol row to render.
     cache : dict[pathlib.Path, tuple[str, list[str]]]
         Source-file cache shared across multiple symbols.
+    max_source_file_bytes : int, optional
+        Command-scoped source-ingestion byte ceiling.
 
     Returns
     -------
@@ -2203,7 +2240,12 @@ def _format_enriched_symbol(
             f"  Provenance: {module_name}",
         ]
 
-    signature, docstring, snippet = _extract_code_context(root, symbol, cache)
+    signature, docstring, snippet = _extract_code_context(
+        root,
+        symbol,
+        cache,
+        max_source_file_bytes=max_source_file_bytes,
+    )
 
     lines: list[str] = []
 
@@ -5004,7 +5046,10 @@ def _render_agent_prompt(
             expanded=request.expanded,
             unique_refs=request.unique_refs,
             prompt_symbol_line=_prompt_symbol_line,
-            format_enriched_symbol=_format_enriched_symbol,
+            format_enriched_symbol=partial(
+                _format_enriched_symbol,
+                max_source_file_bytes=request.max_source_file_bytes,
+            ),
         )
     )
 
@@ -5029,6 +5074,8 @@ def _approx_token_count(lines: list[str]) -> int:
 def _context_blocks_payload(
     root: Path,
     top_matches: list[SymbolRow],
+    *,
+    max_source_file_bytes: int,
 ) -> list[list[str]]:
     """
     Build bounded enriched context blocks for JSON rendering.
@@ -5039,6 +5086,8 @@ def _context_blocks_payload(
         Repository root used to relativize paths.
     top_matches : list[codira.types.SymbolRow]
         Primary ranked symbols.
+    max_source_file_bytes : int
+        Command-scoped source-ingestion byte ceiling.
 
     Returns
     -------
@@ -5049,7 +5098,12 @@ def _context_blocks_payload(
     current_tokens = 0
 
     for symbol in top_matches[:ENRICHED_CONTEXT_LIMIT]:
-        block = _format_enriched_symbol(root, symbol, {})
+        block = _format_enriched_symbol(
+            root,
+            symbol,
+            {},
+            max_source_file_bytes=max_source_file_bytes,
+        )
         block_tokens = _approx_token_count(block)
         if current_tokens + block_tokens > MAX_TOKENS:
             break
@@ -5458,7 +5512,11 @@ def _render_context_json(
             {"type": issue_type, "message": message}
             for issue_type, message in request.doc_issues
         ],
-        "context": _context_blocks_payload(request.root, request.top_matches),
+        "context": _context_blocks_payload(
+            request.root,
+            request.top_matches,
+            max_source_file_bytes=request.max_source_file_bytes,
+        ),
         "module_expansion": _module_expansion_payload(request.expanded),
         "references": [
             {"file": file_path, "lineno": lineno}
@@ -5515,6 +5573,7 @@ def _render_context(
                 doc_issues=request.doc_issues,
                 expanded=request.expanded,
                 unique_refs=request.unique_refs,
+                max_source_file_bytes=request.max_source_file_bytes,
                 confidence_map=request.confidence_map,
                 explain=request.explain,
                 intent=request.intent,
@@ -5542,6 +5601,7 @@ def _render_context(
                 doc_issues=request.doc_issues,
                 expanded=request.expanded,
                 unique_refs=request.unique_refs,
+                max_source_file_bytes=request.max_source_file_bytes,
             )
         )
 
@@ -5578,6 +5638,7 @@ def _render_context(
             doc_issues=request.doc_issues,
             expanded=request.expanded,
             unique_refs=request.unique_refs,
+            max_source_file_bytes=request.max_source_file_bytes,
         )
     )
 
@@ -6048,7 +6109,14 @@ def _append_suggested_context_section(request: MainContextSectionsRequest) -> No
     for index, symbol in enumerate(request.top_matches[:ENRICHED_CONTEXT_LIMIT]):
         if index > 0:
             request.lines.append("")
-        request.lines.extend(_format_enriched_symbol(request.root, symbol, cache))
+        request.lines.extend(
+            _format_enriched_symbol(
+                request.root,
+                symbol,
+                cache,
+                max_source_file_bytes=request.max_source_file_bytes,
+            )
+        )
 
 
 def _append_module_expansion_section(request: MainContextSectionsRequest) -> None:
@@ -6606,6 +6674,7 @@ def context_for(
                 provenance=state.provenance if request.explain else None,
                 diversity=state.diversity if request.explain else None,
                 expansion=state.expansion if request.explain else None,
+                max_source_file_bytes=request.max_source_file_bytes,
             )
         )
     finally:

@@ -320,11 +320,14 @@ class ProjectScanState:
         Current raw file metadata snapshots keyed by absolute path.
     paths : list[str]
         Deterministically ordered tracked project paths.
+    coverage_issues : list[CoverageIssue]
+        Supported files excluded before whole-file ingestion.
     """
 
     analyzers_by_path: dict[str, LanguageAnalyzer]
     metadata_by_path: dict[str, dict[str, object]]
     paths: list[str]
+    coverage_issues: list[CoverageIssue]
 
 
 @dataclass(frozen=True)
@@ -1399,10 +1402,28 @@ def _collect_project_scan_state(
     """
     analyzers_by_path: dict[str, LanguageAnalyzer] = {}
     metadata_by_path: dict[str, dict[str, object]] = {}
+    coverage_issues: list[CoverageIssue] = []
+    max_source_file_bytes = load_effective_config(
+        root=root
+    ).embeddings.indexing.max_source_file_bytes
 
     for path in sorted(iter_project_files(root, analyzers=analyzers)):
         path_str = str(path)
         try:
+            if path.stat().st_size > max_source_file_bytes:
+                relative = path.relative_to(root)
+                coverage_issues.append(
+                    CoverageIssue(
+                        path=path_str,
+                        directory=relative.parts[0] if relative.parts else ".",
+                        suffix=path.suffix.lower() or "<no-suffix>",
+                        reason=(
+                            "source file exceeds configured "
+                            f"{max_source_file_bytes}-byte ingestion limit"
+                        ),
+                    )
+                )
+                continue
             metadata_by_path[path_str] = file_metadata(path)
         except FileNotFoundError:
             # Git-backed discovery can briefly enumerate a tracked path that
@@ -1418,6 +1439,10 @@ def _collect_project_scan_state(
         analyzers_by_path=analyzers_by_path,
         metadata_by_path=metadata_by_path,
         paths=sorted(metadata_by_path),
+        coverage_issues=sorted(
+            coverage_issues,
+            key=lambda issue: (issue.directory, issue.suffix, issue.path),
+        ),
     )
 
 
@@ -1839,6 +1864,7 @@ def _index_repo_unlocked(
     )
     coverage_issues = _audit_canonical_directory_coverage(root, analyzers=analyzers)
     current_state = _collect_project_scan_state(root, analyzers=analyzers)
+    coverage_issues.extend(current_state.coverage_issues)
     planning_conn = index_backend.open_connection(root)
     try:
         existing_state = _load_existing_index_state(

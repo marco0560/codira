@@ -92,6 +92,7 @@ mode = "immediate"
 object_types = ["symbol", "documentation"]
 max_text_chars = 0
 work_batch_multiplier = 256
+max_source_file_bytes = 33554432
 include_paths = []
 exclude_paths = []
 
@@ -217,6 +218,11 @@ list skips all embedding rows while leaving structural indexing enabled.
 `embeddings.indexing.max_text_chars = 0` means no text-size limit. Positive
 values skip embedding payloads longer than the configured number of
 characters.
+
+`embeddings.indexing.max_source_file_bytes = 33554432` is the default 32 MiB
+source-ingestion ceiling. Larger supported files are skipped before hashing,
+parsing, or context rereads and appear as deterministic coverage diagnostics.
+Increase it only when the repository requires the additional memory budget.
 
 `embeddings.indexing.work_batch_multiplier` bounds indexing work segments as a
 multiple of `embeddings.batch_size`. With the defaults, Codira processes at
