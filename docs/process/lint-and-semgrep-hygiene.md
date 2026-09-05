@@ -26,7 +26,7 @@ scripts/characterize_similarity_indexes.py:306 PLR0913 — the reproducible
     corpus runner keeps independently selectable corpus and timing inputs.
 scripts/generate_github_snapshot.py:118 S607 — the fixed `gh` executable is
     intentionally invoked by argument vector; there is no shell interpolation.
-src/codira/indexer.py:1233 PLR0913 — bulk indexing keeps backend, transaction,
+src/codira/indexer.py:1239 PLR0913 — bulk indexing keeps backend, transaction,
     artifact, coverage, and embedding ownership explicit at the orchestration seam.
 src/codira/contracts.py:3346 PLR0913 — the plugin protocol signature is a
     public compatibility contract and cannot be bundled without breaking providers.
@@ -66,7 +66,7 @@ src/codira/query_daemon.py:348,365 BLE001 — worker initialization and operatio
     failures must cross the future boundary as their original exception.
 src/codira/query_daemon_lifecycle.py:720,737 BLE001 — a long-lived service must
     report any unexpected refresh or foreground failure as degraded state.
-src/codira/query_daemon_ipc.py:1263,1352 BLE001 — the IPC boundary converts any
+src/codira/query_daemon_ipc.py:1263,1350 BLE001 — the IPC boundary converts any
     unexpected implementation failure into a stable protocol/unavailable result.
 src/codira/mcp/server.py:223 SLF001 — FastMCP exposes no public transport hook;
     its private server object is the required stdio transport boundary.
@@ -95,7 +95,7 @@ scripts/run_retrieval_quality_benchmark.py:874,
 src/codira/docstring.py:1019, src/codira/docstring.py:1114,
 src/codira/index_generation.py:109,
 src/codira/query_daemon.py:365, src/codira/query_daemon_lifecycle.py:737, and
-src/codira/query_daemon_ipc.py:1352 retain the same category-specific reasons
+src/codira/query_daemon_ipc.py:1350 retain the same category-specific reasons
 as their immediately preceding grouped entries.
 ```
 
