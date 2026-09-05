@@ -4411,6 +4411,63 @@ def test_iter_project_files_uses_analyzer_globs_with_git(tmp_path: Path) -> None
     assert discovered == [demo_file]
 
 
+def test_iter_project_files_rejects_tracked_symlinks_outside_repository(
+    tmp_path: Path,
+) -> None:
+    """
+    Reject tracked source symlinks before analyzer reads can follow them.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts a supported tracked symlink targeting an external
+        file is excluded from discovery.
+    """
+
+    class _DemoAnalyzer:
+        name = "demo"
+        version = "1"
+        discovery_globs: tuple[str, ...] = ("*.demo",)
+
+        def supports_path(self, path: Path) -> bool:
+            return path.suffix == ".demo"
+
+        def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
+            del root
+            return AnalysisResult(
+                source_path=path,
+                module=ModuleArtifact(
+                    name=path.stem,
+                    stable_id=f"demo:module:{path.stem}",
+                    docstring=None,
+                    has_docstring=0,
+                ),
+                classes=(),
+                functions=(),
+                declarations=(),
+                imports=(),
+            )
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    external_file = tmp_path.parent / f"{tmp_path.name}-external.demo"
+    external_file.write_text("private content\n", encoding="utf-8")
+    symlink = tmp_path / "leak.demo"
+    symlink.symlink_to(external_file)
+    subprocess.run(
+        ["git", "add", "leak.demo"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
+    assert list(iter_project_files(tmp_path, analyzers=[_DemoAnalyzer()])) == []
+
+
 def test_iter_project_files_filters_broad_globs_by_supports_path(
     tmp_path: Path,
 ) -> None:
