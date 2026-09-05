@@ -2787,6 +2787,11 @@ def test_index_repo_skips_python_files_with_syntax_errors(tmp_path: Path) -> Non
     assert report.failures[0].path == str(legacy_module)
     assert report.failures[0].analyzer_name == "python"
     assert report.failures[0].error_type == "SyntaxError"
+    generation = IndexGenerationStore(tmp_path).read()
+    assert generation is not None
+    assert generation.state == "ready"
+    assert generation.partial is True
+    assert generation.failed_file_count == 1
 
     conn = sqlite3.connect(get_db_path(tmp_path))
     try:

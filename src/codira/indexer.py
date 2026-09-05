@@ -1784,6 +1784,8 @@ def index_repo(
                     for analyzer in analyzers
                 ],
                 indexed_file_count=report.indexed + report.reused,
+                partial=report.failed > 0,
+                failed_file_count=report.failed,
             )
         )
         return report

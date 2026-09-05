@@ -93,7 +93,7 @@ scripts/run_final_embedding_model_campaign.py:640,
 scripts/run_final_embedding_model_campaign.py:791,
 scripts/run_retrieval_quality_benchmark.py:913,
 src/codira/docstring.py:1019, src/codira/docstring.py:1114,
-src/codira/index_generation.py:109,
+src/codira/index_generation.py:115,
 src/codira/query_daemon.py:366, src/codira/query_daemon_lifecycle.py:738, and
 src/codira/query_daemon_ipc.py:1360 retain the same category-specific reasons
 as their immediately preceding grouped entries.
