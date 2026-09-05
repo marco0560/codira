@@ -1,3 +1,44 @@
+## [2.0.2](https://github.com/marco0560/codira/compare/v2.0.1...v2.0.2) (2026-09-05)
+
+### Bug Fixes
+
+* **analyzer:** disambiguate JavaScript callables ([1839a2a](https://github.com/marco0560/codira/commit/1839a2a267671982e53979eb626f1c0256aca679))
+* **analyzer:** disambiguate TypeScript overloads ([db573e2](https://github.com/marco0560/codira/commit/db573e2832578acc7ea25baeefd60c20b5325bca))
+* **analyzer:** report parser recovery ([3d1e37e](https://github.com/marco0560/codira/commit/3d1e37edd9eaf27e423915f055b80b87a695b4db))
+* **backend:** clear deleted deferred documentation ([9b267f9](https://github.com/marco0560/codira/commit/9b267f9113a6b6c5bfde12fee162923edca1fa30))
+* **backend:** make DuckDB full rebuild index DDL atomic ([b4ee96d](https://github.com/marco0560/codira/commit/b4ee96da449023b2fc3e5db250d0123ad33ca6bd))
+* **backend:** order bounded module symbols ([b55bce7](https://github.com/marco0560/codira/commit/b55bce770e6c299db80d23a96dc430d55943e9bf))
+* **config:** support recursive route globs ([22ab28c](https://github.com/marco0560/codira/commit/22ab28c07b392a2bdea9d0933089f62f07227f05))
+* **contracts:** expose MCP search profiles ([86eac70](https://github.com/marco0560/codira/commit/86eac7090eae2eae38b8d927d11f5b738cb5f891))
+* **coverage:** reject incomplete benchmark inputs ([5ee92da](https://github.com/marco0560/codira/commit/5ee92dab81a3ac1aacf5af25c94b4b3ceb5618df))
+* **docs:** accept normalized Doxygen text ([3ef680c](https://github.com/marco0560/codira/commit/3ef680c13e0aaf0e664f032a81cac7dd30496ab2))
+* **embeddings:** constrain download manifests ([e93031a](https://github.com/marco0560/codira/commit/e93031a664d89c05983d2595c9a18f98aa2ee818))
+* **embeddings:** delegate persistent reset to plugins ([25ea2d0](https://github.com/marco0560/codira/commit/25ea2d06dacb7ac612f839bee5720f73b90d9c40))
+* **embeddings:** route calibration through active engine ([f40163e](https://github.com/marco0560/codira/commit/f40163ee0bc25ea665e526e8c0ccec5334ea5e67))
+* **indexer:** block failed full-index publication ([ea41454](https://github.com/marco0560/codira/commit/ea41454fbbc20425c2d3091b2ab0a996057b0e65))
+* **indexer:** expose partial generation warnings ([69208df](https://github.com/marco0560/codira/commit/69208df99c1ad105ed25cb9bd4a345eeed2c00bb))
+* **indexer:** mark partial ready generations ([da3ae7f](https://github.com/marco0560/codira/commit/da3ae7f4458efbfc2b577b766adb5c2a1b11cf56))
+* **indexer:** recover from daemon status failures ([81d44f0](https://github.com/marco0560/codira/commit/81d44f005220f862d583b175230503438b8a7e18))
+* **package:** declare demo backend dependency ([a465ea0](https://github.com/marco0560/codira/commit/a465ea057963f78ac8b06329f5c2671e13973005))
+* **package:** expose installer lifecycle receipts ([aa749d4](https://github.com/marco0560/codira/commit/aa749d4a9405c26da31fa876918905de4868d216))
+* **package:** install managed launcher module ([42c395f](https://github.com/marco0560/codira/commit/42c395ff783f3a9263a9a0adbd2d5a548881132a))
+* **package:** route target environments ([beef8c1](https://github.com/marco0560/codira/commit/beef8c1c81a15691046bc98a7d63be5918905b8a))
+* **package:** validate installer plans against schema ([5c33e93](https://github.com/marco0560/codira/commit/5c33e93f83a476da804f664cda72711f938189b3))
+* **process:** preserve validation failure ([2bdbff2](https://github.com/marco0560/codira/commit/2bdbff2dfa832aafaed08f53a0c9fb567163c6cc))
+* **process:** type-check first-party package tests ([b4b96b9](https://github.com/marco0560/codira/commit/b4b96b9aa8f6e9e8060605ef6d07cd07e0c5c0ad))
+* **query:** bound daemon shutdown operations ([6d384e5](https://github.com/marco0560/codira/commit/6d384e52ee3d045a436a26d08b1efdefe792728f))
+* **query:** keep daemon refreshes monotonic ([906f6e4](https://github.com/marco0560/codira/commit/906f6e4465fa52bb03663fd592e4c597657af1be))
+* **registry:** hint missing language analyzers ([6cff856](https://github.com/marco0560/codira/commit/6cff856937eafd1d9af6551aab1b5cf7ea5f9c35))
+* **registry:** route documentation audit providers ([1e2ba18](https://github.com/marco0560/codira/commit/1e2ba1894ae71e1f41169b87d8b96c115517a384))
+* **scanner:** cap source ingestion size ([a051086](https://github.com/marco0560/codira/commit/a0510867f1d90e03afb718aaf35ddfd2e5c89fb4))
+* **scanner:** reject escaped source links ([5be273b](https://github.com/marco0560/codira/commit/5be273bd3ac3c1a5e9133fa25790eec26766e1ae))
+* **semantic:** retain switched Qdrant ownership ([5625edf](https://github.com/marco0560/codira/commit/5625edf35245278136b89c227c8ed3bdc0a4653f))
+* **storage:** snapshot SQLite vectors atomically ([6bdd5c9](https://github.com/marco0560/codira/commit/6bdd5c919c44d9c3f240d8b3ac640c824a7a581f))
+
+### Performance Improvements
+
+* **query:** batch reference enrichment ([5d93a20](https://github.com/marco0560/codira/commit/5d93a20c555ce9e7a483b34b5ddff93740c005a9))
+
 ## [2.0.1](https://github.com/marco0560/codira/compare/v2.0.0...v2.0.1) (2026-09-03)
 
 ### Bug Fixes
