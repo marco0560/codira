@@ -1343,9 +1343,7 @@ class QueryDaemonIpcServer:
             msg = "No durable index generation is available."
             raise QueryDaemonUnavailableError(msg)
         if record.state != "ready":
-            msg = (
-                "Index generation is updating; warm reads are temporarily unavailable."
-            )
+            msg = f"Index generation is {record.state}; warm reads are temporarily unavailable."
             raise QueryDaemonUnavailableError(msg)
         try:
             self._runtime.refresh_from_generation_store()

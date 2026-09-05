@@ -12,7 +12,7 @@ from codira.storage import get_codira_dir
 if TYPE_CHECKING:
     from pathlib import Path
 
-IndexGenerationState = Literal["updating", "ready"]
+IndexGenerationState = Literal["updating", "ready", "failed"]
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,7 @@ class IndexGeneration:
         Record schema version.
     generation : int
         Monotonically increasing generation number.
-    state : {"updating", "ready"}
+    state : {"updating", "ready", "failed"}
         Mutation lifecycle state.
     last_successful_generation : int
         Last fully committed generation.
@@ -123,7 +123,7 @@ def transition_record(  # noqa: PLR0913
     ----------
     generation : int
         Current transition generation.
-    state : {"updating", "ready"}
+    state : {"updating", "ready", "failed"}
         Current transition state.
     last_successful_generation : int
         Last committed generation.

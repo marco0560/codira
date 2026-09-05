@@ -10,7 +10,7 @@ import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import pytest
 
@@ -510,20 +510,25 @@ def test_client_disconnect_during_request_does_not_break_later_clients(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Unix socket frame contract")
-def test_updating_generation_never_serves_the_previous_warm_connection(
+@pytest.mark.parametrize("state", ("updating", "failed"))
+def test_non_ready_generation_never_serves_the_previous_warm_connection(
     tmp_path: Path,
+    state: Literal["updating", "failed"],
 ) -> None:
-    """Reject clients while durable handoff reports an incomplete generation.
+    """Reject clients while durable handoff reports a non-ready generation.
 
     Parameters
     ----------
     tmp_path : pathlib.Path
         Temporary repository/output root.
+    state : {"updating", "failed"}
+        Non-ready durable generation state under test.
 
     Returns
     -------
     None
-        The test asserts an old warm runtime is not presented as current.
+        The test asserts an old warm runtime is not presented as current for
+        updating or failed index replacements.
     """
     identity = QueryDaemonIdentity.from_paths(tmp_path / "repo", tmp_path / "out")
     runtime = _FakeRuntime()
@@ -537,11 +542,11 @@ def test_updating_generation_never_serves_the_previous_warm_connection(
         ).write(
             transition_record(
                 generation=2,
-                state="updating",
+                state=state,
                 last_successful_generation=1,
             )
         )
-        with pytest.raises(QueryDaemonUnavailableError, match="updating"):
+        with pytest.raises(QueryDaemonUnavailableError, match=state):
             QueryDaemonIpcClient(identity).handshake()
     finally:
         server.close()
