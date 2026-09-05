@@ -468,10 +468,10 @@ uv run python scripts/embedding_model_manifest.py \
 ```
 
 The manifest does not contain model weights. Use
-`scripts/download_embedding_model.py` to source `$HOME/.hf_token`, download the
-required Hugging Face artifacts, install ONNX files under the manifest's
-`.codira/models/...` paths, and smoke-test each candidate before launching the
-long campaign.
+`scripts/download_embedding_model.py` to download the required Hugging Face
+artifacts, install ONNX files under the declared `--install-root`, and
+smoke-test each candidate before launching the long campaign. Remote-code
+entries require an explicit anonymous acknowledgement; see `docs/scripts.md`.
 
 The current Jina candidate is ONNX-only because the
 `jinaai/jina-embeddings-v2-base-code` SentenceTransformers remote-code path is

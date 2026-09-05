@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import types
 from pathlib import Path
-from typing import TYPE_CHECKING
+
+import pytest
 
 from scripts import download_embedding_model
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def test_read_hf_token_reads_sops_scoped_environment(
@@ -72,29 +71,32 @@ def test_download_embedding_model_main_selects_manifest_entry(
     Returns
     -------
     None
-        The test asserts ``main`` uses the sourced token and requested model id.
+    The test asserts ``main`` uses the sourced token and requested model id.
     """
     manifest = tmp_path / "models.json"
+    install_root = tmp_path / "models"
     manifest.write_text(
-        """
-        {
-          "schema_version": 1,
-          "models": [
+        json.dumps(
             {
-              "id": "candidate",
-              "engine": "onnx",
-              "model": "demo/model",
-              "version": "1",
-              "dimension": 8,
-              "precision": "float32",
-              "config": {
-                "model_path": ".codira/models/demo/model.onnx",
-                "tokenizer_path": ".codira/models/demo/tokenizer.json"
-              }
+                "schema_version": 1,
+                "models": [
+                    {
+                        "id": "candidate",
+                        "engine": "onnx",
+                        "model": "demo/model",
+                        "version": "1",
+                        "dimension": 8,
+                        "precision": "float32",
+                        "config": {
+                            "model_path": str(install_root / "demo" / "model.onnx"),
+                            "tokenizer_path": str(
+                                install_root / "demo" / "tokenizer.json"
+                            ),
+                        },
+                    }
+                ],
             }
-          ]
-        }
-        """,
+        ),
         encoding="utf-8",
     )
     monkeypatch.setenv("HF_TOKEN", "secret-token")
@@ -125,7 +127,11 @@ def test_download_embedding_model_main_selects_manifest_entry(
         assert install_root == tmp_path / "models"
         calls.append((entry.model_id, token))
 
-    def fake_smoke_test_entry(entry: download_embedding_model.ModelEntry) -> None:
+    def fake_smoke_test_entry(
+        entry: download_embedding_model.ModelEntry,
+        *,
+        allow_remote_code: bool = False,
+    ) -> None:
         """
         Record one fake smoke test.
 
@@ -139,6 +145,7 @@ def test_download_embedding_model_main_selects_manifest_entry(
         None
             The fake records inputs only.
         """
+        assert not allow_remote_code
         calls.append((f"smoke:{entry.model_id}", ""))
 
     monkeypatch.setattr(download_embedding_model, "download_entry", fake_download_entry)
@@ -155,7 +162,7 @@ def test_download_embedding_model_main_selects_manifest_entry(
             "--model-id",
             "candidate",
             "--install-root",
-            str(tmp_path / "models"),
+            str(install_root),
             "--sops-exec",
         ]
     )
@@ -185,7 +192,19 @@ def test_download_embedding_model_main_allows_anonymous_download(
     """
     manifest = tmp_path / "models.json"
     manifest.write_text(
-        """{\"models\": [{\"id\": \"candidate\", \"engine\": \"onnx\", \"model\": \"demo/model\", \"dimension\": 8, \"config\": {}}]}""",
+        """
+        {
+          "schema_version": 1,
+          "models": [{
+            "id": "candidate", "engine": "onnx", "model": "demo/model",
+            "version": "1", "dimension": 8, "precision": "float32",
+            "config": {
+              "model_path": ".codira/models/demo/model.onnx",
+              "tokenizer_path": ".codira/models/demo/tokenizer.json"
+            }
+          }]
+        }
+        """,
         encoding="utf-8",
     )
     monkeypatch.delenv("HF_TOKEN", raising=False)
@@ -216,7 +235,11 @@ def test_download_embedding_model_main_allows_anonymous_download(
         del entry, install_root
         calls.append(token)
 
-    def fake_smoke_test_entry(entry: download_embedding_model.ModelEntry) -> None:
+    def fake_smoke_test_entry(
+        entry: download_embedding_model.ModelEntry,
+        *,
+        allow_remote_code: bool = False,
+    ) -> None:
         """
         Accept the fake public model smoke test.
 
@@ -230,7 +253,7 @@ def test_download_embedding_model_main_allows_anonymous_download(
         None
             The fake performs no runtime work.
         """
-        del entry
+        del entry, allow_remote_code
 
     monkeypatch.setattr(download_embedding_model, "download_entry", fake_download_entry)
     monkeypatch.setattr(
@@ -294,7 +317,12 @@ def test_download_embedding_model_main_scopes_huggingface_credentials(
 
     monkeypatch.setattr("scripts.download_embedding_model.subprocess.run", fake_run)
 
-    assert download_embedding_model.main(["--skip-smoke"]) == 7
+    assert (
+        download_embedding_model.main(
+            ["--skip-smoke", "--model-id", "bge-small-en-v1.5-onnx"]
+        )
+        == 7
+    )
     command = observed["command"]
     assert isinstance(command, tuple)
     assert command[:3] == (
@@ -304,7 +332,198 @@ def test_download_embedding_model_main_scopes_huggingface_credentials(
             Path.home() / ".config" / "personal-secrets" / "secrets" / "huggingface.env"
         ),
     )
-    assert "--sops-exec --skip-smoke" in command[3]
+    assert "--sops-exec --skip-smoke --model-id bge-small-en-v1.5-onnx" in command[3]
+
+
+def test_download_embedding_model_rejects_manifest_target_outside_install_root(
+    tmp_path: Path,
+) -> None:
+    """
+    Refuse ONNX artifact paths that escape the declared installation root.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory used to construct containment boundaries.
+
+    Returns
+    -------
+    None
+        The test asserts an external manifest cannot direct an artifact write
+        outside ``--install-root``.
+    """
+    entry = download_embedding_model.ModelEntry(
+        model_id="unsafe",
+        engine="onnx",
+        model="demo/model",
+        dimension=8,
+        config={"model_path": str(tmp_path / "outside.onnx")},
+    )
+
+    with pytest.raises(ValueError, match="must be under"):
+        download_embedding_model._artifact_target(
+            entry,
+            "model_path",
+            tmp_path / "models",
+        )
+
+
+def test_download_embedding_model_requires_anonymous_remote_code_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Reject credentialed manifest-selected remote model code before re-exec.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to assert no credentialed subprocess is launched.
+    tmp_path : pathlib.Path
+        Temporary directory for the untrusted manifest.
+
+    Returns
+    -------
+    None
+        The test asserts remote code needs both explicit acknowledgement and
+        anonymous execution.
+    """
+    manifest = tmp_path / "models.json"
+    manifest.write_text(
+        """
+        {
+          "schema_version": 1,
+          "models": [{
+            "id": "remote", "engine": "sentence-transformers",
+            "model": "demo/model", "version": "1", "dimension": 8,
+            "precision": "float32", "config": {"trust_remote_code": true}
+          }]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    def fail_if_credentialed(*_args: object, **_kwargs: object) -> None:
+        """Fail if unsafe input reaches the credentialed child boundary."""
+        msg = "credentialed child must not start"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(
+        "scripts.download_embedding_model.subprocess.run",
+        fail_if_credentialed,
+    )
+
+    assert download_embedding_model.main(["--manifest", str(manifest)]) == 1
+
+
+def test_download_embedding_model_rejects_unsupported_manifest_config(
+    tmp_path: Path,
+) -> None:
+    """
+    Reject manifest configuration that the downloader does not understand.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for the malformed manifest.
+
+    Returns
+    -------
+    None
+        The test asserts unreviewed configuration cannot change downloader
+        behavior outside its defined schema.
+    """
+    manifest = tmp_path / "models.json"
+    manifest.write_text(
+        """
+        {
+          "schema_version": 1,
+          "models": [{
+            "id": "unexpected", "engine": "sentence-transformers",
+            "model": "demo/model", "version": "1", "dimension": 8,
+            "precision": "float32", "config": {"execute": true}
+          }]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert (
+        download_embedding_model.main(["--manifest", str(manifest), "--anonymous"]) == 1
+    )
+
+
+def test_download_embedding_model_allows_acknowledged_anonymous_remote_code(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Permit reviewed remote model code only for an anonymous invocation.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace download and smoke-test operations.
+    tmp_path : pathlib.Path
+        Temporary directory for the reviewed manifest.
+
+    Returns
+    -------
+    None
+        The test asserts the opt-in reaches smoke testing without credentials.
+    """
+    manifest = tmp_path / "models.json"
+    manifest.write_text(
+        """
+        {
+          "schema_version": 1,
+          "models": [{
+            "id": "remote", "engine": "sentence-transformers",
+            "model": "demo/model", "version": "1", "dimension": 8,
+            "precision": "float32", "config": {"trust_remote_code": true}
+          }]
+        }
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HF_TOKEN", "parent-token-must-not-be-forwarded")
+    observed: list[object] = []
+
+    def fake_download_entry(
+        entry: download_embedding_model.ModelEntry,
+        token: str | None,
+        install_root: Path,
+    ) -> None:
+        """Record the anonymous download arguments."""
+        del entry, install_root
+        observed.append(token)
+
+    def fake_smoke_test_entry(
+        entry: download_embedding_model.ModelEntry,
+        *,
+        allow_remote_code: bool = False,
+    ) -> None:
+        """Record the explicit remote-code acknowledgement."""
+        del entry
+        observed.append(allow_remote_code)
+
+    monkeypatch.setattr(download_embedding_model, "download_entry", fake_download_entry)
+    monkeypatch.setattr(
+        download_embedding_model, "smoke_test_entry", fake_smoke_test_entry
+    )
+
+    assert (
+        download_embedding_model.main(
+            [
+                "--manifest",
+                str(manifest),
+                "--anonymous",
+                "--allow-remote-code",
+            ]
+        )
+        == 0
+    )
+    assert observed == [None, True]
 
 
 def test_download_onnx_entry_keeps_only_manifest_artifacts(
