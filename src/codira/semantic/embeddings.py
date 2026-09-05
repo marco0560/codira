@@ -663,17 +663,7 @@ def provision_embedding_model(
         The active engine verifies or provisions required local artifacts.
     """
     effective_root = _effective_root(root)
-    config = load_effective_config(root=effective_root)
-    engine_config = dict(
-        (config.plugins.configs or {}).get(
-            f"embedding-{config.embeddings.engine}",
-            {},
-        )
-    )
-    engine_config["_codira_batch_size"] = config.embeddings.batch_size
-    engine_config["_codira_model"] = config.embeddings.model
-    engine_config["_codira_model_version"] = config.embeddings.version
-    engine_config["_codira_model_root"] = str(_shared_model_store(effective_root).root)
+    engine_config = embedding_engine_config(root=effective_root)
     token = _ACTIVE_EMBEDDING_ROOT.set(effective_root)
     try:
         active_embedding_engine(root=effective_root).provision(
@@ -780,17 +770,7 @@ def embed_texts(
         Raised when the active semantic engine cannot be loaded.
     """
     effective_root = _effective_root(root)
-    config = load_effective_config(root=effective_root)
-    engine_config = dict(
-        (config.plugins.configs or {}).get(
-            f"embedding-{config.embeddings.engine}",
-            {},
-        )
-    )
-    engine_config["_codira_batch_size"] = config.embeddings.batch_size
-    engine_config["_codira_model"] = config.embeddings.model
-    engine_config["_codira_model_version"] = config.embeddings.version
-    engine_config["_codira_model_root"] = str(_shared_model_store(effective_root).root)
+    engine_config = embedding_engine_config(root=effective_root)
     token = _ACTIVE_EMBEDDING_ROOT.set(effective_root)
     try:
         return active_embedding_engine(root=effective_root).embed_texts(
@@ -799,6 +779,38 @@ def embed_texts(
         )
     finally:
         _ACTIVE_EMBEDDING_ROOT.reset(token)
+
+
+def embedding_engine_config(*, root: Path | None = None) -> dict[str, object]:
+    """
+    Return active-engine configuration with Codira runtime identity values.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Repository root whose effective embedding configuration should be used.
+
+    Returns
+    -------
+    dict[str, object]
+        Namespaced plugin configuration enriched with model, dimension, batch,
+        and shared model-store values.
+    """
+
+    effective_root = _effective_root(root)
+    config = load_effective_config(root=effective_root)
+    engine_config = dict(
+        (config.plugins.configs or {}).get(
+            f"embedding-{config.embeddings.engine}",
+            {},
+        )
+    )
+    engine_config["_codira_batch_size"] = config.embeddings.batch_size
+    engine_config["_codira_dimension"] = config.embeddings.dimension
+    engine_config["_codira_model"] = config.embeddings.model
+    engine_config["_codira_model_version"] = config.embeddings.version
+    engine_config["_codira_model_root"] = str(_shared_model_store(effective_root).root)
+    return engine_config
 
 
 def embedding_work_batch_size(*, root: Path | None = None) -> int:

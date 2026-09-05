@@ -262,6 +262,25 @@ class _FakeEmbeddingEngine:
         del config
         return [[float(index), 0.0, 0.0] for index, _text in enumerate(texts)]
 
+    def calibration_runner(self, config: dict[str, object]) -> object:
+        """
+        Return a placeholder runner for protocol-surface validation.
+
+        Parameters
+        ----------
+        config : dict[str, object]
+            Engine-specific configuration table.
+
+        Returns
+        -------
+        object
+            The runtime-checkable protocol only verifies the capability is
+            exposed; benchmark execution is not part of this fixture.
+        """
+
+        del config
+        return object()
+
     def reset_runtime_caches(self) -> None:
         """
         Perform no-op runtime cache reset.

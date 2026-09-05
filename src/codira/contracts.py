@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from codira.calibration import EmbeddingBenchmarkRunner
     from codira.models import AnalysisResult, FileMetadataSnapshot
     from codira.semantic.embeddings import EmbeddingBackendSpec
     from codira.types import (
@@ -1416,6 +1417,26 @@ class EmbeddingEngine(Protocol):
         -------
         list[list[float]]
             One vector per input payload, in the same order as ``texts``.
+        """
+        ...
+
+    def calibration_runner(
+        self,
+        config: Mapping[str, object],
+    ) -> EmbeddingBenchmarkRunner:
+        """
+        Build the engine-owned runner for bounded local calibration.
+
+        Parameters
+        ----------
+        config : collections.abc.Mapping[str, object]
+            Effective engine configuration, including Codira runtime values.
+
+        Returns
+        -------
+        codira.calibration.EmbeddingBenchmarkRunner
+            Runner that benchmarks this engine without changing normal index
+            state.
         """
         ...
 

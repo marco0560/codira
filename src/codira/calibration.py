@@ -41,13 +41,14 @@ from codira.config import (
     DEFAULT_EMBEDDING_VERSION,
     validate_config_mapping,
 )
+from codira.contracts import EmbeddingEngineSpec
 from codira.semantic.embeddings import (
     EmbeddingBackendError,
     get_embedding_backend,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     class _SentenceTransformerFactory(Protocol):
         """
@@ -463,8 +464,9 @@ class SentenceTransformerBenchmarkRunner:
     reject candidates so calibration can fall back without network access.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, config: Mapping[str, object] | None = None) -> None:
         self._models: dict[str, object] = {}
+        self._config = config or {}
 
     def __call__(
         self,
@@ -566,7 +568,7 @@ class SentenceTransformerBenchmarkRunner:
                 contextlib.redirect_stderr(io.StringIO()),
             ):
                 model = factory(
-                    get_embedding_backend().name,
+                    self._model_name(),
                     device=device,
                     local_files_only=True,
                 )
@@ -574,6 +576,15 @@ class SentenceTransformerBenchmarkRunner:
             msg = f"local embedding backend unavailable: {exc}"
             raise CalibrationBenchmarkError(msg) from exc
         self._models[device] = model
+        return model
+
+    def _model_name(self) -> str:
+        """Return the configured SentenceTransformers model identity."""
+
+        model = self._config.get("_codira_model", get_embedding_backend().name)
+        if not isinstance(model, str):
+            msg = "Embedding calibration model identity must be a string."
+            raise CalibrationBenchmarkError(msg)
         return model
 
     @staticmethod
@@ -698,7 +709,11 @@ def calibrate_embeddings(
     )
 
 
-def embeddings_config_update(result: CalibrationResult) -> dict[str, object]:
+def embeddings_config_update(
+    result: CalibrationResult,
+    *,
+    engine: EmbeddingEngineSpec | None = None,
+) -> dict[str, object]:
     """
     Convert a calibration result into a config update mapping.
 
@@ -706,6 +721,9 @@ def embeddings_config_update(result: CalibrationResult) -> dict[str, object]:
     ----------
     result : CalibrationResult
         Calibration result to serialize.
+    engine : codira.contracts.EmbeddingEngineSpec | None, optional
+        Active engine identity. When omitted, retain the legacy default
+        identity for direct callers.
 
     Returns
     -------
@@ -714,11 +732,19 @@ def embeddings_config_update(result: CalibrationResult) -> dict[str, object]:
     """
 
     selected = result.selected
+    identity = engine or EmbeddingEngineSpec(
+        engine="sentence-transformers",
+        engine_version="",
+        model=DEFAULT_EMBEDDING_MODEL,
+        model_version=DEFAULT_EMBEDDING_VERSION,
+        dimension=DEFAULT_EMBEDDING_DIMENSION,
+    )
     update = {
         "enabled": True,
-        "model": DEFAULT_EMBEDDING_MODEL,
-        "version": DEFAULT_EMBEDDING_VERSION,
-        "dimension": DEFAULT_EMBEDDING_DIMENSION,
+        "engine": identity.engine,
+        "model": identity.model,
+        "version": identity.model_version,
+        "dimension": identity.dimension,
         "device": selected.device,
         "batch_size": selected.batch_size,
         "torch_num_threads": selected.torch_num_threads,
@@ -732,7 +758,11 @@ def embeddings_config_update(result: CalibrationResult) -> dict[str, object]:
     return {"embeddings": update}
 
 
-def render_embeddings_calibration_toml(result: CalibrationResult) -> str:
+def render_embeddings_calibration_toml(
+    result: CalibrationResult,
+    *,
+    engine: EmbeddingEngineSpec | None = None,
+) -> str:
     """
     Render calibration output as a config-compatible TOML snippet.
 
@@ -740,6 +770,8 @@ def render_embeddings_calibration_toml(result: CalibrationResult) -> str:
     ----------
     result : CalibrationResult
         Calibration result to render.
+    engine : codira.contracts.EmbeddingEngineSpec | None, optional
+        Active engine identity to preserve in rendered configuration.
 
     Returns
     -------
@@ -749,13 +781,14 @@ def render_embeddings_calibration_toml(result: CalibrationResult) -> str:
 
     embeddings = cast(
         "dict[str, object]",
-        embeddings_config_update(result)["embeddings"],
+        embeddings_config_update(result, engine=engine)["embeddings"],
     )
     gpu = cast("dict[str, object]", embeddings["gpu"])
     document = tomlkit.document()
     table = tomlkit.table()
     for key in (
         "enabled",
+        "engine",
         "model",
         "version",
         "dimension",

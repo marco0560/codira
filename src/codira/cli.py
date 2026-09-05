@@ -136,6 +136,7 @@ from codira.query_daemon_lifecycle import (
     run_foreground_query_daemon,
 )
 from codira.registry import (
+    active_embedding_engine,
     active_index_backend,
     active_language_analyzers,
     active_plugin_instance_cache,
@@ -146,7 +147,11 @@ from codira.registry import (
 )
 from codira.repository_scope import is_repository_scope_excluded
 from codira.scanner import analyzer_accepts_path, file_metadata, iter_project_files
-from codira.semantic.embeddings import EmbeddingBackendError, get_embedding_backend
+from codira.semantic.embeddings import (
+    EmbeddingBackendError,
+    embedding_engine_config,
+    get_embedding_backend,
+)
 from codira.semantic.search import (
     DocumentationCandidatesRequest,
     EmbeddingCandidatesRequest,
@@ -6715,12 +6720,16 @@ def _run_calibrate_embeddings(args: argparse.Namespace) -> int:
         Zero after successful calibration output handling.
     """
 
-    result = calibrate_embeddings()
-    snippet = render_embeddings_calibration_toml(result)
+    root = Path.cwd()
+    engine = active_embedding_engine(root=root)
+    engine_config = embedding_engine_config(root=root)
+    identity = engine.spec(engine_config)
+    result = calibrate_embeddings(runner=engine.calibration_runner(engine_config))
+    snippet = render_embeddings_calibration_toml(result, engine=identity)
     output_path = cast("Path | None", args.output)
     if args.write:
         path = user_config_path()
-        update_config_file(path, embeddings_config_update(result))
+        update_config_file(path, embeddings_config_update(result, engine=identity))
         print(f"Wrote user config: {path}")
         return 0
     if output_path is not None:
