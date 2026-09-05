@@ -260,15 +260,15 @@ class DaemonScheduler:
         self.observe_head()
         while self._status.pending_reconciliation:
             self._is_reconciling = True
-            self._set_status(
-                replace(
-                    self._status,
-                    state=DaemonState.INDEXING,
-                    pending_reconciliation=False,
-                )
-            )
-            head_before = self._read_head(self._root)
             try:
+                self._set_status(
+                    replace(
+                        self._status,
+                        state=DaemonState.INDEXING,
+                        pending_reconciliation=False,
+                    )
+                )
+                head_before = self._read_head(self._root)
                 self._reconcile(self._root)
             except (OSError, RuntimeError, ValueError) as error:
                 self._set_status(
@@ -280,11 +280,9 @@ class DaemonScheduler:
                         last_error=str(error),
                     )
                 )
-                self._is_reconciling = False
                 return self._status
             finally:
-                if self._is_reconciling:
-                    self._is_reconciling = False
+                self._is_reconciling = False
 
             head_after = self._read_head(self._root)
             self._set_status(
