@@ -58,9 +58,9 @@ src/codira/query/context.py:2243 PLR0913 — channel functions share an explicit
 src/codira/query/context.py:2385, src/codira/query/context.py:2420,
     src/codira/query/context.py:3976, src/codira/query/context.py:4079, and
     src/codira/query/context.py:4134 retain that same channel-contract reason.
-src/codira/docstring.py:1248, src/codira/docstring.py:1359 PLC0415 — lazy imports avoid a configuration or
+src/codira/docstring.py:1286, src/codira/docstring.py:1397 PLC0415 — lazy imports avoid a configuration or
     registry import cycle on the optional documentation-plugin path.
-src/codira/docstring.py:1302, src/codira/docstring.py:1453 PLR0913 — documentation validation preserves
+src/codira/docstring.py:1340, src/codira/docstring.py:1491 PLR0913 — documentation validation preserves
     source, configuration, visibility, and plugin-routing provenance.
 src/codira/query_daemon.py:348,365 BLE001 — worker initialization and operation
     failures must cross the future boundary as their original exception.

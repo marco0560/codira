@@ -23,6 +23,7 @@ from codira import registry
 from codira.config import override_repo_config_path
 from codira.docstring import (
     DocstringValidationRequest,
+    _matches_route_path,
     find_missing_sections,
     find_unexpected_sections,
     validate_docstring,
@@ -105,6 +106,35 @@ def test_selected_documentation_audit_plugin_skips_unrelated_factories(
 
     assert registry.documentation_audit_plugin("selected", root=tmp_path) is selected
     assert calls == ["selected"]
+
+
+def test_documentation_audit_route_examples_match_direct_src_files() -> None:
+    """Match direct source files with the published recursive route examples.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts each published ``src/**/*.ext`` pattern accepts a
+        source file directly below ``src``.
+    """
+    examples = (
+        ("src/module.py", "src/**/*.py"),
+        ("src/module.c", "src/**/*.c"),
+        ("src/module.cpp", "src/**/*.cpp"),
+        ("src/widget.js", "src/**/*.js"),
+        ("src/widget.jsx", "src/**/*.jsx"),
+    )
+
+    for relative_path, pattern in examples:
+        assert _matches_route_path(
+            relative_path=relative_path,
+            include_paths=(pattern,),
+            exclude_paths=(),
+        )
 
 
 def _validation_request(

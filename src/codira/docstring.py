@@ -1193,10 +1193,48 @@ def _matches_route_path(
     """
 
     included = not include_paths or any(
-        fnmatch(relative_path, pattern) for pattern in include_paths
+        _matches_route_glob(relative_path=relative_path, pattern=pattern)
+        for pattern in include_paths
     )
-    excluded = any(fnmatch(relative_path, pattern) for pattern in exclude_paths)
+    excluded = any(
+        _matches_route_glob(relative_path=relative_path, pattern=pattern)
+        for pattern in exclude_paths
+    )
     return included and not excluded
+
+
+def _matches_route_glob(*, relative_path: str, pattern: str) -> bool:
+    """Return whether a route glob matches a repository-relative path.
+
+    Parameters
+    ----------
+    relative_path : str
+        POSIX-style repository-relative source path.
+    pattern : str
+        Route glob whose ``**/`` segments also match zero directories.
+
+    Returns
+    -------
+    bool
+        ``True`` when the pattern accepts the path.
+
+    Notes
+    -----
+    ``fnmatch`` treats ``**/`` as requiring a slash.  Iteratively removing
+    such segments preserves existing ``fnmatch`` behavior while adding the
+    recursive-glob zero-directory case.
+    """
+    patterns = [pattern]
+    while patterns:
+        candidate = patterns.pop()
+        if fnmatch(relative_path, candidate):
+            return True
+        recursive_segment = candidate.find("**/")
+        if recursive_segment >= 0:
+            patterns.append(
+                candidate[:recursive_segment] + candidate[recursive_segment + 3 :]
+            )
+    return False
 
 
 def _relative_route_path(*, root: Path, source_path: Path) -> str:
