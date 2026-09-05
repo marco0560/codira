@@ -16,8 +16,10 @@ This module belongs to the **docstring verification layer** that keeps docstring
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
+from codira import registry
 from codira.config import override_repo_config_path
 from codira.docstring import (
     DocstringValidationRequest,
@@ -30,6 +32,79 @@ from codira.registry import reset_plugin_registry_caches
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from pytest import MonkeyPatch
+
+
+def test_selected_documentation_audit_plugin_skips_unrelated_factories(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Construct only the documentation-audit provider selected by name.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root passed to selected-provider configuration.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to expose selected and unrelated provider factories.
+
+    Returns
+    -------
+    None
+        The test asserts an unrelated provider factory is never invoked.
+    """
+    calls: list[str] = []
+    selected = object()
+
+    def selected_factory() -> object:
+        """Return the selected provider test double.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        object
+            Selected provider instance.
+        """
+        calls.append("selected")
+        return selected
+
+    def unrelated_factory() -> object:
+        """Fail if routing constructs an unrelated provider.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        object
+            This function always raises before returning.
+        """
+        msg = "unrelated provider was constructed"
+        raise AssertionError(msg)
+
+    plugins = [
+        SimpleNamespace(
+            name="selected", family="documentation-audit", factory=selected_factory
+        ),
+        SimpleNamespace(
+            name="unrelated", family="documentation-audit", factory=unrelated_factory
+        ),
+    ]
+    monkeypatch.setattr(
+        registry, "_plugin_snapshot", lambda _family, *, root=None: (plugins, [])
+    )
+    monkeypatch.setattr(
+        registry,
+        "_configure_plugin_instance",
+        lambda *, plugin, instance, root=None: instance,
+    )
+
+    assert registry.documentation_audit_plugin("selected", root=tmp_path) is selected
+    assert calls == ["selected"]
 
 
 def _validation_request(

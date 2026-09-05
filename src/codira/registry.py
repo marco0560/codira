@@ -2022,6 +2022,37 @@ def documentation_audit_plugins(
     return configured
 
 
+def documentation_audit_plugin(
+    name: str,
+    *,
+    root: Path | None = None,
+) -> DocumentationAuditPluginProtocol | None:
+    """Return one configured documentation-audit plugin by stable name.
+
+    Parameters
+    ----------
+    name : str
+        Documentation-audit plugin selected by a matching route.
+    root : pathlib.Path | None, optional
+        Repository root whose configuration should configure the plugin.
+
+    Returns
+    -------
+    codira.contracts.DocumentationAuditPlugin | None
+        Configured selected plugin, or ``None`` when it is unavailable.
+    """
+    plugins, _registrations = _plugin_snapshot("documentation-audit", root=root)
+    for plugin in plugins:
+        if plugin.name != name:
+            continue
+        instance = plugin.factory()
+        return cast(
+            "DocumentationAuditPluginProtocol",
+            _configure_plugin_instance(plugin=plugin, instance=instance, root=root),
+        )
+    return None
+
+
 def missing_language_analyzer_hint(path: Path) -> str | None:
     """
     Return an installation hint when a path targets an unavailable analyzer.

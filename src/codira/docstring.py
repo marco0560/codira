@@ -1356,7 +1356,7 @@ def validate_documentation_issues_with_configured_plugin(  # noqa: PLR0913
     if not is_public:
         return []
 
-    from codira.registry import documentation_audit_plugins  # noqa: PLC0415
+    from codira.registry import documentation_audit_plugin  # noqa: PLC0415
 
     language, matches = _matching_documentation_audit_routes(
         root=root,
@@ -1383,8 +1383,7 @@ def validate_documentation_issues_with_configured_plugin(  # noqa: PLR0913
         ]
 
     route = matches[0]
-    plugins = documentation_audit_plugins(root=root)
-    plugin = plugins.get(route.plugin)
+    plugin = documentation_audit_plugin(route.plugin, root=root)
     if plugin is None:
         return [
             DocumentationAuditIssue(
