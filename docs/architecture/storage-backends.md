@@ -63,7 +63,10 @@ returned `IndexWriteSession`:
 - commit, abort, and close
 
 This contract exists to make warm read-heavy command paths cheap while keeping
-mutation ownership explicit and backend-local.
+mutation ownership explicit and backend-local. `IndexBackend.open_connection()`
+has one first-use exception: it may create an absent backend store before
+returning a connection. It must not migrate, repair, compact, or otherwise
+mutate an existing store; those operations remain in `IndexWriteSession`.
 
 ## Durable vectors and derived similarity artifacts
 

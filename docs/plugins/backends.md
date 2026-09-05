@@ -87,7 +87,7 @@ Current implementation note:
 
 Backend plugins now have two distinct responsibilities:
 
-- `IndexBackend` for read-heavy operations
+- `IndexBackend` for read-heavy operations and first-use storage bootstrap
 - `IndexWriteSession` for mutation-heavy indexing work
 
 Backends should keep these read-side operations cheap:
@@ -98,6 +98,11 @@ Backends should keep these read-side operations cheap:
 - embedding-compatibility checks
 - normal query commands such as `ctx`, `sym`, `calls`, `symlist`, and `audit`
 - warm-index maintenance detection
+
+`open_connection()` may create the initial, absent backend database so a first
+query has a usable local store. That narrow bootstrap exception must not alter
+an existing database. Schema migration, repair, compaction, and all other
+existing-state mutation belong to `IndexWriteSession`.
 
 Backends should keep mutation-side work behind `begin_index_session(root)`:
 
@@ -110,7 +115,8 @@ Backends should keep mutation-side work behind `begin_index_session(root)`:
 
 DuckDB-specific guidance:
 
-- ordinary `open_connection()` calls must stay read-oriented
+- ordinary `open_connection()` calls must stay read-oriented after the one-time
+  absent-store bootstrap
 - schema repair or migration work must not run during normal query opens
 - writer setup belongs in the write session, not in the query path
 - set `plugins.backend-duckdb.profiling_enabled = true` only when diagnosing
