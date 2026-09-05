@@ -541,6 +541,7 @@ def create_server(
         query: str,
         prefix: str | None = None,
         limit: int = 100,
+        search_profile: str | None = None,
         output_budget: int = 4_000,
     ) -> dict[str, object]:
         """Search stored symbol embeddings without maintenance operations.
@@ -553,6 +554,8 @@ def create_server(
             Repository-relative path prefix restricting candidate files.
         limit : int, optional
             Maximum number of ranked embedding matches to return.
+        search_profile : str | None, optional
+            Named similarity-index profile, or the configured default.
         output_budget : int, optional
             Maximum serialized character count for the result payload.
 
@@ -565,6 +568,7 @@ def create_server(
             query,
             prefix=prefix,
             limit=limit,
+            search_profile=search_profile,
             output_budget=output_budget,
         )
 
@@ -573,6 +577,7 @@ def create_server(
         query: str,
         prefix: str | None = None,
         limit: int = 100,
+        search_profile: str | None = None,
         output_budget: int = 4_000,
     ) -> dict[str, object]:
         """Search stored documentation embeddings without mutating the index.
@@ -585,6 +590,8 @@ def create_server(
             Repository-relative path prefix restricting candidate documents.
         limit : int, optional
             Maximum number of ranked documentation matches to return.
+        search_profile : str | None, optional
+            Named similarity-index profile, or the configured default.
         output_budget : int, optional
             Maximum serialized character count for the result payload.
 
@@ -597,6 +604,7 @@ def create_server(
             query,
             prefix=prefix,
             limit=limit,
+            search_profile=search_profile,
             output_budget=output_budget,
         )
 

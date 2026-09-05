@@ -62,13 +62,13 @@ _TOOLS: Final = (
         "emb",
         "Search stored symbol embeddings without maintenance operations.",
         ("query",),
-        ("prefix",),
+        ("prefix", "search_profile"),
     ),
     ToolContract(
         "docs",
         "Search stored documentation embeddings.",
         ("query",),
-        ("prefix",),
+        ("prefix", "search_profile"),
     ),
 )
 
