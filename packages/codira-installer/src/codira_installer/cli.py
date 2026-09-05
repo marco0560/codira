@@ -78,6 +78,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--operation", choices=tuple(RuntimeOperation), default=RuntimeOperation.INSTALL
     )
+    parser.add_argument(
+        "--receipt",
+        type=Path,
+        help="managed-runtime receipt required for update, repair, and modify",
+    )
     parser.add_argument("--workspace")
     parser.add_argument("--repository", type=Path)
     parser.add_argument("--workspace-state-root", type=Path)
@@ -150,6 +155,7 @@ def _request(args: argparse.Namespace) -> InstallerRequest:
         packages=tuple(args.package),
         runtime=RuntimeTarget(runtime_kind, runtime_root),
         operation=RuntimeOperation(args.operation),
+        receipt_path=args.receipt,
         workspace=workspace,
         model_store=args.model_store,
     )

@@ -18,6 +18,7 @@ from codira_installer.models import (
     InstallationProfile,
     InstallSource,
     RuntimeKind,
+    RuntimeOperation,
     RuntimeTarget,
 )
 
@@ -97,6 +98,10 @@ class InstallerScreen(Screen[None]):
             "runtime_root": ""
             if request.runtime.path is None
             else str(request.runtime.path),
+            "operation": str(request.operation),
+            "receipt": ""
+            if request.receipt_path is None
+            else str(request.receipt_path),
             "profile": str(request.profile),
             "packages": ",".join(request.packages),
         }
@@ -131,71 +136,83 @@ class TargetScreen(InstallerScreen):
 class RepositoryScreen(InstallerScreen):
     """Present repository scope before optional repository operations."""
 
-    heading = "3. Repository scope"
+    heading = "4. Repository scope"
     detail = "Repository-scoped daemon operations remain optional and explicit."
+    position = 3
+
+
+class LifecycleScreen(InstallerScreen):
+    """Present receipt-scoped runtime lifecycle operation choices."""
+
+    heading = "3. Runtime operation"
+    detail = "Update, repair, and modify require the managed-runtime receipt."
     position = 2
+    fields = (
+        ("operation", "install, update, repair, or modify"),
+        ("receipt", "runtime receipt path for non-install operations"),
+    )
 
 
 class ProfileScreen(InstallerScreen):
     """Present Core-only, Recommended, and Full-official profile selection."""
 
-    heading = "4. Installation profile"
+    heading = "5. Installation profile"
     detail = "Profiles select only official first-party packages; deselected packages stay installed."
-    position = 3
+    position = 4
     fields = (("profile", "core-only, recommended, or full-official"),)
 
 
 class FeatureScreen(InstallerScreen):
     """Present Advanced feature overrides for official packages only."""
 
-    heading = "5. Features"
+    heading = "6. Features"
     detail = "Advanced selections are constrained to the generated official catalog."
-    position = 4
+    position = 5
     fields = (("packages", "comma-separated official package overrides"),)
 
 
 class ConfigurationScreen(InstallerScreen):
     """Present user and repository configuration review."""
 
-    heading = "6. Configuration"
+    heading = "7. Configuration"
     detail = (
         "Configuration is previewed and atomically replaced only after confirmation."
     )
-    position = 5
+    position = 6
 
 
 class ModelScreen(InstallerScreen):
     """Present optional target-environment model provisioning."""
 
-    heading = "7. Model provisioning"
+    heading = "8. Model provisioning"
     detail = "Model provisioning is optional, target-scoped, and idempotent."
-    position = 6
+    position = 7
 
 
 class McpScreen(InstallerScreen):
     """Present optional idempotent MCP client configuration."""
 
-    heading = "8. MCP integration"
+    heading = "9. MCP integration"
     detail = (
         "Codex, Claude, and Cursor configuration merges preserve unrelated entries."
     )
-    position = 7
+    position = 8
 
 
 class ServiceScreen(InstallerScreen):
     """Present optional repository-scoped daemon operations."""
 
-    heading = "9. Services"
+    heading = "10. Services"
     detail = "Daemon configuration, installation, start, and status stay visible and privilege-free."
-    position = 8
+    position = 9
 
 
 class ReviewScreen(InstallerScreen):
     """Validate the shared plan before allowing an apply request."""
 
-    heading = "10. Review plan"
+    heading = "11. Review plan"
     detail = "Resolving the plan before execution…"
-    position = 9
+    position = 10
 
     def compose(self) -> ComposeResult:
         """Compose the review screen with an initially disabled Apply action.
@@ -244,11 +261,11 @@ class ReviewScreen(InstallerScreen):
 class ProgressScreen(InstallerScreen):
     """Show cooperative worker progress and allow a safe cancellation request."""
 
-    heading = "11. Applying plan"
+    heading = "12. Applying plan"
     detail = (
         "No command is interrupted mid-step; completed work is journaled for resume."
     )
-    position = 10
+    position = 11
 
     def compose(self) -> ComposeResult:
         """Compose worker progress and cancellation controls.
@@ -273,9 +290,9 @@ class ProgressScreen(InstallerScreen):
 class ResultScreen(InstallerScreen):
     """Present success, failure, cancellation, and resume outcomes."""
 
-    heading = "12. Result"
+    heading = "13. Result"
     detail = ""
-    position = 11
+    position = 12
 
     def compose(self) -> ComposeResult:
         """Compose outcome text and an exit action.
@@ -316,6 +333,7 @@ class InstallerApp(App[None]):
     STAGES: ClassVar[tuple[type[InstallerScreen], ...]] = (
         SourceScreen,
         TargetScreen,
+        LifecycleScreen,
         RepositoryScreen,
         ProfileScreen,
         FeatureScreen,
@@ -439,6 +457,15 @@ class InstallerApp(App[None]):
                         target=EnvironmentTarget(kind, environment),
                         runtime=RuntimeTarget(runtime_kind, runtime_root),
                     )
+                )
+            elif isinstance(screen, LifecycleScreen):
+                operation = RuntimeOperation(
+                    screen.query_one("#operation", Input).value
+                )
+                receipt_text = screen.query_one("#receipt", Input).value.strip()
+                receipt = Path(receipt_text) if receipt_text else None
+                self.controller.update_request(
+                    replace(request, operation=operation, receipt_path=receipt)
                 )
             elif isinstance(screen, ProfileScreen):
                 profile = InstallationProfile(screen.query_one("#profile", Input).value)

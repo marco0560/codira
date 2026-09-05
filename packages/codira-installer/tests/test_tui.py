@@ -8,7 +8,12 @@ import json
 from pathlib import Path  # noqa: TC003
 from typing import TYPE_CHECKING
 
-from codira_installer.app import InstallerApp, ReviewScreen, SourceScreen
+from codira_installer.app import (
+    InstallerApp,
+    LifecycleScreen,
+    ReviewScreen,
+    SourceScreen,
+)
 from codira_installer.cli import main
 from codira_installer.controller import InstallerController
 from codira_installer.execution import InstallationCancelled, load_journal
@@ -18,6 +23,7 @@ from codira_installer.models import (
     ExecutionJournal,
     InstallerRequest,
     InstallPlan,
+    RuntimeOperation,
 )
 from codira_installer.plan import load_plan, resolve_plan
 
@@ -240,12 +246,59 @@ def test_headless_textual_navigation_and_review_confirmation(tmp_path: Path) -> 
             app.screen.query_one("#target", Input).value = "existing"
             app.screen.query_one("#environment", Input).value = "/target/.venv"
             await pilot.click("#next")
-            for _ in range(7):
+            for _ in range(8):
                 await pilot.click("#next")
             assert isinstance(app.screen, ReviewScreen)
             assert not app.screen.query_one("#apply", Button).disabled
             assert app.controller.plan is not None
             assert app.controller.plan.request.checkout == Path("/clone/codira")
             assert app.controller.plan.request.target.path == Path("/target/.venv")
+
+    asyncio.run(exercise())
+
+
+def test_tui_commits_receipt_scoped_runtime_operation(tmp_path: Path) -> None:
+    """Commit a non-install lifecycle choice through the Textual front end.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary receipt and journal location.
+
+    Returns
+    -------
+    None
+        The test asserts the lifecycle screen updates the shared request with
+        the selected operation and receipt path.
+    """
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(
+        '{"packages": [], "profile": "recommended", "source": "pypi", "version": "1"}',
+        encoding="utf-8",
+    )
+
+    async def exercise() -> None:
+        """Drive the lifecycle screen through Textual's headless pilot.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            The screen transition commits the lifecycle values.
+        """
+        app = InstallerApp(InstallerController(_request(), tmp_path / "journal.json"))
+        async with app.run_test() as pilot:
+            await pilot.click("#next")
+            await pilot.click("#next")
+            assert isinstance(app.screen, LifecycleScreen)
+            app.screen.query_one("#operation", Input).value = "repair"
+            app.screen.query_one("#receipt", Input).value = str(receipt)
+            await pilot.click("#next")
+
+            assert app.controller.request.operation is RuntimeOperation.REPAIR
+            assert app.controller.request.receipt_path == receipt
 
     asyncio.run(exercise())

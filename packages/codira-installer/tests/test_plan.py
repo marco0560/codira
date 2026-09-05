@@ -55,6 +55,45 @@ def test_target_only_cli_request_installs_into_selected_environment(
         assert str(environment / "bin" / "python") in install.command
 
 
+def test_cli_requests_support_receipt_scoped_runtime_operations(
+    tmp_path: Path,
+) -> None:
+    """Build plans for every non-install operation through the CLI request path.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary receipt location.
+
+    Returns
+    -------
+    None
+        The test asserts CLI parsing preserves the receipt for update, repair,
+        and modify requests accepted by shared planning.
+    """
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(
+        '{"packages": [], "profile": "recommended", "source": "pypi", "version": "1"}',
+        encoding="utf-8",
+    )
+
+    for operation in (
+        RuntimeOperation.UPDATE,
+        RuntimeOperation.REPAIR,
+        RuntimeOperation.MODIFY,
+    ):
+        request = cli._request(
+            cli._parser().parse_args(
+                ["--operation", operation.value, "--receipt", str(receipt)]
+            )
+        )
+
+        plan = resolve_plan(request, installed_packages=())
+
+        assert plan.request.operation is operation
+        assert plan.request.receipt_path == receipt
+
+
 def test_equivalent_requests_render_byte_identical_plans() -> None:
     """Render equivalent requests deterministically.
 

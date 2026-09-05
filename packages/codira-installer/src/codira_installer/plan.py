@@ -484,6 +484,7 @@ def load_plan(payload: Mapping[str, object]) -> InstallPlan:
         target_payload = cast("Mapping[str, object]", request_payload["target"])
         target_path = target_payload["path"]
         checkout = request_payload["checkout"]
+        receipt_path = request_payload["receipt_path"]
         request = InstallerRequest(
             target=EnvironmentTarget(
                 EnvironmentKind(str(target_payload["kind"])),
@@ -559,6 +560,7 @@ def load_plan(payload: Mapping[str, object]) -> InstallPlan:
             model_store=None
             if request_payload["model_store"] is None
             else Path(str(request_payload["model_store"])),
+            receipt_path=None if receipt_path is None else Path(str(receipt_path)),
         )
         steps = tuple(
             PlanStep(
