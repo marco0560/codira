@@ -3302,6 +3302,40 @@ def test_select_language_analyzer_reports_cpp_package_hint(
     assert missing_language_analyzer_hint(Path("native/sample.cpp")) is not None
 
 
+def test_missing_language_analyzer_hints_cover_go_javascript_and_typescript(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """
+    Report package install hints for unavailable Go and web-language analyzers.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest fixture used to patch entry-point discovery.
+
+    Returns
+    -------
+    None
+        The test asserts every supported suffix has its first-party package hint.
+    """
+    monkeypatch.setattr(
+        registry_module,
+        "_entry_points_for_group",
+        lambda group: [],
+    )
+
+    expected_packages_by_path = {
+        Path("native/sample.go"): "codira-analyzer-go",
+        Path("web/sample.js"): "codira-analyzer-javascript",
+        Path("web/sample.ts"): "codira-analyzer-typescript",
+    }
+
+    for path, package_name in expected_packages_by_path.items():
+        hint = missing_language_analyzer_hint(path)
+        assert hint is not None
+        assert package_name in hint
+
+
 def test_select_language_analyzer_reports_python_package_hint(
     monkeypatch: MonkeyPatch,
 ) -> None:
