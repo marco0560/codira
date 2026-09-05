@@ -21,11 +21,10 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field as dataclass_field
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from codira.calibration import EmbeddingBenchmarkRunner
     from codira.models import AnalysisResult, FileMetadataSnapshot
     from codira.semantic.embeddings import EmbeddingBackendSpec
@@ -487,6 +486,51 @@ class VectorStorePurgeRequest:
     dry_run: bool
     older_than_days: int | None = None
     keep: int = 0
+
+
+@dataclass(frozen=True)
+class VectorStoreResetRequest:
+    """Request confirmed teardown of one vector store's persistent state.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose store-owned persistent artifacts may be removed.
+    config : collections.abc.Mapping[str, object]
+        Vector-store-specific configuration table.
+    """
+
+    root: Path
+    config: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class VectorStoreResetResult:
+    """Credential-free outcome of vector-store persistent-state teardown.
+
+    Parameters
+    ----------
+    store : str
+        Vector-store plugin that owned the removed state.
+    removed_artifacts : tuple[str, ...]
+        Deterministic repository-relative paths removed by the plugin.
+    """
+
+    store: str
+    removed_artifacts: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Reject unsafe or non-deterministic artifact paths."""
+
+        if not self.store.strip():
+            raise ValueError("Vector-store reset results require a store name.")
+        if tuple(sorted(set(self.removed_artifacts))) != self.removed_artifacts:
+            raise ValueError("Vector-store reset paths must be unique and ordered.")
+        if any(
+            not path or path.startswith(("/", "\\")) or ".." in Path(path).parts
+            for path in self.removed_artifacts
+        ):
+            raise ValueError("Vector-store reset paths must be safe and relative.")
 
 
 @dataclass(frozen=True)
@@ -1724,6 +1768,25 @@ class VectorStore(Protocol):
         -------
         codira.contracts.VectorStorePurgeResult
             Purge summary.
+        """
+        ...
+
+    def reset_persistent_state(
+        self,
+        request: VectorStoreResetRequest,
+    ) -> VectorStoreResetResult:
+        """Remove all persistent artifacts owned by this vector store.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStoreResetRequest
+            Repository root and plugin-specific configuration for confirmed
+            teardown.
+
+        Returns
+        -------
+        codira.contracts.VectorStoreResetResult
+            Deterministic inventory of removed store-owned artifacts.
         """
         ...
 

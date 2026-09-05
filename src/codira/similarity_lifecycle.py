@@ -69,6 +69,23 @@ def purge_active_similarity_index(
     return index.purge(SimilarityPurgeRequest(root, identity, preview=preview))
 
 
+def reset_active_similarity_index(root: Path) -> SimilarityPurgeResult:
+    """Remove confirmed state through the selected similarity-index contract.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root whose selected derived index owns the artifacts.
+
+    Returns
+    -------
+    codira.contracts.SimilarityPurgeResult
+        Confirmed selected-plugin persistent cleanup outcome.
+    """
+
+    return purge_active_similarity_index(root, preview=False)
+
+
 def rebuild_active_similarity_index(root: Path) -> SimilarityRebuildResult:
     """Build both authoritative object-type snapshots and verify their revisions.
 

@@ -65,6 +65,8 @@ from codira.contracts import (
     VectorStore,
     VectorStorePurgeRequest,
     VectorStorePurgeResult,
+    VectorStoreResetRequest,
+    VectorStoreResetResult,
     VectorStoreSpec,
     split_declared_retrieval_capabilities,
 )
@@ -282,8 +284,7 @@ class _FakeEmbeddingEngine:
         return object()
 
     def reset_runtime_caches(self) -> None:
-        """
-        Perform no-op runtime cache reset.
+        """Perform no-op runtime cache reset.
 
         Parameters
         ----------
@@ -608,8 +609,7 @@ class _FakeVectorStore:
         )
 
     def reset_runtime_caches(self) -> None:
-        """
-        Perform no-op vector-store cache reset.
+        """Perform no-op vector-store cache reset.
 
         Parameters
         ----------
@@ -620,6 +620,15 @@ class _FakeVectorStore:
         None
             The fake vector store has no process-local caches.
         """
+
+    def reset_persistent_state(
+        self,
+        request: VectorStoreResetRequest,
+    ) -> VectorStoreResetResult:
+        """Return no removed state for the protocol-only fake store."""
+
+        del request
+        return VectorStoreResetResult(self.name)
 
 
 class _FakeBackend:

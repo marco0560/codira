@@ -20,6 +20,7 @@ from codira.contracts import (
     VectorStore,
     VectorStoreFullIndexRequest,
     VectorStorePurgeRequest,
+    VectorStoreResetRequest,
 )
 from codira.semantic.embeddings import (
     deserialize_vector as deserialize_embedding_vector,
@@ -230,6 +231,22 @@ def test_duckdb_vector_store_rejects_pre_revision_state(tmp_path: Path) -> None:
 
     with pytest.raises(VectorStoreError, match="codira emb reset --yes"):
         DuckDBVectorStore().initialize(tmp_path, {})
+
+
+def test_duckdb_vector_store_reset_removes_owned_database(tmp_path: Path) -> None:
+    """Remove only the DuckDB artifact owned by the vector-store plugin."""
+
+    path = get_vector_store_path(tmp_path)
+    path.parent.mkdir()
+    path.write_text("state", encoding="utf-8")
+
+    result = DuckDBVectorStore().reset_persistent_state(
+        VectorStoreResetRequest(root=tmp_path, config={})
+    )
+
+    assert result.store == "duckdb"
+    assert result.removed_artifacts == (".codira/embeddings.duckdb",)
+    assert not path.exists()
 
 
 def test_duckdb_vector_store_persists_vector_rows(tmp_path: Path) -> None:

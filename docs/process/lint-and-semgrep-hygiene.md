@@ -28,7 +28,7 @@ scripts/generate_github_snapshot.py:118 S607 — the fixed `gh` executable is
     intentionally invoked by argument vector; there is no shell interpolation.
 src/codira/indexer.py:1239 PLR0913 — bulk indexing keeps backend, transaction,
     artifact, coverage, and embedding ownership explicit at the orchestration seam.
-src/codira/contracts.py:3367 PLR0913 — the plugin protocol signature is a
+src/codira/contracts.py:3430 PLR0913 — the plugin protocol signature is a
     public compatibility contract and cannot be bundled without breaking providers.
 src/codira/contracts.py:17 EM101,TRY003 — public contract validation keeps
     short, consistent exception messages at the typed boundary.
@@ -46,11 +46,11 @@ src/codira/query_daemon_lifecycle.py:580 PLR0913 — service lifecycle inputs ar
     explicit to preserve platform-independent restart behavior.
 src/codira/query_daemon_ipc.py:894 PLR0913 — IPC server construction exposes its
     authentication, runtime, and connection-boundary dependencies.
-src/codira/cli.py:2142 C901,PLR0912 — index CLI failure/reporting branches are
+src/codira/cli.py:2139 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
-src/codira/cli.py:5982 PLR0913 — daemon context rendering receives the complete
+src/codira/cli.py:5900 PLR0913 — daemon context rendering receives the complete
     explicit query/output/profile request after freshness has been established.
-src/codira/cli.py:6804 PLR0913 — command dispatch receives parsed arguments and
+src/codira/cli.py:6722 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
 src/codira/query/context.py:2243 PLR0913 — channel functions share an explicit
     root/query/connection/intent/prefix/profile contract so named similarity
@@ -68,7 +68,7 @@ src/codira/query_daemon_lifecycle.py:721,738 BLE001 — a long-lived service mus
     report any unexpected refresh or foreground failure as degraded state.
 src/codira/query_daemon_ipc.py:1270,1360 BLE001 — the IPC boundary converts any
     unexpected implementation failure into a stable protocol/unavailable result.
-packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py:419
+packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py:454
     BLE001 — the concurrent-writer regression records every thread failure for
     deterministic assertion in the main test thread.
 src/codira/mcp/server.py:223 SLF001 — FastMCP exposes no public transport hook;

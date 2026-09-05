@@ -38,6 +38,8 @@ from codira.contracts import (
     VectorSnapshotRequest,
     VectorStorePurgeRequest,
     VectorStorePurgeResult,
+    VectorStoreResetRequest,
+    VectorStoreResetResult,
     VectorStoreSpec,
 )
 from codira.indexer import (
@@ -416,6 +418,28 @@ class _CacheOnlyVectorStore:
         None
             The in-memory fake has no process-local caches.
         """
+
+    def reset_persistent_state(
+        self,
+        request: VectorStoreResetRequest,
+    ) -> VectorStoreResetResult:
+        """Clear test-owned in-memory state for protocol conformance.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStoreResetRequest
+            Ignored teardown request.
+
+        Returns
+        -------
+        codira.contracts.VectorStoreResetResult
+            Empty persistent-artifact inventory.
+        """
+
+        del request
+        self.cached.clear()
+        self.vectors.clear()
+        return VectorStoreResetResult(self.name)
 
 
 def _test_vector_set_identity() -> VectorSetIdentity:

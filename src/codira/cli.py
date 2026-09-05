@@ -70,6 +70,7 @@ from codira.contracts import (
     BackendError,
     VectorStorePurgeRequest,
     VectorStorePurgeResult,
+    VectorStoreResetRequest,
 )
 from codira.daemon import (
     DaemonStatusStore,
@@ -140,7 +141,6 @@ from codira.registry import (
     active_index_backend,
     active_language_analyzers,
     active_plugin_instance_cache,
-    active_similarity_index,
     configured_index_backend_name,
     plugin_registrations,
     validate_plugin_configuration,
@@ -163,17 +163,20 @@ from codira.semantic.search import (
 from codira.similarity_lifecycle import (
     purge_active_similarity_index,
     rebuild_active_similarity_index,
+    reset_active_similarity_index,
 )
 from codira.storage import (
     _read_metadata_file,
     _write_metadata_file,
     acquire_index_lock,
-    get_codira_dir,
     get_metadata_path,
     get_storage_root,
     override_storage_root,
 )
-from codira.vector_store import active_vector_store_context
+from codira.vector_store import (
+    active_vector_store_context,
+    active_vector_store_reset_context,
+)
 from codira.version import installed_distribution_version, package_version
 from codira.workspace import ResolvedWorkspace, WorkspaceDefinition, WorkspaceError
 from codira.workspace_registry import WorkspaceRegistry
@@ -1245,7 +1248,6 @@ def build_parser() -> argparse.ArgumentParser:
     purge_options.add_argument(
         "-b",
         "--backend",
-        choices=("sqlite", "duckdb"),
         help="Vector-store backend to target (default: configured vector store)",
     )
     purge_options.add_argument(
@@ -1267,11 +1269,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--yes",
         action="store_true",
         help="Confirm destructive purge execution",
-    )
-    purge_options.add_argument(
-        "--allow-remote-orphans",
-        action="store_true",
-        help="Allow emb reset to proceed when verified remote cleanup fails",
     )
     _add_repo_path_arguments(embeddings_parser)
 
@@ -1886,7 +1883,7 @@ def _print_embedding_purge_help() -> None:
     """
 
     print(
-        "usage: codira emb purge [-h] [-S | -A] [-n] [-b {sqlite,duckdb}] "
+        "usage: codira emb purge [-h] [-S | -A] [-n] [-b BACKEND] "
         "[-O DAYS] [-K KEEP] [-y] [-p PATH] [-o OUTPUT_DIR] [-c CONFIG_FILE]\n"
         "\n"
         "Delete or report retained vector-store rows.\n"
@@ -1897,7 +1894,7 @@ def _print_embedding_purge_help() -> None:
         "(default mode)\n"
         "  -A, --all             delete all persisted vectors and vector cache\n"
         "  -n, --dry-run         report what would be deleted\n"
-        "  -b, --backend {sqlite,duckdb}\n"
+        "  -b, --backend BACKEND\n"
         "                        vector-store backend to target "
         "(default: configured vector store)\n"
         "  -O, --older-than DAYS\n"
@@ -1919,10 +1916,10 @@ def _print_embedding_purge_help() -> None:
         "Examples:\n"
         "  codira emb purge --stale --dry-run  # report stale vector sets "
         "without deleting them\n"
-        "  codira emb purge --stale --backend duckdb --keep 1 --yes  # purge "
-        "DuckDB stale sets except the newest one\n"
-        "  codira emb purge --all --backend sqlite --yes  # delete every SQLite "
-        "vector set\n"
+        "  codira emb purge --stale --backend warehouse --keep 1 --yes  # purge "
+        "one registered store's stale sets except the newest one\n"
+        "  codira emb purge --all --backend warehouse --yes  # delete every "
+        "registered store vector set\n"
     )
 
 
@@ -5088,7 +5085,6 @@ def _run_embeddings_command(
         or args.older_than is not None
         or args.keep
         or args.yes
-        or args.allow_remote_orphans
     ):
         msg = "emb purge options require `codira emb purge`"
         raise ConfigError(msg)
@@ -5185,7 +5181,6 @@ def _run_embedding_rebuild_command(args: argparse.Namespace, root: Path) -> int:
         or args.older_than
         or args.keep
         or args.yes
-        or getattr(args, "allow_remote_orphans", False)
     ):
         msg = "emb rebuild does not accept purge options"
         raise ConfigError(msg)
@@ -5208,7 +5203,7 @@ def _run_embedding_rebuild_command(args: argparse.Namespace, root: Path) -> int:
 
 
 def _run_embedding_reset_command(args: argparse.Namespace, root: Path) -> int:
-    """Remove confirmed repository-local semantic storage without migration.
+    """Remove confirmed vector-store and selected similarity-index state.
 
     Parameters
     ----------
@@ -5220,7 +5215,7 @@ def _run_embedding_reset_command(args: argparse.Namespace, root: Path) -> int:
     Returns
     -------
     int
-        Zero after confirmed known vector-store files are removed.
+        Zero after confirmed plugin-owned persistent state is removed.
 
     Raises
     ------
@@ -5240,51 +5235,13 @@ def _run_embedding_reset_command(args: argparse.Namespace, root: Path) -> int:
     ):
         msg = "emb reset does not accept purge options"
         raise ConfigError(msg)
-    state_root = get_codira_dir(root)
-    candidates = (
-        state_root / "embeddings.db",
-        state_root / "embeddings.db-shm",
-        state_root / "embeddings.db-wal",
-        state_root / "embeddings.duckdb",
-    )
-    removed: list[str] = []
-    remote_orphan_hashes: tuple[str, ...] = ()
     with acquire_index_lock(root):
-        derived_root = state_root / "similarity-indexes"
-        qdrant_ledger = derived_root / "qdrant" / "ownership.json"
-        if qdrant_ledger.exists():
-            active_index = active_similarity_index(root=root)
-            if active_index.name != "qdrant":
-                if not getattr(args, "allow_remote_orphans", False):
-                    msg = (
-                        "emb reset stopped because Qdrant ownership remains while "
-                        "another similarity index is configured; restore Qdrant for "
-                        "cleanup or pass --allow-remote-orphans."
-                    )
-                    raise ConfigError(msg)
-                remote_orphan_hashes = _qdrant_ledger_artifact_hashes(qdrant_ledger)
-            else:
-                try:
-                    purge_active_similarity_index(root, preview=False)
-                except (BackendError, ConfigError, OSError, RuntimeError, ValueError):
-                    if not getattr(args, "allow_remote_orphans", False):
-                        msg = (
-                            "emb reset stopped because Qdrant remote cleanup failed; "
-                            "retry it or pass --allow-remote-orphans."
-                        )
-                        raise ConfigError(msg) from None
-                    remote_orphan_hashes = _qdrant_ledger_artifact_hashes(qdrant_ledger)
-        for path in candidates:
-            if path.exists():
-                path.unlink()
-                removed.append(str(path.relative_to(root)))
-        if derived_root.exists():
-            shutil.rmtree(derived_root)
-            removed.append(str(derived_root.relative_to(root)))
-        # Reset is the recovery path for an unavailable or incompatible
-        # configured plugin; the command process owns no lasting cache.
-        with contextlib.suppress(ValueError):
-            active_similarity_index(root=root).reset_runtime_caches()
+        vector_store = active_vector_store_reset_context(root)
+        vector_result = vector_store.store.reset_persistent_state(
+            VectorStoreResetRequest(root=root, config=vector_store.config)
+        )
+        similarity_result = reset_active_similarity_index(root)
+    removed = vector_result.removed_artifacts
     if args.json:
         _emit_json(
             {
@@ -5292,55 +5249,17 @@ def _run_embedding_reset_command(args: argparse.Namespace, root: Path) -> int:
                 "command": "emb reset",
                 "status": "ok",
                 "removed": removed,
-                "remote_orphan_artifact_hashes": remote_orphan_hashes,
+                "similarity_index": similarity_result.index,
+                "removed_similarity_artifact_hashes": similarity_result.removed_artifact_hashes,
+                "skipped_similarity_artifact_hashes": similarity_result.skipped_artifact_hashes,
                 "next": "codira index --full",
             }
         )
     else:
         print("Removed semantic state: " + (", ".join(removed) or "none"))
-        if remote_orphan_hashes:
-            print(
-                "Remote Qdrant artifacts may remain: " + ", ".join(remote_orphan_hashes)
-            )
+        print(f"Cleaned similarity index: {similarity_result.index}")
         print("Next: codira index --full")
     return 0
-
-
-def _qdrant_ledger_artifact_hashes(path: Path) -> tuple[str, ...]:
-    """Return opaque artifact hashes retained in a local Qdrant ownership ledger.
-
-    Parameters
-    ----------
-    path : pathlib.Path
-        Local ownership ledger inspected only for explicit reset recovery output.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Sorted opaque artifact hashes, or no hashes when the ledger is unreadable.
-    """
-
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return ()
-    records = document.get("records") if isinstance(document, dict) else None
-    if not isinstance(records, list):
-        return ()
-    hashes = {
-        artifact_hash
-        for record in records
-        if isinstance(record, dict)
-        for collection in (record.get("retained_collections"),)
-        if isinstance(collection, list)
-        for item in collection
-        if isinstance(item, dict)
-        for artifact_hash in (item.get("artifact_hash"),)
-        if isinstance(artifact_hash, str)
-        and artifact_hash
-        and all(marker not in artifact_hash for marker in ("/", "\\", "://"))
-    }
-    return tuple(sorted(hashes))
 
 
 def _run_similarity_purge_command(args: argparse.Namespace, root: Path) -> int:
@@ -5370,7 +5289,6 @@ def _run_similarity_purge_command(args: argparse.Namespace, root: Path) -> int:
         or args.backend is not None
         or args.older_than is not None
         or args.keep
-        or getattr(args, "allow_remote_orphans", False)
     ):
         msg = "emb similarity-purge does not accept vector purge options"
         raise ConfigError(msg)

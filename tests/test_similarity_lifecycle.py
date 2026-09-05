@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import struct
 from argparse import Namespace
 from dataclasses import dataclass, field
@@ -11,19 +10,20 @@ from typing import TYPE_CHECKING
 import pytest
 
 from codira.cli import _run_embedding_reset_command
-from codira.config import ConfigError
 from codira.contracts import (
     EmbeddingEngineSpec,
     SimilarityIndexSpec,
+    SimilarityPurgeResult,
     StoredVectorRow,
     VectorSetIdentity,
     VectorSnapshot,
     VectorSnapshotMetadata,
     VectorSnapshotRequest,
+    VectorStoreResetRequest,
+    VectorStoreResetResult,
     VectorStoreSpec,
 )
 from codira.similarity_lifecycle import rebuild_active_similarity_index
-from codira.storage import get_codira_dir
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -256,105 +256,78 @@ def test_rejects_source_revision_changed_during_rebuild(
     assert [snapshot.metadata.object_type for snapshot in index.rebuilt] == ["symbol"]
 
 
-def test_reset_recovers_when_selected_similarity_plugin_is_unavailable(
+def test_reset_delegates_persistent_cleanup_to_plugin_contracts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Keep explicit reset usable when the selected plugin cannot load.
+    """Delegate reset without assuming any first-party artifact path.
 
     Parameters
     ----------
     monkeypatch : pytest.MonkeyPatch
-        Fixture that makes configured similarity-index discovery fail.
+        Fixture that installs vector-store and similarity-index reset fakes.
     tmp_path : pathlib.Path
-        Temporary root containing removable derived semantic state.
+        Temporary repository root passed to both plugin contracts.
 
     Returns
     -------
     None
-        The test asserts reset removes derived state without a fallback index.
+        The test asserts reset reports only plugin-owned cleanup results.
     """
 
-    derived = get_codira_dir(tmp_path) / "similarity-indexes"
-    derived.mkdir(parents=True)
-    (derived / "sentinel").write_text("derived", encoding="utf-8")
-    monkeypatch.setattr(
-        "codira.cli.active_similarity_index",
-        lambda *, root: (_ for _ in ()).throw(ValueError("plugin unavailable")),
-    )
-    args = Namespace(
-        yes=True,
-        stale=False,
-        all_sets=False,
-        dry_run=False,
-        backend=None,
-        older_than=None,
-        keep=None,
-        json=True,
-    )
+    @dataclass
+    class _ResetStore:
+        calls: list[VectorStoreResetRequest] = field(default_factory=list)
+        name: str = "warehouse"
 
-    assert _run_embedding_reset_command(args, tmp_path) == 0
-    assert not derived.exists()
+        def reset_persistent_state(
+            self,
+            request: VectorStoreResetRequest,
+        ) -> VectorStoreResetResult:
+            self.calls.append(request)
+            return VectorStoreResetResult(
+                store=self.name,
+                removed_artifacts=(".codira/warehouse-vectors.bin",),
+            )
 
-
-def test_reset_requires_orphan_acknowledgement_after_qdrant_index_switch(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Retain Qdrant ownership evidence after switching to the exact index.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to capture reset JSON output and forbid wrong-plugin purge.
-    tmp_path : pathlib.Path
-        Temporary root containing prior Qdrant ownership evidence.
-
-    Returns
-    -------
-    None
-        The test asserts reset fails closed without acknowledgement and reports
-        opaque Qdrant artifact hashes when orphaning is explicitly accepted.
-    """
-    ledger = (
-        get_codira_dir(tmp_path) / "similarity-indexes" / "qdrant" / "ownership.json"
-    )
-    ledger.parent.mkdir(parents=True)
-    ledger.write_text(
-        json.dumps(
-            {
-                "records": [
-                    {"retained_collections": [{"artifact_hash": "opaque-qdrant"}]}
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    args = Namespace(
-        yes=True,
-        stale=False,
-        all_sets=False,
-        dry_run=False,
-        backend=None,
-        older_than=None,
-        keep=None,
-        json=True,
-        allow_remote_orphans=False,
-    )
-    monkeypatch.setattr(
-        "codira.cli.purge_active_similarity_index",
-        lambda root, *, preview: (_ for _ in ()).throw(
-            AssertionError("Qdrant purge must not use the exact index")
-        ),
-    )
-
-    with pytest.raises(ConfigError, match="Qdrant ownership remains"):
-        _run_embedding_reset_command(args, tmp_path)
-    assert ledger.exists()
-
+    store = _ResetStore()
     emitted: list[dict[str, object]] = []
+    context = type("ResetContext", (), {"store": store, "config": {"region": "lab"}})()
+    monkeypatch.setattr(
+        "codira.cli.active_vector_store_reset_context",
+        lambda root: context,
+    )
+    monkeypatch.setattr(
+        "codira.cli.reset_active_similarity_index",
+        lambda root: SimilarityPurgeResult(
+            index="remote-test",
+            preview=False,
+            removed_artifact_hashes=("owned-artifact",),
+        ),
+    )
     monkeypatch.setattr("codira.cli._emit_json", emitted.append)
-    args.allow_remote_orphans = True
+    args = Namespace(
+        yes=True,
+        stale=False,
+        all_sets=False,
+        dry_run=False,
+        backend=None,
+        older_than=None,
+        keep=None,
+        json=True,
+    )
 
     assert _run_embedding_reset_command(args, tmp_path) == 0
-    assert emitted[0]["remote_orphan_artifact_hashes"] == ("opaque-qdrant",)
+    assert store.calls == [VectorStoreResetRequest(tmp_path, {"region": "lab"})]
+    assert emitted == [
+        {
+            "schema_version": "2.0",
+            "command": "emb reset",
+            "status": "ok",
+            "removed": (".codira/warehouse-vectors.bin",),
+            "similarity_index": "remote-test",
+            "removed_similarity_artifact_hashes": ("owned-artifact",),
+            "skipped_similarity_artifact_hashes": (),
+            "next": "codira index --full",
+        }
+    ]

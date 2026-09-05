@@ -18,6 +18,7 @@ from codira.contracts import (
     VectorStoreError,
     VectorStore,
     VectorStorePurgeRequest,
+    VectorStoreResetRequest,
 )
 from codira.semantic.embeddings import serialize_vector
 from codira_vector_store_sqlite import (
@@ -197,6 +198,40 @@ def test_sqlite_vector_store_rejects_pre_revision_state(tmp_path: Path) -> None:
 
     with pytest.raises(VectorStoreError, match="codira emb reset --yes"):
         SQLiteVectorStore().initialize(tmp_path, {})
+
+
+def test_sqlite_vector_store_reset_removes_owned_database_and_sidecars(
+    tmp_path: Path,
+) -> None:
+    """Remove only SQLite artifacts owned by the vector-store plugin."""
+
+    path = get_vector_store_path(tmp_path)
+    path.parent.mkdir()
+    for candidate in (
+        path,
+        path.with_name(f"{path.name}-shm"),
+        path.with_name(f"{path.name}-wal"),
+    ):
+        candidate.write_text("state", encoding="utf-8")
+
+    result = SQLiteVectorStore().reset_persistent_state(
+        VectorStoreResetRequest(root=tmp_path, config={})
+    )
+
+    assert result.store == "sqlite"
+    assert result.removed_artifacts == (
+        ".codira/embeddings.db",
+        ".codira/embeddings.db-shm",
+        ".codira/embeddings.db-wal",
+    )
+    assert not any(
+        candidate.exists()
+        for candidate in (
+            path,
+            path.with_name(f"{path.name}-shm"),
+            path.with_name(f"{path.name}-wal"),
+        )
+    )
 
 
 def test_sqlite_vector_store_persists_vector_rows(tmp_path: Path) -> None:

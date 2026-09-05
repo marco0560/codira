@@ -240,9 +240,10 @@ run `codira emb rebuild`. REST is default; gRPC is explicit. Qdrant retains two
 immutable revisions behind a stable alias and has no fallback when selected.
 
 Use `codira emb similarity-purge` to inspect remote derived artifacts before
-adding `--yes`. Reset blocks on failed remote cleanup unless the explicit
-`--allow-remote-orphans` recovery override is used. See the package README for
-the full configuration and credential-file requirements.
+adding `--yes`. `codira emb reset --yes` delegates cleanup to the selected
+similarity-index plugin and fails when that plugin cannot verify its owned
+remote state. See the package README for the full configuration and
+credential-file requirements.
 
 ## First commands
 
