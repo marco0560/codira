@@ -148,6 +148,15 @@ def _response_schema() -> dict[str, object]:
                     "trusted_root": {"const": "."},
                     "execution_mode": {"enum": ["warm", "direct", "fallback"]},
                     "generation": {"type": ["integer", "null"]},
+                    "partial_index_warning": {
+                        "type": "object",
+                        "required": ["failed_file_count", "message"],
+                        "properties": {
+                            "failed_file_count": {"type": "integer", "minimum": 1},
+                            "message": {"type": "string", "minLength": 1},
+                        },
+                        "additionalProperties": False,
+                    },
                     "fallback_reason": {"type": "string"},
                     "workspace": {"type": "string", "minLength": 1},
                     "workspace_descriptor_sha256": {
