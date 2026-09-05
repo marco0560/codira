@@ -1844,6 +1844,119 @@ def test_duckdb_full_index_uses_bulk_profile_path(tmp_path: Path) -> None:
     assert "persist.store_analysis" not in span_names
 
 
+def test_duckdb_bulk_full_index_schema_failure_rolls_back_before_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Roll back a DuckDB full rebuild when schema-index creation fails.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to make DuckDB schema-index creation fail.
+    tmp_path : pathlib.Path
+        Temporary workspace containing a source root and isolated output root.
+
+    Returns
+    -------
+    None
+        A failed full rebuild retains the previously published rows and complete
+        schema-index set; a later ordinary index can then publish the change.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    source_root = tmp_path / "repo"
+    output_root = tmp_path / "out"
+    source_root.mkdir()
+    config_path = source_root / ".codira" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "\n".join(
+            (
+                "[backend]",
+                'name = "duckdb"',
+                "",
+                "[embeddings]",
+                "enabled = false",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    source_path = source_root / "sample.py"
+    source_path.write_text(
+        "def first() -> int:\n    return 1\n",
+        encoding="utf-8",
+    )
+
+    with override_storage_root(source_root, output_root):
+        initial_report = index_repo(source_root, full=True)
+        database_path = _duckdb_db_path(source_root)
+        initial_connection = duckdb.connect(str(database_path))
+        try:
+            initial_indexes = initial_connection.execute(
+                "SELECT index_name FROM duckdb_indexes() ORDER BY index_name"
+            ).fetchall()
+            initial_functions = initial_connection.execute(
+                "SELECT name FROM functions ORDER BY name"
+            ).fetchall()
+        finally:
+            initial_connection.close()
+
+        source_path.write_text(
+            "def second() -> int:\n    return 2\n",
+            encoding="utf-8",
+        )
+        error_message = "injected schema-index creation failure"
+
+        def fail_schema_index_creation(_connection: object) -> None:
+            """Raise the controlled late full-index failure."""
+            raise RuntimeError(error_message)
+
+        monkeypatch.setattr(
+            duckdb_backend_module,
+            "_create_duckdb_schema_indexes",
+            fail_schema_index_creation,
+        )
+        failed_report = index_repo(source_root, full=True)
+
+        failed_connection = duckdb.connect(str(database_path))
+        try:
+            failed_indexes = failed_connection.execute(
+                "SELECT index_name FROM duckdb_indexes() ORDER BY index_name"
+            ).fetchall()
+            failed_functions = failed_connection.execute(
+                "SELECT name FROM functions ORDER BY name"
+            ).fetchall()
+        finally:
+            failed_connection.close()
+
+        monkeypatch.undo()
+        recovery_report = index_repo(source_root)
+        recovered_connection = duckdb.connect(str(database_path))
+        try:
+            recovered_indexes = recovered_connection.execute(
+                "SELECT index_name FROM duckdb_indexes() ORDER BY index_name"
+            ).fetchall()
+            recovered_functions = recovered_connection.execute(
+                "SELECT name FROM functions ORDER BY name"
+            ).fetchall()
+        finally:
+            recovered_connection.close()
+
+    assert initial_report.failed == 0
+    assert initial_indexes
+    assert initial_functions == [("first",)]
+    assert failed_report.failed == 1
+    assert failed_report.failures[0].reason == error_message
+    assert failed_indexes == initial_indexes
+    assert failed_functions == initial_functions
+    assert recovery_report.failed == 0
+    assert recovery_report.indexed == 1
+    assert recovered_indexes == initial_indexes
+    assert recovered_functions == [("second",)]
+
+
 def test_duckdb_full_index_reuses_cached_embeddings(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
