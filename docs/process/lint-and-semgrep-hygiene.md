@@ -46,12 +46,24 @@ src/codira/query_daemon_lifecycle.py:580 PLR0913 — service lifecycle inputs ar
     explicit to preserve platform-independent restart behavior.
 src/codira/query_daemon_ipc.py:894 PLR0913 — IPC server construction exposes its
     authentication, runtime, and connection-boundary dependencies.
-src/codira/cli.py:2139 C901,PLR0912 — index CLI failure/reporting branches are
+src/codira/cli_index.py:148 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
-src/codira/cli.py:5905 PLR0913 — daemon context rendering receives the complete
+src/codira/cli_queries.py:2531 PLR0913 — daemon context rendering receives the complete
     explicit query/output/profile request after freshness has been established.
-src/codira/cli.py:6732 PLR0913 — command dispatch receives parsed arguments and
+src/codira/cli.py:449 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
+src/codira/cli.py:368 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
+src/codira/cli.py:377 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
+src/codira/cli.py:388 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
+src/codira/cli.py:389 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
+src/codira/cli.py:405 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
+src/codira/cli.py:410 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
 src/codira/query/context.py:2285 PLR0913 — channel functions share an explicit
     root/query/connection/intent/prefix/profile contract so named similarity
     profiles reach only semantic channels.

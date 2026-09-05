@@ -18,7 +18,6 @@ This module belongs to the **indexing verification layer** that guards increment
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import json
 import os
 import sqlite3
@@ -242,7 +241,7 @@ def _insert_score_resolution_fixture(
 
 def _load_workspace_cli_module() -> types.ModuleType:
     """
-    Load the workspace `src/codira/cli.py` module under a unique name.
+    Return the index-command implementation module.
 
     Parameters
     ----------
@@ -251,25 +250,16 @@ def _load_workspace_cli_module() -> types.ModuleType:
     Returns
     -------
     types.ModuleType
-        Freshly loaded workspace CLI module.
+        Index command-family module under test.
 
     Raises
     ------
     AssertionError
-        Raised when the workspace CLI module cannot be loaded.
+        Raised when the command-family module cannot be loaded.
     """
-    module_path = Path(__file__).resolve().parents[1] / "src" / "codira" / "cli.py"
-    spec = importlib.util.spec_from_file_location(
-        f"workspace_codira_cli_{time.monotonic_ns()}",
-        module_path,
-    )
-    if spec is None or spec.loader is None:
-        msg = f"failed to load workspace codira cli module from {module_path}"
-        raise AssertionError(msg)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    import codira.cli_index as cli_index_module
+
+    return cli_index_module
 
 
 def test_sqlite_resolve_embedding_scores_chunks_large_score_sets(
@@ -4352,9 +4342,9 @@ def test_ensure_index_rebuilds_when_analyzer_inventory_changes(
         {"schema_version": str(SCHEMA_VERSION)},
     )
 
-    monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
+    monkeypatch.setattr("codira.cli_index._get_head_commit", lambda root: None)
     monkeypatch.setattr(
-        "codira.cli.active_language_analyzers",
+        "codira.cli_index.active_language_analyzers",
         lambda *, root=None: [_PythonAnalyzerV12()],
     )
     monkeypatch.setattr(
@@ -4407,9 +4397,9 @@ def test_ensure_index_rebuilds_when_backend_inventory_changes(
         {"schema_version": str(_SQLiteBackendVNext.version)},
     )
 
-    monkeypatch.setattr("codira.cli._get_head_commit", lambda root: None)
+    monkeypatch.setattr("codira.cli_index._get_head_commit", lambda root: None)
     monkeypatch.setattr(
-        "codira.cli.active_index_backend",
+        "codira.cli_index.active_index_backend",
         lambda *, root=None: _SQLiteBackendVNext(),
     )
     monkeypatch.setattr(
@@ -4621,9 +4611,9 @@ def test_ensure_index_rechecks_after_waiting_for_lock(
         del root
         yield
 
-    monkeypatch.setattr("codira.cli.acquire_index_lock", _dummy_lock)
+    monkeypatch.setattr("codira.cli_index.acquire_index_lock", _dummy_lock)
     monkeypatch.setattr(
-        "codira.cli._inspect_index_rebuild_request",
+        "codira.cli_index._inspect_index_rebuild_request",
         lambda root: next(inspections),
     )
 
@@ -4633,7 +4623,7 @@ def test_ensure_index_rechecks_after_waiting_for_lock(
         raise AssertionError(msg)
 
     monkeypatch.setattr(
-        "codira.cli._run_locked_index_refresh",
+        "codira.cli_index._run_locked_index_refresh",
         _unexpected_refresh,
     )
 

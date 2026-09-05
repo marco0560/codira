@@ -946,7 +946,7 @@ def test_daemon_status_reports_durable_reconciliation_record(
     monkeypatch.chdir(root)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(sys, "argv", ["codira", "daemon", "status"])
-    monkeypatch.setattr("codira.cli.SystemdUserService", Service)
+    monkeypatch.setattr("codira.cli_operations.SystemdUserService", Service)
 
     assert main() == 0
 
@@ -1063,7 +1063,7 @@ def test_daemon_run_starts_foreground_runtime_when_enabled(
 
     monkeypatch.chdir(root)
     monkeypatch.setattr(sys, "argv", ["codira", "daemon", "run"])
-    monkeypatch.setattr("codira.cli.run_foreground_daemon", start_runtime)
+    monkeypatch.setattr("codira.cli_operations.run_foreground_daemon", start_runtime)
 
     assert main() == 0
 

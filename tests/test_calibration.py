@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import tomlkit
 
-from codira import cli as cli_module, config as config_module
+from codira import cli_operations as cli_module, config as config_module
 from codira.calibration import (
     BenchmarkMeasurement,
     CalibrationBenchmarkError,
