@@ -396,6 +396,7 @@ def _function(
     owner: str,
     name: str | None = None,
     owner_name: str | None = None,
+    duplicate_discriminator: str | None = None,
 ) -> FunctionArtifact | None:
     """Build a function, arrow-function, or method artifact.
 
@@ -411,6 +412,8 @@ def _function(
         Assigned callable name when the grammar node is anonymous.
     owner_name : str | None, optional
         Owning class name for a method.
+    duplicate_discriminator : str | None, optional
+        Deterministic source offset suffix for a repeated same-owner callable.
 
     Returns
     -------
@@ -436,9 +439,16 @@ def _function(
     ).strip()
     kind = "method" if owner_name else "function"
     stable_owner = f":{owner_name}" if owner_name else ""
+    duplicate_suffix = (
+        ""
+        if duplicate_discriminator is None
+        else f":duplicate:{duplicate_discriminator}"
+    )
     return FunctionArtifact(
         name=function_name,
-        stable_id=f"javascript:{kind}:{owner}{stable_owner}:{function_name}",
+        stable_id=(
+            f"javascript:{kind}:{owner}{stable_owner}:{function_name}{duplicate_suffix}"
+        ),
         lineno=node.start_point.row + 1,
         end_lineno=body.end_point.row + 1
         if body is not None
@@ -742,6 +752,43 @@ class JavaScriptAnalyzer:
         declarations: list[DeclarationArtifact] = []
         imports: list[ImportArtifact] = []
         documentation: list[DocumentationArtifact] = []
+        root_node = _parser().parse(source).root_node
+
+        def exported_declaration(node: Node) -> Node:
+            """Return the semantic declaration nested inside one export node.
+
+            Parameters
+            ----------
+            node : tree_sitter.Node
+                Top-level statement that can wrap an exported declaration.
+
+            Returns
+            -------
+            tree_sitter.Node
+                Unwrapped declaration when available, otherwise ``node``.
+            """
+            if node.type != "export_statement":
+                return node
+            return next(
+                (
+                    child
+                    for child in node.named_children
+                    if child.type not in {"export_clause", "string"}
+                ),
+                node,
+            )
+
+        top_level_functions = [
+            exported_declaration(node)
+            for node in root_node.named_children
+            if exported_declaration(node).type
+            in {"function_declaration", "generator_function_declaration"}
+        ]
+        top_level_name_counts: dict[str, int] = {}
+        for node in top_level_functions:
+            name = _normalized(node.child_by_field_name("name"), source)
+            if name:
+                top_level_name_counts[name] = top_level_name_counts.get(name, 0) + 1
 
         def attach(
             item: FunctionArtifact | ClassArtifact | DeclarationArtifact,
@@ -841,7 +888,17 @@ class JavaScriptAnalyzer:
                 "function_declaration",
                 "generator_function_declaration",
             }:
-                function = _function(current, source, owner=owner)
+                function_name = _normalized(current.child_by_field_name("name"), source)
+                function = _function(
+                    current,
+                    source,
+                    owner=owner,
+                    duplicate_discriminator=(
+                        str(current.start_byte)
+                        if top_level_name_counts.get(function_name, 0) > 1
+                        else None
+                    ),
+                )
                 if function is not None:
                     functions.append(
                         cast("FunctionArtifact", attach(function, node, "function"))
@@ -852,14 +909,32 @@ class JavaScriptAnalyzer:
                     return
                 body = current.child_by_field_name("body")
                 methods: list[FunctionArtifact] = []
-                for child in body.named_children if body is not None else ():
-                    if child.type not in {
-                        "method_definition",
-                        "generator_method",
-                        "method_signature",
-                    }:
-                        continue
-                    method = _function(child, source, owner=owner, owner_name=name)
+                method_nodes = tuple(
+                    child
+                    for child in (body.named_children if body is not None else ())
+                    if child.type
+                    in {"method_definition", "generator_method", "method_signature"}
+                )
+                method_name_counts: dict[str, int] = {}
+                for child in method_nodes:
+                    method_name = _normalized(child.child_by_field_name("name"), source)
+                    if method_name:
+                        method_name_counts[method_name] = (
+                            method_name_counts.get(method_name, 0) + 1
+                        )
+                for child in method_nodes:
+                    method_name = _normalized(child.child_by_field_name("name"), source)
+                    method = _function(
+                        child,
+                        source,
+                        owner=owner,
+                        owner_name=name,
+                        duplicate_discriminator=(
+                            str(child.start_byte)
+                            if method_name_counts.get(method_name, 0) > 1
+                            else None
+                        ),
+                    )
                     if method is not None:
                         methods.append(
                             cast("FunctionArtifact", attach(method, child, "function"))
@@ -912,7 +987,6 @@ class JavaScriptAnalyzer:
                             )
                         )
 
-        root_node = _parser().parse(source).root_node
         for child in root_node.named_children:
             analyze_statement(child)
         return AnalysisResult(

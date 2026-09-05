@@ -115,6 +115,46 @@ def test_javascript_analyzer_honors_emission_configuration(tmp_path: Path) -> No
     assert analyzer.supports_path(tmp_path / "component.ts") is False
 
 
+def test_javascript_analyzer_disambiguates_repeated_callable_ids(
+    tmp_path: Path,
+) -> None:
+    """Keep repeated top-level and method declarations independently indexable.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts repeated callable names receive unique IDs while their
+        adjacent JSDoc provenance retains the corresponding owner identity.
+    """
+    source = tmp_path / "duplicates.js"
+    source.write_text(
+        "/** First top-level duplicate. */\n"
+        "function repeated() { return 1; }\n"
+        "/** Second top-level duplicate. */\n"
+        "function repeated() { return 2; }\n"
+        "class Repeated {\n"
+        "  /** First method duplicate. */\n"
+        "  same() { return 1; }\n"
+        "  /** Second method duplicate. */\n"
+        "  same() { return 2; }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = JavaScriptAnalyzer().analyze_file(source, tmp_path)
+    callables = result.functions + result.classes[0].methods
+    stable_ids = [item.stable_id for item in callables]
+
+    assert len(stable_ids) == len(set(stable_ids)) == 4
+    assert all(":duplicate:" in stable_id for stable_id in stable_ids)
+    assert {item.owner_stable_id for item in result.documentation} == set(stable_ids)
+
+
 def test_javascript_analyzer_extracts_callable_object_references(
     tmp_path: Path,
 ) -> None:
