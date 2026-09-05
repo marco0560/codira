@@ -65,7 +65,9 @@ Before broad patching work:
 codira ctx "<query>" --json
 ```
 
-Use `rg` first when you need to verify candidate symbols or files.
+Use Codira MCP first for indexed exploration, then the `codira` CLI when MCP is
+unavailable or insufficient. Use `rg` only when those indexed interfaces are
+unavailable, insufficient, or irrelevant to the question.
 
 ## Architectural work
 
