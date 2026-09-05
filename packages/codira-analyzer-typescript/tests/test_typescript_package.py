@@ -165,7 +165,7 @@ def test_typescript_analyzer_handles_ambient_abstract_and_reexports(
     assert [item.name for item in result.functions] == ["create", "nested"]
     assert (
         result.functions[1].stable_id
-        == "typescript:function:ambient.ts:Outer.Inner:nested"
+        == "typescript:function:ambient.ts:Outer.Inner:nested:overload:2"
     )
     assert [
         (item.name, [method.name for method in item.methods]) for item in result.classes
@@ -173,6 +173,60 @@ def test_typescript_analyzer_handles_ambient_abstract_and_reexports(
         ("Base", ["run"]),
     ]
     assert [item.name for item in result.imports] == ["./widget", "./shared"]
+
+
+def test_typescript_analyzer_disambiguates_overload_stable_ids(tmp_path: Path) -> None:
+    """Assign deterministic IDs to top-level and method overload signatures.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts overload signatures, implementations, and attached
+        TSDoc provenance all have unique stable ownership identities.
+    """
+    source = tmp_path / "overloads.ts"
+    source.write_text(
+        "/** Parse text. */\n"
+        "export function parse(value: string): string;\n"
+        "/** Parse count. */\n"
+        "export function parse(value: number): number;\n"
+        "export function parse(value: string | number): string | number { return value; }\n"
+        "export class Formatter {\n"
+        "  /** Format text. */\n"
+        "  format(value: string): string;\n"
+        "  /** Format count. */\n"
+        "  format(value: number): number;\n"
+        "  format(value: string | number): string | number { return value; }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = TypeScriptAnalyzer().analyze_file(source, tmp_path)
+    callables = result.functions + result.classes[0].methods
+    stable_ids = [item.stable_id for item in callables]
+
+    assert len(stable_ids) == len(set(stable_ids)) == 6
+    assert [item.stable_id for item in result.functions] == [
+        "typescript:function:overloads.ts:parse:overload:2",
+        "typescript:function:overloads.ts:parse:overload:4",
+        "typescript:function:overloads.ts:parse",
+    ]
+    assert [item.stable_id for item in result.classes[0].methods] == [
+        "typescript:method:overloads.ts:Formatter:format:overload:8",
+        "typescript:method:overloads.ts:Formatter:format:overload:10",
+        "typescript:method:overloads.ts:Formatter:format",
+    ]
+    assert {item.owner_stable_id for item in result.documentation} == {
+        "typescript:function:overloads.ts:parse:overload:2",
+        "typescript:function:overloads.ts:parse:overload:4",
+        "typescript:method:overloads.ts:Formatter:format:overload:8",
+        "typescript:method:overloads.ts:Formatter:format:overload:10",
+    }
 
 
 def test_typescript_factory_builds_expected_analyzer() -> None:

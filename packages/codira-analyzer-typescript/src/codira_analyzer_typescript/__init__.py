@@ -298,6 +298,7 @@ def _function(
     name: str | None = None,
     class_name: str | None = None,
     namespace: str | None = None,
+    overload_discriminator: str | None = None,
 ) -> FunctionArtifact | None:
     """Build a normalized TypeScript function or method.
 
@@ -315,6 +316,8 @@ def _function(
         Owning class name for methods.
     namespace : str | None, optional
         Owning namespace for callable stable identities.
+    overload_discriminator : str | None, optional
+        Deterministic suffix used only for declaration-only overload forms.
 
     Returns
     -------
@@ -334,9 +337,14 @@ def _function(
     owner_suffix = (
         f"{namespace_suffix}:{class_name}" if class_name else namespace_suffix
     )
+    overload_suffix = (
+        "" if overload_discriminator is None else f":overload:{overload_discriminator}"
+    )
     return FunctionArtifact(
         name=function_name,
-        stable_id=f"typescript:{kind}:{owner}{owner_suffix}:{function_name}",
+        stable_id=(
+            f"typescript:{kind}:{owner}{owner_suffix}:{function_name}{overload_suffix}"
+        ),
         lineno=node.start_point.row + 1,
         end_lineno=body.end_point.row + 1
         if body is not None
@@ -748,7 +756,17 @@ class TypeScriptAnalyzer:
                 "function_signature",
                 "generator_function_declaration",
             }:
-                function = _function(current, source, owner=owner, namespace=namespace)
+                function = _function(
+                    current,
+                    source,
+                    owner=owner,
+                    namespace=namespace,
+                    overload_discriminator=(
+                        str(current.start_point.row + 1)
+                        if current.type == "function_signature"
+                        else None
+                    ),
+                )
                 if function is not None:
                     functions.append(
                         cast("FunctionArtifact", attach(function, current, "function"))
@@ -773,6 +791,12 @@ class TypeScriptAnalyzer:
                         owner=owner,
                         class_name=name,
                         namespace=namespace,
+                        overload_discriminator=(
+                            str(child.start_point.row + 1)
+                            if child.type
+                            in {"abstract_method_signature", "method_signature"}
+                            else None
+                        ),
                     )
                     if method is not None:
                         methods_list.append(
