@@ -10,6 +10,7 @@ import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event, Thread
 from typing import TYPE_CHECKING, Literal, cast
 
 import pytest
@@ -73,7 +74,12 @@ class _FakeRuntime:
         self.refreshes += 1
         return False
 
-    def execute(self, operation: Callable[[BackendQueryConnection], object]) -> object:
+    def execute(
+        self,
+        operation: Callable[[BackendQueryConnection], object],
+        *,
+        timeout_seconds: float,
+    ) -> object:
         """Execute one operation against the stable opaque connection.
 
         Parameters
@@ -86,6 +92,7 @@ class _FakeRuntime:
         object
             Value returned by the supplied operation.
         """
+        del timeout_seconds
         return operation(cast("BackendQueryConnection", self.connection))
 
 
@@ -507,6 +514,69 @@ def test_client_disconnect_during_request_does_not_break_later_clients(
         "arguments": {"healthy": True},
         "connection_owned": True,
     }
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix socket frame contract")
+def test_close_returns_while_an_ipc_handler_is_blocked(tmp_path: Path) -> None:
+    """Bound IPC shutdown without waiting for a running handler.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository/output root.
+
+    Returns
+    -------
+    None
+        The test asserts close returns before a cooperative blocked operation
+        is released, while the request worker can subsequently finish.
+    """
+    identity = QueryDaemonIdentity.from_paths(tmp_path / "repo", tmp_path / "out")
+    _publish_ready_generation(identity)
+    started = Event()
+    release = Event()
+
+    def block(arguments: dict[str, object], connection: object) -> dict[str, object]:
+        """Wait for test-controlled release before returning a response.
+
+        Parameters
+        ----------
+        arguments : dict[str, object]
+            Request arguments ignored by the deterministic operation.
+        connection : object
+            Worker-owned connection ignored by the deterministic operation.
+
+        Returns
+        -------
+        dict[str, object]
+            Stable response after the release event is set.
+        """
+        del arguments, connection
+        started.set()
+        release.wait()
+        return {"released": True}
+
+    server = QueryDaemonIpcServer(
+        identity,
+        _FakeRuntime(),
+        {"block": block},
+        timeout_seconds=1.0,
+    )
+    server.start()
+    worker = Thread(
+        target=lambda: QueryDaemonIpcClient(identity).request("block", {}),
+        daemon=True,
+    )
+    worker.start()
+    assert started.wait(timeout=1.0)
+
+    started_at = time.monotonic()
+    server.close()
+
+    assert time.monotonic() - started_at < 0.2
+    release.set()
+    worker.join(timeout=1.0)
+    assert not worker.is_alive()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Unix socket frame contract")

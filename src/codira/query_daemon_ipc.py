@@ -285,13 +285,20 @@ class _QueryRuntime(Protocol):
         """
         ...
 
-    def execute(self, operation: Callable[[BackendQueryConnection], object]) -> object:
+    def execute(
+        self,
+        operation: Callable[[BackendQueryConnection], object],
+        *,
+        timeout_seconds: float,
+    ) -> object:
         """Execute one read operation against the warm connection.
 
         Parameters
         ----------
         operation : collections.abc.Callable
             Operation that receives the worker-owned read connection.
+        timeout_seconds : float
+            Maximum wait for the approved operation to complete.
 
         Returns
         -------
@@ -1020,7 +1027,7 @@ class QueryDaemonIpcServer:
                 closer()
         if self._accept_thread is not None:
             self._accept_thread.join(timeout=self._timeout_seconds + 1)
-        self._executor.shutdown(wait=True, cancel_futures=True)
+        self._executor.shutdown(wait=False, cancel_futures=True)
         if self.endpoint.transport == "unix":
             _remove_socket(self.paths.unix_socket_path)
         with suppress(FileNotFoundError):
@@ -1305,7 +1312,10 @@ class QueryDaemonIpcServer:
             raise QueryDaemonProtocolError(msg)
         generation = self._ready_generation()
         result = self._runtime.execute(
-            lambda connection: handler(cast("dict[str, object]", arguments), connection)
+            lambda connection: handler(
+                cast("dict[str, object]", arguments), connection
+            ),
+            timeout_seconds=self._timeout_seconds,
         )
         if not isinstance(result, dict):
             msg = "IPC operation returned a non-object response."

@@ -76,6 +76,23 @@ class _Runtime:
         """
         self.closed = True
 
+    def close_with_timeout(self, *, timeout_seconds: float) -> bool:
+        """Record bounded deterministic lifecycle resource closure.
+
+        Parameters
+        ----------
+        timeout_seconds : float
+            Bounded close interval ignored by the immediate test double.
+
+        Returns
+        -------
+        bool
+            ``True`` because this test double closes immediately.
+        """
+        del timeout_seconds
+        self.close()
+        return True
+
 
 class _Server:
     """No-network IPC server double used by foreground lifecycle tests.

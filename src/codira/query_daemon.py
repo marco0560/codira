@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from codira.contracts import BackendQueryConnection
 
 Result = TypeVar("Result")
+DEFAULT_QUERY_EXECUTION_TIMEOUT_SECONDS = 5.0
 
 
 class _RuntimeSession(Protocol):
@@ -404,20 +405,27 @@ class WarmQuerySession:
             )
         return future
 
-    def execute(self, operation: Callable[[BackendQueryConnection], Result]) -> Result:
+    def execute(
+        self,
+        operation: Callable[[BackendQueryConnection], Result],
+        *,
+        timeout_seconds: float = DEFAULT_QUERY_EXECUTION_TIMEOUT_SECONDS,
+    ) -> Result:
         """Run one read operation and return its completed result.
 
         Parameters
         ----------
         operation : collections.abc.Callable
             Read operation receiving the worker-owned connection.
+        timeout_seconds : float, optional
+            Maximum wait for the worker-owned operation to complete.
 
         Returns
         -------
         Result
             Completed operation result.
         """
-        return self.submit(operation).result()
+        return self.submit(operation).result(timeout=timeout_seconds)
 
     def close(self) -> None:
         """Close the session after all queued operations complete.
@@ -429,13 +437,29 @@ class WarmQuerySession:
         Returns
         -------
         None
+            The worker thread is joined before this method returns.
+        """
+        self.close_with_timeout(timeout_seconds=None)
+
+    def close_with_timeout(self, *, timeout_seconds: float | None) -> bool:
+        """Close the session with an optional bounded worker drain.
+
+        Parameters
+        ----------
+        timeout_seconds : float | None
+            Maximum worker-drain wait, or ``None`` to wait until completion.
+
+        Returns
+        -------
+        bool
+            ``True`` when the worker stopped before the optional timeout.
         """
         with self._state_lock:
-            if self._closed:
-                return
-            self._closed = True
-            self._queue.put(None)
-        self._worker.join()
+            if not self._closed:
+                self._closed = True
+                self._queue.put(None)
+        self._worker.join(timeout=timeout_seconds)
+        return not self._worker.is_alive()
 
 
 class QueryRuntime:
@@ -559,36 +583,63 @@ class QueryRuntime:
             raise RuntimeError(msg)
         return session.submit(operation)
 
-    def execute(self, operation: Callable[[BackendQueryConnection], Result]) -> Result:
+    def execute(
+        self,
+        operation: Callable[[BackendQueryConnection], Result],
+        *,
+        timeout_seconds: float = DEFAULT_QUERY_EXECUTION_TIMEOUT_SECONDS,
+    ) -> Result:
         """Run a read operation through the current warm session.
 
         Parameters
         ----------
         operation : collections.abc.Callable
             Connection-owning read operation.
+        timeout_seconds : float, optional
+            Maximum wait for the warm session to complete the operation.
 
         Returns
         -------
         Result
             Result returned by the active worker session.
         """
-        return self.submit(operation).result()
+        return self.submit(operation).result(timeout=timeout_seconds)
 
     def close(self) -> None:
         """Close the active warm session deterministically.
 
         Parameters
         ----------
-        None
-
         Returns
         -------
         None
+            The active warm session is closed before this method returns.
         """
         with self._lock:
             session, self._session = self._session, None
         if session is not None:
             session.close()
+
+    def close_with_timeout(self, *, timeout_seconds: float) -> bool:
+        """Close the active warm session with a bounded drain interval.
+
+        Parameters
+        ----------
+        timeout_seconds : float
+            Maximum wait for the concrete warm session to stop.
+
+        Returns
+        -------
+        bool
+            ``True`` when no session remains blocked after the bounded drain.
+        """
+        with self._lock:
+            session, self._session = self._session, None
+        if isinstance(session, WarmQuerySession):
+            return session.close_with_timeout(timeout_seconds=timeout_seconds)
+        if session is not None:
+            session.close()
+        return True
 
 
 def build_query_runtime(identity: QueryDaemonIdentity) -> QueryRuntime:

@@ -372,6 +372,85 @@ def test_warm_session_reuses_one_connection_and_closes_it(tmp_path: Path) -> Non
     assert closed == [connection]
 
 
+def test_warm_session_bounds_blocked_operation_and_close(tmp_path: Path) -> None:
+    """Bound execution and teardown when a worker-owned operation blocks.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts a timed-out operation does not block a bounded close
+        and that cleanup completes after the operation cooperates.
+    """
+    started = Event()
+    release = Event()
+
+    class Backend:
+        """Minimal connection backend for a blocked-operation session test."""
+
+        def open_connection(self, root: Path) -> object:
+            """Return one opaque test connection.
+
+            Parameters
+            ----------
+            root : pathlib.Path
+                Repository root ignored by this deterministic fixture.
+
+            Returns
+            -------
+            object
+                Opaque worker-owned connection.
+            """
+            del root
+            return object()
+
+        def close_connection(self, connection: object) -> None:
+            """Accept cleanup of the opaque test connection.
+
+            Parameters
+            ----------
+            connection : object
+                Worker-owned connection being released.
+
+            Returns
+            -------
+            None
+                The deterministic fixture has no external resources.
+            """
+            del connection
+
+    session = WarmQuerySession(Backend, tmp_path, 1)
+    try:
+
+        def block(_connection: object) -> None:
+            """Wait until the test releases the blocked worker operation.
+
+            Parameters
+            ----------
+            _connection : object
+                Opaque worker-owned connection unused by the fixture.
+
+            Returns
+            -------
+            None
+                The operation returns after the release event is set.
+            """
+            started.set()
+            release.wait()
+
+        with pytest.raises(TimeoutError):
+            session.execute(block, timeout_seconds=0.01)
+        assert started.is_set()
+        assert session.close_with_timeout(timeout_seconds=0.01) is False
+    finally:
+        release.set()
+        assert session.close_with_timeout(timeout_seconds=1.0) is True
+
+
 @pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
 def test_warm_session_supports_first_party_structural_backends(
     tmp_path: Path,

@@ -42,9 +42,9 @@ src/codira/daemon/runtime.py:123 PLR0913 — foreground daemon dependencies are
     explicit runtime controls rather than hidden globals.
 src/codira/migration.py:153 PLR0913 — migration preview reports every resolved
     workspace input without mutating registration state.
-src/codira/query_daemon_lifecycle.py:579 PLR0913 — service lifecycle inputs are
+src/codira/query_daemon_lifecycle.py:580 PLR0913 — service lifecycle inputs are
     explicit to preserve platform-independent restart behavior.
-src/codira/query_daemon_ipc.py:887 PLR0913 — IPC server construction exposes its
+src/codira/query_daemon_ipc.py:894 PLR0913 — IPC server construction exposes its
     authentication, runtime, and connection-boundary dependencies.
 src/codira/cli.py:2137 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
@@ -62,11 +62,11 @@ src/codira/docstring.py:1286, src/codira/docstring.py:1397 PLC0415 — lazy impo
     registry import cycle on the optional documentation-plugin path.
 src/codira/docstring.py:1340, src/codira/docstring.py:1491 PLR0913 — documentation validation preserves
     source, configuration, visibility, and plugin-routing provenance.
-src/codira/query_daemon.py:348,365 BLE001 — worker initialization and operation
+src/codira/query_daemon.py:349,366 BLE001 — worker initialization and operation
     failures must cross the future boundary as their original exception.
-src/codira/query_daemon_lifecycle.py:720,737 BLE001 — a long-lived service must
+src/codira/query_daemon_lifecycle.py:721,738 BLE001 — a long-lived service must
     report any unexpected refresh or foreground failure as degraded state.
-src/codira/query_daemon_ipc.py:1263,1350 BLE001 — the IPC boundary converts any
+src/codira/query_daemon_ipc.py:1270,1360 BLE001 — the IPC boundary converts any
     unexpected implementation failure into a stable protocol/unavailable result.
 src/codira/mcp/server.py:223 SLF001 — FastMCP exposes no public transport hook;
     its private server object is the required stdio transport boundary.
@@ -94,8 +94,8 @@ scripts/run_final_embedding_model_campaign.py:791,
 scripts/run_retrieval_quality_benchmark.py:913,
 src/codira/docstring.py:1019, src/codira/docstring.py:1114,
 src/codira/index_generation.py:109,
-src/codira/query_daemon.py:365, src/codira/query_daemon_lifecycle.py:737, and
-src/codira/query_daemon_ipc.py:1350 retain the same category-specific reasons
+src/codira/query_daemon.py:366, src/codira/query_daemon_lifecycle.py:738, and
+src/codira/query_daemon_ipc.py:1360 retain the same category-specific reasons
 as their immediately preceding grouped entries.
 ```
 
