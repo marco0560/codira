@@ -1703,6 +1703,56 @@ def test_duckdb_full_prepare_rolls_back_table_recreation(tmp_path: Path) -> None
         reopened.close()
 
 
+def test_duckdb_list_symbols_in_module_orders_bounded_results(
+    tmp_path: Path,
+) -> None:
+    """Order bounded module-symbol results independently of insertion order.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts the first twenty symbols use their logical total
+        order even when rows were inserted in reverse order.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            connection.execute(statement)
+        file_path = tmp_path / "pkg" / "module.py"
+        connection.execute(
+            """
+            INSERT INTO files(id, path, hash, mtime, size, analyzer_name, analyzer_version)
+            VALUES (1, ?, 'hash', 1.0, 1, 'python', '1')
+            """,
+            (str(file_path),),
+        )
+        for index in range(25, 0, -1):
+            name = f"symbol_{index:02d}"
+            connection.execute(
+                """
+                INSERT INTO symbol_index(
+                    id, name, stable_id, type, module_name, file_id, lineno
+                ) VALUES (?, ?, ?, 'function', 'pkg.module', 1, ?)
+                """,
+                (index, name, f"python:function:pkg.module:{name}", index),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+    rows = DuckDBIndexBackend().list_symbols_in_module(tmp_path, "pkg.module")
+
+    assert [row[2] for row in rows] == [f"symbol_{index:02d}" for index in range(1, 21)]
+
+
 def test_duckdb_warm_full_reindex_reuses_output_dir_without_duplicate_symbols(
     tmp_path: Path,
 ) -> None:

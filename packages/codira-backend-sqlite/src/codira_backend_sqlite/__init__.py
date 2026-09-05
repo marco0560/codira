@@ -867,6 +867,7 @@ class SQLiteIndexBackend:
                   ON s.file_id = f.id
                 WHERE s.module_name = ?
                 {prefix_sql}
+                ORDER BY s.module_name, s.name, s.type, f.path, s.lineno
                 LIMIT ?
                 """,
                 (module, *prefix_params, limit),

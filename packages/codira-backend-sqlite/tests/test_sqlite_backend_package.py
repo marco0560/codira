@@ -199,6 +199,52 @@ def test_sqlite_backend_counts_reusable_embeddings_in_path_batches(
     assert count == 1001
 
 
+def test_sqlite_list_symbols_in_module_orders_bounded_results(
+    tmp_path: Path,
+) -> None:
+    """Order bounded module-symbol results independently of insertion order.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts the first twenty symbols use their logical total
+        order even when rows were inserted in reverse order.
+    """
+    backend = SQLiteIndexBackend()
+    connection = backend.open_connection(tmp_path)
+    try:
+        file_path = tmp_path / "pkg" / "module.py"
+        connection.execute(
+            """
+            INSERT INTO files(path, hash, mtime, size, analyzer_name, analyzer_version)
+            VALUES (?, 'hash', 1.0, 1, 'python', '1')
+            """,
+            (str(file_path),),
+        )
+        file_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+        for index in range(25, 0, -1):
+            name = f"symbol_{index:02d}"
+            connection.execute(
+                """
+                INSERT INTO symbol_index(name, stable_id, type, module_name, file_id, lineno)
+                VALUES (?, ?, 'function', 'pkg.module', ?, ?)
+                """,
+                (name, f"python:function:pkg.module:{name}", file_id, index),
+            )
+        connection.commit()
+
+        rows = backend.list_symbols_in_module(tmp_path, "pkg.module")
+    finally:
+        connection.close()
+
+    assert [row[2] for row in rows] == [f"symbol_{index:02d}" for index in range(1, 21)]
+
+
 def test_sqlite_backend_full_prepare_clears_populated_database_in_session(
     tmp_path: Path,
 ) -> None:

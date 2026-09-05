@@ -2191,7 +2191,9 @@ class MemoryIndexBackend:
             if symbol.module_name == module
             and path_has_prefix(state.files[symbol.file_id].path, normalized_prefix)
         ]
-        return rows[:limit]
+        return sorted(rows, key=lambda row: (row[1], row[2], row[0], row[3], row[4]))[
+            :limit
+        ]
 
     def find_symbol(
         self,
