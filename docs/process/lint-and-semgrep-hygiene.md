@@ -168,7 +168,8 @@ fires; each such rule has a dedicated violating fixture.
   no lint or Semgrep exceptions. DuckDB reference-scan persistence likewise
   has no lint or Semgrep exceptions. DuckDB index-state inspection has no lint
   or Semgrep exceptions. DuckDB reusable-embedding state loading has no lint
-  or Semgrep exceptions, including orphan cleanup.
+  or Semgrep exceptions, including orphan cleanup. DuckDB docstring-audit
+  policy has no lint or Semgrep exceptions.
 
   Affected sources are
   `scripts/benchmark_index.py`, `src/codira/query/context.py`,

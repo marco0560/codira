@@ -79,6 +79,10 @@ from codira_backend_duckdb.duckdb_embedding_state import (
     _load_previous_symbol_embeddings,
     _prune_orphaned_embeddings,
 )
+from codira_backend_duckdb.duckdb_docstring_policy import (
+    _should_audit_docstrings,
+    _should_require_raises_section,
+)
 from codira_backend_duckdb.duckdb_query_graph import _validated_graph_identifier
 from codira_backend_duckdb.duckdb_query_primitives import (
     _backend_bytes,
@@ -155,6 +159,24 @@ def test_duckdb_embedding_payload_helpers_preserve_text_and_hash_rules() -> None
     )
     assert text == "function\npackage.module\nsymbol\n() -> None\nSummary.\ncontext"
     assert _embedding_content_hash(text) == _embedding_content_hash(text)
+
+
+def test_duckdb_docstring_policy_preserves_audit_exclusions() -> None:
+    """Preserve DuckDB docstring-audit source and pytest exclusions.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts shell files and pytest test callables remain excluded.
+    """
+    assert not _should_audit_docstrings(Path("script.sh"))
+    assert _should_audit_docstrings(Path("src/package.py"))
+    assert not _should_require_raises_section(Path("tests/test_sample.py"), "test_case")
+    assert _should_require_raises_section(Path("src/package.py"), "run")
 
 
 def test_duckdb_graph_identifier_guard_preserves_the_query_vocabulary() -> None:
