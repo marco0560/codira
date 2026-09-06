@@ -1907,1519 +1907,1231 @@ def _load_split_repo_verification_helper() -> _SplitRepoVerificationModule:
     return cast("_SplitRepoVerificationModule", module)
 
 
-def test_editable_package_paths_follow_authoritative_first_party_order() -> None:
-    """
-    Resolve first-party package directories in deterministic install order.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the helper preserves the accepted first-party package list.
-    """
-    helper = _load_install_helper()
-    repo_root = Path("/tmp/codira")
-
-    assert helper.first_party_package_root(repo_root, None) == (repo_root / "packages")
-    assert helper.editable_package_paths(repo_root) == (
-        _expected_monorepo_package_paths(repo_root)
-    )
-    assert helper.FIRST_PARTY_EDITABLE_PACKAGES == EXPECTED_FIRST_PARTY_PACKAGE_DIRS
-
-
-def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
-    """
-    Keep installed repo aliases aligned while excluding local-only credentials.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the installer covers the sanctioned alias set and does
-        not install personal identity, remotes, or credential helpers.
-    """
-    helper = _load_git_config_install_helper()
-    entries = dict(helper.git_alias_entries())
-
-    expected_aliases = {
-        "alias.st",
-        "alias.co",
-        "alias.br",
-        "alias.ci",
-        "alias.lg",
-        "alias.check",
-        "alias.fix",
-        "alias.clean-repo",
-        "alias.clean-repo-dry",
-        "alias.re-clean",
-        "alias.bootstrap",
-        "alias.new-decision",
-        "alias.install-repo-config",
-        "alias.docs-build",
-        "alias.gen-issues",
-        "alias.gen-miles",
-        "alias.gen-zip-common",
-        "alias.txz",
-        "alias.release-audit",
-        "alias.release-check",
-        "alias.rel",
-        "alias.safe-push",
-    }
-
-    assert {key for key in entries if key.startswith("alias.")} == expected_aliases
-    assert entries["init.defaultBranch"] == "main"
-    assert entries["alias.lg"] == "log --oneline --graph --decorate --show-notes -40"
-    assert entries["alias.check"] == "!uv run python scripts/validate_repo.py"
-    assert "source .venv/bin/activate" not in entries["alias.check"]
-    assert entries["alias.fix"] == (
-        "!uv run python scripts/run_repo_tool.py ruff check . --fix "
-        "&& uv run python scripts/run_repo_tool.py ruff format ."
-    )
-    assert entries["alias.docs-build"] == (
-        "!NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict"
-    )
-    assert entries["alias.gen-issues"] == (
-        "!uv run python scripts/generate_github_snapshot.py issues --output issues.json"
-    )
-    assert entries["alias.gen-miles"] == (
-        "!uv run python scripts/generate_github_snapshot.py milestones --output "
-        "milestones.json"
-    )
-    assert "rsync" not in entries["alias.txz"]
-    assert 'name="${1:-codira}"' in entries["alias.txz"]
-    assert 'mkdir -p "$tmp/codira"' in entries["alias.txz"]
-    assert "--transform='s,^,codira/,'" in entries["alias.txz"]
-    assert "\x00" not in entries["alias.txz"]
-    assert 'printf "%s\\0" issues.json milestones.json' in entries["alias.txz"]
-    assert "alias.ctx" not in entries
-    assert "user.name" not in entries
-    assert "user.email" not in entries
-    assert not any(key.startswith("remote.") for key in entries)
-    assert not any("credential" in key for key in entries)
-
-
-def test_github_snapshot_generator_targets_codira_repository() -> None:
-    """
-    Keep generated planning snapshots scoped to this repository.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the generator queries the Codira GitHub repository.
-    """
-    helper = _load_github_snapshot_helper()
-
-    assert helper.OWNER == "marco0560"
-    assert helper.REPOSITORY == "codira"
-
-
-def test_repo_tool_runner_uses_non_repository_tool_state(tmp_path: Path) -> None:
-    """
-    Keep sanctioned tool state outside the repository cleanup surface.
-
-    Parameters
-    ----------
-    tmp_path : pathlib.Path
-        Temporary workspace used for deterministic path assertions.
-
-    Returns
-    -------
-    None
-        The test asserts cache and temp environment variables point below the
-        selected non-repository tool-state root.
-    """
-    helper = _load_repo_tool_runner()
-    repo_root = tmp_path / "repo"
-    temp_root = tmp_path / "system-temp"
-    repo_root.mkdir()
-    temp_root.mkdir()
-
-    state_root = helper.tool_state_root(repo_root, temp_root=temp_root)
-    env = helper.tool_environment(
-        {
-            "PRE_COMMIT_HOME": str(repo_root / ".pre-commit-cache"),
-            "TMP": str(repo_root / ".tmp"),
-        },
-        state_root=state_root,
-    )
-
-    assert state_root.parent.parent == temp_root
-    assert repo_root not in state_root.parents
-    assert env["COVERAGE_FILE"] == str(state_root / "coverage" / ".coverage")
-    assert env["PRE_COMMIT_HOME"] == str(state_root / "pre-commit")
-    assert env["MYPY_CACHE_DIR"] == str(state_root / "mypy")
-    assert env["RUFF_CACHE_DIR"] == str(state_root / "ruff")
-    assert env["SEMGREP_LOG_FILE"] == str(state_root / "semgrep" / "semgrep.log")
-    assert env["SEMGREP_SETTINGS_FILE"] == str(state_root / "semgrep" / "settings.yml")
-    assert env["SEMGREP_VERSION_CACHE_PATH"] == str(
-        state_root / "semgrep" / "version-cache"
-    )
-    assert env["TMP"] == str(state_root / "tmp")
-    assert env["TEMP"] == str(state_root / "tmp")
-    assert env["TMPDIR"] == str(state_root / "tmp")
-
-
-def test_repo_tool_runner_adds_tool_specific_cache_arguments(tmp_path: Path) -> None:
-    """
-    Route tool-specific cache flags through the central wrapper.
-
-    Parameters
-    ----------
-    tmp_path : pathlib.Path
-        Temporary workspace used for deterministic path assertions.
-
-    Returns
-    -------
-    None
-        The test asserts pytest and ruff receive explicit non-repository cache
-        arguments while pre-commit resolves through its Python module.
-    """
-    helper = _load_repo_tool_runner()
-    state_root = tmp_path / "state"
-    pytest_basetemp = state_root / "tmp" / "pytest-fixed"
-
-    assert helper.build_tool_argv(
-        "pytest",
-        ("-q",),
-        state_root=state_root,
-        python="python",
-        pytest_basetemp=pytest_basetemp,
-    ) == (
-        "python",
-        "-m",
-        "pytest",
-        "-o",
-        f"cache_dir={state_root / 'pytest-cache'}",
-        "--basetemp",
-        str(pytest_basetemp),
-        "-q",
-    )
-    assert helper.build_tool_argv(
-        "ruff",
-        ("check", ".", "--fix"),
-        state_root=state_root,
-        python="python",
-    ) == (
-        "python",
-        "-m",
-        "ruff",
-        "check",
-        "--cache-dir",
-        str(state_root / "ruff"),
-        ".",
-        "--fix",
-    )
-    assert helper.build_tool_argv(
-        "pre-commit",
-        ("run", "--all-files"),
-        state_root=state_root,
-        python="python",
-    ) == ("python", "-m", "pre_commit", "run", "--all-files")
-
-
-def test_repo_tool_runner_resolves_semgrep_next_to_python(tmp_path: Path) -> None:
-    """
-    Resolve Semgrep from the active interpreter environment before ``PATH``.
-
-    Parameters
-    ----------
-    tmp_path : pathlib.Path
-        Temporary workspace used for deterministic executable paths.
-
-    Returns
-    -------
-    None
-        The test asserts Semgrep resolves from the same environment as the
-        selected Python interpreter.
-    """
-    helper = _load_repo_tool_runner()
-    state_root = tmp_path / "state"
-    python_dir = tmp_path / "venv" / "bin"
-    python_dir.mkdir(parents=True)
-    python_path = python_dir / "python"
-    python_path.write_text("", encoding="utf-8")
-    semgrep_path = python_dir / "semgrep"
-    semgrep_path.write_text("", encoding="utf-8")
-
-    assert helper.build_tool_argv(
-        "semgrep",
-        ("scan", "--config", "semgrep/rules", "."),
-        state_root=state_root,
-        python=str(python_path),
-    ) == (
-        str(semgrep_path),
-        "scan",
-        "--config",
-        "semgrep/rules",
-        ".",
-    )
-
-
-def test_repo_tool_runner_creates_unique_pytest_basetemp(tmp_path: Path) -> None:
-    """
-    Avoid reusing or pre-creating pytest temporary directories.
-
-    Parameters
-    ----------
-    tmp_path : pathlib.Path
-        Temporary workspace used for deterministic path assertions.
-
-    Returns
-    -------
-    None
-        The test asserts pytest base temporary directory paths are unique, stay
-        under the non-repository state root, and are left for pytest to create.
-    """
-    helper = _load_repo_tool_runner()
-    state_root = tmp_path / "state"
-
-    first = helper.create_pytest_basetemp(state_root)
-    second = helper.create_pytest_basetemp(state_root)
-
-    assert first != second
-    assert first.parent == state_root / "tmp"
-    assert second.parent == state_root / "tmp"
-    assert not first.exists()
-    assert not second.exists()
-
-
-def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
-    """
-    Keep the standard validation entry point on the safe tool-state path.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts validation commands delegate through
-        ``scripts/run_repo_tool.py`` instead of creating cache directories
-        directly.
-    """
-    helper = _load_validation_helper()
-
-    assert helper.build_validation_commands(python="python") == (
-        (
-            "python",
-            str(helper.RUN_REPO_TOOL),
-            "ruff",
-            "check",
-            ".",
-        ),
-        (
-            "python",
-            str(helper.RUN_REPO_TOOL),
-            "ruff",
-            "format",
-            "--check",
-            ".",
-        ),
-        *(
-            (
-                "python",
-                str(helper.RUN_REPO_TOOL),
-                "mypy",
-                ".",
-            ),
-            (
-                "python",
-                str(helper.RUN_REPO_TOOL),
-                "mypy",
-                "--explicit-package-bases",
-                *helper.first_party_package_typecheck_paths(),
-            ),
-        ),
-        (
-            "python",
-            str(helper.RUN_REPO_TOOL),
-            "pre-commit-noncode",
-            "run",
-            "--all-files",
-        ),
-        (
-            "python",
-            str(helper.RUN_REPO_TOOL),
-            "semgrep",
-            "scan",
-            "--config",
-            "semgrep/rules",
-            "--metrics=off",
-            "--disable-version-check",
-            "--exclude",
-            "fixtures",
-            ".",
-        ),
-        (
-            "python",
-            str(helper.RUN_REPO_TOOL),
-            "coverage",
-            "run",
-            "-m",
-            "pytest",
-            "-q",
-            "tests",
-            "packages",
-        ),
-        (
-            "python",
-            str(helper.RUN_REPO_TOOL),
-            "coverage",
-            "json",
-            "-o",
-            ".coverage-report.json",
-            "--omit=*/_remote_module_non_scriptable",
-        ),
-        (
-            "python",
-            str(helper.RUN_REPO_TOOL),
-            "python",
-            "scripts/coverage_summary.py",
-        ),
-    )
-
-
-def test_validation_helper_can_append_complete_semgrep_scan() -> None:
-    """
-    Keep the optional remote-rule Semgrep pass deterministic and additive.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the extra Semgrep command is appended only when
-        requested.
-    """
-    helper = _load_validation_helper()
-    report_path = helper.complete_semgrep_output_path()
-
-    assert helper.build_validation_commands(
-        python="python",
-        include_semgrep_complete=True,
-    )[-1] == (
-        "sops",
-        "exec-env",
-        str(helper.PERSONAL_SECRETS_DIR / "semgrep.env"),
-        (
-            f"python {helper.RUN_REPO_TOOL} semgrep scan --json --output "
-            f"{report_path} --exclude fixtures ."
-        ),
-    )
-
-
-def test_validation_helper_returns_first_failing_exit_status() -> None:
-    """
-    Stop validation at the first failing delegated command.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts a failing first command determines the wrapper exit
-        status.
-    """
-    helper = _load_validation_helper()
-    failing_command = (sys.executable, "-c", "raise SystemExit(7)")
-    skipped_command = (sys.executable, "-c", "raise SystemExit(0)")
-
-    assert helper.run_validation((failing_command, skipped_command)) == 7
-
-
-def test_validation_helper_stops_after_failed_ruff_check(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """
-    Stop validation after a failed standard Ruff check.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to script a failed Ruff check.
-
-    Returns
-    -------
-    None
-        The test asserts the validator does not mutate or continue after failure.
-    """
-    helper = _load_validation_helper()
-    command = ("python", str(helper.RUN_REPO_TOOL), "ruff", "check", ".")
-    next_command = ("python", str(helper.RUN_REPO_TOOL), "mypy", ".")
-    seen: list[tuple[str, ...]] = []
-
-    def fake_run(
-        argv: tuple[str, ...],
-        **_kwargs: object,
-    ) -> subprocess.CompletedProcess[str]:
-        """Return a failure for the Ruff check."""
-
-        seen.append(argv)
-        return subprocess.CompletedProcess(argv, int(argv == command), "", "")
-
-    monkeypatch.setattr(helper.subprocess, "run", fake_run)
-
-    assert helper.run_validation((command, next_command)) == 1
-    assert seen == [command]
-
-
-def test_validation_helper_reports_ruff_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """
-    Return a Ruff failure to the validator operator.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to force a Ruff failure.
-
-    Returns
-    -------
-    None
-        The test asserts the Ruff status is returned without a repair attempt.
-    """
-    helper = _load_validation_helper()
-    command = ("python", str(helper.RUN_REPO_TOOL), "ruff", "check", ".")
-
-    monkeypatch.setattr(
-        helper.subprocess,
-        "run",
-        lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 2, "", ""),
-    )
-
-    assert helper.run_validation((command,)) == 2
-
-
-def test_validation_helper_help_mentions_new_flags() -> None:
-    """
-    Document the validator's opt-in execution modes in the CLI help text.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the parser advertises the new command-line flags.
-    """
-    helper = _load_validation_helper()
-    help_text = helper.build_parser().format_help()
-
-    assert "--dry-run" in help_text
-    assert "--semgrep-complete" in help_text
-
-
-def test_validation_helper_dry_run_prints_without_executing(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """
-    Keep dry-run mode side-effect free while showing delegated commands.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Patch helper subprocess execution.
-    capsys : pytest.CaptureFixture[str]
-        Capture dry-run output.
-
-    Returns
-    -------
-    None
-        The test asserts dry-run mode prints commands and skips subprocess
-        execution.
-    """
-    helper = _load_validation_helper()
-
-    def fail_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        msg = "subprocess.run must not execute during --dry-run"
-        raise AssertionError(msg)
-
-    monkeypatch.setattr(helper.subprocess, "run", fail_run)
-
-    assert helper.main(["--dry-run", "--semgrep-complete"]) == 0
-    output = capsys.readouterr().out
-
-    assert "semgrep/rules" in output
-    assert "semgrep scan --json --output" in output
-    assert str(helper.COMPLETE_SEMGREP_ARTIFACT_ROOT) in output
-
-
-def test_validation_helper_complete_semgrep_output_path_is_timestamped() -> None:
-    """
-    Keep complete-Semgrep artifacts under the gitignored analysis subtree.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the helper emits the required timestamped artifact
-        path shape.
-    """
-    helper = _load_validation_helper()
-    report_path = helper.complete_semgrep_output_path()
-
-    assert report_path.parent == helper.COMPLETE_SEMGREP_ARTIFACT_ROOT
-    assert report_path.name.startswith("semgrep-complete-")
-    assert report_path.name.endswith(".json")
-
-
-def test_validation_helper_complete_semgrep_creates_parent_and_reports_output(
-    monkeypatch: pytest.MonkeyPatch,
+def test_benchmark_campaign_helper_builds_dry_run_plan(
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """
-    Persist the optional complete Semgrep scan under the gitignored artifacts root.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Patch helper state and subprocess execution.
-    tmp_path : pathlib.Path
-        Temporary directory used for the fake Semgrep artifact path.
-    capsys : pytest.CaptureFixture[str]
-        Capture validator output.
-
-    Returns
-    -------
-    None
-        The test asserts the output directory is created and the saved-report
-        path is printed after a successful complete Semgrep run.
-    """
-    helper = _load_validation_helper()
-    report_root = tmp_path / ".artifacts" / "analysis" / "semgrep"
-    report_path = report_root / "semgrep-complete-20260521T120000Z.json"
-    monkeypatch.setattr(helper, "COMPLETE_SEMGREP_ARTIFACT_ROOT", report_root)
-    monkeypatch.setattr(
-        helper,
-        "complete_semgrep_output_path",
-        lambda *, now=None: report_path,
-    )
-    commands = helper.build_validation_commands(
-        python="python",
-        include_semgrep_complete=True,
-    )
-    seen_commands: list[tuple[str, ...]] = []
-
-    def fake_run(
-        argv: tuple[str, ...],
-        *,
-        cwd: Path,
-        check: bool,
-        capture_output: bool,
-        text: bool,
-    ) -> subprocess.CompletedProcess[str]:
-        del cwd, check, capture_output, text
-        seen_commands.append(argv)
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    monkeypatch.setattr(helper.subprocess, "run", fake_run)
-
-    assert helper.run_validation(commands) == 0
-    output = capsys.readouterr().out
-
-    assert report_path.parent.is_dir()
-    assert (
-        f"Saved Semgrep report: {helper.relative_report_path(report_path)}"
-    ) in output
-    assert any(
-        any("--output" in argument for argument in command) for command in seen_commands
-    )
-
-
-def test_validation_helper_complete_semgrep_failure_reports_repo_relative_path(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """
-    Report the saved complete-Semgrep artifact using a repo-relative label.
+    Keep performance campaign command construction reproducible.
 
     Parameters
     ----------
+    tmp_path : pathlib.Path
+        Temporary directory for manifest and target repositories.
     monkeypatch : pytest.MonkeyPatch
-        Patch helper state and subprocess execution.
-    tmp_path : pathlib.Path
-        Temporary directory used for the fake repository root.
-    capsys : pytest.CaptureFixture[str]
-        Capture validator output.
+        Fixture used to patch subprocess execution for deterministic planning.
 
     Returns
     -------
     None
-        The test asserts failure messaging uses the repository-relative artifact
-        path instead of an absolute path.
+        The test asserts the campaign helper loads all repository categories
+        and emits a dry-run command plan with Hyperfine and profiler commands
+        after the phase index is used for adaptive calibration.
     """
-    helper = _load_validation_helper()
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    report_root = repo_root / ".artifacts" / "analysis" / "semgrep"
-    report_path = report_root / "semgrep-complete-20260521T120000Z.json"
-    monkeypatch.setattr(helper, "REPO_ROOT", repo_root)
-    monkeypatch.setattr(helper, "COMPLETE_SEMGREP_ARTIFACT_ROOT", report_root)
-    monkeypatch.setattr(
-        helper,
-        "complete_semgrep_output_path",
-        lambda *, now=None: report_path,
-    )
-    commands = helper.build_validation_commands(
-        python="python",
-        include_semgrep_complete=True,
-    )
-
-    def fake_run(
-        argv: tuple[str, ...],
-        *,
-        cwd: Path,
-        check: bool,
-        capture_output: bool,
-        text: bool,
-    ) -> subprocess.CompletedProcess[str]:
-        del cwd, check, capture_output, text
-        if any("--output" in argument for argument in argv):
-            return subprocess.CompletedProcess(argv, 1, "", "")
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    monkeypatch.setattr(helper.subprocess, "run", fake_run)
-
-    assert helper.run_validation(commands) == 1
-    output = capsys.readouterr().out
-
-    assert (
-        "Complete Semgrep report requires examination: "
-        ".artifacts/analysis/semgrep/semgrep-complete-20260521T120000Z.json"
-    ) in output
-
-
-def test_git_hooks_route_validation_through_repo_tool_runner() -> None:
-    """
-    Keep Git hook validation aligned with the central tool-state wrapper.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts hooks do not bypass ``scripts/run_repo_tool.py``.
-    """
-    repo_root = Path(__file__).resolve().parents[1]
-    pre_commit_hook = (repo_root / ".githooks" / "pre-commit").read_text(
-        encoding="utf-8"
-    )
-    pre_push_hook = (repo_root / ".githooks" / "pre-push").read_text(encoding="utf-8")
-
-    assert "scripts/run_repo_tool.py" in pre_commit_hook
-    assert "scripts/run_repo_tool.py" in pre_push_hook
-    assert ".venv/bin/pre-commit" not in pre_commit_hook
-    assert ".venv/bin/pre-commit" not in pre_push_hook
-    assert "-m mypy" not in pre_push_hook
-    assert "-m pytest" not in pre_push_hook
-    assert "pytest -q tests packages" in pre_push_hook
-    assert '"${ALLOW_MAIN_PUSH:-}" = "1"' in pre_push_hook
-    assert "-m scripts.release_preview" in pre_push_hook
-
-
-def test_install_helper_can_target_exported_split_repositories() -> None:
-    """
-    Build editable-install commands against an external split-repository root.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts local bootstrap can repair stale editable installs by
-        targeting the actual split repository directory.
-    """
-    helper = _load_install_helper()
-    repo_root = Path("/tmp/codira")
-    package_root = Path("/tmp/codira-split-repos")
-
-    assert helper.first_party_package_root(repo_root, package_root) == package_root
-    assert helper.editable_package_paths(
-        repo_root,
-        package_root=package_root,
-    ) == _expected_split_package_paths(package_root)
-    assert helper.bundle_package_path(
-        repo_root,
-        package_root=package_root,
-    ) == (package_root / "codira-bundle-official")
-    assert helper.build_install_commands(
-        helper.InstallCommandRequest(
-            python="/tmp/codira/.venv/bin/python",
-            repo_root=repo_root,
-            include_core=True,
-            include_bundle=True,
-            package_root=package_root,
-        )
-    ) == (
-        (
-            "uv",
-            "pip",
-            "uninstall",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "codira-bundle-official",
+    helper = _load_benchmark_campaign_helper()
+    small = tmp_path / "codira"
+    medium = tmp_path / "fontshow"
+    large = tmp_path / "texlive"
+    for path in (small, medium, large):
+        path.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {
+                        "label": "codira",
+                        "category": "small",
+                        "path": str(small),
+                    },
+                    {
+                        "label": "fontshow",
+                        "category": "medium",
+                        "path": str(medium),
+                        "query": "plugin registry",
+                    },
+                    {
+                        "label": "texlive",
+                        "category": "large",
+                        "path": str(large),
+                    },
+                ]
+            }
         ),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "-e",
-            "/tmp/codira",
-            *_editable_args(
-                _expected_split_package_paths(package_root, include_bundle=False)
-            ),
-        ),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "--no-deps",
-            "-e",
-            "/tmp/codira-split-repos/codira-bundle-official",
-        ),
-    )
-
-
-def test_shared_first_party_package_inventory_stays_in_split_order() -> None:
-    """
-    Resolve the shared first-party package inventory in deterministic order.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the shared package inventory stays aligned with the
-        accepted split/package order.
-    """
-    helper = _load_first_party_package_inventory()
-    repo_root = Path("/tmp/codira")
-
-    assert helper.package_paths(repo_root) == _expected_monorepo_package_paths(
-        repo_root
-    )
-    assert helper.FIRST_PARTY_PACKAGE_DIRS == EXPECTED_FIRST_PARTY_PACKAGE_DIRS
-
-
-def test_build_install_argv_installs_each_first_party_package_editably() -> None:
-    """
-    Build the exact editable-install command for first-party packages.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the helper emits the expected uv command arguments
-        without installing the curated bundle by default.
-    """
-    helper = _load_install_helper()
-    repo_root = Path("/tmp/codira")
-
-    assert helper.bundle_package_path(repo_root) == (
-        repo_root / "packages/codira-bundle-official"
-    )
-    assert helper.non_bundle_package_paths(repo_root) == (
-        _expected_monorepo_package_paths(repo_root, include_bundle=False)
-    )
-    assert helper.build_install_commands(
-        helper.InstallCommandRequest(
-            python="/tmp/codira/.venv/bin/python",
-            repo_root=repo_root,
-        )
-    ) == (
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            *_editable_args(
-                _expected_monorepo_package_paths(repo_root, include_bundle=False)
-            ),
-        ),
-    )
-
-
-def test_install_helper_can_include_core_repo_with_requested_extras() -> None:
-    """
-    Build one source-tree install command for core plus first-party packages.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the helper can prepend the editable core requirement
-        with requested extras ahead of the extracted package set.
-    """
-    helper = _load_install_helper()
-    repo_root = Path("/tmp/codira")
-
-    assert helper.editable_core_requirement(repo_root) == "/tmp/codira"
-    assert (
-        helper.editable_core_requirement(
-            repo_root,
-            extras=("semantic",),
-        )
-        == "/tmp/codira[semantic]"
-    )
-    assert helper.build_install_commands(
-        helper.InstallCommandRequest(
-            python="/tmp/codira/.venv/bin/python",
-            repo_root=repo_root,
-            include_core=True,
-            core_extras=("semantic",),
-        )
-    ) == (
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "-e",
-            "/tmp/codira[semantic]",
-            *_editable_args(
-                _expected_monorepo_package_paths(repo_root, include_bundle=False)
-            ),
-        ),
-    )
-
-
-def test_install_helper_can_opt_into_bundle_package() -> None:
-    """
-    Build the local install plan with an explicit curated bundle step.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the helper only adds the bundle meta-package when it
-        is requested explicitly.
-    """
-    helper = _load_install_helper()
-    repo_root = Path("/tmp/codira")
-
-    assert helper.build_install_commands(
-        helper.InstallCommandRequest(
-            python="/tmp/codira/.venv/bin/python",
-            repo_root=repo_root,
-            include_bundle=True,
-        )
-    ) == (
-        (
-            "uv",
-            "pip",
-            "uninstall",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "codira-bundle-official",
-        ),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            *_editable_args(
-                _expected_monorepo_package_paths(repo_root, include_bundle=False)
-            ),
-        ),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "--no-deps",
-            "-e",
-            "/tmp/codira/packages/codira-bundle-official",
-        ),
-    )
-
-
-def test_build_helper_rehearses_each_first_party_package_boundary() -> None:
-    """
-    Build the split-readiness command plan for every first-party package.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the build helper emits one explicit wheel-build
-        command per future package repository.
-    """
-    helper = _load_build_helper()
-    repo_root = Path("/tmp/codira")
-    wheel_dir = repo_root / ".artifacts" / "wheels"
-
-    assert helper.build_all_argv(
-        python="/tmp/codira/.venv/bin/python",
-        repo_root=repo_root,
-        wheel_dir=wheel_dir,
-    ) == tuple(
-        (
-            "uv",
-            "build",
-            "--python",
-            "/tmp/codira/.venv/bin/python",
-            "--wheel",
-            "--out-dir",
-            "/tmp/codira/.artifacts/wheels",
-            "--no-build-isolation",
-            str(path),
-        )
-        for path in _expected_monorepo_package_paths(repo_root)
-    )
-
-
-def test_build_helper_cleans_known_package_build_artifacts(tmp_path: Path) -> None:
-    """
-    Remove transient build artifacts created during local wheel validation.
-
-    Parameters
-    ----------
-    tmp_path : pathlib.Path
-        Temporary directory managed by pytest.
-
-    Returns
-    -------
-    None
-        The test asserts the helper removes `build/` and `*.egg-info` outputs.
-    """
-    helper = _load_build_helper()
-    package_path = tmp_path / "packages" / "codira-analyzer-python"
-    build_dir = package_path / "build"
-    egg_info_dir = package_path / "src" / "codira_analyzer_python.egg-info"
-    build_dir.mkdir(parents=True)
-    egg_info_dir.mkdir(parents=True)
-
-    helper.cleanup_build_artifacts(package_path)
-
-    assert not build_dir.exists()
-    assert not egg_info_dir.exists()
-
-
-def test_release_install_rehearsal_builds_first_party_and_core_wheels() -> None:
-    """
-    Keep the release rehearsal explicit about first-party and core wheel builds.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the rehearsal builds the first-party package set before
-        the core wheel.
-    """
-    helper = _load_release_install_rehearsal_helper()
-    repo_root = Path("/tmp/codira")
-    wheel_dir = Path("/tmp/codira-wheels")
-
-    assert helper.build_first_party_wheels_argv(
-        python="python",
-        repo_root=repo_root,
-        wheel_dir=wheel_dir,
-    ) == (
-        "python",
-        (repo_root / "scripts" / "build_first_party_packages.py").as_posix(),
-        "--wheel-dir",
-        wheel_dir.as_posix(),
-    )
-    assert helper.build_root_wheel_argv(
-        python="python",
-        repo_root=repo_root,
-        wheel_dir=wheel_dir,
-    ) == (
-        "uv",
-        "build",
-        "--python",
-        "python",
-        "--wheel",
-        "--out-dir",
-        wheel_dir.as_posix(),
-        "--no-build-isolation",
-        repo_root.as_posix(),
-    )
-
-
-def test_release_install_rehearsal_installs_sorted_wheels_into_target_directory(
-    tmp_path: Path,
-) -> None:
-    """
-    Keep installed-wheel rehearsal deterministic across artifact build order.
-
-    Parameters
-    ----------
-    tmp_path : pathlib.Path
-        Temporary directory managed by pytest.
-
-    Returns
-    -------
-    None
-        The test asserts discovered wheels are sorted and installed into the
-        requested target directory.
-    """
-    helper = _load_release_install_rehearsal_helper()
-    wheel_dir = tmp_path / "wheels"
-    install_dir = tmp_path / "site-packages"
-    wheel_dir.mkdir()
-    (wheel_dir / "codira_backend_sqlite-1.0.0-py3-none-any.whl").write_text(
-        "",
         encoding="utf-8",
     )
-    (wheel_dir / "codira-1.0.0-py3-none-any.whl").write_text("", encoding="utf-8")
-
-    wheel_paths = helper.discover_wheel_paths(wheel_dir)
-
-    assert wheel_paths == (
-        wheel_dir / "codira-1.0.0-py3-none-any.whl",
-        wheel_dir / "codira_backend_sqlite-1.0.0-py3-none-any.whl",
-    )
-    assert helper.build_install_wheels_argv(
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260430T120000Z",
+        codira="/tmp/codira/.venv/bin/codira",
+        hyperfine="hyperfine",
         python="python",
-        install_dir=install_dir,
-        wheel_paths=wheel_paths,
-    ) == (
-        "uv",
-        "pip",
-        "install",
-        "--python",
-        "python",
-        "--no-deps",
-        "--target",
-        str(install_dir),
-        str(wheel_dir / "codira-1.0.0-py3-none-any.whl"),
-        str(wheel_dir / "codira_backend_sqlite-1.0.0-py3-none-any.whl"),
+        runs=3,
+        warmup=1,
+        dry_run=True,
     )
 
-
-def test_release_install_rehearsal_probe_covers_standalone_host_target_contract() -> (
-    None
-):
-    """
-    Keep the release rehearsal probe aligned to the standalone host contract.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the release probe exercises installed artifacts,
-        target-source analysis, workspace MCP routing, and model reuse.
-    """
-    helper = _load_release_install_rehearsal_helper()
-
-    probe_argv = helper.build_probe_argv(python="python")
-
-    assert probe_argv[0] == "python"
-    assert probe_argv[1] == "-c"
-    assert "CODIRA_REHEARSAL_INSTALL_DIR" in probe_argv[2]
-    assert '"backend_module": type(backend).__module__' in probe_argv[2]
-    assert '"analyzers": [analyzer.name for analyzer in analyzers]' in probe_argv[2]
-    assert "requires-python" in probe_argv[2]
-    assert '"index",' in probe_argv[2]
-    assert '"--path",' in probe_argv[2]
-    assert '"--output-dir",' in probe_argv[2]
-    assert '"--defer-embeddings",' in probe_argv[2]
-    assert 'resolve_startup_binding(workspace="target"' in probe_argv[2]
-    assert '.call_tool("symbol", {"name": "legacy"})' in probe_argv[2]
-    assert "SharedModelStore(model_root)" in probe_argv[2]
-    assert "codira_similarity_index_faiss" in probe_argv[2]
-    assert "FaissSimilarityIndex" in probe_argv[2]
-    assert '"index_type": "hnsw"' in probe_argv[2]
-    assert "stale FAISS artifact must fail closed" in probe_argv[2]
-
-
-def test_release_artifact_helper_covers_core_and_all_first_party_packages() -> None:
-    """
-    Keep the release build plan aligned to the accepted distribution set.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the release helper covers core plus every first-party
-        distribution in deterministic order.
-    """
-    helper = _load_release_artifact_build_helper()
-    repo_root = Path("/tmp/codira")
-
-    assert helper.release_package_paths(repo_root) == (
-        repo_root,
-        *_expected_monorepo_package_paths(repo_root),
-    )
-
-
-def test_release_artifact_helper_builds_build_and_twine_commands() -> None:
-    """
-    Keep release-artifact command construction explicit and deterministic.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts build and twine-check commands use the expected tool
-        surfaces and package order.
-    """
-    helper = _load_release_artifact_build_helper()
-    repo_root = Path("/tmp/codira")
-
-    assert helper.build_artifact_argv(
-        python="python",
-        package_path=repo_root / "packages/codira-backend-sqlite",
-    ) == (
-        "python",
-        "-m",
-        "build",
-        "--wheel",
-        "--sdist",
-        "/tmp/codira/packages/codira-backend-sqlite",
-    )
-    assert helper.artifact_check_argv(
-        python="python",
-        package_path=repo_root / "packages/codira-backend-sqlite",
-    ) == (
-        "python",
-        "-m",
-        "twine",
-        "check",
-        "/tmp/codira/packages/codira-backend-sqlite/dist/*",
-    )
-
-    release_plan = helper.build_release_plan(python="python", repo_root=repo_root)
-
-    assert release_plan[:2] == (
-        ("python", "-m", "build", "--wheel", "--sdist", "/tmp/codira"),
-        (
-            "python",
-            "-m",
-            "build",
-            "--wheel",
-            "--sdist",
-            "/tmp/codira/packages/codira-analyzer-python",
-        ),
-    )
-    assert release_plan[-3:] == tuple(
-        (
-            "python",
-            "-m",
-            "twine",
-            "check",
-            f"{path}/dist/*",
-        )
-        for path in _expected_monorepo_package_paths(repo_root)[-3:]
-    )
-
-
-def test_split_repo_verification_uses_local_core_checkout_before_package_install() -> (
-    None
-):
-    """
-    Keep split-repo rehearsal pinned to the local core checkout before publish.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts exported package repos install the local core checkout
-        before their own test extra.
-    """
-    helper = _load_split_repo_verification_helper()
-    export_root = Path("/tmp/newrepos/split")
-    repo_root = export_root / "codira-analyzer-python"
-    core_root = Path("/tmp/codira")
-
-    assert helper.split_repo_names() == tuple(
-        relative.removeprefix("packages/")
-        for relative in EXPECTED_FIRST_PARTY_PACKAGE_DIRS
-    )
-    assert helper.build_repo_validation_commands(
-        python="python",
-        exported_repo_root=repo_root,
-        core_repo_root=core_root,
-    )[:2] == (
-        ("uv", "pip", "install", "--python", "python", "-e", "/tmp/codira[semantic]"),
-        (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "python",
-            "-e",
-            "/tmp/newrepos/split/codira-analyzer-python[test]",
-        ),
-    )
-
-
-def test_split_repo_verification_installs_local_first_party_packages_for_bundle() -> (
-    None
-):
-    """
-    Keep bundle split-repo rehearsal independent from unpublished package indexes.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts exported bundle validation installs the local first-party
-        package repos before validating the bundle repo itself.
-    """
-    helper = _load_split_repo_verification_helper()
-    export_root = Path("/tmp/newrepos/split")
-    bundle_root = export_root / "codira-bundle-official"
-    core_root = Path("/tmp/codira")
-
-    commands = helper.build_repo_validation_commands(
-        python="python",
-        exported_repo_root=bundle_root,
-        core_repo_root=core_root,
-    )
-
-    expected_commands = (
-        ("uv", "pip", "install", "--python", "python", "-e", "/tmp/codira[semantic]"),
-        *(
-            (
-                "uv",
-                "pip",
-                "install",
-                "--python",
-                "python",
-                "-e",
-                f"/tmp/newrepos/split/{relative.removeprefix('packages/')}",
+    def fake_run(
+        command: Sequence[str],
+        *,
+        text: bool | None = None,
+        capture_output: bool | None = None,
+        check: bool | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        argv = tuple(str(part) for part in command)
+        if "index" in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "symlist" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "symbols": [
+                            {
+                                "type": "function",
+                                "name": "build_parser",
+                                "module": "codira.cli",
+                                "file": str(
+                                    (small / "src" / "codira" / "cli.py").resolve()
+                                ),
+                                "calls_out": {"total": 4},
+                                "calls_in": {"total": 2},
+                                "refs_out": {"total": 1},
+                                "refs_in": {"total": 1},
+                            }
+                        ],
+                    }
+                ),
+                "",
             )
-            for relative in EXPECTED_NON_BUNDLE_PACKAGE_DIRS
+        if "emb" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "results": [{"score": 0.9}],
+                    }
+                ),
+                "",
+            )
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            json.dumps({"status": "ok", "results": [{"name": "build_parser"}]}),
+            "",
+        )
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+    repositories = helper.load_manifest(manifest)
+    plan = helper.command_plan(repositories, config)
+    help_text = helper.build_parser().format_help()
+    parsed_zero_warmup = helper.build_parser().parse_args(
+        [str(manifest), "--warmup", "0"]
+    )
+
+    assert [row["category"] for row in plan] == ["small", "medium", "large"]
+    assert parsed_zero_warmup.warmup == 0
+    assert "--dry-run" in help_text
+    assert "Examples:" in help_text
+    assert plan[0]["modes"] == ["cold", "warm", "partial_change"]
+    display_commands = cast("list[str]", plan[0]["display_commands"])
+    assert not any("benchmark_index.py" in command for command in display_commands)
+    assert any("hyperfine" in command for command in display_commands)
+    assert any("cProfile" in command for command in display_commands)
+    assert all("--output-dir" in command for command in display_commands)
+    assert any(
+        ".artifacts/benchmarks/20260430T120000Z/indexes/small-codira" in command
+        for command in display_commands
+    )
+
+
+def test_benchmark_campaign_helper_expands_manifest_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Keep manifest-defined Codira commands reproducible and path-aware.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for manifest and target repository fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to patch subprocess execution for deterministic planning.
+
+    Returns
+    -------
+    None
+        The test asserts custom commands expand placeholders, gain repository
+        path isolation where required, and deduplicate built-in default
+        commands.
+    """
+    helper = _load_benchmark_campaign_helper()
+    repo_path = tmp_path / "codira"
+    repo_path.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {
+                        "label": "codira",
+                        "category": "small",
+                        "path": str(repo_path),
+                        "query": "schema migration logic",
+                        "commands": [
+                            ["help"],
+                            ["cov", "--json"],
+                            ["index", "--full"],
+                            ["sym", "build_parser", "--json"],
+                            ["ctx", "--json", "{query}"],
+                            ["caps", "--json"],
+                        ],
+                    }
+                ]
+            }
         ),
+        encoding="utf-8",
+    )
+    config_file = tmp_path / "generated-config.toml"
+    config_file.write_text("config_version = 1\n", encoding="utf-8")
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260501T120000Z",
+        codira="/tmp/codira/.venv/bin/codira",
+        hyperfine="hyperfine",
+        python="python",
+        runs=3,
+        warmup=1,
+        dry_run=True,
+        config_file=config_file,
+    )
+
+    def fake_run(
+        command: Sequence[str],
+        *,
+        text: bool | None = None,
+        capture_output: bool | None = None,
+        check: bool | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        argv = tuple(str(part) for part in command)
+        if "index" in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "symlist" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "symbols": [
+                            {
+                                "type": "function",
+                                "name": "build_parser",
+                                "module": "codira.cli",
+                                "file": str(
+                                    (repo_path / "src" / "codira" / "cli.py").resolve()
+                                ),
+                                "calls_out": {"total": 4},
+                                "calls_in": {"total": 2},
+                                "refs_out": {"total": 1},
+                                "refs_in": {"total": 1},
+                            }
+                        ],
+                    }
+                ),
+                "",
+            )
+        if "emb" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "results": [{"score": 0.9}],
+                    }
+                ),
+                "",
+            )
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            json.dumps({"status": "ok", "results": [{"name": "build_parser"}]}),
+            "",
+        )
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+    repositories = helper.load_manifest(manifest)
+    plan = helper.command_plan(repositories, config)
+    row = plan[0]
+    display_commands = cast("list[str]", row["display_commands"])
+    commands = cast("list[list[str]]", row["commands"])
+    hyperfine_commands = commands[0][8:]
+
+    assert any("codira help" in command for command in display_commands)
+    assert "--show-output" not in commands[0]
+    assert "--ignore-failure" in commands[0]
+    assert row["output_logs"] == [
+        str(
+            config.artifact_root
+            / "20260501T120000Z"
+            / "logs"
+            / f"small-codira-command-{index}.log"
+        )
+        for index in range(1, len(commands) + 1)
+    ]
+    assert any(
+        "cov --json --path " in command and "--output-dir " in command
+        for command in display_commands
+    )
+    assert any(
+        "cov --json --path " in command and f"--config-file {config_file}" in command
+        for command in display_commands
+    )
+    assert any(
+        "sym build_parser --json --path " in command and "--output-dir " in command
+        for command in display_commands
+    )
+    assert any(
+        "ctx --json 'schema migration logic' --path " in command
+        and "--output-dir " in command
+        for command in display_commands
+    )
+    assert any("caps --json" in command for command in display_commands)
+    assert not any(
+        "caps --json" in command and "--config-file" in command
+        for command in hyperfine_commands
+    )
+    assert not any("codira index --full" in command for command in hyperfine_commands)
+    assert any("codira index --path " in command for command in hyperfine_commands)
+
+
+def test_benchmark_campaign_writes_utility_summary(tmp_path: Path) -> None:
+    """
+    Persist workflow-weighted utility scores from Hyperfine exports.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary artifact root.
+
+    Returns
+    -------
+    None
+        The test asserts query command inclusion and score weights stay
+        aligned with the benchmark utility contract.
+    """
+    helper = _load_benchmark_campaign_helper()
+    manifest = tmp_path / "manifest.json"
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260501T120000Z",
+        codira="/tmp/codira/.venv/bin/codira",
+        hyperfine="hyperfine",
+        python="python",
+        runs=3,
+        warmup=1,
+        dry_run=False,
+    )
+    repo = helper.ResolvedRepositoryBenchmark(
+        label="codira",
+        category="small",
+        path=tmp_path,
+        query="schema migration",
+        requested_query="schema migration",
+        modes=("benchmark",),
+        commands=(),
+        requested_commands=(),
+        skipped_commands=(),
+        selection={},
+    )
+    hyperfine_path = helper.run_directory(config) / "small-codira-hyperfine.json"
+    hyperfine_path.parent.mkdir(parents=True)
+    phase_path = helper.run_directory(config) / "small-codira-index-phases.json"
+    phase_path.write_text(
+        json.dumps({"timings": {"total": 10.0}}),
+        encoding="utf-8",
+    )
+    hyperfine_path.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira index",
+                        "mean": 2.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira ctx --json query",
+                        "mean": 1.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira audit --json",
+                        "mean": 3.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira help",
+                        "mean": 100.0,
+                    },
+                    {
+                        "command": "/tmp/codira/.venv/bin/codira caps --json",
+                        "mean": 100.0,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    helper.write_utility_summary(repo, config)
+
+    payload = json.loads(
+        helper.utility_summary_path(repo, config).read_text(encoding="utf-8")
+    )
+    assert payload["query_mean_seconds"] == 2.0
+    assert payload["utility_score"] == 56.0
+    assert [row["subcommand"] for row in payload["query_results"]] == [
+        "ctx",
+        "audit",
+    ]
+
+
+def test_benchmark_campaign_adaptive_resolution_picks_richer_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Resolve benchmark targets toward richer repo-specific command outputs.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for manifest and target repository fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace subprocess execution.
+
+    Returns
+    -------
+    None
+        The test asserts adaptive resolution replaces weak literal targets with
+        richer symbol and query candidates and records selector provenance.
+    """
+    helper = _load_benchmark_campaign_helper()
+    repo_path = tmp_path / "codira"
+    repo_path.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {
+                        "label": "codira",
+                        "category": "small",
+                        "path": str(repo_path),
+                        "query": "schema migration logic",
+                        "commands": [
+                            ["sym", "missing_symbol", "--json"],
+                            ["refs", "missing_symbol", "--incoming", "--json"],
+                            ["emb", "{query}", "--json", "--limit", "5"],
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260502T120000Z",
+        codira="codira",
+        hyperfine="hyperfine",
+        python="python",
+        runs=3,
+        warmup=1,
+        dry_run=True,
+    )
+
+    def fake_run(
+        command: Sequence[str],
+        *,
+        text: bool | None = None,
+        capture_output: bool | None = None,
+        check: bool | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        argv = tuple(str(part) for part in command)
+        if "index" in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "symlist" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "symbols": [
+                            {
+                                "type": "function",
+                                "name": "alpha_edge",
+                                "module": "codira.alpha",
+                                "file": str(
+                                    (
+                                        repo_path / "src" / "codira" / "alpha.py"
+                                    ).resolve()
+                                ),
+                                "calls_out": {"total": 2},
+                                "calls_in": {"total": 1},
+                                "refs_out": {"total": 0},
+                                "refs_in": {"total": 0},
+                            },
+                            {
+                                "type": "function",
+                                "name": "beta_edge",
+                                "module": "codira.beta",
+                                "file": str(
+                                    (repo_path / "src" / "codira" / "beta.py").resolve()
+                                ),
+                                "calls_out": {"total": 5},
+                                "calls_in": {"total": 3},
+                                "refs_out": {"total": 2},
+                                "refs_in": {"total": 2},
+                            },
+                        ],
+                    }
+                ),
+                "",
+            )
+        if "emb" in argv and "--json" in argv:
+            query = argv[argv.index("emb") + 1]
+            if query == "beta edge":
+                payload = {
+                    "status": "ok",
+                    "results": [{"score": 0.95}, {"score": 0.91}],
+                }
+            elif query == "alpha edge":
+                payload = {"status": "ok", "results": [{"score": 0.4}]}
+            else:
+                payload = {"status": "ok", "results": []}
+            return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+        if "sym" in argv and "--json" in argv:
+            name = argv[argv.index("sym") + 1]
+            payload = (
+                {"status": "ok", "results": [{"name": name}, {"name": f"{name}.alt"}]}
+                if name == "beta_edge"
+                else {"status": "ok", "results": [{"name": name}]}
+            )
+            return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+        if "refs" in argv and "--json" in argv:
+            name = argv[argv.index("refs") + 1]
+            if name == "beta_edge":
+                payload = {
+                    "status": "ok",
+                    "results": [{"name": "one"}, {"name": "two"}],
+                }
+                return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+            payload = {"status": "no_matches", "results": []}
+            return subprocess.CompletedProcess(argv, 1, json.dumps(payload), "")
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"status": "ok"}), "")
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    repositories = helper.load_manifest(manifest)
+    resolved = helper.resolve_repositories(repositories, config)
+    plan = helper.command_plan(resolved, config)
+    resolved_repo = cast("_ResolvedBenchmarkRepository", resolved[0])
+
+    assert resolved_repo.query == "beta edge"
+    assert resolved_repo.commands == (
+        ("sym", "beta_edge", "--json"),
+        ("refs", "beta_edge", "--incoming", "--json"),
+        ("emb", "beta edge", "--json", "--limit", "5"),
+    )
+    row = plan[0]
+    assert row["requested_query"] == "schema migration logic"
+    assert row["query"] == "beta edge"
+    assert row["skipped_commands"] == []
+
+
+def test_benchmark_campaign_prints_repo_label_before_phase_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Print the manifest label before the per-repository phase discovery run.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for manifest and target repository fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace subprocess execution.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to capture user-facing banner output.
+
+    Returns
+    -------
+    None
+        The test asserts repository discovery prints the uppercased label
+        banner before the phase index command output.
+    """
+    helper = _load_benchmark_campaign_helper()
+    repo_path = tmp_path / "fontshow"
+    repo_path.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {
+                        "label": "fontshow",
+                        "category": "small",
+                        "path": str(repo_path),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_file = tmp_path / "generated-config.toml"
+    config_file.write_text("config_version = 1\n", encoding="utf-8")
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260502T150000Z",
+        codira="codira",
+        hyperfine="hyperfine",
+        python="python",
+        runs=3,
+        warmup=1,
+        dry_run=True,
+        config_file=config_file,
+    )
+    captured_commands: list[tuple[str, ...]] = []
+
+    def fake_run(
+        command: Sequence[str],
+        *,
+        text: bool | None = None,
+        capture_output: bool | None = None,
+        check: bool | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        argv = tuple(str(part) for part in command)
+        captured_commands.append(argv)
+        if "index" in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "symlist" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "symbols": [
+                            {
+                                "type": "function",
+                                "name": "show_fonts",
+                                "module": "fontshow.main",
+                                "file": str(
+                                    (
+                                        repo_path / "src" / "fontshow" / "main.py"
+                                    ).resolve()
+                                ),
+                                "calls_out": {"total": 1},
+                                "calls_in": {"total": 1},
+                                "refs_out": {"total": 0},
+                                "refs_in": {"total": 0},
+                            }
+                        ],
+                    }
+                ),
+                "",
+            )
+        if "emb" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps({"status": "ok", "results": [{"score": 0.8}]}),
+                "",
+            )
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"status": "ok"}), "")
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    repositories = helper.load_manifest(manifest)
+    helper.resolve_repositories(repositories, config)
+    captured = capsys.readouterr()
+
+    assert captured.err == ""
+    assert captured.out.startswith("--- FONTSHOW ---\n")
+    discovery_index = next(
+        argv for argv in captured_commands if "benchmark_index.py" in argv[1]
+    )
+    assert "--config-file" in discovery_index
+    assert str(config_file) in discovery_index
+    discovery_symlist = next(
+        argv for argv in captured_commands if argv[:2] == ("codira", "symlist")
+    )
+    assert "--config-file" in discovery_symlist
+    assert str(config_file) in discovery_symlist
+
+
+def test_benchmark_campaign_skips_unresolved_adaptive_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Skip adaptive commands that cannot produce meaningful output.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for manifest and target repository fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace subprocess execution.
+
+    Returns
+    -------
+    None
+        The test asserts unresolved adaptive commands are excluded from the
+        resolved Hyperfine command matrix and persisted as skipped commands.
+    """
+    helper = _load_benchmark_campaign_helper()
+    repo_path = tmp_path / "codira"
+    repo_path.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {
+                        "label": "codira",
+                        "category": "small",
+                        "path": str(repo_path),
+                        "commands": [
+                            ["refs", "missing_symbol", "--incoming", "--json"]
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = helper.CampaignConfig(
+        manifest=manifest,
+        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        run_id="20260502T130000Z",
+        codira="codira",
+        hyperfine="hyperfine",
+        python="python",
+        runs=3,
+        warmup=1,
+        dry_run=True,
+    )
+
+    def fake_run(
+        command: Sequence[str],
+        *,
+        text: bool | None = None,
+        capture_output: bool | None = None,
+        check: bool | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        argv = tuple(str(part) for part in command)
+        if "index" in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "symlist" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "symbols": [
+                            {
+                                "type": "function",
+                                "name": "alpha_edge",
+                                "module": "codira.alpha",
+                                "file": str(
+                                    (
+                                        repo_path / "src" / "codira" / "alpha.py"
+                                    ).resolve()
+                                ),
+                                "calls_out": {"total": 2},
+                                "calls_in": {"total": 1},
+                                "refs_out": {"total": 0},
+                                "refs_in": {"total": 0},
+                            }
+                        ],
+                    }
+                ),
+                "",
+            )
+        if "emb" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps({"status": "ok", "results": [{"score": 0.8}]}),
+                "",
+            )
+        if "refs" in argv and "--json" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                1,
+                json.dumps({"status": "no_matches", "results": []}),
+                "",
+            )
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"status": "ok"}), "")
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+
+    repositories = helper.load_manifest(manifest)
+    resolved = helper.resolve_repositories(repositories, config)
+    plan = helper.command_plan(resolved, config)
+    resolved_repo = cast("_ResolvedBenchmarkRepository", resolved[0])
+
+    assert resolved_repo.commands == ()
+    assert resolved_repo.skipped_commands == (
+        ("refs", "missing_symbol", "--incoming", "--json"),
+    )
+    assert plan[0]["skipped_commands"] == [
+        ["refs", "missing_symbol", "--incoming", "--json"]
+    ]
+
+
+def test_benchmark_campaign_rejects_duplicate_labels(tmp_path: Path) -> None:
+    """
+    Keep benchmark manifest identities unique before campaign execution.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for manifest fixtures.
+
+    Returns
+    -------
+    None
+        The test asserts duplicate labels are rejected before command planning.
+    """
+    helper = _load_benchmark_campaign_helper()
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {"label": "dup", "category": "small", "path": str(first)},
+                    {"label": "dup", "category": "medium", "path": str(second)},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate label"):
+        helper.load_manifest(manifest)
+
+
+def test_benchmark_campaign_main_creates_artifact_root_and_reports_missing_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Keep campaign startup failures concise and artifact roots reproducible.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for CLI fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace process arguments.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to inspect user-facing stderr output.
+
+    Returns
+    -------
+    None
+        The test asserts missing manifests return a short error and still create
+        the configured artifact root directory.
+    """
+    helper = _load_benchmark_campaign_helper()
+    artifact_root = tmp_path / "missing-artifacts-root"
+    missing_manifest = tmp_path / "missing-benchmarks.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_campaign.py",
+            str(missing_manifest),
+            "--artifact-root",
+            str(artifact_root),
+        ],
+    )
+
+    assert helper.main() == 2
+    captured = capsys.readouterr()
+
+    assert artifact_root.is_dir()
+    assert captured.out == ""
+    assert "Error: manifest file not found:" in captured.err
+
+
+def test_benchmark_campaign_main_prints_timestamp_after_each_repo_step(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Print a timestamp after each repository command group completes.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for manifest fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace process arguments and command execution.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to inspect terminal output.
+
+    Returns
+    -------
+    None
+        The test asserts one timestamp line is emitted per repository step.
+    """
+    helper = _load_benchmark_campaign_helper()
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {"label": "first", "category": "small", "path": str(first)},
+                    {"label": "second", "category": "medium", "path": str(second)},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifact_root = tmp_path / ".artifacts" / "benchmarks"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_campaign.py",
+            str(manifest),
+            "--artifact-root",
+            str(artifact_root),
+        ],
+    )
+    monkeypatch.setattr(helper, "utc_run_timestamp", lambda: "2026-05-20T10:15:30Z")
+
+    def fake_resolve_repositories(
+        repositories: Sequence[object],
+        config: object,
+    ) -> Sequence[object]:
+        return repositories
+
+    def fake_command_plan(
+        repositories: Sequence[object],
+        config: object,
+    ) -> list[dict[str, object]]:
+        del repositories, config
+        return [
+            {
+                "label": "first",
+                "commands": [["true"]],
+                "output_logs": [str(artifact_root / "run" / "logs" / "first.log")],
+            },
+            {
+                "label": "second",
+                "commands": [["true"]],
+                "output_logs": [str(artifact_root / "run" / "logs" / "second.log")],
+            },
+        ]
+
+    monkeypatch.setattr(helper, "resolve_repositories", fake_resolve_repositories)
+    monkeypatch.setattr(helper, "command_plan", fake_command_plan)
+
+    def fake_run_command(command: tuple[str, ...], *, output_log: Path) -> int:
+        del command, output_log
+        return 0
+
+    monkeypatch.setattr(helper, "_run_command", fake_run_command)
+
+    assert helper.main() == 0
+    captured = capsys.readouterr()
+
+    assert captured.err == ""
+    assert "first: 2026-05-20T10:15:30Z\n" in captured.out
+    assert "second: 2026-05-20T10:15:30Z\n" in captured.out
+
+
+def test_benchmark_campaign_continue_on_error_records_all_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Keep torture campaigns running after command failures.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for manifest and artifact fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace process arguments and command execution.
+
+    Returns
+    -------
+    None
+        The test asserts failed commands are summarized while later commands
+        still execute.
+    """
+    helper = _load_benchmark_campaign_helper()
+    target = tmp_path / "target"
+    target.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {"label": "target", "category": "small", "path": str(target)}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifact_root = tmp_path / ".artifacts"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_campaign.py",
+            str(manifest),
+            "--artifact-root",
+            str(artifact_root),
+            "--run-id",
+            "torture",
+            "--continue-on-error",
+        ],
+    )
+    monkeypatch.setattr(helper, "utc_run_timestamp", lambda: "2026-05-20T10:15:30Z")
+
+    def fake_resolve_repositories(
+        repositories: Sequence[object],
+        config: object,
+    ) -> Sequence[object]:
+        del config
+        return repositories
+
+    def fake_command_plan(
+        repositories: Sequence[object],
+        config: object,
+    ) -> list[dict[str, object]]:
+        del repositories, config
+        return [
+            {
+                "label": "target",
+                "category": "small",
+                "commands": [["false"], ["true"]],
+                "output_logs": [
+                    str(artifact_root / "torture" / "logs" / "false.log"),
+                    str(artifact_root / "torture" / "logs" / "true.log"),
+                ],
+            }
+        ]
+
+    executed: list[tuple[str, ...]] = []
+
+    def fake_run_command(command: tuple[str, ...], *, output_log: Path) -> int:
+        executed.append(command)
+        output_log.parent.mkdir(parents=True, exist_ok=True)
+        output_log.write_text("log\n", encoding="utf-8")
+        return 1 if command == ("false",) else 0
+
+    monkeypatch.setattr(helper, "resolve_repositories", fake_resolve_repositories)
+    monkeypatch.setattr(helper, "command_plan", fake_command_plan)
+    monkeypatch.setattr(helper, "_run_command", fake_run_command)
+
+    assert helper.main() == 1
+
+    assert executed == [("false",), ("true",)]
+    summary = json.loads(
+        (artifact_root / "torture" / "failure-summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["failure_count"] == 1
+    assert summary["continue_on_error"] is True
+    assert summary["failures"][0]["label"] == "target"
+    assert summary["failures"][0]["return_code"] == 1
+    assert summary["failures"][0]["output_log"].endswith("false.log")
+
+
+def test_benchmark_campaign_summarizes_unreadable_profiles(
+    tmp_path: Path,
+) -> None:
+    """
+    Report corrupt profile artifacts without failing the campaign.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for the profile fixture.
+
+    Returns
+    -------
+    None
+        The test asserts malformed cProfile output is represented as
+        diagnostic metadata.
+    """
+    helper = _load_benchmark_campaign_helper()
+    profile = tmp_path / "broken.prof"
+    profile.write_bytes(b"")
+
+    summary = helper.summarize_profile(profile)
+
+    assert summary == [
+        {
+            "status": "unreadable",
+            "error_type": "EOFError",
+            "error": "EOF read where object expected",
+        }
+    ]
+
+
+def test_benchmark_campaign_removes_index_artifacts_after_repository(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Drop bulky per-repository indexes after durable results are written.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for manifest and artifact fixtures.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to replace process arguments and command execution.
+
+    Returns
+    -------
+    None
+        The test asserts the default retention policy removes benchmark index
+        directories after a repository row completes.
+    """
+    helper = _load_benchmark_campaign_helper()
+    target = tmp_path / "target"
+    target.mkdir()
+    manifest = tmp_path / "benchmarks.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "repositories": [
+                    {"label": "target", "category": "small", "path": str(target)}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifact_root = tmp_path / ".artifacts"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_campaign.py",
+            str(manifest),
+            "--artifact-root",
+            str(artifact_root),
+            "--run-id",
+            "cleanup",
+        ],
+    )
+    monkeypatch.setattr(helper, "utc_run_timestamp", lambda: "2026-05-20T10:15:30Z")
+
+    def fake_resolve_repositories(
+        repositories: Sequence[object],
+        config: object,
+    ) -> Sequence[object]:
+        del config
+        return repositories
+
+    index_dir_holder: dict[str, Path] = {}
+
+    def fake_command_plan(
+        repositories: Sequence[object],
+        config: object,
+    ) -> list[dict[str, object]]:
+        index_dir = helper.index_output_dir(repositories[0], config)
+        index_dir.mkdir(parents=True)
+        (index_dir / "index.db").write_text("temporary index\n", encoding="utf-8")
+        index_dir_holder["path"] = index_dir
+        return [
+            {
+                "label": "target",
+                "category": "small",
+                "commands": [["true"]],
+                "output_logs": [str(artifact_root / "cleanup" / "logs" / "true.log")],
+            }
+        ]
+
+    def fake_run_command(command: tuple[str, ...], *, output_log: Path) -> int:
+        del command
+        output_log.parent.mkdir(parents=True, exist_ok=True)
+        output_log.write_text("log\n", encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(helper, "resolve_repositories", fake_resolve_repositories)
+    monkeypatch.setattr(helper, "command_plan", fake_command_plan)
+    monkeypatch.setattr(helper, "_run_command", fake_run_command)
+
+    assert helper.main() == 0
+
+    assert not index_dir_holder["path"].exists()
+
+
+def test_benchmark_campaign_run_command_writes_combined_output_log(
+    tmp_path: Path,
+) -> None:
+    """
+    Persist stdout and stderr from one benchmark campaign command.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary workspace used for the output log.
+
+    Returns
+    -------
+    None
+        The test asserts command output is captured in a durable log file.
+    """
+    helper = _load_benchmark_campaign_helper()
+    output_log = tmp_path / "logs" / "command.log"
+
+    return_code = helper._run_command(
         (
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            "python",
-            "-e",
-            "/tmp/newrepos/split/codira-bundle-official[test]",
+            sys.executable,
+            "-c",
+            "import sys; print('out', flush=True); print('err', file=sys.stderr)",
         ),
-    )
-    assert commands[: len(expected_commands)] == expected_commands
-
-
-def test_build_bootstrap_commands_reuses_shared_first_party_install_command() -> None:
-    """
-    Reuse the shared first-party install helper inside bootstrap planning.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts bootstrap no longer hard-codes a divergent package list.
-    """
-    bootstrap_helper = _load_bootstrap_helper()
-    repo_root = Path("/tmp/codira")
-    commands = bootstrap_helper.build_bootstrap_commands(
-        repo_root=repo_root,
-        python="/usr/bin/python3",
-        skip_validation=True,
+        output_log=output_log,
     )
 
-    assert commands[0].argv == (
-        "uv",
-        "sync",
-        "--frozen",
-        "--group",
-        "dev",
-        "--extra",
-        "docs",
-        "--extra",
-        "semantic",
-    )
-    assert commands[1].argv == (
-        "uv",
-        "pip",
-        "check",
-    )
-    embedding_model_command = next(
-        command
-        for command in commands
-        if command.description
-        == "Download and smoke-test the default ONNX embedding model"
-    )
-    assert embedding_model_command.argv == (
-        "uv",
-        "run",
-        "python",
-        "scripts/download_embedding_model.py",
-        "--model-id",
-        "bge-small-en-v1.5-onnx",
-        "--anonymous",
-    )
-    install_command = next(
-        command
-        for command in commands
-        if command.description
-        == "Install extracted first-party analyzer and backend packages"
-    )
-
-    assert install_command.argv == (
-        "uv",
-        "run",
-        "python",
-        "scripts/install_first_party_packages.py",
-        "--include-core",
-        "--core-extra",
-        "docs",
-        "--core-extra",
-        "semantic",
-    )
-
-
-def test_build_bootstrap_validation_commands_use_standard_validation_wrapper() -> None:
-    """
-    Keep bootstrap validation aligned with the standard validation wrapper.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts validation executes through ``scripts/validate_repo.py``.
-    """
-    bootstrap_helper = _load_bootstrap_helper()
-    repo_root = Path("/tmp/codira")
-    commands = bootstrap_helper.build_bootstrap_commands(
-        repo_root=repo_root,
-        python="/usr/bin/python3",
-        skip_validation=False,
-    )
-    validation_commands = {
-        command.description: command.argv
-        for command in commands
-        if command.description == "Run standard validation"
-    }
-
-    assert validation_commands == {
-        "Run standard validation": (
-            "uv",
-            "run",
-            "python",
-            "scripts/validate_repo.py",
-        ),
-    }
-
-
-def test_ci_workflow_fetches_tags_for_setuptools_scm() -> None:
-    """
-    Keep CI editable installs versioned from reachable release tags.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts CI checkout fetches full history so setuptools_scm
-        does not fall back to a pre-1.0 local version.
-    """
-    workflow = (
-        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
-    ).read_text(encoding="utf-8")
-
-    assert (
-        "uses: actions/checkout@v5\n        with:\n          fetch-depth: 0" in workflow
-    )
-
-
-def test_ci_workflow_retries_dependency_installation() -> None:
-    """
-    Keep CI dependency installation resilient to transient package downloads.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts dependency install commands are guarded by the retry
-        helper used for large semantic dependency downloads.
-    """
-    workflow = (
-        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
-    ).read_text(encoding="utf-8")
-
-    assert "retry() {\n            for attempt in 1 2 3; do" in workflow
-    assert (
-        "retry uv sync --frozen --group dev --extra docs --extra semantic" in workflow
-    )
-    assert (
-        "retry uv run python scripts/install_first_party_packages.py --include-core "
-        "--core-extra docs --core-extra semantic"
-    ) in workflow
+    assert return_code == 0
+    lines = output_log.read_text(encoding="utf-8").splitlines()
+    assert lines[0].startswith(f"$ {sys.executable} -c ")
+    assert lines[-2:] == ["out", "err"]
 
 
 __all__ = [
