@@ -69,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
         Parser configured with roots, threshold, and output-format options.
     """
     parser = argparse.ArgumentParser(
-        description="List Python files over a physical-line threshold."
+        description="List Python files over a code-line threshold."
     )
     parser.add_argument(
         "roots",
@@ -81,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--threshold",
         type=int,
         default=1500,
-        help="Strictly greater-than total-line threshold (default: 1500).",
+        help="Strictly greater-than code-line threshold (default: 1500).",
     )
     parser.add_argument(
         "--format",
@@ -178,14 +178,14 @@ def _docstring_line_numbers(source: str) -> set[int]:
 def inventory_roots(
     roots: tuple[str, ...], threshold: int, repository_root: Path
 ) -> list[PythonLineInventory]:
-    """Inventory Python files exceeding a total-line threshold by root.
+    """Inventory Python files exceeding a code-line threshold by root.
 
     Parameters
     ----------
     roots : tuple[str, ...]
         Repository-relative directories to search.
     threshold : int
-        Strictly greater-than total physical-line threshold.
+        Strictly greater-than code-line threshold.
     repository_root : pathlib.Path
         Repository root containing all requested roots.
 
@@ -211,10 +211,10 @@ def inventory_roots(
             raise ValueError(msg)
         for path in root_path.rglob("*.py"):
             record = inventory_file(root, path, repository_root)
-            if record.total_lines > threshold:
+            if record.code_lines > threshold:
                 records.append(record)
     return sorted(
-        records, key=lambda record: (record.root, -record.total_lines, record.path)
+        records, key=lambda record: (record.root, -record.code_lines, record.path)
     )
 
 
