@@ -240,19 +240,37 @@ def render_text(records: list[PythonLineInventory], roots: tuple[str, ...]) -> s
         if not matching:
             lines.append("  (none)")
             continue
-        lines.append("  path\ttotal\tcode\tcomment\tblank")
-        lines.extend(
-            "  "
-            + "\t".join(
-                (
-                    record.path,
-                    str(record.total_lines),
-                    str(record.code_lines),
-                    str(record.comment_lines),
-                    str(record.blank_lines),
-                )
+        headers = ("path", "total", "code", "comment", "blank")
+        rows = [
+            (
+                record.path,
+                str(record.total_lines),
+                str(record.code_lines),
+                str(record.comment_lines),
+                str(record.blank_lines),
             )
             for record in matching
+        ]
+        widths = tuple(
+            max(len(value) for value in column)
+            for column in zip(headers, *rows, strict=True)
+        )
+        lines.append(
+            "  "
+            + "  ".join(
+                value.ljust(width) if index == 0 else value.rjust(width)
+                for index, (value, width) in enumerate(
+                    zip(headers, widths, strict=True)
+                )
+            )
+        )
+        lines.extend(
+            "  "
+            + "  ".join(
+                value.ljust(width) if index == 0 else value.rjust(width)
+                for index, (value, width) in enumerate(zip(row, widths, strict=True))
+            )
+            for row in rows
         )
     return "\n".join(lines)
 

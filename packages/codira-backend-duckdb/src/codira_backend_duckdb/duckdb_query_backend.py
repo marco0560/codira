@@ -64,9 +64,9 @@ from .duckdb_maintenance import _clear_index_tables, _purge_skipped_docstring_is
 from .duckdb_support import (
     _DuckDBPersistenceConnection,
     _delete_indexed_file_data,
-    _rebuild_graph_indexes,
     _store_analysis,
 )
+from .duckdb_graph_rebuild import _rebuild_graph_indexes
 
 if TYPE_CHECKING:
     from pathlib import Path
