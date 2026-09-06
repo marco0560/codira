@@ -158,10 +158,11 @@ fires; each such rule has a dedicated violating fixture.
   DuckDB backend modules own parameterized SQL execution; query-context calls
   use the active backend connection; the two formatted-query suppressions are
   trusted identifier construction inside backend-owned SQL. The DuckDB support
-  format-string suppression returns a Python name, not an HTTP response. The
   benchmark dynamic-import suppression loads a locally selected backend-support
   module by trusted argument vector. These exceptions do not affect the
-  repository-owned Semgrep rule set.
+  repository-owned Semgrep rule set. DuckDB call-target naming now lives in a
+  helper module without a suppression because it does not cross a response
+  rendering boundary.
 
   Affected sources are
   `scripts/benchmark_index.py`, `src/codira/query/context.py`,

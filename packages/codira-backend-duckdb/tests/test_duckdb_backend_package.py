@@ -51,6 +51,10 @@ from codira_backend_duckdb.duckdb_support import _flush_pending_reference_scan_r
 from codira_backend_duckdb.duckdb_support import _resolve_cached_prepared_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
 from codira_backend_duckdb.duckdb_support import _store_pending_embedding_rows
+from codira_backend_duckdb.duckdb_call_resolution import (
+    _import_alias_map,
+    _unresolved_identity,
+)
 from codira_backend_duckdb.duckdb_query_graph import _validated_graph_identifier
 from codira_backend_duckdb.duckdb_query_primitives import (
     _backend_bytes,
@@ -75,6 +79,31 @@ _UNRESOLVED_CALL_RECORDS = (
     ("name", "", "PyUnicode_AsUTF8AndSize", 2, 4),
     ("name", "", "system", 3, 4),
 )
+
+
+def test_duckdb_call_resolution_helpers_preserve_alias_and_identity_rules() -> None:
+    """
+    Preserve the isolated DuckDB call-resolution helper behavior.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts aliases and unresolved identities remain deterministic.
+    """
+    assert _import_alias_map([{"name": "package.module", "alias": None}]) == {
+        "module": "package.module",
+        "package.module": "package.module",
+    }
+    assert (
+        _unresolved_identity(
+            {"kind": "name", "base": "", "target": "missing"}, resolved=0
+        )
+        == '["name","","missing"]'
+    )
 
 
 def test_duckdb_graph_identifier_guard_preserves_the_query_vocabulary() -> None:
