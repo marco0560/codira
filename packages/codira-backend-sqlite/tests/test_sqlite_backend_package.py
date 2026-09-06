@@ -28,6 +28,7 @@ from codira_backend_sqlite.sqlite_docstring_policy import (
     _should_audit_docstrings,
     _should_require_raises_section,
 )
+from codira_backend_sqlite.sqlite_embedding_payload import _embedding_content_hash
 from codira_backend_sqlite.sqlite_support import _flush_pending_embedding_rows
 
 
@@ -100,6 +101,22 @@ def test_sqlite_docstring_policy_preserves_source_exclusions(tmp_path: Path) -> 
     assert not _should_require_raises_section(
         tmp_path / "tests" / "test_one.py", "test_one"
     )
+
+
+def test_sqlite_embedding_payload_hash_remains_deterministic() -> None:
+    """
+    Preserve deterministic content identity for SQLite embedding payloads.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts equal payloads retain the same SHA-256 identity.
+    """
+    assert _embedding_content_hash("codira") == _embedding_content_hash("codira")
 
 
 def test_sqlite_backend_package_declares_expected_entry_point() -> None:

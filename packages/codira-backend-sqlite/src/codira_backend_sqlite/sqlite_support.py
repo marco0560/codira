@@ -20,7 +20,6 @@ package-local helper implementation used by the first-party SQLite backend.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -52,6 +51,8 @@ from .sqlite_docstring_policy import (
     _should_audit_docstrings,
     _should_require_raises_section,
 )
+from . import sqlite_embedding_payload as _embedding_payload
+from .sqlite_embedding_payload import _embedding_text
 
 if TYPE_CHECKING:
     import sqlite3
@@ -75,6 +76,8 @@ if TYPE_CHECKING:
 CallRecord = dict[str, str | int]
 CallRow = tuple[int, str, str, str, str, str, str | None, str | None, int, int]
 RefRow = tuple[int, str, str, str, str, str, str, str | None, str | None, int, int]
+
+_embedding_content_hash = _embedding_payload._embedding_content_hash
 
 
 @dataclass(frozen=True)
@@ -395,46 +398,6 @@ def _purge_skipped_docstring_issues(conn: sqlite3.Connection) -> None:
                OR path LIKE '%.bash'
         )
         """)
-
-
-def _embedding_text(request: EmbeddingTextRequest) -> str:
-    """
-    Build the deterministic text payload embedded for one symbol.
-
-    Parameters
-    ----------
-    request : EmbeddingTextRequest
-        Embedding text construction request.
-
-    Returns
-    -------
-    str
-        Joined text payload used for embedding generation.
-    """
-    parts = [request.symbol_type, request.module_name, request.symbol_name]
-    if request.signature:
-        parts.append(request.signature)
-    if request.docstring:
-        parts.append(request.docstring)
-    parts.extend(line for line in request.extra_context if line)
-    return "\n".join(parts)
-
-
-def _embedding_content_hash(text: str) -> str:
-    """
-    Return the deterministic content hash for one embedding payload.
-
-    Parameters
-    ----------
-    text : str
-        Exact semantic payload used for embedding generation.
-
-    Returns
-    -------
-    str
-        Hex-encoded SHA-256 digest of ``text``.
-    """
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _c_embedding_context(analysis: AnalysisResult) -> tuple[str, ...]:
