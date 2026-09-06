@@ -163,7 +163,9 @@ fires; each such rule has a dedicated violating fixture.
   repository-owned Semgrep rule set. DuckDB call-target naming now lives in a
   helper module without a suppression because it does not cross a response
   rendering boundary. DuckDB embedding payload construction is likewise
-  package-local and has no `noqa` or `nosemgrep` exceptions.
+  package-local and has no `noqa` or `nosemgrep` exceptions. DuckDB bulk
+  transport owns temporary CSV serialization and replacement-scan cleanup with
+  no lint or Semgrep exceptions.
 
   Affected sources are
   `scripts/benchmark_index.py`, `src/codira/query/context.py`,

@@ -22,9 +22,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
-import csv
 import json
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
@@ -63,6 +61,7 @@ from .duckdb_embedding_payload import (
     _embedding_text,
     _python_embedding_context,
 )
+from .duckdb_bulk_io import _flush_registered_arrow_table, _temporary_csv_path_for_rows
 
 if TYPE_CHECKING:
     from codira.contracts import LanguageAnalyzer, VectorSetIdentity, VectorStore
@@ -2456,69 +2455,6 @@ def _flush_pending_relationship_rows(
             sorted(set(pending_ref_rows)),
             profiler=profiler,
         )
-
-
-def _temporary_csv_path_for_rows(
-    rows: Sequence[Sequence[object]],
-) -> Path:
-    """
-    Write rows to a temporary CSV file for DuckDB bulk import.
-
-    Parameters
-    ----------
-    rows : collections.abc.Sequence[collections.abc.Sequence[object]]
-        Row values to serialize.
-
-    Returns
-    -------
-    pathlib.Path
-        Temporary CSV path owned by the caller.
-    """
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        newline="",
-        prefix="codira-duckdb-bulk-",
-        suffix=".csv",
-        delete=False,
-    ) as handle:
-        csv_path = Path(handle.name)
-        writer = csv.writer(handle)
-        writer.writerows(rows)
-    return csv_path
-
-
-def _flush_registered_arrow_table(
-    conn: _DuckDBPersistenceConnection,
-    *,
-    view_name: str,
-    table: object,
-    insert_sql: str,
-) -> None:
-    """
-    Insert one Arrow table through a temporary DuckDB replacement scan.
-
-    Parameters
-    ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
-    view_name : str
-        Temporary replacement-scan name.
-    table : object
-        Arrow table accepted by DuckDB's Python replacement-scan API.
-    insert_sql : str
-        ``INSERT ... SELECT`` statement reading from ``view_name``.
-
-    Returns
-    -------
-    None
-        Rows are inserted in place and the replacement scan is unregistered.
-    """
-    conn.register(view_name, table)
-    try:
-        conn.execute(insert_sql)
-    finally:
-        conn.unregister(view_name)
 
 
 def _flush_structural_file_rows(

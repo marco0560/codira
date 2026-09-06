@@ -60,6 +60,10 @@ from codira_backend_duckdb.duckdb_embedding_payload import (
     _embedding_content_hash,
     _embedding_text,
 )
+from codira_backend_duckdb.duckdb_bulk_io import (
+    _flush_registered_arrow_table,
+    _temporary_csv_path_for_rows,
+)
 from codira_backend_duckdb.duckdb_query_graph import _validated_graph_identifier
 from codira_backend_duckdb.duckdb_query_primitives import (
     _backend_bytes,
@@ -329,6 +333,43 @@ class _FakeDuckDBConnection:
             The closed flag is updated in place.
         """
         self.closed = True
+
+
+def test_duckdb_bulk_io_helpers_preserve_csv_and_cleanup_rules() -> None:
+    """
+    Preserve DuckDB bulk transport serialization and replacement-scan cleanup.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts CSV rows are retained and temporary views are released.
+    """
+    csv_path = _temporary_csv_path_for_rows(((1, "alpha"), (2, "")))
+    try:
+        assert csv_path.read_text(encoding="utf-8").splitlines() == [
+            "1,alpha",
+            "2,",
+        ]
+    finally:
+        csv_path.unlink()
+
+    connection = _FakeDuckDBConnection()
+    table = object()
+    _flush_registered_arrow_table(
+        cast("_DuckDBPersistenceConnection", connection),
+        view_name="__codira_test_rows",
+        table=table,
+        insert_sql="INSERT INTO target SELECT * FROM __codira_test_rows",
+    )
+    assert connection.executed == [
+        ("REGISTER __codira_test_rows", (table,)),
+        ("INSERT INTO target SELECT * FROM __codira_test_rows", None),
+        ("UNREGISTER __codira_test_rows", None),
+    ]
 
 
 class _RejectingExecutemanyDuckDBConnection(_FakeDuckDBConnection):
