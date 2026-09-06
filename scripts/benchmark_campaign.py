@@ -28,7 +28,6 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -41,6 +40,52 @@ if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
     )
     raise SystemExit(0)
 
+if TYPE_CHECKING:
+    from scripts.benchmark_campaign_constants import (
+        ADAPTIVE_SYMBOL_SUBCOMMANDS,
+        ADAPTIVE_TEXT_SUBCOMMANDS,
+        DEFAULT_ARTIFACT_ROOT,
+        DEFAULT_QUERY,
+        DEFAULT_RUNS,
+        DEFAULT_WARMUP,
+        DISCOVERY_MAX_QUERY_CANDIDATES,
+        DISCOVERY_MAX_SYMBOL_CANDIDATES,
+        DISCOVERY_SYMBOL_LIMIT,
+        MANIFEST_BENCHMARK_SUBCOMMANDS,
+        OPTION_FLAGS_WITH_VALUE,
+        PATH_AWARE_SUBCOMMANDS,
+        UTILITY_QUERY_SUBCOMMANDS,
+    )
+    from scripts.benchmark_campaign_models import (
+        AdaptiveDiscoveryContext,
+        CampaignConfig,
+        RepositoryBenchmark,
+        ResolvedRepositoryBenchmark,
+        SymbolCandidate,
+    )
+else:
+    from benchmark_campaign_constants import (
+        ADAPTIVE_SYMBOL_SUBCOMMANDS,
+        ADAPTIVE_TEXT_SUBCOMMANDS,
+        DEFAULT_ARTIFACT_ROOT,
+        DEFAULT_QUERY,
+        DEFAULT_RUNS,
+        DEFAULT_WARMUP,
+        DISCOVERY_MAX_QUERY_CANDIDATES,
+        DISCOVERY_MAX_SYMBOL_CANDIDATES,
+        DISCOVERY_SYMBOL_LIMIT,
+        MANIFEST_BENCHMARK_SUBCOMMANDS,
+        OPTION_FLAGS_WITH_VALUE,
+        PATH_AWARE_SUBCOMMANDS,
+        UTILITY_QUERY_SUBCOMMANDS,
+    )
+    from benchmark_campaign_models import (
+        AdaptiveDiscoveryContext,
+        CampaignConfig,
+        RepositoryBenchmark,
+        ResolvedRepositoryBenchmark,
+        SymbolCandidate,
+    )
 from benchmark_timing import (  # type: ignore[import-not-found]
     benchmark_metadata,
     utc_run_timestamp,
@@ -49,210 +94,6 @@ from benchmark_timing import (  # type: ignore[import-not-found]
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
-
-DEFAULT_ARTIFACT_ROOT = Path(".artifacts") / "benchmarks"
-DEFAULT_RUNS = 5
-DEFAULT_WARMUP = 1
-DEFAULT_QUERY = "schema migration logic"
-UTILITY_QUERY_SUBCOMMANDS = frozenset(
-    {"ctx", "cov", "sym", "symlist", "emb", "calls", "audit"}
-)
-PATH_AWARE_SUBCOMMANDS = frozenset(
-    {"index", "cov", "sym", "symlist", "emb", "calls", "refs", "audit", "ctx"}
-)
-ADAPTIVE_SYMBOL_SUBCOMMANDS = frozenset({"sym", "calls", "refs"})
-ADAPTIVE_TEXT_SUBCOMMANDS = frozenset({"emb", "ctx"})
-DISCOVERY_SYMBOL_LIMIT = 100
-DISCOVERY_MAX_SYMBOL_CANDIDATES = 12
-DISCOVERY_MAX_QUERY_CANDIDATES = 8
-OPTION_FLAGS_WITH_VALUE = frozenset(
-    {
-        "--limit",
-        "--prefix",
-        "--module",
-        "--path",
-        "--output-dir",
-        "--max-depth",
-        "--config-file",
-    }
-)
-MANIFEST_BENCHMARK_SUBCOMMANDS = frozenset(
-    {
-        "help",
-        "index",
-        "cov",
-        "sym",
-        "symlist",
-        "emb",
-        "calls",
-        "refs",
-        "audit",
-        "ctx",
-        "plugins",
-        "caps",
-    }
-)
-
-
-@dataclass(frozen=True)
-class RepositoryBenchmark:
-    """
-    Benchmark target loaded from a campaign manifest.
-
-    Parameters
-    ----------
-    label : str
-        Stable repository label used in artifact names.
-    category : str
-        Repository category such as ``small``, ``medium``, or ``large``.
-    path : pathlib.Path
-        Repository root to benchmark.
-    query : str
-        Query used for context retrieval benchmarks.
-    modes : tuple[str, ...]
-        Requested run modes for the repository.
-    commands : tuple[tuple[str, ...], ...]
-        Additional Codira command vectors benchmarked through Hyperfine.
-    """
-
-    label: str
-    category: str
-    path: Path
-    query: str
-    modes: tuple[str, ...]
-    commands: tuple[tuple[str, ...], ...]
-
-
-@dataclass(frozen=True)
-class CampaignConfig:
-    """
-    Runtime configuration for one benchmark campaign.
-
-    Parameters
-    ----------
-    manifest : pathlib.Path
-        Manifest file loaded for the campaign.
-    artifact_root : pathlib.Path
-        Directory under which benchmark artifacts are written.
-    run_id : str
-        Stable run identifier used for artifact paths.
-    codira : str
-        Codira executable to benchmark.
-    hyperfine : str
-        Hyperfine executable to invoke.
-    python : str
-        Python executable used for profiling and helper scripts.
-    runs : int
-        Number of measured Hyperfine runs.
-    warmup : int
-        Number of Hyperfine warmup runs.
-    dry_run : bool
-        Whether commands should be reported without execution.
-    continue_on_error : bool
-        Whether campaign execution should continue after command failures and
-        persist a failure summary.
-    keep_indexes : bool
-        Whether repository-local benchmark index directories should be retained
-        after logs, summaries, and profiles are written.
-    config_file : pathlib.Path | None
-        Optional explicit repo-level Codira config file passed to path-aware
-        Codira commands.
-    """
-
-    manifest: Path
-    artifact_root: Path
-    run_id: str
-    codira: str
-    hyperfine: str
-    python: str
-    runs: int
-    warmup: int
-    dry_run: bool
-    continue_on_error: bool = False
-    keep_indexes: bool = False
-    config_file: Path | None = None
-
-
-@dataclass(frozen=True)
-class SymbolCandidate:
-    """
-    Symbol candidate discovered during adaptive command selection.
-
-    Parameters
-    ----------
-    name : str
-        Symbol name used for exact and graph-oriented benchmark commands.
-    prefix : str
-        Repo-root-relative file prefix containing the symbol.
-    score : int
-        Discovery score derived from symbol inventory graph metrics.
-    module : str
-        Dotted module owning the symbol.
-    """
-
-    name: str
-    prefix: str
-    score: int
-    module: str
-
-
-@dataclass(frozen=True)
-class ResolvedRepositoryBenchmark:
-    """
-    Repository benchmark with adaptive command selections applied.
-
-    Parameters
-    ----------
-    label : str
-        Stable repository label used in artifact names.
-    category : str
-        Repository category such as ``small``, ``medium``, or ``large``.
-    path : pathlib.Path
-        Repository root to benchmark.
-    query : str
-        Resolved query used for context retrieval benchmarks.
-    requested_query : str
-        Query requested in the manifest before adaptive refinement.
-    modes : tuple[str, ...]
-        Requested run modes for the repository.
-    commands : tuple[tuple[str, ...], ...]
-        Resolved additional Codira command vectors benchmarked through
-        Hyperfine.
-    requested_commands : tuple[tuple[str, ...], ...]
-        Manifest command vectors before adaptive refinement.
-    skipped_commands : tuple[tuple[str, ...], ...]
-        Requested commands skipped because no meaningful candidate was found.
-    selection : dict[str, object]
-        JSON-serializable adaptive selection provenance.
-    """
-
-    label: str
-    category: str
-    path: Path
-    query: str
-    requested_query: str
-    modes: tuple[str, ...]
-    commands: tuple[tuple[str, ...], ...]
-    requested_commands: tuple[tuple[str, ...], ...]
-    skipped_commands: tuple[tuple[str, ...], ...]
-    selection: dict[str, object]
-
-
-@dataclass(frozen=True)
-class AdaptiveDiscoveryContext:
-    """
-    Runtime context for adaptive command-resolution trials.
-
-    Parameters
-    ----------
-    config : CampaignConfig
-        Campaign configuration.
-    output_dir : pathlib.Path
-        Temporary Codira output directory used for discovery.
-    """
-
-    config: CampaignConfig
-    output_dir: Path
 
 
 def positive_int(value: str) -> int:

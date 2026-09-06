@@ -86,6 +86,8 @@ class _FakeRuntime:
         ----------
         operation : collections.abc.Callable
             Test operation receiving the fake connection.
+        timeout_seconds : float
+            Timeout accepted by the runtime protocol and ignored by this fake.
 
         Returns
         -------

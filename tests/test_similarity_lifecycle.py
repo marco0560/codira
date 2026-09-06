@@ -294,18 +294,18 @@ def test_reset_delegates_persistent_cleanup_to_plugin_contracts(
     emitted: list[dict[str, object]] = []
     context = type("ResetContext", (), {"store": store, "config": {"region": "lab"}})()
     monkeypatch.setattr(
-        "codira.cli.active_vector_store_reset_context",
+        "codira.cli_queries.active_vector_store_reset_context",
         lambda root: context,
     )
     monkeypatch.setattr(
-        "codira.cli.reset_active_similarity_index",
+        "codira.cli_queries.reset_active_similarity_index",
         lambda root: SimilarityPurgeResult(
             index="remote-test",
             preview=False,
             removed_artifact_hashes=("owned-artifact",),
         ),
     )
-    monkeypatch.setattr("codira.cli._emit_json", emitted.append)
+    monkeypatch.setattr("codira.cli_queries._emit_json", emitted.append)
     args = Namespace(
         yes=True,
         stale=False,

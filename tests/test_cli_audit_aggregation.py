@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from codira.cli import _run_audit_docstrings
+from codira.cli_queries import _run_audit_docstrings
 
 
 def test_missing_parameter_aggregation(
@@ -68,7 +68,7 @@ def test_missing_parameter_aggregation(
     def fake_docstring_issues(root: Path, prefix: str | None = None) -> list[Any]:
         return rows
 
-    monkeypatch.setattr("codira.cli.docstring_issues", fake_docstring_issues)
+    monkeypatch.setattr("codira.cli_queries.docstring_issues", fake_docstring_issues)
 
     # Act
     exit_code = _run_audit_docstrings(Path())

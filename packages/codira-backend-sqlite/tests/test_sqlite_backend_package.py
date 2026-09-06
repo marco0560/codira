@@ -19,6 +19,16 @@ from codira.models import (
 from codira_backend_sqlite.schema import DDL
 from codira.semantic.embeddings import EmbeddingBackendSpec
 from codira_backend_sqlite import SQLiteIndexBackend, build_backend
+from codira_backend_sqlite.sqlite_call_resolution import (
+    _import_alias_map,
+    _unresolved_identity,
+)
+from codira_backend_sqlite.sqlite_query_batches import _path_batches, _placeholders
+from codira_backend_sqlite.sqlite_docstring_policy import (
+    _should_audit_docstrings,
+    _should_require_raises_section,
+)
+from codira_backend_sqlite.sqlite_embedding_payload import _embedding_content_hash
 from codira_backend_sqlite.sqlite_support import _flush_pending_embedding_rows
 
 
@@ -27,6 +37,86 @@ _UNRESOLVED_CALL_RECORDS = (
     ("name", "", "PyUnicode_AsUTF8AndSize", 2, 4),
     ("name", "", "system", 3, 4),
 )
+
+
+def test_sqlite_call_resolution_helpers_preserve_alias_and_identity_rules() -> None:
+    """
+    Preserve the isolated SQLite call-resolution helper behavior.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts aliases and unresolved identities remain deterministic.
+    """
+    assert _import_alias_map([{"name": "package.module", "alias": None}]) == {
+        "module": "package.module",
+        "package.module": "package.module",
+    }
+    assert (
+        _unresolved_identity(
+            {"kind": "name", "base": "", "target": "missing"}, resolved=0
+        )
+        == '["name","","missing"]'
+    )
+
+
+def test_sqlite_query_batch_helpers_preserve_binding_limits() -> None:
+    """
+    Preserve SQLite query placeholder and path-batch boundaries.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts placeholder and conservative batch sizing behavior.
+    """
+    assert _placeholders([1, 2, 3]) == "?,?,?"
+    paths = [str(index) for index in range(901)]
+    assert [len(batch) for batch in _path_batches(paths)] == [900, 1]
+
+
+def test_sqlite_docstring_policy_preserves_source_exclusions(tmp_path: Path) -> None:
+    """
+    Preserve SQLite docstring auditing exclusions for shell and test artifacts.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory used to construct source paths.
+
+    Returns
+    -------
+    None
+        The test asserts source-kind policy remains deterministic.
+    """
+    assert not _should_audit_docstrings(tmp_path / "script.sh")
+    assert _should_audit_docstrings(tmp_path / "module.py")
+    assert not _should_require_raises_section(
+        tmp_path / "tests" / "test_one.py", "test_one"
+    )
+
+
+def test_sqlite_embedding_payload_hash_remains_deterministic() -> None:
+    """
+    Preserve deterministic content identity for SQLite embedding payloads.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts equal payloads retain the same SHA-256 identity.
+    """
+    assert _embedding_content_hash("codira") == _embedding_content_hash("codira")
 
 
 def test_sqlite_backend_package_declares_expected_entry_point() -> None:

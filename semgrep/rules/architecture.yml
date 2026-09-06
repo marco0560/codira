@@ -131,6 +131,8 @@ rules:
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_storage.py
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_support.py
+        - /packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_artifact_persistence.py
+        - /packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_write_session.py
         - /packages/codira-vector-store-sqlite/src/codira_vector_store_sqlite/__init__.py
         - /packages/**/tests/**/*.py
     patterns:
@@ -155,6 +157,7 @@ rules:
       exclude:
         - /packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py
         - "**/packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_storage.py"
+        - "**/packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_write_session.py"
         - "**/packages/codira-backend-duckdb/src/codira_backend_duckdb/__init__.py"
         - "**/packages/codira-backend-duckdb/src/codira_backend_duckdb/duckdb_query_backend.py"
         - /examples/plugins/codira_demo_backend/src/codira_demo_backend/__init__.py

@@ -1022,6 +1022,10 @@ class QueryDaemonIpcServer:
             self._stopped.set()
             listener, self._listener = self._listener, None
         if listener is not None:
+            shutdown = getattr(listener, "shutdown", None)
+            if callable(shutdown):
+                with suppress(OSError):
+                    shutdown(socket.SHUT_RDWR)
             closer = getattr(listener, "close", None)
             if callable(closer):
                 closer()

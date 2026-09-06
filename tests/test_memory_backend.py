@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from codira_analyzer_python import PythonAnalyzer
 from codira_backend_sqlite import SQLiteIndexBackend
 from memory_backend import MemoryIndexBackend, build_backend
+from memory_backend_models import _MemoryState
 
 import codira.indexer as indexer_module
 import codira.registry as registry_module
@@ -468,6 +469,27 @@ def test_memory_backend_implements_full_contract_without_sql_dependency() -> Non
     )
     assert "sqlite3" not in backend_source
     assert "sqlite_backend_support" not in backend_source
+
+
+def test_memory_backend_reexports_its_state_model_boundary() -> None:
+    """
+    Keep lifecycle code and in-memory state records connected through one facade.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the facade preserves the existing state-record name.
+    """
+    from memory_backend import _MemoryState as facade_state
+
+    state = _MemoryState()
+
+    assert facade_state is _MemoryState
+    assert state.files == {}
 
 
 def test_registry_can_select_memory_backend_entry_point(

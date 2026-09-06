@@ -21,31 +21,37 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from codira.query.classifier import build_retrieval_plan, classify_query
-from codira.query.context import (
+from codira.query.context_channels import _retrieve_documentation_candidates
+from codira.query.context_expansion import _collect_reference_rows
+from codira.query.context_models import (
     PRIMARY_SYMBOL_AGGREGATION_RULES,
     ExplainSectionsRequest,
     MainContextSectionsRequest,
     SimilarityContextResults,
-    _aggregate_candidate_signals,
+    _ReferenceScanFile,
+)
+from codira.query.context_render import (
     _append_explain_signal_sections,
     _append_main_context_sections,
+    _channel_results_payload,
+    _similarity_channel_payload,
+    _top_matches_payload,
+)
+from codira.query.context_scoring import (
+    _aggregate_candidate_signals,
     _candidate_has_signal,
     _candidate_retrieval_signals,
     _candidate_signal_strength,
-    _channel_results_payload,
-    _classify_file_role,
-    _collect_reference_rows,
-    _find_references,
     _format_symbol,
+    _rank_signals_with_provenance,
+)
+from codira.query.context_source import (
+    _classify_file_role,
+    _find_references,
     _load_cached_source_file,
     _load_reference_scan_file,
     _path_bias,
-    _rank_signals_with_provenance,
-    _ReferenceScanFile,
-    _retrieve_documentation_candidates,
-    _similarity_channel_payload,
     _snippet_from_source_range,
-    _top_matches_payload,
 )
 from codira.query.signals import RetrievalSignal
 
@@ -158,7 +164,7 @@ def test_reference_collection_batches_names_on_existing_connection(
             ]
 
     monkeypatch.setattr(
-        "codira.query.context.active_index_backend",
+        "codira.query.context_expansion.active_index_backend",
         lambda *, root: ReferenceBackend(),
     )
 
@@ -625,7 +631,7 @@ def test_retrieve_documentation_candidates_renders_explicit_provenance(
             ]
 
     monkeypatch.setattr(
-        "codira.query.context.documentation_candidates",
+        "codira.query.context_channels.documentation_candidates",
         _FakeBackend().documentation_candidates,
     )
 

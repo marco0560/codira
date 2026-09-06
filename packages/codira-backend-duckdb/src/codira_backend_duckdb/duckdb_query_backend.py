@@ -20,18 +20,15 @@ production query/maintenance helper surface used by the DuckDB backend.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-import importlib
 import json
-import re
-from typing import TYPE_CHECKING, Protocol, cast
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, cast
 
 from codira.contracts import (
     BackendDocumentationCandidatesRequest,
     BackendEmbeddingCandidatesRequest,
     BackendError,
     BackendGraphMetric,
-    BackendQueryValue,
     BackendPersistAnalysisRequest,
     BackendRelationQueryRequest,
     BackendResolveDocumentationScoresRequest,
@@ -45,21 +42,32 @@ from codira.prefix import normalize_prefix, prefix_clause
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.semantic.embeddings import EmbeddingBackendSpec, get_embedding_backend
 from .schema import SCHEMA_VERSION
-from .duckdb_support import (
-    _DuckDBPersistenceConnection,
-    _clear_index_tables,
+from .duckdb_query_graph import _validated_graph_identifier
+from .duckdb_query_inventory import DuckDBQueryInventoryMixin
+from . import duckdb_query_primitives as _query_primitives
+from .duckdb_query_primitives import (
+    _BackendCompatibleConnection,
+    _backend_int,
+    _duckdb_error_type,
+)
+from .duckdb_index_state import (
     _count_indexed_files,
-    _count_reused_embeddings,
     _current_embedding_state_matches,
-    _delete_indexed_file_data,
     _load_existing_file_hashes,
     _load_existing_file_ownership,
+)
+from .duckdb_embedding_state import (
+    _count_reused_embeddings,
     _load_previous_embeddings_by_path,
     _prune_orphaned_embeddings,
-    _purge_skipped_docstring_issues,
-    _rebuild_graph_indexes,
+)
+from .duckdb_maintenance import _clear_index_tables, _purge_skipped_docstring_issues
+from .duckdb_support import (
+    _DuckDBPersistenceConnection,
+    _delete_indexed_file_data,
     _store_analysis,
 )
+from .duckdb_graph_rebuild import _rebuild_graph_indexes
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -82,278 +90,12 @@ EmbeddingInventoryRow = tuple[str, str, int, int]
 
 __all__ = ["DuckDBQueryBackend"]
 
-_SAFE_GRAPH_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
-_ALLOWED_GRAPH_TABLES = frozenset({"call_edges", "callable_refs"})
-_ALLOWED_GRAPH_COLUMNS = frozenset(
-    {
-        "caller_module",
-        "caller_name",
-        "callee_module",
-        "callee_name",
-        "owner_module",
-        "owner_name",
-        "target_module",
-        "target_name",
-    }
+_BackendCompatibleConnectionAdapter = (
+    _query_primitives._BackendCompatibleConnectionAdapter
 )
 
 
-class _BackendCompatibleCursor(Protocol):
-    """Cursor surface shared by backend-compatible connection adapters."""
-
-    def execute(
-        self,
-        statement: str,
-        parameters: Sequence[object] | None = None,
-    ) -> _BackendCompatibleCursor:
-        """
-        Execute one statement and keep the cursor positioned on its result.
-
-        Parameters
-        ----------
-        statement : str
-            SQL statement to execute.
-        parameters : collections.abc.Sequence[object] | None, optional
-            Positional parameters bound to ``statement``.
-
-        Returns
-        -------
-        _BackendCompatibleCursor
-            The active cursor positioned on the statement result.
-        """
-
-    def fetchone(self) -> tuple[BackendQueryValue, ...] | None:
-        """
-        Return the next available row from the active result set.
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        tuple[codira.contracts.BackendQueryValue, ...] | None
-            Next available row, or ``None`` when the result is exhausted.
-        """
-
-    def fetchall(self) -> list[tuple[BackendQueryValue, ...]]:
-        """
-        Return every remaining row from the active result set.
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        list[tuple[codira.contracts.BackendQueryValue, ...]]
-            Remaining rows from the active result set.
-        """
-
-
-def _validated_graph_identifier(identifier: str, *, kind: str) -> str:
-    """
-    Validate one internal DuckDB graph identifier before SQL interpolation.
-
-    Parameters
-    ----------
-    identifier : str
-        Internal table or column identifier interpolated into SQL text.
-    kind : str
-        Human-readable identifier class used in error messages.
-
-    Returns
-    -------
-    str
-        The validated identifier.
-
-    Raises
-    ------
-    ValueError
-        Raised when ``identifier`` is not one of the repository-owned graph
-        identifiers expected by the backend query helpers.
-    """
-    if not _SAFE_GRAPH_IDENTIFIER_PATTERN.fullmatch(identifier):
-        msg = f"Unsafe DuckDB graph {kind} identifier: {identifier!r}"
-        raise ValueError(msg)
-    if kind == "table" and identifier not in _ALLOWED_GRAPH_TABLES:
-        msg = f"Unsupported DuckDB graph table identifier: {identifier!r}"
-        raise ValueError(msg)
-    if kind == "column" and identifier not in _ALLOWED_GRAPH_COLUMNS:
-        msg = f"Unsupported DuckDB graph column identifier: {identifier!r}"
-        raise ValueError(msg)
-    return identifier
-
-
-class _BackendCompatibleConnectionAdapter(Protocol):
-    """Connection surface shared by backend-compatible connection adapters."""
-
-    def execute(
-        self,
-        statement: str,
-        parameters: Sequence[object] | None = None,
-    ) -> _BackendCompatibleCursor:
-        """
-        Execute one statement on the active backend connection.
-
-        Parameters
-        ----------
-        statement : str
-            SQL statement to execute.
-        parameters : collections.abc.Sequence[object] | None, optional
-            Positional parameters bound to ``statement``.
-
-        Returns
-        -------
-        _BackendCompatibleCursor
-            Cursor-like result wrapper for the executed statement.
-        """
-
-    def executemany(
-        self,
-        statement: str,
-        parameters: Sequence[Sequence[object]],
-    ) -> _BackendCompatibleCursor:
-        """
-        Execute one statement against multiple parameter rows.
-
-        Parameters
-        ----------
-        statement : str
-            SQL statement to execute repeatedly.
-        parameters : collections.abc.Sequence[collections.abc.Sequence[object]]
-            Parameter rows bound to ``statement``.
-
-        Returns
-        -------
-        _BackendCompatibleCursor
-            Cursor-like result wrapper for the most recent execution.
-        """
-
-    def cursor(self) -> _BackendCompatibleCursor:
-        """
-        Return a cursor-like object bound to the active connection.
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        _BackendCompatibleCursor
-            Cursor-like object bound to the active backend connection.
-        """
-
-    def commit(self) -> None:
-        """
-        Commit pending writes on the active connection.
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        None
-            Pending writes are committed in place.
-        """
-
-    def close(self) -> None:
-        """
-        Close the active backend connection.
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        None
-            The active backend connection is closed.
-        """
-
-
-class _DuckDBModuleWithError(Protocol):
-    """Minimal DuckDB module surface needed for error translation."""
-
-    Error: type[BaseException]
-
-
-_BackendCompatibleConnection = _BackendCompatibleConnectionAdapter
-
-
-def _backend_int(value: BackendQueryValue) -> int:
-    """
-    Coerce one backend-compatible scalar into an integer.
-
-    Parameters
-    ----------
-    value : BackendQueryValue
-        Scalar value returned from one backend query row.
-
-    Returns
-    -------
-    int
-        Integer form of ``value``.
-    """
-
-    return int(cast("str | bytes | bytearray | int | float", value))
-
-
-def _backend_float(value: BackendQueryValue) -> float:
-    """
-    Coerce one backend-compatible scalar into a float.
-
-    Parameters
-    ----------
-    value : BackendQueryValue
-        Scalar value returned from one backend query row.
-
-    Returns
-    -------
-    float
-        Floating-point form of ``value``.
-    """
-    return float(cast("str | bytes | bytearray | int | float", value))
-
-
-def _backend_bytes(value: BackendQueryValue) -> bytes:
-    """
-    Coerce one backend-compatible scalar into raw bytes.
-
-    Parameters
-    ----------
-    value : BackendQueryValue
-        Scalar value returned from one backend query row.
-
-    Returns
-    -------
-    bytes
-        Raw byte representation of ``value``.
-    """
-
-    return bytes(cast("bytes | bytearray", value))
-
-
-def _duckdb_error_type() -> type[BaseException]:
-    """
-    Return the active DuckDB driver error base class.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    type[BaseException]
-        Base exception type exported by the active DuckDB driver module.
-    """
-
-    module = importlib.import_module("duckdb")
-    return cast("_DuckDBModuleWithError", module).Error
-
-
-class DuckDBQueryBackend:
+class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
     """
     DuckDB-local query and maintenance surface for the production backend.
 
@@ -364,137 +106,6 @@ class DuckDBQueryBackend:
 
     name = "duckdb-query-backend"
     version = SCHEMA_VERSION
-
-    def load_runtime_inventory(
-        self,
-        root: Path,
-        *,
-        conn: _BackendCompatibleConnection | None = None,
-    ) -> tuple[str, str, int] | None:
-        """
-        Return persisted backend and coverage metadata for the last index run.
-
-        Parameters
-        ----------
-        root : pathlib.Path
-            Repository root whose index should be queried.
-        conn : _BackendCompatibleConnection | None, optional
-            Existing backend-compatible connection to reuse.
-
-        Returns
-        -------
-        tuple[str, str, int] | None
-            Stored ``(backend_name, backend_version, coverage_complete)``
-            tuple, or ``None`` when no runtime inventory has been recorded.
-        """
-        owns_connection = conn is None
-        if conn is None:
-            conn = self.open_connection(root)
-        try:
-            row = conn.execute("""
-                SELECT backend_name, backend_version, coverage_complete
-                FROM index_runtime
-                WHERE singleton = 1
-                """).fetchone()
-            if row is None:
-                return None
-            return (str(row[0]), str(row[1]), _backend_int(row[2]))
-        finally:
-            if owns_connection:
-                conn.close()
-
-    def load_analyzer_inventory(
-        self,
-        root: Path,
-        *,
-        conn: _BackendCompatibleConnection | None = None,
-    ) -> list[tuple[str, str, str]]:
-        """
-        Return persisted analyzer inventory for the last index run.
-
-        Parameters
-        ----------
-        root : pathlib.Path
-            Repository root whose index should be queried.
-        conn : _BackendCompatibleConnection | None, optional
-            Existing backend-compatible connection to reuse.
-
-        Returns
-        -------
-        list[tuple[str, str, str]]
-            Stored analyzer rows as ``(name, version, discovery_globs_json)``
-            ordered by analyzer name.
-        """
-        owns_connection = conn is None
-        if conn is None:
-            conn = self.open_connection(root)
-        try:
-            rows = conn.execute("""
-                SELECT name, version, discovery_globs
-                FROM index_analyzers
-                ORDER BY name
-                """).fetchall()
-            return [
-                (str(name), str(version), str(globs)) for name, version, globs in rows
-            ]
-        finally:
-            if owns_connection:
-                conn.close()
-
-    def needs_maintenance(
-        self,
-        root: Path,
-        *,
-        conn: _BackendCompatibleConnection | None = None,
-    ) -> bool:
-        """
-        Report whether warm-index maintenance still needs one write session.
-
-        Parameters
-        ----------
-        root : pathlib.Path
-            Repository root whose index should be checked.
-        conn : _BackendCompatibleConnection | None, optional
-            Existing backend-compatible connection to reuse.
-
-        Returns
-        -------
-        bool
-            ``True`` when stale shell docstring issues or orphaned embeddings
-            still require mutation work.
-        """
-        owns_connection = conn is None
-        if conn is None:
-            conn = self.open_connection(root)
-        try:
-            row = conn.execute(
-                """
-                SELECT
-                    EXISTS(
-                        SELECT 1
-                        FROM docstring_issues di
-                        JOIN files f ON f.id = di.file_id
-                        WHERE f.analyzer_name = 'bash'
-                           OR f.path LIKE '%.sh'
-                           OR f.path LIKE '%.bash'
-                    ),
-                    EXISTS(
-                        SELECT 1
-                        FROM embeddings e
-                        WHERE e.object_type = 'symbol'
-                          AND NOT EXISTS (
-                              SELECT 1
-                              FROM symbol_index s
-                              WHERE s.id = e.object_id
-                          )
-                    )
-                """
-            ).fetchone()
-            assert row is not None
-            return bool(_backend_int(row[0])) or bool(_backend_int(row[1]))
-        finally:
-            if owns_connection:
-                conn.close()
 
     def initialize(self, root: Path) -> None:
         """

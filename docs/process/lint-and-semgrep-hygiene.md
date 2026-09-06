@@ -28,11 +28,11 @@ scripts/generate_github_snapshot.py:118 S607 — the fixed `gh` executable is
     intentionally invoked by argument vector; there is no shell interpolation.
 src/codira/indexer.py:1242 PLR0913 — bulk indexing keeps backend, transaction,
     artifact, coverage, and embedding ownership explicit at the orchestration seam.
-src/codira/contracts.py:3430 PLR0913 — the plugin protocol signature is a
+src/codira/contracts.py:3271 PLR0913 — the plugin protocol signature is a
     public compatibility contract and cannot be bundled without breaking providers.
 src/codira/contracts.py:17 EM101,TRY003 — public contract validation keeps
     short, consistent exception messages at the typed boundary.
-src/codira/config.py:1403 C901 — configuration semantics remain deliberately
+src/codira/config_validation.py:574 C901 — configuration semantics remain deliberately
     centralized so versioned breaking-change guidance is deterministic.
 src/codira/daemon/service_spec.py:110 PLR0913 — one factory records the full,
     immutable workspace service identity needed by all platform adapters.
@@ -46,18 +46,32 @@ src/codira/query_daemon_lifecycle.py:580 PLR0913 — service lifecycle inputs ar
     explicit to preserve platform-independent restart behavior.
 src/codira/query_daemon_ipc.py:894 PLR0913 — IPC server construction exposes its
     authentication, runtime, and connection-boundary dependencies.
-src/codira/cli.py:2139 C901,PLR0912 — index CLI failure/reporting branches are
+src/codira/cli_index.py:148 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
-src/codira/cli.py:5905 PLR0913 — daemon context rendering receives the complete
+src/codira/cli_queries.py:2341 PLR0913 — daemon context rendering receives the complete
     explicit query/output/profile request after freshness has been established.
-src/codira/cli.py:6732 PLR0913 — command dispatch receives parsed arguments and
+src/codira/cli.py:449 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
-src/codira/query/context.py:2285 PLR0913 — channel functions share an explicit
-    root/query/connection/intent/prefix/profile contract so named similarity
-    profiles reach only semantic channels.
-src/codira/query/context.py:2427, src/codira/query/context.py:2462,
-    src/codira/query/context.py:4018, src/codira/query/context.py:4121, and
-    src/codira/query/context.py:4176 retain that same channel-contract reason.
+src/codira/cli.py:368 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
+src/codira/cli.py:377 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
+src/codira/cli.py:388 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
+src/codira/cli.py:389 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
+src/codira/cli.py:405 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
+src/codira/cli.py:410 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
+src/codira/query/context_scoring.py:637, src/codira/query/context_scoring.py:779,
+    and src/codira/query/context_scoring.py:814 PLR0913 — lexical channel
+    functions share an explicit root/query/connection/intent/prefix/profile
+    contract so named similarity profiles reach only semantic channels.
+src/codira/query/context_channels.py:973,
+    src/codira/query/context_channels.py:1076, and
+    src/codira/query/context_channels.py:1131 PLR0913 — semantic channel
+    functions retain the same explicit retrieval contract.
 src/codira/docstring.py:1286, src/codira/docstring.py:1397 PLC0415 — lazy imports avoid a configuration or
     registry import cycle on the optional documentation-plugin path.
 src/codira/docstring.py:1340, src/codira/docstring.py:1491 PLR0913 — documentation validation preserves
@@ -66,9 +80,9 @@ src/codira/query_daemon.py:349,366 BLE001 — worker initialization and operatio
     failures must cross the future boundary as their original exception.
 src/codira/query_daemon_lifecycle.py:721,738 BLE001 — a long-lived service must
     report any unexpected refresh or foreground failure as degraded state.
-src/codira/query_daemon_ipc.py:1270,1360 BLE001 — the IPC boundary converts any
+src/codira/query_daemon_ipc.py:1274,1364 BLE001 — the IPC boundary converts any
     unexpected implementation failure into a stable protocol/unavailable result.
-packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py:454
+packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py:465
     BLE001 — the concurrent-writer regression records every thread failure for
     deterministic assertion in the main test thread.
 src/codira/mcp/server.py:223 SLF001 — FastMCP exposes no public transport hook;
@@ -98,7 +112,7 @@ scripts/run_retrieval_quality_benchmark.py:913,
 src/codira/docstring.py:1019, src/codira/docstring.py:1114,
 src/codira/index_generation.py:115,
 src/codira/query_daemon.py:366, src/codira/query_daemon_lifecycle.py:738, and
-src/codira/query_daemon_ipc.py:1360 retain the same category-specific reasons
+src/codira/query_daemon_ipc.py:1364 retain the same category-specific reasons
 as their immediately preceding grouped entries.
 ```
 
@@ -144,10 +158,21 @@ fires; each such rule has a dedicated violating fixture.
   DuckDB backend modules own parameterized SQL execution; query-context calls
   use the active backend connection; the two formatted-query suppressions are
   trusted identifier construction inside backend-owned SQL. The DuckDB support
-  format-string suppression returns a Python name, not an HTTP response. The
   benchmark dynamic-import suppression loads a locally selected backend-support
   module by trusted argument vector. These exceptions do not affect the
-  repository-owned Semgrep rule set.
+  repository-owned Semgrep rule set. DuckDB call-target naming now lives in a
+  helper module without a suppression because it does not cross a response
+  rendering boundary. DuckDB embedding payload construction is likewise
+  package-local and has no `noqa` or `nosemgrep` exceptions. DuckDB bulk
+  transport owns temporary CSV serialization and replacement-scan cleanup with
+  no lint or Semgrep exceptions. DuckDB reference-scan persistence likewise
+  has no lint or Semgrep exceptions. DuckDB index-state inspection has no lint
+  or Semgrep exceptions. DuckDB reusable-embedding state loading has no lint
+  or Semgrep exceptions, including orphan cleanup. DuckDB docstring-audit
+  policy has no lint or Semgrep exceptions. DuckDB index-maintenance cleanup
+  has no lint or Semgrep exceptions. DuckDB graph-rebuild lookup helpers have
+  no lint or Semgrep exceptions. DuckDB graph-rebuild execution has no lint or
+  Semgrep exceptions.
 
   Affected sources are
   `scripts/benchmark_index.py`, `src/codira/query/context.py`,
@@ -159,6 +184,11 @@ fires; each such rule has a dedicated violating fixture.
   `packages/codira-backend-duckdb/src/codira_backend_duckdb/duckdb_query_backend.py`.
 
 ## Review outcome
+
+The external stdio MCP handshake test skips only when Codex declares its
+network-disabled sandbox. Outside that constrained environment it retains the
+real child-process coverage and uses a bounded timeout so transport failures
+cannot leave an orphaned test server.
 
 Slice 18 adds `codira.arch.no-host-ast-in-python-analysis`: after the completed
 host-target parser migration, a production `ast` import would silently violate

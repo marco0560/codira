@@ -21,19 +21,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from codira.query.classifier import build_retrieval_plan, classify_query
-from codira.query.context import (
-    MERGE_RESULT_LIMIT,
+from codira.query.context_channels import (
     _bounded_graph_retrieval_signals,
     _channel_retrieval_producers,
     _collect_overload_retrieval_signals,
     _collect_retrieval_signals,
-    _dedupe_channel_results,
+    _signals_from_channel_bundles,
+)
+from codira.query.context_models import MERGE_RESULT_LIMIT
+from codira.query.context_scoring import (
     _diversify_merged_symbols,
     _diversify_merged_symbols_explain,
     _merge_ranked_channel_bundles_explain,
     _rank_signals_with_provenance,
-    _signals_from_channel_bundles,
 )
+from codira.query.context_source import _dedupe_channel_results
 from codira.query.producers import (
     CALL_GRAPH_RETRIEVAL_PRODUCER,
     CHANNEL_PRODUCER_SPECS,
@@ -708,7 +710,7 @@ def test_collect_overload_retrieval_signals_adds_bounded_api_evidence(
     }
 
     monkeypatch.setattr(
-        "codira.query.context.find_symbol_overloads",
+        "codira.query.context_channels.find_symbol_overloads",
         lambda root, symbol, conn=None: overload_rows.get(symbol, []),
     )
 

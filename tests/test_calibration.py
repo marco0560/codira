@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import tomlkit
 
-from codira import cli as cli_module, config as config_module
+from codira import cli_operations as cli_module, config as config_module
 from codira.calibration import (
     BenchmarkMeasurement,
     CalibrationBenchmarkError,
@@ -471,7 +471,23 @@ def test_calibration_cli_uses_active_engine_runner_and_identity(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Route calibration through the configured engine and preserve its spec."""
+    """Route calibration through the configured engine and preserve its spec.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to isolate configuration and replace plugin dependencies.
+    tmp_path : pathlib.Path
+        Temporary root used for the isolated configuration state.
+    capsys : pytest.CaptureFixture[str]
+        Fixture used to inspect rendered command output.
+
+    Returns
+    -------
+    None
+        The test asserts the active engine supplies the calibration runner and
+        rendered identity.
+    """
 
     _isolate_config_paths(monkeypatch, tmp_path)
     result = CalibrationResult(
