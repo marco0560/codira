@@ -376,7 +376,19 @@ def test_duckdb_bulk_io_helpers_preserve_csv_and_cleanup_rules() -> None:
 
 
 def test_duckdb_reference_scan_rows_exclude_import_lines(tmp_path: Path) -> None:
-    """Keep query-time reference scans free of import declarations."""
+    """
+    Keep query-time reference scans free of import declarations.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory used to hold the source fixture.
+
+    Returns
+    -------
+    None
+        The test asserts only non-import source lines are retained.
+    """
     path = tmp_path / "sample.py"
     path.write_text(
         "import module\nfrom package import name\nname()\n", encoding="utf-8"
