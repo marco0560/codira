@@ -49,7 +49,6 @@ from codira.semantic.embeddings import (
 )
 from .profiling import DuckDBProfileRecorder
 from .duckdb_call_resolution import (
-    _import_alias_map,
     _qualified_callable_name,
     _resolve_call_record,
     _unresolved_identity,
@@ -64,6 +63,12 @@ from .duckdb_bulk_io import _flush_registered_arrow_table, _temporary_csv_path_f
 from .duckdb_reference_scan import (
     _flush_pending_reference_scan_rows,
     _flush_reference_scan_rows,
+)
+from .duckdb_graph_lookup import (
+    _caller_class_from_owner,
+    _load_class_methods,
+    _load_import_aliases,
+    _load_module_functions,
 )
 from .duckdb_docstring_policy import (
     _should_audit_docstrings,
@@ -757,125 +762,6 @@ class EnumMemberPersistenceRequest:
     symbol_lineno: int
     enum_members: tuple[EnumMemberArtifact, ...]
     structural_rows: DuckDBStructuralRowBuffers
-
-
-def _load_module_functions(conn: _DuckDBPersistenceConnection) -> dict[str, set[str]]:
-    """
-    Load known top-level functions from indexed structural tables.
-
-    Parameters
-    ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
-
-    Returns
-    -------
-    dict[str, set[str]]
-        Top-level function names keyed by module name.
-    """
-    rows = conn.execute("""
-        SELECT m.name, f.name
-        FROM functions f
-        JOIN modules m
-          ON f.module_id = m.id
-        WHERE f.class_id IS NULL
-        ORDER BY m.name, f.name
-        """).fetchall()
-    module_functions: dict[str, set[str]] = {}
-    for module_name, function_name in rows:
-        module_functions.setdefault(str(module_name), set()).add(str(function_name))
-    return module_functions
-
-
-def _load_class_methods(
-    conn: _DuckDBPersistenceConnection,
-) -> dict[tuple[str, str], set[str]]:
-    """
-    Load known methods from indexed structural tables.
-
-    Parameters
-    ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
-
-    Returns
-    -------
-    dict[tuple[str, str], set[str]]
-        Method names keyed by ``(module_name, class_name)``.
-    """
-    rows = conn.execute("""
-        SELECT m.name, c.name, f.name
-        FROM functions f
-        JOIN classes c
-          ON f.class_id = c.id
-        JOIN modules m
-          ON f.module_id = m.id
-        ORDER BY m.name, c.name, f.name
-        """).fetchall()
-    class_methods: dict[tuple[str, str], set[str]] = {}
-    for module_name, class_name, method_name in rows:
-        key = (str(module_name), str(class_name))
-        class_methods.setdefault(key, set()).add(str(method_name))
-    return class_methods
-
-
-def _load_import_aliases(
-    conn: _DuckDBPersistenceConnection,
-) -> dict[str, dict[str, str]]:
-    """
-    Load import alias maps for indexed modules.
-
-    Parameters
-    ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
-
-    Returns
-    -------
-    dict[str, dict[str, str]]
-        Alias maps keyed by owning module name.
-    """
-    rows = conn.execute("""
-        SELECT m.name, i.name, i.alias
-        FROM imports i
-        JOIN modules m
-          ON i.module_id = m.id
-        WHERE i.kind = 'import'
-        ORDER BY m.name, i.lineno, i.name, COALESCE(i.alias, '')
-        """).fetchall()
-    imports_by_module: dict[str, list[dict[str, object]]] = {}
-    for module_name, import_name, alias in rows:
-        imports_by_module.setdefault(str(module_name), []).append(
-            {
-                "name": str(import_name),
-                "alias": None if alias is None else str(alias),
-            }
-        )
-
-    return {
-        module_name: _import_alias_map(imports)
-        for module_name, imports in imports_by_module.items()
-    }
-
-
-def _caller_class_from_owner(owner_name: str) -> str | None:
-    """
-    Derive the owning class name from a logical callable owner.
-
-    Parameters
-    ----------
-    owner_name : str
-        Logical callable owner name.
-
-    Returns
-    -------
-    str | None
-        Owning class name for methods, or ``None`` for top-level functions.
-    """
-    if "." not in owner_name:
-        return None
-    class_name, _method_name = owner_name.rsplit(".", 1)
-    return class_name
 
 
 def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:

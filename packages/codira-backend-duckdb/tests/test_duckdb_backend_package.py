@@ -88,6 +88,7 @@ from codira_backend_duckdb.duckdb_maintenance import (
     _purge_skipped_docstring_issues,
 )
 from codira_backend_duckdb.duckdb_query_graph import _validated_graph_identifier
+from codira_backend_duckdb.duckdb_graph_lookup import _caller_class_from_owner
 from codira_backend_duckdb.duckdb_query_primitives import (
     _backend_bytes,
     _backend_float,
@@ -200,6 +201,8 @@ def test_duckdb_graph_identifier_guard_preserves_the_query_vocabulary() -> None:
     assert _validated_graph_identifier("caller_module", kind="column") == (
         "caller_module"
     )
+    assert _caller_class_from_owner("Package.Class.method") == "Package.Class"
+    assert _caller_class_from_owner("function") is None
 
     with pytest.raises(ValueError, match="Unsafe DuckDB graph table identifier"):
         _validated_graph_identifier("call_edges; DROP TABLE files", kind="table")
