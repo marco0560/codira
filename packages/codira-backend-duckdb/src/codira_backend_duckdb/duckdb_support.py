@@ -62,18 +62,18 @@ from .duckdb_docstring_policy import (
     _should_require_raises_section,
 )
 from .duckdb_embedding_persistence import (
-    _chunked_embedding_batches,
-    _duckdb_batch_error_types,
-    _embedding_batch_backend_error,
+    _delete_pending_embedding_rows,
     _flush_embedding_rows,
-    _pending_embedding_payload_bytes,
     _store_vector_store_materialized_rows,
 )
 from .duckdb_embedding_persistence import (
     _store_pending_embedding_rows as _store_pending_embedding_rows,
 )
 
-__all__ = ["_store_pending_embedding_rows"]
+__all__ = [
+    "_delete_pending_embedding_rows",
+    "_store_pending_embedding_rows",
+]
 
 if TYPE_CHECKING:
     from codira.contracts import LanguageAnalyzer, VectorSetIdentity, VectorStore
@@ -2563,101 +2563,6 @@ def _flush_callable_ref_record_rows(
             csv_path.unlink()
         except FileNotFoundError:
             pass
-
-
-def _delete_pending_embedding_rows(
-    conn: _DuckDBPersistenceConnection,
-    *,
-    prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
-    backend: EmbeddingBackendSpec,
-    profiler: DuckDBProfileRecorder | None = None,
-) -> None:
-    """
-    Delete pending rows that have been materialized into embeddings.
-
-    Parameters
-    ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
-    root : pathlib.Path | None, optional
-        Repository root used for embedding configuration and vector-store paths.
-    prepared_rows : list[tuple[codira.indexer.PendingEmbeddingRow, str, bytes | None]]
-        Prepared embedding rows as ``(row, content_hash, stored_vector)``.
-    backend : EmbeddingBackendSpec
-        Active embedding backend metadata.
-    profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
-        Optional recorder for pending-row delete spans.
-
-    Returns
-    -------
-    None
-        Matching pending rows are deleted in place.
-
-    Raises
-    ------
-    codira.contracts.BackendError
-        Raised when DuckDB or Arrow rejects one pending-row deletion batch.
-    """
-
-    if not prepared_rows:
-        return
-
-    import pyarrow as pa
-
-    active_profiler = (
-        DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
-    )
-    for batch in _chunked_embedding_batches(prepared_rows):
-        object_types: list[str] = []
-        object_ids: list[int] = []
-        backends: list[str] = []
-        versions: list[str] = []
-        for row, _content_hash, _stored_vector in batch:
-            object_types.append(row.object_type)
-            object_ids.append(row.object_id)
-            backends.append(backend.name)
-            versions.append(backend.version)
-
-        try:
-            with active_profiler.span(
-                "arrow.build.pending_embedding_delete",
-                rows=len(batch),
-            ):
-                table = pa.table(
-                    {
-                        "object_type": pa.array(object_types, type=pa.string()),
-                        "object_id": pa.array(object_ids, type=pa.int64()),
-                        "backend": pa.array(backends, type=pa.string()),
-                        "version": pa.array(versions, type=pa.string()),
-                    }
-                )
-            with active_profiler.span(
-                "arrow.flush.pending_embedding_delete",
-                rows=len(batch),
-            ):
-                _flush_registered_arrow_table(
-                    conn,
-                    view_name="__codira_pending_embedding_delete_rows",
-                    table=table,
-                    insert_sql="""
-                        DELETE FROM pending_embeddings
-                        USING __codira_pending_embedding_delete_rows pending
-                        WHERE pending_embeddings.object_type = pending.object_type
-                          AND pending_embeddings.object_id = pending.object_id
-                          AND pending_embeddings.backend = pending.backend
-                          AND pending_embeddings.version = pending.version
-                        """,
-                )
-        except _duckdb_batch_error_types() as exc:
-            msg = _embedding_batch_backend_error(
-                operation="pending_embeddings_delete",
-                row_count=len(batch),
-                payload_bytes=_pending_embedding_payload_bytes(
-                    batch,
-                    backend=backend,
-                ),
-            )
-            raise BackendError(msg) from exc
 
 
 def _flush_prepared_embedding_rows(
