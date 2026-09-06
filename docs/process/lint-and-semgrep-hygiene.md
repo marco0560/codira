@@ -167,6 +167,7 @@ fires; each such rule has a dedicated violating fixture.
   transport owns temporary CSV serialization and replacement-scan cleanup with
   no lint or Semgrep exceptions. DuckDB reference-scan persistence likewise
   has no lint or Semgrep exceptions. DuckDB index-state inspection has no lint
+  or Semgrep exceptions. DuckDB reusable-embedding state loading has no lint
   or Semgrep exceptions.
 
   Affected sources are

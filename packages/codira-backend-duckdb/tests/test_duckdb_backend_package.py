@@ -73,6 +73,9 @@ from codira_backend_duckdb.duckdb_index_state import (
     _load_existing_file_hashes,
     _load_existing_file_ownership,
 )
+from codira_backend_duckdb.duckdb_embedding_state import (
+    _load_previous_symbol_embeddings,
+)
 from codira_backend_duckdb.duckdb_query_graph import _validated_graph_identifier
 from codira_backend_duckdb.duckdb_query_primitives import (
     _backend_bytes,
@@ -446,6 +449,61 @@ def test_duckdb_index_state_helpers_preserve_backend_metadata_rules(
         }
     finally:
         raw.close()
+
+
+def test_duckdb_embedding_state_loads_symbol_and_documentation_rows(
+    tmp_path: Path,
+) -> None:
+    """
+    Preserve reusable DuckDB embedding loading across durable owner types.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory used to derive the indexed source path.
+
+    Returns
+    -------
+    None
+        The test asserts both symbol and documentation embeddings are returned.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    raw = duckdb.connect(":memory:")
+    path = str(tmp_path / "module.py")
+    try:
+        raw.execute("CREATE TABLE files (id INTEGER, path VARCHAR)")
+        raw.execute(
+            "CREATE TABLE symbol_index (id INTEGER, file_id INTEGER, stable_id VARCHAR)"
+        )
+        raw.execute(
+            "CREATE TABLE documentation_artifacts (id INTEGER, file_id INTEGER, stable_id VARCHAR)"
+        )
+        raw.execute(
+            "CREATE TABLE embeddings (object_type VARCHAR, object_id INTEGER, backend VARCHAR, version VARCHAR, content_hash VARCHAR, dim INTEGER, vector BLOB)"
+        )
+        raw.execute("INSERT INTO files VALUES (1, ?)", (path,))
+        raw.execute("INSERT INTO symbol_index VALUES (2, 1, 'symbol-id')")
+        raw.execute("INSERT INTO documentation_artifacts VALUES (3, 1, 'docs-id')")
+        raw.execute(
+            "INSERT INTO embeddings VALUES ('symbol', 2, 'local', '1', 'symbol-hash', 2, ?)",
+            (b"12",),
+        )
+        raw.execute(
+            "INSERT INTO embeddings VALUES ('documentation', 3, 'local', '1', 'docs-hash', 2, ?)",
+            (b"34",),
+        )
+
+        rows = _load_previous_symbol_embeddings(
+            cast("_DuckDBPersistenceConnection", raw),
+            path,
+            backend=EmbeddingBackendSpec(name="local", version="1", dim=2),
+        )
+    finally:
+        raw.close()
+
+    assert rows["symbol-id"].content_hash == "symbol-hash"
+    assert rows["symbol-id"].vector == b"12"
+    assert rows["docs-id"].content_hash == "docs-hash"
 
 
 class _RejectingExecutemanyDuckDBConnection(_FakeDuckDBConnection):
