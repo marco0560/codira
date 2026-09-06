@@ -60,11 +60,10 @@ from .duckdb_embedding_state import (
     _load_previous_embeddings_by_path,
     _prune_orphaned_embeddings,
 )
+from .duckdb_maintenance import _clear_index_tables, _purge_skipped_docstring_issues
 from .duckdb_support import (
     _DuckDBPersistenceConnection,
-    _clear_index_tables,
     _delete_indexed_file_data,
-    _purge_skipped_docstring_issues,
     _rebuild_graph_indexes,
     _store_analysis,
 )

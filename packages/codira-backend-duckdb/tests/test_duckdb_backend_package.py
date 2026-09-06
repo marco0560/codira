@@ -83,6 +83,10 @@ from codira_backend_duckdb.duckdb_docstring_policy import (
     _should_audit_docstrings,
     _should_require_raises_section,
 )
+from codira_backend_duckdb.duckdb_maintenance import (
+    _clear_index_tables,
+    _purge_skipped_docstring_issues,
+)
 from codira_backend_duckdb.duckdb_query_graph import _validated_graph_identifier
 from codira_backend_duckdb.duckdb_query_primitives import (
     _backend_bytes,
@@ -407,6 +411,27 @@ def test_duckdb_bulk_io_helpers_preserve_csv_and_cleanup_rules() -> None:
         ("INSERT INTO target SELECT * FROM __codira_test_rows", None),
         ("UNREGISTER __codira_test_rows", None),
     ]
+
+
+def test_duckdb_maintenance_helpers_preserve_cleanup_statements() -> None:
+    """Preserve DuckDB maintenance cleanup ownership and statement order.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts lifecycle cleanup statements remain package-local.
+    """
+    connection = _FakeDuckDBConnection()
+    _clear_index_tables(cast("_DuckDBPersistenceConnection", connection))
+    _purge_skipped_docstring_issues(cast("_DuckDBPersistenceConnection", connection))
+
+    assert connection.executed[0] == ("DELETE FROM docstring_issues", None)
+    assert connection.executed[-2] == ("DELETE FROM analysis_status", None)
+    assert "analyzer_name = 'bash'" in connection.executed[-1][0]
 
 
 def test_duckdb_reference_scan_rows_exclude_import_lines(tmp_path: Path) -> None:
