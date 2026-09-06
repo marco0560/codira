@@ -153,6 +153,15 @@ imports `sqlite3` as part of the supported production backend.
 Removal condition:
 No removal planned while SQLite remains a supported backend.
 
+#### `packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_artifact_persistence.py`
+
+Rationale:
+This package-local layer persists analyzed artifacts, relationships, and their
+embedding payloads for the supported SQLite backend.
+
+Removal condition:
+No removal planned while SQLite remains a supported backend.
+
 #### `packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_write_session.py`
 
 Rationale:
