@@ -49,7 +49,6 @@ from .duckdb_support import (
     _flush_docstring_issue_rows,
     _flush_import_rows,
     _flush_pending_embedding_rows,
-    _flush_pending_reference_scan_rows,
     _flush_pending_relationship_rows,
     _flush_structural_rows,
     _process_pending_embedding_rows,
@@ -58,6 +57,7 @@ from .duckdb_support import (
     _store_analysis,
     _store_pending_embedding_rows,
 )
+from .duckdb_reference_scan import _flush_pending_reference_scan_rows
 from .repo_storage import get_codira_dir, get_metadata_path
 from .profiling import (
     DuckDBProfileRecorder,

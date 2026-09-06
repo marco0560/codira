@@ -47,7 +47,6 @@ from codira_backend_duckdb import (
 from codira_backend_duckdb.duckdb_support import DocumentationArtifactRow
 from codira_backend_duckdb.duckdb_support import _delete_pending_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_pending_embedding_rows
-from codira_backend_duckdb.duckdb_support import _flush_pending_reference_scan_rows
 from codira_backend_duckdb.duckdb_support import _resolve_cached_prepared_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
 from codira_backend_duckdb.duckdb_support import _store_pending_embedding_rows
@@ -63,6 +62,10 @@ from codira_backend_duckdb.duckdb_embedding_payload import (
 from codira_backend_duckdb.duckdb_bulk_io import (
     _flush_registered_arrow_table,
     _temporary_csv_path_for_rows,
+)
+from codira_backend_duckdb.duckdb_reference_scan import (
+    _flush_pending_reference_scan_rows,
+    _reference_scan_rows,
 )
 from codira_backend_duckdb.duckdb_query_graph import _validated_graph_identifier
 from codira_backend_duckdb.duckdb_query_primitives import (
@@ -370,6 +373,16 @@ def test_duckdb_bulk_io_helpers_preserve_csv_and_cleanup_rules() -> None:
         ("INSERT INTO target SELECT * FROM __codira_test_rows", None),
         ("UNREGISTER __codira_test_rows", None),
     ]
+
+
+def test_duckdb_reference_scan_rows_exclude_import_lines(tmp_path: Path) -> None:
+    """Keep query-time reference scans free of import declarations."""
+    path = tmp_path / "sample.py"
+    path.write_text(
+        "import module\nfrom package import name\nname()\n", encoding="utf-8"
+    )
+
+    assert _reference_scan_rows(path) == [(str(path), 3, "name()")]
 
 
 class _RejectingExecutemanyDuckDBConnection(_FakeDuckDBConnection):
