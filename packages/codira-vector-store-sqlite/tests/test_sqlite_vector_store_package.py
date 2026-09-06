@@ -203,7 +203,18 @@ def test_sqlite_vector_store_rejects_pre_revision_state(tmp_path: Path) -> None:
 def test_sqlite_vector_store_reset_removes_owned_database_and_sidecars(
     tmp_path: Path,
 ) -> None:
-    """Remove only SQLite artifacts owned by the vector-store plugin."""
+    """Remove only SQLite artifacts owned by the vector-store plugin.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing the plugin state.
+
+    Returns
+    -------
+    None
+        The test asserts the owned SQLite database and sidecars are removed.
+    """
 
     path = get_vector_store_path(tmp_path)
     path.parent.mkdir()

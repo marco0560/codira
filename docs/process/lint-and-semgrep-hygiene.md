@@ -64,13 +64,13 @@ src/codira/cli.py:405 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
 src/codira/cli.py:410 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/query/context_scoring.py:635, src/codira/query/context_scoring.py:777,
-    and src/codira/query/context_scoring.py:812 PLR0913 — lexical channel
+src/codira/query/context_scoring.py:637, src/codira/query/context_scoring.py:779,
+    and src/codira/query/context_scoring.py:814 PLR0913 — lexical channel
     functions share an explicit root/query/connection/intent/prefix/profile
     contract so named similarity profiles reach only semantic channels.
-src/codira/query/context_channels.py:970,
-    src/codira/query/context_channels.py:1073, and
-    src/codira/query/context_channels.py:1128 PLR0913 — semantic channel
+src/codira/query/context_channels.py:973,
+    src/codira/query/context_channels.py:1076, and
+    src/codira/query/context_channels.py:1131 PLR0913 — semantic channel
     functions retain the same explicit retrieval contract.
 src/codira/docstring.py:1286, src/codira/docstring.py:1397 PLC0415 — lazy imports avoid a configuration or
     registry import cycle on the optional documentation-plugin path.
@@ -82,7 +82,7 @@ src/codira/query_daemon_lifecycle.py:721,738 BLE001 — a long-lived service mus
     report any unexpected refresh or foreground failure as degraded state.
 src/codira/query_daemon_ipc.py:1274,1364 BLE001 — the IPC boundary converts any
     unexpected implementation failure into a stable protocol/unavailable result.
-packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py:454
+packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py:465
     BLE001 — the concurrent-writer regression records every thread failure for
     deterministic assertion in the main test thread.
 src/codira/mcp/server.py:223 SLF001 — FastMCP exposes no public transport hook;

@@ -234,7 +234,18 @@ def test_duckdb_vector_store_rejects_pre_revision_state(tmp_path: Path) -> None:
 
 
 def test_duckdb_vector_store_reset_removes_owned_database(tmp_path: Path) -> None:
-    """Remove only the DuckDB artifact owned by the vector-store plugin."""
+    """Remove only the DuckDB artifact owned by the vector-store plugin.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing the plugin state.
+
+    Returns
+    -------
+    None
+        The test asserts the owned DuckDB artifact is removed.
+    """
 
     path = get_vector_store_path(tmp_path)
     path.parent.mkdir()

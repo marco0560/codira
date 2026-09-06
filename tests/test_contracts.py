@@ -625,7 +625,18 @@ class _FakeVectorStore:
         self,
         request: VectorStoreResetRequest,
     ) -> VectorStoreResetResult:
-        """Return no removed state for the protocol-only fake store."""
+        """Return no removed state for the protocol-only fake store.
+
+        Parameters
+        ----------
+        request : codira.contracts.VectorStoreResetRequest
+            Reset request ignored by the protocol-only fake.
+
+        Returns
+        -------
+        codira.contracts.VectorStoreResetResult
+            Empty removal result for the fake store.
+        """
 
         del request
         return VectorStoreResetResult(self.name)
