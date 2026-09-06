@@ -162,7 +162,8 @@ fires; each such rule has a dedicated violating fixture.
   module by trusted argument vector. These exceptions do not affect the
   repository-owned Semgrep rule set. DuckDB call-target naming now lives in a
   helper module without a suppression because it does not cross a response
-  rendering boundary.
+  rendering boundary. DuckDB embedding payload construction is likewise
+  package-local and has no `noqa` or `nosemgrep` exceptions.
 
   Affected sources are
   `scripts/benchmark_index.py`, `src/codira/query/context.py`,
@@ -174,6 +175,11 @@ fires; each such rule has a dedicated violating fixture.
   `packages/codira-backend-duckdb/src/codira_backend_duckdb/duckdb_query_backend.py`.
 
 ## Review outcome
+
+The external stdio MCP handshake test skips only when Codex declares its
+network-disabled sandbox. Outside that constrained environment it retains the
+real child-process coverage and uses a bounded timeout so transport failures
+cannot leave an orphaned test server.
 
 Slice 18 adds `codira.arch.no-host-ast-in-python-analysis`: after the completed
 host-target parser migration, a production `ast` import would silently violate
