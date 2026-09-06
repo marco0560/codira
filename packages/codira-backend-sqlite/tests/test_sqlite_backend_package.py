@@ -19,6 +19,10 @@ from codira.models import (
 from codira_backend_sqlite.schema import DDL
 from codira.semantic.embeddings import EmbeddingBackendSpec
 from codira_backend_sqlite import SQLiteIndexBackend, build_backend
+from codira_backend_sqlite.sqlite_call_resolution import (
+    _import_alias_map,
+    _unresolved_identity,
+)
 from codira_backend_sqlite.sqlite_support import _flush_pending_embedding_rows
 
 
@@ -27,6 +31,27 @@ _UNRESOLVED_CALL_RECORDS = (
     ("name", "", "PyUnicode_AsUTF8AndSize", 2, 4),
     ("name", "", "system", 3, 4),
 )
+
+
+def test_sqlite_call_resolution_helpers_preserve_alias_and_identity_rules() -> None:
+    """
+    Preserve the isolated SQLite call-resolution helper behavior.
+
+    Returns
+    -------
+    None
+        The test asserts aliases and unresolved identities remain deterministic.
+    """
+    assert _import_alias_map([{"name": "package.module", "alias": None}]) == {
+        "module": "package.module",
+        "package.module": "package.module",
+    }
+    assert (
+        _unresolved_identity(
+            {"kind": "name", "base": "", "target": "missing"}, resolved=0
+        )
+        == '["name","","missing"]'
+    )
 
 
 def test_sqlite_backend_package_declares_expected_entry_point() -> None:
