@@ -64,12 +64,14 @@ src/codira/cli.py:405 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
 src/codira/cli.py:410 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/query/context.py:2285 PLR0913 — channel functions share an explicit
-    root/query/connection/intent/prefix/profile contract so named similarity
-    profiles reach only semantic channels.
-src/codira/query/context.py:2427, src/codira/query/context.py:2462,
-    src/codira/query/context.py:4018, src/codira/query/context.py:4121, and
-    src/codira/query/context.py:4176 retain that same channel-contract reason.
+src/codira/query/context_scoring.py:635, src/codira/query/context_scoring.py:777,
+    and src/codira/query/context_scoring.py:812 PLR0913 — lexical channel
+    functions share an explicit root/query/connection/intent/prefix/profile
+    contract so named similarity profiles reach only semantic channels.
+src/codira/query/context_channels.py:970,
+    src/codira/query/context_channels.py:1073, and
+    src/codira/query/context_channels.py:1128 PLR0913 — semantic channel
+    functions retain the same explicit retrieval contract.
 src/codira/docstring.py:1286, src/codira/docstring.py:1397 PLC0415 — lazy imports avoid a configuration or
     registry import cycle on the optional documentation-plugin path.
 src/codira/docstring.py:1340, src/codira/docstring.py:1491 PLR0913 — documentation validation preserves
@@ -78,7 +80,7 @@ src/codira/query_daemon.py:349,366 BLE001 — worker initialization and operatio
     failures must cross the future boundary as their original exception.
 src/codira/query_daemon_lifecycle.py:721,738 BLE001 — a long-lived service must
     report any unexpected refresh or foreground failure as degraded state.
-src/codira/query_daemon_ipc.py:1270,1360 BLE001 — the IPC boundary converts any
+src/codira/query_daemon_ipc.py:1274,1364 BLE001 — the IPC boundary converts any
     unexpected implementation failure into a stable protocol/unavailable result.
 packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py:454
     BLE001 — the concurrent-writer regression records every thread failure for
@@ -110,7 +112,7 @@ scripts/run_retrieval_quality_benchmark.py:913,
 src/codira/docstring.py:1019, src/codira/docstring.py:1114,
 src/codira/index_generation.py:115,
 src/codira/query_daemon.py:366, src/codira/query_daemon_lifecycle.py:738, and
-src/codira/query_daemon_ipc.py:1360 retain the same category-specific reasons
+src/codira/query_daemon_ipc.py:1364 retain the same category-specific reasons
 as their immediately preceding grouped entries.
 ```
 
