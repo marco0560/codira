@@ -32,7 +32,7 @@ src/codira/contracts.py:3430 PLR0913 — the plugin protocol signature is a
     public compatibility contract and cannot be bundled without breaking providers.
 src/codira/contracts.py:17 EM101,TRY003 — public contract validation keeps
     short, consistent exception messages at the typed boundary.
-src/codira/config.py:1403 C901 — configuration semantics remain deliberately
+src/codira/config_validation.py:573 C901 — configuration semantics remain deliberately
     centralized so versioned breaking-change guidance is deterministic.
 src/codira/daemon/service_spec.py:110 PLR0913 — one factory records the full,
     immutable workspace service identity needed by all platform adapters.

@@ -24,7 +24,12 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from codira import config as config_module
+from codira import (
+    config as config_module,
+    config_models,
+    config_toml,
+    config_validation,
+)
 from codira.cli import main
 from codira.config import (
     ConfigError,
@@ -83,6 +88,29 @@ def _isolate_config_paths(
         lambda: system_dir / "config.toml",
     )
     return user_dir, system_dir
+
+
+def test_config_facade_reexports_public_model_types() -> None:
+    """Keep public configuration model imports stable after extraction.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts facade exports retain their canonical identities.
+    """
+
+    assert config_module.CodiraConfig is config_models.CodiraConfig
+    assert config_module.ConfigError is config_models.ConfigError
+    assert config_module.DEFAULT_CONFIG is config_models.DEFAULT_CONFIG
+    assert (
+        config_module.validate_config_mapping
+        is config_validation.validate_config_mapping
+    )
+    assert config_module.render_config_toml is config_toml.render_config_toml
 
 
 def test_effective_config_merges_with_env_precedence(
