@@ -169,3 +169,28 @@ def _count_reused_embeddings(
     ).fetchone()
     assert row is not None
     return _backend_int(cast("BackendQueryValue", row[0]))
+
+
+def _prune_orphaned_embeddings(conn: _DuckDBPersistenceConnection) -> None:
+    """Remove embeddings whose durable owner no longer exists.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open database connection.
+
+    Returns
+    -------
+    None
+        Orphaned embedding rows are deleted in place.
+    """
+    conn.execute("""
+        DELETE FROM embeddings
+        WHERE object_type = 'symbol'
+          AND object_id NOT IN (SELECT id FROM symbol_index)
+        """)
+    conn.execute("""
+        DELETE FROM embeddings
+        WHERE object_type = 'documentation'
+          AND object_id NOT IN (SELECT id FROM documentation_artifacts)
+        """)

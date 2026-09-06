@@ -77,6 +77,7 @@ from codira_backend_duckdb.duckdb_embedding_state import (
     _count_reused_embeddings,
     _load_previous_embeddings_by_path,
     _load_previous_symbol_embeddings,
+    _prune_orphaned_embeddings,
 )
 from codira_backend_duckdb.duckdb_query_graph import _validated_graph_identifier
 from codira_backend_duckdb.duckdb_query_primitives import (
@@ -494,6 +495,10 @@ def test_duckdb_embedding_state_loads_symbol_and_documentation_rows(
             "INSERT INTO embeddings VALUES ('documentation', 3, 'local', '1', 'docs-hash', 2, ?)",
             (b"34",),
         )
+        raw.execute(
+            "INSERT INTO embeddings VALUES ('symbol', 99, 'local', '1', 'orphan-hash', 2, ?)",
+            (b"56",),
+        )
 
         rows = _load_previous_symbol_embeddings(
             cast("_DuckDBPersistenceConnection", raw),
@@ -509,6 +514,8 @@ def test_duckdb_embedding_state_loads_symbol_and_documentation_rows(
             cast("_DuckDBPersistenceConnection", raw),
             [path],
         )
+        _prune_orphaned_embeddings(cast("_DuckDBPersistenceConnection", raw))
+        remaining = raw.execute("SELECT COUNT(*) FROM embeddings").fetchone()
     finally:
         raw.close()
 
@@ -516,7 +523,8 @@ def test_duckdb_embedding_state_loads_symbol_and_documentation_rows(
     assert rows["symbol-id"].vector == b"12"
     assert rows["docs-id"].content_hash == "docs-hash"
     assert set(rows_by_path[path]) == {"symbol-id", "docs-id"}
-    assert reused_count == 2
+    assert reused_count == 3
+    assert remaining == (2,)
 
 
 class _RejectingExecutemanyDuckDBConnection(_FakeDuckDBConnection):

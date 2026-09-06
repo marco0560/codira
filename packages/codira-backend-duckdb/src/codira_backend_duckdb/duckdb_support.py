@@ -5015,29 +5015,3 @@ def _delete_indexed_file_data(
     conn.execute("DELETE FROM reference_scan_lines WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM files WHERE path = ?", (file_path,))
     conn.execute("DELETE FROM analysis_status WHERE path = ?", (file_path,))
-
-
-def _prune_orphaned_embeddings(conn: _DuckDBPersistenceConnection) -> None:
-    """
-    Remove embedding rows whose indexed symbol owner no longer exists.
-
-    Parameters
-    ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
-
-    Returns
-    -------
-    None
-        Orphaned embedding rows are deleted in place.
-    """
-    conn.execute("""
-        DELETE FROM embeddings
-        WHERE object_type = 'symbol'
-          AND object_id NOT IN (SELECT id FROM symbol_index)
-        """)
-    conn.execute("""
-        DELETE FROM embeddings
-        WHERE object_type = 'documentation'
-          AND object_id NOT IN (SELECT id FROM documentation_artifacts)
-        """)
