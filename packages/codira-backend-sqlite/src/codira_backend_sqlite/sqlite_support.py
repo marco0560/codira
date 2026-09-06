@@ -35,7 +35,6 @@ from codira.contracts import (
 )
 from codira.docstring import validate_documentation_issues_with_configured_plugin
 from codira.plugin_config import analyzer_inventory_discovery_json
-from codira.repository_scope import path_has_excluded_tree_name
 from codira.semantic.embeddings import (
     embed_texts as embed_texts,
     embedding_work_batch_size,
@@ -49,6 +48,10 @@ from .sqlite_call_resolution import (
     _unresolved_identity,
 )
 from .sqlite_query_batches import _path_batches, _placeholders
+from .sqlite_docstring_policy import (
+    _should_audit_docstrings,
+    _should_require_raises_section,
+)
 
 if TYPE_CHECKING:
     import sqlite3
@@ -1207,61 +1210,6 @@ def _persist_docstring_issues(
                 issue.severity,
             ),
         )
-
-
-def _should_audit_docstrings(source_path: Path) -> bool:
-    """
-    Decide whether one source file participates in docstring auditing.
-
-    Parameters
-    ----------
-    source_path : pathlib.Path
-        Source file path whose indexed artifacts are being audited.
-
-    Returns
-    -------
-    bool
-        ``True`` when docstring issues should be emitted for the file.
-
-    Notes
-    -----
-    Shell scripts and shell functions do not follow the project's NumPy-style
-    docstring contract. Treating Bash artifacts like Python callables produces
-    deterministic but semantically invalid audit noise, so they are excluded.
-    """
-    return source_path.suffix not in {
-        ".sh",
-        ".bash",
-    } and not path_has_excluded_tree_name(source_path)
-
-
-def _should_require_raises_section(source_path: Path, function_name: str) -> bool:
-    """
-    Decide whether a callable should require a ``Raises`` docstring section.
-
-    Parameters
-    ----------
-    source_path : pathlib.Path
-        Source file path owning the callable.
-    function_name : str
-        Callable name as stored in the index.
-
-    Returns
-    -------
-    bool
-        ``True`` when explicit raises should require a ``Raises`` section.
-
-    Notes
-    -----
-    Pytest-style ``test_*`` callables often use local ``raise`` statements as
-    assertion fallbacks. Requiring ``Raises`` sections for those tests creates
-    audit noise without improving user-facing documentation quality.
-    """
-    return not (
-        "tests" in source_path.parts
-        and source_path.suffix == ".py"
-        and function_name.startswith("test_")
-    )
 
 
 def _persist_module_artifacts(
