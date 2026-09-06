@@ -23,7 +23,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 import importlib
 import json
-import re
 from typing import TYPE_CHECKING, Protocol, cast
 
 from codira.contracts import (
@@ -45,6 +44,7 @@ from codira.prefix import normalize_prefix, prefix_clause
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.semantic.embeddings import EmbeddingBackendSpec, get_embedding_backend
 from .schema import SCHEMA_VERSION
+from .duckdb_query_graph import _validated_graph_identifier
 from .duckdb_support import (
     _DuckDBPersistenceConnection,
     _clear_index_tables,
@@ -81,21 +81,6 @@ CallableRefRow = tuple[str, str, str | None, str | None, str | None, str | None,
 EmbeddingInventoryRow = tuple[str, str, int, int]
 
 __all__ = ["DuckDBQueryBackend"]
-
-_SAFE_GRAPH_IDENTIFIER_PATTERN = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
-_ALLOWED_GRAPH_TABLES = frozenset({"call_edges", "callable_refs"})
-_ALLOWED_GRAPH_COLUMNS = frozenset(
-    {
-        "caller_module",
-        "caller_name",
-        "callee_module",
-        "callee_name",
-        "owner_module",
-        "owner_name",
-        "target_module",
-        "target_name",
-    }
-)
 
 
 class _BackendCompatibleCursor(Protocol):
@@ -149,40 +134,6 @@ class _BackendCompatibleCursor(Protocol):
         list[tuple[codira.contracts.BackendQueryValue, ...]]
             Remaining rows from the active result set.
         """
-
-
-def _validated_graph_identifier(identifier: str, *, kind: str) -> str:
-    """
-    Validate one internal DuckDB graph identifier before SQL interpolation.
-
-    Parameters
-    ----------
-    identifier : str
-        Internal table or column identifier interpolated into SQL text.
-    kind : str
-        Human-readable identifier class used in error messages.
-
-    Returns
-    -------
-    str
-        The validated identifier.
-
-    Raises
-    ------
-    ValueError
-        Raised when ``identifier`` is not one of the repository-owned graph
-        identifiers expected by the backend query helpers.
-    """
-    if not _SAFE_GRAPH_IDENTIFIER_PATTERN.fullmatch(identifier):
-        msg = f"Unsafe DuckDB graph {kind} identifier: {identifier!r}"
-        raise ValueError(msg)
-    if kind == "table" and identifier not in _ALLOWED_GRAPH_TABLES:
-        msg = f"Unsupported DuckDB graph table identifier: {identifier!r}"
-        raise ValueError(msg)
-    if kind == "column" and identifier not in _ALLOWED_GRAPH_COLUMNS:
-        msg = f"Unsupported DuckDB graph column identifier: {identifier!r}"
-        raise ValueError(msg)
-    return identifier
 
 
 class _BackendCompatibleConnectionAdapter(Protocol):

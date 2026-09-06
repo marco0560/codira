@@ -51,6 +51,7 @@ from codira_backend_duckdb.duckdb_support import _flush_pending_reference_scan_r
 from codira_backend_duckdb.duckdb_support import _resolve_cached_prepared_embedding_rows
 from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
 from codira_backend_duckdb.duckdb_support import _store_pending_embedding_rows
+from codira_backend_duckdb.duckdb_query_graph import _validated_graph_identifier
 from codira_backend_duckdb.profiling import (
     DuckDBProfileRecorder,
     classify_sql_statement,
@@ -69,6 +70,30 @@ _UNRESOLVED_CALL_RECORDS = (
     ("name", "", "PyUnicode_AsUTF8AndSize", 2, 4),
     ("name", "", "system", 3, 4),
 )
+
+
+def test_duckdb_graph_identifier_guard_preserves_the_query_vocabulary() -> None:
+    """
+    Restrict interpolated graph identifiers to the package-owned vocabulary.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts valid graph names are retained and arbitrary SQL is rejected.
+    """
+    assert _validated_graph_identifier("call_edges", kind="table") == "call_edges"
+    assert _validated_graph_identifier("caller_module", kind="column") == (
+        "caller_module"
+    )
+
+    with pytest.raises(ValueError, match="Unsafe DuckDB graph table identifier"):
+        _validated_graph_identifier("call_edges; DROP TABLE files", kind="table")
+    with pytest.raises(ValueError, match="Unsupported DuckDB graph column identifier"):
+        _validated_graph_identifier("path", kind="column")
 
 
 class _FakeDuckDBConnection:
