@@ -23,6 +23,7 @@ from codira_backend_sqlite.sqlite_call_resolution import (
     _import_alias_map,
     _unresolved_identity,
 )
+from codira_backend_sqlite.sqlite_query_batches import _path_batches, _placeholders
 from codira_backend_sqlite.sqlite_support import _flush_pending_embedding_rows
 
 
@@ -56,6 +57,24 @@ def test_sqlite_call_resolution_helpers_preserve_alias_and_identity_rules() -> N
         )
         == '["name","","missing"]'
     )
+
+
+def test_sqlite_query_batch_helpers_preserve_binding_limits() -> None:
+    """
+    Preserve SQLite query placeholder and path-batch boundaries.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts placeholder and conservative batch sizing behavior.
+    """
+    assert _placeholders([1, 2, 3]) == "?,?,?"
+    paths = [str(index) for index in range(901)]
+    assert [len(batch) for batch in _path_batches(paths)] == [900, 1]
 
 
 def test_sqlite_backend_package_declares_expected_entry_point() -> None:
