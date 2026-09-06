@@ -52,6 +52,11 @@ from codira_backend_duckdb.duckdb_support import _resolve_cached_prepared_embedd
 from codira_backend_duckdb.duckdb_support import _flush_structural_documentation_rows
 from codira_backend_duckdb.duckdb_support import _store_pending_embedding_rows
 from codira_backend_duckdb.duckdb_query_graph import _validated_graph_identifier
+from codira_backend_duckdb.duckdb_query_primitives import (
+    _backend_bytes,
+    _backend_float,
+    _backend_int,
+)
 from codira_backend_duckdb.profiling import (
     DuckDBProfileRecorder,
     classify_sql_statement,
@@ -94,6 +99,20 @@ def test_duckdb_graph_identifier_guard_preserves_the_query_vocabulary() -> None:
         _validated_graph_identifier("call_edges; DROP TABLE files", kind="table")
     with pytest.raises(ValueError, match="Unsupported DuckDB graph column identifier"):
         _validated_graph_identifier("path", kind="column")
+
+
+def test_duckdb_query_primitives_preserve_scalar_coercions() -> None:
+    """
+    Retain scalar coercion semantics used by DuckDB query rows.
+
+    Returns
+    -------
+    None
+        The test asserts each helper retains its prior conversion behavior.
+    """
+    assert _backend_int(2.0) == 2
+    assert _backend_float("1.25") == 1.25
+    assert _backend_bytes(bytearray(b"codira")) == b"codira"
 
 
 class _FakeDuckDBConnection:
