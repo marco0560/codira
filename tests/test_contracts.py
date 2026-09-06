@@ -37,6 +37,7 @@ from codira_backend_sqlite import SQLiteIndexBackend
 from codira_backend_sqlite.schema import SCHEMA_VERSION
 from codira_backend_sqlite.sqlite_storage import get_db_path
 
+import codira.contracts_backend_requests as backend_requests_module
 import codira.indexer as indexer_module
 import codira.registry as registry_module
 from codira.cli import _run_symbol
@@ -150,6 +151,45 @@ def _load_workspace_registry_module() -> ModuleType:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_backend_request_records_remain_available_from_contracts_facade() -> None:
+    """
+    Preserve backend request imports while isolating their record family.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts the contracts facade re-exports the extracted records.
+    """
+    assert (
+        BackendRelationQueryRequest
+        is backend_requests_module.BackendRelationQueryRequest
+    )
+    assert (
+        BackendEmbeddingCandidatesRequest
+        is backend_requests_module.BackendEmbeddingCandidatesRequest
+    )
+    assert (
+        BackendDocumentationCandidatesRequest
+        is backend_requests_module.BackendDocumentationCandidatesRequest
+    )
+    assert (
+        BackendResolveEmbeddingScoresRequest
+        is backend_requests_module.BackendResolveEmbeddingScoresRequest
+    )
+    assert (
+        BackendResolveDocumentationScoresRequest
+        is backend_requests_module.BackendResolveDocumentationScoresRequest
+    )
+    assert (
+        BackendRuntimeInventoryRequest
+        is backend_requests_module.BackendRuntimeInventoryRequest
+    )
 
 
 class _FakeAnalyzer:

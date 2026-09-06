@@ -28,7 +28,7 @@ scripts/generate_github_snapshot.py:118 S607 — the fixed `gh` executable is
     intentionally invoked by argument vector; there is no shell interpolation.
 src/codira/indexer.py:1242 PLR0913 — bulk indexing keeps backend, transaction,
     artifact, coverage, and embedding ownership explicit at the orchestration seam.
-src/codira/contracts.py:3430 PLR0913 — the plugin protocol signature is a
+src/codira/contracts.py:3271 PLR0913 — the plugin protocol signature is a
     public compatibility contract and cannot be bundled without breaking providers.
 src/codira/contracts.py:17 EM101,TRY003 — public contract validation keeps
     short, consistent exception messages at the typed boundary.
