@@ -66,6 +66,9 @@ from .duckdb_reference_scan import (
     _flush_pending_reference_scan_rows,
     _flush_reference_scan_rows,
 )
+from .duckdb_index_state import (
+    _count_indexed_files,
+)
 
 if TYPE_CHECKING:
     from codira.contracts import LanguageAnalyzer, VectorSetIdentity, VectorStore
@@ -5093,34 +5096,6 @@ def _load_previous_symbol_embeddings(
     }
 
 
-def _current_embedding_state_matches(
-    conn: _DuckDBPersistenceConnection,
-    backend: EmbeddingBackendSpec,
-) -> bool:
-    """
-    Check whether stored embeddings already match the active backend state.
-
-    Parameters
-    ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
-    backend : EmbeddingBackendSpec
-        Active embedding backend metadata.
-
-    Returns
-    -------
-    bool
-        ``True`` when all stored embeddings use the active backend and version.
-    """
-    rows = conn.execute(
-        "SELECT DISTINCT backend, version, dim "
-        "FROM embeddings ORDER BY backend, version, dim"
-    ).fetchall()
-    if not rows:
-        return True
-    return rows == [(backend.name, backend.version, backend.dim)]
-
-
 def _prune_orphaned_embeddings(conn: _DuckDBPersistenceConnection) -> None:
     """
     Remove embedding rows whose indexed symbol owner no longer exists.
@@ -5145,43 +5120,6 @@ def _prune_orphaned_embeddings(conn: _DuckDBPersistenceConnection) -> None:
         WHERE object_type = 'documentation'
           AND object_id NOT IN (SELECT id FROM documentation_artifacts)
         """)
-
-
-def _load_existing_file_hashes(conn: _DuckDBPersistenceConnection) -> dict[str, str]:
-    """
-    Load indexed file hashes keyed by path.
-
-    Parameters
-    ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
-
-    Returns
-    -------
-    dict[str, str]
-        Indexed file hashes keyed by absolute path.
-    """
-    rows = conn.execute("SELECT path, hash FROM files ORDER BY path").fetchall()
-    return {str(path): str(file_hash) for path, file_hash in rows}
-
-
-def _count_indexed_files(conn: _DuckDBPersistenceConnection) -> int:
-    """
-    Count files currently persisted in the DuckDB index.
-
-    Parameters
-    ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
-
-    Returns
-    -------
-    int
-        Number of rows in the indexed files table.
-    """
-    row = conn.execute("SELECT COUNT(*) FROM files").fetchone()
-    assert row is not None
-    return _duckdb_int(row[0])
 
 
 def _load_previous_embeddings_by_path(
@@ -5265,33 +5203,6 @@ def _load_previous_embeddings_by_path(
             vector=_duckdb_bytes(vector),
         )
     return result
-
-
-def _load_existing_file_ownership(
-    conn: _DuckDBPersistenceConnection,
-) -> dict[str, tuple[str, str]]:
-    """
-    Load persisted analyzer ownership keyed by path.
-
-    Parameters
-    ----------
-    conn : _DuckDBPersistenceConnection
-        Open database connection.
-
-    Returns
-    -------
-    dict[str, tuple[str, str]]
-        Indexed analyzer ownership keyed by absolute path.
-    """
-    rows = conn.execute("""
-        SELECT path, analyzer_name, analyzer_version
-        FROM files
-        ORDER BY path
-        """).fetchall()
-    return {
-        str(path): (str(analyzer_name), str(analyzer_version))
-        for path, analyzer_name, analyzer_version in rows
-    }
 
 
 def _count_reused_embeddings(

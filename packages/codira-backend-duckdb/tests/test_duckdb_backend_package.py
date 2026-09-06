@@ -67,6 +67,12 @@ from codira_backend_duckdb.duckdb_reference_scan import (
     _flush_pending_reference_scan_rows,
     _reference_scan_rows,
 )
+from codira_backend_duckdb.duckdb_index_state import (
+    _count_indexed_files,
+    _current_embedding_state_matches,
+    _load_existing_file_hashes,
+    _load_existing_file_ownership,
+)
 from codira_backend_duckdb.duckdb_query_graph import _validated_graph_identifier
 from codira_backend_duckdb.duckdb_query_primitives import (
     _backend_bytes,
@@ -395,6 +401,51 @@ def test_duckdb_reference_scan_rows_exclude_import_lines(tmp_path: Path) -> None
     )
 
     assert _reference_scan_rows(path) == [(str(path), 3, "name()")]
+
+
+def test_duckdb_index_state_helpers_preserve_backend_metadata_rules(
+    tmp_path: Path,
+) -> None:
+    """
+    Preserve DuckDB index-state query behavior at its extraction boundary.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory used for the isolated DuckDB database.
+
+    Returns
+    -------
+    None
+        The test asserts metadata, hash, ownership, and count queries agree.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    raw = duckdb.connect(":memory:")
+    try:
+        raw.execute(
+            "CREATE TABLE files (path VARCHAR, hash VARCHAR, analyzer_name VARCHAR, analyzer_version VARCHAR)"
+        )
+        raw.execute(
+            "CREATE TABLE embeddings (backend VARCHAR, version VARCHAR, dim INTEGER)"
+        )
+        raw.execute(
+            "INSERT INTO files VALUES (?, ?, ?, ?)",
+            (str(tmp_path / "module.py"), "hash", "python", "11"),
+        )
+        raw.execute("INSERT INTO embeddings VALUES (?, ?, ?)", ("local", "1", 3))
+        connection = cast("_DuckDBPersistenceConnection", raw)
+        backend = EmbeddingBackendSpec(name="local", version="1", dim=3)
+
+        assert _current_embedding_state_matches(connection, backend)
+        assert _load_existing_file_hashes(connection) == {
+            str(tmp_path / "module.py"): "hash"
+        }
+        assert _count_indexed_files(connection) == 1
+        assert _load_existing_file_ownership(connection) == {
+            str(tmp_path / "module.py"): ("python", "11")
+        }
+    finally:
+        raw.close()
 
 
 class _RejectingExecutemanyDuckDBConnection(_FakeDuckDBConnection):

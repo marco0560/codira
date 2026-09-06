@@ -49,15 +49,17 @@ from .duckdb_query_primitives import (
     _backend_int,
     _duckdb_error_type,
 )
+from .duckdb_index_state import (
+    _count_indexed_files,
+    _current_embedding_state_matches,
+    _load_existing_file_hashes,
+    _load_existing_file_ownership,
+)
 from .duckdb_support import (
     _DuckDBPersistenceConnection,
     _clear_index_tables,
-    _count_indexed_files,
     _count_reused_embeddings,
-    _current_embedding_state_matches,
     _delete_indexed_file_data,
-    _load_existing_file_hashes,
-    _load_existing_file_ownership,
     _load_previous_embeddings_by_path,
     _prune_orphaned_embeddings,
     _purge_skipped_docstring_issues,

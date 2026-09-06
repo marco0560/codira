@@ -166,7 +166,8 @@ fires; each such rule has a dedicated violating fixture.
   package-local and has no `noqa` or `nosemgrep` exceptions. DuckDB bulk
   transport owns temporary CSV serialization and replacement-scan cleanup with
   no lint or Semgrep exceptions. DuckDB reference-scan persistence likewise
-  has no lint or Semgrep exceptions.
+  has no lint or Semgrep exceptions. DuckDB index-state inspection has no lint
+  or Semgrep exceptions.
 
   Affected sources are
   `scripts/benchmark_index.py`, `src/codira/query/context.py`,
