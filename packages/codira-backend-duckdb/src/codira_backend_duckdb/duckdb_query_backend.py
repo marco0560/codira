@@ -55,12 +55,14 @@ from .duckdb_index_state import (
     _load_existing_file_hashes,
     _load_existing_file_ownership,
 )
+from .duckdb_embedding_state import (
+    _count_reused_embeddings,
+    _load_previous_embeddings_by_path,
+)
 from .duckdb_support import (
     _DuckDBPersistenceConnection,
     _clear_index_tables,
-    _count_reused_embeddings,
     _delete_indexed_file_data,
-    _load_previous_embeddings_by_path,
     _prune_orphaned_embeddings,
     _purge_skipped_docstring_issues,
     _rebuild_graph_indexes,

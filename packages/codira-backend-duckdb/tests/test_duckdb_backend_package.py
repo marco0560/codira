@@ -74,6 +74,8 @@ from codira_backend_duckdb.duckdb_index_state import (
     _load_existing_file_ownership,
 )
 from codira_backend_duckdb.duckdb_embedding_state import (
+    _count_reused_embeddings,
+    _load_previous_embeddings_by_path,
     _load_previous_symbol_embeddings,
 )
 from codira_backend_duckdb.duckdb_query_graph import _validated_graph_identifier
@@ -498,12 +500,23 @@ def test_duckdb_embedding_state_loads_symbol_and_documentation_rows(
             path,
             backend=EmbeddingBackendSpec(name="local", version="1", dim=2),
         )
+        rows_by_path = _load_previous_embeddings_by_path(
+            cast("_DuckDBPersistenceConnection", raw),
+            [path],
+            backend=EmbeddingBackendSpec(name="local", version="1", dim=2),
+        )
+        reused_count = _count_reused_embeddings(
+            cast("_DuckDBPersistenceConnection", raw),
+            [path],
+        )
     finally:
         raw.close()
 
     assert rows["symbol-id"].content_hash == "symbol-hash"
     assert rows["symbol-id"].vector == b"12"
     assert rows["docs-id"].content_hash == "docs-hash"
+    assert set(rows_by_path[path]) == {"symbol-id", "docs-id"}
+    assert reused_count == 2
 
 
 class _RejectingExecutemanyDuckDBConnection(_FakeDuckDBConnection):
