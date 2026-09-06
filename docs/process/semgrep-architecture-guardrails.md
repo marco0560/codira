@@ -153,6 +153,15 @@ imports `sqlite3` as part of the supported production backend.
 Removal condition:
 No removal planned while SQLite remains a supported backend.
 
+#### `packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_write_session.py`
+
+Rationale:
+This package-local write-session layer owns SQLite transactions and deferred
+embedding buffers for the supported production backend.
+
+Removal condition:
+No removal planned while SQLite remains a supported backend.
+
 #### `packages/codira-vector-store-sqlite/src/codira_vector_store_sqlite/__init__.py`
 
 Rationale:
@@ -173,6 +182,15 @@ package-local `sqlite_storage` and `sqlite_support` modules.
 Removal condition:
 Remove this allowlist entry when the backend module no longer needs a separate
 package-local helper module.
+
+#### `packages/codira-backend-sqlite/src/codira_backend_sqlite/sqlite_write_session.py`
+
+Rationale:
+This package-local session implementation imports SQLite persistence helpers to
+own write-session buffering and transaction behavior.
+
+Removal condition:
+No removal planned while SQLite remains a supported backend.
 
 #### DuckDB backend and query modules
 
