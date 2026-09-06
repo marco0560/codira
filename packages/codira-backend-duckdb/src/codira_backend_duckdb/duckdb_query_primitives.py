@@ -37,6 +37,10 @@ class _BackendCompatibleCursor(Protocol):
         """
         Return the next available row from the active result set.
 
+        Parameters
+        ----------
+        None
+
         Returns
         -------
         tuple[codira.contracts.BackendQueryValue, ...] | None
@@ -46,6 +50,10 @@ class _BackendCompatibleCursor(Protocol):
     def fetchall(self) -> list[tuple[BackendQueryValue, ...]]:
         """
         Return every remaining row from the active result set.
+
+        Parameters
+        ----------
+        None
 
         Returns
         -------
@@ -103,6 +111,10 @@ class _BackendCompatibleConnectionAdapter(Protocol):
         """
         Return a cursor-like object bound to the active connection.
 
+        Parameters
+        ----------
+        None
+
         Returns
         -------
         _BackendCompatibleCursor
@@ -113,6 +125,10 @@ class _BackendCompatibleConnectionAdapter(Protocol):
         """
         Commit pending writes on the active connection.
 
+        Parameters
+        ----------
+        None
+
         Returns
         -------
         None
@@ -122,6 +138,10 @@ class _BackendCompatibleConnectionAdapter(Protocol):
     def close(self) -> None:
         """
         Close the active backend connection.
+
+        Parameters
+        ----------
+        None
 
         Returns
         -------

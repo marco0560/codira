@@ -105,6 +105,10 @@ def test_duckdb_query_primitives_preserve_scalar_coercions() -> None:
     """
     Retain scalar coercion semantics used by DuckDB query rows.
 
+    Parameters
+    ----------
+    None
+
     Returns
     -------
     None

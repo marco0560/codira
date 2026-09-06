@@ -37,6 +37,10 @@ def test_sqlite_call_resolution_helpers_preserve_alias_and_identity_rules() -> N
     """
     Preserve the isolated SQLite call-resolution helper behavior.
 
+    Parameters
+    ----------
+    None
+
     Returns
     -------
     None
