@@ -6,6 +6,7 @@ import tomllib
 from pathlib import Path
 
 from codira_analyzer_cpp import CppAnalyzer, build_analyzer
+from codira_analyzer_cpp import cpp_syntax
 
 
 def test_cpp_package_declares_expected_entry_point() -> None:
@@ -48,6 +49,26 @@ def test_cpp_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CppAnalyzer)
     assert analyzer.name == "cpp"
+
+
+def test_cpp_syntax_helpers_remain_available_to_package_traversal() -> None:
+    """Keep the extracted parser and normalization boundary usable.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts traversal dependencies keep their deterministic shape.
+    """
+
+    assert cpp_syntax._normalize_signature("int  run(  int value )") == (
+        "int run( int value )"
+    )
+    assert cpp_syntax._split_qualified_name("demo :: Widget") == ("demo", "Widget")
+    assert cpp_syntax._new_parser() is not None
 
 
 def test_cpp_analyzer_applies_configuration_options(tmp_path: Path) -> None:
