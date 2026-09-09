@@ -316,7 +316,36 @@ paths, and contradictory budgets; public/private serialization tests pass.
 
 ## Phase 2 — Deterministic evaluation
 
-Status: pending. Commit: pending. Evidence: pending.
+Status: complete. Commit: atomic Phase 2 commit on the implementation branch.
+
+Evidence to date: the staged implementation supplies all declared DSL
+primitives, result normalization, protected command and patch evaluation, and
+explicit protected custom-evaluator bindings. The focused oracle suite covers
+reference success plus missing, malformed, false-positive, tampered,
+symlink-escape, patch-target-escape, failing-test, evaluator-false,
+declaration/binding, and malformed-composition cases. On 2026-09-09 its focused
+checks passed: Ruff format and lint, mypy, and `pytest -q
+tests/test_agent_efficiency_oracles.py` (5 tests). Codira was refreshed and
+`codira audit --json` returned `no_matches`.
+
+Independent review record (Grok Build through OpenRouter, 2026-09-09): the
+initial review returned `NEEDS_FIXES` for patch traversal, shell-path bypasses,
+unbound custom evaluator identities, command validation after mutation, two
+missing negative cases, and overstatement in the methodology. The remediation
+validates all unified-diff, rename, and copy targets before `git apply`; rejects
+shell executable paths and inline-command flags; validates test commands before
+copy/apply; binds the protected registry callable to the reviewed script path
+and SHA-256; adds the identified negative cases; and corrects the runbook. A
+confirmation review returned `NEEDS_FIXES` for rename/copy targets, malformed
+boolean children being validated after side effects, class docstring templates,
+and additional negatives. Those findings are resolved in the staged patch and
+focused tests. Its suggestion to prohibit all interpreter commands was not
+accepted: protected tests necessarily invoke an interpreter in the protected
+fixture; shell and inline-code execution remain rejected, and the oracle
+definition is grader-controlled. The final independent confirmation on
+2026-09-09 returned `VERDICT: PASS` after reviewing the complete staged patch.
+Its provider-reported cost was USD 0.0159166. The required final repository
+validation follows this ledger update before the atomic Phase 2 commit.
 
 Implement all DSL primitives, normalization, protected grading, and the custom
 evaluator contract. Cover correct, missing, malformed, false-positive, and
