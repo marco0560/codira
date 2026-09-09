@@ -25,6 +25,10 @@ from scripts.agent_efficiency.contracts import (
 def fixture() -> dict[str, object]:
     """Build a valid public fixture document.
 
+    Parameters
+    ----------
+    None
+
     Returns
     -------
     dict[str, object]
@@ -43,6 +47,10 @@ def fixture() -> dict[str, object]:
 
 def campaign() -> dict[str, object]:
     """Build a valid campaign document.
+
+    Parameters
+    ----------
+    None
 
     Returns
     -------
@@ -66,6 +74,10 @@ def campaign() -> dict[str, object]:
 
 def test_fixture_rejects_moving_revision_and_private_public_serialization() -> None:
     """Reject moving fixture revisions and private-data publication.
+
+    Parameters
+    ----------
+    None
 
     Returns
     -------
@@ -91,6 +103,10 @@ def test_fixture_rejects_moving_revision_and_private_public_serialization() -> N
 
 def test_task_rejects_unsafe_path_and_campaign_rejects_contradictory_budget() -> None:
     """Reject fixture escapes and budgets that cannot be honored.
+
+    Parameters
+    ----------
+    None
 
     Returns
     -------
@@ -121,6 +137,10 @@ def test_task_rejects_unsafe_path_and_campaign_rejects_contradictory_budget() ->
 
 def test_offline_adapter_preserves_attempt_identity_and_complete_usage() -> None:
     """Produce a deterministic schema-valid offline result.
+
+    Parameters
+    ----------
+    None
 
     Returns
     -------

@@ -195,6 +195,11 @@ def main(argv: list[str] | None = None) -> int:
     -------
     int
         Zero after all schemas have been written.
+
+    Raises
+    ------
+    SystemExit
+        If arguments other than the optional ``--check`` flag are supplied.
     """
 
     arguments = argv if argv is not None else sys.argv[1:]

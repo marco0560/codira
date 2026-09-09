@@ -46,6 +46,41 @@ class ContractError(ValueError):
         The exception carries the deterministic validation detail.
     """
 
+    @classmethod
+    def unsupported_kind(cls, kind: str) -> ContractError:
+        """Build the error for an unsupported document kind.
+
+        Parameters
+        ----------
+        kind : str
+            Unrecognized document-kind name.
+
+        Returns
+        -------
+        ContractError
+            Typed deterministic validation failure.
+        """
+
+        detail = f"unsupported benchmark document kind: {kind}"
+        return cls(detail)
+
+    @classmethod
+    def message(cls, detail: str) -> ContractError:
+        """Build a typed validation failure from a stable detail.
+
+        Parameters
+        ----------
+        detail : str
+            Deterministic validation explanation.
+
+        Returns
+        -------
+        ContractError
+            Typed validation failure.
+        """
+
+        return cls(detail)
+
 
 @dataclass(frozen=True)
 class OfflineRunRequest:
@@ -212,7 +247,7 @@ def _validator(kind: str) -> Draft202012Validator:
     """
 
     if kind not in DOCUMENT_KINDS:
-        raise ContractError(f"unsupported benchmark document kind: {kind}")  # noqa: TRY003, EM102
+        raise ContractError.unsupported_kind(kind)
     schema_path = SCHEMA_DIRECTORY / f"{kind}.schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     checker = FormatChecker()
@@ -234,6 +269,11 @@ def validate_document(kind: str, document: Mapping[str, object]) -> None:
     -------
     None
         Invalid documents raise ``ContractError``.
+
+    Raises
+    ------
+    ContractError
+        If the document violates its versioned schema or local invariants.
     """
 
     errors = sorted(
@@ -242,15 +282,18 @@ def validate_document(kind: str, document: Mapping[str, object]) -> None:
     if errors:
         raise ContractError(errors[0].message)
     if document.get("schema_version") != CONTRACT_VERSION:
-        raise ContractError("incompatible schema_version")  # noqa: TRY003, EM101
+        detail = "incompatible schema_version"
+        raise ContractError.message(detail)
     if kind == "fixture" and not _SHA40.fullmatch(cast("str", document["revision"])):
-        raise ContractError("fixture revision must be an immutable 40-character SHA")  # noqa: TRY003, EM101
+        detail = "fixture revision must be an immutable 40-character SHA"
+        raise ContractError.message(detail)
     if kind == "campaign":
         budgets = cast("Mapping[str, object]", document["budgets"])
         if cast("int", budgets["max_total_tokens"]) < cast(
             "int", budgets["max_output_tokens"]
         ):
-            raise ContractError("max_total_tokens cannot be below max_output_tokens")  # noqa: TRY003, EM101
+            detail = "max_total_tokens cannot be below max_output_tokens"
+            raise ContractError.message(detail)
 
 
 def load_document(path: Path, kind: str) -> dict[str, object]:
@@ -277,9 +320,11 @@ def load_document(path: Path, kind: str) -> dict[str, object]:
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        raise ContractError(f"cannot load {kind} document: {error}") from error  # noqa: TRY003, EM102
+        detail = f"cannot load {kind} document: {error}"
+        raise ContractError.message(detail) from error
     if not isinstance(parsed, dict):
-        raise ContractError(f"{kind} document must be a JSON object")  # noqa: TRY003, EM102
+        detail = f"{kind} document must be a JSON object"
+        raise ContractError.message(detail)
     document = cast("dict[str, object]", parsed)
     validate_document(kind, document)
     return document
@@ -310,7 +355,8 @@ def serialize_public(kind: str, document: Mapping[str, object]) -> dict[str, obj
     if document.get("visibility") == "private" or any(
         key.startswith("private_") for key in document
     ):
-        raise ContractError("private benchmark material cannot be publicly serialized")  # noqa: TRY003, EM101
+        detail = "private benchmark material cannot be publicly serialized"
+        raise ContractError.message(detail)
     public = cast("dict[str, object]", json.loads(json.dumps(document)))
     public["fingerprint"] = canonical_fingerprint(public)
     return public
