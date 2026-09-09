@@ -15,7 +15,10 @@ venv/
 # Build artifacts
 # -------------------------------
 .artifacts/
-benchmarks/
+benchmarks/*
+!benchmarks/agent-efficiency/
+!benchmarks/agent-efficiency/Containerfile.phase0
+!benchmarks/agent-efficiency/phase0-live-probe.toml
 issues.json
 milestones.json
 guidelines.tar.xz
