@@ -1,0 +1,1 @@
+{"schema_version":"1.0","task_id":"symbols-001","fixture_id":"codira-public","prompt":"Identify the Codira MCP context endpoint and its implementation path. Write structured evidence to .benchmark/result.json.","result_path":".benchmark/result.json","oracle_id":"symbols-001","visibility":"public"}

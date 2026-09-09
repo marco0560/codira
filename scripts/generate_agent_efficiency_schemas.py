@@ -77,6 +77,22 @@ SCHEMAS = {
             "license": {"type": "string", "minLength": 1},
             "visibility": VISIBILITY,
             "private_locator": {"type": "string", "minLength": 1},
+            "tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "license_path": {"type": "string", "format": "safe-relative-path"},
+            "license_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "setup_files": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["path", "sha256"],
+                    "properties": {
+                        "path": {"type": "string", "format": "safe-relative-path"},
+                        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    },
+                },
+            },
+            "transport": {"const": "git-archive"},
         },
     ),
     "task": schema(

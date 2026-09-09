@@ -1,0 +1,1 @@
+{"schema_version":"1.0","task_id":"impact-001","fixture_id":"codira-public","prompt":"Determine the direct impact of changing the MCP adapter _query contract. Write structured evidence to .benchmark/result.json.","result_path":".benchmark/result.json","oracle_id":"impact-001","visibility":"public"}

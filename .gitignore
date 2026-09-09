@@ -19,6 +19,14 @@ benchmarks/*
 !benchmarks/agent-efficiency/
 !benchmarks/agent-efficiency/Containerfile.phase0
 !benchmarks/agent-efficiency/phase0-live-probe.toml
+!benchmarks/agent-efficiency/schemas/
+!benchmarks/agent-efficiency/schemas/*.json
+!benchmarks/agent-efficiency/fixtures/
+!benchmarks/agent-efficiency/fixtures/*.json
+!benchmarks/agent-efficiency/tasks/
+!benchmarks/agent-efficiency/tasks/*.json
+!benchmarks/agent-efficiency/oracles/
+!benchmarks/agent-efficiency/oracles/*.json
 issues.json
 milestones.json
 guidelines.tar.xz

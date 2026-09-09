@@ -10,6 +10,14 @@
       "minLength": 1,
       "type": "string"
     },
+    "license_path": {
+      "format": "safe-relative-path",
+      "type": "string"
+    },
+    "license_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
     "private_locator": {
       "minLength": 1,
       "type": "string"
@@ -21,8 +29,36 @@
     "schema_version": {
       "const": "1.0"
     },
+    "setup_files": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "format": "safe-relative-path",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "source_url": {
       "format": "uri",
+      "type": "string"
+    },
+    "transport": {
+      "const": "git-archive"
+    },
+    "tree_sha": {
+      "pattern": "^[0-9a-f]{40}$",
       "type": "string"
     },
     "visibility": {

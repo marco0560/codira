@@ -1,0 +1,1 @@
+{"schema_version":"1.0","task_id":"architecture-001","fixture_id":"picomatch-public","prompt":"Describe Picomatch entry points and the matcher, parser, and scanner relationships. Write structured evidence to .benchmark/result.json.","result_path":".benchmark/result.json","oracle_id":"architecture-001","visibility":"public"}

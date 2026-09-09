@@ -1,0 +1,15 @@
+{
+  "fixture_id": "picomatch-public",
+  "license": "MIT",
+  "license_path": "LICENSE",
+  "license_sha256": "d0cd141b0c322fded5dfad1d4645bb2fedfc05b7321fe1009469638190d59ef9",
+  "revision": "570df2f8781bc92e5fece2c16d9ff990c4a8d1da",
+  "schema_version": "1.0",
+  "setup_files": [
+    {"path": "package.json", "sha256": "9c56d3fb790f86019de5db15174f19327a77b17bcb13877b5c7fd09c611bb7f6"}
+  ],
+  "source_url": "https://github.com/micromatch/picomatch",
+  "transport": "git-archive",
+  "tree_sha": "5a3f30720f18f01cd58bd8b9f1b71caaef9f231d",
+  "visibility": "public"
+}

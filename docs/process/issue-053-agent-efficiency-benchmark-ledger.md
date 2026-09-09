@@ -357,7 +357,31 @@ negative/mutation cases fail. Record review findings and resolution.
 
 ## Phase 3 — Corpus admission and freeze
 
-Status: pending. Commit: pending. Evidence: pending.
+Status: complete. Commit: atomic Phase 3 commit on the implementation branch.
+
+Evidence to date: on 2026-09-09, SOPS-scoped GitHub queries verified the
+registered MIT/BSD-3-Clause/MIT license metadata and all three immutable
+revisions. Disposable exact checkouts reproduced the Codira tree
+`e50955c20b6911ed991c3761de8b97fba19fe986`, Click tree
+`2955d48825c98fd7dcbc60eb41cf18a952a2c0a3`, and Picomatch tree
+`5a3f30720f18f01cd58bd8b9f1b71caaef9f231d`, including license and setup-file
+SHA-256 records. The Click sentinel probe failed at the registered parent
+`420c8fb44eeadb537cae69d2fee3796e808558dd` and passed at the protected source
+fix `f58ca3e81424a35626c8a475eb59ab95589008ce`. Public fixture records and all
+six task/oracle records are staged in the implementation worktree. Remaining:
+anti-leak export verification, reference-oracle execution, focused tests, and
+the final gate.
+
+Completion evidence: a clean `git archive` export of Click contained its
+admitted source while exposing neither `.git` metadata nor the protected
+source-fix SHA. On 2026-09-09, all six registered reference artifacts passed
+their Phase 2 deterministic oracles against disposable exact exports:
+`architecture-001`, `documentation-001`, `impact-001`, `localize-001`,
+`patch-001`, and `symbols-001`. The patch case used the actual protected diff
+from the registered Click source fix and an independent sentinel probe. The
+focused corpus/contract/oracle tests passed (11 tests). The final Codira audit
+returned `no_matches`. The detached full repository gate completed on
+2026-09-09 with 1,025 passed, 1 skipped, 87% total coverage, and exit code 0.
 
 Verify license notices, exact trees, setup locks/image digests, language/size
 inventory, six prompts, result contracts, and independently curated ground truth.

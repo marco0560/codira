@@ -1,0 +1,1 @@
+{"schema_version":"1.0","oracle_id":"localize-001","task_id":"localize-001","definition":{"all_of":[{"contains_paths":["src/click/_utils.py"]},{"contains_symbols":[{"qualified_name":"click._utils.Sentinel"}]}]},"visibility":"public"}

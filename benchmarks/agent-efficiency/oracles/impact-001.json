@@ -1,0 +1,1 @@
+{"schema_version":"1.0","oracle_id":"impact-001","task_id":"impact-001","definition":{"all_of":[{"contains_paths":["src/codira/mcp/adapter.py"]},{"normalized_artifact":{"contract":"_query","impact":"MCP adapter query boundary"}}]},"visibility":"public"}
