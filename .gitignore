@@ -18,6 +18,7 @@ venv/
 benchmarks/*
 !benchmarks/agent-efficiency/
 !benchmarks/agent-efficiency/Containerfile.phase0
+!benchmarks/agent-efficiency/Containerfile.phase4
 !benchmarks/agent-efficiency/phase0-live-probe.toml
 !benchmarks/agent-efficiency/schemas/
 !benchmarks/agent-efficiency/schemas/*.json

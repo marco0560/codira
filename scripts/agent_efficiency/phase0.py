@@ -875,7 +875,23 @@ def jsonl_conformance_check(
         return CheckResult(
             "jsonl-evidence", False, "baseline JSONL contains an MCP tool event"
         )
-    if not any(item_type == "command_execution" for item_type in item_types):
+    file_changes = [
+        item
+        for event in events
+        if event.get("type") == "item.completed"
+        for item in [event.get("item")]
+        if isinstance(item, Mapping) and item.get("type") == "file_change"
+    ]
+    has_artifact = any(
+        item.get("status") == "completed"
+        and isinstance(item.get("changes"), list)
+        and bool(item["changes"])
+        for item in file_changes
+    )
+    if (
+        not any(item_type == "command_execution" for item_type in item_types)
+        and not has_artifact
+    ):
         return CheckResult(
             "jsonl-evidence", False, "tool-output capture event is absent"
         )

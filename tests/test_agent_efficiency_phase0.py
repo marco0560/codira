@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -559,6 +560,28 @@ def test_jsonl_conformance_rejects_mcp_for_baseline_and_accepts_clean_baseline()
     assert phase0.jsonl_conformance_check(baseline, "baseline").passed is True
 
 
+def test_jsonl_conformance_accepts_completed_file_change_as_artifact_evidence() -> None:
+    """Accept the current Codex artifact event in place of shell execution.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The completed file-change item proves the agent wrote its requested
+        artifact even when no command-execution item is emitted.
+    """
+
+    events = list(_complete_events())
+    events[3] = {
+        "type": "item.completed",
+        "item": {"type": "file_change", "status": "completed", "changes": [{}]},
+    }
+    assert phase0.jsonl_conformance_check(events).passed is True
+
+
 def test_cancellation_check_requires_a_prompt_cancellation_exit() -> None:
     """Reject normal exits and late termination from a cancellation probe.
 
@@ -903,6 +926,30 @@ def test_provider_proxy_requires_two_distinct_runner_side_credentials() -> None:
     else:
         message = "expected incomplete proxy settings to fail"
         raise AssertionError(message)
+
+
+def test_unix_provider_proxy_is_owner_only() -> None:
+    """Bind the runner-side proxy to one owner-only Unix socket capability.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts that the bound socket has owner-only permissions.
+    """
+
+    settings = provider_proxy.ProxySettings("client", "upstream", 0)
+    with tempfile.TemporaryDirectory(dir="/tmp", prefix="phase4-") as directory:
+        socket_path = Path(directory) / "provider.sock"
+        server = provider_proxy.create_unix_server(settings, str(socket_path))
+        try:
+            assert socket_path.is_socket()
+            assert socket_path.stat().st_mode & 0o777 == 0o600
+        finally:
+            server.server_close()
 
 
 def test_provider_proxy_exposes_only_responses_api_paths() -> None:

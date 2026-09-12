@@ -288,6 +288,7 @@ source = { editable = "." }
 dependencies = [
     { name = "jsonschema" },
     { name = "mcp" },
+    { name = "packaging" },
     { name = "platformdirs" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "tomlkit" },
@@ -421,6 +422,7 @@ requires-dist = [
     { name = "mkdocs-awesome-pages-plugin", marker = "extra == 'docs'", specifier = ">=2.10,<3.0" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.7,<10.0" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=1.0,<2.0" },
+    { name = "packaging", specifier = ">=24,<27" },
     { name = "platformdirs", specifier = ">=4.9.6" },
     { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=311" },
     { name = "sentence-transformers", marker = "extra == 'bundle-official'", specifier = ">=5.4,<6.0" },

@@ -393,7 +393,40 @@ Record any remaining setup dependencies before a measured run is allowed.
 
 ## Phase 4 — Paired harness and persistence
 
-Status: pending. Commit: pending. Evidence: pending.
+Status: complete. Commit: atomic Phase 4 commit on the implementation branch.
+Evidence: the implementation branch now
+has deterministic paired scheduling, immutable atomic result records, strict
+resume/configuration-drift validation, provider-usage normalization, and a
+network-disabled/read-only container JSONL adapter. Focused Phase 0/1/4 tests
+(43 passed, 1 skipped), Ruff, and mypy passed on 2026-09-13. A credential-free Podman integration
+test also passed against the reviewed digest-pinned Phase 0 image: a disposable
+JSONL shim verified the real container adapter's mounts, no-network/read-only
+constraints, output capture, and baseline result normalization. The shim is not
+evidence of real Codex/MCP startup. After operator authorization on 2026-09-12,
+a local-only Phase 4 image was built from the implementation checkout as
+`localhost/codira-agent-efficiency-phase4@sha256:9f2c48be23e150c7d99807da87d9a504152acbecdf4e42a7951a84a518d5bf08`.
+It pins Codex CLI 0.153.4 and the local Codira core version
+`2.0.2.post1.dev49`; a credential-free network-disabled probe verified
+`codex --version`, the `codira-mcp` entry point, and a direct MCP `initialize`
+handshake. The build exposed and corrected Codira's missing runtime declaration
+for `packaging`. The image is local only and unpublished. No comparative paid
+campaign has started. On 2026-09-13, the repository gate completed cleanly
+with 1,037 passed, 2 skipped, 87% total coverage, and exit code 0.
+On 2026-09-13, the authorized local Phase 4 conformance turn used the
+Unix-socket relay to reach the runner-side OpenRouter proxy while the Codex
+container retained `--network=none`. It returned zero after 19.410 seconds,
+used the required Codira MCP server, emitted ten JSONL events, and reported
+complete usage (68,375 input, 56,215 cached input, 575 output, and 192
+reasoning-output tokens). Codex 0.153.4 represented the requested artifact as
+a completed `file_change` rather than `command_execution`; the evidence checker
+now accepts that completed artifact event and revalidated the preserved stream
+as successful. The runner-side proxy now binds a distinct immutable handler
+configuration per server and exposes an owner-only Unix socket; the container
+has no provider credential or direct network route. The independent Grok Build
+review through the authorized OpenRouter route returned `VERDICT: PASS` on
+2026-09-13 (provider-reported cost USD 0.0137676); its only note was the
+expected compatible-UID requirement for the owner-only socket. This closes the
+separate execution/accounting review requirement.
 
 Implement isolated container runs, Codex JSONL adapter, MCP connection, randomized
 pairing, cancellation, atomic checkpoints, resume, and usage normalization.

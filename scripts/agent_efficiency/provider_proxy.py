@@ -24,10 +24,12 @@ import hmac
 import http.client
 import json
 import os
+import socket
 import sys
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import ClassVar
 
 UPSTREAM_HOST = "openrouter.ai"
@@ -208,8 +210,48 @@ def create_server(settings: ProxySettings) -> ThreadingHTTPServer:
         Unstarted loopback server using the constrained proxy handler.
     """
 
-    ProviderProxyHandler.settings = settings
-    return ThreadingHTTPServer(("127.0.0.1", settings.port), ProviderProxyHandler)
+    return ThreadingHTTPServer(("127.0.0.1", settings.port), _handler_type(settings))
+
+
+class ThreadingUnixHTTPServer(ThreadingHTTPServer):
+    """Serve the constrained HTTP proxy over one runner-owned Unix socket."""
+
+    address_family = socket.AF_UNIX
+    allow_reuse_address = False
+
+
+def create_unix_server(
+    settings: ProxySettings, socket_path: str
+) -> ThreadingHTTPServer:
+    """Create a credential-separating proxy without a host TCP listener.
+
+    Parameters
+    ----------
+    settings : ProxySettings
+        Validated runner-only credentials and request ceiling.
+    socket_path : str
+        Absent Unix-domain socket owned by the disposable runner state.
+
+    Returns
+    -------
+    http.server.ThreadingHTTPServer
+        Unstarted proxy reachable only through the mounted socket capability.
+
+    Raises
+    ------
+    ValueError
+        If the requested socket path already exists.
+    """
+
+    if Path(socket_path).exists():
+        message = "provider proxy socket path must be absent"
+        raise ValueError(message)
+    server = ThreadingUnixHTTPServer(
+        socket_path,  # type: ignore[arg-type]
+        _handler_type(settings),
+    )
+    Path(socket_path).chmod(0o600)
+    return server
 
 
 class ProviderProxyHandler(BaseHTTPRequestHandler):
@@ -374,6 +416,28 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
         finally:
             connection.close()
             self.close_connection = True
+
+
+def _handler_type(settings: ProxySettings) -> type[ProviderProxyHandler]:
+    """Bind one immutable settings object to an isolated handler class.
+
+    Parameters
+    ----------
+    settings : ProxySettings
+        Credentials and request limits for exactly one listening server.
+
+    Returns
+    -------
+    type[ProviderProxyHandler]
+        A fresh subclass, preventing concurrent proxy servers from sharing
+        mutable class-level configuration.
+    """
+
+    return type(
+        "ConfiguredProviderProxyHandler",
+        (ProviderProxyHandler,),
+        {"settings": settings},
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

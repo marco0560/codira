@@ -1,0 +1,28 @@
+# Phase 4 local-only benchmark-runner image for issue #53.
+#
+# The trusted runner builds this from the implementation checkout, records the
+# resulting immutable digest, and never gives provider or registry credentials
+# to a measured container. It is not a publication recipe.
+FROM ghcr.io/marco0560/codira-agent-benchmark@sha256:3647440cc3b727288bde32e5d651781f4869064c15c64f553474ca25d0aa00eb
+
+LABEL org.opencontainers.image.source="https://github.com/marco0560/codira"
+LABEL org.opencontainers.image.description="Codira issue #53 Phase 4 local benchmark runner"
+
+ARG CODEX_VERSION=0.153.4
+ARG CODIRA_VERSION=2.0.2.post1.dev49
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes nodejs npm \
+    && npm install --global "@openai/codex@${CODEX_VERSION}" \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
+
+# Copy only the core MCP package, never fixture worktrees, runtime state, or
+# grader material. The precise image digest records the resulting tool identity.
+COPY pyproject.toml README.md LICENSE /opt/codira/
+COPY src/codira /opt/codira/src/codira
+RUN SETUPTOOLS_SCM_PRETEND_VERSION="${CODIRA_VERSION}" \
+    python -m pip install --no-cache-dir /opt/codira \
+    && codex --version \
+    && codira-mcp --help >/dev/null
+
+WORKDIR /workspace
