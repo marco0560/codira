@@ -499,6 +499,29 @@ on 2026-09-13: 1,050 passed, 2 skipped, 87% coverage, and zero Semgrep
 findings. The operator confirmed that the dedicated
 `codira-agent-efficiency-pilot` key has the required USD 2 daily cap.
 
+Phase 6 step 3 implements the explicit, resumable paid-pilot runner in
+`scripts/run_agent_efficiency_phase6_pilot.py`. It validates all frozen public
+task and fixture bindings before reading the dedicated pilot credential;
+requires explicit local source bindings; exports each agent-visible fixture at
+its admitted Git revision; and makes a separate detached protected checkout for
+grading. The patch task's protected Sentinel probe is a benchmark-owned,
+SHA-256-verified asset derived from Click upstream commit
+`f58ca3e81424a35626c8a475eb59ab95589008ce`; it is copied only into the grader
+checkout. A fresh per-attempt Unix-socket proxy now enforces the fixed Terra
+medium model, OpenRouter price caps, output cap, and one Responses request
+before upstream forwarding. The runner preserves immutable `CampaignStore`
+records, fails closed on unfinished attempt work and malformed controls, and
+turns protected-oracle contract failures into terminal `oracle_failure`
+records. The test-review SOPS registry now authorizes the narrowly scoped
+`scripts/run_agent_efficiency_phase6_review.py` helper. Grok Build through
+OpenRouter reviewed the implementation iteratively: two `NEEDS_FIXES` reviews
+identified assertion, path-safety, failure-normalization, and coverage gaps;
+all were remediated. The final confirmation returned `VERDICT: PASS` on
+2026-09-14 (provider-reported USD 0.0535486; all three review calls totalled
+USD 0.1240278). Focused checks reached 62 passed, 1 skipped; the final full
+repository gate passed on 2026-09-14 with 1,058 passed, 2 skipped, 87% total
+coverage, and zero Semgrep findings. No paid pilot attempt was executed.
+
 Proposed pilot: three independent pairs (six executions), covering discovery,
 patch preparation, and documentation across all three fixtures. Pilot results
 are separate from the final campaign.

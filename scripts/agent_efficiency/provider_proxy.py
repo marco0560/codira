@@ -26,8 +26,9 @@ import json
 import os
 import socket
 import sys
+import threading
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -62,6 +63,45 @@ class ResponseConstraints:
     max_completion_usd_per_million: float | None = None
 
 
+@dataclass
+class ResponseRequestLimiter:
+    """Admit at most a fixed number of Responses requests for one attempt.
+
+    Parameters
+    ----------
+    maximum : int
+        Positive request count permitted by the frozen campaign manifest.
+
+    Returns
+    -------
+    None
+        Instances retain only an in-memory counter for one proxy server.
+    """
+
+    maximum: int
+    count: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def admit(self) -> bool:
+        """Consume one request slot if the immutable ceiling permits it.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        bool
+            ``True`` for an admitted request and ``False`` after exhaustion.
+        """
+
+        with self._lock:
+            if self.maximum < 1 or self.count >= self.maximum:
+                return False
+            self.count += 1
+            return True
+
+
 @dataclass(frozen=True)
 class ProxySettings:
     """Contain the non-logged runtime settings for one proxy process.
@@ -90,6 +130,28 @@ class ProxySettings:
     port: int
     max_output_tokens: int = 12000
     constraints: ResponseConstraints = ResponseConstraints()
+    max_response_requests: int = 1
+    limiter: ResponseRequestLimiter = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Create the private per-server request counter.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Invalid zero request ceilings fail immediately.
+        """
+
+        if self.max_response_requests < 1:
+            message = "proxy max response requests must be positive"
+            raise ValueError(message)
+        object.__setattr__(
+            self, "limiter", ResponseRequestLimiter(self.max_response_requests)
+        )
 
 
 def parse_settings(
@@ -453,6 +515,9 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
                 )
             except (TypeError, ValueError):
                 self.send_error(HTTPStatus.BAD_REQUEST)
+                return
+            if not self.settings.limiter.admit():
+                self.send_error(HTTPStatus.TOO_MANY_REQUESTS)
                 return
         request_headers = {
             key: value

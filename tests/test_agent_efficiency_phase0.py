@@ -1048,6 +1048,26 @@ def test_provider_proxy_rejects_model_effort_substitution_and_sets_price_cap() -
         )
 
 
+def test_provider_proxy_response_limiter_rejects_a_second_attempt_request() -> None:
+    """Keep the per-attempt provider request ceiling at the proxy boundary.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The second response request is denied before any upstream forwarding.
+    """
+
+    settings = provider_proxy.ProxySettings(
+        "client", "upstream", 0, max_response_requests=1
+    )
+    assert settings.limiter.admit() is True
+    assert settings.limiter.admit() is False
+
+
 def test_observed_total_token_check_excludes_cached_input_from_total() -> None:
     """Count cached input only once through the provider-reported input total.
 
