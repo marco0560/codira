@@ -64,6 +64,27 @@ def build_pilot_plan(
 
     if len(task_ids) != 3 or len(set(task_ids)) != 3:
         raise PilotLauncherError("Phase 6 pilot requires exactly three unique tasks")
+    task_fingerprints = manifest.get("task_fingerprints")
+    task_fixture_ids = manifest.get("task_fixture_ids")
+    fixture_fingerprints = manifest.get("fixture_fingerprints")
+    if not isinstance(task_fingerprints, Mapping):
+        raise PilotLauncherError("campaign manifest lacks immutable task bindings")
+    if not isinstance(task_fixture_ids, Mapping):
+        raise PilotLauncherError("campaign manifest lacks immutable task bindings")
+    if not isinstance(fixture_fingerprints, Mapping):
+        raise PilotLauncherError("campaign manifest lacks immutable task bindings")
+    requested_tasks = set(task_ids)
+    if requested_tasks != set(task_fingerprints) or requested_tasks != set(
+        task_fixture_ids
+    ):
+        raise PilotLauncherError("pilot tasks must exactly match manifest bindings")
+    if not all(isinstance(value, str) for value in task_fixture_ids.values()):
+        raise PilotLauncherError("pilot fixture bindings must be strings")
+    bound_fixtures = {
+        value for value in task_fixture_ids.values() if isinstance(value, str)
+    }
+    if len(bound_fixtures) != 3 or not bound_fixtures <= set(fixture_fingerprints):
+        raise PilotLauncherError("pilot requires three bound immutable fixtures")
     try:
         schedule = build_paired_schedule(task_ids, 1, seed)
     except ValueError as error:

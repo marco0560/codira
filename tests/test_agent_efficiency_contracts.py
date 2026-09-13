@@ -61,12 +61,33 @@ def campaign() -> dict[str, object]:
     return {
         "schema_version": CONTRACT_VERSION,
         "campaign_id": "pilot-001",
-        "fixture_fingerprint": "a" * 64,
-        "task_fingerprints": ["b" * 64],
+        "fixture_fingerprints": {"click-public": "a" * 64},
+        "task_fingerprints": {"symbols-001": "b" * 64},
+        "task_fixture_ids": {"symbols-001": "click-public"},
         "budgets": {
             "max_total_tokens": 100,
             "max_output_tokens": 20,
             "timeout_seconds": 30,
+        },
+        "provider": {
+            "name": "openrouter",
+            "model": "openai/gpt-5.6-terra",
+            "reasoning_effort": "medium",
+            "wire_api": "responses",
+            "max_prompt_usd_per_million": 2,
+            "max_completion_usd_per_million": 12,
+        },
+        "accounting": {
+            "max_daily_spend_usd": 2,
+            "max_estimated_attempt_spend_usd": 0.3,
+            "max_estimated_pilot_spend_usd": 1.8,
+            "max_response_requests_per_attempt": 1,
+        },
+        "resource_controls": {
+            "network": "none",
+            "read_only_rootfs": True,
+            "pids_limit": 512,
+            "tmpfs_size_mib": 128,
         },
         "visibility": "public",
     }
@@ -132,6 +153,25 @@ def test_task_rejects_unsafe_path_and_campaign_rejects_contradictory_budget() ->
         "timeout_seconds": 30,
     }
     with pytest.raises(ContractError, match="max_total_tokens"):
+        validate_document("campaign", invalid_campaign)
+
+
+def test_campaign_rejects_task_binding_to_an_unknown_fixture() -> None:
+    """Reject campaign task bindings that do not name an admitted fixture.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The campaign relationship validation rejects the unknown fixture.
+    """
+
+    invalid_campaign = campaign()
+    invalid_campaign["task_fixture_ids"] = {"symbols-001": "missing-public"}
+    with pytest.raises(ContractError, match="unknown fixture"):
         validate_document("campaign", invalid_campaign)
 
 

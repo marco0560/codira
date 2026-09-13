@@ -468,7 +468,8 @@ SHA and create the campaign branch from that commit.
 
 ## Phase 6 — Bounded pilot and estimate
 
-Status: in_progress. Commit: this atomic commit. Evidence: Phase 6 step 1 implements
+Status: in_progress. Commit: step 1 `67c3f30`; step 2 this atomic commit.
+Evidence: Phase 6 step 1 implements
 `scripts/run_agent_efficiency_phase6_pilot.py`, a dry-run-only launcher. It
 validates a public campaign-schema manifest, requires exactly three unique task
 identities and one repetition, and emits the deterministic six-attempt schedule
@@ -479,6 +480,24 @@ passed on 2026-09-13. Independent Grok Build review returned `VERDICT: PASS`
 on 2026-09-13 (OpenRouter-reported cost: USD 0.0077846); it identified no
 required change. The full repository gate passed on 2026-09-13: 1,046 passed,
 2 skipped, 87% coverage, and zero Semgrep findings.
+
+Phase 6 step 2 adds the public, schema-validated
+`benchmarks/agent-efficiency/phase6-pilot.json` approval manifest. It binds
+the three selected public task identities to their three frozen fixture
+fingerprints; fixes OpenRouter `openai/gpt-5.6-terra` at medium reasoning; and
+records the approved USD 2 daily hard key limit, USD 1.80 pilot estimate,
+12,000 output-token limit, 80,000 observed-total-token admission ceiling,
+600-second attempt timeout, and existing container controls. The campaign
+contract now validates task-to-fixture bindings. The provider proxy rejects
+model/effort substitution and injects the approved OpenRouter output and price
+ceilings. The launcher remains dry-run-only until live execution is separately
+reviewed and gated. Focused tests, Ruff, mypy, `codira audit`, and the checked
+in manifest dry run passed on 2026-09-13. Independent Grok Build review
+returned `VERDICT: PASS` on 2026-09-13 (OpenRouter-reported cost: USD
+0.0118504); it identified no required change. The full repository gate passed
+on 2026-09-13: 1,050 passed, 2 skipped, 87% coverage, and zero Semgrep
+findings. The operator confirmed that the dedicated
+`codira-agent-efficiency-pilot` key has the required USD 2 daily cap.
 
 Proposed pilot: three independent pairs (six executions), covering discovery,
 patch preparation, and documentation across all three fixtures. Pilot results

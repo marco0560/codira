@@ -24,6 +24,8 @@ import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pytest
+
 from scripts.agent_efficiency import phase0, provider_proxy
 from scripts.check_agent_efficiency_environment import build_parser
 from scripts.run_agent_efficiency_phase0_escape_probes import blocked, probe_commands
@@ -1002,6 +1004,48 @@ def test_provider_proxy_clamps_responses_output_allowance() -> None:
     assert json.loads(provider_proxy.constrain_response_request(b"{}", 12000)) == {
         "max_output_tokens": 12000
     }
+
+
+def test_provider_proxy_rejects_model_effort_substitution_and_sets_price_cap() -> None:
+    """Reject unapproved model settings and constrain approved provider pricing.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions cover immutable Phase 6 model, effort, and price controls.
+    """
+
+    payload = json.dumps(
+        {
+            "model": "openai/gpt-5.6-terra",
+            "reasoning": {"effort": "medium"},
+            "max_output_tokens": 12000,
+        }
+    ).encode()
+    constraints = provider_proxy.ResponseConstraints(
+        "openai/gpt-5.6-terra", "medium", 2, 12
+    )
+    constrained = provider_proxy.constrain_response_request(payload, 12000, constraints)
+    assert json.loads(constrained)["provider"] == {
+        "allow_fallbacks": False,
+        "max_price": {"prompt": 2, "completion": 12},
+    }
+    with pytest.raises(ValueError, match="approved model"):
+        provider_proxy.constrain_response_request(
+            payload,
+            12000,
+            provider_proxy.ResponseConstraints("openai/gpt-5.6-sol", "medium"),
+        )
+    with pytest.raises(ValueError, match="approved effort"):
+        provider_proxy.constrain_response_request(
+            payload,
+            12000,
+            provider_proxy.ResponseConstraints("openai/gpt-5.6-terra", "high"),
+        )
 
 
 def test_observed_total_token_check_excludes_cached_input_from_total() -> None:

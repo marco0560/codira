@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from pathlib import Path
 
+from scripts.agent_efficiency.contracts import load_document
 from scripts.run_agent_efficiency_phase6_pilot import build_pilot_plan, main
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _manifest() -> dict[str, object]:
@@ -27,12 +25,45 @@ def _manifest() -> dict[str, object]:
     return {
         "schema_version": "1.0",
         "campaign_id": "pilot-001",
-        "fixture_fingerprint": "a" * 64,
-        "task_fingerprints": ["b" * 64, "c" * 64, "d" * 64],
+        "fixture_fingerprints": {
+            "codira-public": "a" * 64,
+            "click-public": "b" * 64,
+            "picomatch-public": "c" * 64,
+        },
+        "task_fingerprints": {
+            "symbols-001": "d" * 64,
+            "patch-001": "e" * 64,
+            "documentation-001": "f" * 64,
+        },
+        "task_fixture_ids": {
+            "symbols-001": "codira-public",
+            "patch-001": "click-public",
+            "documentation-001": "picomatch-public",
+        },
         "budgets": {
             "max_total_tokens": 80000,
             "max_output_tokens": 12000,
             "timeout_seconds": 600,
+        },
+        "provider": {
+            "name": "openrouter",
+            "model": "openai/gpt-5.6-terra",
+            "reasoning_effort": "medium",
+            "wire_api": "responses",
+            "max_prompt_usd_per_million": 2,
+            "max_completion_usd_per_million": 12,
+        },
+        "accounting": {
+            "max_daily_spend_usd": 2,
+            "max_estimated_attempt_spend_usd": 0.3,
+            "max_estimated_pilot_spend_usd": 1.8,
+            "max_response_requests_per_attempt": 1,
+        },
+        "resource_controls": {
+            "network": "none",
+            "read_only_rootfs": True,
+            "pids_limit": 512,
+            "tmpfs_size_mib": 128,
         },
         "visibility": "public",
     }
@@ -59,6 +90,28 @@ def test_build_pilot_plan_has_three_complete_pairs() -> None:
     attempts = plan["attempts"]
     assert isinstance(attempts, list)
     assert len(attempts) == 6
+
+
+def test_checked_in_pilot_manifest_has_three_frozen_fixture_bindings() -> None:
+    """Load the approved pilot manifest and verify its complete dry-run plan.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The checked-in public manifest produces the six planned executions.
+    """
+
+    manifest = load_document(
+        Path("benchmarks/agent-efficiency/phase6-pilot.json"), "campaign"
+    )
+    plan = build_pilot_plan(
+        manifest, ("symbols-001", "patch-001", "documentation-001"), 7
+    )
+    assert plan["scheduled_execution_count"] == 6
 
 
 def test_pilot_launcher_rejects_execution_before_manifest_approval(
@@ -124,6 +177,41 @@ def test_pilot_launcher_rejects_wrong_task_cardinality(tmp_path: Path) -> None:
                 "symbols-001",
                 "--task-id",
                 "patch-001",
+                "--seed",
+                "7",
+            ]
+        )
+        == 2
+    )
+
+
+def test_pilot_launcher_rejects_tasks_that_drift_from_manifest(tmp_path: Path) -> None:
+    """Reject a three-task pilot whose identities differ from the manifest.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary public manifest location.
+
+    Returns
+    -------
+    None
+        The launcher returns its deterministic invalid-plan status.
+    """
+
+    manifest = tmp_path / "pilot.json"
+    manifest.write_text(json.dumps(_manifest()), encoding="utf-8")
+    assert (
+        main(
+            [
+                "--campaign-manifest",
+                str(manifest),
+                "--task-id",
+                "symbols-001",
+                "--task-id",
+                "patch-001",
+                "--task-id",
+                "architecture-001",
                 "--seed",
                 "7",
             ]

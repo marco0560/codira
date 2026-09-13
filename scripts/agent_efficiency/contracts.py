@@ -294,6 +294,20 @@ def validate_document(kind: str, document: Mapping[str, object]) -> None:
         ):
             detail = "max_total_tokens cannot be below max_output_tokens"
             raise ContractError.message(detail)
+        task_fingerprints = cast("Mapping[str, object]", document["task_fingerprints"])
+        task_fixture_ids = cast("Mapping[str, object]", document["task_fixture_ids"])
+        fixture_fingerprints = cast(
+            "Mapping[str, object]", document["fixture_fingerprints"]
+        )
+        if set(task_fingerprints) != set(task_fixture_ids):
+            detail = "task fingerprints and fixture bindings must have identical tasks"
+            raise ContractError.message(detail)
+        if any(
+            fixture_id not in fixture_fingerprints
+            for fixture_id in task_fixture_ids.values()
+        ):
+            detail = "task fixture binding references an unknown fixture"
+            raise ContractError.message(detail)
 
 
 def load_document(path: Path, kind: str) -> dict[str, object]:

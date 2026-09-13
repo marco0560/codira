@@ -26,6 +26,7 @@ import json
 import os
 import socket
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,6 +38,28 @@ UPSTREAM_PATH_PREFIX = "/api/v1"
 ALLOWED_PATHS = frozenset({"/v1/responses", "/v1/models"})
 PROXY_CLIENT_TOKEN_ENV = "CODIRA_PROXY_CLIENT_TOKEN"
 UPSTREAM_TOKEN_ENV = "OPENROUTER_API_KEY"
+
+
+@dataclass(frozen=True)
+class ResponseConstraints:
+    """Define the immutable provider controls for one benchmark response.
+
+    Parameters
+    ----------
+    expected_model : str or None, optional
+        Exact model identity admitted for a bounded benchmark execution.
+    expected_reasoning_effort : str or None, optional
+        Exact reasoning effort admitted for a bounded benchmark execution.
+    max_prompt_usd_per_million : float or None, optional
+        Maximum admitted OpenRouter prompt price in USD per million tokens.
+    max_completion_usd_per_million : float or None, optional
+        Maximum admitted OpenRouter completion price in USD per million tokens.
+    """
+
+    expected_model: str | None = None
+    expected_reasoning_effort: str | None = None
+    max_prompt_usd_per_million: float | None = None
+    max_completion_usd_per_million: float | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +76,8 @@ class ProxySettings:
         Loopback TCP port on which the proxy listens.
     max_output_tokens : int
         Maximum output-token allowance applied to every Responses request.
+    constraints : ResponseConstraints, optional
+        Immutable model, reasoning, and price constraints for one request.
 
     Returns
     -------
@@ -64,6 +89,7 @@ class ProxySettings:
     upstream_token: str
     port: int
     max_output_tokens: int = 12000
+    constraints: ResponseConstraints = ResponseConstraints()
 
 
 def parse_settings(
@@ -154,7 +180,11 @@ def upstream_path(request_path: str) -> str:
     return f"{UPSTREAM_PATH_PREFIX}{request_path.removeprefix('/v1')}"
 
 
-def constrain_response_request(payload: bytes, max_output_tokens: int) -> bytes:
+def constrain_response_request(
+    payload: bytes,
+    max_output_tokens: int,
+    constraints: ResponseConstraints = ResponseConstraints(),
+) -> bytes:
     """Cap one Responses request without exposing or persisting its content.
 
     Parameters
@@ -163,6 +193,8 @@ def constrain_response_request(payload: bytes, max_output_tokens: int) -> bytes:
         JSON request body received from the local Codex client.
     max_output_tokens : int
         Approved ceiling to apply to the request's output allowance.
+    constraints : ResponseConstraints, optional
+        Immutable model, reasoning, and price limits for a bounded pilot.
 
     Returns
     -------
@@ -192,6 +224,40 @@ def constrain_response_request(payload: bytes, max_output_tokens: int) -> bytes:
     if not isinstance(requested, int) or isinstance(requested, bool):
         message = "Responses max_output_tokens must be an integer"
         raise TypeError(message)
+    if (
+        constraints.expected_model is not None
+        and request.get("model") != constraints.expected_model
+    ):
+        message = "Responses request model does not match the approved model"
+        raise ValueError(message)
+    if constraints.expected_reasoning_effort is not None:
+        reasoning = request.get("reasoning")
+        if (
+            not isinstance(reasoning, Mapping)
+            or reasoning.get("effort") != constraints.expected_reasoning_effort
+        ):
+            message = "Responses reasoning effort does not match the approved effort"
+            raise ValueError(message)
+    if (constraints.max_prompt_usd_per_million is None) != (
+        constraints.max_completion_usd_per_million is None
+    ):
+        message = "Responses provider price ceilings must be supplied together"
+        raise ValueError(message)
+    if constraints.max_prompt_usd_per_million is not None:
+        if (
+            constraints.max_prompt_usd_per_million <= 0
+            or constraints.max_completion_usd_per_million is None
+            or constraints.max_completion_usd_per_million <= 0
+        ):
+            message = "Responses provider price ceilings must be positive"
+            raise ValueError(message)
+        request["provider"] = {
+            "allow_fallbacks": False,
+            "max_price": {
+                "prompt": constraints.max_prompt_usd_per_million,
+                "completion": constraints.max_completion_usd_per_million,
+            },
+        }
     request["max_output_tokens"] = min(requested, max_output_tokens)
     return json.dumps(request, separators=(",", ":")).encode("utf-8")
 
@@ -381,7 +447,9 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
         if path == "/v1/responses" and self.command == "POST":
             try:
                 payload = constrain_response_request(
-                    payload, self.settings.max_output_tokens
+                    payload,
+                    self.settings.max_output_tokens,
+                    self.settings.constraints,
                 )
             except (TypeError, ValueError):
                 self.send_error(HTTPStatus.BAD_REQUEST)
