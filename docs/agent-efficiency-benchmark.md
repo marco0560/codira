@@ -30,3 +30,51 @@ Run the executable example checks with:
 ```bash
 uv run pytest -q tests/test_agent_efficiency_oracles.py
 ```
+
+## Campaign workflow
+
+All campaign state is outside Git. The runner creates a frozen state directory
+from a public configuration JSON and deterministic schedule; its state-inspection
+entry point performs no paid execution:
+
+```bash
+uv run python scripts/run_agent_efficiency_benchmark.py \
+  --state-root /path/to/ignored-state \
+  --campaign-id pilot-001 \
+  --task-id symbols-001 \
+  --task-id patch-001 \
+  --repetitions 1 \
+  --seed 7 \
+  --configuration-json /path/to/configuration.json
+```
+
+Prepare host prerequisites with the Phase 0 helper. A future bounded Phase 6
+runner records each completed attempt atomically and resumes only missing
+attempts; it never overwrites immutable records. Evaluate and render a campaign
+only through the dedicated reporting command using the same frozen identity:
+
+```bash
+uv run python scripts/report_agent_efficiency_benchmark.py \
+  --state-root /path/to/ignored-state \
+  --output-dir /path/to/public-report \
+  --campaign-id pilot-001 \
+  --task-id symbols-001 \
+  --task-id patch-001 \
+  --repetitions 1 \
+  --seed 7 \
+  --configuration-json /path/to/configuration.json
+```
+
+The command validates state, configuration fingerprints, record integrity, and
+run-result contracts before writing `report.json` and `report.md`. Markdown is
+derived only from canonical JSON. Per-attempt public records intentionally omit
+raw JSONL, stderr, and transcript text; path-, URL-, or token-like failure
+content is rendered as `redacted`. Pairs missing one variant or complete usage
+are reported as exclusions and are not included in paired token statistics.
+Elapsed-time statistics cover all recorded attempts, including attempts excluded
+from token comparisons. Supply every task ID from the frozen campaign schedule
+to both commands, in any order.
+
+Do not create or run the campaign branch until the Phase 5 implementation is
+reviewed and validated. The later pilot requires a separately approved bounded
+manifest; neither state inspection nor reporting authorizes paid execution.

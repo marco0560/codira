@@ -439,7 +439,23 @@ Separate execution/accounting review completed.
 
 ## Phase 5 — Reporting and campaign readiness
 
-Status: pending. Commit: pending. Evidence: pending.
+Status: complete. Commit: atomic Phase 5 commit on the implementation branch.
+Evidence: canonical report generation is
+implemented with a versioned JSON document and Markdown derived only from that
+JSON. It loads only validated immutable records, emits per-attempt summaries
+with normalized usage, elapsed time, event counts, paired token differences,
+median/p90 statistics, and explicit exclusions. Synthetic path- and token-like
+failure data is redacted before public rendering. The dedicated report command
+reconstructs the frozen campaign identity without executing an agent. Focused
+reporting checks passed (6 tests), as did Ruff, mypy, and `codira audit` on
+2026-09-13. Grok Build's independent OpenRouter review initially identified
+Markdown omission of exclusions, unsafe assertions, missing evidence-metric
+validation, incomplete-pair coverage, incomplete task examples, and defensive
+top-level validation. Each finding was remediated; the fingerprinted final
+confirmation returned `VERDICT: PASS` (provider-reported cost USD 0.0156366).
+The full repository gate then completed with 1,043 passed, 2 skipped, 87% total
+coverage, and exit code 0. The local campaign branch is created from this
+validated Phase 5 commit only; no paid campaign execution is authorized.
 
 Build reproducible JSON and Markdown reports with per-task success/failure,
 paired token differences, median/p90, elapsed time, tool calls, and exclusions.
