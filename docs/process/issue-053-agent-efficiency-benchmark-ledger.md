@@ -468,7 +468,17 @@ SHA and create the campaign branch from that commit.
 
 ## Phase 6 — Bounded pilot and estimate
 
-Status: pending. Commit: pending. Evidence: pending.
+Status: in_progress. Commit: this atomic commit. Evidence: Phase 6 step 1 implements
+`scripts/run_agent_efficiency_phase6_pilot.py`, a dry-run-only launcher. It
+validates a public campaign-schema manifest, requires exactly three unique task
+identities and one repetition, and emits the deterministic six-attempt schedule
+without reading credentials, creating runtime state, or executing an agent.
+`--execute` fails closed pending the separate pilot-manifest, budget, and
+execution approval. Focused launcher tests, Ruff, mypy, and `codira audit`
+passed on 2026-09-13. Independent Grok Build review returned `VERDICT: PASS`
+on 2026-09-13 (OpenRouter-reported cost: USD 0.0077846); it identified no
+required change. The full repository gate passed on 2026-09-13: 1,046 passed,
+2 skipped, 87% coverage, and zero Semgrep findings.
 
 Proposed pilot: three independent pairs (six executions), covering discovery,
 patch preparation, and documentation across all three fixtures. Pilot results
