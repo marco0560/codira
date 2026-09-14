@@ -210,6 +210,11 @@ def main(arguments: list[str] | None = None) -> int:
     -------
     int
         Zero for a completed review and two for safe rejection.
+
+    Raises
+    ------
+    SystemExit
+        If command-line arguments violate the parser contract.
     """
 
     args = build_parser().parse_args(arguments)

@@ -22,7 +22,22 @@ from click._utils import Sentinel, UNSET  # type: ignore[import-not-found]
 
 
 def main() -> int:
-    """Run the upstream-derived singleton identity regression assertions."""
+    """Run the upstream-derived singleton identity regression assertions.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    int
+        Zero after every singleton and option-default assertion passes.
+
+    Raises
+    ------
+    AssertionError
+        If a copy, deepcopy, pickle, or option default loses sentinel identity.
+    """
 
     duplicates = (
         copy.copy,

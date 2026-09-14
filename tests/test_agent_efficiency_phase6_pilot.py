@@ -98,7 +98,17 @@ def _manifest() -> dict[str, object]:
 
 
 def test_prompt_for_attempt_requires_the_manifest_bound_mcp_instruction() -> None:
-    """Expose Codira MCP only through the assisted treatment prompt."""
+    """Expose Codira MCP only through the assisted treatment prompt.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions distinguish the baseline and assisted prompt constructions.
+    """
 
     manifest = _manifest()
     task_prompt = "Write the required artifact."
@@ -109,7 +119,17 @@ def test_prompt_for_attempt_requires_the_manifest_bound_mcp_instruction() -> Non
 
 
 def test_treatment_protocol_rejects_a_missing_assisted_instruction() -> None:
-    """Fail before paid execution when the treatment is not reproducible."""
+    """Fail before paid execution when the treatment is not reproducible.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The missing treatment protocol raises a deterministic launcher error.
+    """
 
     manifest = _manifest()
     manifest.pop("treatment_protocol")
@@ -659,6 +679,10 @@ def test_execute_attempt_records_an_oracle_contract_failure(
         Temporary campaign and disposable attempt roots.
     monkeypatch : pytest.MonkeyPatch
         Fixture replacing container, proxy, and fixture side effects.
+    assistance_mode : str
+        Parametrized baseline or Codira MCP treatment identity.
+    expected_mcp_command : str or None
+        Expected configured MCP executable for the selected treatment.
 
     Returns
     -------

@@ -1,6 +1,6 @@
 {
   "asset_path": "protected_sentinel_probe.py",
-  "asset_sha256": "2b70714aa802112fa1ce8fa00291b3e46d9e8bb17946cc50f4653a106a9e02b9",
+  "asset_sha256": "08c8844c89e4eb198b5784f0b46fc30a5d55e4b20e51d427dc1c253b57fdb7a8",
   "source_commit": "f58ca3e81424a35626c8a475eb59ab95589008ce",
   "source_path": "tests/test_utils/test_sentinel.py",
   "source_repository": "https://github.com/pallets/click",
