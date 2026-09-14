@@ -261,7 +261,7 @@ def load_task_oracles(
 
 
 def export_fixture(source: Path, revision: str, destination: Path) -> None:
-    """Export one immutable Git revision without its repository metadata.
+    """Export one immutable Git revision with synthetic empty Git metadata.
 
     Parameters
     ----------
@@ -275,7 +275,8 @@ def export_fixture(source: Path, revision: str, destination: Path) -> None:
     Returns
     -------
     None
-        A clean archive extraction is written at ``destination``.
+        A clean archive extraction and history-free Git working tree are written
+        at ``destination``.
 
     Raises
     ------
@@ -303,12 +304,19 @@ def export_fixture(source: Path, revision: str, destination: Path) -> None:
             if path.is_absolute() or ".." in path.parts:
                 _fail("fixture archive contains an unsafe path")
         archive.extractall(destination, filter="data")
-    if any(path.name == ".git" for path in destination.rglob(".git")):
-        _fail("fixture export contains Git metadata")
+    initialized = subprocess.run(
+        (GIT_EXECUTABLE, "init", "--quiet"),
+        cwd=destination,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if initialized.returncode != 0:
+        _fail("fixture synthetic Git initialization failed")
 
 
 def verify_source_fix_excluded(root: Path, source_fix: str) -> None:
-    """Verify an agent fixture has neither Git history nor a source-fix marker.
+    """Verify an agent fixture has no Git history, remote, or source-fix marker.
 
     Parameters
     ----------
@@ -320,16 +328,27 @@ def verify_source_fix_excluded(root: Path, source_fix: str) -> None:
     Returns
     -------
     None
-        The fixture contains no prohibited transport metadata or marker.
+        The fixture has only synthetic empty metadata and no protected marker.
 
     Raises
     ------
     ContractError
-        If Git metadata or the protected commit identity is present.
+        If Git history, a remote, or the protected commit identity is present.
     """
 
-    if any(path.name == ".git" for path in root.rglob(".git")):
-        _fail("agent fixture exposes Git metadata")
+    metadata = root / ".git"
+    if not metadata.is_dir() or any(
+        path.name == ".git" and path != metadata for path in root.rglob(".git")
+    ):
+        _fail("agent fixture has invalid synthetic Git metadata")
+    if GIT_EXECUTABLE is None:
+        _fail("fixture Git executable is unavailable")
+    history = _run((GIT_EXECUTABLE, "rev-parse", "--verify", "HEAD"), root)
+    if history.returncode == 0:
+        _fail("agent fixture exposes Git history")
+    remotes = _run((GIT_EXECUTABLE, "remote"), root)
+    if remotes.returncode != 0 or remotes.stdout.strip():
+        _fail("agent fixture exposes a Git remote")
     for path in root.rglob("*"):
         if path.is_file() and source_fix in path.read_text(
             encoding="utf-8", errors="ignore"

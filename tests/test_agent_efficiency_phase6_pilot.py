@@ -24,6 +24,8 @@ from scripts.run_agent_efficiency_phase6_pilot import (
     main,
     parse_fixture_sources,
     prepare_protected_fixture,
+    prompt_for_attempt,
+    validate_treatment_protocol,
 )
 
 
@@ -83,8 +85,36 @@ def _manifest() -> dict[str, object]:
             "pids_limit": 512,
             "tmpfs_size_mib": 128,
         },
+        "runtime_image": "localhost/pilot@sha256:" + "a" * 64,
+        "treatment_protocol": {
+            "version": "mcp-required-v1",
+            "codira_mcp_instruction": (
+                "Before completing this task, call the configured Codira MCP "
+                "server at least once."
+            ),
+        },
         "visibility": "public",
     }
+
+
+def test_prompt_for_attempt_requires_the_manifest_bound_mcp_instruction() -> None:
+    """Expose Codira MCP only through the assisted treatment prompt."""
+
+    manifest = _manifest()
+    task_prompt = "Write the required artifact."
+    assert prompt_for_attempt(task_prompt, "baseline", manifest) == task_prompt
+    assisted = prompt_for_attempt(task_prompt, "codira-mcp", manifest)
+    assert assisted.endswith(task_prompt)
+    assert "call the configured Codira MCP server" in assisted
+
+
+def test_treatment_protocol_rejects_a_missing_assisted_instruction() -> None:
+    """Fail before paid execution when the treatment is not reproducible."""
+
+    manifest = _manifest()
+    manifest.pop("treatment_protocol")
+    with pytest.raises(PilotLauncherError, match="treatment protocol"):
+        validate_treatment_protocol(manifest)
 
 
 def test_build_pilot_plan_has_three_complete_pairs() -> None:
@@ -110,6 +140,23 @@ def test_build_pilot_plan_has_three_complete_pairs() -> None:
     assert len(attempts) == 6
 
 
+def test_build_pilot_plan_rejects_a_task_outside_manifest_bindings() -> None:
+    """Fail closed instead of indexing an unknown requested task identity.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions cover the public launcher error for task-selection drift.
+    """
+
+    with pytest.raises(PilotLauncherError, match="absent from manifest bindings"):
+        build_pilot_plan(_manifest(), ("symbols-001", "patch-001", "unknown-001"), 7)
+
+
 def test_checked_in_pilot_manifest_has_three_frozen_fixture_bindings() -> None:
     """Load the approved pilot manifest and verify its complete dry-run plan.
 
@@ -124,12 +171,188 @@ def test_checked_in_pilot_manifest_has_three_frozen_fixture_bindings() -> None:
     """
 
     manifest = load_document(
-        Path("benchmarks/agent-efficiency/phase6-pilot.json"), "campaign"
+        Path("benchmarks/agent-efficiency/phase6-pilot-018.json"), "campaign"
     )
     plan = build_pilot_plan(
         manifest, ("symbols-001", "patch-001", "documentation-001"), 7
     )
     assert plan["scheduled_execution_count"] == 6
+    assert plan["task_ids"] == ["documentation-001", "patch-001", "symbols-001"]
+    assert plan["accounting"] == manifest["accounting"]
+    assert plan["runtime_image"] == manifest["runtime_image"]
+    assert plan["fixture_fingerprints"] == manifest["fixture_fingerprints"]
+    assert plan["task_fingerprints"] == manifest["task_fingerprints"]
+    assert plan["task_fixture_ids"] == manifest["task_fixture_ids"]
+
+
+def test_pilot_plan_rejects_an_invalid_runtime_image() -> None:
+    """Reject a public plan that supplies an invalid runtime input.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        A malformed runtime image fails before the launcher can execute an attempt.
+    """
+
+    manifest = _manifest()
+    manifest["runtime_image"] = "mutable-tag"
+    with pytest.raises(PilotLauncherError, match="invalid runtime image"):
+        build_pilot_plan(manifest, ("symbols-001", "patch-001", "documentation-001"), 7)
+
+
+def test_pilot_launcher_rejects_an_image_that_differs_from_the_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail before input preparation when the supplied runtime image drifts.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable manifest and campaign state locations.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture asserting that no paid-input preparation occurs.
+
+    Returns
+    -------
+    None
+        The launcher returns its deterministic mismatch status.
+    """
+
+    manifest = tmp_path / "pilot.json"
+    manifest.write_text(json.dumps(_manifest()), encoding="utf-8")
+    monkeypatch.setattr(
+        pilot,
+        "parse_fixture_sources",
+        lambda values: pytest.fail("image mismatch must precede input preparation"),
+    )
+    assert (
+        main(
+            [
+                "--campaign-manifest",
+                str(manifest),
+                "--task-id",
+                "symbols-001",
+                "--task-id",
+                "patch-001",
+                "--task-id",
+                "documentation-001",
+                "--seed",
+                "7",
+                "--state-root",
+                str(tmp_path / "state"),
+                "--image",
+                "localhost/other@sha256:" + "b" * 64,
+                "--execute",
+            ]
+        )
+        == 2
+    )
+
+
+def test_pilot_launcher_requires_a_manifest_runtime_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject historical manifests before fixture preparation or credential access.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable manifest and campaign state locations.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture asserting that no paid-input preparation occurs.
+
+    Returns
+    -------
+    None
+        Paid execution cannot use a manifest without a bound runtime image.
+    """
+
+    manifest_data = _manifest()
+    manifest_data.pop("runtime_image")
+    manifest = tmp_path / "pilot.json"
+    manifest.write_text(json.dumps(manifest_data), encoding="utf-8")
+    monkeypatch.setattr(
+        pilot,
+        "parse_fixture_sources",
+        lambda values: pytest.fail("missing image must precede input preparation"),
+    )
+    assert (
+        main(
+            [
+                "--campaign-manifest",
+                str(manifest),
+                "--task-id",
+                "symbols-001",
+                "--task-id",
+                "patch-001",
+                "--task-id",
+                "documentation-001",
+                "--seed",
+                "7",
+                "--state-root",
+                str(tmp_path / "state"),
+                "--image",
+                "localhost/pilot@sha256:" + "a" * 64,
+                "--execute",
+            ]
+        )
+        == 2
+    )
+
+
+def test_pilot_launcher_rejects_an_invalid_manifest_runtime_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject a malformed runtime image before paid-input preparation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable manifest and campaign state locations.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture asserting that no paid-input preparation occurs.
+
+    Returns
+    -------
+    None
+        Paid execution cannot use a mutable or malformed image reference.
+    """
+
+    manifest_data = _manifest()
+    manifest_data["runtime_image"] = "mutable-tag"
+    manifest = tmp_path / "pilot.json"
+    manifest.write_text(json.dumps(manifest_data), encoding="utf-8")
+    monkeypatch.setattr(
+        pilot,
+        "parse_fixture_sources",
+        lambda values: pytest.fail("invalid image must precede input preparation"),
+    )
+    assert (
+        main(
+            [
+                "--campaign-manifest",
+                str(manifest),
+                "--task-id",
+                "symbols-001",
+                "--task-id",
+                "patch-001",
+                "--task-id",
+                "documentation-001",
+                "--seed",
+                "7",
+                "--state-root",
+                str(tmp_path / "state"),
+                "--image",
+                "mutable-tag",
+                "--execute",
+            ]
+        )
+        == 2
+    )
 
 
 def test_pilot_launcher_rejects_execution_before_manifest_approval(
@@ -391,8 +614,42 @@ def test_proxy_relay_configuration_binds_loopback_to_the_unix_socket(
     )
 
 
+def test_baseline_configuration_excludes_codira_mcp(tmp_path: Path) -> None:
+    """Expose the provider proxy without MCP access to the baseline variant.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Fresh per-attempt Codex state directory.
+
+    Returns
+    -------
+    None
+        Baseline TOML has the fixed provider but no MCP-server declaration.
+    """
+
+    state = tmp_path / "state"
+    phase0.write_isolated_codex_config(
+        state,
+        "/workspace",
+        "http://127.0.0.1:43123/v1",
+        ("openai/gpt-5.6-terra", "medium"),
+        None,
+    )
+    configuration = (state / "config.toml").read_text(encoding="utf-8")
+    assert 'base_url = "http://127.0.0.1:43123/v1"' in configuration
+    assert "[mcp_servers.codira]" not in configuration
+
+
+@pytest.mark.parametrize(
+    ("assistance_mode", "expected_mcp_command"),
+    (("baseline", None), ("codira-mcp", "codira-mcp")),
+)
 def test_execute_attempt_records_an_oracle_contract_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    assistance_mode: str,
+    expected_mcp_command: str | None,
 ) -> None:
     """Convert grader contract failure into one terminal immutable-safe result.
 
@@ -416,7 +673,9 @@ def test_execute_attempt_records_an_oracle_contract_failure(
         {"runner": "test"},
         build_paired_schedule(("patch-001",), 1, 1),
     )
-    attempt = store.schedule[0]
+    attempt = next(
+        item for item in store.schedule if item.assistance_mode == assistance_mode
+    )
     fixture = {"revision": "a" * 40}
     task = {
         "fixture_id": "click-public",
@@ -491,11 +750,31 @@ def test_execute_attempt_records_an_oracle_contract_failure(
         "prepare_protected_fixture",
         lambda source, revision, root, task_id: (root.mkdir(), None)[1],
     )
-    monkeypatch.setattr(
-        phase0,
-        "write_isolated_codex_config",
-        lambda root, *args: (root.mkdir(), root / "config.toml")[1],
-    )
+    mcp_commands: list[str | None] = []
+
+    def write_config(root: Path, *arguments: object) -> Path:
+        """Record the MCP selection without writing a real configuration.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Synthetic per-attempt state root.
+        arguments : object
+            Positional configuration controls passed by the pilot runner.
+
+        Returns
+        -------
+        pathlib.Path
+            Synthetic configuration path.
+        """
+
+        command = arguments[-1] if arguments else None
+        assert command is None or isinstance(command, str)
+        mcp_commands.append(command)
+        root.mkdir()
+        return root / "config.toml"
+
+    monkeypatch.setattr(phase0, "write_isolated_codex_config", write_config)
     monkeypatch.setattr(pilot, "write_proxy_relay", lambda root: root / "relay.py")
     monkeypatch.setattr(provider_proxy, "create_unix_server", lambda *args: Server())
     monkeypatch.setattr(
@@ -538,3 +817,4 @@ def test_execute_attempt_records_an_oracle_contract_failure(
     assert result["outcome"] == "oracle_failure"
     assert result["failure_class"] == "oracle_contract"
     assert evidence["oracle_passed"] is False
+    assert mcp_commands == [expected_mcp_command]

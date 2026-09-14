@@ -12,6 +12,11 @@ scripts/run_agent_efficiency_phase6_review.py:2 EM101, S607, TRY003, TRY301 — 
 review-only transport uses explicit Git command vectors and public-safe failure
 messages; its credentials are supplied only by the SOPS-scoped child process.
 
+scripts/run_agent_efficiency_phase6_review.py:167 S310 — the review-only
+transport makes one explicit HTTPS request to the fixed OpenRouter endpoint;
+the supplied request is constructed locally and the SOPS-scoped credential is
+never logged.
+
 The review removed two obsolete `E501` suppressions from `tests/test_contracts.py`.
 All remaining suppressions name the narrow rule they suppress.
 

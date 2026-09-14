@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from scripts.agent_efficiency import phase0
 from scripts.agent_efficiency.contracts import CONTRACT_VERSION
 from scripts.agent_efficiency.usage import UsageError, normalize_completed_turn
 
+_CONTAINER_ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -20,7 +23,7 @@ if TYPE_CHECKING:
 
 _PROXY_RELAY_BOOTSTRAP = (
     "python /codex-state/provider_relay.py & relay_pid=$!; "
-    '"$2" exec --json --ephemeral --sandbox workspace-write --ignore-rules '
+    '"$2" exec --json --ephemeral --sandbox danger-full-access --ignore-rules '
     '--skip-git-repo-check "$1"; status=$?; kill $relay_pid; wait $relay_pid 2>/dev/null; '
     "exit $status"
 )
@@ -273,7 +276,7 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
             "--json",
             "--ephemeral",
             "--sandbox",
-            "workspace-write",
+            "danger-full-access",
             "--ignore-rules",
             "--skip-git-repo-check",
             request.prompt,
@@ -289,6 +292,7 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
         "--security-opt=no-new-privileges",
         "--pids-limit=512",
         "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m",
+        f"--cidfile={state_root / 'container.cid'}",
         f"--mount=type=bind,src={fixture_root},dst=/workspace,rw",
         f"--mount=type=bind,src={state_root},dst=/codex-state,rw",
         "--env=HOME=/codex-state/home",
@@ -298,6 +302,39 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
         request.image,
         *command,
     )
+
+
+def remove_timed_out_container(request: ContainerAttemptRequest) -> None:
+    """Force-remove the one container identified by a timed-out attempt.
+
+    Parameters
+    ----------
+    request : ContainerAttemptRequest
+        Attempt whose runtime command was cancelled by the wall-clock limit.
+
+    Returns
+    -------
+    None
+        Cleanup is best-effort: timeout evidence is retained even if the
+        runtime has already removed the container or its CID file is absent.
+    """
+
+    cidfile = request.state_root.resolve() / "container.cid"
+    try:
+        container_id = cidfile.read_text(encoding="utf-8").strip()
+    except OSError:
+        return
+    if _CONTAINER_ID_PATTERN.fullmatch(container_id) is None:
+        return
+    try:
+        subprocess.run(
+            (request.runtime, "rm", "--force", container_id),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError:
+        return
 
 
 def execute_container_attempt(request: ContainerAttemptRequest) -> ContainerExecution:
@@ -337,6 +374,7 @@ def execute_container_attempt(request: ContainerAttemptRequest) -> ContainerExec
             time.monotonic() - started,
         )
     except subprocess.TimeoutExpired as error:
+        remove_timed_out_container(request)
         stdout = error.stdout if isinstance(error.stdout, str) else ""
         stderr = error.stderr if isinstance(error.stderr, str) else ""
         return ContainerExecution(

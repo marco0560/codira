@@ -592,7 +592,7 @@ def build_isolated_codex_config(
     proxy_url: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
-    mcp_command: str = "codira-mcp",
+    mcp_command: str | None = "codira-mcp",
 ) -> str:
     """Build the minimal benchmark Codex configuration with required MCP.
 
@@ -607,8 +607,9 @@ def build_isolated_codex_config(
         Pinned provider model selected by an approved execution manifest.
     reasoning_effort : str or None, optional
         Provider reasoning effort selected by that manifest.
-    mcp_command : str, optional
-        Resolved host-visible Codira MCP executable.
+    mcp_command : str or None, optional
+        Resolved host-visible Codira MCP executable, or ``None`` to expose no
+        MCP server to the baseline condition.
 
     Returns
     -------
@@ -626,7 +627,6 @@ def build_isolated_codex_config(
 
     root_configuration = 'approval_policy = "never"\nsandbox_mode = "workspace-write"\n'
     escaped_root = codira_root.replace("\\", "\\\\").replace('"', '\\"')
-    escaped_mcp_command = mcp_command.replace("\\", "\\\\").replace('"', '\\"')
     configuration = (
         root_configuration + "\n"
         "[sandbox_workspace_write]\n"
@@ -636,12 +636,16 @@ def build_isolated_codex_config(
         "ignore_default_excludes = false\n\n"
         "[features]\n"
         "memories = false\n"
-        "multi_agent = false\n\n"
-        "[mcp_servers.codira]\n"
-        f'command = "{escaped_mcp_command}"\n'
-        f'args = ["--root", "{escaped_root}"]\n'
-        "required = true\n"
+        "multi_agent = false\n"
     )
+    if mcp_command is not None:
+        escaped_mcp_command = mcp_command.replace("\\", "\\\\").replace('"', '\\"')
+        configuration += (
+            "\n[mcp_servers.codira]\n"
+            f'command = "{escaped_mcp_command}"\n'
+            f'args = ["--root", "{escaped_root}"]\n'
+            "required = true\n"
+        )
     if proxy_url is None:
         if model is not None or reasoning_effort is not None:
             message = "model settings require a provider proxy URL"
@@ -690,7 +694,7 @@ def write_isolated_codex_config(
     codira_root: str = "/workspace/fixture",
     proxy_url: str | None = None,
     provider_settings: tuple[str, str] | None = None,
-    mcp_command: str = "codira-mcp",
+    mcp_command: str | None = "codira-mcp",
 ) -> Path:
     """Write the only user-level Codex configuration for one benchmark run.
 
@@ -706,8 +710,9 @@ def write_isolated_codex_config(
     provider_settings : tuple[str, str] or None, optional
         Provider model and reasoning effort selected by the approved execution
         manifest.
-    mcp_command : str, optional
-        Resolved host-visible Codira MCP executable.
+    mcp_command : str or None, optional
+        Resolved host-visible Codira MCP executable, or ``None`` for a
+        baseline configuration without MCP access.
 
     Returns
     -------

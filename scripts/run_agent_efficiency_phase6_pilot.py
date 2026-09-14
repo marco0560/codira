@@ -129,6 +129,70 @@ class ExecutionControls:
     max_response_requests: int
 
 
+def prompt_for_attempt(
+    task_prompt: str, assistance_mode: str, manifest: Mapping[str, object]
+) -> str:
+    """Bind the approved treatment instruction to an agent invocation.
+
+    Parameters
+    ----------
+    task_prompt : str
+        Frozen public task prompt shared by both variants.
+    assistance_mode : str
+        Scheduled treatment identity.
+    manifest : collections.abc.Mapping[str, object]
+        Approved campaign manifest containing the treatment protocol.
+
+    Returns
+    -------
+    str
+        The baseline prompt unchanged, or the protocol instruction followed by
+        the same public task prompt for the assisted treatment.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the manifest lacks a valid treatment protocol.
+    """
+
+    protocol = manifest.get("treatment_protocol")
+    if not isinstance(protocol, Mapping):
+        raise PilotLauncherError("campaign treatment protocol is invalid")
+    version = protocol.get("version")
+    instruction = protocol.get("codira_mcp_instruction")
+    if (
+        not isinstance(version, str)
+        or not version
+        or not isinstance(instruction, str)
+        or not instruction.strip()
+    ):
+        raise PilotLauncherError("campaign treatment protocol is invalid")
+    if assistance_mode == "baseline":
+        return task_prompt
+    if assistance_mode == "codira-mcp":
+        return f"{instruction.strip()}\n\n{task_prompt}"
+    raise PilotLauncherError("scheduled assistance mode is invalid")
+
+
+def validate_treatment_protocol(manifest: Mapping[str, object]) -> None:
+    """Reject paid execution without both approved treatment prompts.
+
+    Parameters
+    ----------
+    manifest : collections.abc.Mapping[str, object]
+        Approved campaign manifest.
+
+    Returns
+    -------
+    None
+        Successful return means both scheduled treatment identities have an
+        unambiguous prompt construction.
+    """
+
+    for assistance_mode in ("baseline", "codira-mcp"):
+        prompt_for_attempt("", assistance_mode, manifest)
+
+
 def build_pilot_plan(
     manifest: Mapping[str, object], task_ids: Sequence[str], seed: int
 ) -> dict[str, object]:
@@ -166,7 +230,10 @@ def build_pilot_plan(
     tasks = cast("Mapping[str, object]", raw_tasks)
     bindings = cast("Mapping[str, object]", raw_bindings)
     fixtures = cast("Mapping[str, object]", raw_fixtures)
-    if set(task_ids) != set(tasks) or set(task_ids) != set(bindings):
+    requested_task_ids = set(task_ids)
+    if not requested_task_ids <= set(tasks) or not requested_task_ids <= set(bindings):
+        raise PilotLauncherError("pilot task is absent from manifest bindings")
+    if requested_task_ids != set(tasks) or requested_task_ids != set(bindings):
         raise PilotLauncherError("pilot tasks must exactly match manifest bindings")
     bound = set(bindings.values())
     if (
@@ -175,9 +242,24 @@ def build_pilot_plan(
         or not bound <= set(fixtures)
     ):
         raise PilotLauncherError("pilot requires three bound immutable fixtures")
-    budgets, campaign_id = manifest.get("budgets"), manifest.get("campaign_id")
-    if not isinstance(budgets, Mapping) or not isinstance(campaign_id, str):
+    budgets, accounting, campaign_id = (
+        manifest.get("budgets"),
+        manifest.get("accounting"),
+        manifest.get("campaign_id"),
+    )
+    if (
+        not isinstance(budgets, Mapping)
+        or not isinstance(accounting, Mapping)
+        or not isinstance(campaign_id, str)
+    ):
         raise PilotLauncherError("campaign manifest lacks required pilot fields")
+    runtime_image = manifest.get("runtime_image")
+    if runtime_image is not None and (
+        not isinstance(runtime_image, str)
+        or phase0.IMAGE_DIGEST_PATTERN.fullmatch(runtime_image) is None
+    ):
+        raise PilotLauncherError("campaign manifest has an invalid runtime image")
+    execution_controls(manifest)
     try:
         schedule = build_paired_schedule(task_ids, 1, seed)
     except ValueError as error:
@@ -187,9 +269,18 @@ def build_pilot_plan(
         "manifest_fingerprint": canonical_fingerprint(manifest),
         "seed": seed,
         "task_ids": sorted(task_ids),
+        "task_fingerprints": {task_id: tasks[task_id] for task_id in sorted(task_ids)},
+        "task_fixture_ids": {
+            task_id: bindings[task_id] for task_id in sorted(task_ids)
+        },
+        "fixture_fingerprints": {
+            fixture_id: fixtures[fixture_id] for fixture_id in sorted(map(str, bound))
+        },
         "repetitions": 1,
         "scheduled_execution_count": len(schedule),
         "budgets": dict(budgets),
+        "accounting": dict(accounting),
+        "runtime_image": runtime_image,
         "attempts": [item.__dict__ for item in schedule],
         "execution_authorized": False,
     }
@@ -559,7 +650,7 @@ def execute_pilot_attempt(
         "/workspace",
         "http://127.0.0.1:43123/v1",
         (controls.model, controls.reasoning_effort),
-        "codira-mcp",
+        "codira-mcp" if attempt.assistance_mode == "codira-mcp" else None,
     )
     write_proxy_relay(state_root)
     socket_path = state_root / "provider.sock"
@@ -586,7 +677,9 @@ def execute_pilot_attempt(
                 context.image,
                 agent_root,
                 state_root,
-                str(task["prompt"]),
+                prompt_for_attempt(
+                    str(task["prompt"]), attempt.assistance_mode, context.manifest
+                ),
                 controls.timeout_seconds,
                 proxy_socket=socket_path,
                 proxy_client_token=token,
@@ -684,6 +777,18 @@ def main(arguments: list[str] | None = None) -> int:
             return 0
         if args.state_root is None or not args.image:
             raise PilotLauncherError("paid execution requires --state-root and --image")
+        runtime_image = manifest.get("runtime_image")
+        if (
+            not isinstance(runtime_image, str)
+            or phase0.IMAGE_DIGEST_PATTERN.fullmatch(runtime_image) is None
+        ):
+            raise PilotLauncherError(
+                "paid execution requires a digest-pinned manifest runtime image"
+            )
+        if args.image != runtime_image:
+            raise PilotLauncherError("paid execution image differs from manifest")
+        execution_controls(manifest)
+        validate_treatment_protocol(manifest)
         sources = parse_fixture_sources(args.fixture_source)
         tasks, oracles, fixtures = load_pilot_inputs(manifest, args.task_id, sources)
         upstream = os.environ.get(provider_proxy.UPSTREAM_TOKEN_ENV, "")

@@ -32,6 +32,25 @@ IMAGE = "example.invalid/codira-benchmark@sha256:" + "a" * 64
 INTEGRATION_IMAGE_ENV = "CODIRA_AGENT_EFFICIENCY_INTEGRATION_IMAGE"
 
 
+def test_runner_containerfile_installs_transcript_required_utilities() -> None:
+    """Keep commands used by benchmark agents available in the runner image.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The image recipe retains the shell tools observed in pilot transcripts.
+    """
+
+    containerfile = Path("benchmarks/agent-efficiency/Containerfile.phase4")
+    source = containerfile.read_text(encoding="utf-8")
+    for package in ("git", "jq", "ripgrep"):
+        assert package in source
+
+
 def _events(mode: str = "codira-mcp") -> list[dict[str, object]]:
     """Build a complete synthetic JSONL event stream for one variant.
 
@@ -347,6 +366,7 @@ def test_container_argv_and_adapter_preserve_isolation_and_incomplete_usage(
     )
     assert "--network=none" in argv
     assert "--read-only" in argv
+    assert argv[argv.index("--sandbox") + 1] == "danger-full-access"
     assert not any("OPENROUTER" in item or "GH_TOKEN" in item for item in argv)
     attempt = build_paired_schedule(("symbols-001",), 1, 1)[0]
     events = _events(attempt.assistance_mode)
@@ -384,12 +404,20 @@ def test_container_timeout_is_recorded_as_cancellation(
     state = tmp_path / "state"
     state.mkdir()
 
-    def timeout(*_args: object, **_kwargs: object) -> object:
-        """Raise the process timeout expected from a cancelled container."""
+    (state / "container.cid").write_text("a" * 64, encoding="utf-8")
+    calls: list[tuple[str, ...]] = []
 
-        raise subprocess.TimeoutExpired(("podman", "run"), 1, output="partial")
+    def timeout_or_cleanup(arguments: tuple[str, ...], **_kwargs: object) -> object:
+        """Time out the launch then record force-removal of its CID."""
 
-    monkeypatch.setattr("scripts.agent_efficiency.runner.subprocess.run", timeout)
+        calls.append(arguments)
+        if arguments[1] == "run":
+            raise subprocess.TimeoutExpired(("podman", "run"), 1, output="partial")
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr(
+        "scripts.agent_efficiency.runner.subprocess.run", timeout_or_cleanup
+    )
     execution = execute_container_attempt(
         ContainerAttemptRequest("podman", IMAGE, fixture, state, "do task", 1)
     )
@@ -399,6 +427,7 @@ def test_container_timeout_is_recorded_as_cancellation(
     assert result["outcome"] == "cancelled"
     assert result["failure_class"] == "timeout"
     assert evidence["timed_out"] is True
+    assert calls[-1] == ("podman", "rm", "--force", "a" * 64)
 
 
 def test_variant_configuration_exposes_required_mcp_only_to_assisted_runs(
@@ -468,6 +497,9 @@ def test_proxy_transport_keeps_container_network_disabled(
     assert relay.is_file()
     assert "--network=none" in argv
     assert "--env=CODIRA_PROXY_CLIENT_TOKEN" in argv
+    assert "--sandbox danger-full-access" in next(
+        item for item in argv if "/codex-state/provider_relay.py" in item
+    )
     assert any("/codex-state/provider_relay.py" in item for item in argv)
 
 

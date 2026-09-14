@@ -468,7 +468,8 @@ SHA and create the campaign branch from that commit.
 
 ## Phase 6 — Bounded pilot and estimate
 
-Status: in_progress. Commit: step 1 `67c3f30`; step 2 this atomic commit.
+Status: complete. Commit: this atomic commit; earlier steps `67c3f30` and
+`c3cd66a`.
 Evidence: Phase 6 step 1 implements
 `scripts/run_agent_efficiency_phase6_pilot.py`, a dry-run-only launcher. It
 validates a public campaign-schema manifest, requires exactly three unique task
@@ -520,7 +521,123 @@ all were remediated. The final confirmation returned `VERDICT: PASS` on
 2026-09-14 (provider-reported USD 0.0535486; all three review calls totalled
 USD 0.1240278). Focused checks reached 62 passed, 1 skipped; the final full
 repository gate passed on 2026-09-14 with 1,058 passed, 2 skipped, 87% total
-coverage, and zero Semgrep findings. No paid pilot attempt was executed.
+coverage, and zero Semgrep findings.
+
+Pilot 001 was then launched from the immutable local state root. All six
+attempts became `infrastructure_failure` records with return code 127 and an
+empty JSONL transcript; every record reports zero Responses requests and zero
+usage tokens. The originally selected base image,
+`ghcr.io/marco0560/codira-agent-benchmark@sha256:3647440cc3b727288bde32e5d651781f4869064c15c64f553474ca25d0aa00eb`,
+does not contain `codex`, as verified offline. Thus Pilot 001 made no provider
+request and incurred no pilot-provider charge; it is not evidence about either
+assistance mode. Its records and original manifest remain unchanged. The
+corrective Pilot 002 has a new campaign identity and binds the verified Phase 4
+runtime image
+`localhost/codira-phase6-pilot@sha256:c261d4ef446e73ccaec07ba8b592b2e80b26a7035a83d1cc5c3541718e2e1d24`.
+The runner now requires an exact manifest runtime image for paid execution and
+rejects a command-line image mismatch before preparing inputs or reading the
+credential. Pilot 002 was pending at this checkpoint.
+
+Pilot 002 subsequently completed its six scheduled records, each with exactly
+one forwarded Responses request, but all became `infrastructure_failure` with
+`turn.failed` reporting the proxy's 429 request ceiling. The historical raw
+records report no completed-turn usage, so no provider cost or benchmark result
+is inferred from them. The one-request control is incompatible with Codex's
+multi-request agent loop. Under operator authorization, Pilot 003 is a new
+identity with the same frozen tasks, fixtures, model, image, USD 2 daily key
+cap, USD 1.80 pilot estimate, and 600-second timeout; it permits at most eight
+Responses requests of 1,500 output tokens each per attempt. That preserves a
+12,000-token generated-output envelope while allowing bounded tool-loop
+continuations. Pilot 003 was stopped after its first baseline record: the
+agent completed with six Responses requests and complete usage evidence, but
+the baseline configuration incorrectly exposed Codira MCP. The record is
+non-comparable and no further Pilot 003 record was written. The runner now
+creates a no-MCP baseline configuration, covered by a regression test. Pilot
+004 is a new identity with the same controls and frozen public inputs, bound to
+the corrected verified runtime image
+`localhost/codira-phase6-pilot@sha256:9dc2d751d504430174ca9d03cf85cdce42b223128b5ac744587dbf2b63480dc5`.
+Pilot 004 completed all six records with complete usage evidence, but every
+attempt reported that the nested Codex workspace sandbox could not create or
+inspect files inside the already-confined container. The outer Podman boundary
+already enforces no network, read-only root, dropped capabilities,
+no-new-privileges, and explicit writable mounts. The runner therefore invokes
+the supported Codex `danger-full-access` inner mode only within that outer
+boundary; a regression test locks the command vector. Pilot 005 is the new
+identity for this runner-input change, with the same verified image and frozen
+public inputs. It has not yet been executed.
+
+Pilot 005 likewise completed six immutable `infrastructure_failure` records:
+each exhausted its eight-request ceiling before a terminal turn. One baseline
+trace had already written the required result artifact before needing its ninth
+continuation, proving the remaining fault is the request bound rather than the
+outer sandbox. Under operator authorization, Pilot 006 is the replacement
+identity. It permits 12 Responses requests at 1,000 output tokens each, keeping
+the same 12,000-token generated-output envelope while allowing the observed
+agent loop to complete. The dedicated key now has a USD 4 daily cap; the
+operator reported USD 2.9496 remaining before Pilot 006. Pilot 006 was stopped
+after two records when its transcript revealed that the runner image lacked
+`uv`; the baseline had written the required artifact before its verification
+command failed. Those records are invalid and no benchmark cost or outcome is
+inferred from their incomplete terminal usage. Pilot 011 is a fresh identity
+bound to `localhost/codira-phase6-pilot@sha256:c63266df197bcccdba2020be8e38327a240ae88a85d8ebca463a946a06a09d34`.
+Its image provides `uv`, uses its preinstalled Python 3.13 without sync or
+managed-Python downloads, and was verified to run the observed `uv run python`
+command under the production no-network/read-only controls. It preserves the
+authorized 12-request, 1,000-output-token, USD 4 daily, and USD 1.80 pilot
+ceilings. Pilot 011 was stopped after its first pair: the baseline exhausted
+12 requests without a terminal turn after its recorded verification command
+found `jq` unavailable, while the assisted attempt reached a terminal
+deterministic-oracle failure after 11 requests. The pair is invalid and is not
+used as a comparison. Pilot 013 is a fresh identity bound to
+`localhost/codira-phase6-pilot@sha256:e7ded5da0e93f4d5372963165d545b779afe717879cca938125067d82099194e`.
+Its image includes `git`, `jq`, and `ripgrep` in addition to Codira, Codira
+MCP, Codex, and uv. A disposable-fixture preflight verified every command
+observed in the Pilot 011 transcripts, including the `uv run`, Git, jq,
+Codira CLI, and Codira MCP compound paths, under the production no-network and
+read-only controls. Pilot 013 retains the same authorized ceilings.
+Pilot 013 was stopped after its first pair when complete terminal usage showed
+that the USD 0.30 per-attempt estimate was too low: the baseline recorded
+232,080 input and 1,830 output tokens, and the assisted attempt 210,749 input
+and 1,837 output tokens. At the manifest's conservative maximum prompt and
+completion rates, those two attempts can total up to USD 0.97. Both are
+deterministic-oracle failures, not runner failures, and their pair is retained
+as immutable evidence but not used to draw comparative conclusions. No further
+attempt is authorized until the estimate and available key budget are revised
+explicitly. The operator raised the pilot key's daily cap to USD 6. Pilot 014
+is the resulting fresh identity, with the same frozen inputs and verified image
+but a USD 0.50 per-attempt estimate and USD 3.00 pilot ceiling.
+Pilot 014 then confirmed a separate fixture-contract defect: its synthetic
+archive export had no Git worktree, so a normal `git diff --check` verification
+failed and the assisted attempt exhausted its 12-request ceiling. The exporter
+now initializes an empty, history-free, remote-free Git repository after
+extracting the frozen tree; its contract test verifies no source commit is
+exposed while normal Git verification works. The operator raised the daily cap
+to USD 10. Pilot 015 is the new identity for that fixture change, allowing 24
+requests of 500 output tokens each (the same 12,000 output-token envelope),
+with conservative USD 1.00 per-attempt and USD 6.00 pilot ceilings.
+Pilot 015 showed that even 24 requests cannot compensate for the agent's
+post-artifact verification loop. With operator approval, all three pilot tasks
+now instruct the agent to stop immediately after writing the required artifact.
+Their fingerprints changed; the oracles and frozen fixtures did not. Pilot 016
+is the fresh identity for that treatment change, retaining Pilot 015's resource
+and USD 10 daily controls.
+
+Pilot 016 identified that an assisted documentation execution could complete
+without invoking MCP, so its record was retained as invalid evidence. The
+runner now binds a versioned treatment instruction from each paid manifest and
+requires one Codira MCP call only for the assisted variant. Pilot 017 exposed a
+timeout-cleanup defect: the outer Podman client was cancelled but the container
+could survive. Each attempt now supplies a host-visible CID file and, after a
+timeout, force-removes only the validated CID. Pilot 018 is the fresh identity
+for those runner inputs. Its six immutable records all have complete usage and
+its deterministic report has zero exclusions. Every attempt nevertheless
+failed its deterministic oracle; the paired Codira MCP token increases were
+64,658 (symbols), 146,978 (documentation), and 144,781 (patch). The pilot
+therefore provides no provider-token evidence for a successful outcome and
+does not support a 60-run campaign. On 2026-09-14 the operator explicitly
+approved closure as an inconclusive, non-advancing Phase 6 result. This is an
+explicit waiver of this phase's normal full-campaign-manifest/budget gate;
+Phase 7 remains pending and no full campaign is authorized.
 
 Proposed pilot: three independent pairs (six executions), covering discovery,
 patch preparation, and documentation across all three fixtures. Pilot results
