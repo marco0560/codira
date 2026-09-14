@@ -468,8 +468,7 @@ SHA and create the campaign branch from that commit.
 
 ## Phase 6 — Bounded pilot and estimate
 
-Status: complete. Commit: this atomic commit; earlier steps `67c3f30` and
-`c3cd66a`.
+Status: complete. Commit: `2909726`; earlier steps `67c3f30` and `c3cd66a`.
 Evidence: Phase 6 step 1 implements
 `scripts/run_agent_efficiency_phase6_pilot.py`, a dry-run-only launcher. It
 validates a public campaign-schema manifest, requires exactly three unique task
@@ -638,6 +637,49 @@ does not support a 60-run campaign. On 2026-09-14 the operator explicitly
 approved closure as an inconclusive, non-advancing Phase 6 result. This is an
 explicit waiver of this phase's normal full-campaign-manifest/budget gate;
 Phase 7 remains pending and no full campaign is authorized.
+
+### Restart checkpoint and lessons learned
+
+Restart from implementation commit `2909726`. Phase 6 is closed as
+inconclusive; Phase 7 is not authorized. Before any renewed benchmark work,
+redesign and validate the task/oracle methodology so that a successful outcome
+is measurable.
+
+1. Preserve immutable records before cleanup, then enumerate benchmark tmux
+   sessions and runtime processes. Stop only the exact stale session or
+   CID-bound container; remove stale tmux sessions and disposable `/tmp`
+   state only after its records have been retained.
+2. Before a paid run, derive the executable inventory from prior transcripts
+   and verify every direct and compound command in the hardened runtime. This
+   includes Codex, Codira, Codira MCP, uv, Git, jq, ripgrep, and the observed
+   workflow commands—not merely that the image builds.
+3. Examine every terminal record and the deterministic paired report before
+   changing limits or launching a replacement: confirm usage completeness,
+   response count, MCP evidence, oracle result, exclusions, and the concrete
+   cause of any failure. Do not raise request, token, timeout, or spend limits
+   to mask a missing program, containment defect, post-artifact loop, or
+   invalid task. Any changed task, runtime, runner, or control requires a new
+   experiment identity.
+4. Treat complete provider usage as an admission requirement for a comparative
+   pair. A timeout, incomplete usage, malformed transcript, absent MCP event,
+   or baseline MCP exposure is retained as evidence but is not a result from
+   which a token comparison or cost conclusion may be drawn.
+5. Keep each paid manifest bound to canonical task and fixture fingerprints,
+   the digest-pinned image, and the exact treatment protocol. Validate all of
+   those bindings before reading the provider credential; a raw file hash is
+   not interchangeable with the contract's canonical JSON fingerprint.
+6. Budget from observed usage, not only the nominal output cap. Reconcile the
+   remaining daily-key balance before a replacement run, keep a conservative
+   per-attempt and whole-pilot ceiling, and prevent concurrent or orphaned
+   attempts from consuming the same budget.
+7. Preserve fixture privacy without breaking ordinary agent workflows: an
+   exported fixture may be a history-free, remote-free Git worktree so that
+   `git diff --check` works, while source commits, remotes, and protected
+   oracle assets remain unavailable to the agent.
+8. A public report is useful only if it is durable and reproducible. Retain
+   immutable raw records outside Git as required, but commit or otherwise
+   preserve a public-safe report reference and its configuration fingerprint
+   rather than relying on a transient `/tmp` path for a future restart.
 
 Proposed pilot: three independent pairs (six executions), covering discovery,
 patch preparation, and documentation across all three fixtures. Pilot results
