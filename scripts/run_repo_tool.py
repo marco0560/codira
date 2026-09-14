@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GIT_EXE = shutil.which("git")
 SUPPORTED_TOOLS: dict[str, str | None] = {
+    "codira": "codira",
     "coverage": "coverage",
     "mypy": "mypy",
     "pre-commit": "pre_commit",

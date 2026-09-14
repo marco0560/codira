@@ -2125,6 +2125,12 @@ def test_repo_tool_runner_adds_tool_specific_cache_arguments(tmp_path: Path) -> 
         state_root=state_root,
         python="python",
     ) == ("python", "-m", "pre_commit", "run", "--all-files")
+    assert helper.build_tool_argv(
+        "codira",
+        ("audit",),
+        state_root=state_root,
+        python="python",
+    ) == ("python", "-m", "codira", "audit")
 
 
 def test_repo_tool_runner_resolves_semgrep_next_to_python(tmp_path: Path) -> None:
@@ -2286,6 +2292,12 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
             str(helper.RUN_REPO_TOOL),
             "python",
             "scripts/coverage_summary.py",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
+            "codira",
+            "audit",
         ),
     )
 

@@ -131,6 +131,11 @@ VALIDATION_STEPS: tuple[ValidationStep, ...] = (
         "python",
         ("scripts/coverage_summary.py",),
     ),
+    ValidationStep(
+        "docstring-audit",
+        "codira",
+        ("audit",),
+    ),
 )
 
 
