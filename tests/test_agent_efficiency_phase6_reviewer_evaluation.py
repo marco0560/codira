@@ -85,7 +85,10 @@ def _response(payload: dict[str, object]) -> object:
     return Response()
 
 
-def _review_payload(model: str, content: str = "VERDICT: PASS\n") -> dict[str, object]:
+def _review_payload(
+    model: str,
+    content: str = '{"verdict": "PASS", "findings": []}',
+) -> dict[str, object]:
     """Return one complete model-identified reviewer response.
 
     Parameters
@@ -93,7 +96,7 @@ def _review_payload(model: str, content: str = "VERDICT: PASS\n") -> dict[str, o
     model : str
         Exact requested OpenRouter model ID.
     content : str, optional
-        Reviewer content with the required verdict prefix.
+        Reviewer content with the required strict JSON response schema.
 
     Returns
     -------
@@ -163,7 +166,11 @@ def test_request_review_binds_model_budget_and_complete_identity(
             "messages": [{"role": "user", "content": "review this"}],
             "temperature": 0,
             "max_tokens": 321,
-            "provider": {"allow_fallbacks": False},
+            "provider": {"allow_fallbacks": False, "require_parameters": True},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": helper.REVIEW_RESPONSE_SCHEMA,
+            },
         },
         "timeout": 17,
     }
@@ -171,6 +178,8 @@ def test_request_review_binds_model_budget_and_complete_identity(
     assert result["response_model"] == "deepseek/deepseek-v4.1-flash"
     assert result["provider"] == "example-provider"
     assert result["verdict"] == "PASS"
+    assert result["review"] == "VERDICT: PASS\n"
+    assert result["request_settings"]["response_format"] == "json_schema"
     assert result["request_settings"]["reasoning_enabled"] is None
 
 
@@ -244,6 +253,13 @@ def test_request_review_retains_only_http_status_for_transport_diagnostics(
         (_review_payload("expected", "unstructured response"), "verdict"),
         (_review_payload("expected", "VERDICT: PASS but uncertain"), "verdict"),
         (
+            _review_payload(
+                "expected",
+                '{"verdict": "PASS", "findings": [{"file": "x.py", "line": 1, "detail": "bad"}]}',
+            ),
+            "verdict",
+        ),
+        (
             {
                 **_review_payload("expected"),
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1},
@@ -254,7 +270,10 @@ def test_request_review_retains_only_http_status_for_transport_diagnostics(
             {
                 **_review_payload("expected"),
                 "choices": [
-                    {"finish_reason": "length", "message": {"content": "VERDICT: PASS"}}
+                    {
+                        "finish_reason": "length",
+                        "message": {"content": '{"verdict": "PASS", "findings": []}'},
+                    }
                 ],
             },
             "incomplete",
@@ -317,6 +336,66 @@ def test_request_review_preserves_invalid_response_body_for_ignored_evidence(
     with pytest.raises(helper.ReviewError, match="verdict") as captured:
         helper.request_review("review", "secret", model="expected")
     assert captured.value.response_body == json.dumps(payload)
+
+
+def test_request_review_classifies_truncated_null_content_as_incomplete(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Classify a reasoning-only truncated response before content parsing.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the transport with a length-terminated null-content response.
+
+    Returns
+    -------
+    None
+        The response is rejected as incomplete and retained for evidence.
+    """
+
+    helper = _load_script(
+        "phase6_review_truncated", "run_agent_efficiency_phase6_review.py"
+    )
+    payload = _review_payload("expected")
+    payload["choices"] = [{"finish_reason": "length", "message": {"content": None}}]
+    monkeypatch.setattr(
+        helper, "urlopen", lambda *_arguments, **_kwargs: _response(payload)
+    )
+    with pytest.raises(helper.ReviewError, match="incomplete") as captured:
+        helper.request_review("review", "secret", model="expected")
+    assert captured.value.response_body == json.dumps(payload)
+
+
+def test_request_review_rejects_provider_output_above_requested_cap(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Reject usage whose provider completion count exceeds the request cap.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the transport with a complete response exceeding its cap.
+
+    Returns
+    -------
+    None
+        The result is rejected as a provider control violation.
+    """
+
+    helper = _load_script("phase6_review_cap", "run_agent_efficiency_phase6_review.py")
+    payload = _review_payload("expected")
+    payload["usage"] = {
+        "prompt_tokens": 1,
+        "completion_tokens": 2,
+        "total_tokens": 3,
+        "cost": 0.01,
+    }
+    monkeypatch.setattr(
+        helper, "urlopen", lambda *_arguments, **_kwargs: _response(payload)
+    )
+    with pytest.raises(helper.ReviewError, match="output cap"):
+        helper.request_review("review", "secret", model="expected", max_output_tokens=1)
 
 
 def test_evaluation_requires_an_explicit_execution_flag() -> None:
@@ -417,7 +496,9 @@ def test_provider_contract_rejects_price_drift_and_requires_output_control(
         helper,
         "urlopen",
         lambda *_args, **_kwargs: _response(
-            catalog(["max_tokens", "reasoning"], prompt="0.000002")
+            catalog(
+                ["max_tokens", "reasoning", "structured_outputs"], prompt="0.000002"
+            )
         ),
     )
     with pytest.raises(helper.EvaluationError, match="price exceeds"):
@@ -456,7 +537,11 @@ def test_authenticated_model_contract_rejects_key_filtered_model(
                 "data": [
                     {
                         "id": "first",
-                        "supported_parameters": ["max_tokens", "reasoning"],
+                        "supported_parameters": [
+                            "max_tokens",
+                            "reasoning",
+                            "structured_outputs",
+                        ],
                         "reasoning": {"mandatory": False, "default_enabled": False},
                     }
                 ]

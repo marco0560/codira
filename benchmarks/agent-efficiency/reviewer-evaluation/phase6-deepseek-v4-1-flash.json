@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "evaluation_id": "phase6-deepseek-v4-1-flash-r5-20260917",
+  "evaluation_id": "phase6-deepseek-v4-1-flash-r6-20260917",
   "provider_catalog_verified_on": "2026-09-16",
   "repetitions": 2,
   "max_requests": 24,

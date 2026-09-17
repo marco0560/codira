@@ -1,9 +1,14 @@
 # DeepSeek V4.1-Flash reviewer evaluation plan
 
-Status: `r2`–`r5` are terminal non-comparative records. `r5` passed its fresh
+Status: `r2`–`r6` are terminal non-comparative records. `r5` passed its fresh
 preflight and repository gate, but its first Grok response failed the literal
 verdict parser before a valid attempt could be recorded. It produced no paired
 evidence and cannot support a replacement decision.
+
+`r6` validated strict structured output with one calibration per model, but its
+representative paired run stopped after two Grok attempts when DeepSeek consumed
+its requested output budget in reasoning and returned `finish_reason: length`
+with no content. It is not comparative evidence.
 
 Approved on: 2026-09-15.
 

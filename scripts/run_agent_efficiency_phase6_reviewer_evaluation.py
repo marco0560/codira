@@ -33,8 +33,9 @@ DEFAULT_MANIFEST = Path(
     "benchmarks/agent-efficiency/reviewer-evaluation/phase6-deepseek-v4-1-flash.json"
 )
 DEFAULT_OUTPUT_DIRECTORY = Path(
-    ".artifacts/agent-efficiency/reviewer-evaluation/phase6-deepseek-v4-1-flash-r5-20260917"
+    ".artifacts/agent-efficiency/reviewer-evaluation/phase6-deepseek-v4-1-flash-r6-20260917"
 )
+CALIBRATION_MAX_ESTIMATED_USD = 0.1
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_OUTPUT_ROOT = REPOSITORY_ROOT / DEFAULT_OUTPUT_DIRECTORY
 _SHA40 = frozenset("0123456789abcdef")
@@ -559,8 +560,9 @@ def fetch_provider_contracts(
         if (
             not isinstance(pricing, Mapping)
             or not isinstance(parameters, list)
-            or "max_tokens" not in parameters
-            or "reasoning" not in parameters
+            or not {"max_tokens", "reasoning", "structured_outputs"}.issubset(
+                parameters
+            )
             or not isinstance(top_provider, Mapping)
         ):
             raise _error("required reviewer model contract is incomplete")
@@ -641,11 +643,11 @@ def fetch_authenticated_model_contracts(
         if not isinstance(item, Mapping):
             raise _error("scoped key cannot access required reviewer model")
         parameters = item.get("supported_parameters")
-        if (
-            not isinstance(parameters, list)
-            or "max_tokens" not in parameters
-            or "reasoning" not in parameters
-        ):
+        if not isinstance(parameters, list) or not {
+            "max_tokens",
+            "reasoning",
+            "structured_outputs",
+        }.issubset(parameters):
             raise _error("scoped key reviewer model contract is incomplete")
         reasoning = item.get("reasoning")
         if reasoning is not None and not isinstance(reasoning, Mapping):
@@ -1218,6 +1220,144 @@ def run_evaluation(
     return {"attempts": attempts}
 
 
+def run_calibration(
+    manifest: Mapping[str, object],
+    models: Sequence[ModelContract],
+    cases: Sequence[EvaluationCase],
+    diffs: Mapping[str, str],
+    output_directory: Path,
+) -> dict[str, object]:
+    """Prove the exact live response contract once for each selected model.
+
+    Parameters
+    ----------
+    manifest : collections.abc.Mapping[str, object]
+        Frozen comparison manifest whose model identities remain authoritative.
+    models : collections.abc.Sequence[ModelContract]
+        Exact models admitted by the public provider preflight.
+    cases : collections.abc.Sequence[EvaluationCase]
+        Frozen corpus whose first case supplies representative long-diff input.
+    diffs : collections.abc.Mapping[str, str]
+        Reproduced frozen diff text keyed by case ID.
+    output_directory : pathlib.Path
+        Distinct ignored root for this calibration identity.
+
+    Returns
+    -------
+    dict[str, object]
+        Safe admitted calibration attempt summaries.
+
+    Raises
+    ------
+    EvaluationError
+        If either model cannot produce complete schema, identity, and usage evidence.
+    """
+
+    output_directory = _validate_output_directory(output_directory)
+    state_path = output_directory / "execution-state.json"
+    if state_path.exists():
+        raise _error("reviewer calibration has existing attempt state")
+    token = os.environ.get(TOKEN_ENVIRONMENT_KEY, "")
+    if not token:
+        raise _error("independent review credential is unavailable")
+    authenticated_contracts = fetch_authenticated_model_contracts(models, token)
+    case = cases[0]
+    prompt = build_prompt(diffs[case.identifier])
+    max_output_tokens = _required_int(manifest, "max_output_tokens")
+    timeout_seconds = _required_int(manifest, "timeout_seconds")
+    estimate = sum(
+        len(prompt) * model.prompt_usd_per_million / 1_000_000
+        + max_output_tokens * model.completion_usd_per_million / 1_000_000
+        for model in models
+    )
+    if estimate > CALIBRATION_MAX_ESTIMATED_USD:
+        raise _error("reviewer calibration estimate exceeds the frozen budget")
+    key_budget = fetch_key_budget(token, estimate)
+    attempts: list[dict[str, object]] = []
+    state: dict[str, object] = {
+        "schema_version": "1.0",
+        "status": "prepared",
+        "mode": "structured_response_calibration",
+        "evaluation_id": manifest["evaluation_id"],
+        "manifest_sha256": _canonical_sha256(manifest),
+        "artifact_root": str(output_directory),
+        "controls": {
+            "maximum_requests": len(models),
+            "max_output_tokens": max_output_tokens,
+            "timeout_seconds": timeout_seconds,
+            "estimated_total_usd": estimate,
+            "max_total_estimated_usd": CALIBRATION_MAX_ESTIMATED_USD,
+        },
+        "key_budget": key_budget,
+        "authenticated_model_contracts": authenticated_contracts,
+        "current_attempt": None,
+        "completed_attempts": attempts,
+    }
+    _create_json(state_path, state)
+    prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    for model in models:
+        attempt_identity = {
+            "requested_model": model.identifier,
+            "prompt_sha256": prompt_sha256,
+            "max_output_tokens": max_output_tokens,
+            "timeout_seconds": timeout_seconds,
+        }
+        raw_path = (
+            output_directory
+            / "raw"
+            / "calibration"
+            / f"{_safe_model_name(model.identifier)}.json"
+        )
+        state.update({"status": "in_progress", "current_attempt": attempt_identity})
+        _write_json(state_path, state)
+        try:
+            result = request_review(
+                prompt,
+                token,
+                model=model.identifier,
+                max_output_tokens=max_output_tokens,
+                timeout_seconds=timeout_seconds,
+            )
+        except ReviewError as error:
+            failed_attempt = {**attempt_identity, "failure": str(error)}
+            if error.response_body is not None:
+                _write_json(
+                    raw_path,
+                    {
+                        "response_body": error.response_body,
+                        "validation_error": str(error),
+                    },
+                )
+                failed_attempt["raw_response_path"] = str(raw_path)
+                failed_attempt["raw_response_sha256"] = hashlib.sha256(
+                    error.response_body.encode("utf-8")
+                ).hexdigest()
+            state.update(
+                {
+                    "status": "failed",
+                    "failure": str(error),
+                    "failed_attempt": failed_attempt,
+                }
+            )
+            _write_json(state_path, state)
+            raise _error("reviewer calibration attempt failed") from error
+        _write_json(raw_path, result)
+        attempts.append(
+            {
+                "model": model.identifier,
+                "provider": result["provider"],
+                "verdict": result["verdict"],
+                "raw_response_path": str(raw_path),
+                "usage": result["usage"],
+                "elapsed_seconds": result["elapsed_seconds"],
+            }
+        )
+        state.update({"current_attempt": None, "completed_attempts": attempts})
+        _write_json(state_path, state)
+    _write_json(state_path, {**state, "status": "complete", "current_attempt": None})
+    return {"calibration_attempts": attempts}
+
+
 def run_diagnostic_once(
     manifest: Mapping[str, object],
     models: Sequence[ModelContract],
@@ -1383,6 +1523,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--key-budget", action="store_true")
     parser.add_argument("--authenticated-model-contract", action="store_true")
+    parser.add_argument("--calibrate", action="store_true")
     parser.add_argument("--diagnostic-once", action="store_true")
     return parser
 
@@ -1414,6 +1555,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 (
                     args.key_budget,
                     args.authenticated_model_contract,
+                    args.calibrate,
                     args.execute,
                     args.diagnostic_once,
                 )
@@ -1462,6 +1604,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if args.execute:
             summary.update(
                 run_evaluation(manifest, models, cases, diffs, args.output_dir)
+            )
+        elif args.calibrate:
+            summary.update(
+                run_calibration(manifest, models, cases, diffs, args.output_dir)
             )
         elif args.diagnostic_once:
             summary.update(

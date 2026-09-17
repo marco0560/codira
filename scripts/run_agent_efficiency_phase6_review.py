@@ -19,6 +19,31 @@ MODEL = "x-ai/grok-build-0.1"
 TOKEN_ENVIRONMENT_KEY = "OPENROUTER_API_KEY"
 DEFAULT_MAX_OUTPUT_TOKENS = 12000
 DEFAULT_TIMEOUT_SECONDS = 300
+REVIEW_RESPONSE_SCHEMA: dict[str, object] = {
+    "name": "phase6_reviewer_verdict",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "verdict": {"type": "string", "enum": ["PASS", "NEEDS_FIXES"]},
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "file": {"type": "string"},
+                        "line": {"type": "integer", "minimum": 1},
+                        "detail": {"type": "string"},
+                    },
+                    "required": ["file", "line", "detail"],
+                },
+            },
+        },
+        "required": ["verdict", "findings"],
+    },
+}
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -137,8 +162,9 @@ diff only; do not propose unrelated refactors. Verify: credential separation,
 one-response-request enforcement, frozen fixture identity, protected grader
 asset provenance/isolation, resumable immutable records, and safe failure
 behavior. Report only concrete correctness, security, or test-coverage defects.
-Start exactly with `VERDICT: PASS` when no required change remains, otherwise
-`VERDICT: NEEDS_FIXES`, followed by concise findings with file and line.
+Return only the strict response-schema object. Use `PASS` with an empty
+`findings` array when no required change remains. Otherwise use `NEEDS_FIXES`
+with one or more concrete findings, each including file, line, and detail.
 
 DIFF:
 """
@@ -184,6 +210,99 @@ def _provider_identity(payload: dict[str, object]) -> str:
     if len(providers) != 1:
         raise ReviewError("independent review provider identity is unverified")
     return providers[0]
+
+
+def _render_structured_finding(finding: object, response_body: str) -> str:
+    """Validate and render one strict-schema reviewer finding.
+
+    Parameters
+    ----------
+    finding : object
+        Candidate finding decoded from the model response.
+    response_body : str
+        Exact received provider body retained for failure evidence.
+
+    Returns
+    -------
+    str
+        Canonical line used by the deterministic finding scorer.
+
+    Raises
+    ------
+    ReviewError
+        If the finding does not satisfy the frozen response schema.
+    """
+
+    if not isinstance(finding, dict) or set(finding) != {"file", "line", "detail"}:
+        raise ReviewError(
+            "independent review verdict is malformed", response_body=response_body
+        )
+    file_name = finding["file"]
+    line_number = finding["line"]
+    detail = finding["detail"]
+    if (
+        not isinstance(file_name, str)
+        or not file_name
+        or not isinstance(line_number, int)
+        or line_number < 1
+        or not isinstance(detail, str)
+        or not detail
+    ):
+        raise ReviewError(
+            "independent review verdict is malformed", response_body=response_body
+        )
+    return f"{file_name}:{line_number}: {detail}"
+
+
+def _parse_structured_review(content: str, response_body: str) -> tuple[str, str]:
+    """Validate the strict response schema and render scorer-compatible text.
+
+    Parameters
+    ----------
+    content : str
+        Model message content expected to contain the strict JSON object.
+    response_body : str
+        Exact received provider body retained for failure evidence.
+
+    Returns
+    -------
+    tuple[str, str]
+        Validated verdict and canonical review text.
+
+    Raises
+    ------
+    ReviewError
+        If the JSON value or its semantic verdict contract is invalid.
+    """
+
+    try:
+        structured_review = json.loads(content)
+        verdict = structured_review["verdict"]
+        findings = structured_review["findings"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ReviewError(
+            "independent review verdict is malformed", response_body=response_body
+        ) from error
+    if (
+        not isinstance(structured_review, dict)
+        or set(structured_review) != {"verdict", "findings"}
+        or verdict not in {"PASS", "NEEDS_FIXES"}
+        or not isinstance(findings, list)
+    ):
+        raise ReviewError(
+            "independent review verdict is malformed", response_body=response_body
+        )
+    rendered_findings = [
+        _render_structured_finding(finding, response_body) for finding in findings
+    ]
+    if (verdict == "PASS" and rendered_findings) or (
+        verdict == "NEEDS_FIXES" and not rendered_findings
+    ):
+        raise ReviewError(
+            "independent review verdict is malformed", response_body=response_body
+        )
+    review = "\n".join((f"VERDICT: {verdict}", *rendered_findings)) + "\n"
+    return verdict, review
 
 
 def request_review(
@@ -232,7 +351,11 @@ def request_review(
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
         "max_tokens": max_output_tokens,
-        "provider": {"allow_fallbacks": False},
+        "provider": {"allow_fallbacks": False, "require_parameters": True},
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": REVIEW_RESPONSE_SCHEMA,
+        },
     }
     body = json.dumps(request_payload).encode("utf-8")
     request = Request(
@@ -270,11 +393,7 @@ def request_review(
         raise ReviewError(
             "independent review response is malformed", response_body=response_body
         ) from error
-    if (
-        not isinstance(content, str)
-        or not isinstance(usage, dict)
-        or not isinstance(response_model, str)
-    ):
+    if not isinstance(usage, dict) or not isinstance(response_model, str):
         raise ReviewError(
             "independent review response is malformed", response_body=response_body
         )
@@ -287,15 +406,11 @@ def request_review(
         raise ReviewError(
             "independent review response is incomplete", response_body=response_body
         )
-    first_line = content.splitlines()[0] if content.splitlines() else ""
-    if first_line == "VERDICT: PASS":
-        verdict = "PASS"
-    elif first_line == "VERDICT: NEEDS_FIXES":
-        verdict = "NEEDS_FIXES"
-    else:
+    if not isinstance(content, str):
         raise ReviewError(
-            "independent review verdict is malformed", response_body=response_body
+            "independent review response is malformed", response_body=response_body
         )
+    verdict, review = _parse_structured_review(content, response_body)
     required_usage = ("prompt_tokens", "completion_tokens", "total_tokens", "cost")
     if not all(
         isinstance(usage.get(field), int | float) and usage[field] >= 0
@@ -304,6 +419,10 @@ def request_review(
         raise ReviewError(
             "independent review usage is incomplete", response_body=response_body
         )
+    if usage["completion_tokens"] > max_output_tokens:
+        raise ReviewError(
+            "independent review output cap was exceeded", response_body=response_body
+        )
     elapsed_seconds = time.monotonic() - started
     provider = _provider_identity(payload)
     return {
@@ -311,7 +430,7 @@ def request_review(
         "response_model": response_model,
         "provider": provider,
         "verdict": verdict,
-        "review": content,
+        "review": review,
         "response_body": response_body,
         "usage": usage,
         "elapsed_seconds": elapsed_seconds,
@@ -319,6 +438,9 @@ def request_review(
             "max_output_tokens": max_output_tokens,
             "timeout_seconds": timeout_seconds,
             "allow_fallbacks": False,
+            "require_parameters": True,
+            "response_format": "json_schema",
+            "response_schema_strict": True,
             "reasoning_enabled": None,
         },
     }
@@ -353,6 +475,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--evaluation-authenticated-model-contract", action="store_true"
     )
     parser.add_argument("--diagnostic-evaluation", action="store_true")
+    parser.add_argument("--calibration-evaluation", action="store_true")
     parser.add_argument("--output", type=Path)
     return parser
 
@@ -383,6 +506,7 @@ def _run_evaluation(args: argparse.Namespace) -> int:
             args.evaluation_key_budget,
             args.evaluation_authenticated_model_contract,
             args.diagnostic_evaluation,
+            args.calibration_evaluation,
         )
     )
     if selected_modes > 1:
@@ -410,6 +534,7 @@ def _run_evaluation(args: argparse.Namespace) -> int:
                 "--authenticated-model-contract",
             ),
             (args.diagnostic_evaluation, "--diagnostic-once"),
+            (args.calibration_evaluation, "--calibrate"),
         )
         if enabled
     )

@@ -789,6 +789,18 @@ The active successor control is
 It separates offline qualification, live-route calibration, and paired
 evaluation; no stage authorizes the next one implicitly.
 
+### Reviewer evaluation `r6` terminal record (2026-09-18)
+
+The r6 strict-schema calibration admitted both exact models, but did not
+represent the long frozen diff. The paired run completed two Grok attempts and
+then stopped on DeepSeek's first attempt: its response had `finish_reason`
+`length` and null content after consuming the output allowance in reasoning.
+The preserved artifact establishes an incomplete result, not a schema failure.
+It also showed Grok reporting completion usage above the requested cap, so the
+runner now rejects over-cap provider usage and classifies length termination
+before content parsing. Future calibration must use the representative frozen
+diff and exact paired controls. `r6` has no comparative conclusion.
+
 Proposed pilot: three independent pairs (six executions), covering discovery,
 patch preparation, and documentation across all three fixtures. Pilot results
 are separate from the final campaign.
