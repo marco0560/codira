@@ -1,6 +1,8 @@
 # DeepSeek V4.1-Flash reviewer evaluation plan
 
-Status: approved for persistence; execution pending authorization.
+Status: `r3` terminal with zero admitted reviews and zero observed provider
+usage. The operator authorized one separately identified `r4` diagnostic
+request on 2026-09-17; it is not the 24-request comparative trial.
 
 Approved on: 2026-09-15.
 
@@ -18,12 +20,59 @@ Approval authorizes saving this plan only. Implementation and paid evaluation
 require subsequent authorization. A default-model switch requires a separate
 approval informed by the evaluation results.
 
+## Implementation checkpoint (2026-09-16)
+
+The bounded evaluator, frozen six-diff corpus, response-admission checks, and
+credential-free provider/cost preflight have been implemented and validated by
+the repository gate. The refreshed preflight reproduced all six diffs, verified
+both exact model IDs plus `max_tokens` and reasoning support, and estimated a
+USD 1.6071094 worst-case cost for the 24-request trial using one token per
+prompt character.
+
+One earlier provider-request attempt ended after its timeout without a durable
+per-attempt record or raw response. Its completion and billing state are
+unknown. It is not trial evidence. The evaluator now fails closed on any prior
+state, atomically claims the `r2` identity, verifies the scoped key can cover
+the conservative estimate, and requires explicit execution. The operator
+authorized the new USD 2-capped trial on 2026-09-16. Its ignored artifacts are
+kept under a distinct `r2` identity root rather than replacing the earlier
+attempt's surviving preflight record.
+
+`r2` verified a USD 3.00 scoped-key limit with USD 2.8660008 remaining before
+its first request. That request reached the local response-admission boundary
+but yielded no admitted review, raw response, or usage record. It is terminal
+with zero completed attempts and unknown provider billing. The response parser
+now opts into OpenRouter router metadata and obtains provider identity from the
+documented successful-attempt record. A new identity and authorization are
+required before another paid request.
+
+`r3` verified the same USD 3.00 key limit and failed before retaining a review
+or usage record. Its non-billing post-run key check still reported USD 3.00
+remaining and USD 0.00 daily usage. The evaluator now preserves only a safe
+HTTP status for future transport failures, enabling diagnosis without retaining
+an error body, review text, or credential.
+
+The `r4` diagnostic used its own ignored artifact root and atomically recorded
+one pre-request state. It submitted only the first frozen known-defect case to
+the Grok control model, then terminated with safe failure category `HTTP 400`.
+The post-run non-billing key check remained USD 3.00 available with USD 0.00
+daily usage, so it has zero observed provider usage. It cannot produce a
+DeepSeek-versus-Grok conclusion or authorize a later request.
+
+The subsequent authenticated model catalog established the cause: the scoped
+key exposes Grok as mandatory-reasoning, while `r4` incorrectly requested
+`reasoning.enabled: false`. The helper now preserves each model's provider
+default and requires authenticated model admission before any future completion.
+
 ## 1. Verify the provider contract
 
 Confirm the exact OpenRouter model ID, available providers, pricing, context
 limits, supported parameters, reasoning controls, and usage reporting. Record
 the verification date and avoid moving model aliases or silent model
 substitutions.
+
+Use authenticated `/models/user` for key-specific availability and reasoning
+requirements; public `/models` is only a model-wide capability and price source.
 
 ## 2. Prepare a frozen comparison set
 

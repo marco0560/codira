@@ -681,6 +681,85 @@ is measurable.
    preserve a public-safe report reference and its configuration fingerprint
    rather than relying on a transient `/tmp` path for a future restart.
 
+### Paid reviewer evaluation guardrails (2026-09-16)
+
+The first DeepSeek/Grok evaluator attempt reached the provider-request stage
+without a durable per-attempt record and then ended after the request timeout
+with no raw response. Its provider-side completion and billing status are
+therefore unknown. It is not evaluator evidence and must not be retried or
+used to support a model-selection conclusion.
+
+1. Before any paid request, atomically persist an attempt state containing the
+   immutable diff hash, exact model ID, repetition, output and timeout
+   controls, budget identity, and artifact root. Mark it complete only after a
+   verified full response and provider usage have been durably recorded.
+2. An existing `in_progress` or `failed` attempt state blocks automatic retry
+   and resume. Resolve the provider-side accounting uncertainty and obtain a
+   new experiment identity and approval before a replacement request.
+3. Run a credential-free contract and cost preflight before invoking SOPS.
+   It must verify the exact model IDs, no-fallback routing, output-limit
+   support, and worst-case published pricing using frozen prompt sizes and the
+   output cap. The 2026-09-16 preflight estimated USD 0.9633854 for 24
+   requests; that estimate is not evidence of a completed trial.
+4. Admit a review only when the returned model exactly matches the request,
+   the finish reason is `stop`, the verdict has the required format, and usage
+   is complete. Keep raw response bodies outside Git; retain only safe
+   summaries, timing, model/provider identity, usage, and response hashes in
+   reproducibility records.
+5. Supervise long provider calls with durable, monitorable state rather than
+   relying on a foreground tool timeout. If a process ends without a completed
+   state, treat the preceding request as unknown; do not issue a duplicate.
+6. Scope the OpenRouter test credential solely to the secret-registry-approved
+   helper command. A new executable command requires registry review and an
+   explicit authorization; do not broaden the SOPS command as a workaround.
+
+### Reviewer evaluation `r2` terminal record (2026-09-16)
+
+The explicitly authorized `phase6-deepseek-v4-1-flash-r2-20260916` run passed
+its credential-free contract preflight and then verified a USD 3.00 scoped-key
+limit with USD 2.8660008 remaining against its USD 1.6071094 conservative
+estimate. It atomically persisted its first attempt state before contacting the
+provider. The first `x-ai/grok-build-0.1` request then failed the local
+response-admission boundary; no raw response, complete usage, or admitted
+review record exists. The state is terminal `failed` with zero completed
+attempts. Treat it as non-comparative evidence with unknown provider-side
+billing; do not resume or retry `r2`.
+
+### Reviewer evaluation `r3` terminal record (2026-09-17)
+
+The explicitly authorized `phase6-deepseek-v4-1-flash-r3-20260917` run used
+the provider-metadata correction, atomically recorded its first attempt, and
+then failed closed before admitting a review, raw response, or usage record. A
+subsequent non-billing scoped-key metadata check reported the same USD 3.00
+limit, USD 3.00 remaining, and USD 0.00 daily usage as the pre-request check.
+`r3` therefore has zero observed provider usage and is not comparative
+evidence. Its terminal state blocks resume; a replacement requires a new
+identity and explicit authorization. Future terminal state stores a safe HTTP
+status for transport failures, never the provider error body.
+
+### Reviewer evaluation `r4` diagnostic terminal record (2026-09-17)
+
+After a fresh passing repository gate, the authorized distinct
+`phase6-deepseek-v4-1-flash-r4-diagnostic-20260917` identity atomically
+recorded one attempt for the first frozen known-defect case and
+`x-ai/grok-build-0.1`. That single request terminated with safe failure
+category `HTTP 400`; no raw response, usage record, or admitted review exists.
+The permitted non-billing scoped-key metadata check afterwards still reported
+a USD 3.00 limit, USD 3.00 remaining, and USD 0.00 daily usage. `r4` therefore
+has zero observed provider usage, is terminal, and cannot be resumed. It is not
+a DeepSeek request and cannot support a replacement conclusion. No retry or
+additional diagnostic may occur without a new identity and approval.
+
+The follow-up authenticated `/models/user` check isolated the cause without a
+completion request: this scoped key makes `x-ai/grok-build-0.1` available but
+marks its reasoning as mandatory. The new evaluator had added
+`reasoning.enabled: false`, unlike the successful Phase 6 helper, so that
+incompatible request field explains `r4`'s HTTP 400. The repair omits an
+explicit reasoning setting (preserving each key-visible model default) and
+requires the authenticated catalog before every future completion. Public
+`/models` remains useful for price and aggregate capabilities, but cannot prove
+key-specific admission.
+
 Proposed pilot: three independent pairs (six executions), covering discovery,
 patch preparation, and documentation across all three fixtures. Pilot results
 are separate from the final campaign.

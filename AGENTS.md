@@ -40,6 +40,10 @@ reading implementation details. High-value entry points are `cli.py`,
 - Generated artifacts must be changed through their generator and regenerated.
 - Use `uv` for the environment; plugins may be installed through entry points
   outside this checkout.
+- Before a paid OpenRouter completion, verify the exact selected models through
+  authenticated `/models/user`, not only the public catalog. Preserve the
+  key-visible reasoning contract; never send `reasoning.enabled: false` to a
+  model marked as mandatory-reasoning.
 
 ## Validation
 
@@ -50,3 +54,8 @@ uv run python scripts/validate_repo.py
 If the primary gate cannot run, report why and use the closest repository-local
 fallback. Commit scopes and release/version rules are defined by the repository
 hooks and documentation.
+
+For a full gate expected to exceed foreground observation, run it in a named
+tmux session with a durable log, then capture its terminal exit status before
+reporting the result. Do not restart an already-confirmed live gate merely to
+move it under tmux; preserve and report that existing terminal record.

@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "evaluation_id": "phase6-deepseek-v4-1-flash-r4-diagnostic-20260917",
+  "provider_catalog_verified_on": "2026-09-16",
+  "repetitions": 2,
+  "max_requests": 24,
+  "max_output_tokens": 12000,
+  "timeout_seconds": 300,
+  "max_total_estimated_usd": 2.0,
+  "models": [
+    {
+      "id": "x-ai/grok-build-0.1",
+      "max_prompt_usd_per_million": 2.0,
+      "max_completion_usd_per_million": 4.0
+    },
+    {
+      "id": "deepseek/deepseek-v4.1-flash",
+      "max_prompt_usd_per_million": 0.3,
+      "max_completion_usd_per_million": 1.2
+    }
+  ],
+  "cases": [
+    {
+      "id": "baseline-mcp-defect",
+      "base": "32603dcddd0325939fc3f3c1b36d7d90e4a038b0",
+      "head": "c3cd66afd9c21f7c63e58b8bbee315c7f8462f4f",
+      "paths": [
+        "scripts/agent_efficiency/phase0.py",
+        "scripts/run_agent_efficiency_phase6_pilot.py"
+      ],
+      "expected_verdict": "NEEDS_FIXES",
+      "finding_terms": [["baseline", "mcp"], ["baseline", "codira"]],
+      "diff_sha256": "6b4622924d1498cfae1551ba112745f1b2c31bdbbedea5e379b16b33211a2cda"
+    },
+    {
+      "id": "baseline-mcp-corrected",
+      "base": "32603dcddd0325939fc3f3c1b36d7d90e4a038b0",
+      "head": "2909726629e6123d221be9f002af0dc05a03d546",
+      "paths": [
+        "scripts/agent_efficiency/phase0.py",
+        "scripts/run_agent_efficiency_phase6_pilot.py"
+      ],
+      "expected_verdict": "PASS",
+      "finding_terms": [],
+      "diff_sha256": "0cd1c781dcf04372ad5b5dc1a768b9b315c5a5dadf655c19c1453d41c9660f7b"
+    },
+    {
+      "id": "synthetic-git-defect",
+      "base": "d13af091438ec7e193d38a9b597874e0733675c0",
+      "head": "c3cd66afd9c21f7c63e58b8bbee315c7f8462f4f",
+      "paths": ["scripts/agent_efficiency/corpus.py"],
+      "expected_verdict": "NEEDS_FIXES",
+      "finding_terms": [["git", "history"], ["git", "worktree"]],
+      "diff_sha256": "e02f5f91160664037010193191b1976f45f9d2f787727e0e1906ecc607c0e272"
+    },
+    {
+      "id": "synthetic-git-corrected",
+      "base": "d13af091438ec7e193d38a9b597874e0733675c0",
+      "head": "2909726629e6123d221be9f002af0dc05a03d546",
+      "paths": ["scripts/agent_efficiency/corpus.py"],
+      "expected_verdict": "PASS",
+      "finding_terms": [],
+      "diff_sha256": "440542299dedba6af31d6b46d61bfa636680e301349e434dba8dbfdd1cc46ae2"
+    },
+    {
+      "id": "timeout-cleanup-defect",
+      "base": "d13af091438ec7e193d38a9b597874e0733675c0",
+      "head": "c3cd66afd9c21f7c63e58b8bbee315c7f8462f4f",
+      "paths": ["scripts/agent_efficiency/runner.py"],
+      "expected_verdict": "NEEDS_FIXES",
+      "finding_terms": [["timeout", "container"], ["timeout", "cleanup"]],
+      "diff_sha256": "c5a5895d1280768a79dc4cc38bf41793ed704bcd436f2371554b0be023535cde"
+    },
+    {
+      "id": "timeout-cleanup-corrected",
+      "base": "d13af091438ec7e193d38a9b597874e0733675c0",
+      "head": "2909726629e6123d221be9f002af0dc05a03d546",
+      "paths": ["scripts/agent_efficiency/runner.py"],
+      "expected_verdict": "PASS",
+      "finding_terms": [],
+      "diff_sha256": "02d2dfc2fcc0d86ff0b24c4479091a48935cbc7a818f97151b241ab853b215d7"
+    }
+  ]
+}

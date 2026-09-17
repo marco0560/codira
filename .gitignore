@@ -28,6 +28,8 @@ benchmarks/*
 !benchmarks/agent-efficiency/tasks/*.json
 !benchmarks/agent-efficiency/oracles/
 !benchmarks/agent-efficiency/oracles/*.json
+!benchmarks/agent-efficiency/reviewer-evaluation/
+!benchmarks/agent-efficiency/reviewer-evaluation/*.json
 issues.json
 milestones.json
 guidelines.tar.xz
