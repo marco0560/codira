@@ -22,6 +22,7 @@ repository-owned tool runner.
 from __future__ import annotations
 
 import argparse
+import json
 import shlex
 import subprocess
 import sys
@@ -134,7 +135,7 @@ VALIDATION_STEPS: tuple[ValidationStep, ...] = (
     ValidationStep(
         "docstring-audit",
         "codira",
-        ("audit",),
+        ("audit", "--json"),
     ),
 )
 
@@ -333,6 +334,30 @@ def complete_semgrep_report_path(command: tuple[str, ...]) -> Path | None:
     return Path(command_parts[output_index])
 
 
+def audit_has_findings(output: str) -> bool:
+    """Return whether a Codira audit JSON document contains any finding.
+
+    Parameters
+    ----------
+    output : str
+        Standard output from the JSON-mode Codira audit command.
+
+    Returns
+    -------
+    bool
+        ``True`` for a non-empty findings collection or malformed audit output.
+    """
+
+    try:
+        document = json.loads(output)
+    except json.JSONDecodeError:
+        return True
+    if not isinstance(document, dict):
+        return True
+    findings = document.get("results")
+    return not isinstance(findings, list) or bool(findings)
+
+
 def run_validation(
     commands: tuple[tuple[str, ...], ...] | None = None,
 ) -> int:
@@ -359,9 +384,16 @@ def run_validation(
         complete_report_path = complete_semgrep_report_path(command)
         if complete_report_path is not None:
             complete_report_path.parent.mkdir(parents=True, exist_ok=True)
-        capture_output = (
+        is_coverage_report = (
             len(command) >= 5 and command[2] == "coverage" and command[3] == "report"
         )
+        is_docstring_audit = (
+            len(command) >= 5
+            and command[2] == "codira"
+            and command[3] == "audit"
+            and "--json" in command[4:]
+        )
+        capture_output = is_coverage_report or is_docstring_audit
 
         completed = subprocess.run(
             command,
@@ -371,7 +403,7 @@ def run_validation(
             text=capture_output,
         )
 
-        if capture_output:
+        if is_coverage_report:
             output = completed.stdout.strip()
 
             if "--format=total" in command:
@@ -383,6 +415,14 @@ def run_validation(
                     print("\nWorst coverage files:")
                     for line in lines[2:7]:
                         print(line)
+
+        if (
+            is_docstring_audit
+            and completed.returncode == 0
+            and audit_has_findings(completed.stdout)
+        ):
+            print("Codira audit reported findings or malformed JSON output.")
+            return 1
 
         if complete_report_path is not None:
             report_label = relative_report_path(complete_report_path)

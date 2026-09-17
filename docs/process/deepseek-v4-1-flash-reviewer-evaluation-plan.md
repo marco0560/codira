@@ -1,8 +1,9 @@
 # DeepSeek V4.1-Flash reviewer evaluation plan
 
-Status: `r3` terminal with zero admitted reviews and zero observed provider
-usage. The operator authorized one separately identified `r4` diagnostic
-request on 2026-09-17; it is not the 24-request comparative trial.
+Status: `r2`–`r5` are terminal non-comparative records. `r5` passed its fresh
+preflight and repository gate, but its first Grok response failed the literal
+verdict parser before a valid attempt could be recorded. It produced no paired
+evidence and cannot support a replacement decision.
 
 Approved on: 2026-09-15.
 
@@ -63,6 +64,20 @@ The subsequent authenticated model catalog established the cause: the scoped
 key exposes Grok as mandatory-reasoning, while `r4` incorrectly requested
 `reasoning.enabled: false`. The helper now preserves each model's provider
 default and requires authenticated model admission before any future completion.
+
+The operator subsequently authorized the fresh
+`phase6-deepseek-v4-1-flash-r5-20260917` trial. It uses the corrected request
+contract, a new ignored artifact root, and the original frozen 24-request cap;
+it must stop at the first incomplete or unverified result.
+
+`r5` stopped after its first Grok control response with `independent review
+verdict is malformed`; there were zero completed attempts. The then-current
+helper discarded the response body when validation failed, so the precise model
+format cannot be recovered from this immutable record. This is a protocol
+defect, not evidence about either model's review quality. The helper now writes
+every received provider body into the ignored per-attempt artifact before
+semantic validation and records only its path and SHA-256 in terminal state.
+Any future experiment requires a new identity and explicit authorization.
 
 ## 1. Verify the provider contract
 

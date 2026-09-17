@@ -32,11 +32,25 @@ class ReviewError(ValueError):
     detail : str
         Stable validation or transport failure detail.
 
-    Returns
-    -------
-    None
-        The exception retains no credential or request-body content.
+    response_body : str, optional
+        Exact provider response body, retained only so the caller can place it
+        in its ignored evidence artifact. It never contains the credential or
+        request headers and must not be rendered in logs or state files.
     """
+
+    def __init__(self, detail: str, *, response_body: str | None = None) -> None:
+        """Initialize a validation failure with optional response evidence.
+
+        Parameters
+        ----------
+        detail : str
+            Stable validation or transport failure detail.
+        response_body : str, optional
+            Received provider response body, if one was available.
+        """
+
+        super().__init__(detail)
+        self.response_body = response_body
 
 
 def _git_output(arguments: tuple[str, ...]) -> str:
@@ -232,44 +246,64 @@ def request_review(
         method="POST",
     )
     started = time.monotonic()
+    response_body: str | None = None
     try:
         with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
-            payload = json.loads(response.read())
+            response_body = response.read().decode("utf-8")
     except HTTPError as error:
         detail = f"independent review request failed with HTTP {error.code}"
         raise ReviewError(detail) from error
-    except (OSError, URLError, json.JSONDecodeError) as error:
+    except (OSError, URLError, UnicodeDecodeError) as error:
         raise ReviewError("independent review request failed") from error
+    try:
+        payload = json.loads(response_body)
+    except json.JSONDecodeError as error:
+        raise ReviewError(
+            "independent review response is malformed", response_body=response_body
+        ) from error
     try:
         choice = payload["choices"][0]
         content = choice["message"]["content"]
         usage = payload.get("usage", {})
         response_model = payload["model"]
     except (KeyError, IndexError, TypeError) as error:
-        raise ReviewError("independent review response is malformed") from error
+        raise ReviewError(
+            "independent review response is malformed", response_body=response_body
+        ) from error
     if (
         not isinstance(content, str)
         or not isinstance(usage, dict)
         or not isinstance(response_model, str)
     ):
-        raise ReviewError("independent review response is malformed")
+        raise ReviewError(
+            "independent review response is malformed", response_body=response_body
+        )
     if response_model != model:
-        raise ReviewError("independent review model identity is unverified")
+        raise ReviewError(
+            "independent review model identity is unverified",
+            response_body=response_body,
+        )
     if choice.get("finish_reason") != "stop":
-        raise ReviewError("independent review response is incomplete")
+        raise ReviewError(
+            "independent review response is incomplete", response_body=response_body
+        )
     first_line = content.splitlines()[0] if content.splitlines() else ""
     if first_line == "VERDICT: PASS":
         verdict = "PASS"
     elif first_line == "VERDICT: NEEDS_FIXES":
         verdict = "NEEDS_FIXES"
     else:
-        raise ReviewError("independent review verdict is malformed")
+        raise ReviewError(
+            "independent review verdict is malformed", response_body=response_body
+        )
     required_usage = ("prompt_tokens", "completion_tokens", "total_tokens", "cost")
     if not all(
         isinstance(usage.get(field), int | float) and usage[field] >= 0
         for field in required_usage
     ):
-        raise ReviewError("independent review usage is incomplete")
+        raise ReviewError(
+            "independent review usage is incomplete", response_body=response_body
+        )
     elapsed_seconds = time.monotonic() - started
     provider = _provider_identity(payload)
     return {
@@ -278,6 +312,7 @@ def request_review(
         "provider": provider,
         "verdict": verdict,
         "review": content,
+        "response_body": response_body,
         "usage": usage,
         "elapsed_seconds": elapsed_seconds,
         "request_settings": {

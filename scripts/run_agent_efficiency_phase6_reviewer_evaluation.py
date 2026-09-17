@@ -33,7 +33,7 @@ DEFAULT_MANIFEST = Path(
     "benchmarks/agent-efficiency/reviewer-evaluation/phase6-deepseek-v4-1-flash.json"
 )
 DEFAULT_OUTPUT_DIRECTORY = Path(
-    ".artifacts/agent-efficiency/reviewer-evaluation/phase6-deepseek-v4-1-flash-r4-diagnostic-20260917"
+    ".artifacts/agent-efficiency/reviewer-evaluation/phase6-deepseek-v4-1-flash-r5-20260917"
 )
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_OUTPUT_ROOT = REPOSITORY_ROOT / DEFAULT_OUTPUT_DIRECTORY
@@ -723,6 +723,11 @@ def validate_execution_limits(
     max_output_tokens : int
         Requested completion-token cap.
 
+    Returns
+    -------
+    None
+        The validated limits are accepted without a return value.
+
     Raises
     ------
     EvaluationError
@@ -1122,6 +1127,13 @@ def run_evaluation(
                     }
                 )
                 _write_json(state_path, state)
+                raw_path = (
+                    output_directory
+                    / "raw"
+                    / case.identifier
+                    / _safe_model_name(model.identifier)
+                    / f"repeat-{repetition}.json"
+                )
                 try:
                     result = request_review(
                         prompt,
@@ -1131,22 +1143,33 @@ def run_evaluation(
                         timeout_seconds=timeout_seconds,
                     )
                 except ReviewError as error:
+                    failed_attempt = {**attempt_identity, "failure": str(error)}
+                    if error.response_body is not None:
+                        _write_json(
+                            raw_path,
+                            {
+                                "response_body": error.response_body,
+                                "validation_error": str(error),
+                            },
+                        )
+                        failed_attempt.update(
+                            {
+                                "raw_response_path": str(raw_path),
+                                "raw_response_sha256": hashlib.sha256(
+                                    error.response_body.encode("utf-8")
+                                ).hexdigest(),
+                            }
+                        )
                     state.update(
                         {
                             "status": "failed",
                             "failure": str(error),
+                            "failed_attempt": failed_attempt,
                         }
                     )
                     _write_json(state_path, state)
                     raise _error("reviewer evaluation attempt failed") from error
                 review = str(result["review"])
-                raw_path = (
-                    output_directory
-                    / "raw"
-                    / case.identifier
-                    / _safe_model_name(model.identifier)
-                    / f"repeat-{repetition}.json"
-                )
                 _write_json(raw_path, result)
                 expected_terms_found = _matching_terms(review, case.finding_terms)
                 attempts.append(
@@ -1281,6 +1304,7 @@ def run_diagnostic_once(
         "completed_attempts": [],
     }
     _create_json(state_path, state)
+    raw_path = output_directory / "raw" / "diagnostic-once.json"
     try:
         result = request_review(
             prompt,
@@ -1290,11 +1314,33 @@ def run_diagnostic_once(
             timeout_seconds=timeout_seconds,
         )
     except ReviewError as error:
-        state.update({"status": "failed", "failure": str(error)})
+        failed_attempt = {**attempt_identity, "failure": str(error)}
+        if error.response_body is not None:
+            _write_json(
+                raw_path,
+                {
+                    "response_body": error.response_body,
+                    "validation_error": str(error),
+                },
+            )
+            failed_attempt.update(
+                {
+                    "raw_response_path": str(raw_path),
+                    "raw_response_sha256": hashlib.sha256(
+                        error.response_body.encode("utf-8")
+                    ).hexdigest(),
+                }
+            )
+        state.update(
+            {
+                "status": "failed",
+                "failure": str(error),
+                "failed_attempt": failed_attempt,
+            }
+        )
         _write_json(state_path, state)
         raise _error("reviewer diagnostic attempt failed") from error
     review = str(result["review"])
-    raw_path = output_directory / "raw" / "diagnostic-once.json"
     _write_json(raw_path, result)
     attempt = {
         "case_id": case.identifier,
@@ -1319,6 +1365,11 @@ def run_diagnostic_once(
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the bounded reviewer-evaluation command-line interface.
+
+    Parameters
+    ----------
+    None
+        Parser construction uses fixed command-line defaults.
 
     Returns
     -------
@@ -1349,6 +1400,11 @@ def main(arguments: Sequence[str] | None = None) -> int:
     int
         Zero for a successful preflight or completed evaluation, two for a safe
         refusal before a credentialed request.
+
+    Raises
+    ------
+    SystemExit
+        If command-line arguments violate the parser contract.
     """
 
     args = build_parser().parse_args(arguments)

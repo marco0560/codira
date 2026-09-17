@@ -17,7 +17,7 @@ TRY003 — the bounded evaluator invokes explicit Git vectors and the fixed publ
 OpenRouter catalog/key endpoints; response bodies and credentials remain outside
 tracked records.
 
-scripts/run_agent_efficiency_phase6_review.py:236 S310 — the review-only
+scripts/run_agent_efficiency_phase6_review.py:251 S310 — the review-only
 transport makes one explicit HTTPS request to the fixed OpenRouter endpoint;
 the supplied request is constructed locally and the SOPS-scoped credential is
 never logged.

@@ -760,6 +760,30 @@ requires the authenticated catalog before every future completion. Public
 `/models` remains useful for price and aggregate capabilities, but cannot prove
 key-specific admission.
 
+### Reviewer evaluation `r5` comparative-trial authorization (2026-09-17)
+
+The operator authorized the fresh
+`phase6-deepseek-v4-1-flash-r5-20260917` comparative trial after the reasoning
+contract repair. It must use the frozen six-case corpus, two exact models, two
+repetitions, 24-request maximum, USD 2.00 conservative ceiling, authenticated
+model admission, and a new ignored artifact root. Run a current public contract
+and cost preflight plus a fresh repository gate before SOPS. Stop at the first
+unverified or incomplete result; no retry or resume is implied.
+
+### Reviewer evaluation `r5` terminal record (2026-09-17)
+
+The fresh preflight and repository gate passed, then the first Grok control
+request (`baseline-mcp-defect`, repeat 1) stopped with `independent review
+verdict is malformed`. It recorded zero completed attempts and therefore has no
+comparative, coverage, cost, or replacement evidence. The pre-existing helper
+did not retain a response body when its verdict parser rejected it, so this
+record cannot distinguish a prose prefix, Markdown wrapper, or another response
+layout. The response-evidence omission is logged as a runner defect, not a
+model-quality result. The repaired helper atomically persists every received
+provider body in the ignored per-attempt artifact before validation, with only
+the artifact path and SHA-256 in terminal state. A future paid request must use
+a new experiment identity and separate explicit authorization.
+
 Proposed pilot: three independent pairs (six executions), covering discovery,
 patch preparation, and documentation across all three fixtures. Pilot results
 are separate from the final campaign.

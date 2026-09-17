@@ -291,8 +291,41 @@ def test_request_review_rejects_unverified_or_incomplete_output(
         helper.request_review("review", "secret", model="expected")
 
 
+def test_request_review_preserves_invalid_response_body_for_ignored_evidence(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Keep a received malformed verdict available to the artifact writer.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the network call with a response that violates the verdict contract.
+
+    Returns
+    -------
+    None
+        The received provider body remains available to the artifact writer.
+    """
+
+    helper = _load_script(
+        "phase6_review_evidence", "run_agent_efficiency_phase6_review.py"
+    )
+    payload = _review_payload("expected", "I found a defect.")
+    monkeypatch.setattr(
+        helper, "urlopen", lambda *_arguments, **_kwargs: _response(payload)
+    )
+    with pytest.raises(helper.ReviewError, match="verdict") as captured:
+        helper.request_review("review", "secret", model="expected")
+    assert captured.value.response_body == json.dumps(payload)
+
+
 def test_evaluation_requires_an_explicit_execution_flag() -> None:
     """Reject evaluation selection unless the operator explicitly authorizes it.
+
+    Parameters
+    ----------
+    None
+        The test supplies only fixed command-line arguments.
 
     Returns
     -------
@@ -308,6 +341,11 @@ def test_evaluation_requires_an_explicit_execution_flag() -> None:
 
 def test_evaluation_manifest_reproduces_all_six_frozen_diffs() -> None:
     """Keep every tracked historical comparison input content-addressed.
+
+    Parameters
+    ----------
+    None
+        The test reads the fixed tracked manifest.
 
     Returns
     -------
@@ -431,6 +469,11 @@ def test_authenticated_model_contract_rejects_key_filtered_model(
 
 def test_execution_limits_reject_provider_context_overflow() -> None:
     """Reject a frozen request whose output cap exceeds a public model limit.
+
+    Parameters
+    ----------
+    None
+        The test constructs a fixed minimal model contract.
 
     Returns
     -------
@@ -704,11 +747,12 @@ def test_run_evaluation_persists_the_safe_provider_failure_reason(
     )
 
     failure = "independent review model identity is unverified"
+    response_body = '{"model":"wrong"}'
 
     def fail_review(*_arguments: object, **_kwargs: object) -> dict[str, object]:
         """Raise the stable admission failure used by this regression test."""
 
-        raise helper.ReviewError(failure)
+        raise helper.ReviewError(failure, response_body=response_body)
 
     monkeypatch.setattr(helper, "request_review", fail_review)
     with pytest.raises(helper.EvaluationError, match="attempt failed"):
@@ -722,6 +766,16 @@ def test_run_evaluation_persists_the_safe_provider_failure_reason(
     state = json.loads((artifact_root / "execution-state.json").read_text())
     assert state["status"] == "failed"
     assert state["failure"] == failure
+    failed_attempt = state["failed_attempt"]
+    evidence_path = Path(failed_attempt["raw_response_path"])
+    assert json.loads(evidence_path.read_text()) == {
+        "response_body": response_body,
+        "validation_error": failure,
+    }
+    assert (
+        failed_attempt["raw_response_sha256"]
+        == helper.hashlib.sha256(response_body.encode("utf-8")).hexdigest()
+    )
 
 
 def test_diagnostic_once_submits_only_the_first_grok_control_request(

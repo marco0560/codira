@@ -44,6 +44,10 @@ reading implementation details. High-value entry points are `cli.py`,
   authenticated `/models/user`, not only the public catalog. Preserve the
   key-visible reasoning contract; never send `reasoning.enabled: false` to a
   model marked as mandatory-reasoning.
+- Persist the exact received provider response in the ignored, per-attempt
+  artifact before semantic validation. A parsing failure must retain its
+  response evidence and digest in terminal state, never discard it or place it
+  in logs, tracked files, credentials, or request headers.
 
 ## Validation
 
