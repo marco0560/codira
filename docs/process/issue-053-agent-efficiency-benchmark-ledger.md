@@ -784,6 +784,11 @@ provider body in the ignored per-attempt artifact before validation, with only
 the artifact path and SHA-256 in terminal state. A future paid request must use
 a new experiment identity and separate explicit authorization.
 
+The active successor control is
+[`phase6-paid-review-gold-standard-protocol.md`](phase6-paid-review-gold-standard-protocol.md).
+It separates offline qualification, live-route calibration, and paired
+evaluation; no stage authorizes the next one implicitly.
+
 Proposed pilot: three independent pairs (six executions), covering discovery,
 patch preparation, and documentation across all three fixtures. Pilot results
 are separate from the final campaign.

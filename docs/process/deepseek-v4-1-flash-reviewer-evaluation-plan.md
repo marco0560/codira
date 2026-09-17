@@ -7,6 +7,10 @@ evidence and cannot support a replacement decision.
 
 Approved on: 2026-09-15.
 
+All future paid reviewer work is governed by
+[`phase6-paid-review-gold-standard-protocol.md`](phase6-paid-review-gold-standard-protocol.md).
+It authorizes no completion by itself.
+
 ## Objective and scope
 
 Determine whether DeepSeek V4.1-Flash can replace `x-ai/grok-build-0.1`
