@@ -454,6 +454,10 @@ def start_tmux(launch: PilotLaunch) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """Build the deterministic paired-pilot executor parser.
 
+    Parameters
+    ----------
+    None
+
     Returns
     -------
     argparse.ArgumentParser

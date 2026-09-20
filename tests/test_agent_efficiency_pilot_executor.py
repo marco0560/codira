@@ -116,6 +116,11 @@ def test_prepare_claims_paths_and_builds_fixed_paid_command(
         Isolated temporary directory supplied by pytest.
     monkeypatch : pytest.MonkeyPatch
         Fixture-admission adapter for executor-only behavior.
+
+    Returns
+    -------
+    None
+        The prepared receipt and fixed launch command satisfy the contract.
     """
 
     monkeypatch.setattr(
@@ -147,6 +152,11 @@ def test_executor_rejects_seed_that_differs_from_factory_plan(tmp_path: Path) ->
     ----------
     tmp_path : pathlib.Path
         Isolated temporary directory supplied by pytest.
+
+    Returns
+    -------
+    None
+        A schedule seed mismatch is rejected before side effects.
     """
 
     campaign_directory, sources = _campaign_directory(tmp_path)
@@ -162,6 +172,11 @@ def test_executor_rejects_reused_execution_root(tmp_path: Path) -> None:
     ----------
     tmp_path : pathlib.Path
         Isolated temporary directory supplied by pytest.
+
+    Returns
+    -------
+    None
+        Reusing an execution root is rejected before overwriting evidence.
     """
 
     campaign_directory, sources = _campaign_directory(tmp_path)
@@ -183,6 +198,11 @@ def test_launch_mode_reverifies_prepared_receipt(
         Isolated temporary directory supplied by pytest.
     monkeypatch : pytest.MonkeyPatch
         Fixture-admission adapter for executor-only behavior.
+
+    Returns
+    -------
+    None
+        Receipt verification admits only unchanged prepared launch inputs.
     """
 
     monkeypatch.setattr(
