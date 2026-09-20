@@ -155,6 +155,12 @@ minor answer-quality signals must not invalidate operational calibration.
    factory, schedule, fixture, runtime, state, log, and exit-path identities,
    and its launch stage revalidates that receipt before starting tmux.
 
+6. **Next action before another paid pilot:** fix the Python analyzer's Unicode
+   decoder failure for valid source/docstring content, then verify whether a
+   newer `tree-sitter-python` release is available and evaluate it in a
+   disposable index fixture. Do not reuse Pilot 006 or launch a replacement
+   paid identity until both checks are complete.
+
 ## Pilot 003 terminal evidence
 
 The six authorized attempts completed under the fresh factory identity. The
@@ -187,6 +193,45 @@ price enforcement, strict
 provider-parameter routing, identical case-sensitive patch directives in both
 arms, and an assisted-only index health/empty-cursor directive. Its request and
 whole-session token ceilings are unchanged.
+
+## Pilot 006 investigation update
+
+Pilot 006 terminated before the patch pair with exit status 2. The assisted
+patch fixture was not rejected because of parallel indexing or sandbox worker
+startup: the exact preparation command reported `Analysis concurrency: off,
+workers=1`. It deterministically failed one Python file:
+
+```text
+src/click/utils.py
+UnicodeDecodeError: 'unicodeescape' codec can't decode bytes in position
+476-477: truncated \\UXXXXXXXX escape
+```
+
+The fixture contained 79 Python files; 78 were indexed and one failed, leaving
+`partial=true` and `failed_file_count=1`. The offending documentation contains
+literal Windows paths such as `C:\\Users\\...`. Python accepts the source, but
+the current Python/Tree-sitter analysis path attempts to decode the `\\U`
+sequence and raises. The MCP admission check correctly rejected this partial
+index before provider setup.
+
+The request cap was also behaving as configured, not being exceeded by billed
+provider traffic. Pilot 006 set
+`max_response_requests_per_attempt=10`; the affected attempts received ten
+upstream HTTP 200 responses, then the eleventh continuation received a local
+HTTP 429 and was classified as `local_request_cap_exceeded`. The ten-call cap
+was insufficient for the model's trajectory on those tasks, but the local
+rejection did not incur an additional upstream request.
+
+The exact records, response bodies, and replay evidence remain immutable under
+`.artifacts/agent-efficiency/codira-efficacy-pilot-006-execution/` and
+`/tmp/codira-ae-ac494e2b429a2c64/`. Pilot 006 is not a valid paired efficacy
+result and must not be retried under the same identity.
+
+`tree-sitter-python` is currently pinned at 0.25.0 in `uv.lock` and the package
+metadata; the current PyPI release and the Context7 documentation both report
+0.25.0. There is therefore no newer release to adopt at this time. The decoder
+fix remains the first action; reassess the package version again when a newer
+release is published.
 
 ## Current financial context
 
