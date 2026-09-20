@@ -447,7 +447,6 @@ def constrain_response_request(
             raise ValueError(message)
         request["provider"] = {
             "allow_fallbacks": False,
-            "require_parameters": True,
             "max_price": {
                 "prompt": constraints.max_prompt_usd_per_million,
                 "completion": constraints.max_completion_usd_per_million,

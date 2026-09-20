@@ -182,7 +182,8 @@ failed without Codira after spending its bounded trajectory on history and
 unavailable dependency setup. The linked analysis assigns the mixed
 harness/model responsibility and records every implemented control.
 
-Pilot 005 uses a fresh image and campaign identity, medium reasoning, strict
+Pilot 006 uses a fresh campaign identity, medium reasoning, exact model and
+price enforcement, strict
 provider-parameter routing, identical case-sensitive patch directives in both
 arms, and an assisted-only index health/empty-cursor directive. Its request and
 whole-session token ceilings are unchanged.

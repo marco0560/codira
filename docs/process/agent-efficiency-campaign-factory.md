@@ -80,5 +80,8 @@ process exits successfully.
 The provider proxy persists each exact upstream response body to the ignored
 attempt artifact directory before parsing or forwarding it. Public-safe
 observations bind those bodies by digest and byte count. Routing disables
-fallbacks and requires support for requested parameters so the frozen model
-and reasoning controls cannot be silently substituted or dropped.
+fallbacks and pins the approved model, reasoning, and price controls. Provider
+parameter filtering remains disabled because the complete Responses/tool
+request contains provider-specific fields that would otherwise produce a
+false no-endpoint rejection; the proxy still rejects model or reasoning
+substitution locally.

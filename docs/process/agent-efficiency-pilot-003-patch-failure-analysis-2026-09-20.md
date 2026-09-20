@@ -178,3 +178,15 @@ Pilot 004 was generated and prepared against the first corrected image, then
 the full repository gate found a cursor type-narrowing error. Its immutable
 artifacts remain preserved and are superseded without paid execution. Pilot
 005 binds the rebuilt, gate-candidate image and is the only launch candidate.
+
+Pilot 005 reached the provider boundary and produced one terminal assisted
+attempt plus one terminal baseline attempt. Both received the exact persisted
+OpenRouter response `404 No endpoints found that can handle the requested
+parameters`; the assisted attempt then timed out after 900 seconds. The cause
+was the proxy's newly added `require_parameters: true`, which filtered the
+complete Responses/tool request despite the authenticated model preflight
+listing the individual reasoning and tool parameters. The run was stopped
+before further attempts and remains immutable, non-comparative evidence. The
+proxy now retains no-fallback, exact-model, reasoning, and price enforcement
+without that over-strict provider filter. Pilot 006 is the fresh candidate
+after this correction.

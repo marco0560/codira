@@ -1032,7 +1032,6 @@ def test_provider_proxy_rejects_model_effort_substitution_and_sets_price_cap() -
     constrained = provider_proxy.constrain_response_request(payload, 12000, constraints)
     assert json.loads(constrained)["provider"] == {
         "allow_fallbacks": False,
-        "require_parameters": True,
         "max_price": {"prompt": 2, "completion": 12},
     }
     with pytest.raises(ValueError, match="approved model"):
