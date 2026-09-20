@@ -305,13 +305,14 @@ def _parse_structured_review(content: str, response_body: str) -> tuple[str, str
     return verdict, review
 
 
-def request_review(
+def request_review(  # noqa: C901, PLR0913
     prompt: str,
     token: str,
     *,
     model: str = MODEL,
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    reasoning_effort: str | None = None,
 ) -> dict[str, object]:
     """Submit one review request without logging its credential or body.
 
@@ -327,6 +328,9 @@ def request_review(
         Positive completion-token ceiling sent to OpenRouter.
     timeout_seconds : int, optional
         Positive request timeout in seconds.
+    reasoning_effort : str or None, optional
+        Explicit provider reasoning setting, if the frozen model contract
+        requires one.
 
     Returns
     -------
@@ -346,6 +350,8 @@ def request_review(
         raise ReviewError("independent review output limit must be positive")
     if timeout_seconds < 1:
         raise ReviewError("independent review timeout must be positive")
+    if reasoning_effort is not None and reasoning_effort != "none":
+        raise ReviewError("independent review reasoning setting is invalid")
     request_payload: dict[str, object] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -357,6 +363,8 @@ def request_review(
             "json_schema": REVIEW_RESPONSE_SCHEMA,
         },
     }
+    if reasoning_effort is not None:
+        request_payload["reasoning_effort"] = reasoning_effort
     body = json.dumps(request_payload).encode("utf-8")
     request = Request(
         OPENROUTER_URL,
@@ -441,7 +449,7 @@ def request_review(
             "require_parameters": True,
             "response_format": "json_schema",
             "response_schema_strict": True,
-            "reasoning_enabled": None,
+            "reasoning_effort": reasoning_effort,
         },
     }
 

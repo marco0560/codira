@@ -263,6 +263,9 @@ def build_report(store: CampaignStore) -> dict[str, object]:
         if not baseline["usage_complete"] or not assisted["usage_complete"]:
             exclusions.append({"pair_id": pair_id, "reason": "incomplete_usage"})
             continue
+        if baseline["outcome"] != "success" or assisted["outcome"] != "success":
+            exclusions.append({"pair_id": pair_id, "reason": "unsuccessful_outcome"})
+            continue
         baseline_usage = baseline["usage"]
         assisted_usage = assisted["usage"]
         assert isinstance(baseline_usage, Mapping) and isinstance(

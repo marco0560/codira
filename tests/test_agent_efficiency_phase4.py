@@ -19,13 +19,17 @@ from scripts.agent_efficiency.campaign_state import (
 from scripts.agent_efficiency.runner import (
     ContainerAttemptRequest,
     ContainerExecution,
+    IndexPreparationRequest,
     build_attempt_codex_config,
     build_container_argv,
+    build_index_preparation_argv,
+    capture_workspace_patch,
     execute_container_attempt,
     result_from_execution,
     write_attempt_codex_config,
     write_proxy_relay,
 )
+from scripts.agent_efficiency.runtime_admission import admit_runtime
 from scripts.agent_efficiency.usage import UsageError, normalize_completed_turn
 
 IMAGE = "example.invalid/codira-benchmark@sha256:" + "a" * 64
@@ -49,6 +53,47 @@ def test_runner_containerfile_installs_transcript_required_utilities() -> None:
     source = containerfile.read_text(encoding="utf-8")
     for package in ("git", "jq", "ripgrep"):
         assert package in source
+    assert "packages/codira-backend-sqlite" in source
+    assert "/opt/codira-backend-sqlite" in source
+    assert "packages/codira-vector-store-sqlite" in source
+    assert "packages/codira-embedding-onnx" in source
+    assert "download_embedding_model.py" in source
+    assert "bge-small-en-v1.5-onnx" in source
+    assert '"tree-sitter==0.25.2"' in source
+    for analyzer in ("python", "javascript", "json", "markdown", "bash", "text"):
+        assert f"packages/codira-analyzer-{analyzer}" in source
+    assert "runtime_admission.py" in source
+    assert "benchmark-codira.toml" in source
+    assert "codira-mcp-benchmark" in source
+    profile = Path("scripts/agent_efficiency/benchmark-codira.toml").read_text(
+        encoding="utf-8"
+    )
+    assert 'engine = "onnx"' in profile
+    assert 'strategy = "off"' in profile
+    assert "batch_size = 1" in profile
+
+
+@pytest.mark.integration
+def test_runtime_admission_executes_an_indexed_mcp_query(tmp_path: Path) -> None:
+    """Require a real local index and MCP context response before admission.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Writable disposable fixture root.
+
+    Returns
+    -------
+    None
+        The installed stdio MCP endpoint returns a non-error context response.
+    """
+
+    if os.environ.get("CODIRA_AGENT_EFFICIENCY_RUNTIME_ADMISSION") != "1":
+        pytest.skip("set CODIRA_AGENT_EFFICIENCY_RUNTIME_ADMISSION=1 to run")
+    (tmp_path / "sample.py").write_text(
+        "def helper() -> int:\n    return 42\n", encoding="utf-8"
+    )
+    admit_runtime(tmp_path, "helper")
 
 
 def _events(mode: str = "codira-mcp") -> list[dict[str, object]]:
@@ -159,6 +204,72 @@ def test_paired_schedule_randomizes_order_but_preserves_complete_pairs() -> None
     for attempt in first:
         pairs.setdefault(attempt.pair_id, set()).add(attempt.assistance_mode)
     assert all(modes == {"baseline", "codira-mcp"} for modes in pairs.values())
+
+
+def test_runner_captures_workspace_diff_without_agent_git_history(
+    tmp_path: Path,
+) -> None:
+    """Capture a patch from a private snapshot and a history-free workspace.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary private baseline and agent workspace roots.
+
+    Returns
+    -------
+    None
+        The captured patch contains only changed source content.
+    """
+
+    baseline, workspace = tmp_path / "baseline", tmp_path / "workspace"
+    baseline.mkdir()
+    workspace.mkdir()
+    (baseline / "module.py").write_text("VALUE = 'before'\n", encoding="utf-8")
+    (workspace / "module.py").write_text("VALUE = 'after'\n", encoding="utf-8")
+    (workspace / ".git").mkdir()
+    (workspace / ".git" / "hidden").write_text("ignored", encoding="utf-8")
+
+    patch = workspace / ".benchmark" / "fix.patch"
+    capture_workspace_patch(baseline, workspace, patch)
+
+    source = patch.read_text(encoding="utf-8")
+    assert "a/module.py" in source
+    assert "b/module.py" in source
+    assert ".git" not in source
+
+
+def test_index_preparation_precedes_mcp_with_hardened_runtime(
+    tmp_path: Path,
+) -> None:
+    """Require a separate hardened ``codira index`` command before MCP use.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable exported fixture root.
+
+    Returns
+    -------
+    None
+        The command never mounts Codex state or a provider transport.
+    """
+
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    argv = build_index_preparation_argv(
+        IndexPreparationRequest(
+            "podman", IMAGE, fixture, 60, "/opt/codira/benchmark-codira.toml"
+        )
+    )
+    assert argv[-4:] == (
+        "codira",
+        "index",
+        "--config-file",
+        "/opt/codira/benchmark-codira.toml",
+    )
+    assert "--network=none" in argv
+    assert "/codex-state" not in " ".join(argv)
 
 
 def test_store_resumes_only_validated_immutable_records(tmp_path: Path) -> None:
@@ -381,6 +492,39 @@ def test_container_argv_and_adapter_preserve_isolation_and_incomplete_usage(
     assert evidence["jsonl_event_count"] == len(events)
 
 
+def test_failed_turn_preserves_rate_limit_evidence() -> None:
+    """Classify a provider 429 terminal event without requiring completion usage.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions prove a failed paid response remains diagnosable evidence.
+    """
+
+    attempt = build_paired_schedule(("symbols-001",), 1, 1)[0]
+    events = _events(attempt.assistance_mode)[:-1] + [
+        {
+            "type": "turn.failed",
+            "error": {"message": "exceeded retry limit, last status: 429"},
+        }
+    ]
+
+    result, evidence = result_from_execution(
+        "pilot-001",
+        attempt,
+        ContainerExecution(1, "\n".join(json.dumps(item) for item in events), "", 0.1),
+    )
+
+    assert result["outcome"] == "infrastructure_failure"
+    assert result["failure_class"] == "provider_rate_limited"
+    assert result["usage_complete"] is False
+    assert evidence["jsonl_event_count"] == len(events)
+
+
 def test_container_timeout_is_recorded_as_cancellation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -428,6 +572,36 @@ def test_container_timeout_is_recorded_as_cancellation(
     assert result["failure_class"] == "timeout"
     assert evidence["timed_out"] is True
     assert calls[-1] == ("podman", "rm", "--force", "a" * 64)
+
+
+def test_runner_marks_provider_usage_above_the_manifest_cap_invalid() -> None:
+    """Reject a complete response whose measured usage exceeds its manifest cap.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Over-cap provider usage becomes non-comparative infrastructure evidence.
+    """
+
+    attempt = build_paired_schedule(("symbols-001",), 1, 1)[0]
+    execution = ContainerExecution(
+        0,
+        "\n".join(json.dumps(item) for item in _events(attempt.assistance_mode)),
+        "",
+        0.1,
+    )
+
+    result, _ = result_from_execution(
+        "pilot-001", attempt, execution, max_total_tokens=18
+    )
+
+    assert result["usage_complete"] is True
+    assert result["outcome"] == "infrastructure_failure"
+    assert result["failure_class"] == "usage_cap_exceeded"
 
 
 def test_variant_configuration_exposes_required_mcp_only_to_assisted_runs(

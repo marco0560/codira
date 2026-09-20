@@ -140,6 +140,53 @@ def test_missing_malformed_and_false_positive_results_fail(tmp_path: Path) -> No
     assert not outcome.passed
 
 
+def test_text_artifact_oracle_requires_each_declared_fact(tmp_path: Path) -> None:
+    """Grade a natural Markdown task artifact without a hidden JSON schema.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary agent and protected roots.
+
+    Returns
+    -------
+    None
+        The text primitive accepts required facts and rejects omissions.
+    """
+
+    result_root = tmp_path / "agent"
+    protected = tmp_path / "protected"
+    result_root.mkdir()
+    protected.mkdir()
+    (result_root / "answer.md").write_text(
+        "MCPAdapter.context_for_task lives in src/codira/mcp/adapter.py\n",
+        encoding="utf-8",
+    )
+    definition = {
+        "text_contains": [
+            "MCPAdapter.context_for_task",
+            "src/codira/mcp/adapter.py",
+        ]
+    }
+    assert evaluate_oracle(
+        definition,
+        result_root=result_root,
+        result_path="answer.md",
+        result_format="text",
+        protected_root=protected,
+    ).passed
+    (result_root / "answer.md").write_text(
+        "MCPAdapter.context_for_task\n", encoding="utf-8"
+    )
+    assert not evaluate_oracle(
+        definition,
+        result_root=result_root,
+        result_path="answer.md",
+        result_format="text",
+        protected_root=protected,
+    ).passed
+
+
 def test_patch_oracle_uses_pristine_copy_and_rejects_tampering(tmp_path: Path) -> None:
     """Apply only a valid patch and run the independent protected test.
 

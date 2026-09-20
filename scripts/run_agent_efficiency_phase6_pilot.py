@@ -20,8 +20,11 @@ import sys
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import cast
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -42,13 +45,38 @@ from scripts.agent_efficiency.corpus import export_fixture, verify_fixture
 from scripts.agent_efficiency.oracles import evaluate_oracle
 from scripts.agent_efficiency.runner import (
     ContainerAttemptRequest,
+    IndexPreparationRequest,
+    capture_workspace_patch,
     execute_container_attempt,
+    execute_index_preparation,
     result_from_execution,
     write_proxy_relay,
 )
 
 BENCHMARK_ROOT = Path("benchmarks/agent-efficiency")
 PROTECTED_ASSET_ROOT = BENCHMARK_ROOT / "protected"
+BENCHMARK_CODIRA_CONFIG = "/opt/codira/benchmark-codira.toml"
+BENCHMARK_MCP_COMMAND = "/opt/codira/codira-mcp-benchmark"
+BENCHMARK_CODIRA_PROFILE = Path("scripts/agent_efficiency/benchmark-codira.toml")
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+OPENROUTER_USER_MODELS_URL = "https://openrouter.ai/api/v1/models/user"
+OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
+
+
+def runtime_profile_fingerprint() -> str:
+    """Return the identity of the Codira profile used by assisted attempts.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    str
+        SHA-256 digest of the exact profile copied into every assisted fixture.
+    """
+
+    return hashlib.sha256(BENCHMARK_CODIRA_PROFILE.read_bytes()).hexdigest()
 
 
 class PilotLauncherError(ValueError):
@@ -111,8 +139,11 @@ class ExecutionControls:
         Exact provider settings fixed for the pilot.
     max_prompt_price, max_completion_price : float
         Positive OpenRouter price ceilings per million tokens.
-    max_output_tokens, timeout_seconds, max_response_requests : int
-        Positive per-attempt output, time, and provider-request ceilings.
+    max_total_tokens, max_output_tokens, timeout_seconds, max_response_requests : int
+        Positive per-attempt total-token, output, time, and provider-request
+        ceilings.
+    max_daily_spend, max_attempt_spend, max_pilot_spend : float
+        Positive bounded accounting controls in USD.
 
     Returns
     -------
@@ -124,9 +155,354 @@ class ExecutionControls:
     reasoning_effort: str
     max_prompt_price: float
     max_completion_price: float
+    max_total_tokens: int
     max_output_tokens: int
     timeout_seconds: int
     max_response_requests: int
+    max_transport_attempts_per_response: int
+    max_daily_spend: float
+    max_attempt_spend: float
+    max_pilot_spend: float
+
+
+def _openrouter_json(request: Request, detail: str) -> Mapping[str, object]:
+    """Fetch a JSON object from the fixed OpenRouter admission endpoints.
+
+    Parameters
+    ----------
+    request : urllib.request.Request
+        Fixed public or authenticated metadata request without a request body.
+    detail : str
+        Public-safe failure category for transport or JSON decoding errors.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, object]
+        Parsed OpenRouter response object.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the endpoint fails, emits invalid JSON, or returns a non-object.
+    """
+
+    try:
+        with urlopen(request, timeout=30) as response:
+            document = json.loads(response.read())
+    except HTTPError as error:
+        raise PilotLauncherError(f"{detail}: HTTP {error.code}") from error
+    except (OSError, URLError, json.JSONDecodeError) as error:
+        raise PilotLauncherError(detail) from error
+    if not isinstance(document, Mapping):
+        raise PilotLauncherError(f"{detail}: malformed response")
+    return document
+
+
+def _model_catalog(
+    document: Mapping[str, object],
+) -> Mapping[str, Mapping[str, object]]:
+    """Return the model-ID mapping from one OpenRouter catalog document.
+
+    Parameters
+    ----------
+    document : collections.abc.Mapping[str, object]
+        Parsed public or authenticated OpenRouter catalog object.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, collections.abc.Mapping[str, object]]
+        Exact model IDs mapped to their public-safe metadata.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the catalog does not expose a model list.
+    """
+
+    entries = document.get("data")
+    if not isinstance(entries, list):
+        raise PilotLauncherError("OpenRouter model catalog is malformed")
+    return {
+        identifier: entry
+        for entry in entries
+        if isinstance(entry, Mapping)
+        and isinstance((identifier := entry.get("id")), str)
+    }
+
+
+def _active_pricing(
+    pricing: Mapping[str, object], now_utc: datetime | None = None
+) -> tuple[Mapping[str, object], dict[str, object]]:
+    """Return the one published UTC pricing window active at admission time.
+
+    Parameters
+    ----------
+    pricing : collections.abc.Mapping[str, object]
+        OpenRouter model pricing with optional UTC weekday overrides.
+    now_utc : datetime.datetime or None, optional
+        UTC instant used for deterministic window selection. ``None`` uses the
+        current UTC time.
+
+    Returns
+    -------
+    tuple[collections.abc.Mapping[str, object], dict[str, object]]
+        Active pricing mapping and a public-safe selected-window record.
+
+    Raises
+    ------
+    PilotLauncherError
+        If pricing overrides are malformed, overlap, or cannot be interpreted.
+    """
+
+    overrides = pricing.get("overrides", [])
+    if not isinstance(overrides, list):
+        raise PilotLauncherError("OpenRouter model pricing overrides are malformed")
+    instant = now_utc or datetime.now(UTC)
+    if instant.tzinfo is None or instant.utcoffset() != UTC.utcoffset(instant):
+        raise PilotLauncherError("OpenRouter pricing instant must be UTC")
+    minute = instant.hour * 60 + instant.minute
+    weekday = instant.strftime("%A").lower()
+    selected: list[Mapping[str, object]] = []
+    for override in overrides:
+        if not isinstance(override, Mapping):
+            raise PilotLauncherError("OpenRouter model pricing overrides are malformed")
+        raw_days = override.get("utc_days")
+        raw_start = override.get("utc_start")
+        raw_end = override.get("utc_end")
+        if not isinstance(raw_days, list) or not all(
+            isinstance(day, str) for day in raw_days
+        ):
+            raise PilotLauncherError("OpenRouter model pricing overrides are malformed")
+        days = tuple(day.lower() for day in raw_days)
+        if raw_start is None and raw_end is None:
+            in_window = True
+        elif (
+            isinstance(raw_start, int)
+            and not isinstance(raw_start, bool)
+            and isinstance(raw_end, int)
+            and not isinstance(raw_end, bool)
+        ):
+            start = _utc_hhmm_minutes(raw_start)
+            end = _utc_hhmm_minutes(raw_end)
+            in_window = (
+                start <= minute < end
+                if start < end
+                else minute >= start or minute < end
+            )
+        else:
+            raise PilotLauncherError("OpenRouter model pricing overrides are malformed")
+        if weekday in days and in_window:
+            selected.append(override)
+    if len(selected) > 1:
+        raise PilotLauncherError("OpenRouter model pricing windows overlap")
+    if not selected:
+        return pricing, {"kind": "base"}
+    override = selected[0]
+    window: dict[str, object] = {
+        "kind": "override",
+        "utc_days": list(cast("list[str]", override["utc_days"])),
+    }
+    if "utc_start" in override:
+        window["utc_start"] = cast("int", override["utc_start"])
+        window["utc_end"] = cast("int", override["utc_end"])
+    return override, window
+
+
+def _utc_hhmm_minutes(value: int) -> int:
+    """Convert an OpenRouter integer UTC ``HHMM`` value to minutes after midnight.
+
+    Parameters
+    ----------
+    value : int
+        Integer UTC clock value without a colon.
+
+    Returns
+    -------
+    int
+        Minute offset in the inclusive range zero through 1,439.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the value is not a valid UTC ``HHMM`` clock value.
+    """
+
+    hour, minute = divmod(value, 100)
+    if value < 0 or hour > 23 or minute > 59:
+        raise PilotLauncherError("OpenRouter pricing window is malformed")
+    return hour * 60 + minute
+
+
+def _token_price(pricing: Mapping[str, object], field: str) -> float:
+    """Return one positive per-token price from the active OpenRouter window.
+
+    Parameters
+    ----------
+    pricing : collections.abc.Mapping[str, object]
+        Active base or override price mapping.
+    field : str
+        Required ``prompt`` or ``completion`` price field.
+
+    Returns
+    -------
+    float
+        Positive per-token price before conversion to per-million units.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the selected window omits or corrupts a required price.
+    """
+
+    value = pricing.get(field)
+    if not isinstance(value, str | int | float) or isinstance(value, bool):
+        raise PilotLauncherError("OpenRouter model price is unavailable")
+    try:
+        result = float(value)
+    except ValueError as error:
+        raise PilotLauncherError("OpenRouter model price is malformed") from error
+    if result <= 0:
+        raise PilotLauncherError("OpenRouter model price is unavailable")
+    return result
+
+
+def preflight_openrouter_route(
+    manifest: Mapping[str, object],
+    controls: ExecutionControls,
+    token: str,
+    *,
+    now_utc: datetime | None = None,
+) -> dict[str, object]:
+    """Verify the exact agent route and scoped key without a completion request.
+
+    Parameters
+    ----------
+    manifest : collections.abc.Mapping[str, object]
+        Frozen pilot manifest whose fingerprint is persisted in the result.
+    controls : ExecutionControls
+        Validated model, price, token, and accounting ceilings.
+    token : str
+        Scoped OpenRouter key supplied only through the approved SOPS child.
+    now_utc : datetime.datetime or None, optional
+        UTC instant used for deterministic pricing-window admission in tests.
+
+    Returns
+    -------
+    dict[str, object]
+        Public-safe model and key-budget admission record.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the public route, key-visible route, price, capability, or budget
+        differs from the frozen manifest.
+    """
+
+    public_catalog = _model_catalog(
+        _openrouter_json(
+            Request(OPENROUTER_MODELS_URL, method="GET"),
+            "cannot fetch public OpenRouter catalog",
+        )
+    )
+    public_model = public_catalog.get(controls.model)
+    if not isinstance(public_model, Mapping):
+        raise PilotLauncherError("frozen OpenRouter model is unavailable")
+    pricing = public_model.get("pricing")
+    parameters = public_model.get("supported_parameters")
+    top_provider = public_model.get("top_provider")
+    context_length = public_model.get("context_length")
+    if (
+        not isinstance(pricing, Mapping)
+        or not isinstance(parameters, list)
+        or not {"tools", "reasoning"}.issubset(parameters)
+        or not isinstance(top_provider, Mapping)
+        or not isinstance(context_length, int)
+        or context_length < controls.max_total_tokens
+    ):
+        raise PilotLauncherError("public OpenRouter model contract is incomplete")
+    active_pricing, pricing_window = _active_pricing(pricing, now_utc)
+    prompt_price = _token_price(active_pricing, "prompt") * 1_000_000
+    completion_price = _token_price(active_pricing, "completion") * 1_000_000
+    if (
+        prompt_price > controls.max_prompt_price
+        or completion_price > controls.max_completion_price
+    ):
+        raise PilotLauncherError("OpenRouter model price exceeds the frozen ceiling")
+
+    authenticated_catalog = _model_catalog(
+        _openrouter_json(
+            Request(
+                OPENROUTER_USER_MODELS_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                method="GET",
+            ),
+            "cannot fetch authenticated OpenRouter catalog",
+        )
+    )
+    authenticated_model = authenticated_catalog.get(controls.model)
+    authenticated_parameters = (
+        authenticated_model.get("supported_parameters")
+        if isinstance(authenticated_model, Mapping)
+        else None
+    )
+    if not isinstance(authenticated_parameters, list) or not {
+        "tools",
+        "reasoning",
+    }.issubset(authenticated_parameters):
+        raise PilotLauncherError("scoped key cannot admit the frozen model route")
+
+    budget_payload = _openrouter_json(
+        Request(
+            OPENROUTER_KEY_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            method="GET",
+        ),
+        "cannot fetch scoped OpenRouter key budget",
+    )
+    budget = budget_payload.get("data")
+    if not isinstance(budget, Mapping):
+        raise PilotLauncherError("scoped OpenRouter key budget is malformed")
+    limit = budget.get("limit")
+    remaining = budget.get("limit_remaining")
+    daily_usage = budget.get("usage_daily")
+    reset = budget.get("limit_reset")
+    if (
+        not isinstance(limit, int | float)
+        or not isinstance(remaining, int | float)
+        or not isinstance(daily_usage, int | float)
+        or isinstance(limit, bool)
+        or isinstance(remaining, bool)
+        or isinstance(daily_usage, bool)
+        or limit > controls.max_daily_spend
+        or remaining < controls.max_pilot_spend
+        or (reset is not None and not isinstance(reset, str))
+    ):
+        raise PilotLauncherError("scoped OpenRouter key budget is insufficient")
+    return {
+        "campaign_id": manifest["campaign_id"],
+        "manifest_fingerprint": canonical_fingerprint(manifest),
+        "model": controls.model,
+        "reasoning_effort": controls.reasoning_effort,
+        "public_route": {
+            "context_length": context_length,
+            "max_completion_tokens": top_provider.get("max_completion_tokens"),
+            "max_prompt_usd_per_million": prompt_price,
+            "max_completion_usd_per_million": completion_price,
+            "pricing_window": pricing_window,
+            "supported_parameters": sorted(str(value) for value in parameters),
+        },
+        "authenticated_route": {
+            "supported_parameters": sorted(
+                str(value) for value in authenticated_parameters
+            )
+        },
+        "key_budget": {
+            "limit_usd": float(limit),
+            "limit_remaining_usd": float(remaining),
+            "limit_reset": reset,
+            "usage_daily_usd": float(daily_usage),
+        },
+    }
 
 
 def prompt_for_attempt(
@@ -259,7 +635,13 @@ def build_pilot_plan(
         or phase0.IMAGE_DIGEST_PATTERN.fullmatch(runtime_image) is None
     ):
         raise PilotLauncherError("campaign manifest has an invalid runtime image")
-    execution_controls(manifest)
+    runtime_profile = manifest.get("runtime_profile_fingerprint")
+    if runtime_profile is not None and (
+        not isinstance(runtime_profile, str)
+        or len(runtime_profile) != 64
+        or any(character not in "0123456789abcdef" for character in runtime_profile)
+    ):
+        raise PilotLauncherError("campaign manifest has an invalid runtime profile")
     try:
         schedule = build_paired_schedule(task_ids, 1, seed)
     except ValueError as error:
@@ -281,6 +663,7 @@ def build_pilot_plan(
         "budgets": dict(budgets),
         "accounting": dict(accounting),
         "runtime_image": runtime_image,
+        "runtime_profile_fingerprint": runtime_profile,
         "attempts": [item.__dict__ for item in schedule],
         "execution_authorized": False,
     }
@@ -518,7 +901,7 @@ def prepare_protected_fixture(
 
 
 def execution_controls(
-    manifest: Mapping[str, object],
+    manifest: Mapping[str, object], *, scheduled_attempts: int = 6
 ) -> ExecutionControls:
     """Return complete typed execution controls before any attempt side effect.
 
@@ -526,6 +909,10 @@ def execution_controls(
     ----------
     manifest : Mapping[str, object]
         Approved campaign manifest.
+    scheduled_attempts : int, optional
+        Number of frozen provider attempts whose aggregate cap must fit the
+        declared pilot spending ceiling. The paired pilot defaults to six;
+        the dedicated route calibration supplies one.
 
     Returns
     -------
@@ -538,6 +925,8 @@ def execution_controls(
         If any required runtime control is absent or has an invalid type.
     """
 
+    if scheduled_attempts < 1:
+        raise PilotLauncherError("scheduled attempt count must be positive")
     provider = manifest.get("provider")
     accounting = manifest.get("accounting")
     budgets = manifest.get("budgets")
@@ -566,32 +955,69 @@ def execution_controls(
         or completion_price <= 0
     ):
         raise PilotLauncherError("campaign provider controls are invalid")
+    max_total_tokens = budgets.get("max_total_tokens")
     max_output_tokens = budgets.get("max_output_tokens")
     timeout_seconds = budgets.get("timeout_seconds")
     if (
-        not isinstance(max_output_tokens, int)
+        not isinstance(max_total_tokens, int)
+        or isinstance(max_total_tokens, bool)
+        or max_total_tokens < 1
+        or not isinstance(max_output_tokens, int)
         or isinstance(max_output_tokens, bool)
         or max_output_tokens < 1
+        or max_total_tokens < max_output_tokens
         or not isinstance(timeout_seconds, int)
         or isinstance(timeout_seconds, bool)
         or timeout_seconds < 1
     ):
         raise PilotLauncherError("campaign budget controls are invalid")
+    daily_spend = accounting.get("max_daily_spend_usd")
+    attempt_spend = accounting.get("max_estimated_attempt_spend_usd")
+    pilot_spend = accounting.get("max_estimated_pilot_spend_usd")
     request_limit = accounting.get("max_response_requests_per_attempt")
+    transport_limit = accounting.get("max_transport_attempts_per_response", 1)
+    daily_spend_value = cast("int | float", daily_spend)
+    attempt_spend_value = cast("int | float", attempt_spend)
+    pilot_spend_value = cast("int | float", pilot_spend)
+    request_limit_value = cast("int", request_limit)
+    transport_limit_value = cast("int", transport_limit)
     if (
-        not isinstance(request_limit, int)
+        not all(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            for value in (daily_spend, attempt_spend, pilot_spend)
+        )
+        or float(daily_spend_value) <= 0
+        or float(attempt_spend_value) <= 0
+        or float(pilot_spend_value) <= 0
+        or float(pilot_spend_value) > float(daily_spend_value)
+        or float(pilot_spend_value) < float(attempt_spend_value) * scheduled_attempts
+        or float(attempt_spend_value)
+        < request_limit_value
+        * transport_limit_value
+        * max_total_tokens
+        * max(float(prompt_price), float(completion_price))
+        / 1_000_000
+        or not isinstance(request_limit, int)
         or isinstance(request_limit, bool)
         or request_limit < 1
+        or not isinstance(transport_limit, int)
+        or isinstance(transport_limit, bool)
+        or transport_limit < 1
     ):
-        raise PilotLauncherError("campaign response request control is invalid")
+        raise PilotLauncherError("campaign accounting controls are invalid")
     return ExecutionControls(
         model,
         effort,
         float(prompt_price),
         float(completion_price),
+        max_total_tokens,
         max_output_tokens,
         timeout_seconds,
-        request_limit,
+        request_limit_value,
+        transport_limit_value,
+        float(daily_spend_value),
+        float(attempt_spend_value),
+        float(pilot_spend_value),
     )
 
 
@@ -625,7 +1051,9 @@ def execute_pilot_attempt(
     task = context.tasks[attempt.task_id]
     fixture_id = str(task["fixture_id"])
     fixture = context.fixtures[fixture_id]
-    controls = execution_controls(context.manifest)
+    controls = execution_controls(
+        context.manifest, scheduled_attempts=len(store.schedule)
+    )
     attempt_root = store.root / "attempt-work" / attempt.attempt_id
     if attempt_root.exists():
         raise PilotLauncherError(
@@ -638,6 +1066,61 @@ def execute_pilot_attempt(
     )
     attempt_root.mkdir(parents=True)
     export_fixture(context.sources[fixture_id], str(fixture["revision"]), agent_root)
+    if attempt.assistance_mode == "codira-mcp":
+        if not BENCHMARK_CODIRA_PROFILE.is_file():
+            raise PilotLauncherError("benchmark Codira profile is unavailable")
+        profile_target = agent_root / ".codira" / "config.toml"
+        profile_target.parent.mkdir(exist_ok=True)
+        shutil.copyfile(BENCHMARK_CODIRA_PROFILE, profile_target)
+        profile_fingerprint = runtime_profile_fingerprint()
+        preparation = execute_index_preparation(
+            IndexPreparationRequest(
+                context.runtime,
+                context.image,
+                agent_root,
+                controls.timeout_seconds,
+                BENCHMARK_CODIRA_CONFIG,
+            )
+        )
+        index_root = agent_root / ".codira"
+        index_fingerprint = canonical_fingerprint(
+            {
+                str(path.relative_to(index_root)): hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+                for path in sorted(index_root.rglob("*"))
+                if path.is_file()
+            }
+        )
+        store.store_index_preparation(
+            attempt.attempt_id,
+            {
+                "elapsed_seconds": preparation.elapsed_seconds,
+                "fixture_revision": str(fixture["revision"]),
+                "profile_fingerprint": profile_fingerprint,
+                "index_fingerprint": index_fingerprint,
+                "returncode": preparation.returncode,
+                "timed_out": preparation.timed_out,
+                "stdout_fingerprint": hashlib.sha256(
+                    preparation.stdout.encode("utf-8")
+                ).hexdigest(),
+                "stderr_fingerprint": hashlib.sha256(
+                    preparation.stderr.encode("utf-8")
+                ).hexdigest(),
+            },
+        )
+        if preparation.timed_out or preparation.returncode != 0:
+            raise PilotLauncherError(
+                "codira index preparation failed before MCP startup"
+            )
+    result_format = str(task.get("result_format", "json"))
+    snapshot_root = attempt_root / "workspace-before"
+    if result_format == "workspace-diff":
+        shutil.copytree(
+            agent_root,
+            snapshot_root,
+            ignore=shutil.ignore_patterns(".benchmark", ".git", "__pycache__"),
+        )
     protected_asset = prepare_protected_fixture(
         context.sources[fixture_id],
         str(fixture["revision"]),
@@ -650,7 +1133,7 @@ def execute_pilot_attempt(
         "/workspace",
         "http://127.0.0.1:43123/v1",
         (controls.model, controls.reasoning_effort),
-        "codira-mcp" if attempt.assistance_mode == "codira-mcp" else None,
+        BENCHMARK_MCP_COMMAND if attempt.assistance_mode == "codira-mcp" else None,
     )
     write_proxy_relay(state_root)
     socket_path = state_root / "provider.sock"
@@ -667,6 +1150,7 @@ def execute_pilot_attempt(
         controls.max_output_tokens,
         constraints,
         controls.max_response_requests,
+        controls.max_transport_attempts_per_response,
     )
     server = provider_proxy.create_unix_server(settings, str(socket_path))
     try:
@@ -688,10 +1172,36 @@ def execute_pilot_attempt(
     finally:
         server.shutdown()
         server.server_close()
+    capture_error: str | None = None
+    if result_format == "workspace-diff":
+        try:
+            capture_workspace_patch(
+                snapshot_root, agent_root, agent_root / str(task["result_path"])
+            )
+        except ValueError as error:
+            capture_error = str(error)
     (attempt_root / "events.jsonl").write_text(execution.stdout, encoding="utf-8")
-    result, evidence = result_from_execution(store.campaign_id, attempt, execution)
+    result, evidence = result_from_execution(
+        store.campaign_id,
+        attempt,
+        execution,
+        max_total_tokens=controls.max_total_tokens,
+    )
+    evidence["provider_responses"] = list(settings.response_observations)
+    observations = settings.response_observations
+    if (
+        observations
+        and observations[-1].get("source") == "local"
+        and result["failure_class"] == "provider_rate_limited"
+    ):
+        result["failure_class"] = "local_request_cap_exceeded"
     oracle_passed, oracle_fingerprint = False, None
-    if result["outcome"] == "success":
+    if result["outcome"] == "success" and capture_error is not None:
+        result["outcome"], result["failure_class"] = (
+            "oracle_failure",
+            "workspace_capture",
+        )
+    elif result["outcome"] == "success":
         try:
             definition = context.oracles[attempt.task_id]["definition"]
             if not isinstance(definition, Mapping):
@@ -700,6 +1210,7 @@ def execute_pilot_attempt(
                 definition,
                 result_root=agent_root,
                 result_path=str(task["result_path"]),
+                result_format=result_format,
                 protected_root=protected_root,
             )
             oracle_passed, oracle_fingerprint = outcome.passed, outcome.fingerprint
@@ -745,6 +1256,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixture-source", action="append", default=[])
     parser.add_argument("--image")
     parser.add_argument("--runtime", default="podman")
+    parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--execute", action="store_true")
     return parser
 
@@ -772,6 +1284,20 @@ def main(arguments: list[str] | None = None) -> int:
     try:
         manifest = load_document(args.campaign_manifest, "campaign")
         plan = build_pilot_plan(manifest, args.task_id, args.seed)
+        if args.preflight and args.execute:
+            raise PilotLauncherError("preflight and paid execution are separate stages")
+        if args.preflight:
+            controls = execution_controls(manifest)
+            upstream = os.environ.get(provider_proxy.UPSTREAM_TOKEN_ENV, "")
+            if not upstream:
+                raise PilotLauncherError("pilot OpenRouter credential is unavailable")
+            print(
+                json.dumps(
+                    preflight_openrouter_route(manifest, controls, upstream),
+                    sort_keys=True,
+                )
+            )
+            return 0
         if not args.execute:
             print(json.dumps(plan, sort_keys=True))
             return 0
@@ -787,6 +1313,15 @@ def main(arguments: list[str] | None = None) -> int:
             )
         if args.image != runtime_image:
             raise PilotLauncherError("paid execution image differs from manifest")
+        runtime_profile = manifest.get("runtime_profile_fingerprint")
+        if not isinstance(runtime_profile, str):
+            raise PilotLauncherError(
+                "paid execution requires a runtime profile fingerprint"
+            )
+        if runtime_profile != runtime_profile_fingerprint():
+            raise PilotLauncherError(
+                "local Codira profile differs from manifest fingerprint"
+            )
         execution_controls(manifest)
         validate_treatment_protocol(manifest)
         sources = parse_fixture_sources(args.fixture_source)

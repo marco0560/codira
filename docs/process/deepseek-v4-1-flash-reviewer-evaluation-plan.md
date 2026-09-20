@@ -1,6 +1,9 @@
 # DeepSeek V4.1-Flash reviewer evaluation plan
 
-Status: `r2`–`r6` are terminal non-comparative records. `r5` passed its fresh
+Status: `r7` completed the first valid 24-request reviewer-transport
+comparison. Its evidence and scope correction are in
+[`phase6-r7-reviewer-evaluation-report.md`](phase6-r7-reviewer-evaluation-report.md).
+`r2`–`r6` are terminal non-comparative records. `r5` passed its fresh
 preflight and repository gate, but its first Grok response failed the literal
 verdict parser before a valid attempt could be recorded. It produced no paired
 evidence and cannot support a replacement decision.
@@ -18,17 +21,17 @@ It authorizes no completion by itself.
 
 ## Objective and scope
 
-Determine whether DeepSeek V4.1-Flash can replace `x-ai/grok-build-0.1`
-in `scripts/run_agent_efficiency_phase6_review.py` while preserving useful
-defect detection, reliable verdicts, and reproducible evidence.
+Qualify the supplemental reviewer helper's request transport, response
+preservation, accounting, and bounded-execution controls for the two exact
+models. This is not a model-selection study.
 
 This evaluation concerns the supplemental independent reviewer. Changing the
 model constant alone is not yet established as sufficient: parameter support,
 reasoning behavior, response parsing, and accounting require verification.
 
 Approval authorizes saving this plan only. Implementation and paid evaluation
-require subsequent authorization. A default-model switch requires a separate
-approval informed by the evaluation results.
+require subsequent authorization. No default-model switch or Codira product
+claim follows from its results.
 
 ## Implementation checkpoint (2026-09-16)
 
@@ -157,5 +160,6 @@ Run focused helper tests and the required repository gate:
 uv run python scripts/validate_repo.py
 ```
 
-Produce a recommendation to replace Grok, retain it, or expand the evaluation.
-A default-model switch follows a separate approval informed by those results.
+Report only the helper's transport and accounting evidence. Any review-quality
+or default-model decision needs a separately designed, independently aligned
+evaluation.

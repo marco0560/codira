@@ -30,9 +30,44 @@ ENV UV_CACHE_DIR=/tmp/uv-cache \
 # grader material. The precise image digest records the resulting tool identity.
 COPY pyproject.toml README.md LICENSE /opt/codira/
 COPY src/codira /opt/codira/src/codira
+COPY packages/codira-backend-sqlite /opt/codira-backend-sqlite
+COPY packages/codira-vector-store-sqlite /opt/codira-vector-store-sqlite
+COPY packages/codira-embedding-onnx /opt/codira-embedding-onnx
+COPY packages/codira-analyzer-python /opt/codira-analyzer-python
+COPY packages/codira-analyzer-javascript /opt/codira-analyzer-javascript
+COPY packages/codira-analyzer-json /opt/codira-analyzer-json
+COPY packages/codira-analyzer-markdown /opt/codira-analyzer-markdown
+COPY packages/codira-analyzer-bash /opt/codira-analyzer-bash
+COPY packages/codira-analyzer-text /opt/codira-analyzer-text
+COPY benchmarks/embedding-model-candidates.json /opt/codira/embedding-model-candidates.json
+COPY scripts/download_embedding_model.py /opt/codira/scripts/download_embedding_model.py
+COPY scripts/embedding_model_manifest.py /opt/codira/scripts/embedding_model_manifest.py
+COPY scripts/scriptlib.py /opt/codira/scripts/scriptlib.py
 RUN SETUPTOOLS_SCM_PRETEND_VERSION="${CODIRA_VERSION}" \
-    python -m pip install --no-cache-dir /opt/codira \
+    python -m pip install --no-cache-dir \
+        "tree-sitter==0.25.2" \
+        /opt/codira \
+        /opt/codira-backend-sqlite \
+        /opt/codira-vector-store-sqlite \
+        /opt/codira-embedding-onnx \
+        /opt/codira-analyzer-python \
+        /opt/codira-analyzer-javascript \
+        /opt/codira-analyzer-json \
+        /opt/codira-analyzer-markdown \
+        /opt/codira-analyzer-bash \
+        /opt/codira-analyzer-text \
+    && cd /opt/codira \
+    && PYTHONPATH=/opt/codira python scripts/download_embedding_model.py \
+        --manifest /opt/codira/embedding-model-candidates.json \
+        --install-root /opt/codira \
+        --model-id bge-small-en-v1.5-onnx \
+        --anonymous \
     && codex --version \
-    && codira-mcp --help >/dev/null
+    && codira-mcp --help >/dev/null \
+    && python -c "from importlib.metadata import entry_points; assert 'sqlite' in entry_points(group='codira.backends').names; assert 'sqlite' in entry_points(group='codira.vector_stores').names; assert 'onnx' in entry_points(group='codira.embedding_engines').names; assert {'python', 'javascript', 'json', 'markdown', 'bash', 'text'} <= set(entry_points(group='codira.analyzers').names)"
+
+COPY scripts/agent_efficiency/benchmark-codira.toml /opt/codira/benchmark-codira.toml
+COPY --chmod=755 scripts/agent_efficiency/codira-mcp-benchmark /opt/codira/codira-mcp-benchmark
+COPY scripts/agent_efficiency/runtime_admission.py /opt/codira/runtime_admission.py
 
 WORKDIR /workspace

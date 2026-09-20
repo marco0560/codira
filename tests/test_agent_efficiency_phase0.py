@@ -1068,6 +1068,34 @@ def test_provider_proxy_response_limiter_rejects_a_second_attempt_request() -> N
     assert settings.limiter.admit() is False
 
 
+def test_provider_proxy_keeps_sanitized_transport_observations() -> None:
+    """Retain retry metadata without retaining arbitrary upstream headers.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions prove the response ledger distinguishes local from upstream.
+    """
+
+    settings = provider_proxy.ProxySettings(
+        "client",
+        "upstream",
+        0,
+        max_response_requests=5,
+        max_transport_attempts_per_response=2,
+    )
+    settings.record_response(429, [("Retry-After", "60"), ("X-Secret", "no")])
+    settings.record_response(429, [], source="local")
+
+    assert settings.response_observations[0]["retry_after"] == "60"
+    assert "X-Secret" not in settings.response_observations[0]
+    assert settings.response_observations[1]["source"] == "local"
+
+
 def test_observed_total_token_check_excludes_cached_input_from_total() -> None:
     """Count cached input only once through the provider-reported input total.
 

@@ -12,6 +12,13 @@
       "minLength": 1,
       "type": "string"
     },
+    "result_format": {
+      "enum": [
+        "json",
+        "text",
+        "workspace-diff"
+      ]
+    },
     "result_path": {
       "format": "safe-relative-path",
       "type": "string"

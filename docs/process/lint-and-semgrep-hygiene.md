@@ -17,10 +17,14 @@ TRY003 — the bounded evaluator invokes explicit Git vectors and the fixed publ
 OpenRouter catalog/key endpoints; response bodies and credentials remain outside
 tracked records.
 
-scripts/run_agent_efficiency_phase6_review.py:374 S310 — the review-only
+scripts/run_agent_efficiency_phase6_review.py:382 S310 — the review-only
 transport makes one explicit HTTPS request to the fixed OpenRouter endpoint;
 the supplied request is constructed locally and the SOPS-scoped credential is
 never logged.
+
+scripts/run_agent_efficiency_phase6_review.py:308 C901, PLR0913 — the bounded
+review transport keeps each request-control boundary explicit so the immutable
+model, token, timeout, and reasoning controls are independently auditable.
 
 The review removed two obsolete `E501` suppressions from `tests/test_contracts.py`.
 All remaining suppressions name the narrow rule they suppress.
@@ -30,6 +34,9 @@ scripts/scriptlib.py:270 PLR0913 — public process runner keeps explicit
     command, environment, and failure-boundary inputs for reusable scripts.
 scripts/run_manifest_baseline.py:131 PLR0913 — benchmark invocation inputs are
     independently selectable for reproducible comparisons.
+scripts/agent_efficiency/oracles.py:587 PLR0913 — the public oracle boundary
+    keeps result format, protected root, and evaluator registry explicit so
+    grading remains deterministic and auditable.
 scripts/run_retrieval_quality_benchmark.py:617,913 PLR0913 — result rows and
     benchmark groups preserve explicit provenance and execution inputs.
 scripts/run_final_embedding_model_campaign.py:430,575,640,791 PLR0913 — the

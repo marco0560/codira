@@ -182,99 +182,105 @@ fields with planned or inferred test results.
 
 ## Phase 0 — Runner and isolation conformance
 
-Status: complete. Commit: atomic Phase 0 commit on the implementation branch.
-Evidence: the secret-free Phase 0
-verifier and its focused tests are implemented on the implementation branch.
-On 2026-09-08, `ruff format`, `ruff check`, `mypy`, and the focused test module
-passed (22 tests). The verifier now rejects inherited credentials/state,
-unexpected MCP use in the baseline, missing cancellation evidence, and missing
-or unblocked mandatory escape probes. It also produces credential-free,
-network-disabled, read-only container commands and public/protected sentinel
-fixtures for deterministic containment probes. The reviewed Phase 0 image
-Containerfile pins a linux/amd64 Python 3.13 base digest, and its local Podman
-build succeeded on 2026-09-08 as
-`localhost/codira-agent-efficiency-phase0:review` (image ID
-`f8ede51cd8ff11b74d8e0c569cb10cab5cd813ae75befcaf56428363a2b23cd5`). On
-2026-09-08 the reviewed image was published to
-`ghcr.io/marco0560/codira-agent-benchmark:phase0-review-20260908`; its recorded
-immutable manifest is
+**Status:** `complete`
+**Commit:** atomic Phase 0 commit on the implementation branch.
+
+### Evidence
+
+The secret-free Phase 0 verifier and its focused tests are implemented on the
+implementation branch. On 2026-09-08, `ruff format`, `ruff check`, `mypy`, and the focused
+test module passed (22 tests). The verifier now rejects inherited credentials/state,
+unexpected MCP use in the baseline, missing cancellation evidence, and missing or
+unblocked mandatory escape probes.
+
+It also produces credential-free, network-disabled, read-only container commands and
+public/protected sentinel fixtures for deterministic containment probes. The reviewed
+Phase 0 image Containerfile pins a linux/amd64 Python 3.13 base digest, and its local
+Podman build succeeded on 2026-09-08 as `localhost/codira-agent-efficiency-phase0:review` (image ID `f8ede51cd8ff11b74d8e0c569cb10cab5cd813ae75befcaf56428363a2b23cd5`). On 2026-09-08
+the reviewed image was published to `ghcr.io/marco0560/codira-agent-benchmark:phase0-review-20260908`; its recorded immutable manifest is
 `ghcr.io/marco0560/codira-agent-benchmark@sha256:3647440cc3b727288bde32e5d651781f4869064c15c64f553474ca25d0aa00eb`.
-The package is currently private, so a trusted runner must authenticate before
-pulling it; the benchmark agent still receives no GitHub credential. A
-network-disabled, read-only container probe confirmed Python 3.13.15, Git
-2.47.3, and no Docker socket. The runner-side loopback OpenRouter Responses API
-proxy and generated clean custom-provider Codex configuration are implemented
-and unit-tested. On 2026-09-08 the proxy was converted from an OpenAI-specific
-endpoint to the documented OpenRouter custom-provider contract: Codex sends
-Responses requests only to a loopback `/v1` endpoint with a proxy token, and
-the proxy forwards only the allowlisted paths to OpenRouter `/api/v1` using the
-runner-side `OPENROUTER_API_KEY`. Neither process has forwarded a provider
-request. The focused suite passed again (22 tests), together with `ruff` format
-and lint checks and `mypy`. The initial host preflight
-correctly failed closed because `codex`, Docker, and the digest-pinned image
-were unavailable. On 2026-09-08 the operator installed Podman 5.8.2 and Codex
-CLI 0.153.4, then ran the helper with Podman. It advanced through executable and
-version validation and failed only because the deliberately nonexistent,
-digest-shaped placeholder image was not locally available. No live agent turn,
-JSONL probe, container isolation probe, or cancellation test has been run.
-The existing SOPS-scoped OpenRouter credential was registered as an intended
-consumer of the runner-side proxy and its presence was verified without
-rendering it. The dedicated `codira-tests-key` has a provider-enforced USD 0.25
-daily limit. The approved bounded probe manifest is
-`benchmarks/agent-efficiency/phase0-live-probe.toml`: one conformance-only
-attempt using `openai/gpt-5.6-terra` at medium effort, a 600-second timeout,
-and a 12,000 maximum-output-token cap. It is excluded from paired savings
-analysis. The live-probe launcher is implemented with a dry-run default
-and an explicit paid-execution gate; it starts a loopback proxy, creates fresh
-Codex state, and removes `OPENROUTER_API_KEY` from the Codex child environment.
-Focused launcher, proxy, configuration, fixture, and manifest tests passed (26
-tests), together with `ruff` and `mypy`. The fixture/MCP launcher dry run passed
-on the host using the explicit Codex and `codira-mcp` executable paths. No paid
-request completed. The first approved launch on 2026-09-09 was an
-infrastructure failure: it produced no JSONL because the intentionally
-non-Git disposable fixture lacked Codex's `--skip-git-repo-check` flag. The
-runner now supplies that flag; the failed attempt is retained at
-`/tmp/codira-phase0-live-events.jsonl` and is ineligible for comparison. One
-corrected infrastructure retry reached the provider but was rejected before
-generation: Codex requested its default 65,536 output-token allowance, which
-exceeded the dedicated USD 0.25 daily key limit. Its JSONL evidence is retained
-at `/tmp/codira-phase0-live-events-retry1.jsonl` and is ineligible for
-comparison. The proxy now caps every Responses request at the manifest's 12,000
-output-token ceiling; focused checks passed again (28 tests). The explicitly
-approved second retry completed its required artifact and MCP work, but is
-ineligible under the manifest because its provider-reported observed total was
-69,577 tokens, exceeding the 12,000-token ceiling. The launcher now enforces
-that admission ceiling after JSONL capture. The operator approved an 80,000
-observed-total-token ceiling on 2026-09-09. The manifest retains the separate
-12,000 maximum-output-token proxy cap so the provider request stays within the
-USD 0.25 daily key limit. The revised-manifest retry completed successfully on
-2026-09-09: it used Codira MCP, wrote the required `{"status":"ok"}` artifact,
-and emitted complete usage evidence (69,065 input, 56,815 cached input, 578
-output, and 104 reasoning-output tokens). Its observed total of 69,747 is
-within the revised 80,000 ceiling. Evidence is retained at
-`/tmp/codira-phase0-live-events-retry3.jsonl`; it remains conformance-only and
-is excluded from comparative analysis. The non-billed escape probes passed for
-all five mandatory cases; their credential-free evidence is
-`/tmp/codira-phase0-escape-probes.json`. The first live cancellation attempt
-reached `turn.started` and stopped after the runner's SIGINT, but Codex exited
-gracefully with code 0 while the checker accepted only signal-style exits. The
-checker now accepts that code only when the runner records the signal delivery;
-focused checks passed again (31 tests). The approved corrected cancellation
-retry completed on 2026-09-09: the runner delivered SIGINT, Codex exited with
-code 1 in 0.045 seconds, and the JSONL stream contains `thread.started` and
-`turn.started` with no terminal event. The credential-free diagnostic sidecar
-is `/tmp/codira-phase0-cancel-events-retry3.jsonl.diagnostic.json`, and the
-event evidence is `/tmp/codira-phase0-cancel-events-retry3.jsonl`. The runner
-therefore records the cancellation as conformant. The sole unmet Phase 0
-prerequisite is deciding whether the reviewed GHCR package remains
-runner-authenticated/private or is intentionally made public. On 2026-09-09,
-the operator approved retaining runner-authenticated/private visibility. Phase
-0 conformance prerequisites are therefore complete; package pull credentials
-remain solely with the trusted runner, never with the benchmark agent. The safe
-bootstrap/preflight entry point is
-`scripts/prepare_agent_efficiency_phase0_host.sh`; it performs host-changing
-installation/image-pull actions only on explicit request and never receives
-direct API-key environment variables.
+
+The package is currently private, so a trusted runner must authenticate before pulling
+it; the benchmark agent still receives no GitHub credential. A network-disabled,
+read-only container probe confirmed Python 3.13.15, Git 2.47.3, and no Docker socket.
+The runner-side loopback OpenRouter Responses API proxy and generated clean
+custom-provider Codex configuration are implemented and unit-tested.
+
+On 2026-09-08 the proxy was converted from an OpenAI-specific endpoint to the documented
+OpenRouter custom-provider contract: Codex sends Responses requests only to a loopback
+`/v1` endpoint with a proxy token, and the proxy forwards only the allowlisted paths
+to OpenRouter `/api/v1` using the runner-side `OPENROUTER_API_KEY`. Neither process has forwarded a
+provider request. The focused suite passed again (22 tests), together with `ruff`
+format and lint checks and `mypy`.
+
+The initial host preflight correctly failed closed because `codex`, Docker, and the
+digest-pinned image were unavailable. On 2026-09-08 the operator installed Podman 5.8.2
+and Codex CLI 0.153.4, then ran the helper with Podman. It advanced through executable
+and version validation and failed only because the deliberately nonexistent,
+digest-shaped placeholder image was not locally available.
+
+No live agent turn, JSONL probe, container isolation probe, or cancellation test has
+been run. The existing SOPS-scoped OpenRouter credential was registered as an intended
+consumer of the runner-side proxy and its presence was verified without rendering it.
+The dedicated `codira-tests-key` has a provider-enforced USD 0.25 daily limit.
+
+The approved bounded probe manifest is `benchmarks/agent-efficiency/phase0-live-probe.toml`: one conformance-only attempt using
+`openai/gpt-5.6-terra` at medium effort, a 600-second timeout, and a 12,000 maximum-output-token cap.
+It is excluded from paired savings analysis. The live-probe launcher is implemented with
+a dry-run default and an explicit paid-execution gate; it starts a loopback proxy,
+creates fresh Codex state, and removes `OPENROUTER_API_KEY` from the Codex child environment.
+
+Focused launcher, proxy, configuration, fixture, and manifest tests passed (26 tests),
+together with `ruff` and `mypy`. The fixture/MCP launcher dry run passed on the
+host using the explicit Codex and `codira-mcp` executable paths. No paid request completed.
+
+The first approved launch on 2026-09-09 was an infrastructure failure: it produced no
+JSONL because the intentionally non-Git disposable fixture lacked Codex's `--skip-git-repo-check`
+flag. The runner now supplies that flag; the failed attempt is retained at `/tmp/codira-phase0-live-events.jsonl` and
+is ineligible for comparison. One corrected infrastructure retry reached the provider
+but was rejected before generation: Codex requested its default 65,536 output-token
+allowance, which exceeded the dedicated USD 0.25 daily key limit.
+
+Its JSONL evidence is retained at `/tmp/codira-phase0-live-events-retry1.jsonl` and is ineligible for comparison. The proxy
+now caps every Responses request at the manifest's 12,000 output-token ceiling; focused
+checks passed again (28 tests). The explicitly approved second retry completed its
+required artifact and MCP work, but is ineligible under the manifest because its
+provider-reported observed total was 69,577 tokens, exceeding the 12,000-token ceiling.
+
+The launcher now enforces that admission ceiling after JSONL capture. The operator
+approved an 80,000 observed-total-token ceiling on 2026-09-09. The manifest retains the
+separate 12,000 maximum-output-token proxy cap so the provider request stays within the
+USD 0.25 daily key limit.
+
+The revised-manifest retry completed successfully on 2026-09-09: it used Codira MCP,
+wrote the required `{"status":"ok"}` artifact, and emitted complete usage evidence (69,065
+input, 56,815 cached input, 578 output, and 104 reasoning-output tokens). Its observed
+total of 69,747 is within the revised 80,000 ceiling. Evidence is retained at `/tmp/codira-phase0-live-events-retry3.jsonl`;
+it remains conformance-only and is excluded from comparative analysis.
+
+The non-billed escape probes passed for all five mandatory cases; their credential-free
+evidence is `/tmp/codira-phase0-escape-probes.json`. The first live cancellation attempt reached `turn.started` and stopped
+after the runner's SIGINT, but Codex exited gracefully with code 0 while the checker
+accepted only signal-style exits. The checker now accepts that code only when the runner
+records the signal delivery; focused checks passed again (31 tests).
+
+The approved corrected cancellation retry completed on 2026-09-09: the runner delivered
+SIGINT, Codex exited with code 1 in 0.045 seconds, and the JSONL stream contains
+`thread.started` and `turn.started` with no terminal event. The credential-free diagnostic sidecar
+is `/tmp/codira-phase0-cancel-events-retry3.jsonl.diagnostic.json`, and the event evidence is `/tmp/codira-phase0-cancel-events-retry3.jsonl`. The runner therefore records the
+cancellation as conformant.
+
+The sole unmet Phase 0 prerequisite is deciding whether the reviewed GHCR package
+remains runner-authenticated/private or is intentionally made public. On 2026-09-09, the
+operator approved retaining runner-authenticated/private visibility. Phase 0 conformance
+prerequisites are therefore complete; package pull credentials remain solely with the
+trusted runner, never with the benchmark agent.
+
+The safe bootstrap/preflight entry point is `scripts/prepare_agent_efficiency_phase0_host.sh`; it performs host-changing
+installation/image-pull actions only on explicit request and never receives direct
+API-key environment variables.
+
+### Required work
 
 - Pin Codex CLI, container runtime/image, authentication mode, and effective
   configuration. Verify JSONL events, usage completeness, cancellation,
@@ -285,7 +291,9 @@ direct API-key environment variables.
 - Record limits that can actually be enforced; usage reported only at completion
   cannot by itself implement a hard mid-run token ceiling.
 
-Gate: runner capabilities and isolation demonstrated; unsupported capabilities
+### Gate
+
+Runner capabilities and isolation demonstrated; unsupported capabilities
 fail closed or require a recorded decision. The operator's execution shell has
 Podman 5.8.2 and Codex CLI 0.153.4; this agent's sandbox has a separate PATH.
 The normal live probe, all five non-billed escape probes, and the corrected
@@ -293,8 +301,12 @@ live cancellation probe provide the required execution-host evidence.
 
 ## Phase 1 — Versioned contracts
 
-Status: complete. Commit: atomic Phase 1 commit on the implementation branch.
-Evidence: versioned Draft 2020-12
+**Status:** `complete`
+**Commit:** atomic Phase 1 commit on the implementation branch.
+
+### Evidence
+
+Versioned Draft 2020-12
 schemas for fixtures, tasks, campaigns, usage, run results, and oracles are
 generated by `scripts/generate_agent_efficiency_schemas.py` and checked with
 `--check`. The strict loader rejects malformed JSON, incompatible versions,
@@ -307,18 +319,25 @@ identity, provenance, failure class, and complete zero-usage accounting. On
 passed (35 tests). The full repository gate completed in a detached execution
 host session on 2026-09-09: 1,018 passed, 1 skipped, and 87% total coverage.
 
+### Required work
+
 Define fixture, task, campaign, per-run result, usage, and oracle schemas plus a
 runner-neutral interface and offline adapter. Include fingerprints, provenance,
 attempt identity, failure classes, accounting completeness, and budgets.
 
-Gate: reject malformed inputs, moving revisions, incompatible versions, unsafe
+### Gate
+
+Reject malformed inputs, moving revisions, incompatible versions, unsafe
 paths, and contradictory budgets; public/private serialization tests pass.
 
 ## Phase 2 — Deterministic evaluation
 
-Status: complete. Commit: atomic Phase 2 commit on the implementation branch.
+**Status:** `complete`
+**Commit:** atomic Phase 2 commit on the implementation branch.
 
-Evidence to date: the staged implementation supplies all declared DSL
+### Evidence
+
+The staged implementation supplies all declared DSL
 primitives, result normalization, protected command and patch evaluation, and
 explicit protected custom-evaluator bindings. The focused oracle suite covers
 reference success plus missing, malformed, false-positive, tampered,
@@ -328,38 +347,46 @@ checks passed: Ruff format and lint, mypy, and `pytest -q
 tests/test_agent_efficiency_oracles.py` (5 tests). Codira was refreshed and
 `codira audit --json` returned `no_matches`.
 
-Independent review record (Grok Build through OpenRouter, 2026-09-09): the
-initial review returned `NEEDS_FIXES` for patch traversal, shell-path bypasses,
-unbound custom evaluator identities, command validation after mutation, two
-missing negative cases, and overstatement in the methodology. The remediation
-validates all unified-diff, rename, and copy targets before `git apply`; rejects
-shell executable paths and inline-command flags; validates test commands before
-copy/apply; binds the protected registry callable to the reviewed script path
-and SHA-256; adds the identified negative cases; and corrects the runbook. A
-confirmation review returned `NEEDS_FIXES` for rename/copy targets, malformed
-boolean children being validated after side effects, class docstring templates,
-and additional negatives. Those findings are resolved in the staged patch and
-focused tests. Its suggestion to prohibit all interpreter commands was not
-accepted: protected tests necessarily invoke an interpreter in the protected
-fixture; shell and inline-code execution remain rejected, and the oracle
-definition is grader-controlled. The final independent confirmation on
-2026-09-09 returned `VERDICT: PASS` after reviewing the complete staged patch.
-Its provider-reported cost was USD 0.0159166. The required final repository
-validation follows this ledger update before the atomic Phase 2 commit.
+Independent review record (Grok Build through OpenRouter, 2026-09-09): the initial
+review returned `NEEDS_FIXES` for patch traversal, shell-path bypasses, unbound custom
+evaluator identities, command validation after mutation, two missing negative cases, and
+overstatement in the methodology. The remediation validates all unified-diff, rename,
+and copy targets before `git apply`; rejects shell executable paths and inline-command
+flags; validates test commands before copy/apply; binds the protected registry callable
+to the reviewed script path and SHA-256; adds the identified negative cases; and
+corrects the runbook. A confirmation review returned `NEEDS_FIXES` for rename/copy targets,
+malformed boolean children being validated after side effects, class docstring
+templates, and additional negatives.
+
+Those findings are resolved in the staged patch and focused tests. Its suggestion to
+prohibit all interpreter commands was not accepted: protected tests necessarily invoke
+an interpreter in the protected fixture; shell and inline-code execution remain
+rejected, and the oracle definition is grader-controlled. The final independent
+confirmation on 2026-09-09 returned `VERDICT: PASS` after reviewing the complete staged patch.
+
+Its provider-reported cost was USD 0.0159166. The required final repository validation
+follows this ledger update before the atomic Phase 2 commit.
+
+### Required work
 
 Implement all DSL primitives, normalization, protected grading, and the custom
 evaluator contract. Cover correct, missing, malformed, false-positive, and
 tampered results. Include executable documentation examples and clean patch
 application with independent tests.
 
-Gate: independently reviewed oracles; reference successes pass and meaningful
+### Gate
+
+Independently reviewed oracles; reference successes pass and meaningful
 negative/mutation cases fail. Record review findings and resolution.
 
 ## Phase 3 — Corpus admission and freeze
 
-Status: complete. Commit: atomic Phase 3 commit on the implementation branch.
+**Status:** `complete`
+**Commit:** atomic Phase 3 commit on the implementation branch.
 
-Evidence to date: on 2026-09-09, SOPS-scoped GitHub queries verified the
+### Evidence
+
+On 2026-09-09, SOPS-scoped GitHub queries verified the
 registered MIT/BSD-3-Clause/MIT license metadata and all three immutable
 revisions. Disposable exact checkouts reproduced the Codira tree
 `e50955c20b6911ed991c3761de8b97fba19fe986`, Click tree
@@ -383,93 +410,119 @@ focused corpus/contract/oracle tests passed (11 tests). The final Codira audit
 returned `no_matches`. The detached full repository gate completed on
 2026-09-09 with 1,025 passed, 1 skipped, 87% total coverage, and exit code 0.
 
+### Required work
+
 Verify license notices, exact trees, setup locks/image digests, language/size
 inventory, six prompts, result contracts, and independently curated ground truth.
 Establish parent-fail/source-fix-pass evidence for Click. Prevent source-fix
 leakage through Git history, package copies, setup artifacts, or agent context.
 
-Gate: all three fixtures reproduce and all six task oracles are validated.
+### Gate
+
+All three fixtures reproduce and all six task oracles are validated.
 Record any remaining setup dependencies before a measured run is allowed.
 
 ## Phase 4 — Paired harness and persistence
 
-Status: complete. Commit: atomic Phase 4 commit on the implementation branch.
-Evidence: the implementation branch now
-has deterministic paired scheduling, immutable atomic result records, strict
-resume/configuration-drift validation, provider-usage normalization, and a
-network-disabled/read-only container JSONL adapter. Focused Phase 0/1/4 tests
-(43 passed, 1 skipped), Ruff, and mypy passed on 2026-09-13. A credential-free Podman integration
-test also passed against the reviewed digest-pinned Phase 0 image: a disposable
-JSONL shim verified the real container adapter's mounts, no-network/read-only
-constraints, output capture, and baseline result normalization. The shim is not
-evidence of real Codex/MCP startup. After operator authorization on 2026-09-12,
-a local-only Phase 4 image was built from the implementation checkout as
-`localhost/codira-agent-efficiency-phase4@sha256:9f2c48be23e150c7d99807da87d9a504152acbecdf4e42a7951a84a518d5bf08`.
-It pins Codex CLI 0.153.4 and the local Codira core version
-`2.0.2.post1.dev49`; a credential-free network-disabled probe verified
-`codex --version`, the `codira-mcp` entry point, and a direct MCP `initialize`
-handshake. The build exposed and corrected Codira's missing runtime declaration
-for `packaging`. The image is local only and unpublished. No comparative paid
-campaign has started. On 2026-09-13, the repository gate completed cleanly
-with 1,037 passed, 2 skipped, 87% total coverage, and exit code 0.
-On 2026-09-13, the authorized local Phase 4 conformance turn used the
-Unix-socket relay to reach the runner-side OpenRouter proxy while the Codex
-container retained `--network=none`. It returned zero after 19.410 seconds,
-used the required Codira MCP server, emitted ten JSONL events, and reported
-complete usage (68,375 input, 56,215 cached input, 575 output, and 192
-reasoning-output tokens). Codex 0.153.4 represented the requested artifact as
-a completed `file_change` rather than `command_execution`; the evidence checker
-now accepts that completed artifact event and revalidated the preserved stream
-as successful. The runner-side proxy now binds a distinct immutable handler
-configuration per server and exposes an owner-only Unix socket; the container
-has no provider credential or direct network route. The independent Grok Build
-review through the authorized OpenRouter route returned `VERDICT: PASS` on
-2026-09-13 (provider-reported cost USD 0.0137676); its only note was the
-expected compatible-UID requirement for the owner-only socket. This closes the
-separate execution/accounting review requirement.
+**Status:** `complete`
+**Commit:** atomic Phase 4 commit on the implementation branch.
+
+### Evidence
+
+The implementation branch now has deterministic paired scheduling, immutable atomic
+result records, strict resume/configuration-drift validation, provider-usage
+normalization, and a network-disabled/read-only container JSONL adapter. Focused Phase
+0/1/4 tests (43 passed, 1 skipped), Ruff, and mypy passed on 2026-09-13. A
+credential-free Podman integration test also passed against the reviewed digest-pinned
+Phase 0 image: a disposable JSONL shim verified the real container adapter's mounts,
+no-network/read-only constraints, output capture, and baseline result normalization.
+
+The shim is not evidence of real Codex/MCP startup. After operator authorization on
+2026-09-12, a local-only Phase 4 image was built from the implementation checkout as
+`localhost/codira-agent-efficiency-phase4@sha256:9f2c48be23e150c7d99807da87d9a504152acbecdf4e42a7951a84a518d5bf08`. It pins Codex CLI 0.153.4 and the local Codira core version `2.0.2.post1.dev49`; a
+credential-free network-disabled probe verified `codex --version`, the `codira-mcp` entry point,
+and a direct MCP `initialize` handshake.
+
+The build exposed and corrected Codira's missing runtime declaration for `packaging`. The
+image is local only and unpublished. No comparative paid campaign has started.
+
+On 2026-09-13, the repository gate completed cleanly with 1,037 passed, 2 skipped, 87%
+total coverage, and exit code 0. On 2026-09-13, the authorized local Phase 4 conformance
+turn used the Unix-socket relay to reach the runner-side OpenRouter proxy while the
+Codex container retained `--network=none`. It returned zero after 19.410 seconds, used the
+required Codira MCP server, emitted ten JSONL events, and reported complete usage
+(68,375 input, 56,215 cached input, 575 output, and 192 reasoning-output tokens).
+
+Codex 0.153.4 represented the requested artifact as a completed `file_change` rather than
+`command_execution`; the evidence checker now accepts that completed artifact event and
+revalidated the preserved stream as successful. The runner-side proxy now binds a
+distinct immutable handler configuration per server and exposes an owner-only Unix
+socket; the container has no provider credential or direct network route. The
+independent Grok Build review through the authorized OpenRouter route returned `VERDICT: PASS`
+on 2026-09-13 (provider-reported cost USD 0.0137676); its only note was the expected
+compatible-UID requirement for the owner-only socket.
+
+This closes the separate execution/accounting review requirement.
+
+### Required work
 
 Implement isolated container runs, Codex JSONL adapter, MCP connection, randomized
 pairing, cancellation, atomic checkpoints, resume, and usage normalization.
 Record initial index preparation separately. Test incomplete streams, missing
 usage, duplicate events, crashes between writes, retries, and configuration drift.
 
-Gate: offline plus container integration tests demonstrate pairing, complete
+### Gate
+
+Offline plus container integration tests demonstrate pairing, complete
 accounting where supported, memory isolation, recovery, and evidence integrity.
 Separate execution/accounting review completed.
 
 ## Phase 5 — Reporting and campaign readiness
 
-Status: complete. Commit: atomic Phase 5 commit on the implementation branch.
-Evidence: canonical report generation is
-implemented with a versioned JSON document and Markdown derived only from that
-JSON. It loads only validated immutable records, emits per-attempt summaries
-with normalized usage, elapsed time, event counts, paired token differences,
-median/p90 statistics, and explicit exclusions. Synthetic path- and token-like
-failure data is redacted before public rendering. The dedicated report command
-reconstructs the frozen campaign identity without executing an agent. Focused
-reporting checks passed (6 tests), as did Ruff, mypy, and `codira audit` on
-2026-09-13. Grok Build's independent OpenRouter review initially identified
-Markdown omission of exclusions, unsafe assertions, missing evidence-metric
-validation, incomplete-pair coverage, incomplete task examples, and defensive
-top-level validation. Each finding was remediated; the fingerprinted final
-confirmation returned `VERDICT: PASS` (provider-reported cost USD 0.0156366).
-The full repository gate then completed with 1,043 passed, 2 skipped, 87% total
-coverage, and exit code 0. The local campaign branch is created from this
-validated Phase 5 commit only; no paid campaign execution is authorized.
+**Status:** `complete`
+**Commit:** atomic Phase 5 commit on the implementation branch.
+
+### Evidence
+
+Canonical report generation is implemented with a versioned JSON document and Markdown
+derived only from that JSON. It loads only validated immutable records, emits
+per-attempt summaries with normalized usage, elapsed time, event counts, paired token
+differences, median/p90 statistics, and explicit exclusions. Synthetic path- and
+token-like failure data is redacted before public rendering.
+
+The dedicated report command reconstructs the frozen campaign identity without executing
+an agent. Focused reporting checks passed (6 tests), as did Ruff, mypy, and `codira audit` on
+2026-09-13. Grok Build's independent OpenRouter review initially identified Markdown
+omission of exclusions, unsafe assertions, missing evidence-metric validation,
+incomplete-pair coverage, incomplete task examples, and defensive top-level validation.
+
+Each finding was remediated; the fingerprinted final confirmation returned `VERDICT: PASS`
+(provider-reported cost USD 0.0156366). The full repository gate then completed with
+1,043 passed, 2 skipped, 87% total coverage, and exit code 0. The local campaign branch
+is created from this validated Phase 5 commit only; no paid campaign execution is
+authorized.
+
+### Required work
 
 Build reproducible JSON and Markdown reports with per-task success/failure,
 paired token differences, median/p90, elapsed time, tool calls, and exclusions.
 Retain traces needed to diagnose interaction friction. Exercise public redaction
 using synthetic private data. Document prepare/run/resume/evaluate/report flows.
 
-Gate: regenerate from stored records, reject incomparable inputs, pass focused
+### Gate
+
+Regenerate from stored records, reject incomparable inputs, pass focused
 tests and `uv run python scripts/validate_repo.py`. Record reviewed implementation
 SHA and create the campaign branch from that commit.
 
 ## Phase 6 — Bounded pilot and estimate
 
-Status: complete. Commit: `2909726`; earlier steps `67c3f30` and `c3cd66a`.
-Evidence: Phase 6 step 1 implements
+**Status:** `complete`
+**Commit:** `2909726`; earlier steps `67c3f30` and `c3cd66a`.
+
+### Evidence and execution history
+
+Phase 6 step 1 implements
 `scripts/run_agent_efficiency_phase6_pilot.py`, a dry-run-only launcher. It
 validates a public campaign-schema manifest, requires exactly three unique task
 identities and one repetition, and emits the deterministic six-attempt schedule
@@ -481,164 +534,170 @@ on 2026-09-13 (OpenRouter-reported cost: USD 0.0077846); it identified no
 required change. The full repository gate passed on 2026-09-13: 1,046 passed,
 2 skipped, 87% coverage, and zero Semgrep findings.
 
-Phase 6 step 2 adds the public, schema-validated
-`benchmarks/agent-efficiency/phase6-pilot.json` approval manifest. It binds
-the three selected public task identities to their three frozen fixture
-fingerprints; fixes OpenRouter `openai/gpt-5.6-terra` at medium reasoning; and
-records the approved USD 2 daily hard key limit, USD 1.80 pilot estimate,
-12,000 output-token limit, 80,000 observed-total-token admission ceiling,
-600-second attempt timeout, and existing container controls. The campaign
-contract now validates task-to-fixture bindings. The provider proxy rejects
-model/effort substitution and injects the approved OpenRouter output and price
-ceilings. The launcher remains dry-run-only until live execution is separately
-reviewed and gated. Focused tests, Ruff, mypy, `codira audit`, and the checked
-in manifest dry run passed on 2026-09-13. Independent Grok Build review
-returned `VERDICT: PASS` on 2026-09-13 (OpenRouter-reported cost: USD
-0.0118504); it identified no required change. The full repository gate passed
-on 2026-09-13: 1,050 passed, 2 skipped, 87% coverage, and zero Semgrep
-findings. The operator confirmed that the dedicated
-`codira-agent-efficiency-pilot` key has the required USD 2 daily cap.
+Phase 6 step 2 adds the public, schema-validated `benchmarks/agent-efficiency/phase6-pilot.json` approval manifest. It binds
+the three selected public task identities to their three frozen fixture fingerprints;
+fixes OpenRouter `openai/gpt-5.6-terra` at medium reasoning; and records the approved USD 2 daily
+hard key limit, USD 1.80 pilot estimate, 12,000 output-token limit, 80,000
+observed-total-token admission ceiling, 600-second attempt timeout, and existing
+container controls. The campaign contract now validates task-to-fixture bindings.
 
-Phase 6 step 3 implements the explicit, resumable paid-pilot runner in
-`scripts/run_agent_efficiency_phase6_pilot.py`. It validates all frozen public
-task and fixture bindings before reading the dedicated pilot credential;
-requires explicit local source bindings; exports each agent-visible fixture at
-its admitted Git revision; and makes a separate detached protected checkout for
+The provider proxy rejects model/effort substitution and injects the approved OpenRouter
+output and price ceilings. The launcher remains dry-run-only until live execution is
+separately reviewed and gated. Focused tests, Ruff, mypy, `codira audit`, and the checked in
+manifest dry run passed on 2026-09-13.
+
+Independent Grok Build review returned `VERDICT: PASS` on 2026-09-13 (OpenRouter-reported
+cost: USD 0.0118504); it identified no required change. The full repository gate passed
+on 2026-09-13: 1,050 passed, 2 skipped, 87% coverage, and zero Semgrep findings. The
+operator confirmed that the dedicated `codira-agent-efficiency-pilot` key has the required USD 2 daily cap.
+
+Phase 6 step 3 implements the explicit, resumable paid-pilot runner in `scripts/run_agent_efficiency_phase6_pilot.py`. It
+validates all frozen public task and fixture bindings before reading the dedicated pilot
+credential; requires explicit local source bindings; exports each agent-visible fixture
+at its admitted Git revision; and makes a separate detached protected checkout for
 grading. The patch task's protected Sentinel probe is a benchmark-owned,
-SHA-256-verified asset derived from Click upstream commit
-`f58ca3e81424a35626c8a475eb59ab95589008ce`; it is copied only into the grader
-checkout. A fresh per-attempt Unix-socket proxy now enforces the fixed Terra
-medium model, OpenRouter price caps, output cap, and one Responses request
-before upstream forwarding. The runner preserves immutable `CampaignStore`
-records, fails closed on unfinished attempt work and malformed controls, and
-turns protected-oracle contract failures into terminal `oracle_failure`
-records. The test-review SOPS registry now authorizes the narrowly scoped
-`scripts/run_agent_efficiency_phase6_review.py` helper. Grok Build through
-OpenRouter reviewed the implementation iteratively: two `NEEDS_FIXES` reviews
-identified assertion, path-safety, failure-normalization, and coverage gaps;
-all were remediated. The final confirmation returned `VERDICT: PASS` on
-2026-09-14 (provider-reported USD 0.0535486; all three review calls totalled
-USD 0.1240278). Focused checks reached 62 passed, 1 skipped; the final full
-repository gate passed on 2026-09-14 with 1,058 passed, 2 skipped, 87% total
-coverage, and zero Semgrep findings.
+SHA-256-verified asset derived from Click upstream commit `f58ca3e81424a35626c8a475eb59ab95589008ce`; it is copied only
+into the grader checkout.
 
-Pilot 001 was then launched from the immutable local state root. All six
-attempts became `infrastructure_failure` records with return code 127 and an
-empty JSONL transcript; every record reports zero Responses requests and zero
-usage tokens. The originally selected base image,
-`ghcr.io/marco0560/codira-agent-benchmark@sha256:3647440cc3b727288bde32e5d651781f4869064c15c64f553474ca25d0aa00eb`,
-does not contain `codex`, as verified offline. Thus Pilot 001 made no provider
-request and incurred no pilot-provider charge; it is not evidence about either
-assistance mode. Its records and original manifest remain unchanged. The
-corrective Pilot 002 has a new campaign identity and binds the verified Phase 4
-runtime image
-`localhost/codira-phase6-pilot@sha256:c261d4ef446e73ccaec07ba8b592b2e80b26a7035a83d1cc5c3541718e2e1d24`.
-The runner now requires an exact manifest runtime image for paid execution and
-rejects a command-line image mismatch before preparing inputs or reading the
-credential. Pilot 002 was pending at this checkpoint.
+A fresh per-attempt Unix-socket proxy now enforces the fixed Terra medium model,
+OpenRouter price caps, output cap, and one Responses request before upstream forwarding.
+The runner preserves immutable `CampaignStore` records, fails closed on unfinished attempt
+work and malformed controls, and turns protected-oracle contract failures into terminal
+`oracle_failure` records. The test-review SOPS registry now authorizes the narrowly scoped
+`scripts/run_agent_efficiency_phase6_review.py` helper.
 
-Pilot 002 subsequently completed its six scheduled records, each with exactly
-one forwarded Responses request, but all became `infrastructure_failure` with
-`turn.failed` reporting the proxy's 429 request ceiling. The historical raw
-records report no completed-turn usage, so no provider cost or benchmark result
-is inferred from them. The one-request control is incompatible with Codex's
-multi-request agent loop. Under operator authorization, Pilot 003 is a new
-identity with the same frozen tasks, fixtures, model, image, USD 2 daily key
-cap, USD 1.80 pilot estimate, and 600-second timeout; it permits at most eight
-Responses requests of 1,500 output tokens each per attempt. That preserves a
-12,000-token generated-output envelope while allowing bounded tool-loop
-continuations. Pilot 003 was stopped after its first baseline record: the
-agent completed with six Responses requests and complete usage evidence, but
-the baseline configuration incorrectly exposed Codira MCP. The record is
-non-comparable and no further Pilot 003 record was written. The runner now
-creates a no-MCP baseline configuration, covered by a regression test. Pilot
-004 is a new identity with the same controls and frozen public inputs, bound to
-the corrected verified runtime image
-`localhost/codira-phase6-pilot@sha256:9dc2d751d504430174ca9d03cf85cdce42b223128b5ac744587dbf2b63480dc5`.
-Pilot 004 completed all six records with complete usage evidence, but every
-attempt reported that the nested Codex workspace sandbox could not create or
-inspect files inside the already-confined container. The outer Podman boundary
-already enforces no network, read-only root, dropped capabilities,
-no-new-privileges, and explicit writable mounts. The runner therefore invokes
-the supported Codex `danger-full-access` inner mode only within that outer
-boundary; a regression test locks the command vector. Pilot 005 is the new
-identity for this runner-input change, with the same verified image and frozen
-public inputs. It has not yet been executed.
+Grok Build through OpenRouter reviewed the implementation iteratively: two `NEEDS_FIXES`
+reviews identified assertion, path-safety, failure-normalization, and coverage gaps; all
+were remediated. The final confirmation returned `VERDICT: PASS` on 2026-09-14
+(provider-reported USD 0.0535486; all three review calls totalled USD 0.1240278).
+Focused checks reached 62 passed, 1 skipped; the final full repository gate passed on
+2026-09-14 with 1,058 passed, 2 skipped, 87% total coverage, and zero Semgrep findings.
 
-Pilot 005 likewise completed six immutable `infrastructure_failure` records:
-each exhausted its eight-request ceiling before a terminal turn. One baseline
-trace had already written the required result artifact before needing its ninth
-continuation, proving the remaining fault is the request bound rather than the
-outer sandbox. Under operator authorization, Pilot 006 is the replacement
-identity. It permits 12 Responses requests at 1,000 output tokens each, keeping
-the same 12,000-token generated-output envelope while allowing the observed
-agent loop to complete. The dedicated key now has a USD 4 daily cap; the
-operator reported USD 2.9496 remaining before Pilot 006. Pilot 006 was stopped
-after two records when its transcript revealed that the runner image lacked
-`uv`; the baseline had written the required artifact before its verification
-command failed. Those records are invalid and no benchmark cost or outcome is
-inferred from their incomplete terminal usage. Pilot 011 is a fresh identity
-bound to `localhost/codira-phase6-pilot@sha256:c63266df197bcccdba2020be8e38327a240ae88a85d8ebca463a946a06a09d34`.
-Its image provides `uv`, uses its preinstalled Python 3.13 without sync or
-managed-Python downloads, and was verified to run the observed `uv run python`
-command under the production no-network/read-only controls. It preserves the
-authorized 12-request, 1,000-output-token, USD 4 daily, and USD 1.80 pilot
-ceilings. Pilot 011 was stopped after its first pair: the baseline exhausted
-12 requests without a terminal turn after its recorded verification command
-found `jq` unavailable, while the assisted attempt reached a terminal
-deterministic-oracle failure after 11 requests. The pair is invalid and is not
-used as a comparison. Pilot 013 is a fresh identity bound to
-`localhost/codira-phase6-pilot@sha256:e7ded5da0e93f4d5372963165d545b779afe717879cca938125067d82099194e`.
-Its image includes `git`, `jq`, and `ripgrep` in addition to Codira, Codira
-MCP, Codex, and uv. A disposable-fixture preflight verified every command
-observed in the Pilot 011 transcripts, including the `uv run`, Git, jq,
-Codira CLI, and Codira MCP compound paths, under the production no-network and
-read-only controls. Pilot 013 retains the same authorized ceilings.
-Pilot 013 was stopped after its first pair when complete terminal usage showed
-that the USD 0.30 per-attempt estimate was too low: the baseline recorded
-232,080 input and 1,830 output tokens, and the assisted attempt 210,749 input
-and 1,837 output tokens. At the manifest's conservative maximum prompt and
-completion rates, those two attempts can total up to USD 0.97. Both are
-deterministic-oracle failures, not runner failures, and their pair is retained
-as immutable evidence but not used to draw comparative conclusions. No further
-attempt is authorized until the estimate and available key budget are revised
-explicitly. The operator raised the pilot key's daily cap to USD 6. Pilot 014
-is the resulting fresh identity, with the same frozen inputs and verified image
-but a USD 0.50 per-attempt estimate and USD 3.00 pilot ceiling.
-Pilot 014 then confirmed a separate fixture-contract defect: its synthetic
-archive export had no Git worktree, so a normal `git diff --check` verification
-failed and the assisted attempt exhausted its 12-request ceiling. The exporter
-now initializes an empty, history-free, remote-free Git repository after
-extracting the frozen tree; its contract test verifies no source commit is
-exposed while normal Git verification works. The operator raised the daily cap
-to USD 10. Pilot 015 is the new identity for that fixture change, allowing 24
-requests of 500 output tokens each (the same 12,000 output-token envelope),
-with conservative USD 1.00 per-attempt and USD 6.00 pilot ceilings.
-Pilot 015 showed that even 24 requests cannot compensate for the agent's
-post-artifact verification loop. With operator approval, all three pilot tasks
-now instruct the agent to stop immediately after writing the required artifact.
-Their fingerprints changed; the oracles and frozen fixtures did not. Pilot 016
-is the fresh identity for that treatment change, retaining Pilot 015's resource
-and USD 10 daily controls.
+Pilot 001 was then launched from the immutable local state root. All six attempts became
+`infrastructure_failure` records with return code 127 and an empty JSONL transcript; every record
+reports zero Responses requests and zero usage tokens. The originally selected base
+image, `ghcr.io/marco0560/codira-agent-benchmark@sha256:3647440cc3b727288bde32e5d651781f4869064c15c64f553474ca25d0aa00eb`, does not contain `codex`, as verified offline.
 
-Pilot 016 identified that an assisted documentation execution could complete
-without invoking MCP, so its record was retained as invalid evidence. The
-runner now binds a versioned treatment instruction from each paid manifest and
-requires one Codira MCP call only for the assisted variant. Pilot 017 exposed a
-timeout-cleanup defect: the outer Podman client was cancelled but the container
-could survive. Each attempt now supplies a host-visible CID file and, after a
-timeout, force-removes only the validated CID. Pilot 018 is the fresh identity
-for those runner inputs. Its six immutable records all have complete usage and
-its deterministic report has zero exclusions. Every attempt nevertheless
-failed its deterministic oracle; the paired Codira MCP token increases were
-64,658 (symbols), 146,978 (documentation), and 144,781 (patch). The pilot
-therefore provides no provider-token evidence for a successful outcome and
-does not support a 60-run campaign. On 2026-09-14 the operator explicitly
-approved closure as an inconclusive, non-advancing Phase 6 result. This is an
-explicit waiver of this phase's normal full-campaign-manifest/budget gate;
+Thus Pilot 001 made no provider request and incurred no pilot-provider charge; it is not
+evidence about either assistance mode. Its records and original manifest remain
+unchanged. The corrective Pilot 002 has a new campaign identity and binds the verified
+Phase 4 runtime image `localhost/codira-phase6-pilot@sha256:c261d4ef446e73ccaec07ba8b592b2e80b26a7035a83d1cc5c3541718e2e1d24`.
+
+The runner now requires an exact manifest runtime image for paid execution and rejects a
+command-line image mismatch before preparing inputs or reading the credential. Pilot 002
+was pending at this checkpoint.
+
+Pilot 002 subsequently completed its six scheduled records, each with exactly one
+forwarded Responses request, but all became `infrastructure_failure` with `turn.failed` reporting the
+proxy's 429 request ceiling. The historical raw records report no completed-turn usage,
+so no provider cost or benchmark result is inferred from them. The one-request control
+is incompatible with Codex's multi-request agent loop.
+
+Under operator authorization, Pilot 003 is a new identity with the same frozen tasks,
+fixtures, model, image, USD 2 daily key cap, USD 1.80 pilot estimate, and 600-second
+timeout; it permits at most eight Responses requests of 1,500 output tokens each per
+attempt. That preserves a 12,000-token generated-output envelope while allowing bounded
+tool-loop continuations. Pilot 003 was stopped after its first baseline record: the
+agent completed with six Responses requests and complete usage evidence, but the
+baseline configuration incorrectly exposed Codira MCP.
+
+The record is non-comparable and no further Pilot 003 record was written. The runner now
+creates a no-MCP baseline configuration, covered by a regression test. Pilot 004 is a
+new identity with the same controls and frozen public inputs, bound to the corrected
+verified runtime image `localhost/codira-phase6-pilot@sha256:9dc2d751d504430174ca9d03cf85cdce42b223128b5ac744587dbf2b63480dc5`.
+
+Pilot 004 completed all six records with complete usage evidence, but every attempt
+reported that the nested Codex workspace sandbox could not create or inspect files
+inside the already-confined container. The outer Podman boundary already enforces no
+network, read-only root, dropped capabilities, no-new-privileges, and explicit writable
+mounts. The runner therefore invokes the supported Codex `danger-full-access` inner mode only
+within that outer boundary; a regression test locks the command vector.
+
+Pilot 005 is the new identity for this runner-input change, with the same verified image
+and frozen public inputs. It has not yet been executed.
+
+Pilot 005 likewise completed six immutable `infrastructure_failure` records: each exhausted its
+eight-request ceiling before a terminal turn. One baseline trace had already written the
+required result artifact before needing its ninth continuation, proving the remaining
+fault is the request bound rather than the outer sandbox. Under operator authorization,
+Pilot 006 is the replacement identity.
+
+It permits 12 Responses requests at 1,000 output tokens each, keeping the same
+12,000-token generated-output envelope while allowing the observed agent loop to
+complete. The dedicated key now has a USD 4 daily cap; the operator reported USD 2.9496
+remaining before Pilot 006. Pilot 006 was stopped after two records when its transcript
+revealed that the runner image lacked `uv`; the baseline had written the required
+artifact before its verification command failed.
+
+Those records are invalid and no benchmark cost or outcome is inferred from their
+incomplete terminal usage. Pilot 011 is a fresh identity bound to `localhost/codira-phase6-pilot@sha256:c63266df197bcccdba2020be8e38327a240ae88a85d8ebca463a946a06a09d34`. Its image
+provides `uv`, uses its preinstalled Python 3.13 without sync or managed-Python
+downloads, and was verified to run the observed `uv run python` command under the production
+no-network/read-only controls.
+
+It preserves the authorized 12-request, 1,000-output-token, USD 4 daily, and USD 1.80
+pilot ceilings. Pilot 011 was stopped after its first pair: the baseline exhausted 12
+requests without a terminal turn after its recorded verification command found `jq`
+unavailable, while the assisted attempt reached a terminal deterministic-oracle failure
+after 11 requests. The pair is invalid and is not used as a comparison.
+
+Pilot 013 is a fresh identity bound to `localhost/codira-phase6-pilot@sha256:e7ded5da0e93f4d5372963165d545b779afe717879cca938125067d82099194e`. Its image includes `git`,
+`jq`, and `ripgrep` in addition to Codira, Codira MCP, Codex, and uv. A
+disposable-fixture preflight verified every command observed in the Pilot 011
+transcripts, including the `uv run`, Git, jq, Codira CLI, and Codira MCP compound
+paths, under the production no-network and read-only controls.
+
+Pilot 013 retains the same authorized ceilings. Pilot 013 was stopped after its first
+pair when complete terminal usage showed that the USD 0.30 per-attempt estimate was too
+low: the baseline recorded 232,080 input and 1,830 output tokens, and the assisted
+attempt 210,749 input and 1,837 output tokens. At the manifest's conservative maximum
+prompt and completion rates, those two attempts can total up to USD 0.97.
+
+Both are deterministic-oracle failures, not runner failures, and their pair is retained
+as immutable evidence but not used to draw comparative conclusions. No further attempt
+is authorized until the estimate and available key budget are revised explicitly. The
+operator raised the pilot key's daily cap to USD 6.
+
+Pilot 014 is the resulting fresh identity, with the same frozen inputs and verified
+image but a USD 0.50 per-attempt estimate and USD 3.00 pilot ceiling. Pilot 014 then
+confirmed a separate fixture-contract defect: its synthetic archive export had no Git
+worktree, so a normal `git diff --check` verification failed and the assisted attempt exhausted
+its 12-request ceiling. The exporter now initializes an empty, history-free, remote-free
+Git repository after extracting the frozen tree; its contract test verifies no source
+commit is exposed while normal Git verification works.
+
+The operator raised the daily cap to USD 10. Pilot 015 is the new identity for that
+fixture change, allowing 24 requests of 500 output tokens each (the same 12,000
+output-token envelope), with conservative USD 1.00 per-attempt and USD 6.00 pilot
+ceilings. Pilot 015 showed that even 24 requests cannot compensate for the agent's
+post-artifact verification loop.
+
+With operator approval, all three pilot tasks now instruct the agent to stop immediately
+after writing the required artifact. Their fingerprints changed; the oracles and frozen
+fixtures did not. Pilot 016 is the fresh identity for that treatment change, retaining
+Pilot 015's resource and USD 10 daily controls.
+
+Pilot 016 identified that an assisted documentation execution could complete without
+invoking MCP, so its record was retained as invalid evidence. The runner now binds a
+versioned treatment instruction from each paid manifest and requires one Codira MCP call
+only for the assisted variant. Pilot 017 exposed a timeout-cleanup defect: the outer
+Podman client was cancelled but the container could survive.
+
+Each attempt now supplies a host-visible CID file and, after a timeout, force-removes
+only the validated CID. Pilot 018 is the fresh identity for those runner inputs. Its six
+immutable records all have complete usage and its deterministic report has zero
+exclusions.
+
+Every attempt nevertheless failed its deterministic oracle; the paired Codira MCP token
+increases were 64,658 (symbols), 146,978 (documentation), and 144,781 (patch). The pilot
+therefore provides no provider-token evidence for a successful outcome and does not
+support a 60-run campaign. On 2026-09-14 the operator explicitly approved closure as an
+inconclusive, non-advancing Phase 6 result.
+
+This is an explicit waiver of this phase's normal full-campaign-manifest/budget gate;
 Phase 7 remains pending and no full campaign is authorized.
 
-### Restart checkpoint and lessons learned
+#### Restart checkpoint and lessons learned
 
 Restart from implementation commit `2909726`. Phase 6 is closed as
 inconclusive; Phase 7 is not authorized. Before any renewed benchmark work,
@@ -681,7 +740,110 @@ is measurable.
    preserve a public-safe report reference and its configuration fingerprint
    rather than relying on a transient `/tmp` path for a future restart.
 
-### Paid reviewer evaluation guardrails (2026-09-16)
+#### Offline runtime re-admission (2026-09-19)
+
+The renewed runner image is not eligible for a paid request until it passes an
+offline, fixture-level admission. The admitted image
+`localhost/codira-phase6-onnx:20260919-r2@sha256:57e461389adc7d14a22684c4fc92558300900d3165517e64c33594c80d336c89`
+contains the repository-selected `bge-small-en-v1.5-onnx` model and tokenizer,
+downloaded and smoke-tested by `scripts/download_embedding_model.py` during
+the image build. The runner writes the same profile to the exported fixture
+before executing `codira index`; the MCP process reads that fixture-local
+profile, preventing index/MCP configuration drift.
+
+The profile fingerprint is
+`505d9aa2d761657199fa63de526dea33c1e4aacef030c2f45e3216526643f680`; it
+fixes the SQLite backend, ONNX engine, 384-dimensional model, single-item
+batches, and serial indexing. The image pins `tree-sitter==0.25.2`, the version
+in `uv.lock`. An unconstrained image installed 0.26.0 and the
+Python analyzer segfaulted (exit 139) on the frozen Click fixture; this was a
+runtime ABI failure, not a token, model, or oracle result. The corrected image
+passed offline `codira index` followed by an MCP `context_for_task` call under
+the production no-network, read-only-root, dropped-capabilities, bounded-tmpfs
+controls for all three frozen sources: Click, Picomatch, and Codira.
+
+This is a necessary runtime-admission repair only. It authorizes no provider
+request. Any next paid experiment must use a fresh identity bound to this exact
+digest and profile fingerprint, the revised task/oracle contracts, and the
+operator-approved DeepSeek model, accounting cap, and budget.
+
+#### Renewed Codira-efficacy pilot manifest (2026-09-19)
+
+The operator approved preparation, but not execution, of
+`codira-efficacy-pilot-001`. Its public manifest is
+`benchmarks/agent-efficiency/codira-efficacy-pilot-001.json`, fingerprint
+`cdaaf6c87ed4c5aca1a49ad495f2e4fe187fa1d35ae8c7ecb3df5d1d4d10bbb2`.
+It fixes the admitted image and profile, current canonical task/fixture
+fingerprints, and exact `deepseek/deepseek-v4.1-flash-20260910` routing with
+fallback disabled by the runner. It schedules three baseline/MCP pairs (six
+requests), permits one provider request per attempt, and records the USD 6.00
+daily key cap. Its conservative ceiling is USD 0.15 per attempt and USD 0.90
+for the six-request pilot, calculated from 200,000 total tokens at the
+manifest's USD 0.60/M highest admitted rate.
+
+The runner now rejects an accounting configuration whose worst-case
+manifest-token cost does not fit its per-attempt and six-attempt pilot ceiling,
+and records a completed response above `max_total_tokens` as non-comparative
+infrastructure evidence. The dedicated key's daily cap remains the hard
+provider-spend boundary. A separate live-route calibration and explicit paid
+execution authorization remain required.
+
+`codira-efficacy-pilot-001` subsequently failed Stage 1 admission before any
+completion: its date-suffixed ID was a documentation URL revision, not an ID
+present in OpenRouter's live API catalog. The public catalog reported the exact
+API ID `deepseek/deepseek-v4.1-flash`, with the same USD 0.15/M prompt and USD
+0.60/M completion ceilings and `tools`/`reasoning` capabilities. The failed
+candidate remains unchanged. `codira-efficacy-pilot-002` is the fresh manifest
+for that live route; it requires a new Stage 1 preflight record before any
+separate paid-execution approval.
+
+`codira-efficacy-pilot-002` also failed Stage 1 before an authenticated catalog
+or completion request. The public model catalog has weekday time-window
+overrides reaching USD 0.30/M prompt and USD 1.20/M completion, above the
+manifest's USD 0.15/M and USD 0.60/M ceilings. The runner rejected that drift;
+it did not rely on fallback routing or submit an agent request. A replacement
+manifest needs an explicit operator decision: retain the low ceilings and
+accept route unavailability in the higher-priced windows, or bind the observed
+maximum rates with a fresh USD 0.25 per-attempt and USD 1.50 six-request pilot
+estimate (both still below the USD 6.00 daily scoped-key cap).
+
+The operator selected the first option on 2026-09-19: retain the low ceilings
+and make the route unavailable during higher-priced windows. The Stage 1
+preflight was corrected to select the active UTC pricing window while retaining
+the provider maximum as a future-window guard. Its final full repository gate
+passed (`1105 passed, 3 skipped`). The approved non-billing preflight then
+reached the scoped-key budget check and stopped with `scoped OpenRouter key
+budget is insufficient`: the key's remaining budget was below the frozen USD
+0.90 pilot minimum. No completion request, model response, or provider-usage
+record was created. The empty stdout artifact is retained at
+`.artifacts/agent-efficiency/codira-efficacy-pilot-002/preflight-r3.json`; the
+fresh manifest fingerprint is
+`726589024df160997475bb9f432526d4565fdae2b713788e70c290df99f70448`.
+
+The initial key-budget failure was caused by the key limit being externally set
+to USD 12.00 while the frozen manifest requires USD 6.00; it was not a provider
+completion or a response/admission result. After the operator reset the scoped
+key to its approved USD 6.00 daily cap, a repeated non-billing Stage 1 preflight
+passed. Its sanitized record is
+`.artifacts/agent-efficiency/codira-efficacy-pilot-002/preflight-r4.json`
+(SHA-256 `fab105bfeb8120a321699f7effb71df3f555772ad5ab211149fa4b29ec48212b`).
+It proves the exact DeepSeek route is key-visible with tools and reasoning,
+the active Saturday/Sunday low-price override is USD 0.15/M prompt and USD
+0.60/M completion, and the key reports USD 6.00 limit, USD 6.00 remaining,
+daily reset, and zero daily usage. No completion request was submitted.
+
+Stage 1 success does not authorize the Stage 3 six-request pilot. The next
+paid action remains a separately frozen, explicitly approved one-request Stage
+2 calibration; a fresh calibration identity is required before it can be run.
+
+The final repository gate for this runtime repair passed on 2026-09-19 in a
+tmux session with durable evidence (`1101 passed, 3 skipped`); Codira audit
+reported no findings. The first two gate failures were retained and diagnosed:
+formatting drift, then an undocumented `noqa`, followed by three missing
+NumPy-docstring sections after audit was correctly made blocking. No finding
+was suppressed or ignored.
+
+#### Paid reviewer evaluation guardrails (2026-09-16)
 
 The first DeepSeek/Grok evaluator attempt reached the provider-request stage
 without a durable per-attempt record and then ended after the request timeout
@@ -713,7 +875,7 @@ used to support a model-selection conclusion.
    helper command. A new executable command requires registry review and an
    explicit authorization; do not broaden the SOPS command as a workaround.
 
-### Reviewer evaluation `r2` terminal record (2026-09-16)
+#### Reviewer evaluation `r2` terminal record (2026-09-16)
 
 The explicitly authorized `phase6-deepseek-v4-1-flash-r2-20260916` run passed
 its credential-free contract preflight and then verified a USD 3.00 scoped-key
@@ -725,7 +887,7 @@ review record exists. The state is terminal `failed` with zero completed
 attempts. Treat it as non-comparative evidence with unknown provider-side
 billing; do not resume or retry `r2`.
 
-### Reviewer evaluation `r3` terminal record (2026-09-17)
+#### Reviewer evaluation `r3` terminal record (2026-09-17)
 
 The explicitly authorized `phase6-deepseek-v4-1-flash-r3-20260917` run used
 the provider-metadata correction, atomically recorded its first attempt, and
@@ -737,7 +899,7 @@ evidence. Its terminal state blocks resume; a replacement requires a new
 identity and explicit authorization. Future terminal state stores a safe HTTP
 status for transport failures, never the provider error body.
 
-### Reviewer evaluation `r4` diagnostic terminal record (2026-09-17)
+#### Reviewer evaluation `r4` diagnostic terminal record (2026-09-17)
 
 After a fresh passing repository gate, the authorized distinct
 `phase6-deepseek-v4-1-flash-r4-diagnostic-20260917` identity atomically
@@ -760,7 +922,7 @@ requires the authenticated catalog before every future completion. Public
 `/models` remains useful for price and aggregate capabilities, but cannot prove
 key-specific admission.
 
-### Reviewer evaluation `r5` comparative-trial authorization (2026-09-17)
+#### Reviewer evaluation `r5` comparative-trial authorization (2026-09-17)
 
 The operator authorized the fresh
 `phase6-deepseek-v4-1-flash-r5-20260917` comparative trial after the reasoning
@@ -770,7 +932,7 @@ model admission, and a new ignored artifact root. Run a current public contract
 and cost preflight plus a fresh repository gate before SOPS. Stop at the first
 unverified or incomplete result; no retry or resume is implied.
 
-### Reviewer evaluation `r5` terminal record (2026-09-17)
+#### Reviewer evaluation `r5` terminal record (2026-09-17)
 
 The fresh preflight and repository gate passed, then the first Grok control
 request (`baseline-mcp-defect`, repeat 1) stopped with `independent review
@@ -789,7 +951,7 @@ The active successor control is
 It separates offline qualification, live-route calibration, and paired
 evaluation; no stage authorizes the next one implicitly.
 
-### Reviewer evaluation `r6` terminal record (2026-09-18)
+#### Reviewer evaluation `r6` terminal record (2026-09-18)
 
 The r6 strict-schema calibration admitted both exact models, but did not
 represent the long frozen diff. The paired run completed two Grok attempts and
@@ -800,6 +962,8 @@ It also showed Grok reporting completion usage above the requested cap, so the
 runner now rejects over-cap provider usage and classifies length termination
 before content parsing. Future calibration must use the representative frozen
 diff and exact paired controls. `r6` has no comparative conclusion.
+
+### Original pilot requirements
 
 Proposed pilot: three independent pairs (six executions), covering discovery,
 patch preparation, and documentation across all three fixtures. Pilot results
@@ -815,23 +979,41 @@ limits, retry allowance, and estimate with explicit uncertainty. Fix defects
 through the implementation branch and assign a new experiment identity when
 inputs change. Do not fabricate provider usage or silently substitute a model.
 
-Gate: pilot evidence reviewed and full-campaign manifest/budget approved.
+### Gate
+
+Pilot evidence reviewed and full-campaign manifest/budget approved.
 
 ## Phase 7 — Full campaign and evidence validation
 
-Status: pending. Commit: pending. Evidence: pending.
+**Status:** `pending`
+**Commit:** pending
+
+### Evidence
+
+Pending.
+
+### Required work
 
 Execute the approved 60-run matrix on the campaign branch with frozen identities
 and resumable records. Preserve failures and interrupted attempts. Generate
 public sanitized reports and validate their provenance and exclusions.
 
-Gate: every scheduled execution is accounted for, valid results reproducible,
+### Gate
+
+Every scheduled execution is accounted for, valid results reproducible,
 review findings resolved, repository gate passes, and evidence commits recorded.
 Phase 7 does not close the issue: Phase 8 is required.
 
 ## Phase 8 — Findings and product direction
 
-Status: pending. Commit: pending. Evidence: pending.
+**Status:** `pending`
+**Commit:** pending
+
+### Evidence
+
+Pending.
+
+### Required work
 
 Deliver both documents regardless of whether results favor Codira:
 
@@ -849,7 +1031,9 @@ The internal assessment is not automatically public: use public-safe aggregate
 evidence in tracked documentation; keep sensitive trace details in ignored
 local evidence. Publication and creation of follow-up issues are separate actions.
 
-Gate: claims independently reviewed against raw evidence and sample limitations;
+### Gate
+
+Claims independently reviewed against raw evidence and sample limitations;
 both documents complete; follow-up recommendations and unresolved limitations
 recorded. Report #53 ready for closure only after this phase and all required
 validation are complete.

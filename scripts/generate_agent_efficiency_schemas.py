@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -102,6 +102,7 @@ SCHEMAS = {
             "fixture_id": {"type": "string"},
             "prompt": {"type": "string", "minLength": 1},
             "result_path": {"type": "string", "format": "safe-relative-path"},
+            "result_format": {"enum": ["json", "text", "workspace-diff"]},
             "oracle_id": {"type": "string"},
             "visibility": VISIBILITY,
         },
@@ -109,18 +110,34 @@ SCHEMAS = {
     "campaign": schema(
         [
             "campaign_id",
-            "fixture_fingerprint",
+            "fixture_fingerprints",
             "task_fingerprints",
+            "task_fixture_ids",
             "budgets",
+            "provider",
+            "accounting",
+            "resource_controls",
             "visibility",
         ],
         {
             "campaign_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"},
-            "fixture_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "fixture_fingerprints": {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            },
             "task_fingerprints": {
-                "type": "array",
-                "minItems": 1,
-                "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            },
+            "task_fixture_ids": {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+                },
             },
             "budgets": {
                 "type": "object",
@@ -137,6 +154,96 @@ SCHEMAS = {
                 },
             },
             "visibility": VISIBILITY,
+            "provider": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "name",
+                    "model",
+                    "reasoning_effort",
+                    "wire_api",
+                    "max_prompt_usd_per_million",
+                    "max_completion_usd_per_million",
+                ],
+                "properties": {
+                    "name": {"const": "openrouter"},
+                    "model": {"type": "string", "minLength": 1},
+                    "reasoning_effort": {
+                        "enum": ["none", "low", "medium", "high", "xhigh"]
+                    },
+                    "wire_api": {"const": "responses"},
+                    "max_prompt_usd_per_million": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                    },
+                    "max_completion_usd_per_million": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                    },
+                },
+            },
+            "accounting": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "max_daily_spend_usd",
+                    "max_estimated_attempt_spend_usd",
+                    "max_estimated_pilot_spend_usd",
+                    "max_response_requests_per_attempt",
+                ],
+                "properties": {
+                    "max_daily_spend_usd": {"type": "number", "exclusiveMinimum": 0},
+                    "max_estimated_attempt_spend_usd": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                    },
+                    "max_estimated_pilot_spend_usd": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                    },
+                    "max_response_requests_per_attempt": {
+                        "type": "integer",
+                        "minimum": 1,
+                    },
+                    "max_transport_attempts_per_response": {
+                        "type": "integer",
+                        "minimum": 1,
+                    },
+                },
+            },
+            "resource_controls": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "network",
+                    "read_only_rootfs",
+                    "pids_limit",
+                    "tmpfs_size_mib",
+                ],
+                "properties": {
+                    "network": {"const": "none"},
+                    "read_only_rootfs": {"const": True},
+                    "pids_limit": {"type": "integer", "minimum": 1},
+                    "tmpfs_size_mib": {"type": "integer", "minimum": 1},
+                },
+            },
+            "runtime_image": {"type": "string", "pattern": "^.+@sha256:[0-9a-f]{64}$"},
+            "runtime_profile_fingerprint": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "treatment_protocol": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["version", "codira_mcp_instruction"],
+                "properties": {
+                    "version": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$",
+                    },
+                    "codira_mcp_instruction": {"type": "string", "minLength": 1},
+                },
+            },
         },
     ),
     "usage": schema(
@@ -196,6 +303,40 @@ SCHEMAS = {
         },
     ),
 }
+
+_CAMPAIGN_PROPERTIES = cast(
+    "Mapping[str, object]",
+    cast("Mapping[str, object]", SCHEMAS["campaign"])["properties"],
+)
+_CAMPAIGN_SPEC_PROPERTIES = dict(_CAMPAIGN_PROPERTIES)
+_CAMPAIGN_SPEC_PROPERTIES.pop("fixture_fingerprints")
+_CAMPAIGN_SPEC_PROPERTIES.pop("task_fingerprints")
+_CAMPAIGN_SPEC_PROPERTIES.pop("task_fixture_ids")
+_CAMPAIGN_SPEC_PROPERTIES.update(
+    {
+        "stage": {"enum": ["calibration", "pilot"]},
+        "task_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"},
+            "uniqueItems": True,
+        },
+        "seed": {"type": "integer", "minimum": 0},
+    }
+)
+SCHEMAS["campaign-spec"] = schema(
+    [
+        "campaign_id",
+        "stage",
+        "task_ids",
+        "budgets",
+        "provider",
+        "accounting",
+        "resource_controls",
+        "visibility",
+    ],
+    _CAMPAIGN_SPEC_PROPERTIES,
+)
 
 
 def main(argv: list[str] | None = None) -> int:

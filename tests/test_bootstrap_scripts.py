@@ -2270,6 +2270,13 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
         (
             "python",
             str(helper.RUN_REPO_TOOL),
+            "pytest",
+            "-q",
+            "tests/test_quality_policy.py",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
             "coverage",
             "run",
             "-m",

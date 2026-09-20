@@ -2,6 +2,38 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "accounting": {
+      "additionalProperties": false,
+      "properties": {
+        "max_daily_spend_usd": {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "max_estimated_attempt_spend_usd": {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "max_estimated_pilot_spend_usd": {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "max_response_requests_per_attempt": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_transport_attempts_per_response": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_daily_spend_usd",
+        "max_estimated_attempt_spend_usd",
+        "max_estimated_pilot_spend_usd",
+        "max_response_requests_per_attempt"
+      ],
+      "type": "object"
+    },
     "budgets": {
       "additionalProperties": false,
       "properties": {
@@ -25,6 +57,18 @@
       ],
       "type": "object"
     },
+    "campaign_id": {
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+      "type": "string"
+    },
+    "fixture_fingerprints": {
+      "additionalProperties": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "minProperties": 1,
+      "type": "object"
+    },
     "provider": {
       "additionalProperties": false,
       "properties": {
@@ -44,7 +88,13 @@
           "const": "openrouter"
         },
         "reasoning_effort": {
-          "enum": ["low", "medium", "high", "xhigh"]
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
         },
         "wire_api": {
           "const": "responses"
@@ -60,41 +110,23 @@
       ],
       "type": "object"
     },
-    "accounting": {
-      "additionalProperties": false,
-      "properties": {
-        "max_daily_spend_usd": {
-          "exclusiveMinimum": 0,
-          "type": "number"
-        },
-        "max_estimated_attempt_spend_usd": {
-          "exclusiveMinimum": 0,
-          "type": "number"
-        },
-        "max_estimated_pilot_spend_usd": {
-          "exclusiveMinimum": 0,
-          "type": "number"
-        },
-        "max_response_requests_per_attempt": {
-          "minimum": 1,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "max_daily_spend_usd",
-        "max_estimated_attempt_spend_usd",
-        "max_estimated_pilot_spend_usd",
-        "max_response_requests_per_attempt"
-      ],
-      "type": "object"
-    },
     "resource_controls": {
       "additionalProperties": false,
       "properties": {
-        "network": {"const": "none"},
-        "pids_limit": {"minimum": 1, "type": "integer"},
-        "read_only_rootfs": {"const": true},
-        "tmpfs_size_mib": {"minimum": 1, "type": "integer"}
+        "network": {
+          "const": "none"
+        },
+        "pids_limit": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "read_only_rootfs": {
+          "const": true
+        },
+        "tmpfs_size_mib": {
+          "minimum": 1,
+          "type": "integer"
+        }
       },
       "required": [
         "network",
@@ -108,35 +140,9 @@
       "pattern": "^.+@sha256:[0-9a-f]{64}$",
       "type": "string"
     },
-    "treatment_protocol": {
-      "additionalProperties": false,
-      "properties": {
-        "codira_mcp_instruction": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "version": {
-          "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$",
-          "type": "string"
-        }
-      },
-      "required": [
-        "version",
-        "codira_mcp_instruction"
-      ],
-      "type": "object"
-    },
-    "campaign_id": {
-      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+    "runtime_profile_fingerprint": {
+      "pattern": "^[0-9a-f]{64}$",
       "type": "string"
-    },
-    "fixture_fingerprints": {
-      "additionalProperties": {
-        "pattern": "^[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "minProperties": 1,
-      "type": "object"
     },
     "schema_version": {
       "const": "1.0"
@@ -155,6 +161,24 @@
         "type": "string"
       },
       "minProperties": 1,
+      "type": "object"
+    },
+    "treatment_protocol": {
+      "additionalProperties": false,
+      "properties": {
+        "codira_mcp_instruction": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "version": {
+          "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "codira_mcp_instruction"
+      ],
       "type": "object"
     },
     "visibility": {

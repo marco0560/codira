@@ -35,9 +35,10 @@ DEFAULT_MANIFEST = Path(
 DEFAULT_OUTPUT_DIRECTORY = Path(
     ".artifacts/agent-efficiency/reviewer-evaluation/phase6-deepseek-v4-1-flash-r6-20260917"
 )
-CALIBRATION_MAX_ESTIMATED_USD = 0.1
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-ARTIFACT_OUTPUT_ROOT = REPOSITORY_ROOT / DEFAULT_OUTPUT_DIRECTORY
+ARTIFACT_OUTPUT_ROOT = (
+    REPOSITORY_ROOT / ".artifacts/agent-efficiency/reviewer-evaluation"
+)
 _SHA40 = frozenset("0123456789abcdef")
 
 
@@ -63,11 +64,14 @@ class ModelContract:
         Highest published prompt-token price.
     completion_usd_per_million : float
         Highest published completion-token price.
+    reasoning_effort : str or None, optional
+        Explicit provider reasoning setting frozen for this model.
     """
 
     identifier: str
     prompt_usd_per_million: float
     completion_usd_per_million: float
+    reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -286,6 +290,7 @@ def _load_models(document: Mapping[str, object]) -> tuple[ModelContract, ...]:
         identifier = raw_model.get("id")
         prompt_price = raw_model.get("max_prompt_usd_per_million")
         completion_price = raw_model.get("max_completion_usd_per_million")
+        reasoning_effort = raw_model.get("reasoning_effort")
         if (
             not isinstance(identifier, str)
             or not identifier
@@ -293,10 +298,16 @@ def _load_models(document: Mapping[str, object]) -> tuple[ModelContract, ...]:
             or prompt_price <= 0
             or not isinstance(completion_price, (int, float))
             or completion_price <= 0
+            or reasoning_effort not in (None, "none")
         ):
             raise _error("reviewer evaluation model is invalid")
         models.append(
-            ModelContract(identifier, float(prompt_price), float(completion_price))
+            ModelContract(
+                identifier,
+                float(prompt_price),
+                float(completion_price),
+                reasoning_effort,
+            )
         )
     if {model.identifier for model in models} != {
         "x-ai/grok-build-0.1",
@@ -403,6 +414,8 @@ def load_manifest(
     output_tokens = document.get("max_output_tokens")
     timeout_seconds = document.get("timeout_seconds")
     spend_limit = document.get("max_total_estimated_usd")
+    calibration_spend_limit = document.get("max_calibration_estimated_usd")
+    authorized_total = document.get("max_authorized_total_usd")
     if (
         not isinstance(repetitions, int)
         or repetitions != 2
@@ -414,6 +427,11 @@ def load_manifest(
         or timeout_seconds < 1
         or not isinstance(spend_limit, (int, float))
         or spend_limit <= 0
+        or not isinstance(calibration_spend_limit, (int, float))
+        or calibration_spend_limit <= 0
+        or not isinstance(authorized_total, (int, float))
+        or authorized_total <= 0
+        or spend_limit + calibration_spend_limit > authorized_total
     ):
         raise _error("reviewer evaluation manifest has invalid bounded controls")
     models = _load_models(document)
@@ -1143,6 +1161,7 @@ def run_evaluation(
                         model=model.identifier,
                         max_output_tokens=max_output_tokens,
                         timeout_seconds=timeout_seconds,
+                        reasoning_effort=model.reasoning_effort,
                     )
                 except ReviewError as error:
                     failed_attempt = {**attempt_identity, "failure": str(error)}
@@ -1265,12 +1284,13 @@ def run_calibration(
     prompt = build_prompt(diffs[case.identifier])
     max_output_tokens = _required_int(manifest, "max_output_tokens")
     timeout_seconds = _required_int(manifest, "timeout_seconds")
+    maximum_budget = _required_number(manifest, "max_calibration_estimated_usd")
     estimate = sum(
         len(prompt) * model.prompt_usd_per_million / 1_000_000
         + max_output_tokens * model.completion_usd_per_million / 1_000_000
         for model in models
     )
-    if estimate > CALIBRATION_MAX_ESTIMATED_USD:
+    if estimate > maximum_budget:
         raise _error("reviewer calibration estimate exceeds the frozen budget")
     key_budget = fetch_key_budget(token, estimate)
     attempts: list[dict[str, object]] = []
@@ -1285,8 +1305,14 @@ def run_calibration(
             "maximum_requests": len(models),
             "max_output_tokens": max_output_tokens,
             "timeout_seconds": timeout_seconds,
+            "reasoning_effort_by_model": {
+                model.identifier: model.reasoning_effort for model in models
+            },
             "estimated_total_usd": estimate,
-            "max_total_estimated_usd": CALIBRATION_MAX_ESTIMATED_USD,
+            "max_total_estimated_usd": maximum_budget,
+            "max_authorized_total_usd": _required_number(
+                manifest, "max_authorized_total_usd"
+            ),
         },
         "key_budget": key_budget,
         "authenticated_model_contracts": authenticated_contracts,
@@ -1317,6 +1343,7 @@ def run_calibration(
                 model=model.identifier,
                 max_output_tokens=max_output_tokens,
                 timeout_seconds=timeout_seconds,
+                reasoning_effort=model.reasoning_effort,
             )
         except ReviewError as error:
             failed_attempt = {**attempt_identity, "failure": str(error)}
@@ -1452,6 +1479,7 @@ def run_diagnostic_once(
             model=model.identifier,
             max_output_tokens=max_output_tokens,
             timeout_seconds=timeout_seconds,
+            reasoning_effort=model.reasoning_effort,
         )
     except ReviewError as error:
         failed_attempt = {**attempt_identity, "failure": str(error)}

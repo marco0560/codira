@@ -1,0 +1,112 @@
+"""Test deterministic, credential-free campaign construction."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from scripts.agent_efficiency.campaign_factory import (
+    CampaignFactoryError,
+    build_campaign,
+    write_campaign_artifacts,
+)
+
+
+def _spec(stage: str, task_ids: list[str]) -> dict[str, object]:
+    """Build one valid factory specification for frozen public fixtures."""
+
+    result: dict[str, object] = {
+        "schema_version": "1.0",
+        "campaign_id": f"factory-{stage}-001",
+        "stage": stage,
+        "task_ids": task_ids,
+        "budgets": {
+            "max_total_tokens": 200000,
+            "max_output_tokens": 32000,
+            "timeout_seconds": 900,
+        },
+        "provider": {
+            "name": "openrouter",
+            "model": "deepseek/deepseek-v4.1-flash",
+            "reasoning_effort": "none",
+            "wire_api": "responses",
+            "max_prompt_usd_per_million": 0.15,
+            "max_completion_usd_per_million": 0.6,
+        },
+        "accounting": {
+            "max_daily_spend_usd": 6,
+            "max_estimated_attempt_spend_usd": 0.15,
+            "max_estimated_pilot_spend_usd": 0.15 if stage == "calibration" else 0.9,
+            "max_response_requests_per_attempt": 1,
+        },
+        "resource_controls": {
+            "network": "none",
+            "read_only_rootfs": True,
+            "pids_limit": 512,
+            "tmpfs_size_mib": 128,
+        },
+        "visibility": "public",
+    }
+    if stage == "pilot":
+        result["seed"] = 20260919
+    return result
+
+
+def test_factory_builds_one_assisted_calibration_attempt() -> None:
+    """Generate frozen calibration bindings and exactly one request."""
+
+    manifest, plan = build_campaign(
+        _spec("calibration", ["symbols-001"]), Path("benchmarks/agent-efficiency")
+    )
+
+    task_fingerprints = manifest["task_fingerprints"]
+    assert isinstance(task_fingerprints, dict)
+    assert set(task_fingerprints) == {"symbols-001"}
+    assert plan["scheduled_attempt_count"] == 1
+    assert plan["attempts"] == [
+        {
+            "task_id": "symbols-001",
+            "repetition": 1,
+            "assistance_mode": "codira-mcp",
+            "attempt_id": "symbols-001-calibration-codira-mcp",
+            "pair_id": "symbols-001-calibration",
+        }
+    ]
+
+
+def test_factory_builds_a_deterministic_six_request_pilot() -> None:
+    """Require exactly three tasks and preserve paired schedule determinism."""
+
+    specification = _spec("pilot", ["symbols-001", "patch-001", "documentation-001"])
+    first = build_campaign(specification, Path("benchmarks/agent-efficiency"))
+    second = build_campaign(specification, Path("benchmarks/agent-efficiency"))
+
+    assert first == second
+    assert first[1]["scheduled_attempt_count"] == 6
+
+
+def test_factory_rejects_an_invalid_stage_cardinality() -> None:
+    """Prevent a calibration from becoming an unreviewed campaign."""
+
+    with pytest.raises(CampaignFactoryError, match="calibration requires exactly 1"):
+        build_campaign(
+            _spec("calibration", ["symbols-001", "patch-001"]),
+            Path("benchmarks/agent-efficiency"),
+        )
+
+
+def test_factory_refuses_to_overwrite_artifacts(tmp_path: Path) -> None:
+    """Keep generated campaign evidence immutable after first creation."""
+
+    manifest, plan = build_campaign(
+        _spec("calibration", ["symbols-001"]), Path("benchmarks/agent-efficiency")
+    )
+    output = tmp_path / "factory-calibration-001"
+
+    manifest_path, plan_path = write_campaign_artifacts(output, manifest, plan)
+
+    assert manifest_path.is_file()
+    assert plan_path.is_file()
+    with pytest.raises(CampaignFactoryError, match="already exists"):
+        write_campaign_artifacts(output, manifest, plan)

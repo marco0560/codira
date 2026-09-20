@@ -1,12 +1,14 @@
 {
   "schema_version": "1.0",
-  "evaluation_id": "phase6-deepseek-v4-1-flash-r6-20260917",
+  "evaluation_id": "phase6-deepseek-v4-1-flash-r7-20260918",
   "provider_catalog_verified_on": "2026-09-16",
   "repetitions": 2,
   "max_requests": 24,
-  "max_output_tokens": 12000,
+  "max_output_tokens": 50000,
   "timeout_seconds": 300,
-  "max_total_estimated_usd": 2.0,
+  "max_total_estimated_usd": 3.981,
+  "max_calibration_estimated_usd": 0.409,
+  "max_authorized_total_usd": 4.39,
   "models": [
     {
       "id": "x-ai/grok-build-0.1",
@@ -16,7 +18,8 @@
     {
       "id": "deepseek/deepseek-v4.1-flash",
       "max_prompt_usd_per_million": 0.3,
-      "max_completion_usd_per_million": 1.2
+      "max_completion_usd_per_million": 1.2,
+      "reasoning_effort": "none"
     }
   ],
   "cases": [

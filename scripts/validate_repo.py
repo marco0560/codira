@@ -113,6 +113,11 @@ VALIDATION_STEPS: tuple[ValidationStep, ...] = (
         ),
     ),
     ValidationStep(
+        "lint-semgrep-hygiene",
+        "pytest",
+        ("-q", "tests/test_quality_policy.py"),
+    ),
+    ValidationStep(
         "coverage",
         "coverage",
         ("run", "-m", "pytest", "-q", "tests", "packages"),

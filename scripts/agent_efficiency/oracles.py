@@ -28,6 +28,7 @@ _PRIMITIVES = frozenset(
         "command_passes",
         "patch_applies_and_tests_pass",
         "normalized_artifact",
+        "text_contains",
         "all_of",
         "any_of",
         "custom_evaluator",
@@ -186,6 +187,44 @@ def _result_object(result_path: Path) -> Mapping[str, object]:
         detail = "result artifact must be a JSON object"
         raise ContractError.message(detail)
     return cast("Mapping[str, object]", parsed)
+
+
+def _result_artifact(result_path: Path, result_format: str) -> object:
+    """Load one declared natural task artifact for deterministic grading.
+
+    Parameters
+    ----------
+    result_path : pathlib.Path
+        Safe agent-visible artifact path.
+    result_format : str
+        Declared task-artifact representation.
+
+    Returns
+    -------
+    object
+        A JSON object, UTF-8 text, or ``None`` for a runner-captured diff.
+
+    Raises
+    ------
+    ContractError
+        If the declared artifact is unavailable or malformed.
+    """
+
+    if result_format == "json":
+        return _result_object(result_path)
+    if result_format == "text":
+        try:
+            return result_path.read_text(encoding="utf-8")
+        except OSError as error:
+            detail = f"text artifact is missing or unreadable: {error}"
+            raise ContractError.message(detail) from error
+    if result_format == "workspace-diff":
+        if not result_path.is_file():
+            detail = "runner-captured patch is missing"
+            raise ContractError.message(detail)
+        return None
+    detail = "task result format is unsupported"
+    raise ContractError.message(detail)
 
 
 def _protected_command(command: object) -> Sequence[str]:
@@ -384,7 +423,7 @@ def _patch_check(
 
 def _evaluate(
     definition: OracleDefinition,
-    result: Mapping[str, object],
+    result: object,
     result_root: Path,
     protected_root: Path,
     evaluators: Mapping[str, ProtectedEvaluator],
@@ -423,11 +462,22 @@ def _evaluate(
         detail = f"unsupported oracle primitive: {name}"
         raise ContractError.message(detail)
     if name == "contains_symbols":
-        return _is_subset(payload, result.get("symbols", [])), name
+        return _is_subset(
+            payload, result.get("symbols", []) if isinstance(result, Mapping) else []
+        ), name
     if name == "contains_paths":
-        return _is_subset(payload, result.get("paths", [])), name
+        return _is_subset(
+            payload, result.get("paths", []) if isinstance(result, Mapping) else []
+        ), name
     if name == "normalized_artifact":
         return _is_subset(normalize(payload), normalize(result)), name
+    if name == "text_contains":
+        if not isinstance(payload, list) or not all(
+            isinstance(item, str) and item for item in payload
+        ):
+            detail = "text_contains requires non-empty strings"
+            raise ContractError.message(detail)
+        return isinstance(result, str) and all(item in result for item in payload), name
     if name == "command_passes":
         return _run_protected(payload, protected_root), name
     if name == "patch_applies_and_tests_pass":
@@ -455,6 +505,9 @@ def _evaluate(
             for item in payload
         ]
         return (all(children) if name == "all_of" else any(children)), name
+    if not isinstance(result, Mapping):
+        detail = "custom evaluator requires a JSON object artifact"
+        raise ContractError.message(detail)
     return _custom_evaluator(payload, result, protected_root, evaluators), name
 
 
@@ -531,11 +584,12 @@ def _custom_evaluator(
     return registered.evaluator(result, protected_root)
 
 
-def evaluate_oracle(
+def evaluate_oracle(  # noqa: PLR0913
     definition: OracleDefinition,
     *,
     result_root: Path,
     result_path: str = ".benchmark/result.json",
+    result_format: str = "json",
     protected_root: Path,
     evaluators: Mapping[str, ProtectedEvaluator] | None = None,
 ) -> OracleResult:
@@ -548,7 +602,9 @@ def evaluate_oracle(
     result_root : pathlib.Path
         Agent-visible fixture result tree.
     result_path : str, optional
-        Safe relative JSON result-artifact path.
+        Safe relative task-artifact path.
+    result_format : str, optional
+        Declared JSON, text, or runner-captured workspace-diff representation.
     protected_root : pathlib.Path
         Pristine grader-only fixture tree.
     evaluators : Mapping[str, ProtectedEvaluator] | None, optional
@@ -573,7 +629,7 @@ def evaluate_oracle(
         raise ContractError.message(detail)
     passed, label = _evaluate(
         definition,
-        _result_object(artifact),
+        _result_artifact(artifact, result_format),
         root,
         protected_root.resolve(),
         evaluators or {},

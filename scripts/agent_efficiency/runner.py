@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import difflib
 import os
 import re
 import subprocess
@@ -119,6 +120,31 @@ class ContainerExecution:
     stderr: str
     elapsed_seconds: float
     timed_out: bool = False
+
+
+@dataclass(frozen=True)
+class IndexPreparationRequest:
+    """Describe a pre-timer Codira index preparation container.
+
+    Parameters
+    ----------
+    runtime : str
+        Supported container runtime executable.
+    image : str
+        Digest-pinned reviewed benchmark image.
+    fixture_root : pathlib.Path
+        Disposable writable exported fixture to index before MCP startup.
+    timeout_seconds : int
+        Positive wall-clock limit for the non-agent preparation step.
+    codira_config_path : str
+        Absolute container-visible profile used by both index and MCP startup.
+    """
+
+    runtime: str
+    image: str
+    fixture_root: Path
+    timeout_seconds: int
+    codira_config_path: str
 
 
 def build_attempt_codex_config(assistance_mode: str) -> str:
@@ -304,6 +330,99 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
     )
 
 
+def build_index_preparation_argv(request: IndexPreparationRequest) -> tuple[str, ...]:
+    """Build the isolated command that indexes before Codira MCP can start.
+
+    Parameters
+    ----------
+    request : IndexPreparationRequest
+        Frozen runtime, image, fixture, and bounded preparation controls.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Shell-free hardened container invocation ending with ``codira index``.
+
+    Raises
+    ------
+    ValueError
+        If the runtime, image, fixture, or timeout is unsafe.
+    """
+
+    if request.runtime not in phase0.SUPPORTED_CONTAINER_RUNTIMES:
+        raise ValueError("container runtime is unsupported")
+    if phase0.IMAGE_DIGEST_PATTERN.fullmatch(request.image) is None:
+        raise ValueError("container image must use an exact sha256 digest")
+    if request.timeout_seconds < 1 or not request.codira_config_path.startswith("/"):
+        raise ValueError("index preparation timeout must be positive")
+    fixture_root = request.fixture_root.resolve()
+    if not fixture_root.is_dir():
+        raise ValueError("index preparation fixture root must exist")
+    return (
+        request.runtime,
+        "run",
+        "--rm",
+        "--network=none",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--pids-limit=512",
+        "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m",
+        f"--mount=type=bind,src={fixture_root},dst=/workspace,rw",
+        "--workdir=/workspace",
+        request.image,
+        "codira",
+        "index",
+        "--config-file",
+        request.codira_config_path,
+    )
+
+
+def execute_index_preparation(request: IndexPreparationRequest) -> ContainerExecution:
+    """Run required pre-MCP ``codira index`` outside agent timing.
+
+    Parameters
+    ----------
+    request : IndexPreparationRequest
+        Validated isolated pre-timer preparation request.
+
+    Returns
+    -------
+    ContainerExecution
+        Captured non-secret facts; a timeout is represented explicitly.
+    """
+
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            build_index_preparation_argv(request),
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=request.timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as error:
+        stdout = (
+            error.stdout.decode() if isinstance(error.stdout, bytes) else error.stdout
+        )
+        stderr = (
+            error.stderr.decode() if isinstance(error.stderr, bytes) else error.stderr
+        )
+        return ContainerExecution(
+            124,
+            stdout or "",
+            stderr or "",
+            time.monotonic() - started,
+            timed_out=True,
+        )
+    return ContainerExecution(
+        completed.returncode,
+        completed.stdout,
+        completed.stderr,
+        time.monotonic() - started,
+    )
+
+
 def remove_timed_out_container(request: ContainerAttemptRequest) -> None:
     """Force-remove the one container identified by a timed-out attempt.
 
@@ -335,6 +454,99 @@ def remove_timed_out_container(request: ContainerAttemptRequest) -> None:
         )
     except OSError:
         return
+
+
+def capture_workspace_patch(
+    baseline_root: Path, workspace_root: Path, patch_path: Path
+) -> None:
+    """Capture agent workspace edits as a treatment-neutral unified patch.
+
+    The exported fixture deliberately has no Git history, so the runner keeps
+    a private pre-agent snapshot and produces the patch after the turn.  The
+    snapshot is never mounted into the agent container.
+
+    Parameters
+    ----------
+    baseline_root : pathlib.Path
+        Private pre-agent fixture snapshot.
+    workspace_root : pathlib.Path
+        Agent-visible workspace after completion.
+    patch_path : pathlib.Path
+        Safe workspace-relative destination for the captured patch.
+
+    Returns
+    -------
+    None
+        The patch is written only to ``patch_path``.
+
+    Raises
+    ------
+    ValueError
+        If a candidate workspace contains a symlink or non-text changed file.
+    """
+
+    ignored = {".benchmark", ".git", "__pycache__"}
+
+    def files(root: Path) -> set[Path]:
+        """Return safe regular workspace files excluding runner metadata."""
+
+        discovered: set[Path] = set()
+        for candidate in root.rglob("*"):
+            relative = candidate.relative_to(root)
+            if ignored.intersection(relative.parts):
+                continue
+            if candidate.is_symlink():
+                raise ValueError("workspace patch capture rejects symlinks")
+            if candidate.is_file():
+                discovered.add(relative)
+        return discovered
+
+    lines: list[str] = []
+    for relative in sorted(files(baseline_root) | files(workspace_root)):
+        before, after = baseline_root / relative, workspace_root / relative
+        before_bytes = before.read_bytes() if before.is_file() else None
+        after_bytes = after.read_bytes() if after.is_file() else None
+        if before_bytes == after_bytes:
+            continue
+        if any(
+            value is not None and b"\0" in value
+            for value in (before_bytes, after_bytes)
+        ):
+            raise ValueError("workspace patch capture rejects binary changes")
+        label = relative.as_posix()
+        lines.append(f"diff --git a/{label} b/{label}")
+        if before_bytes is None:
+            assert after_bytes is not None
+            lines.append("new file mode 100644")
+            diff = difflib.unified_diff(
+                [],
+                after_bytes.decode("utf-8").splitlines(),
+                fromfile="/dev/null",
+                tofile=f"b/{label}",
+                lineterm="",
+            )
+        elif after_bytes is None:
+            assert before_bytes is not None
+            lines.append("deleted file mode 100644")
+            diff = difflib.unified_diff(
+                before_bytes.decode("utf-8").splitlines(),
+                [],
+                fromfile=f"a/{label}",
+                tofile="/dev/null",
+                lineterm="",
+            )
+        else:
+            assert before_bytes is not None
+            diff = difflib.unified_diff(
+                before_bytes.decode("utf-8").splitlines(),
+                after_bytes.decode("utf-8").splitlines(),
+                fromfile=f"a/{label}",
+                tofile=f"b/{label}",
+                lineterm="",
+            )
+        lines.extend(diff)
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    patch_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def execute_container_attempt(request: ContainerAttemptRequest) -> ContainerExecution:
@@ -386,6 +598,8 @@ def result_from_execution(
     campaign_id: str,
     attempt: ScheduledAttempt,
     execution: ContainerExecution,
+    *,
+    max_total_tokens: int | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Convert captured execution facts into a schema-valid run-result record.
 
@@ -397,6 +611,9 @@ def result_from_execution(
         Frozen schedule identity for the container execution.
     execution : ContainerExecution
         Captured process and JSONL evidence.
+    max_total_tokens : int or None, optional
+        Manifest-bound total provider-token ceiling. ``None`` retains the
+        generic runner behavior used by non-pilot callers.
 
     Returns
     -------
@@ -421,14 +638,21 @@ def result_from_execution(
         try:
             events = phase0.parse_jsonl_events(execution.stdout)
             event_count = len(events)
-            check = phase0.jsonl_conformance_check(events, attempt.assistance_mode)
-            normalized = normalize_completed_turn(events)
-            usage_complete = normalized.complete
-            usage = normalized.as_document()
-            if execution.returncode == 0 and check.passed:
-                outcome = "success"
+            terminal_failure = _terminal_failure_class(events)
+            if terminal_failure is not None:
+                failure_class = terminal_failure
             else:
-                failure_class = check.detail if not check.passed else "nonzero_exit"
+                check = phase0.jsonl_conformance_check(events, attempt.assistance_mode)
+                normalized = normalize_completed_turn(events)
+                usage_complete = normalized.complete
+                usage = normalized.as_document()
+                total_tokens = sum(usage.values())
+                if max_total_tokens is not None and total_tokens > max_total_tokens:
+                    failure_class = "usage_cap_exceeded"
+                elif execution.returncode == 0 and check.passed:
+                    outcome = "success"
+                else:
+                    failure_class = check.detail if not check.passed else "nonzero_exit"
         except (phase0.JsonlEvidenceError, UsageError) as error:
             failure_class = str(error)
     result: dict[str, object] = {
@@ -452,6 +676,32 @@ def result_from_execution(
         "stderr_sha256": _text_sha256(execution.stderr),
     }
     return result, evidence
+
+
+def _terminal_failure_class(events: tuple[dict[str, object], ...]) -> str | None:
+    """Classify a failed Codex terminal event without losing its evidence.
+
+    Parameters
+    ----------
+    events : tuple[dict[str, object], ...]
+        Parsed JSONL events captured from one Codex invocation.
+
+    Returns
+    -------
+    str or None
+        Stable public-safe failure class for one failed terminal event, or
+        ``None`` when usage normalization should process a completed turn.
+    """
+
+    completed = [event for event in events if event.get("type") == "turn.completed"]
+    failed = [event for event in events if event.get("type") == "turn.failed"]
+    if completed or len(failed) != 1:
+        return None
+    error = failed[0].get("error")
+    message = error.get("message", "") if isinstance(error, dict) else ""
+    if isinstance(message, str) and "429" in message:
+        return "provider_rate_limited"
+    return "turn_failed"
 
 
 def _text_sha256(value: str) -> str:

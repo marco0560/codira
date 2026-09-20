@@ -27,8 +27,10 @@ import os
 import socket
 import sys
 import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -131,7 +133,12 @@ class ProxySettings:
     max_output_tokens: int = 12000
     constraints: ResponseConstraints = ResponseConstraints()
     max_response_requests: int = 1
+    max_transport_attempts_per_response: int = 1
     limiter: ResponseRequestLimiter = field(init=False, repr=False)
+    response_observations: list[dict[str, object]] = field(
+        default_factory=list, repr=False
+    )
+    observation_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def __post_init__(self) -> None:
         """Create the private per-server request counter.
@@ -146,12 +153,48 @@ class ProxySettings:
             Invalid zero request ceilings fail immediately.
         """
 
-        if self.max_response_requests < 1:
+        if (
+            self.max_response_requests < 1
+            or self.max_transport_attempts_per_response < 1
+        ):
             message = "proxy max response requests must be positive"
             raise ValueError(message)
         object.__setattr__(
             self, "limiter", ResponseRequestLimiter(self.max_response_requests)
         )
+
+    def record_response(
+        self, status: int, headers: list[tuple[str, str]], source: str = "upstream"
+    ) -> None:
+        """Append public-safe upstream response metadata for one request.
+
+        Parameters
+        ----------
+        status : int
+            Upstream HTTP status code.
+        headers : list[tuple[str, str]]
+            Upstream headers from which only ``Retry-After`` is retained.
+        source : str, optional
+            ``"upstream"`` for provider traffic or ``"local"`` for a proxy cap.
+
+        Returns
+        -------
+        None
+            The in-memory evidence ledger receives one sanitized observation.
+        """
+
+        retry_after = next(
+            (value for key, value in headers if key.lower() == "retry-after"), None
+        )
+        observation: dict[str, object] = {
+            "observed_at": datetime.now(UTC).isoformat(),
+            "status": status,
+            "source": source,
+        }
+        if retry_after is not None:
+            observation["retry_after"] = retry_after
+        with self.observation_lock:
+            self.response_observations.append(observation)
 
 
 def parse_settings(
@@ -517,6 +560,9 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
                 self.send_error(HTTPStatus.BAD_REQUEST)
                 return
             if not self.settings.limiter.admit():
+                self.settings.record_response(
+                    HTTPStatus.TOO_MANY_REQUESTS, [], source="local"
+                )
                 self.send_error(HTTPStatus.TOO_MANY_REQUESTS)
                 return
         request_headers = {
@@ -527,12 +573,47 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
         }
         request_headers["Authorization"] = f"Bearer {self.settings.upstream_token}"
         request_headers["Content-Length"] = str(len(payload))
-        connection = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=300)
         try:
-            connection.request(self.command, provider_path, payload, request_headers)
-            response = connection.getresponse()
+            response = None
+            response_headers: list[tuple[str, str]] = []
+            for transport_attempt in range(
+                self.settings.max_transport_attempts_per_response
+            ):
+                connection = http.client.HTTPSConnection(UPSTREAM_HOST, timeout=300)
+                connection.request(
+                    self.command, provider_path, payload, request_headers
+                )
+                response = connection.getresponse()
+                response_headers = response.getheaders()
+                self.settings.record_response(response.status, response_headers)
+                if (
+                    response.status
+                    not in {
+                        HTTPStatus.TOO_MANY_REQUESTS,
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                    }
+                    or transport_attempt + 1
+                    == self.settings.max_transport_attempts_per_response
+                ):
+                    break
+                retry_after = next(
+                    (
+                        value
+                        for key, value in response_headers
+                        if key.lower() == "retry-after"
+                    ),
+                    None,
+                )
+                response.read()
+                connection.close()
+                time.sleep(
+                    float(retry_after)
+                    if retry_after and retry_after.isdigit()
+                    else 1.0 * (2**transport_attempt)
+                )
+            assert response is not None
             self.send_response(response.status, response.reason)
-            for key, value in response.getheaders():
+            for key, value in response_headers:
                 if key.lower() not in {
                     "connection",
                     "content-length",
@@ -545,6 +626,7 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
                 self.wfile.write(chunk)
                 self.wfile.flush()
         except OSError:
+            self.settings.record_response(HTTPStatus.BAD_GATEWAY, [])
             self.send_error(HTTPStatus.BAD_GATEWAY)
         finally:
             connection.close()

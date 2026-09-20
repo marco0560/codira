@@ -48,12 +48,24 @@ reading implementation details. High-value entry points are `cli.py`,
   artifact before semantic validation. A parsing failure must retain its
   response evidence and digest in terminal state, never discard it or place it
   in logs, tracked files, credentials, or request headers.
+- Create paid agent-efficiency work only with
+  `scripts/generate_agent_efficiency_campaign.py` from a versioned
+  `campaign-spec` JSON file. The factory, offline validation, authenticated
+  preflight, and paid tmux execution are separate stages. Never hand-author a
+  campaign manifest or ad-hoc launch command; preserve the factory's immutable
+  manifest and launch-plan artifacts, and do not reuse their output directory.
 
 ## Validation
 
 ```bash
 uv run python scripts/validate_repo.py
 ```
+
+Run the full gate in a tmux session with a durable log and separately written
+exit-status file. Wait at least three minutes before the first status check,
+then poll no more often than once per minute. When a successful gate has
+finished, leave its completed session and evidence intact; do not terminate it
+merely as cleanup.
 
 If the primary gate cannot run, report why and use the closest repository-local
 fallback. Commit scopes and release/version rules are defined by the repository

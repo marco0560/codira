@@ -180,7 +180,46 @@ def test_request_review_binds_model_budget_and_complete_identity(
     assert result["verdict"] == "PASS"
     assert result["review"] == "VERDICT: PASS\n"
     assert result["request_settings"]["response_format"] == "json_schema"
-    assert result["request_settings"]["reasoning_enabled"] is None
+    assert result["request_settings"]["reasoning_effort"] is None
+
+
+def test_request_review_binds_explicit_reasoning_effort(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Send the frozen non-default reasoning control only when requested.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the network call with a complete model response.
+
+    Returns
+    -------
+    None
+        The serialized provider control and retained evidence are asserted.
+    """
+
+    helper = _load_script(
+        "phase6_review_reasoning", "run_agent_efficiency_phase6_review.py"
+    )
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request: Request, timeout: int) -> object:
+        """Capture the payload carrying the explicit DeepSeek control."""
+
+        assert isinstance(request.data, bytes)
+        captured.update(json.loads(request.data))
+        return _response(_review_payload("deepseek/deepseek-v4.1-flash"))
+
+    monkeypatch.setattr(helper, "urlopen", fake_urlopen)
+    result = helper.request_review(
+        "review this",
+        "secret",
+        model="deepseek/deepseek-v4.1-flash",
+        reasoning_effort="none",
+    )
+    assert captured["reasoning_effort"] == "none"
+    assert result["request_settings"]["reasoning_effort"] == "none"
 
 
 def test_request_review_uses_opted_in_router_metadata_for_provider_identity(
@@ -660,6 +699,36 @@ def test_atomic_state_creation_rejects_a_concurrent_claim(tmp_path: Path) -> Non
     with pytest.raises(helper.EvaluationError, match="attempt state"):
         helper._create_json(state_path, {"status": "other"})
     assert json.loads(state_path.read_text()) == {"status": "prepared"}
+
+
+def test_output_directory_allows_distinct_ignored_experiment_roots(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Allow a new immutable experiment root without widening the artifact boundary.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the repository artifact root with an isolated directory.
+    tmp_path : pathlib.Path
+        Isolated filesystem root for accepted and rejected output paths.
+
+    Returns
+    -------
+    None
+        A sibling experiment root is accepted and an external path is rejected.
+    """
+
+    helper = _load_script(
+        "phase6_reviewer_output_boundary",
+        "run_agent_efficiency_phase6_reviewer_evaluation.py",
+    )
+    artifact_root = tmp_path / ".artifacts/agent-efficiency/reviewer-evaluation"
+    monkeypatch.setattr(helper, "ARTIFACT_OUTPUT_ROOT", artifact_root)
+    sibling = artifact_root / "phase6-deepseek-v4-1-flash-r7-20260918-calibration"
+    assert helper._validate_output_directory(sibling) == sibling.resolve()
+    with pytest.raises(helper.EvaluationError, match="ignored artifacts"):
+        helper._validate_output_directory(tmp_path / "tracked-output")
 
 
 def test_run_evaluation_writes_raw_responses_only_under_ignored_output(

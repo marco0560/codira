@@ -153,6 +153,45 @@ def test_report_excludes_incomplete_usage_pairs(tmp_path: Path) -> None:
     assert "incomplete_usage" in render_markdown(report)
 
 
+def test_report_excludes_unsuccessful_pairs_with_complete_usage(tmp_path: Path) -> None:
+    """Exclude task failures even when both provider usage records are complete.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary campaign state root.
+
+    Returns
+    -------
+    None
+        Task failures never enter token-saving statistics.
+    """
+
+    store = _store(tmp_path)
+    for record_path in store.records_root.glob("symbols-001-*.json"):
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["result"]["outcome"] = "oracle_failure"
+        record["result"]["failure_class"] = "deterministic_oracle"
+        evidence = record["evidence"]
+        record["evidence_fingerprint"] = sha256(
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report = build_report(store)
+    assert report["paired_token_differences"] == [
+        {
+            "pair_id": "patch-001-r01",
+            "baseline_tokens": 33,
+            "codira_mcp_tokens": 44,
+            "token_difference": 11,
+        }
+    ]
+    assert report["exclusions"] == [
+        {"pair_id": "symbols-001-r01", "reason": "unsuccessful_outcome"}
+    ]
+
+
 def test_report_excludes_incomplete_pair(tmp_path: Path) -> None:
     """Exclude a pair when only one scheduled variant has a terminal record.
 

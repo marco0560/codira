@@ -1,1 +1,1 @@
-{"schema_version":"1.0","oracle_id":"architecture-001","task_id":"architecture-001","definition":{"contains_paths":["index.js","lib/picomatch.js","lib/parse.js","lib/scan.js"]},"visibility":"public"}
+{"schema_version":"1.0","oracle_id":"architecture-001","task_id":"architecture-001","definition":{"text_contains":["index.js","lib/picomatch.js","lib/parse.js","lib/scan.js"]},"visibility":"public"}

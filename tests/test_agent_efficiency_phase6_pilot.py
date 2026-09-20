@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,6 +24,7 @@ from scripts.run_agent_efficiency_phase6_pilot import (
     install_protected_asset,
     main,
     parse_fixture_sources,
+    preflight_openrouter_route,
     prepare_protected_fixture,
     prompt_for_attempt,
     validate_treatment_protocol,
@@ -71,7 +73,7 @@ def _manifest() -> dict[str, object]:
             "reasoning_effort": "medium",
             "wire_api": "responses",
             "max_prompt_usd_per_million": 2,
-            "max_completion_usd_per_million": 12,
+            "max_completion_usd_per_million": 3,
         },
         "accounting": {
             "max_daily_spend_usd": 2,
@@ -86,6 +88,7 @@ def _manifest() -> dict[str, object]:
             "tmpfs_size_mib": 128,
         },
         "runtime_image": "localhost/pilot@sha256:" + "a" * 64,
+        "runtime_profile_fingerprint": "b" * 64,
         "treatment_protocol": {
             "version": "mcp-required-v1",
             "codira_mcp_instruction": (
@@ -200,9 +203,47 @@ def test_checked_in_pilot_manifest_has_three_frozen_fixture_bindings() -> None:
     assert plan["task_ids"] == ["documentation-001", "patch-001", "symbols-001"]
     assert plan["accounting"] == manifest["accounting"]
     assert plan["runtime_image"] == manifest["runtime_image"]
+    assert plan["runtime_profile_fingerprint"] is None
     assert plan["fixture_fingerprints"] == manifest["fixture_fingerprints"]
     assert plan["task_fingerprints"] == manifest["task_fingerprints"]
     assert plan["task_fixture_ids"] == manifest["task_fixture_ids"]
+
+
+def test_new_efficacy_pilot_manifest_binds_admitted_runtime_and_budget() -> None:
+    """Require the renewed pilot to retain its exact runtime and cost controls.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The public manifest creates exactly three baseline/MCP pairs without
+        authorizing an execution.
+    """
+
+    manifest = load_document(
+        Path("benchmarks/agent-efficiency/codira-efficacy-pilot-001.json"),
+        "campaign",
+    )
+    plan = build_pilot_plan(
+        manifest, ("symbols-001", "patch-001", "documentation-001"), 20260919
+    )
+
+    assert plan["scheduled_execution_count"] == 6
+    assert plan["execution_authorized"] is False
+    assert manifest["runtime_profile_fingerprint"] == (
+        "505d9aa2d761657199fa63de526dea33c1e4aacef030c2f45e3216526643f680"
+    )
+    assert manifest["provider"] == {
+        "name": "openrouter",
+        "model": "deepseek/deepseek-v4.1-flash-20260910",
+        "reasoning_effort": "none",
+        "wire_api": "responses",
+        "max_prompt_usd_per_million": 0.15,
+        "max_completion_usd_per_million": 0.6,
+    }
 
 
 def test_pilot_plan_rejects_an_invalid_runtime_image() -> None:
@@ -221,6 +262,26 @@ def test_pilot_plan_rejects_an_invalid_runtime_image() -> None:
     manifest = _manifest()
     manifest["runtime_image"] = "mutable-tag"
     with pytest.raises(PilotLauncherError, match="invalid runtime image"):
+        build_pilot_plan(manifest, ("symbols-001", "patch-001", "documentation-001"), 7)
+
+
+def test_pilot_plan_rejects_an_invalid_runtime_profile() -> None:
+    """Reject a malformed profile identity before a paid execution is planned.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The malformed profile fingerprint is rejected by planning.
+    """
+
+    manifest = _manifest()
+    manifest["runtime_profile_fingerprint"] = "not-a-sha256"
+
+    with pytest.raises(PilotLauncherError, match="invalid runtime profile"):
         build_pilot_plan(manifest, ("symbols-001", "patch-001", "documentation-001"), 7)
 
 
@@ -573,6 +634,162 @@ def test_execution_controls_reject_drift_before_attempt_side_effects() -> None:
         execution_controls(manifest)
 
 
+def test_execution_controls_reject_an_unfunded_token_ceiling() -> None:
+    """Reject accounting that cannot cover the configured maximum token spend.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Price and token ceilings must fit within both attempt and pilot budgets.
+    """
+
+    manifest = _manifest()
+    accounting = manifest["accounting"]
+    assert isinstance(accounting, dict)
+    accounting["max_estimated_attempt_spend_usd"] = 0.1
+
+    with pytest.raises(PilotLauncherError, match="accounting"):
+        execution_controls(manifest)
+
+
+def test_preflight_admits_only_the_exact_route_and_scoped_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Record public and authenticated route admission without a completion.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the three fixed OpenRouter metadata endpoints.
+
+    Returns
+    -------
+    None
+        The public-safe record retains route capabilities and budget only.
+    """
+
+    manifest = _manifest()
+    provider = manifest["provider"]
+    budgets = manifest["budgets"]
+    accounting = manifest["accounting"]
+    assert isinstance(provider, dict)
+    assert isinstance(budgets, dict)
+    assert isinstance(accounting, dict)
+    provider.update(
+        {
+            "model": "deepseek/deepseek-v4.1-flash-20260910",
+            "reasoning_effort": "none",
+            "max_prompt_usd_per_million": 0.15,
+            "max_completion_usd_per_million": 0.6,
+        }
+    )
+    budgets.update({"max_total_tokens": 200000, "max_output_tokens": 32000})
+    accounting.update(
+        {
+            "max_daily_spend_usd": 6,
+            "max_estimated_attempt_spend_usd": 0.15,
+            "max_estimated_pilot_spend_usd": 0.9,
+        }
+    )
+    model = {
+        "id": provider["model"],
+        "pricing": {
+            "prompt": "0.00000015",
+            "completion": "0.0000006",
+            "overrides": [
+                {
+                    "utc_days": ["saturday", "sunday"],
+                    "prompt": "0.00000015",
+                    "completion": "0.0000006",
+                },
+                {
+                    "utc_days": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday",
+                    ],
+                    "utc_start": 100,
+                    "utc_end": 400,
+                    "prompt": "0.0000003",
+                    "completion": "0.0000012",
+                },
+            ],
+        },
+        "supported_parameters": ["tools", "reasoning"],
+        "top_provider": {"max_completion_tokens": 393216},
+        "context_length": 1048576,
+    }
+
+    class Response:
+        """Return one deterministic JSON body through the HTTP context API.
+
+        Parameters
+        ----------
+        document : dict[str, object]
+            Synthetic OpenRouter response body.
+        """
+
+        def __init__(self, document: dict[str, object]) -> None:
+            self.document = document
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *arguments: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(self.document).encode("utf-8")
+
+    responses = [
+        Response({"data": [model]}),
+        Response({"data": [model]}),
+        Response(
+            {
+                "data": {
+                    "limit": 6,
+                    "limit_remaining": 5.75,
+                    "usage_daily": 0.25,
+                    "limit_reset": "2026-09-20T00:00:00Z",
+                }
+            }
+        ),
+    ]
+    monkeypatch.setattr(pilot, "urlopen", lambda *arguments, **kwargs: responses.pop(0))
+
+    record = preflight_openrouter_route(
+        manifest,
+        execution_controls(manifest),
+        "scoped-token",
+        now_utc=datetime(2026, 9, 20, 12, tzinfo=UTC),
+    )
+
+    assert record["model"] == provider["model"]
+    assert record["public_route"] == {
+        "context_length": 1048576,
+        "max_completion_tokens": 393216,
+        "max_prompt_usd_per_million": 0.15,
+        "max_completion_usd_per_million": 0.6,
+        "pricing_window": {
+            "kind": "override",
+            "utc_days": ["saturday", "sunday"],
+        },
+        "supported_parameters": ["reasoning", "tools"],
+    }
+    assert record["key_budget"] == {
+        "limit_usd": 6.0,
+        "limit_remaining_usd": 5.75,
+        "limit_reset": "2026-09-20T00:00:00Z",
+        "usage_daily_usd": 0.25,
+    }
+
+
 def test_prepare_protected_fixture_rejects_git_clone_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -663,7 +880,7 @@ def test_baseline_configuration_excludes_codira_mcp(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("assistance_mode", "expected_mcp_command"),
-    (("baseline", None), ("codira-mcp", "codira-mcp")),
+    (("baseline", None), ("codira-mcp", pilot.BENCHMARK_MCP_COMMAND)),
 )
 def test_execute_attempt_records_an_oracle_contract_failure(
     tmp_path: Path,
@@ -774,6 +991,17 @@ def test_execute_attempt_records_an_oracle_contract_failure(
         "prepare_protected_fixture",
         lambda source, revision, root, task_id: (root.mkdir(), None)[1],
     )
+    monkeypatch.setattr(
+        pilot,
+        "execute_index_preparation",
+        lambda request: SimpleNamespace(
+            elapsed_seconds=0.1,
+            returncode=0,
+            timed_out=False,
+            stdout="Indexed: 1",
+            stderr="",
+        ),
+    )
     mcp_commands: list[str | None] = []
 
     def write_config(root: Path, *arguments: object) -> Path:
@@ -807,7 +1035,7 @@ def test_execute_attempt_records_an_oracle_contract_failure(
     monkeypatch.setattr(
         pilot,
         "result_from_execution",
-        lambda campaign_id, scheduled, execution: (
+        lambda campaign_id, scheduled, execution, **_kwargs: (
             {
                 "schema_version": "1.0",
                 "campaign_id": campaign_id,

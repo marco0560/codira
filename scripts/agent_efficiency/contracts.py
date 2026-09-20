@@ -27,7 +27,7 @@ SCHEMA_DIRECTORY = (
     Path(__file__).resolve().parents[2] / "benchmarks" / "agent-efficiency" / "schemas"
 )
 DOCUMENT_KINDS = frozenset(
-    {"fixture", "task", "campaign", "run-result", "usage", "oracle"}
+    {"fixture", "task", "campaign", "campaign-spec", "run-result", "usage", "oracle"}
 )
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
