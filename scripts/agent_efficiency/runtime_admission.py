@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import shutil
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+
+GIT_EXECUTABLE = shutil.which("git")
 
 
 class RuntimeAdmissionError(RuntimeError):
@@ -26,6 +30,87 @@ class RuntimeAdmissionError(RuntimeError):
     detail : str
         Public-safe description of the failed local capability.
     """
+
+
+def _tool_document(response: object) -> Mapping[str, object]:
+    """Decode one MCP tool response into its structured document.
+
+    Parameters
+    ----------
+    response : object
+        MCP SDK call result carrying structured or text JSON content.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, object]
+        Parsed tool document.
+
+    Raises
+    ------
+    RuntimeAdmissionError
+        If no structured object can be recovered.
+    """
+
+    structured = getattr(response, "structuredContent", None)
+    if isinstance(structured, Mapping):
+        return structured
+    for item in getattr(response, "content", ()):
+        text = getattr(item, "text", None)
+        if not isinstance(text, str):
+            continue
+        try:
+            document = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(document, Mapping):
+            return document
+    raise RuntimeAdmissionError("Codira MCP response is not structured JSON")
+
+
+def _require_history_free_staged_fixture(root: Path) -> int:
+    """Require the exact staged, history-free representation used by agents.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Candidate exported fixture mount.
+
+    Returns
+    -------
+    int
+        Positive count of paths in the synthetic Git index.
+
+    Raises
+    ------
+    RuntimeAdmissionError
+        If the fixture has history or no staged baseline paths.
+    """
+
+    if GIT_EXECUTABLE is None:
+        raise RuntimeAdmissionError("runtime admission Git executable is unavailable")
+    history = subprocess.run(
+        (GIT_EXECUTABLE, "rev-parse", "--verify", "HEAD"),
+        cwd=root,
+        check=False,
+        capture_output=True,
+    )
+    try:
+        tracked = subprocess.run(
+            (GIT_EXECUTABLE, "ls-files", "--cached", "-z"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+        ).stdout
+    except subprocess.CalledProcessError as error:
+        raise RuntimeAdmissionError(
+            "runtime admission requires a synthetic Git fixture"
+        ) from error
+    count = len([item for item in tracked.split(b"\0") if item])
+    if history.returncode == 0 or count < 1:
+        raise RuntimeAdmissionError(
+            "runtime admission requires a staged history-free fixture"
+        )
+    return count
 
 
 async def _call_context(root: Path, query: str, mcp_command: str) -> None:
@@ -52,6 +137,31 @@ async def _call_context(root: Path, query: str, mcp_command: str) -> None:
             asyncio.timeout(30),
         ):
             await session.initialize()
+            status_response = await session.call_tool("index_status", arguments={})
+            status_document = _tool_document(status_response)
+            status_result = status_document.get("result")
+            if not isinstance(status_result, Mapping):
+                raise RuntimeAdmissionError("Codira MCP index status is malformed")
+            metadata = status_result.get("metadata")
+            generation = status_result.get("generation")
+            indexed_file_count = (
+                metadata.get("indexed_file_count")
+                if isinstance(metadata, Mapping)
+                else None
+            )
+            if (
+                status_result.get("usable") is not True
+                or not isinstance(metadata, Mapping)
+                or not isinstance(indexed_file_count, str | int)
+                or isinstance(indexed_file_count, bool)
+                or not str(indexed_file_count).isdecimal()
+                or int(indexed_file_count) < 1
+                or not isinstance(generation, Mapping)
+                or generation.get("state") != "ready"
+                or generation.get("partial") is not False
+                or generation.get("failed_file_count") != 0
+            ):
+                raise RuntimeAdmissionError("Codira MCP index is not usable")
             response = await session.call_tool(
                 "context_for_task", arguments={"query": query, "output_budget": 512}
             )
@@ -62,6 +172,11 @@ async def _call_context(root: Path, query: str, mcp_command: str) -> None:
         detail = repr(response.content)[:500]
         message = f"Codira MCP context query was not usable: {detail}"
         raise RuntimeAdmissionError(message)
+    document = _tool_document(response)
+    result = document.get("result")
+    context = result.get("context") if isinstance(result, Mapping) else None
+    if not isinstance(context, Mapping) or context.get("status") != "ok":
+        raise RuntimeAdmissionError("Codira MCP context query found no fixture context")
 
 
 def admit_runtime(root: Path, query: str, config_path: str | None = None) -> None:
@@ -77,6 +192,11 @@ def admit_runtime(root: Path, query: str, config_path: str | None = None) -> Non
         Image-local structural profile. ``None`` retains ordinary host commands
         for the local regression test.
 
+    Returns
+    -------
+    None
+        The function returns only after index and MCP admission succeed.
+
     Raises
     ------
     RuntimeAdmissionError
@@ -90,6 +210,7 @@ def admit_runtime(root: Path, query: str, config_path: str | None = None) -> Non
         detail = "codira index executable is unavailable in the runner image"
         raise RuntimeAdmissionError(detail)
     if config_path is not None:
+        _require_history_free_staged_fixture(root)
         profile = Path(config_path)
         if not profile.is_file():
             raise RuntimeAdmissionError("benchmark Codira profile is unavailable")

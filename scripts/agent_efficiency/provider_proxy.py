@@ -20,6 +20,7 @@ This module is the runner-side authentication boundary for issue #53 Phase 0.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import hmac
 import http.client
 import json
@@ -134,6 +135,7 @@ class ProxySettings:
     constraints: ResponseConstraints = ResponseConstraints()
     max_response_requests: int = 1
     max_transport_attempts_per_response: int = 1
+    response_artifact_root: Path | None = None
     limiter: ResponseRequestLimiter = field(init=False, repr=False)
     response_observations: list[dict[str, object]] = field(
         default_factory=list, repr=False
@@ -162,11 +164,24 @@ class ProxySettings:
         object.__setattr__(
             self, "limiter", ResponseRequestLimiter(self.max_response_requests)
         )
+        if self.response_artifact_root is not None:
+            if not self.response_artifact_root.is_absolute():
+                message = "proxy response artifact root must be absolute"
+                raise ValueError(message)
+            try:
+                self.response_artifact_root.mkdir(mode=0o700)
+            except OSError as error:
+                message = "proxy response artifact root must be fresh"
+                raise ValueError(message) from error
 
     def record_response(
-        self, status: int, headers: list[tuple[str, str]], source: str = "upstream"
+        self,
+        status: int,
+        headers: list[tuple[str, str]],
+        source: str = "upstream",
+        body: bytes | None = None,
     ) -> None:
-        """Append public-safe upstream response metadata for one request.
+        """Persist an exact upstream body and append public-safe metadata.
 
         Parameters
         ----------
@@ -176,25 +191,99 @@ class ProxySettings:
             Upstream headers from which only ``Retry-After`` is retained.
         source : str, optional
             ``"upstream"`` for provider traffic or ``"local"`` for a proxy cap.
+        body : bytes or None, optional
+            Exact received upstream response body. Paid runners supply it so
+            evidence is durable before the body reaches semantic consumers.
 
         Returns
         -------
         None
             The in-memory evidence ledger receives one sanitized observation.
+
+        Raises
+        ------
+        ValueError
+            If an upstream body has no configured private artifact root.
+        OSError
+            If exact response evidence cannot be persisted durably.
         """
 
         retry_after = next(
             (value for key, value in headers if key.lower() == "retry-after"), None
         )
-        observation: dict[str, object] = {
-            "observed_at": datetime.now(UTC).isoformat(),
-            "status": status,
-            "source": source,
-        }
-        if retry_after is not None:
-            observation["retry_after"] = retry_after
+        observed_at = datetime.now(UTC).isoformat()
         with self.observation_lock:
+            observation: dict[str, object] = {
+                "observed_at": observed_at,
+                "status": status,
+                "source": source,
+            }
+            if retry_after is not None:
+                observation["retry_after"] = retry_after
+            if body is not None and source == "upstream":
+                if self.response_artifact_root is None:
+                    message = "upstream response artifact root is unavailable"
+                    raise ValueError(message)
+                index = len(self.response_observations) + 1
+                stem = f"response-{index:03d}"
+                body_path = self.response_artifact_root / f"{stem}.body"
+                metadata_path = self.response_artifact_root / f"{stem}.json"
+                digest = hashlib.sha256(body).hexdigest()
+                self._atomic_bytes(body_path, body)
+                self._atomic_bytes(
+                    metadata_path,
+                    (
+                        json.dumps(
+                            {
+                                "body_sha256": digest,
+                                "body_size_bytes": len(body),
+                                "headers": headers,
+                                "observed_at": observed_at,
+                                "source": source,
+                                "status": status,
+                            },
+                            indent=2,
+                            sort_keys=True,
+                        )
+                        + "\n"
+                    ).encode("utf-8"),
+                )
+                observation.update(
+                    {
+                        "response_artifact": body_path.name,
+                        "response_sha256": digest,
+                        "response_size_bytes": len(body),
+                    }
+                )
             self.response_observations.append(observation)
+
+    @staticmethod
+    def _atomic_bytes(path: Path, content: bytes) -> None:
+        """Write one absent response artifact atomically and durably.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Absent ignored artifact path beneath the per-attempt directory.
+        content : bytes
+            Exact bytes to persist without interpretation.
+
+        Raises
+        ------
+        OSError
+            If the response evidence cannot be persisted without overwrite.
+        """
+
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            with temporary.open("xb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.replace(path)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
 
 
 def parse_settings(
@@ -358,6 +447,7 @@ def constrain_response_request(
             raise ValueError(message)
         request["provider"] = {
             "allow_fallbacks": False,
+            "require_parameters": True,
             "max_price": {
                 "prompt": constraints.max_prompt_usd_per_million,
                 "completion": constraints.max_completion_usd_per_million,
@@ -520,7 +610,7 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
         del format, args
 
     def _forward(self) -> None:
-        """Authorize and relay one supported request without persisting data.
+        """Authorize, persist, and relay one supported provider response.
 
         Parameters
         ----------
@@ -529,7 +619,7 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
         Returns
         -------
         None
-            The upstream status, headers, and body are streamed to the client.
+            Exact upstream bytes are persisted before reaching the client.
         """
 
         path = self.path.split("?", maxsplit=1)[0]
@@ -575,6 +665,7 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
         request_headers["Content-Length"] = str(len(payload))
         try:
             response = None
+            response_body = b""
             response_headers: list[tuple[str, str]] = []
             for transport_attempt in range(
                 self.settings.max_transport_attempts_per_response
@@ -585,7 +676,10 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
                 )
                 response = connection.getresponse()
                 response_headers = response.getheaders()
-                self.settings.record_response(response.status, response_headers)
+                response_body = response.read()
+                self.settings.record_response(
+                    response.status, response_headers, body=response_body
+                )
                 if (
                     response.status
                     not in {
@@ -604,7 +698,6 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
                     ),
                     None,
                 )
-                response.read()
                 connection.close()
                 time.sleep(
                     float(retry_after)
@@ -622,9 +715,8 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
                     self.send_header(key, value)
             self.send_header("Connection", "close")
             self.end_headers()
-            while chunk := response.read(64 * 1024):
-                self.wfile.write(chunk)
-                self.wfile.flush()
+            self.wfile.write(response_body)
+            self.wfile.flush()
         except OSError:
             self.settings.record_response(HTTPStatus.BAD_GATEWAY, [])
             self.send_error(HTTPStatus.BAD_GATEWAY)

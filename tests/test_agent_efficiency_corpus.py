@@ -148,4 +148,23 @@ def test_export_fixture_creates_a_history_free_git_worktree(tmp_path: Path) -> N
         ).returncode
         == 0
     )
+    assert (
+        subprocess.run(
+            ("git", "ls-files", "--error-unmatch", "fixture.txt"),
+            cwd=destination,
+            check=False,
+        ).returncode
+        == 0
+    )
+    (destination / "fixture.txt").write_text("changed", encoding="utf-8")
+    assert (
+        "fixture.txt"
+        in subprocess.run(
+            ("git", "diff", "--name-only"),
+            cwd=destination,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.splitlines()
+    )
     verify_source_fix_excluded(destination, "f58ca3e81424a35626c8a475eb59ab95589008ce")

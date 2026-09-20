@@ -61,6 +61,7 @@ BENCHMARK_CODIRA_PROFILE = Path("scripts/agent_efficiency/benchmark-codira.toml"
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 OPENROUTER_USER_MODELS_URL = "https://openrouter.ai/api/v1/models/user"
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
+GIT_EXECUTABLE = shutil.which("git")
 
 
 def runtime_profile_fingerprint() -> str:
@@ -77,6 +78,75 @@ def runtime_profile_fingerprint() -> str:
     """
 
     return hashlib.sha256(BENCHMARK_CODIRA_PROFILE.read_bytes()).hexdigest()
+
+
+def validate_prepared_index(root: Path) -> dict[str, object]:
+    """Validate one assisted fixture index before provider setup.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        History-free staged fixture containing a completed Codira index.
+
+    Returns
+    -------
+    dict[str, object]
+        Public-safe tracked-file and index-generation evidence.
+
+    Raises
+    ------
+    PilotLauncherError
+        If Git has no staged baseline or the Codira index is empty, partial,
+        failed, implausibly large, or internally inconsistent.
+    """
+
+    if GIT_EXECUTABLE is None:
+        raise PilotLauncherError("Git is unavailable for index validation")
+    try:
+        tracked = subprocess.run(
+            (GIT_EXECUTABLE, "ls-files", "--cached", "-z"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+        ).stdout
+        tracked_file_count = len([item for item in tracked.split(b"\0") if item])
+        metadata = json.loads(
+            (root / ".codira" / "metadata.json").read_text(encoding="utf-8")
+        )
+        generation = json.loads(
+            (root / ".codira" / "index-generation.json").read_text(encoding="utf-8")
+        )
+        indexed_file_count = int(metadata["indexed_file_count"])
+        generation_indexed_file_count = int(generation["indexed_file_count"])
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        subprocess.CalledProcessError,
+    ) as error:
+        raise PilotLauncherError(
+            "Codira index preparation evidence is invalid"
+        ) from error
+    if (
+        tracked_file_count < 1
+        or indexed_file_count < 1
+        or indexed_file_count > tracked_file_count
+        or generation_indexed_file_count != indexed_file_count
+        or generation.get("state") != "ready"
+        or generation.get("partial") is not False
+        or generation.get("failed_file_count") != 0
+    ):
+        raise PilotLauncherError("Codira index preparation is not usable")
+    return {
+        "tracked_file_count": tracked_file_count,
+        "indexed_file_count": indexed_file_count,
+        "generation": generation.get("generation"),
+        "generation_state": generation.get("state"),
+        "partial": generation.get("partial"),
+        "failed_file_count": generation.get("failed_file_count"),
+    }
 
 
 class PilotLauncherError(ValueError):
@@ -139,9 +209,14 @@ class ExecutionControls:
         Exact provider settings fixed for the pilot.
     max_prompt_price, max_completion_price : float
         Positive OpenRouter price ceilings per million tokens.
-    max_total_tokens, max_output_tokens, timeout_seconds, max_response_requests : int
-        Positive per-attempt total-token, output, time, and provider-request
-        ceilings.
+    max_total_tokens : int
+        Positive token ceiling with scope declared by
+        ``max_total_tokens_scope``.
+    max_total_tokens_scope : str
+        Whether the total-token ceiling covers the whole agent session or each
+        logical continuation for conservative legacy accounting.
+    max_output_tokens, timeout_seconds, max_response_requests : int
+        Positive output, time, and provider-request ceilings.
     max_daily_spend, max_attempt_spend, max_pilot_spend : float
         Positive bounded accounting controls in USD.
 
@@ -156,6 +231,7 @@ class ExecutionControls:
     max_prompt_price: float
     max_completion_price: float
     max_total_tokens: int
+    max_total_tokens_scope: str
     max_output_tokens: int
     timeout_seconds: int
     max_response_requests: int
@@ -483,6 +559,17 @@ def preflight_openrouter_route(
         "manifest_fingerprint": canonical_fingerprint(manifest),
         "model": controls.model,
         "reasoning_effort": controls.reasoning_effort,
+        "accounting": {
+            "max_total_tokens": controls.max_total_tokens,
+            "max_total_tokens_scope": controls.max_total_tokens_scope,
+            "max_response_requests_per_attempt": controls.max_response_requests,
+            "max_transport_attempts_per_response": (
+                controls.max_transport_attempts_per_response
+            ),
+            "max_estimated_attempt_spend_usd": controls.max_attempt_spend,
+            "max_estimated_pilot_spend_usd": controls.max_pilot_spend,
+            "max_daily_spend_usd": controls.max_daily_spend,
+        },
         "public_route": {
             "context_length": context_length,
             "max_completion_tokens": top_provider.get("max_completion_tokens"),
@@ -522,8 +609,8 @@ def prompt_for_attempt(
     Returns
     -------
     str
-        The baseline prompt unchanged, or the protocol instruction followed by
-        the same public task prompt for the assisted treatment.
+        Common protocol guidance plus the public task prompt, with the
+        assisted-only Codira instruction prepended for the treatment arm.
 
     Raises
     ------
@@ -536,6 +623,7 @@ def prompt_for_attempt(
         raise PilotLauncherError("campaign treatment protocol is invalid")
     version = protocol.get("version")
     instruction = protocol.get("codira_mcp_instruction")
+    common_instruction = protocol.get("agent_instruction")
     if (
         not isinstance(version, str)
         or not version
@@ -543,10 +631,19 @@ def prompt_for_attempt(
         or not instruction.strip()
     ):
         raise PilotLauncherError("campaign treatment protocol is invalid")
+    if common_instruction is not None and (
+        not isinstance(common_instruction, str) or not common_instruction.strip()
+    ):
+        raise PilotLauncherError("campaign treatment protocol is invalid")
+    if version == "mcp-required-v2" and not isinstance(common_instruction, str):
+        raise PilotLauncherError("campaign treatment protocol is invalid")
+    task = task_prompt
+    if isinstance(common_instruction, str):
+        task = f"{common_instruction.strip()}\n\n{task}"
     if assistance_mode == "baseline":
-        return task_prompt
+        return task
     if assistance_mode == "codira-mcp":
-        return f"{instruction.strip()}\n\n{task_prompt}"
+        return f"{instruction.strip()}\n\n{task}"
     raise PilotLauncherError("scheduled assistance mode is invalid")
 
 
@@ -976,33 +1073,43 @@ def execution_controls(
     pilot_spend = accounting.get("max_estimated_pilot_spend_usd")
     request_limit = accounting.get("max_response_requests_per_attempt")
     transport_limit = accounting.get("max_transport_attempts_per_response", 1)
+    token_scope = accounting.get("max_total_tokens_scope", "per-continuation")
     daily_spend_value = cast("int | float", daily_spend)
     attempt_spend_value = cast("int | float", attempt_spend)
     pilot_spend_value = cast("int | float", pilot_spend)
     request_limit_value = cast("int", request_limit)
     transport_limit_value = cast("int", transport_limit)
-    if (
-        not all(
+    if not (
+        all(
             isinstance(value, (int, float)) and not isinstance(value, bool)
             for value in (daily_spend, attempt_spend, pilot_spend)
         )
-        or float(daily_spend_value) <= 0
+        and isinstance(request_limit, int)
+        and not isinstance(request_limit, bool)
+        and request_limit >= 1
+        and isinstance(transport_limit, int)
+        and not isinstance(transport_limit, bool)
+        and transport_limit >= 1
+        and token_scope in {"whole-session", "per-continuation"}
+    ):
+        raise PilotLauncherError("campaign accounting controls are invalid")
+    token_scope_value = token_scope
+    reservation_multiplier = (
+        1
+        if token_scope_value == "whole-session"
+        else request_limit_value * transport_limit_value
+    )
+    if (
+        float(daily_spend_value) <= 0
         or float(attempt_spend_value) <= 0
         or float(pilot_spend_value) <= 0
         or float(pilot_spend_value) > float(daily_spend_value)
         or float(pilot_spend_value) < float(attempt_spend_value) * scheduled_attempts
         or float(attempt_spend_value)
-        < request_limit_value
-        * transport_limit_value
+        < reservation_multiplier
         * max_total_tokens
         * max(float(prompt_price), float(completion_price))
         / 1_000_000
-        or not isinstance(request_limit, int)
-        or isinstance(request_limit, bool)
-        or request_limit < 1
-        or not isinstance(transport_limit, int)
-        or isinstance(transport_limit, bool)
-        or transport_limit < 1
     ):
         raise PilotLauncherError("campaign accounting controls are invalid")
     return ExecutionControls(
@@ -1011,6 +1118,7 @@ def execution_controls(
         float(prompt_price),
         float(completion_price),
         max_total_tokens,
+        token_scope_value,
         max_output_tokens,
         timeout_seconds,
         request_limit_value,
@@ -1082,6 +1190,11 @@ def execute_pilot_attempt(
                 BENCHMARK_CODIRA_CONFIG,
             )
         )
+        if preparation.timed_out or preparation.returncode != 0:
+            raise PilotLauncherError(
+                "codira index preparation failed before MCP startup"
+            )
+        index_admission = validate_prepared_index(agent_root)
         index_root = agent_root / ".codira"
         index_fingerprint = canonical_fingerprint(
             {
@@ -1107,12 +1220,9 @@ def execute_pilot_attempt(
                 "stderr_fingerprint": hashlib.sha256(
                     preparation.stderr.encode("utf-8")
                 ).hexdigest(),
+                **index_admission,
             },
         )
-        if preparation.timed_out or preparation.returncode != 0:
-            raise PilotLauncherError(
-                "codira index preparation failed before MCP startup"
-            )
     result_format = str(task.get("result_format", "json"))
     snapshot_root = attempt_root / "workspace-before"
     if result_format == "workspace-diff":
@@ -1151,6 +1261,7 @@ def execute_pilot_attempt(
         constraints,
         controls.max_response_requests,
         controls.max_transport_attempts_per_response,
+        response_artifact_root=attempt_root / "provider-responses",
     )
     server = provider_proxy.create_unix_server(settings, str(socket_path))
     try:
@@ -1195,12 +1306,20 @@ def execute_pilot_attempt(
         and result["failure_class"] == "provider_rate_limited"
     ):
         result["failure_class"] = "local_request_cap_exceeded"
+    operational_status = "passed" if result["outcome"] == "success" else "failed"
+    operational_failure = (
+        None if operational_status == "passed" else result["failure_class"]
+    )
     oracle_passed, oracle_fingerprint = False, None
+    task_oracle_status = "not_evaluated"
+    task_oracle_failure: str | None = None
     if result["outcome"] == "success" and capture_error is not None:
         result["outcome"], result["failure_class"] = (
             "oracle_failure",
             "workspace_capture",
         )
+        task_oracle_status = "failed"
+        task_oracle_failure = "workspace_capture"
     elif result["outcome"] == "success":
         try:
             definition = context.oracles[attempt.task_id]["definition"]
@@ -1214,16 +1333,33 @@ def execute_pilot_attempt(
                 protected_root=protected_root,
             )
             oracle_passed, oracle_fingerprint = outcome.passed, outcome.fingerprint
+            task_oracle_status = "passed" if outcome.passed else "failed"
             if not outcome.passed:
                 result["outcome"], result["failure_class"] = (
                     "oracle_failure",
                     "deterministic_oracle",
                 )
+                task_oracle_failure = "deterministic_oracle"
         except (ContractError, KeyError, TypeError):
             result["outcome"], result["failure_class"] = (
                 "oracle_failure",
                 "oracle_contract",
             )
+            task_oracle_status = "failed"
+            task_oracle_failure = "oracle_contract"
+    result.update(
+        {
+            "operational_calibration": {
+                "status": operational_status,
+                "failure_class": operational_failure,
+            },
+            "task_oracle": {
+                "status": task_oracle_status,
+                "failure_class": task_oracle_failure,
+                "fingerprint": oracle_fingerprint,
+            },
+        }
+    )
     evidence.update(
         {
             "oracle_passed": oracle_passed,

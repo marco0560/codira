@@ -80,6 +80,10 @@ def calibration_attempt(manifest: dict[str, object]) -> ScheduledAttempt:
 def build_parser() -> argparse.ArgumentParser:
     """Build the explicit one-request calibration command parser.
 
+    Parameters
+    ----------
+    None
+
     Returns
     -------
     argparse.ArgumentParser
@@ -108,6 +112,11 @@ def main(arguments: list[str] | None = None) -> int:
     -------
     int
         Zero for an admitted calibration record; two for safe rejection.
+
+    Raises
+    ------
+    SystemExit
+        If command-line arguments violate the parser contract.
     """
 
     args = build_parser().parse_args(arguments)

@@ -46,7 +46,17 @@ def _calibration_manifest() -> dict[str, object]:
 
 
 def test_calibration_builds_one_assisted_attempt() -> None:
-    """Bind calibration to one Codira-MCP request, never a paired schedule."""
+    """Bind calibration to one Codira-MCP request, never a paired schedule.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions cover the sole assisted calibration attempt.
+    """
 
     attempt = calibration_attempt(_calibration_manifest())
 
@@ -56,7 +66,17 @@ def test_calibration_builds_one_assisted_attempt() -> None:
 
 
 def test_calibration_allows_one_attempt_accounting() -> None:
-    """Accept the one-request cap while the pilot default remains six requests."""
+    """Accept the one-request cap while the pilot default remains six requests.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions distinguish calibration and pilot accounting cardinality.
+    """
 
     controls = execution_controls(_calibration_manifest(), scheduled_attempts=1)
 
@@ -66,7 +86,17 @@ def test_calibration_allows_one_attempt_accounting() -> None:
 
 
 def test_calibration_rejects_multiple_task_bindings() -> None:
-    """Reject a manifest that could turn calibration into a campaign."""
+    """Reject a manifest that could turn calibration into a campaign.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions cover fail-closed calibration task binding.
+    """
 
     manifest = _calibration_manifest()
     task_hashes = manifest["task_fingerprints"]

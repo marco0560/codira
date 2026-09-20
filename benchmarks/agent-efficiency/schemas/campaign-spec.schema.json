@@ -21,6 +21,12 @@
           "minimum": 1,
           "type": "integer"
         },
+        "max_total_tokens_scope": {
+          "enum": [
+            "whole-session",
+            "per-continuation"
+          ]
+        },
         "max_transport_attempts_per_response": {
           "minimum": 1,
           "type": "integer"
@@ -161,6 +167,10 @@
     "treatment_protocol": {
       "additionalProperties": false,
       "properties": {
+        "agent_instruction": {
+          "minLength": 1,
+          "type": "string"
+        },
         "codira_mcp_instruction": {
           "minLength": 1,
           "type": "string"

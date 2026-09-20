@@ -152,6 +152,113 @@ def _percentile90(values: list[float]) -> float | None:
     return ordered[(9 * len(ordered) - 1) // 10]
 
 
+def _outcome_axes(result: Mapping[str, object]) -> dict[str, dict[str, object]]:
+    """Return explicit operational and task-oracle reporting axes.
+
+    Parameters
+    ----------
+    result : Mapping[str, object]
+        Validated run result, possibly written before explicit axes existed.
+
+    Returns
+    -------
+    dict[str, dict[str, object]]
+        Public-safe axis documents with their persistence source.
+
+    Notes
+    -----
+    Legacy immutable records are projected without rewriting them. Reaching an
+    oracle outcome proves that the operational path completed; infrastructure
+    and cancellation outcomes leave the task oracle unevaluated.
+    """
+
+    persisted_operational = result.get("operational_calibration")
+    persisted_oracle = result.get("task_oracle")
+    if isinstance(persisted_operational, Mapping) and isinstance(
+        persisted_oracle, Mapping
+    ):
+        operational_failure, operational_redacted = _redact_failure(
+            persisted_operational.get("failure_class")
+        )
+        oracle_failure, oracle_redacted = _redact_failure(
+            persisted_oracle.get("failure_class")
+        )
+        return {
+            "operational_calibration": {
+                "status": persisted_operational.get("status"),
+                "failure_class": operational_failure,
+                "redaction_applied": operational_redacted,
+                "source": "persisted",
+            },
+            "task_oracle": {
+                "status": persisted_oracle.get("status"),
+                "failure_class": oracle_failure,
+                "fingerprint": persisted_oracle.get("fingerprint"),
+                "redaction_applied": oracle_redacted,
+                "source": "persisted",
+            },
+        }
+
+    outcome = result.get("outcome")
+    failure, redacted = _redact_failure(result.get("failure_class"))
+    operational_passed = outcome in {"success", "oracle_failure"}
+    if outcome == "success":
+        oracle_status = "passed"
+    elif outcome == "oracle_failure":
+        oracle_status = "failed"
+    else:
+        oracle_status = "not_evaluated"
+    return {
+        "operational_calibration": {
+            "status": "passed" if operational_passed else "failed",
+            "failure_class": None if operational_passed else failure,
+            "redaction_applied": False if operational_passed else redacted,
+            "source": "legacy_derived",
+        },
+        "task_oracle": {
+            "status": oracle_status,
+            "failure_class": failure if oracle_status == "failed" else None,
+            "fingerprint": None,
+            "redaction_applied": redacted if oracle_status == "failed" else False,
+            "source": "legacy_derived",
+        },
+    }
+
+
+def _axis_status_count(
+    attempts: list[dict[str, object]], axis: str, status: str
+) -> int:
+    """Count attempts with one explicit outcome-axis status.
+
+    Parameters
+    ----------
+    attempts : list[dict[str, object]]
+        Public attempt projections containing explicit outcome axes.
+    axis : str
+        Outcome-axis field to inspect.
+    status : str
+        Status value to count.
+
+    Returns
+    -------
+    int
+        Number of matching attempt outcomes.
+
+    Raises
+    ------
+    ReportError
+        If an attempt lacks the expected outcome-axis mapping.
+    """
+
+    count = 0
+    for attempt in attempts:
+        outcome_axis = attempt.get(axis)
+        if not isinstance(outcome_axis, Mapping):
+            raise ReportError(f"attempt {axis} axis is invalid")
+        count += outcome_axis.get("status") == status
+    return count
+
+
 def _attempt_public(record: Mapping[str, object]) -> dict[str, object]:
     """Project one validated private record into a public per-attempt entry.
 
@@ -184,7 +291,7 @@ def _attempt_public(record: Mapping[str, object]) -> dict[str, object]:
         raise ReportError("result usage is invalid")
     usage = cast("Mapping[str, object]", usage)
     failure, redacted = _redact_failure(result.get("failure_class"))
-    return {
+    public = {
         "attempt_id": attempt.get("attempt_id"),
         "pair_id": attempt.get("pair_id"),
         "task_id": attempt.get("task_id"),
@@ -208,6 +315,8 @@ def _attempt_public(record: Mapping[str, object]) -> dict[str, object]:
             evidence.get("jsonl_event_count"), "jsonl_event_count"
         ),
     }
+    public.update(_outcome_axes(result))
+    return public
 
 
 def build_report(store: CampaignStore) -> dict[str, object]:
@@ -304,6 +413,18 @@ def build_report(store: CampaignStore) -> dict[str, object]:
             "p90_token_difference": _percentile90(deltas),
             "median_elapsed_seconds": median(elapsed) if elapsed else None,
             "p90_elapsed_seconds": _percentile90(elapsed),
+            "operational_pass_count": _axis_status_count(
+                attempts, "operational_calibration", "passed"
+            ),
+            "task_oracle_pass_count": _axis_status_count(
+                attempts, "task_oracle", "passed"
+            ),
+            "task_oracle_fail_count": _axis_status_count(
+                attempts, "task_oracle", "failed"
+            ),
+            "task_oracle_not_evaluated_count": _axis_status_count(
+                attempts, "task_oracle", "not_evaluated"
+            ),
         },
     }
 
@@ -351,8 +472,37 @@ def render_markdown(report: Mapping[str, object]) -> str:
         "p90_token_difference",
         "median_elapsed_seconds",
         "p90_elapsed_seconds",
+        "operational_pass_count",
+        "task_oracle_pass_count",
+        "task_oracle_fail_count",
+        "task_oracle_not_evaluated_count",
     ):
         lines.append(f"| {key} | {summary[key]} |")
+    lines.extend(
+        [
+            "",
+            "## Outcome axes",
+            "",
+            "| Attempt | Operational calibration | Task oracle | Source |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    attempts = report.get("attempts")
+    if not isinstance(attempts, list):
+        raise ReportError("report attempts are invalid")
+    for attempt in attempts:
+        if not isinstance(attempt, Mapping):
+            raise ReportError("report attempt is invalid")
+        operational = attempt.get("operational_calibration")
+        oracle = attempt.get("task_oracle")
+        if not isinstance(operational, Mapping) or not isinstance(oracle, Mapping):
+            raise ReportError("report outcome axes are invalid")
+        source = operational.get("source")
+        if source != oracle.get("source"):
+            raise ReportError("report outcome-axis sources differ")
+        lines.append(
+            f"| {attempt['attempt_id']} | {operational['status']} | {oracle['status']} | {source} |"
+        )
     lines.extend(
         [
             "",

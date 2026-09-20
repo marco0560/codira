@@ -19,7 +19,11 @@ from codira.architecture import (
 from codira.capabilities import build_capability_contract
 from codira.config import load_effective_config
 from codira.index_generation import IndexGenerationStore
-from codira.indexer import audit_repo_coverage, persisted_analysis_coverage_issues
+from codira.indexer import (
+    CoverageIssue,
+    audit_repo_coverage,
+    persisted_analysis_coverage_issues,
+)
 from codira.mcp.contract import (
     DEFAULT_OUTPUT_BUDGET,
     MAX_OUTPUT_BUDGET,
@@ -57,7 +61,6 @@ if TYPE_CHECKING:
         SimilarityResolvedCandidate,
     )
     from codira.index_generation import IndexGeneration
-    from codira.indexer import CoverageIssue
     from codira.types import (
         DocstringIssueRow,
         ScoredDocumentation,
@@ -217,6 +220,20 @@ class MCPAdapter:
         metadata = _read_metadata_file(get_metadata_path(self.root))
         generation = IndexGenerationStore(self.root).read()
         issues = audit_repo_coverage(self.root)
+        indexed_file_count = metadata.get("indexed_file_count")
+        empty_index = indexed_file_count == "0"
+        if empty_index:
+            issues.append(
+                CoverageIssue(
+                    path=".",
+                    directory=".",
+                    suffix="",
+                    reason=(
+                        "index contains zero files; verify that repository files "
+                        "are tracked or staged"
+                    ),
+                )
+            )
         if metadata:
             issues.extend(
                 persisted_analysis_coverage_issues(
@@ -226,6 +243,7 @@ class MCPAdapter:
         return self._envelope(
             {
                 "indexed": bool(metadata),
+                "usable": bool(metadata) and not empty_index,
                 "metadata": metadata,
                 "generation": (
                     None
@@ -990,7 +1008,21 @@ class MCPAdapter:
         -------
         object
             Result produced by the operation.
+
+        Raises
+        ------
+        ValueError
+            If the persisted index is absent or contains zero files.
         """
+        metadata = _read_metadata_file(get_metadata_path(self.root))
+        indexed_file_count = metadata.get("indexed_file_count")
+        if (
+            not isinstance(indexed_file_count, str)
+            or not indexed_file_count.isdecimal()
+            or int(indexed_file_count) < 1
+        ):
+            msg = "Codira index is unavailable or contains zero files"
+            raise ValueError(msg)
         if self.query_executor is None:
             return operation(None)
         return self.query_executor.execute(operation)
@@ -1139,7 +1171,7 @@ class MCPAdapter:
         ValueError
             If the cursor is malformed.
         """
-        if cursor is None:
+        if cursor is None or cursor == "":
             return 0
         prefix, separator, value = cursor.partition(":")
         if prefix != "offset" or separator != ":" or not value.isdecimal():

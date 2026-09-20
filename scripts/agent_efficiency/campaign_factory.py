@@ -26,37 +26,101 @@ class CampaignFactoryError(ValueError):
 
     @classmethod
     def stage_cardinality(cls, stage: str, required_count: int) -> CampaignFactoryError:
-        """Build the fixed-cardinality failure for one execution stage."""
+        """Build the fixed-cardinality failure for one execution stage.
+
+        Parameters
+        ----------
+        stage : str
+            Campaign stage with invalid task cardinality.
+        required_count : int
+            Exact number of unique tasks required by the stage.
+
+        Returns
+        -------
+        CampaignFactoryError
+            Stable stage-cardinality failure.
+        """
 
         return cls(f"{stage} requires exactly {required_count} unique task IDs")
 
     @classmethod
     def message(cls, detail: str) -> CampaignFactoryError:
-        """Build one stable public-safe factory error."""
+        """Build one stable public-safe factory error.
+
+        Parameters
+        ----------
+        detail : str
+            Public-safe failure detail.
+
+        Returns
+        -------
+        CampaignFactoryError
+            Factory error carrying the supplied detail.
+        """
 
         return cls(detail)
 
     @classmethod
     def missing_seed(cls) -> CampaignFactoryError:
-        """Build the pilot seed requirement error."""
+        """Build the pilot seed requirement error.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        CampaignFactoryError
+            Stable missing-seed failure.
+        """
 
         return cls("pilot requires a deterministic schedule seed")
 
     @classmethod
     def invalid_fixture_binding(cls) -> CampaignFactoryError:
-        """Build the invalid task-fixture binding error."""
+        """Build the invalid task-fixture binding error.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        CampaignFactoryError
+            Stable invalid-binding failure.
+        """
 
         return cls("task fixture binding is invalid")
 
     @classmethod
     def unbounded_accounting(cls) -> CampaignFactoryError:
-        """Build the accounting-cap failure."""
+        """Build the accounting-cap failure.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        CampaignFactoryError
+            Stable unbounded-accounting failure.
+        """
 
         return cls("campaign accounting does not bound its schedule")
 
     @classmethod
     def existing_output_directory(cls) -> CampaignFactoryError:
-        """Build the immutable output-directory collision error."""
+        """Build the immutable output-directory collision error.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        CampaignFactoryError
+            Stable output-directory collision failure.
+        """
 
         return cls("campaign output directory already exists")
 
@@ -187,10 +251,16 @@ def _validate_accounting(manifest: Mapping[str, object], attempts: int) -> None:
         cast("int | float", accounting["max_estimated_attempt_spend_usd"])
     )
     total = float(cast("int | float", accounting["max_estimated_pilot_spend_usd"]))
+    token_scope = str(accounting.get("max_total_tokens_scope", "per-continuation"))
+    reservation_multiplier = (
+        1
+        if token_scope == "whole-session"
+        else int(cast("int", accounting.get("max_transport_attempts_per_response", 1)))
+        * int(cast("int", accounting["max_response_requests_per_attempt"]))
+    )
     token_bound = (
         int(cast("int", budgets["max_total_tokens"]))
-        * int(cast("int", accounting.get("max_transport_attempts_per_response", 1)))
-        * int(cast("int", accounting["max_response_requests_per_attempt"]))
+        * reservation_multiplier
         * max(
             float(cast("int | float", provider["max_prompt_usd_per_million"])),
             float(cast("int | float", provider["max_completion_usd_per_million"])),
@@ -204,7 +274,27 @@ def _validate_accounting(manifest: Mapping[str, object], attempts: int) -> None:
 def write_campaign_artifacts(
     output_directory: Path, manifest: Mapping[str, object], plan: Mapping[str, object]
 ) -> tuple[Path, Path]:
-    """Atomically create one fresh artifact directory without overwrite."""
+    """Atomically create one fresh artifact directory without overwrite.
+
+    Parameters
+    ----------
+    output_directory : pathlib.Path
+        Fresh destination for the immutable generated artifacts.
+    manifest : collections.abc.Mapping[str, object]
+        Validated campaign manifest to persist.
+    plan : collections.abc.Mapping[str, object]
+        Non-executing launch plan to persist.
+
+    Returns
+    -------
+    tuple[pathlib.Path, pathlib.Path]
+        Paths to the campaign manifest and launch plan.
+
+    Raises
+    ------
+    CampaignFactoryError
+        If the destination already exists.
+    """
 
     if output_directory.exists():
         raise CampaignFactoryError.existing_output_directory()

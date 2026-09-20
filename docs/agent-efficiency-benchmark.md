@@ -71,6 +71,25 @@ derived only from canonical JSON. Per-attempt public records intentionally omit
 raw JSONL, stderr, and transcript text; path-, URL-, or token-like failure
 content is rendered as `redacted`. Pairs missing one variant or complete usage
 are reported as exclusions and are not included in paired token statistics.
+
+Patch fixtures use a history-free synthetic repository whose immutable
+baseline is staged. Agents can therefore inspect `git diff` without access to
+upstream history or remotes. Assisted attempts are rejected before provider
+setup unless the staged file count and persisted Codira index/generation
+evidence prove a non-empty usable index. Exact provider response bodies are
+kept only in the ignored per-attempt evidence directory and represented in
+public-safe observations by digest and size.
+
+New attempt records persist two independent outcomes:
+
+- `operational_calibration`: whether execution, provider routing, required MCP
+  use, evidence capture, and enforced caps completed successfully;
+- `task_oracle`: whether the deterministic task oracle passed, failed, or was
+  not evaluated because operation did not complete.
+
+Reports render both axes per attempt. Records created before these fields were
+introduced remain immutable; reporting derives and labels their axes as
+`legacy_derived` from the validated terminal outcome instead of rewriting them.
 Elapsed-time statistics cover all recorded attempts, including attempts excluded
 from token comparisons. Supply every task ID from the frozen campaign schedule
 to both commands, in any order.

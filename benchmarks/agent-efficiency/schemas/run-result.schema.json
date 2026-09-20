@@ -1,6 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "dependentRequired": {
+    "operational_calibration": [
+      "task_oracle"
+    ],
+    "task_oracle": [
+      "operational_calibration"
+    ]
+  },
   "properties": {
     "assistance_mode": {
       "enum": [
@@ -20,6 +28,28 @@
         "string",
         "null"
       ]
+    },
+    "operational_calibration": {
+      "additionalProperties": false,
+      "properties": {
+        "failure_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "failure_class"
+      ],
+      "type": "object"
     },
     "outcome": {
       "enum": [
@@ -50,6 +80,37 @@
     },
     "task_id": {
       "type": "string"
+    },
+    "task_oracle": {
+      "additionalProperties": false,
+      "properties": {
+        "failure_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "not_evaluated"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "failure_class",
+        "fingerprint"
+      ],
+      "type": "object"
     },
     "usage": {
       "additionalProperties": false,

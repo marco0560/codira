@@ -93,6 +93,16 @@ def test_report_is_deterministic_and_markdown_is_derived(tmp_path: Path) -> None
     assert first_json == second.json_path.read_text(encoding="utf-8")
     assert first_markdown == render_markdown(report)
     assert report["summary"]["pair_count"] == 2
+    assert report["summary"]["operational_pass_count"] == 4
+    assert report["summary"]["task_oracle_pass_count"] == 4
+    attempts = report["attempts"]
+    assert isinstance(attempts, list)
+    assert {
+        attempt["operational_calibration"]["source"]
+        for attempt in attempts
+        if isinstance(attempt, dict)
+    } == {"legacy_derived"}
+    assert "Outcome axes" in first_markdown
     assert "Paired token differences" in first_markdown
 
 
@@ -190,6 +200,73 @@ def test_report_excludes_unsuccessful_pairs_with_complete_usage(tmp_path: Path) 
     assert report["exclusions"] == [
         {"pair_id": "symbols-001-r01", "reason": "unsuccessful_outcome"}
     ]
+    attempts = report["attempts"]
+    assert isinstance(attempts, list)
+    symbols_attempts = [
+        attempt
+        for attempt in attempts
+        if isinstance(attempt, dict) and attempt["task_id"] == "symbols-001"
+    ]
+    assert {
+        attempt["operational_calibration"]["status"] for attempt in symbols_attempts
+    } == {"passed"}
+    assert {attempt["task_oracle"]["status"] for attempt in symbols_attempts} == {
+        "failed"
+    }
+
+
+def test_report_preserves_explicit_persisted_outcome_axes(tmp_path: Path) -> None:
+    """Report new two-axis records without collapsing oracle and operation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary campaign state root.
+
+    Returns
+    -------
+    None
+        Assertions distinguish persisted operational and oracle outcomes.
+    """
+
+    store = _store(tmp_path)
+    record_path = next(store.records_root.glob("*.json"))
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["result"]["outcome"] = "oracle_failure"
+    record["result"]["failure_class"] = "deterministic_oracle"
+    record["result"]["operational_calibration"] = {
+        "status": "passed",
+        "failure_class": None,
+    }
+    record["result"]["task_oracle"] = {
+        "status": "failed",
+        "failure_class": "deterministic_oracle",
+        "fingerprint": "a" * 64,
+    }
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    report = build_report(store)
+    attempts = report["attempts"]
+    assert isinstance(attempts, list)
+    attempt = next(
+        item
+        for item in attempts
+        if isinstance(item, dict)
+        and item["attempt_id"] == record["attempt"]["attempt_id"]
+    )
+    assert attempt["operational_calibration"] == {
+        "status": "passed",
+        "failure_class": None,
+        "redaction_applied": False,
+        "source": "persisted",
+    }
+    assert attempt["task_oracle"] == {
+        "status": "failed",
+        "failure_class": "deterministic_oracle",
+        "fingerprint": "a" * 64,
+        "redaction_applied": False,
+        "source": "persisted",
+    }
 
 
 def test_report_excludes_incomplete_pair(tmp_path: Path) -> None:

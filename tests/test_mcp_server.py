@@ -639,15 +639,45 @@ def test_adapter_paginates_and_rejects_path_like_cursors(tmp_path: Path) -> None
     adapter = MCPAdapter(tmp_path)
 
     first_page = adapter.symbols(limit=1)
+    empty_cursor_page = adapter.symbols(cursor="", limit=1)
     second_page = adapter.symbols(cursor="offset:1", limit=1)
 
     assert first_page["page"] == {"limit": 1, "next_cursor": "offset:1"}
+    assert empty_cursor_page == first_page
     assert second_page["page"] == {"limit": 1, "next_cursor": "offset:2"}
     first_result = cast("dict[str, object]", first_page["result"])
     first_symbols = cast("list[dict[str, object]]", first_result["symbols"])
     assert first_symbols[0]["file"] == "sample.py"
     with pytest.raises(ValueError, match="continuation cursor"):
         adapter.symbols(cursor="/etc/passwd")
+
+
+def test_adapter_rejects_queries_against_a_zero_file_index(tmp_path: Path) -> None:
+    """Distinguish an unusable empty index from a valid no-match result.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty repository root receiving a completed zero-file index.
+
+    Returns
+    -------
+    None
+        Status prominently reports the defect and queries fail closed.
+    """
+
+    active_index_backend().initialize(tmp_path)
+    index_repo(tmp_path)
+    adapter = MCPAdapter(tmp_path)
+
+    status = cast("dict[str, object]", adapter.index_status()["result"])
+    coverage = cast("dict[str, object]", status["coverage"])
+    assert status["indexed"] is True
+    assert status["usable"] is False
+    assert coverage["status"] == "incomplete"
+    assert "zero files" in str(coverage["issues"])
+    with pytest.raises(ValueError, match="zero files"):
+        adapter.context_for_task("anything")
 
 
 def test_server_symbol_tool_invokes_the_direct_adapter(tmp_path: Path) -> None:

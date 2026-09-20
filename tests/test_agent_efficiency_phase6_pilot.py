@@ -27,6 +27,7 @@ from scripts.run_agent_efficiency_phase6_pilot import (
     preflight_openrouter_route,
     prepare_protected_fixture,
     prompt_for_attempt,
+    validate_prepared_index,
     validate_treatment_protocol,
 )
 
@@ -121,6 +122,43 @@ def test_prompt_for_attempt_requires_the_manifest_bound_mcp_instruction() -> Non
     assert "call the configured Codira MCP server" in assisted
 
 
+def test_prompt_for_attempt_applies_common_verification_directives_to_both_arms() -> (
+    None
+):
+    """Keep source-verification guidance identical across the paired arms.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Both prompts carry the common instruction while MCP guidance remains
+        confined to the assisted arm.
+    """
+
+    manifest = _manifest()
+    protocol = manifest["treatment_protocol"]
+    assert isinstance(protocol, dict)
+    protocol.update(
+        {
+            "version": "mcp-required-v2",
+            "agent_instruction": "Verify exact case-sensitive names from source.",
+        }
+    )
+    baseline = prompt_for_attempt("Do the task.", "baseline", manifest)
+    assisted = prompt_for_attempt("Do the task.", "codira-mcp", manifest)
+    assert baseline.startswith("Verify exact case-sensitive names from source.")
+    assert assisted.startswith(
+        "Before completing this task, call the configured Codira MCP server"
+    )
+    assert "Verify exact case-sensitive names from source." in assisted
+    protocol.pop("agent_instruction")
+    with pytest.raises(PilotLauncherError, match="treatment protocol"):
+        validate_treatment_protocol(manifest)
+
+
 def test_treatment_protocol_rejects_a_missing_assisted_instruction() -> None:
     """Fail before paid execution when the treatment is not reproducible.
 
@@ -138,6 +176,60 @@ def test_treatment_protocol_rejects_a_missing_assisted_instruction() -> None:
     manifest.pop("treatment_protocol")
     with pytest.raises(PilotLauncherError, match="treatment protocol"):
         validate_treatment_protocol(manifest)
+
+
+def test_validate_prepared_index_rejects_empty_and_inconsistent_indexes(
+    tmp_path: Path,
+) -> None:
+    """Reject the zero-file treatment defect before any provider setup.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary staged fixture and synthetic Codira metadata root.
+
+    Returns
+    -------
+    None
+        Only a non-empty consistent ready generation is admitted.
+    """
+
+    subprocess.run(("git", "init", "--quiet"), cwd=tmp_path, check=True)
+    (tmp_path / "sample.py").write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(("git", "add", "--all"), cwd=tmp_path, check=True)
+    state = tmp_path / ".codira"
+    state.mkdir()
+    (state / "metadata.json").write_text(
+        json.dumps({"indexed_file_count": "0"}), encoding="utf-8"
+    )
+    generation = {
+        "generation": 1,
+        "state": "ready",
+        "indexed_file_count": 0,
+        "partial": False,
+        "failed_file_count": 0,
+    }
+    (state / "index-generation.json").write_text(
+        json.dumps(generation), encoding="utf-8"
+    )
+    with pytest.raises(PilotLauncherError, match="not usable"):
+        validate_prepared_index(tmp_path)
+
+    (state / "metadata.json").write_text(
+        json.dumps({"indexed_file_count": "1"}), encoding="utf-8"
+    )
+    generation["indexed_file_count"] = 1
+    (state / "index-generation.json").write_text(
+        json.dumps(generation), encoding="utf-8"
+    )
+    assert validate_prepared_index(tmp_path) == {
+        "tracked_file_count": 1,
+        "indexed_file_count": 1,
+        "generation": 1,
+        "generation_state": "ready",
+        "partial": False,
+        "failed_file_count": 0,
+    }
 
 
 def test_build_pilot_plan_has_three_complete_pairs() -> None:
@@ -656,6 +748,55 @@ def test_execution_controls_reject_an_unfunded_token_ceiling() -> None:
         execution_controls(manifest)
 
 
+def test_execution_controls_account_whole_session_tokens_once() -> None:
+    """Admit the approved whole-session ceiling with continuation headroom.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions cover the approved token scope, limits, and spend caps.
+    """
+
+    manifest = _manifest()
+    provider = manifest["provider"]
+    budgets = manifest["budgets"]
+    accounting = manifest["accounting"]
+    assert isinstance(provider, dict)
+    assert isinstance(budgets, dict)
+    assert isinstance(accounting, dict)
+    provider.update(
+        {
+            "max_prompt_usd_per_million": 0.15,
+            "max_completion_usd_per_million": 0.6,
+        }
+    )
+    budgets["max_total_tokens"] = 240000
+    accounting.update(
+        {
+            "max_total_tokens_scope": "whole-session",
+            "max_response_requests_per_attempt": 10,
+            "max_transport_attempts_per_response": 2,
+            "max_daily_spend_usd": 6,
+            "max_estimated_attempt_spend_usd": 0.18,
+            "max_estimated_pilot_spend_usd": 1.08,
+        }
+    )
+
+    controls = execution_controls(manifest)
+
+    assert controls.max_total_tokens == 240000
+    assert controls.max_total_tokens_scope == "whole-session"
+    assert controls.max_response_requests == 10
+    assert controls.max_transport_attempts_per_response == 2
+    accounting.pop("max_total_tokens_scope")
+    with pytest.raises(PilotLauncherError, match="accounting"):
+        execution_controls(manifest)
+
+
 def test_preflight_admits_only_the_exact_route_and_scoped_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -771,6 +912,15 @@ def test_preflight_admits_only_the_exact_route_and_scoped_budget(
     )
 
     assert record["model"] == provider["model"]
+    assert record["accounting"] == {
+        "max_total_tokens": 200000,
+        "max_total_tokens_scope": "per-continuation",
+        "max_response_requests_per_attempt": 1,
+        "max_transport_attempts_per_response": 1,
+        "max_estimated_attempt_spend_usd": 0.15,
+        "max_estimated_pilot_spend_usd": 0.9,
+        "max_daily_spend_usd": 6.0,
+    }
     assert record["public_route"] == {
         "context_length": 1048576,
         "max_completion_tokens": 393216,
@@ -1002,6 +1152,18 @@ def test_execute_attempt_records_an_oracle_contract_failure(
             stderr="",
         ),
     )
+    monkeypatch.setattr(
+        pilot,
+        "validate_prepared_index",
+        lambda root: {
+            "tracked_file_count": 1,
+            "indexed_file_count": 1,
+            "generation": 1,
+            "generation_state": "ready",
+            "partial": False,
+            "failed_file_count": 0,
+        },
+    )
     mcp_commands: list[str | None] = []
 
     def write_config(root: Path, *arguments: object) -> Path:
@@ -1068,5 +1230,17 @@ def test_execute_attempt_records_an_oracle_contract_failure(
 
     assert result["outcome"] == "oracle_failure"
     assert result["failure_class"] == "oracle_contract"
+    assert result["operational_calibration"] == {
+        "status": "passed",
+        "failure_class": None,
+    }
+    assert result["task_oracle"] == {
+        "status": "failed",
+        "failure_class": "oracle_contract",
+        "fingerprint": None,
+    }
     assert evidence["oracle_passed"] is False
     assert mcp_commands == [expected_mcp_command]
+    assert (
+        store.root / "attempt-work" / attempt.attempt_id / "provider-responses"
+    ).is_dir()

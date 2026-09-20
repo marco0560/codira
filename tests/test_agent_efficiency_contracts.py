@@ -196,6 +196,33 @@ def test_offline_adapter_preserves_attempt_identity_and_complete_usage() -> None
     assert result["usage_complete"] is True
 
 
+def test_run_result_requires_both_explicit_outcome_axes() -> None:
+    """Reject a partially persisted two-axis outcome contract.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions require operational and oracle outcomes to appear together.
+    """
+
+    result = dict(
+        OfflineRunnerAdapter(outcome="success").run(
+            OfflineRunRequest("pilot-001", "symbols-001", "attempt-001", "baseline")
+        )
+    )
+    result["operational_calibration"] = {
+        "status": "passed",
+        "failure_class": None,
+    }
+
+    with pytest.raises(ContractError, match="task_oracle"):
+        validate_document("run-result", result)
+
+
 def test_all_contract_kinds_reject_malformed_and_incompatible_input(
     tmp_path: Path,
 ) -> None:

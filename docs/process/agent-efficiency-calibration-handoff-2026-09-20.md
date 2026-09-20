@@ -32,11 +32,13 @@ model, image, prompt, and oracle conditions.
    approval-gated execution workflow.
 4. `docs/process/deepseek-v4-1-flash-reviewer-evaluation-plan.md` — earlier
    reviewer work; do not confuse it with the Codira-efficiency experiment.
-5. `scripts/run_agent_efficiency_phase6_pilot.py` — controls, accounting,
+5. `docs/process/agent-efficiency-pilot-003-patch-failure-analysis-2026-09-20.md`
+   — causal analysis and Pilot 004 admission criteria.
+6. `scripts/run_agent_efficiency_phase6_pilot.py` — controls, accounting,
    attempt execution, evidence persistence.
-6. `scripts/agent_efficiency/provider_proxy.py` — credential boundary,
+7. `scripts/agent_efficiency/provider_proxy.py` — credential boundary,
    continuation limiter, upstream retry and sanitized response evidence.
-7. `scripts/launch_agent_efficiency_calibration.py` and
+8. `scripts/launch_agent_efficiency_calibration.py` and
    `scripts/run_agent_efficiency_phase6_calibration.py` — factory-backed,
    immutable single-calibration execution.
 
@@ -133,19 +135,57 @@ minor answer-quality signals must not invalidate operational calibration.
 
 ## Next work
 
-1. Amend the calibration/reporting policy to persist and report the two axes
-   explicitly; retain existing immutable records unchanged.
+1. **Implemented in the working tree:** calibration attempts persist separate
+   `operational_calibration` and `task_oracle` outcomes, reports render both,
+   and historical immutable records are reported through a labeled legacy
+   projection without rewriting them.
 2. Design the actual paired pilot around the experiment objective: same frozen
    task, model, image, token ceiling, prompt, and deterministic oracle with and
    without Codira MCP. Measure paired token use, cost, completion, and tool use.
-3. Revisit accounting before paid pilot launch. The current conservative
-   product `continuations × transport attempts × max_total_tokens × price`
-   yields an impractical maximum for six paired runs under the $6 daily key
-   limit. Do not weaken the cap informally. Specify whether `max_total_tokens`
-   is whole-session or per-continuation, make the accounting correspond to that
-   definition, test it, and obtain approval for the new cap.
+3. **Approved for implementation:** `max_total_tokens` is a whole-session cap
+   for the fresh pilot. Use 240,000 tokens, ten logical continuations, two
+   transport attempts per continuation, USD 0.18 per attempt, USD 1.08 for six
+   attempts, and the existing USD 6.00 daily key limit. The token and spend
+   ceilings include the operator-approved 20% increase; continuation and retry
+   caps do not multiply a whole-session token reservation.
 4. Only then generate a fresh factory pilot manifest, run offline validation,
    authenticated preflight, and obtain explicit paid authorization.
+5. Launch the authorized paired pilot only through
+   `scripts/launch_agent_efficiency_pilot.py`; its prepare stage persists the
+   factory, schedule, fixture, runtime, state, log, and exit-path identities,
+   and its launch stage revalidates that receipt before starting tmux.
+
+## Pilot 003 terminal evidence
+
+The six authorized attempts completed under the fresh factory identity. The
+documentation pair passed both operational and task-oracle checks. Both patch
+attempts exhausted the ten-continuation cap before producing a workspace diff,
+so neither has a patch to compare or a capitalization defect in changed code.
+The baseline symbol answer failed only because it wrote `McpAdapter` instead of
+the case-sensitive `MCPAdapter`; the Codira-MCP symbol answer used the correct
+capitalization and passed.
+
+The postflight key snapshot measured a USD 0.015987972 daily-usage increase.
+Pilot 003 remains excluded as a complete efficacy result: the proxy retained
+sanitized response status metadata and completed-turn usage, but did not retain
+the exact raw provider bodies required by the repository contract. No attempt
+is retried or rewritten. The proxy now creates a fresh ignored per-attempt
+response directory, durably persists each exact upstream body plus status and
+headers before forwarding it to Codex, and binds the public-safe observation to
+the artifact with a SHA-256 digest and byte count.
+
+The patch failure was not a demonstrated parallel-indexing sandbox rejection.
+The exported fixture had no staged paths, so indexing returned success with
+zero indexed files. The runner and MCP health contract admitted that state,
+and the assisted model ignored the explicit zero count. The baseline also
+failed without Codira after spending its bounded trajectory on history and
+unavailable dependency setup. The linked analysis assigns the mixed
+harness/model responsibility and records every implemented control.
+
+Pilot 005 uses a fresh image and campaign identity, medium reasoning, strict
+provider-parameter routing, identical case-sensitive patch directives in both
+arms, and an assisted-only index health/empty-cursor directive. Its request and
+whole-session token ceilings are unchanged.
 
 ## Current financial context
 

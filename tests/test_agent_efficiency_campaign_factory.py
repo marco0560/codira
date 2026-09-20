@@ -54,7 +54,17 @@ def _spec(stage: str, task_ids: list[str]) -> dict[str, object]:
 
 
 def test_factory_builds_one_assisted_calibration_attempt() -> None:
-    """Generate frozen calibration bindings and exactly one request."""
+    """Generate frozen calibration bindings and exactly one request.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions cover calibration identity, bindings, and cardinality.
+    """
 
     manifest, plan = build_campaign(
         _spec("calibration", ["symbols-001"]), Path("benchmarks/agent-efficiency")
@@ -76,7 +86,17 @@ def test_factory_builds_one_assisted_calibration_attempt() -> None:
 
 
 def test_factory_builds_a_deterministic_six_request_pilot() -> None:
-    """Require exactly three tasks and preserve paired schedule determinism."""
+    """Require exactly three tasks and preserve paired schedule determinism.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions cover deterministic paired pilot construction.
+    """
 
     specification = _spec("pilot", ["symbols-001", "patch-001", "documentation-001"])
     first = build_campaign(specification, Path("benchmarks/agent-efficiency"))
@@ -86,8 +106,53 @@ def test_factory_builds_a_deterministic_six_request_pilot() -> None:
     assert first[1]["scheduled_attempt_count"] == 6
 
 
+def test_factory_accounts_whole_session_tokens_once_per_attempt() -> None:
+    """Bound a multi-continuation pilot by its whole-session token ceiling.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions distinguish session accounting from legacy multiplication.
+    """
+
+    specification = _spec("pilot", ["symbols-001", "patch-001", "documentation-001"])
+    budgets = specification["budgets"]
+    accounting = specification["accounting"]
+    assert isinstance(budgets, dict)
+    assert isinstance(accounting, dict)
+    budgets["max_total_tokens"] = 240000
+    accounting.update(
+        {
+            "max_total_tokens_scope": "whole-session",
+            "max_response_requests_per_attempt": 10,
+            "max_transport_attempts_per_response": 2,
+            "max_estimated_attempt_spend_usd": 0.18,
+            "max_estimated_pilot_spend_usd": 1.08,
+        }
+    )
+
+    manifest, plan = build_campaign(specification, Path("benchmarks/agent-efficiency"))
+
+    assert manifest["accounting"] == accounting
+    assert plan["scheduled_attempt_count"] == 6
+
+
 def test_factory_rejects_an_invalid_stage_cardinality() -> None:
-    """Prevent a calibration from becoming an unreviewed campaign."""
+    """Prevent a calibration from becoming an unreviewed campaign.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Assertions cover fail-closed calibration cardinality.
+    """
 
     with pytest.raises(CampaignFactoryError, match="calibration requires exactly 1"):
         build_campaign(
@@ -97,7 +162,18 @@ def test_factory_rejects_an_invalid_stage_cardinality() -> None:
 
 
 def test_factory_refuses_to_overwrite_artifacts(tmp_path: Path) -> None:
-    """Keep generated campaign evidence immutable after first creation."""
+    """Keep generated campaign evidence immutable after first creation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary destination for generated campaign artifacts.
+
+    Returns
+    -------
+    None
+        Assertions cover first-write success and overwrite rejection.
+    """
 
     manifest, plan = build_campaign(
         _spec("calibration", ["symbols-001"]), Path("benchmarks/agent-efficiency")

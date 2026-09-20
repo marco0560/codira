@@ -1032,6 +1032,7 @@ def test_provider_proxy_rejects_model_effort_substitution_and_sets_price_cap() -
     constrained = provider_proxy.constrain_response_request(payload, 12000, constraints)
     assert json.loads(constrained)["provider"] == {
         "allow_fallbacks": False,
+        "require_parameters": True,
         "max_price": {"prompt": 2, "completion": 12},
     }
     with pytest.raises(ValueError, match="approved model"):
@@ -1094,6 +1095,68 @@ def test_provider_proxy_keeps_sanitized_transport_observations() -> None:
     assert settings.response_observations[0]["retry_after"] == "60"
     assert "X-Secret" not in settings.response_observations[0]
     assert settings.response_observations[1]["source"] == "local"
+
+
+def test_provider_proxy_persists_exact_response_before_observation(
+    tmp_path: Path,
+) -> None:
+    """Persist exact provider bytes with reconstruction metadata and a digest.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated ignored-equivalent attempt root supplied by pytest.
+
+    Returns
+    -------
+    None
+        Assertions bind the public-safe observation to exact private evidence.
+    """
+
+    body = b'{"id":"response-1","usage":{"input_tokens":3}}\n'
+    root = tmp_path / "provider-responses"
+    settings = provider_proxy.ProxySettings(
+        "client", "upstream", 0, response_artifact_root=root
+    )
+
+    settings.record_response(
+        200,
+        [("Content-Type", "application/json"), ("X-Provider", "test")],
+        body=body,
+    )
+
+    observation = settings.response_observations[0]
+    metadata = json.loads((root / "response-001.json").read_text(encoding="utf-8"))
+    assert (root / "response-001.body").read_bytes() == body
+    assert metadata["body_sha256"] == observation["response_sha256"]
+    assert metadata["body_size_bytes"] == len(body)
+    assert metadata["headers"] == [
+        ["Content-Type", "application/json"],
+        ["X-Provider", "test"],
+    ]
+
+
+def test_provider_proxy_rejects_reused_response_artifact_root(tmp_path: Path) -> None:
+    """Reject an existing response directory before contacting the provider.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated attempt root supplied by pytest.
+
+    Returns
+    -------
+    None
+        A reused raw-response destination fails closed.
+    """
+
+    root = tmp_path / "provider-responses"
+    root.mkdir()
+
+    with pytest.raises(ValueError, match="must be fresh"):
+        provider_proxy.ProxySettings(
+            "client", "upstream", 0, response_artifact_root=root
+        )
 
 
 def test_observed_total_token_check_excludes_cached_input_from_total() -> None:

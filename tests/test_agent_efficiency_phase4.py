@@ -29,7 +29,11 @@ from scripts.agent_efficiency.runner import (
     write_attempt_codex_config,
     write_proxy_relay,
 )
-from scripts.agent_efficiency.runtime_admission import admit_runtime
+from scripts.agent_efficiency.runtime_admission import (
+    RuntimeAdmissionError,
+    _require_history_free_staged_fixture,
+    admit_runtime,
+)
 from scripts.agent_efficiency.usage import UsageError, normalize_completed_turn
 
 IMAGE = "example.invalid/codira-benchmark@sha256:" + "a" * 64
@@ -94,6 +98,47 @@ def test_runtime_admission_executes_an_indexed_mcp_query(tmp_path: Path) -> None
         "def helper() -> int:\n    return 42\n", encoding="utf-8"
     )
     admit_runtime(tmp_path, "helper")
+
+
+def test_runtime_admission_requires_the_agent_fixture_git_representation(
+    tmp_path: Path,
+) -> None:
+    """Reject source checkouts and empty synthetic indexes during admission.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary Git repository used to model admission representations.
+
+    Returns
+    -------
+    None
+        Only a staged repository without a commit is admitted.
+    """
+
+    subprocess.run(("git", "init", "--quiet"), cwd=tmp_path, check=True)
+    (tmp_path / "sample.py").write_text("value = 1\n", encoding="utf-8")
+    with pytest.raises(RuntimeAdmissionError, match="staged history-free"):
+        _require_history_free_staged_fixture(tmp_path)
+    subprocess.run(("git", "add", "--all"), cwd=tmp_path, check=True)
+    assert _require_history_free_staged_fixture(tmp_path) == 1
+    subprocess.run(
+        (
+            "git",
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ),
+        cwd=tmp_path,
+        check=True,
+    )
+    with pytest.raises(RuntimeAdmissionError, match="staged history-free"):
+        _require_history_free_staged_fixture(tmp_path)
 
 
 def _events(mode: str = "codira-mcp") -> list[dict[str, object]]:
@@ -323,13 +368,20 @@ def test_store_retains_index_preparation_separately_from_timed_results(
     assisted = next(
         item for item in store.schedule if item.assistance_mode == "codira-mcp"
     )
+    preparation = {
+        "elapsed_seconds": 1.2,
+        "fixture_revision": "a" * 40,
+        "index_fingerprint": "b" * 64,
+        "tracked_file_count": 2,
+        "indexed_file_count": 1,
+        "generation": 1,
+        "generation_state": "ready",
+        "partial": False,
+        "failed_file_count": 0,
+    }
     path = store.store_index_preparation(
         assisted.attempt_id,
-        {
-            "elapsed_seconds": 1.2,
-            "fixture_revision": "a" * 40,
-            "index_fingerprint": "b" * 64,
-        },
+        preparation,
     )
     assert path.parent == store.preparation_root
     stored = json.loads(path.read_text(encoding="utf-8"))
@@ -343,11 +395,7 @@ def test_store_retains_index_preparation_separately_from_timed_results(
     with pytest.raises(CampaignStateError, match="only valid"):
         store.store_index_preparation(
             baseline.attempt_id,
-            {
-                "elapsed_seconds": 1.2,
-                "fixture_revision": "a" * 40,
-                "index_fingerprint": "b" * 64,
-            },
+            preparation,
         )
 
 

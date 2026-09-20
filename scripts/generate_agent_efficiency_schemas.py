@@ -209,6 +209,9 @@ SCHEMAS = {
                         "type": "integer",
                         "minimum": 1,
                     },
+                    "max_total_tokens_scope": {
+                        "enum": ["whole-session", "per-continuation"]
+                    },
                 },
             },
             "resource_controls": {
@@ -241,6 +244,7 @@ SCHEMAS = {
                         "type": "string",
                         "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$",
                     },
+                    "agent_instruction": {"type": "string", "minLength": 1},
                     "codira_mcp_instruction": {"type": "string", "minLength": 1},
                 },
             },
@@ -280,6 +284,28 @@ SCHEMAS = {
                 ]
             },
             "failure_class": {"type": ["string", "null"]},
+            "operational_calibration": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["status", "failure_class"],
+                "properties": {
+                    "status": {"enum": ["passed", "failed"]},
+                    "failure_class": {"type": ["string", "null"]},
+                },
+            },
+            "task_oracle": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["status", "failure_class", "fingerprint"],
+                "properties": {
+                    "status": {"enum": ["passed", "failed", "not_evaluated"]},
+                    "failure_class": {"type": ["string", "null"]},
+                    "fingerprint": {
+                        "type": ["string", "null"],
+                        "pattern": "^[0-9a-f]{64}$",
+                    },
+                },
+            },
             "usage_complete": {"type": "boolean"},
             "usage": USAGE,
             "provenance": {
@@ -302,6 +328,10 @@ SCHEMAS = {
             "visibility": VISIBILITY,
         },
     ),
+}
+SCHEMAS["run-result"]["dependentRequired"] = {
+    "operational_calibration": ["task_oracle"],
+    "task_oracle": ["operational_calibration"],
 }
 
 _CAMPAIGN_PROPERTIES = cast(

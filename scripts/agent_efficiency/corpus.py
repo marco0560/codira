@@ -313,6 +313,15 @@ def export_fixture(source: Path, revision: str, destination: Path) -> None:
     )
     if initialized.returncode != 0:
         _fail("fixture synthetic Git initialization failed")
+    staged = subprocess.run(
+        (GIT_EXECUTABLE, "add", "--all"),
+        cwd=destination,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if staged.returncode != 0:
+        _fail("fixture synthetic Git index initialization failed")
 
 
 def verify_source_fix_excluded(root: Path, source_fix: str) -> None:

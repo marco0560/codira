@@ -322,7 +322,17 @@ class CampaignStore:
         scheduled = self._scheduled(attempt_id)
         if scheduled.assistance_mode != "codira-mcp":
             raise CampaignStateError("index preparation is only valid for codira-mcp")
-        required = {"elapsed_seconds", "fixture_revision", "index_fingerprint"}
+        required = {
+            "elapsed_seconds",
+            "fixture_revision",
+            "index_fingerprint",
+            "tracked_file_count",
+            "indexed_file_count",
+            "generation",
+            "generation_state",
+            "partial",
+            "failed_file_count",
+        }
         if not required <= preparation.keys():
             raise CampaignStateError("index preparation lacks required evidence")
         elapsed = preparation["elapsed_seconds"]
@@ -332,6 +342,25 @@ class CampaignStore:
             or elapsed < 0
         ):
             raise CampaignStateError("index preparation elapsed_seconds is invalid")
+        tracked = preparation["tracked_file_count"]
+        indexed = preparation["indexed_file_count"]
+        generation = preparation["generation"]
+        if (
+            not isinstance(tracked, int)
+            or isinstance(tracked, bool)
+            or tracked < 1
+            or not isinstance(indexed, int)
+            or isinstance(indexed, bool)
+            or indexed < 1
+            or indexed > tracked
+            or not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation < 1
+            or preparation["generation_state"] != "ready"
+            or preparation["partial"] is not False
+            or preparation["failed_file_count"] != 0
+        ):
+            raise CampaignStateError("index preparation is not usable")
         record = {
             "state_version": STATE_VERSION,
             "configuration_fingerprint": self.configuration_fingerprint,

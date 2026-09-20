@@ -20,7 +20,17 @@ from scripts.agent_efficiency.contracts import ContractError, load_document
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the credential-free campaign-factory parser."""
+    """Build the credential-free campaign-factory parser.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    argparse.ArgumentParser
+        Parser requiring a versioned specification and fresh output directory.
+    """
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", type=Path, required=True)
@@ -29,7 +39,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(arguments: list[str] | None = None) -> int:
-    """Generate fresh immutable artifacts from a versioned specification."""
+    """Generate fresh immutable artifacts from a versioned specification.
+
+    Parameters
+    ----------
+    arguments : list[str] or None, optional
+        Command-line arguments excluding the executable name.
+
+    Returns
+    -------
+    int
+        Zero after generation; two when validation or persistence fails.
+    """
 
     args = build_parser().parse_args(arguments)
     try:
