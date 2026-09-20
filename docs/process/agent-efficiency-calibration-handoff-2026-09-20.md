@@ -143,7 +143,7 @@ minor answer-quality signals must not invalidate operational calibration.
    task, model, image, token ceiling, prompt, and deterministic oracle with and
    without Codira MCP. Measure paired token use, cost, completion, and tool use.
 3. **Approved for implementation:** `max_total_tokens` is a whole-session cap
-   for the fresh pilot. Use 240,000 tokens, ten logical continuations, two
+   for the fresh pilot. Use 240,000 tokens, twelve logical continuations, two
    transport attempts per continuation, USD 0.18 per attempt, USD 1.08 for six
    attempts, and the existing USD 6.00 daily key limit. The token and spend
    ceilings include the operator-approved 20% increase; continuation and retry
@@ -160,6 +160,22 @@ minor answer-quality signals must not invalidate operational calibration.
    newer `tree-sitter-python` release is available and evaluate it in a
    disposable index fixture. Do not reuse Pilot 006 or launch a replacement
    paid identity until both checks are complete.
+7. **Prepare the runtime completely before the next campaign:** modify the
+   image/host-preparation path (including the relevant
+   `scripts/prepare_agent_efficiency_phase0_host.sh` or image build script) so
+   the selected fixture environment has `uv`, its project/development
+   dependencies, and the project import path ready offline before the agent
+   starts. Record the preparation and validation in the immutable image
+   identity; do not make the paid model discover or install dependencies.
+8. Raise the next fresh campaign's
+   `max_response_requests_per_attempt` to **12**. This is a new campaign
+   identity, not a modification or retry of Pilot 006.
+9. Add a model directive and, where practical, a cheap preflight for API
+   existence: inspect the package export surface, documented examples, or
+   exact signature before invoking an unfamiliar API; after a command reports
+   an unknown attribute/function, stop repeating the guess and inspect the
+   source/export list before retrying. Keep this as a trajectory-control
+   measure, not an oracle exemption.
 
 ## Pilot 003 terminal evidence
 
@@ -221,6 +237,13 @@ upstream HTTP 200 responses, then the eleventh continuation received a local
 HTTP 429 and was classified as `local_request_cap_exceeded`. The ten-call cap
 was insufficient for the model's trajectory on those tasks, but the local
 rejection did not incur an additional upstream request.
+
+The next pilot should use twelve logical requests. The increase addresses the
+measured trajectory budget, while complete offline environment preparation and
+an explicit API-verification directive target avoidable turns that consumed the
+previous budget. In particular, the documentation attempt first called a
+nonexistent `pm.matcher` export; a package-export check or source-backed
+directive should have prevented that call.
 
 The exact records, response bodies, and replay evidence remain immutable under
 `.artifacts/agent-efficiency/codira-efficacy-pilot-006-execution/` and
