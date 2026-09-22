@@ -6,11 +6,13 @@ import ast
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import json
+from pathlib import Path
 
 from codira_analyzer_python.syntax import (
     SyntaxDiagnosticKind,
     SyntaxKind,
     SyntaxNode,
+    parse_python_artifacts,
     parse_python_source,
 )
 
@@ -109,6 +111,26 @@ def test_normalized_syntax_preserves_utf8_byte_and_line_spans() -> None:
     assert identifier.end_column == 2
     assert call.start_byte == 5
     assert call.start_column == 5
+
+
+def test_artifact_parser_preserves_raw_docstring_windows_paths() -> None:
+    """Parse valid raw docstrings without treating their paths as escapes.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts a raw Windows-style path remains literal documentation.
+    """
+
+    source = r'r"""C:\Users\benchmark"""' + "\n"
+
+    artifacts = parse_python_artifacts(Path("sample.py"), Path("."), source)
+
+    assert artifacts["module"]["docstring"] == r"C:\Users\benchmark"
 
 
 def test_normalized_syntax_reports_error_recovery_deterministically() -> None:

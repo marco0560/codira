@@ -69,5 +69,6 @@ RUN SETUPTOOLS_SCM_PRETEND_VERSION="${CODIRA_VERSION}" \
 COPY scripts/agent_efficiency/benchmark-codira.toml /opt/codira/benchmark-codira.toml
 COPY --chmod=755 scripts/agent_efficiency/codira-mcp-benchmark /opt/codira/codira-mcp-benchmark
 COPY scripts/agent_efficiency/runtime_admission.py /opt/codira/runtime_admission.py
+COPY --chmod=755 scripts/agent_efficiency/prepare-fixture-environment /opt/codira/prepare-fixture-environment
 
 WORKDIR /workspace

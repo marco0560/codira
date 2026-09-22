@@ -1,0 +1,47 @@
+#!/usr/bin/env sh
+# Resolve selected fixture dependencies during the controlled image build only.
+set -eu
+
+root="$1"
+fixtures="$root/fixtures"
+mkdir -p "$root/uv-cache" "$root/npm-cache" "$root/npm-locks" "$root/pip-wheels"
+
+for source in "$fixtures"/*; do
+    test -d "$source" || continue
+    fixture_id="$(basename "$source")"
+    if test -f "$source/pyproject.toml" && test -f "$source/uv.lock"; then
+        (
+            cd "$source"
+            SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \
+                UV_CACHE_DIR="$root/uv-cache" uv sync --frozen --all-groups
+        )
+        rm -rf "$source/.venv"
+        (
+            cd "$source"
+            SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \
+                UV_CACHE_DIR="$root/uv-cache" uv sync --offline --frozen --all-groups
+        )
+        rm -rf "$source/.venv"
+    elif test -f "$source/package.json"; then
+        (cd "$source" && npm_config_cache="$root/npm-cache" npm install --package-lock-only --ignore-scripts)
+        (cd "$source" && npm_config_cache="$root/npm-cache" npm ci --ignore-scripts)
+        mkdir -p "$root/npm-locks/$fixture_id"
+        install -m 0644 "$source/package-lock.json" "$root/npm-locks/$fixture_id/package-lock.json"
+        rm -rf "$source/node_modules"
+        (cd "$source" && npm_config_cache="$root/npm-cache" npm ci --offline --ignore-scripts)
+        rm -rf "$source/node_modules"
+    elif test -f "$source/requirements.txt"; then
+        if grep -Ev '^[[:space:]]*(#|$)' "$source/requirements.txt" | grep -qv '=='; then
+            printf '%s\n' "pip fixture is not exactly pinned: $fixture_id" >&2
+            exit 2
+        fi
+        python -m pip download --dest "$root/pip-wheels" -r "$source/requirements.txt"
+        python -m venv "$source/.venv"
+        "$source/.venv/bin/python" -m pip install --no-index --find-links="$root/pip-wheels" -r "$source/requirements.txt"
+        rm -rf "$source/.venv"
+    else
+        printf '%s\n' "fixture has no supported environment: $fixture_id" >&2
+        exit 2
+    fi
+done
+rm -rf "$fixtures"
