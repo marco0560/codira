@@ -24,6 +24,7 @@ from scripts.agent_efficiency.corpus import export_fixture
 BENCHMARK_ROOT = Path("benchmarks/agent-efficiency")
 ENVIRONMENT_ROOT = "/opt/codira/fixture-environments"
 HELPER_ROOT = Path("scripts/agent_efficiency")
+BENCHMARK_PROFILE = HELPER_ROOT / "benchmark-codira.toml"
 GIT_EXECUTABLE = shutil.which("git")
 
 
@@ -150,6 +151,9 @@ def build_plan(base_image: str, sources: dict[str, Path]) -> EnvironmentImagePla
         "version": 1,
         "base_image": base_image,
         "fixtures": fixtures,
+        "benchmark_profile_sha256": hashlib.sha256(
+            BENCHMARK_PROFILE.read_bytes()
+        ).hexdigest(),
         "validation": {"offline_preparation": "required-by-build"},
     }
     return EnvironmentImagePlan(base_image, dict(sources), profile)
@@ -201,12 +205,14 @@ def write_build_context(plan: EnvironmentImagePlan, destination: Path) -> Path:
     )
     shutil.copy2(HELPER_ROOT / "prepare-fixture-environment", destination)
     shutil.copy2(HELPER_ROOT / "build-fixture-environments", destination)
+    shutil.copy2(BENCHMARK_PROFILE, destination)
     containerfile = destination / "Containerfile"
     containerfile.write_text(
         "ARG BASE_IMAGE\n"
         "FROM ${BASE_IMAGE}\n"
         "COPY --chmod=755 prepare-fixture-environment /opt/codira/prepare-fixture-environment\n"
         "COPY --chmod=755 build-fixture-environments /opt/codira/build-fixture-environments\n"
+        "COPY benchmark-codira.toml /opt/codira/benchmark-codira.toml\n"
         "COPY fixture-environments /opt/codira/fixture-environments\n"
         f"RUN /opt/codira/build-fixture-environments {ENVIRONMENT_ROOT}\n"
         "LABEL io.codira.agent-efficiency.environment-profile-sha256=${ENVIRONMENT_PROFILE_SHA256}\n",

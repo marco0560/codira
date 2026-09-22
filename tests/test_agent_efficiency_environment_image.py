@@ -6,6 +6,7 @@ import json
 from typing import TYPE_CHECKING
 
 from scripts.build_agent_efficiency_environment_image import (
+    BENCHMARK_PROFILE,
     HELPER_ROOT,
     EnvironmentImagePlan,
     write_build_context,
@@ -84,6 +85,12 @@ def test_write_build_context_embeds_profile_and_never_fixture_git_history(
         ).read_text(encoding="utf-8")
     )
     assert profile["fingerprint"]
+    assert (tmp_path / "context" / "benchmark-codira.toml").read_bytes() == (
+        BENCHMARK_PROFILE.read_bytes()
+    )
+    assert "COPY benchmark-codira.toml /opt/codira/benchmark-codira.toml" in (
+        containerfile.read_text(encoding="utf-8")
+    )
     assert "build-fixture-environments" in containerfile.read_text(encoding="utf-8")
     assert "--offline" in (HELPER_ROOT / "build-fixture-environments").read_text(
         encoding="utf-8"

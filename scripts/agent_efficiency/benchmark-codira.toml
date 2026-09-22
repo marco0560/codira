@@ -10,6 +10,24 @@ batch_size = 1
 [index.concurrency]
 strategy = "off"
 
+[plugins.analyzer-bash]
+exclude_paths = [".benchmark"]
+
+[plugins.analyzer-javascript]
+exclude_paths = [".benchmark"]
+
+[plugins.analyzer-json]
+exclude_paths = [".benchmark"]
+
+[plugins.analyzer-markdown]
+exclude_paths = [".benchmark"]
+
+[plugins.analyzer-python]
+exclude_paths = [".benchmark"]
+
+[plugins.analyzer-text]
+exclude_paths = [".benchmark"]
+
 [plugins.embedding-onnx]
 model_path = "/opt/codira/.codira/models/bge-small-en-v1.5/model.onnx"
 tokenizer_path = "/opt/codira/.codira/models/bge-small-en-v1.5/tokenizer.json"

@@ -78,6 +78,9 @@ def test_runner_containerfile_installs_transcript_required_utilities() -> None:
     assert 'engine = "onnx"' in profile
     assert 'strategy = "off"' in profile
     assert "batch_size = 1" in profile
+    for analyzer in ("bash", "javascript", "json", "markdown", "python", "text"):
+        assert f"[plugins.analyzer-{analyzer}]" in profile
+    assert profile.count('exclude_paths = [".benchmark"]') == 6
 
 
 @pytest.mark.integration
