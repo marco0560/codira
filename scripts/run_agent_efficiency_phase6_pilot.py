@@ -1252,7 +1252,7 @@ def execute_pilot_attempt(
         shutil.copytree(
             agent_root,
             snapshot_root,
-            ignore=shutil.ignore_patterns(".benchmark", ".git", "__pycache__"),
+            ignore=shutil.ignore_patterns(".benchmark", ".git", ".venv", "__pycache__"),
         )
     protected_asset = prepare_protected_fixture(
         context.sources[fixture_id],

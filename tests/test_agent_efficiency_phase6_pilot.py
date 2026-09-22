@@ -1072,6 +1072,7 @@ def test_execute_attempt_records_an_oracle_contract_failure(
         "fixture_id": "click-public",
         "prompt": "test",
         "result_path": ".benchmark/result.json",
+        "result_format": "workspace-diff",
     }
     context = PilotExecutionContext(
         {"patch-001": task},
@@ -1133,9 +1134,15 @@ def test_execute_attempt_records_an_oracle_contract_failure(
             None
             """
 
-    monkeypatch.setattr(
-        pilot, "export_fixture", lambda source, revision, root: root.mkdir(parents=True)
-    )
+    def export_fixture(source: Path, revision: str, root: Path) -> None:
+        """Create a fixture with a dangling prepared-environment interpreter."""
+
+        del source, revision
+        interpreter = root / ".venv" / "bin" / "python"
+        interpreter.parent.mkdir(parents=True)
+        interpreter.symlink_to("/nonexistent-python")
+
+    monkeypatch.setattr(pilot, "export_fixture", export_fixture)
     monkeypatch.setattr(
         pilot,
         "fixture_environment",
@@ -1232,6 +1239,7 @@ def test_execute_attempt_records_an_oracle_contract_failure(
             {},
         ),
     )
+    monkeypatch.setattr(pilot, "capture_workspace_patch", lambda *args: None)
     monkeypatch.setattr(
         pilot,
         "evaluate_oracle",
@@ -1258,3 +1266,6 @@ def test_execute_attempt_records_an_oracle_contract_failure(
     assert (
         store.root / "attempt-work" / attempt.attempt_id / "provider-responses"
     ).is_dir()
+    assert not (
+        store.root / "attempt-work" / attempt.attempt_id / "workspace-before" / ".venv"
+    ).exists()
