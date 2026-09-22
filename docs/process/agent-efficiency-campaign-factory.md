@@ -38,6 +38,32 @@ as exact identifier case, history-free fixture semantics, offline dependency
 policy, edit completion, and focused validation; never put a task advantage in
 only one arm.
 
+## Fixture-environment image preparation
+
+Before generating a replacement pilot, build a fresh candidate image from the
+selected frozen fixture revisions. The build is the only dependency-resolution
+boundary: it may use Podman's private build network to populate package caches
+and, for an npm fixture without an upstream lockfile, produce the exact lockfile
+that will be embedded in that candidate image. The build script archives the
+declared Git revisions rather than trusting the current branch tips, writes an
+immutable profile with the setup hashes, and validates an offline preparation
+inside the build. It never receives provider credentials.
+
+```bash
+uv run python scripts/build_agent_efficiency_environment_image.py \
+  --base-image localhost/codira-phase6-onnx@sha256:<base-digest> \
+  --fixture-source click-public=/absolute/path/to/click \
+  --fixture-source picomatch-public=/absolute/path/to/picomatch \
+  --fixture-source codira-public=/absolute/path/to/codira \
+  --tag localhost/codira-phase6-fixtures:<fresh-tag> \
+  --output-profile /absolute/fresh/output/environment-profile.json
+```
+
+Use the resulting immutable image identity in the new factory specification;
+do not alter an earlier campaign. Every later environment-preparation, index,
+and agent container runs with `--network=none`. The model receives a directive
+that the project environment is already ready and must not install dependencies.
+
 After generation, perform offline validation and the full tmux repository gate,
 then authenticated route/key admission. A distinct explicit authorization is
 required before any paid execution. Never edit a generated manifest, reuse its

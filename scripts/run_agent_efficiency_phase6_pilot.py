@@ -5,7 +5,7 @@ The public manifest is validated before the runner reads its OpenRouter
 credential. Agent containers receive only a fresh proxy token and an exported
 fixture; protected graders receive a separate immutable checkout.
 """
-# ruff: noqa: EM101, EM102, TRY003, TRY004, TRY301
+# ruff: noqa: C901, EM101, EM102, TRY003, TRY004, TRY301
 
 from __future__ import annotations
 
@@ -42,12 +42,18 @@ from scripts.agent_efficiency.contracts import (
     load_document,
 )
 from scripts.agent_efficiency.corpus import export_fixture, verify_fixture
+from scripts.agent_efficiency.environment import (
+    EnvironmentPreparationError,
+    fixture_environment,
+)
 from scripts.agent_efficiency.oracles import evaluate_oracle
 from scripts.agent_efficiency.runner import (
     ContainerAttemptRequest,
+    EnvironmentPreparationRequest,
     IndexPreparationRequest,
     capture_workspace_patch,
     execute_container_attempt,
+    execute_environment_preparation,
     execute_index_preparation,
     result_from_execution,
     write_proxy_relay,
@@ -1174,6 +1180,23 @@ def execute_pilot_attempt(
     )
     attempt_root.mkdir(parents=True)
     export_fixture(context.sources[fixture_id], str(fixture["revision"]), agent_root)
+    try:
+        environment = fixture_environment(agent_root, fixture_id)
+    except EnvironmentPreparationError as error:
+        raise PilotLauncherError(str(error)) from error
+    environment_preparation = execute_environment_preparation(
+        EnvironmentPreparationRequest(
+            context.runtime,
+            context.image,
+            agent_root,
+            controls.timeout_seconds,
+            environment,
+        )
+    )
+    if environment_preparation.timed_out or environment_preparation.returncode != 0:
+        raise PilotLauncherError(
+            "fixture environment preparation failed before provider setup"
+        )
     if attempt.assistance_mode == "codira-mcp":
         if not BENCHMARK_CODIRA_PROFILE.is_file():
             raise PilotLauncherError("benchmark Codira profile is unavailable")
@@ -1274,7 +1297,9 @@ def execute_pilot_attempt(
                 state_root,
                 prompt_for_attempt(
                     str(task["prompt"]), attempt.assistance_mode, context.manifest
-                ),
+                )
+                + "\n\n"
+                + environment.directive,
                 controls.timeout_seconds,
                 proxy_socket=socket_path,
                 proxy_client_token=token,
@@ -1299,6 +1324,11 @@ def execute_pilot_attempt(
         max_total_tokens=controls.max_total_tokens,
     )
     evidence["provider_responses"] = list(settings.response_observations)
+    evidence["environment_preparation"] = {
+        "ecosystem": environment.ecosystem,
+        "elapsed_seconds": environment_preparation.elapsed_seconds,
+        "returncode": environment_preparation.returncode,
+    }
     observations = settings.response_observations
     if (
         observations

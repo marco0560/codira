@@ -1,0 +1,47 @@
+#!/usr/bin/env sh
+# Prepare one fixture from dependency material embedded in the candidate image.
+set -eu
+
+fixture_id="$1"
+ecosystem="$2"
+material_root="/opt/codira/fixture-environments"
+
+case "$fixture_id" in
+    *[!A-Za-z0-9._-]*|'')
+        printf '%s\n' 'fixture environment identity is invalid' >&2
+        exit 2
+        ;;
+esac
+
+case "$ecosystem" in
+    uv)
+        source_cache="$material_root/uv-cache"
+        cache=".benchmark/uv-cache"
+        test -d "$source_cache"
+        mkdir -p "$cache"
+        cp -a "$source_cache/." "$cache"
+        SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \
+            UV_CACHE_DIR="$cache" uv sync --offline --frozen --all-groups
+        ;;
+    npm)
+        source_cache="$material_root/npm-cache"
+        cache=".benchmark/npm-cache"
+        lock="$material_root/npm-locks/$fixture_id/package-lock.json"
+        test -d "$source_cache"
+        test -f "$lock"
+        mkdir -p "$cache"
+        cp -a "$source_cache/." "$cache"
+        install -m 0644 "$lock" package-lock.json
+        npm_config_cache="$cache" npm ci --offline --ignore-scripts
+        ;;
+    pip)
+        wheels="$material_root/pip-wheels"
+        test -d "$wheels"
+        python -m venv .venv
+        PIP_NO_CACHE_DIR=1 .venv/bin/python -m pip install --no-index --find-links="$wheels" -r requirements.txt
+        ;;
+    *)
+        printf '%s\n' 'fixture environment ecosystem is invalid' >&2
+        exit 2
+        ;;
+esac

@@ -16,12 +16,15 @@ from scripts.agent_efficiency.campaign_state import (
     build_paired_schedule,
     run_pending,
 )
+from scripts.agent_efficiency.environment import FixtureEnvironment
 from scripts.agent_efficiency.runner import (
     ContainerAttemptRequest,
     ContainerExecution,
+    EnvironmentPreparationRequest,
     IndexPreparationRequest,
     build_attempt_codex_config,
     build_container_argv,
+    build_environment_preparation_argv,
     build_index_preparation_argv,
     capture_workspace_patch,
     execute_container_attempt,
@@ -139,6 +142,38 @@ def test_runtime_admission_requires_the_agent_fixture_git_representation(
     )
     with pytest.raises(RuntimeAdmissionError, match="staged history-free"):
         _require_history_free_staged_fixture(tmp_path)
+
+
+def test_environment_preparation_runs_offline_before_the_agent(tmp_path: Path) -> None:
+    """Build a no-network command for a locked fixture environment.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary fixture directory mounted writable in the container.
+
+    Returns
+    -------
+    None
+        The command retains the hardened runtime controls and selected plan.
+    """
+
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    environment = FixtureEnvironment(
+        "uv",
+        ("/opt/codira/prepare-fixture-environment", "fixture-public", "uv"),
+        "ready",
+        "fixture-public",
+    )
+
+    argv = build_environment_preparation_argv(
+        EnvironmentPreparationRequest("podman", IMAGE, fixture, 60, environment)
+    )
+
+    assert "--network=none" in argv
+    assert "--read-only" in argv
+    assert argv[-3:] == environment.prepare_argv
 
 
 def _events(mode: str = "codira-mcp") -> list[dict[str, object]]:

@@ -466,13 +466,16 @@ def _string_value(node: Node | None, source: bytes) -> str | None:
     if node is None or node.type != "string":
         return None
     raw = _text(node, source)
-    match = re.match(r"(?is)^[rubf]*('''|\"\"\"|'|\")", raw)
+    match = re.match(r"(?is)^([rubf]*)('''|\"\"\"|'|\")", raw)
     if match is None:
         return None
-    quote = match.group(1)
+    prefixes = match.group(1).lower()
+    quote = match.group(2)
     if not raw.endswith(quote):
         return None
     body = raw[match.end() : -len(quote)]
+    if "r" in prefixes:
+        return body
     return bytes(body, "utf-8").decode("unicode_escape")
 
 

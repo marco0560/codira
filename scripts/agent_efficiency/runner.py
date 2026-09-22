@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from scripts.agent_efficiency.campaign_state import ScheduledAttempt
+    from scripts.agent_efficiency.environment import FixtureEnvironment
 
 _PROXY_RELAY_BOOTSTRAP = (
     "python /codex-state/provider_relay.py & relay_pid=$!; "
@@ -145,6 +146,36 @@ class IndexPreparationRequest:
     fixture_root: Path
     timeout_seconds: int
     codira_config_path: str
+
+
+@dataclass(frozen=True)
+class EnvironmentPreparationRequest:
+    """Describe one offline fixture-environment preparation container.
+
+    Parameters
+    ----------
+    runtime : str
+        Supported container runtime executable.
+    image : str
+        Digest-pinned reviewed benchmark image.
+    fixture_root : pathlib.Path
+        Exported writable fixture whose environment is prepared before a turn.
+    timeout_seconds : int
+        Positive wall-clock limit for pre-agent preparation.
+    environment : scripts.agent_efficiency.environment.FixtureEnvironment
+        Deterministically selected locked package-manager plan.
+
+    Returns
+    -------
+    None
+        Instances bind the no-network preparation command to one fixture.
+    """
+
+    runtime: str
+    image: str
+    fixture_root: Path
+    timeout_seconds: int
+    environment: FixtureEnvironment
 
 
 def build_attempt_codex_config(assistance_mode: str) -> str:
@@ -414,6 +445,93 @@ def execute_index_preparation(request: IndexPreparationRequest) -> ContainerExec
             stderr or "",
             time.monotonic() - started,
             timed_out=True,
+        )
+    return ContainerExecution(
+        completed.returncode,
+        completed.stdout,
+        completed.stderr,
+        time.monotonic() - started,
+    )
+
+
+def build_environment_preparation_argv(
+    request: EnvironmentPreparationRequest,
+) -> tuple[str, ...]:
+    """Build the hardened offline command that prepares one fixture environment.
+
+    Parameters
+    ----------
+    request : EnvironmentPreparationRequest
+        Runtime, immutable image, fixture, and selected environment plan.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Shell-free no-network container invocation ending in the plan command.
+
+    Raises
+    ------
+    ValueError
+        If runtime, image, fixture, or timeout inputs are unsafe.
+    """
+
+    if request.runtime not in phase0.SUPPORTED_CONTAINER_RUNTIMES:
+        raise ValueError("container runtime is unsupported")
+    if phase0.IMAGE_DIGEST_PATTERN.fullmatch(request.image) is None:
+        raise ValueError("container image must use an exact sha256 digest")
+    if request.timeout_seconds < 1 or not request.fixture_root.resolve().is_dir():
+        raise ValueError("environment preparation inputs are invalid")
+    return (
+        request.runtime,
+        "run",
+        "--rm",
+        "--network=none",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--pids-limit=512",
+        "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m",
+        f"--mount=type=bind,src={request.fixture_root.resolve()},dst=/workspace,rw",
+        "--workdir=/workspace",
+        request.image,
+        *request.environment.prepare_argv,
+    )
+
+
+def execute_environment_preparation(
+    request: EnvironmentPreparationRequest,
+) -> ContainerExecution:
+    """Prepare a locked fixture environment before the agent timer begins.
+
+    Parameters
+    ----------
+    request : EnvironmentPreparationRequest
+        Immutable no-network preparation container request.
+
+    Returns
+    -------
+    ContainerExecution
+        Captured pre-agent execution facts, including timeout state.
+    """
+
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            build_environment_preparation_argv(request),
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=request.timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as error:
+        stdout = (
+            error.stdout.decode() if isinstance(error.stdout, bytes) else error.stdout
+        )
+        stderr = (
+            error.stderr.decode() if isinstance(error.stderr, bytes) else error.stderr
+        )
+        return ContainerExecution(
+            124, stdout or "", stderr or "", time.monotonic() - started, True
         )
     return ContainerExecution(
         completed.returncode,
