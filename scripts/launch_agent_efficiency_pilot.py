@@ -234,7 +234,7 @@ def _atomic_json(path: Path, document: dict[str, object]) -> None:
 
 
 def runtime_state_root(launch: PilotLaunch) -> Path:
-    """Return the short immutable-identity runtime state directory.
+    """Return the durable runtime state directory beneath the execution root.
 
     Parameters
     ----------
@@ -244,16 +244,11 @@ def runtime_state_root(launch: PilotLaunch) -> Path:
     Returns
     -------
     pathlib.Path
-        Short absolute directory safe for Unix-domain socket descendants.
+        Persistent campaign directory safe for Unix-domain socket descendants
+        when the caller selects a short execution-root name.
     """
 
-    fingerprint = canonical_fingerprint(
-        {
-            "manifest_fingerprint": canonical_fingerprint(launch.manifest),
-            "execution_root": str(launch.execution_root),
-        }
-    )
-    return Path("/tmp") / f"codira-ae-{fingerprint[:16]}"
+    return launch.execution_root / "state"
 
 
 def _receipt(launch: PilotLaunch) -> dict[str, object]:

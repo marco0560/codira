@@ -137,7 +137,7 @@ def test_prepare_claims_paths_and_builds_fixed_paid_command(
 
     assert receipt.is_file()
     assert runtime_state_root(launch).is_dir()
-    assert len(str(runtime_state_root(launch) / "provider.sock").encode()) < 108
+    assert runtime_state_root(launch) == execution_root / "state"
     assert str(execution_root / "logs" / "pilot.log") in command
     assert str(execution_root / "pilot.exit") in command
     assert "sops exec-env" in command

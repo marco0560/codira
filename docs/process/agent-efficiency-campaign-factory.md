@@ -103,6 +103,11 @@ plausible indexed path count, a ready non-partial generation, and zero failed
 files. A zero-file index is an infrastructure failure, even when the index
 process exits successfully.
 
+Use a short execution-root name: the receipt keeps all resumable state beneath
+`<execution-root>/state`, including records and response evidence, and the
+provider uses a Unix-domain socket there. Do not put durable campaign state in
+`/tmp` or a user-wide cache.
+
 The provider proxy persists each exact upstream response body to the ignored
 attempt artifact directory before parsing or forwarding it. Public-safe
 observations bind those bodies by digest and byte count. Routing disables
