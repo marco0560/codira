@@ -963,6 +963,19 @@ runner now rejects over-cap provider usage and classifies length termination
 before content parsing. Future calibration must use the representative frozen
 diff and exact paired controls. `r6` has no comparative conclusion.
 
+#### Pilot 010 terminal report (2026-09-23)
+
+The fresh `codira-efficacy-pilot-010` identity completed all six scheduled
+records with a zero runner exit. It is an operationally complete but
+scientifically inconclusive pilot: two baseline task-oracle successes have no
+matching successful Codira-MCP arm, while three attempts hit the local
+12-request continuation ceiling and the assisted symbols attempt exceeded the
+240,000 whole-session token ceiling. All assisted indexes were ready,
+non-partial, and failure-free; the runner persisted 62 exact upstream response
+bodies outside Git. The detailed evidence boundary, per-attempt results,
+causal assessment, and fresh-identity requirements are in
+[`agent-efficiency-pilot-010-inconclusive-report-2026-09-23.md`](agent-efficiency-pilot-010-inconclusive-report-2026-09-23.md).
+
 ### Original pilot requirements
 
 Proposed pilot: three independent pairs (six executions), covering discovery,
