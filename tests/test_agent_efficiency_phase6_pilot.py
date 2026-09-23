@@ -1159,6 +1159,20 @@ def test_execute_attempt_records_an_oracle_contract_failure(
     )
     monkeypatch.setattr(
         pilot,
+        "fixture_environment",
+        lambda root, fixture_id: SimpleNamespace(
+            ecosystem="uv", directive="environment ready"
+        ),
+    )
+    monkeypatch.setattr(
+        pilot,
+        "execute_environment_preparation",
+        lambda request: SimpleNamespace(
+            elapsed_seconds=0.1, returncode=0, timed_out=False
+        ),
+    )
+    monkeypatch.setattr(
+        pilot,
         "prepare_protected_fixture",
         lambda source, revision, root, task_id: (root.mkdir(), None)[1],
     )
