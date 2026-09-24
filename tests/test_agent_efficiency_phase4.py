@@ -312,6 +312,9 @@ def test_runner_captures_workspace_diff_without_agent_git_history(
     (workspace / "module.py").write_text("VALUE = 'after'\n", encoding="utf-8")
     (workspace / ".git").mkdir()
     (workspace / ".git" / "hidden").write_text("ignored", encoding="utf-8")
+    virtualenv = workspace / ".venv" / "bin"
+    virtualenv.mkdir(parents=True)
+    (virtualenv / "python").symlink_to("python3")
 
     patch = workspace / ".benchmark" / "fix.patch"
     capture_workspace_patch(baseline, workspace, patch)
@@ -320,6 +323,7 @@ def test_runner_captures_workspace_diff_without_agent_git_history(
     assert "a/module.py" in source
     assert "b/module.py" in source
     assert ".git" not in source
+    assert ".venv" not in source
 
 
 def test_index_preparation_precedes_mcp_with_hardened_runtime(
