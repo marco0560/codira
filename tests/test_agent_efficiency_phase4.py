@@ -545,9 +545,6 @@ def test_container_argv_and_adapter_preserve_isolation_and_incomplete_usage(
     ----------
     tmp_path : pathlib.Path
         Temporary fixture and fresh Codex-state directories.
-    monkeypatch : pytest.MonkeyPatch
-        Fixture used to model the mounted Unix-socket capability.
-
     Returns
     -------
     None
@@ -761,6 +758,11 @@ def test_proxy_transport_keeps_container_network_disabled(
         item for item in argv if "/codex-state/provider_relay.py" in item
     )
     assert any("/codex-state/provider_relay.py" in item for item in argv)
+    assert any(
+        item.endswith("dst=/codex-state/provider.sock")
+        and str(socket_path.resolve()) in item
+        for item in argv
+    )
 
 
 @pytest.mark.integration

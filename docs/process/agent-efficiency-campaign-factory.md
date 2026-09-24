@@ -8,7 +8,7 @@ stage cardinality and accounting, and writes immutable artifacts.
 ```bash
 uv run python scripts/generate_agent_efficiency_campaign.py \
   --spec benchmarks/agent-efficiency/campaign-specs/calibration-template.json \
-  --output-dir /tmp/codira-calibration-001
+  --output-dir .artifacts/agent-efficiency/codira-calibration-001
 ```
 
 The output directory must not exist. The factory writes:
@@ -37,6 +37,38 @@ assisted-only `codira_mcp_instruction`. Use the common field for controls such
 as exact identifier case, history-free fixture semantics, offline dependency
 policy, edit completion, and focused validation; never put a task advantage in
 only one arm.
+
+## Stable harness and experiment variables
+
+Treat the campaign factory, fixture export and admission, prepared image,
+offline environment directive, container isolation, provider proxy, Codira
+index admission, result/oracle evaluation, paired schedule, and evidence format
+as the harness contract. Change one of those only to repair a demonstrated
+defect, add a regression test, and qualify it offline before creating another
+campaign. Freeze the qualified harness by its code revision, image digest,
+runtime-profile fingerprint, fixture/task/oracle fingerprints, and generated
+campaign manifest; never retrofit a generated campaign.
+
+Model identity, reasoning effort, task wording/selection, repetitions/seed,
+request and token ceilings, and spending ceilings are experiment inputs. Put
+them in a new versioned campaign specification and let the factory generate a
+fresh immutable manifest. An experiment-input change does not justify rebuilding
+the image unless it changes fixture dependencies or environment preparation.
+Conversely, a tooling or environment failure is not a reason to raise the model
+budget or proceed to another pilot: repair and regression-test the harness,
+then create a fresh campaign identity.
+
+The provider proxy persists each exact response before parsing its terminal
+usage, accounts input and output tokens independently of the Codex transcript,
+and serializes completion requests so only one response can be in flight. Once
+the cumulative whole-session threshold is reached, the next request is denied;
+missing usage on a successful response also blocks further requests. Because
+the threshold is observed only after a response completes, one response may
+cross it. Bound that overage by the model context length and per-response
+output cap, then reserve worst-case token-priced cost plus that one response
+against the attempt spending ceiling before admitting another request. If the
+route cannot establish those bounds, preflight or runtime admission must fail
+closed.
 
 ## Fixture-environment image preparation
 
@@ -104,9 +136,11 @@ files. A zero-file index is an infrastructure failure, even when the index
 process exits successfully.
 
 Use a short execution-root name: the receipt keeps all resumable state beneath
-`<execution-root>/state`, including records and response evidence, and the
-provider uses a Unix-domain socket there. Do not put durable campaign state in
-`/tmp` or a user-wide cache.
+`<execution-root>/state`, including records and response evidence. The provider
+socket is a short-lived artifact under
+`/home/marco/Personalia/Progetti/.Temp`, mounted at the stable in-container path
+`/codex-state/provider.sock`; do not put durable campaign state in `.Temp`,
+`/tmp`, or a user-wide cache.
 
 The provider proxy persists each exact upstream response body to the ignored
 attempt artifact directory before parsing or forwarding it. Public-safe

@@ -135,12 +135,21 @@ class ProxySettings:
     constraints: ResponseConstraints = ResponseConstraints()
     max_response_requests: int = 1
     max_transport_attempts_per_response: int = 1
+    max_total_tokens: int | None = None
+    max_context_tokens: int | None = None
+    max_prompt_usd_per_million: float | None = None
+    max_completion_usd_per_million: float | None = None
+    max_attempt_spend_usd: float | None = None
     response_artifact_root: Path | None = None
     limiter: ResponseRequestLimiter = field(init=False, repr=False)
     response_observations: list[dict[str, object]] = field(
         default_factory=list, repr=False
     )
     observation_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    response_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    provider_total_tokens: int = 0
+    provider_estimated_cost_usd: float = 0.0
+    token_accounting_failed: bool = False
 
     def __post_init__(self) -> None:
         """Create the private per-server request counter.
@@ -158,6 +167,20 @@ class ProxySettings:
         if (
             self.max_response_requests < 1
             or self.max_transport_attempts_per_response < 1
+            or (self.max_total_tokens is not None and self.max_total_tokens < 1)
+            or (self.max_context_tokens is not None and self.max_context_tokens < 1)
+            or (
+                self.max_prompt_usd_per_million is not None
+                and self.max_prompt_usd_per_million <= 0
+            )
+            or (
+                self.max_completion_usd_per_million is not None
+                and self.max_completion_usd_per_million <= 0
+            )
+            or (
+                self.max_attempt_spend_usd is not None
+                and self.max_attempt_spend_usd <= 0
+            )
         ):
             message = "proxy max response requests must be positive"
             raise ValueError(message)
@@ -180,6 +203,7 @@ class ProxySettings:
         headers: list[tuple[str, str]],
         source: str = "upstream",
         body: bytes | None = None,
+        reason: str | None = None,
     ) -> None:
         """Persist an exact upstream body and append public-safe metadata.
 
@@ -194,6 +218,8 @@ class ProxySettings:
         body : bytes or None, optional
             Exact received upstream response body. Paid runners supply it so
             evidence is durable before the body reaches semantic consumers.
+        reason : str or None, optional
+            Stable reason for a local admission rejection; never provider data.
 
         Returns
         -------
@@ -220,6 +246,8 @@ class ProxySettings:
             }
             if retry_after is not None:
                 observation["retry_after"] = retry_after
+            if source == "local" and reason is not None:
+                observation["reason"] = reason
             if body is not None and source == "upstream":
                 if self.response_artifact_root is None:
                     message = "upstream response artifact root is unavailable"
@@ -230,6 +258,7 @@ class ProxySettings:
                 metadata_path = self.response_artifact_root / f"{stem}.json"
                 digest = hashlib.sha256(body).hexdigest()
                 self._atomic_bytes(body_path, body)
+                usage = _provider_usage(body)
                 self._atomic_bytes(
                     metadata_path,
                     (
@@ -255,7 +284,110 @@ class ProxySettings:
                         "response_size_bytes": len(body),
                     }
                 )
+                if usage is not None:
+                    observation["provider_usage"] = usage
+                    object.__setattr__(
+                        self,
+                        "provider_total_tokens",
+                        self.provider_total_tokens + int(usage["total_tokens"]),
+                    )
+                    if (
+                        self.max_prompt_usd_per_million is not None
+                        and self.max_completion_usd_per_million is not None
+                    ):
+                        estimated_cost = (
+                            usage["input_tokens"] * self.max_prompt_usd_per_million
+                            + usage["output_tokens"]
+                            * self.max_completion_usd_per_million
+                        ) / 1_000_000
+                        object.__setattr__(
+                            self,
+                            "provider_estimated_cost_usd",
+                            self.provider_estimated_cost_usd + estimated_cost,
+                        )
+                        observation["estimated_cost_usd_at_ceiling"] = round(
+                            estimated_cost, 8
+                        )
+                    if (
+                        self.max_context_tokens is not None
+                        and int(usage["total_tokens"]) > self.max_context_tokens
+                    ) or int(usage["output_tokens"]) > self.max_output_tokens:
+                        object.__setattr__(self, "token_accounting_failed", True)
+                        observation["usage_exceeded_frozen_response_limits"] = True
+                elif 200 <= status < 300 or status in {
+                    HTTPStatus.BAD_GATEWAY,
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    HTTPStatus.GATEWAY_TIMEOUT,
+                }:
+                    # Preserve exact bytes when available, then fail closed:
+                    # successful or transport-uncertain responses without
+                    # usage cannot be admitted against the session ceiling.
+                    object.__setattr__(self, "token_accounting_failed", True)
             self.response_observations.append(observation)
+            if (
+                body is None
+                and source == "upstream"
+                and status
+                in {
+                    HTTPStatus.BAD_GATEWAY,
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    HTTPStatus.GATEWAY_TIMEOUT,
+                }
+            ):
+                object.__setattr__(self, "token_accounting_failed", True)
+
+    def local_token_cap_reason(self) -> str | None:
+        """Return why another completion cannot be admitted, if applicable.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        str or None
+            Stable public-safe reason for stopping further upstream requests.
+        """
+
+        if self.token_accounting_failed:
+            return "provider_usage_unavailable"
+        if (
+            self.max_total_tokens is not None
+            and self.provider_total_tokens >= self.max_total_tokens
+        ):
+            return "session_token_budget_exhausted"
+        if (
+            self.max_attempt_spend_usd is not None
+            and self.provider_estimated_cost_usd >= self.max_attempt_spend_usd
+        ):
+            return "attempt_spend_budget_exhausted"
+        if (
+            self.max_total_tokens is not None
+            and self.max_context_tokens is not None
+            and self.max_prompt_usd_per_million is not None
+            and self.max_completion_usd_per_million is not None
+            and self.max_attempt_spend_usd is not None
+        ):
+            remaining_token_spend = (
+                max(0, self.max_total_tokens - self.provider_total_tokens)
+                * max(
+                    self.max_prompt_usd_per_million,
+                    self.max_completion_usd_per_million,
+                )
+                / 1_000_000
+            )
+            one_response_spend = (
+                self.max_context_tokens * self.max_prompt_usd_per_million
+                + self.max_output_tokens * self.max_completion_usd_per_million
+            ) / 1_000_000
+            if (
+                self.provider_estimated_cost_usd
+                + remaining_token_spend
+                + one_response_spend
+                > self.max_attempt_spend_usd
+            ):
+                return "attempt_spend_cap_reservation_exceeded"
+        return None
 
     @staticmethod
     def _atomic_bytes(path: Path, content: bytes) -> None:
@@ -323,6 +455,69 @@ def parse_settings(
         message = "proxy max output tokens must be positive"
         raise ValueError(message)
     return ProxySettings(client_token, upstream_token, port, max_output_tokens)
+
+
+def _provider_usage(body: bytes) -> dict[str, int] | None:
+    """Extract one terminal OpenAI Responses usage record from JSON or SSE.
+
+    Parameters
+    ----------
+    body : bytes
+        Exact provider response already persisted by the caller.
+
+    Returns
+    -------
+    dict[str, int] or None
+        Input, output, and total token counts from a terminal usage object.
+    """
+
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    documents: list[object] = []
+    try:
+        documents.append(json.loads(text))
+    except json.JSONDecodeError:
+        for line in text.splitlines():
+            if not line.startswith("data:"):
+                continue
+            payload = line.removeprefix("data:").strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                documents.append(json.loads(payload))
+            except json.JSONDecodeError:
+                continue
+    for document in reversed(documents):
+        if not isinstance(document, Mapping):
+            continue
+        if document.get("type") == "response.completed":
+            response = document.get("response")
+            document = response if isinstance(response, Mapping) else document
+        usage = document.get("usage")
+        if not isinstance(usage, Mapping):
+            continue
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        total_tokens = usage.get("total_tokens")
+        if (
+            isinstance(input_tokens, int)
+            and not isinstance(input_tokens, bool)
+            and input_tokens >= 0
+            and isinstance(output_tokens, int)
+            and not isinstance(output_tokens, bool)
+            and output_tokens >= 0
+            and isinstance(total_tokens, int)
+            and not isinstance(total_tokens, bool)
+            and total_tokens == input_tokens + output_tokens
+        ):
+            return {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+            }
+    return None
 
 
 def is_authorized(authorization: str | None, client_token: str) -> bool:
@@ -638,7 +833,8 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.BAD_REQUEST)
             return
         payload = self.rfile.read(content_length)
-        if path == "/v1/responses" and self.command == "POST":
+        response_request = path == "/v1/responses" and self.command == "POST"
+        if response_request:
             try:
                 payload = constrain_response_request(
                     payload,
@@ -648,10 +844,26 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 self.send_error(HTTPStatus.BAD_REQUEST)
                 return
+            self.settings.response_lock.acquire()
             if not self.settings.limiter.admit():
                 self.settings.record_response(
-                    HTTPStatus.TOO_MANY_REQUESTS, [], source="local"
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    [],
+                    source="local",
+                    reason="response_request_limit_exceeded",
                 )
+                self.settings.response_lock.release()
+                self.send_error(HTTPStatus.TOO_MANY_REQUESTS)
+                return
+            token_cap_reason = self.settings.local_token_cap_reason()
+            if token_cap_reason is not None:
+                self.settings.record_response(
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    [],
+                    source="local",
+                    reason=token_cap_reason,
+                )
+                self.settings.response_lock.release()
                 self.send_error(HTTPStatus.TOO_MANY_REQUESTS)
                 return
         request_headers = {
@@ -721,6 +933,8 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.BAD_GATEWAY)
         finally:
             connection.close()
+            if response_request:
+                self.settings.response_lock.release()
             self.close_connection = True
 
 

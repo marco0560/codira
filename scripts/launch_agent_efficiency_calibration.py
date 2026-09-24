@@ -22,6 +22,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +32,7 @@ if __package__ in {None, ""}:
 from scripts.agent_efficiency.contracts import canonical_fingerprint, load_document
 from scripts.agent_efficiency.corpus import verify_fixture
 from scripts.run_agent_efficiency_phase6_calibration import calibration_attempt
+from scripts.run_agent_efficiency_phase6_pilot import PROJECT_TEMP_ROOT
 
 FACTORY_VERSION = "1.0"
 SOPS_ENVIRONMENT = (
@@ -208,7 +210,7 @@ def _atomic_json(path: Path, document: dict[str, object]) -> None:
 
 
 def runtime_state_root(launch: CalibrationLaunch) -> Path:
-    """Return the short, immutable-identity runtime state directory.
+    """Return the durable state directory beneath this execution's root.
 
     Parameters
     ----------
@@ -217,17 +219,11 @@ def runtime_state_root(launch: CalibrationLaunch) -> Path:
 
     Returns
     -------
-    pathlib.Path
-        Short absolute directory safe for Unix-domain socket descendants.
+        pathlib.Path
+        Persistent path for campaign state and provider response evidence.
     """
 
-    fingerprint = canonical_fingerprint(
-        {
-            "manifest_fingerprint": canonical_fingerprint(launch.manifest),
-            "execution_root": str(launch.execution_root),
-        }
-    )
-    return Path("/tmp") / f"codira-ae-{fingerprint[:16]}"
+    return launch.execution_root / "state"
 
 
 def prepare_launch(launch: CalibrationLaunch) -> Path:
@@ -269,36 +265,82 @@ def prepare_launch(launch: CalibrationLaunch) -> Path:
     checkout = launch.execution_root / "fixture"
     if not isinstance(revision, str) or git is None:
         raise CalibrationLaunchError("calibration fixture preparation is unavailable")
-    clone = subprocess.run(
-        (
-            git,
-            "clone",
-            "--no-checkout",
-            "--no-local",
-            str(launch.fixture_source),
-            str(checkout),
-        ),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    detached = (
-        subprocess.run(
-            (git, "-C", str(checkout), "checkout", "--detach", revision),
+    with tempfile.TemporaryDirectory(prefix="aef-", dir=PROJECT_TEMP_ROOT) as temp:
+        temp_checkout = Path(temp) / "fixture"
+        clone = subprocess.run(
+            (
+                git,
+                "clone",
+                "--no-checkout",
+                "--no-local",
+                str(launch.fixture_source),
+                str(temp_checkout),
+            ),
             check=False,
             capture_output=True,
             text=True,
         )
-        if clone.returncode == 0
-        else None
-    )
-    if detached is None or detached.returncode != 0:
-        raise CalibrationLaunchError("cannot materialize frozen calibration fixture")
+        if clone.returncode != 0:
+            raise CalibrationLaunchError(
+                f"cannot clone frozen calibration fixture (exit {clone.returncode})"
+            )
+        pinned_head = subprocess.run(
+            (
+                git,
+                "-C",
+                str(temp_checkout),
+                "update-ref",
+                "--no-deref",
+                "HEAD",
+                revision,
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if pinned_head.returncode != 0:
+            detail = (
+                pinned_head.stderr.splitlines()[0][:180]
+                if pinned_head.stderr
+                else "no diagnostic"
+            )
+            raise CalibrationLaunchError(
+                "cannot pin frozen calibration fixture "
+                f"(exit {pinned_head.returncode}: {detail})"
+            )
+        detached = subprocess.run(
+            (git, "-C", str(temp_checkout), "checkout", "--detach", revision),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if detached.returncode != 0:
+            detail = (
+                detached.stderr.splitlines()[0][:180]
+                if detached.stderr
+                else "no diagnostic"
+            )
+            raise CalibrationLaunchError(
+                "cannot check out frozen calibration fixture "
+                f"(exit {detached.returncode}: {detail})"
+            )
+        try:
+            report = verify_fixture(fixture, temp_checkout)
+        except ValueError as error:
+            raise CalibrationLaunchError(
+                "frozen calibration fixture fails admission"
+            ) from error
+        try:
+            shutil.copytree(temp_checkout, checkout)
+        except OSError as error:
+            raise CalibrationLaunchError(
+                "cannot persist the admitted calibration fixture"
+            ) from error
     try:
         report = verify_fixture(fixture, checkout)
     except ValueError as error:
         raise CalibrationLaunchError(
-            "frozen calibration fixture fails admission"
+            "persisted calibration fixture fails admission"
         ) from error
     receipt = {
         "campaign_id": launch.manifest["campaign_id"],

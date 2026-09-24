@@ -1135,6 +1135,141 @@ def test_provider_proxy_persists_exact_response_before_observation(
     ]
 
 
+def test_provider_proxy_accounts_terminal_sse_usage_and_stops_at_session_cap(
+    tmp_path: Path,
+) -> None:
+    """Stop new paid requests after persisted provider usage reaches its cap.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated durable-equivalent response evidence directory.
+
+    Returns
+    -------
+    None
+        The complete SSE usage record is counted once before admission closes.
+    """
+
+    root = tmp_path / "provider-responses"
+    settings = provider_proxy.ProxySettings(
+        "client",
+        "upstream",
+        0,
+        max_total_tokens=5,
+        max_context_tokens=100,
+        max_prompt_usd_per_million=0.3,
+        max_completion_usd_per_million=1.2,
+        max_attempt_spend_usd=0.7,
+        response_artifact_root=root,
+    )
+    body = (
+        b"event: response.completed\n"
+        b'data: {"type":"response.completed","response":{"usage":'
+        b'{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}\n\n'
+    )
+
+    settings.record_response(200, [("Content-Type", "text/event-stream")], body=body)
+
+    observation = settings.response_observations[0]
+    assert observation["provider_usage"] == {
+        "input_tokens": 3,
+        "output_tokens": 2,
+        "total_tokens": 5,
+    }
+    assert settings.provider_total_tokens == 5
+    assert settings.local_token_cap_reason() == "session_token_budget_exhausted"
+    assert settings.provider_estimated_cost_usd == pytest.approx(0.0000033)
+
+
+def test_provider_proxy_fails_closed_when_success_usage_is_missing(
+    tmp_path: Path,
+) -> None:
+    """Do not admit more requests after an unmetered successful response.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated response evidence directory.
+
+    Returns
+    -------
+    None
+        Missing terminal usage is retained as a fail-closed admission state.
+    """
+
+    settings = provider_proxy.ProxySettings(
+        "client",
+        "upstream",
+        0,
+        max_total_tokens=100,
+        response_artifact_root=tmp_path / "provider-responses",
+    )
+
+    settings.record_response(200, [], body=b'{"id":"response-1"}')
+
+    assert settings.token_accounting_failed is True
+    assert settings.local_token_cap_reason() == "provider_usage_unavailable"
+
+
+def test_provider_proxy_reserves_one_bounded_response_against_attempt_spend() -> None:
+    """Admit the approved cap only when its one-response cost reserve fits.
+
+    Parameters
+    ----------
+    Returns
+    -------
+    None
+        The M2.5 context/output reserve fits $0.70 but not a lower ceiling.
+    """
+
+    admitted = provider_proxy.ProxySettings(
+        "client",
+        "upstream",
+        0,
+        max_output_tokens=32000,
+        max_total_tokens=500000,
+        max_context_tokens=204800,
+        max_prompt_usd_per_million=0.3,
+        max_completion_usd_per_million=1.2,
+        max_attempt_spend_usd=0.7,
+    )
+    rejected = provider_proxy.ProxySettings(
+        "client",
+        "upstream",
+        0,
+        max_output_tokens=32000,
+        max_total_tokens=500000,
+        max_context_tokens=204800,
+        max_prompt_usd_per_million=0.3,
+        max_completion_usd_per_million=1.2,
+        max_attempt_spend_usd=0.6998,
+    )
+
+    assert admitted.local_token_cap_reason() is None
+    assert rejected.local_token_cap_reason() == "attempt_spend_cap_reservation_exceeded"
+
+
+def test_provider_proxy_fails_closed_after_transport_uncertainty() -> None:
+    """Prevent another request when an upstream completion lacks usage proof.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        A gateway failure without body evidence closes request admission.
+    """
+
+    settings = provider_proxy.ProxySettings("client", "upstream", 0)
+
+    settings.record_response(502, [])
+
+    assert settings.local_token_cap_reason() == "provider_usage_unavailable"
+
+
 def test_provider_proxy_rejects_reused_response_artifact_root(tmp_path: Path) -> None:
     """Reject an existing response directory before contacting the provider.
 

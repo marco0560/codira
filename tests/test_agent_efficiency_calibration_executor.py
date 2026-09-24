@@ -103,7 +103,7 @@ def test_prepare_claims_paths_before_tmux_command(tmp_path: Path) -> None:
 
     assert receipt.is_file()
     assert runtime_state_root(launch).is_dir()
-    assert len(str(runtime_state_root(launch) / "provider.sock").encode()) < 108
+    assert runtime_state_root(launch) == execution_root / "state"
     assert (execution_root / "logs").is_dir()
     assert str(execution_root / "logs" / "calibration.log") in command
     assert str(execution_root / "calibration.exit") in command

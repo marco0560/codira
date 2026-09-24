@@ -828,12 +828,12 @@ def test_preflight_admits_only_the_exact_route_and_scoped_budget(
             "max_completion_usd_per_million": 0.6,
         }
     )
-    budgets.update({"max_total_tokens": 200000, "max_output_tokens": 32000})
+    budgets.update({"max_total_tokens": 500000, "max_output_tokens": 32000})
     accounting.update(
         {
             "max_daily_spend_usd": 6,
-            "max_estimated_attempt_spend_usd": 0.15,
-            "max_estimated_pilot_spend_usd": 0.9,
+            "max_estimated_attempt_spend_usd": 0.3,
+            "max_estimated_pilot_spend_usd": 1.8,
         }
     )
     model = {
@@ -864,7 +864,7 @@ def test_preflight_admits_only_the_exact_route_and_scoped_budget(
         },
         "supported_parameters": ["tools", "reasoning"],
         "top_provider": {"max_completion_tokens": 393216},
-        "context_length": 1048576,
+        "context_length": 204800,
     }
 
     class Response:
@@ -913,16 +913,16 @@ def test_preflight_admits_only_the_exact_route_and_scoped_budget(
 
     assert record["model"] == provider["model"]
     assert record["accounting"] == {
-        "max_total_tokens": 200000,
+        "max_total_tokens": 500000,
         "max_total_tokens_scope": "per-continuation",
         "max_response_requests_per_attempt": 1,
         "max_transport_attempts_per_response": 1,
-        "max_estimated_attempt_spend_usd": 0.15,
-        "max_estimated_pilot_spend_usd": 0.9,
+        "max_estimated_attempt_spend_usd": 0.3,
+        "max_estimated_pilot_spend_usd": 1.8,
         "max_daily_spend_usd": 6.0,
     }
     assert record["public_route"] == {
-        "context_length": 1048576,
+        "context_length": 204800,
         "max_completion_tokens": 393216,
         "max_prompt_usd_per_million": 0.15,
         "max_completion_usd_per_million": 0.6,
@@ -1062,12 +1062,16 @@ def test_execute_attempt_records_an_oracle_contract_failure(
         tmp_path / "campaign",
         "pilot-001",
         {"runner": "test"},
-        build_paired_schedule(("patch-001",), 1, 1),
+        build_paired_schedule(("documentation-001",), 1, 1),
     )
     attempt = next(
         item for item in store.schedule if item.assistance_mode == assistance_mode
     )
     fixture = {"revision": "a" * 40}
+    temp_root = tmp_path
+    monkeypatch.setattr(pilot, "PROJECT_TEMP_ROOT", temp_root)
+    proxy_paths: list[Path] = []
+
     task = {
         "fixture_id": "click-public",
         "prompt": "test",
@@ -1075,8 +1079,8 @@ def test_execute_attempt_records_an_oracle_contract_failure(
         "result_format": "workspace-diff",
     }
     context = PilotExecutionContext(
-        {"patch-001": task},
-        {"patch-001": {"definition": {}}},
+        {"documentation-001": task},
+        {"documentation-001": {"definition": {}}},
         {"click-public": fixture},
         {"click-public": tmp_path},
         "image@sha256:" + "a" * 64,
@@ -1225,7 +1229,30 @@ def test_execute_attempt_records_an_oracle_contract_failure(
 
     monkeypatch.setattr(phase0, "write_isolated_codex_config", write_config)
     monkeypatch.setattr(pilot, "write_proxy_relay", lambda root: root / "relay.py")
-    monkeypatch.setattr(provider_proxy, "create_unix_server", lambda *args: Server())
+
+    def create_server(
+        settings: provider_proxy.ProxySettings, socket_path: str
+    ) -> Server:
+        """Capture the disposable socket path used for this attempt.
+
+        Parameters
+        ----------
+        settings : provider_proxy.ProxySettings
+            Validated proxy settings supplied by the pilot.
+        socket_path : str
+            Host Unix socket path supplied to the proxy server.
+
+        Returns
+        -------
+        Server
+            Synthetic proxy server used by the test.
+        """
+
+        del settings
+        proxy_paths.append(Path(socket_path))
+        return Server()
+
+    monkeypatch.setattr(provider_proxy, "create_unix_server", create_server)
     monkeypatch.setattr(
         pilot, "execute_container_attempt", lambda request: SimpleNamespace(stdout="")
     )
@@ -1277,6 +1304,10 @@ def test_execute_attempt_records_an_oracle_contract_failure(
     }
     assert evidence["oracle_passed"] is False
     assert mcp_commands == [expected_mcp_command]
+    assert len(proxy_paths) == 1
+    assert proxy_paths[0].parent.parent == temp_root
+    assert proxy_paths[0].name == "p.sock"
+    assert not proxy_paths[0].parent.exists()
     assert (
         store.root / "attempt-work" / attempt.attempt_id / "provider-responses"
     ).is_dir()

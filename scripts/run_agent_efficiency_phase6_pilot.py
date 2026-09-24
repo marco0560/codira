@@ -17,6 +17,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -60,6 +61,7 @@ from scripts.agent_efficiency.runner import (
 )
 
 BENCHMARK_ROOT = Path("benchmarks/agent-efficiency")
+PROJECT_TEMP_ROOT = Path("/home/marco/Personalia/Progetti/.Temp")
 PROTECTED_ASSET_ROOT = BENCHMARK_ROOT / "protected"
 BENCHMARK_CODIRA_CONFIG = "/opt/codira/benchmark-codira.toml"
 BENCHMARK_MCP_COMMAND = "/opt/codira/codira-mcp-benchmark"
@@ -188,6 +190,9 @@ class PilotExecutionContext:
         Runner-only provider credential, never persisted.
     manifest : Mapping[str, object]
         Approved execution controls.
+    provider_context_length : int or None, optional
+        Context size from the immediately preceding authenticated route
+        preflight; absent only in deterministic unit-test contexts.
 
     Returns
     -------
@@ -203,6 +208,7 @@ class PilotExecutionContext:
     runtime: str
     upstream_token: str
     manifest: Mapping[str, object]
+    provider_context_length: int | None = None
 
 
 @dataclass(frozen=True)
@@ -493,13 +499,20 @@ def preflight_openrouter_route(
     parameters = public_model.get("supported_parameters")
     top_provider = public_model.get("top_provider")
     context_length = public_model.get("context_length")
+    max_completion_tokens = (
+        top_provider.get("max_completion_tokens")
+        if isinstance(top_provider, Mapping)
+        else None
+    )
     if (
         not isinstance(pricing, Mapping)
         or not isinstance(parameters, list)
         or not {"tools", "reasoning"}.issubset(parameters)
         or not isinstance(top_provider, Mapping)
         or not isinstance(context_length, int)
-        or context_length < controls.max_total_tokens
+        or context_length < controls.max_output_tokens
+        or not isinstance(max_completion_tokens, int)
+        or max_completion_tokens < controls.max_output_tokens
     ):
         raise PilotLauncherError("public OpenRouter model contract is incomplete")
     active_pricing, pricing_window = _active_pricing(pricing, now_utc)
@@ -1160,6 +1173,14 @@ def execute_pilot_attempt(
     ------
     PilotLauncherError
         If a fresh attempt cannot be safely prepared or graded.
+
+    Notes
+    -----
+    The host proxy socket lives in the designated short-lived project
+    temporary directory, keeping it below the Unix-domain path limit even
+    when the durable attempt path and identifier are long. It is removed when
+    the container attempt finishes; response evidence remains under the
+    durable campaign state root.
     """
 
     task = context.tasks[attempt.task_id]
@@ -1269,7 +1290,6 @@ def execute_pilot_attempt(
         BENCHMARK_MCP_COMMAND if attempt.assistance_mode == "codira-mcp" else None,
     )
     write_proxy_relay(state_root)
-    socket_path = state_root / "provider.sock"
     constraints = provider_proxy.ResponseConstraints(
         controls.model,
         controls.reasoning_effort,
@@ -1284,30 +1304,37 @@ def execute_pilot_attempt(
         constraints,
         controls.max_response_requests,
         controls.max_transport_attempts_per_response,
+        max_total_tokens=controls.max_total_tokens,
+        max_context_tokens=context.provider_context_length,
+        max_prompt_usd_per_million=controls.max_prompt_price,
+        max_completion_usd_per_million=controls.max_completion_price,
+        max_attempt_spend_usd=controls.max_attempt_spend,
         response_artifact_root=attempt_root / "provider-responses",
     )
-    server = provider_proxy.create_unix_server(settings, str(socket_path))
-    try:
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        execution = execute_container_attempt(
-            ContainerAttemptRequest(
-                context.runtime,
-                context.image,
-                agent_root,
-                state_root,
-                prompt_for_attempt(
-                    str(task["prompt"]), attempt.assistance_mode, context.manifest
+    with tempfile.TemporaryDirectory(prefix="ae-", dir=PROJECT_TEMP_ROOT) as socket_dir:
+        socket_path = Path(socket_dir) / "p.sock"
+        server = provider_proxy.create_unix_server(settings, str(socket_path))
+        try:
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            execution = execute_container_attempt(
+                ContainerAttemptRequest(
+                    context.runtime,
+                    context.image,
+                    agent_root,
+                    state_root,
+                    prompt_for_attempt(
+                        str(task["prompt"]), attempt.assistance_mode, context.manifest
+                    )
+                    + "\n\n"
+                    + environment.directive,
+                    controls.timeout_seconds,
+                    proxy_socket=socket_path,
+                    proxy_client_token=token,
                 )
-                + "\n\n"
-                + environment.directive,
-                controls.timeout_seconds,
-                proxy_socket=socket_path,
-                proxy_client_token=token,
             )
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
+        finally:
+            server.shutdown()
+            server.server_close()
     capture_error: str | None = None
     if result_format == "workspace-diff":
         try:
@@ -1335,7 +1362,13 @@ def execute_pilot_attempt(
         and observations[-1].get("source") == "local"
         and result["failure_class"] == "provider_rate_limited"
     ):
-        result["failure_class"] = "local_request_cap_exceeded"
+        local_reason = observations[-1].get("reason")
+        result["failure_class"] = {
+            "session_token_budget_exhausted": "session_token_cap_exceeded",
+            "provider_usage_unavailable": "provider_usage_unavailable",
+            "attempt_spend_budget_exhausted": "attempt_spend_cap_exceeded",
+            "attempt_spend_cap_reservation_exceeded": "attempt_spend_cap_exceeded",
+        }.get(str(local_reason), "local_request_cap_exceeded")
     operational_status = "passed" if result["outcome"] == "success" else "failed"
     operational_failure = (
         None if operational_status == "passed" else result["failure_class"]
@@ -1488,13 +1521,22 @@ def main(arguments: list[str] | None = None) -> int:
             raise PilotLauncherError(
                 "local Codira profile differs from manifest fingerprint"
             )
-        execution_controls(manifest)
+        controls = execution_controls(manifest)
         validate_treatment_protocol(manifest)
         sources = parse_fixture_sources(args.fixture_source)
         tasks, oracles, fixtures = load_pilot_inputs(manifest, args.task_id, sources)
         upstream = os.environ.get(provider_proxy.UPSTREAM_TOKEN_ENV, "")
         if not upstream:
             raise PilotLauncherError("pilot OpenRouter credential is unavailable")
+        route_preflight = preflight_openrouter_route(manifest, controls, upstream)
+        public_route = route_preflight.get("public_route")
+        provider_context_length = (
+            public_route.get("context_length")
+            if isinstance(public_route, Mapping)
+            else None
+        )
+        if not isinstance(provider_context_length, int):
+            raise PilotLauncherError("authenticated route context is unavailable")
         store = CampaignStore(
             args.state_root,
             str(manifest["campaign_id"]),
@@ -1516,6 +1558,7 @@ def main(arguments: list[str] | None = None) -> int:
             args.runtime,
             upstream,
             manifest,
+            provider_context_length,
         )
         written = run_pending(
             store, lambda attempt: execute_pilot_attempt(store, attempt, context)

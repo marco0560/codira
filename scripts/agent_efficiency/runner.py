@@ -286,7 +286,8 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
     Returns
     -------
     tuple[str, ...]
-        Runtime command with no host home, socket, credential, or grader mount.
+        Runtime command without host-home, credential, or grader mounts; an
+        enabled provider proxy socket is mounted at its stable container path.
 
     Raises
     ------
@@ -295,9 +296,8 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
 
     Notes
     -----
-    The container has no network route.  A future paid execution must first
-    replace this command only through a separately reviewed provider-proxy
-    transport; Phase 4 does not silently weaken this containment boundary.
+    The container has no network route.  When provider proxying is enabled,
+    only its Unix socket is mounted separately at ``/codex-state/provider.sock``.
     """
 
     if request.runtime not in phase0.SUPPORTED_CONTAINER_RUNTIMES:
@@ -317,6 +317,12 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
         assert request.proxy_socket is not None
         if not request.proxy_socket.is_socket() or not 1 <= request.proxy_port <= 65535:
             raise ValueError("provider proxy socket and port are invalid")
+    proxy_mount: tuple[str, ...] = ()
+    if request.proxy_socket is not None:
+        proxy_mount = (
+            f"--mount=type=bind,src={request.proxy_socket.resolve()},"
+            "dst=/codex-state/provider.sock",
+        )
     command = (
         (
             "/bin/sh",
@@ -352,6 +358,7 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
         f"--cidfile={state_root / 'container.cid'}",
         f"--mount=type=bind,src={fixture_root},dst=/workspace,rw",
         f"--mount=type=bind,src={state_root},dst=/codex-state,rw",
+        *proxy_mount,
         "--env=HOME=/codex-state/home",
         "--env=CODEX_HOME=/codex-state",
         *(("--env=CODIRA_PROXY_CLIENT_TOKEN",) if proxy_enabled else ()),

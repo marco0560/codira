@@ -27,6 +27,7 @@ from scripts.run_agent_efficiency_phase6_pilot import (
     execution_controls,
     load_pilot_inputs,
     parse_fixture_sources,
+    preflight_openrouter_route,
     runtime_profile_fingerprint,
     validate_treatment_protocol,
 )
@@ -87,7 +88,8 @@ def build_parser() -> argparse.ArgumentParser:
     Returns
     -------
     argparse.ArgumentParser
-        Parser requiring an immutable manifest and explicit execution switch.
+    Parser requiring a frozen manifest and one explicit offline-preflight or
+    paid-execution stage.
     """
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -96,7 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixture-source", action="append", required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--runtime", default="podman")
-    parser.add_argument("--execute", action="store_true")
+    stage = parser.add_mutually_exclusive_group(required=True)
+    stage.add_argument("--preflight", action="store_true")
+    stage.add_argument("--execute", action="store_true")
     return parser
 
 
@@ -120,15 +124,21 @@ def main(arguments: list[str] | None = None) -> int:
     """
 
     args = build_parser().parse_args(arguments)
-    if not args.execute:
-        print(
-            "calibration launcher error: paid execution requires --execute",
-            file=sys.stderr,
-        )
-        return 2
     try:
         manifest = load_document(args.campaign_manifest, "campaign")
         attempt = calibration_attempt(manifest)
+        controls = execution_controls(manifest, scheduled_attempts=1)
+        upstream = os.environ.get(provider_proxy.UPSTREAM_TOKEN_ENV, "")
+        if not upstream:
+            raise PilotLauncherError("calibration OpenRouter credential is unavailable")
+        if args.preflight:
+            print(
+                json.dumps(
+                    preflight_openrouter_route(manifest, controls, upstream),
+                    sort_keys=True,
+                )
+            )
+            return 0
         runtime_image = manifest.get("runtime_image")
         if not isinstance(runtime_image, str) or args.image != runtime_image:
             raise PilotLauncherError("calibration image differs from manifest")
@@ -138,15 +148,20 @@ def main(arguments: list[str] | None = None) -> int:
             or runtime_profile != runtime_profile_fingerprint()
         ):
             raise PilotLauncherError("local Codira profile differs from manifest")
-        controls = execution_controls(manifest, scheduled_attempts=1)
         validate_treatment_protocol(manifest)
         sources = parse_fixture_sources(args.fixture_source)
         tasks, oracles, fixtures = load_pilot_inputs(
             manifest, (attempt.task_id,), sources
         )
-        upstream = os.environ.get(provider_proxy.UPSTREAM_TOKEN_ENV, "")
-        if not upstream:
-            raise PilotLauncherError("calibration OpenRouter credential is unavailable")
+        route_preflight = preflight_openrouter_route(manifest, controls, upstream)
+        public_route = route_preflight.get("public_route")
+        provider_context_length = (
+            public_route.get("context_length")
+            if isinstance(public_route, dict)
+            else None
+        )
+        if not isinstance(provider_context_length, int):
+            raise PilotLauncherError("authenticated route context is unavailable")
         store = CampaignStore(
             args.state_root,
             str(manifest["campaign_id"]),
@@ -172,6 +187,7 @@ def main(arguments: list[str] | None = None) -> int:
             args.runtime,
             upstream,
             manifest,
+            provider_context_length,
         )
         result, evidence = execute_pilot_attempt(store, attempt, context)
         record = store.store_result(attempt.attempt_id, result, evidence)
