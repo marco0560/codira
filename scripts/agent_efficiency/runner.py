@@ -771,8 +771,12 @@ def result_from_execution(
                 normalized = normalize_completed_turn(events)
                 usage_complete = normalized.complete
                 usage = normalized.as_document()
-                total_tokens = sum(usage.values())
-                if max_total_tokens is not None and total_tokens > max_total_tokens:
+                total_tokens = normalized.observed_total_tokens
+                if (
+                    max_total_tokens is not None
+                    and total_tokens is not None
+                    and total_tokens > max_total_tokens
+                ):
                     failure_class = "usage_cap_exceeded"
                 elif execution.returncode == 0 and check.passed:
                     outcome = "success"

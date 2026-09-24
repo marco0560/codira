@@ -679,12 +679,43 @@ def test_runner_marks_provider_usage_above_the_manifest_cap_invalid() -> None:
     )
 
     result, _ = result_from_execution(
-        "pilot-001", attempt, execution, max_total_tokens=18
+        "pilot-001", attempt, execution, max_total_tokens=14
     )
 
     assert result["usage_complete"] is True
     assert result["outcome"] == "infrastructure_failure"
     assert result["failure_class"] == "usage_cap_exceeded"
+
+
+def test_runner_does_not_double_count_cached_input_against_manifest_cap() -> None:
+    """Compare the manifest cap with normalized usage, not cached input twice.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        A 15-token observed total passes despite counters summing to 19.
+    """
+
+    attempt = build_paired_schedule(("symbols-001",), 1, 1)[0]
+    execution = ContainerExecution(
+        0,
+        "\n".join(json.dumps(item) for item in _events(attempt.assistance_mode)),
+        "",
+        0.1,
+    )
+
+    result, _ = result_from_execution(
+        "pilot-001", attempt, execution, max_total_tokens=15
+    )
+    usage = cast("dict[str, object]", result["usage"])
+
+    assert result["usage_complete"] is True
+    assert usage["cached_input_tokens"] == 4
+    assert result["outcome"] == "success"
 
 
 def test_variant_configuration_exposes_required_mcp_only_to_assisted_runs(
