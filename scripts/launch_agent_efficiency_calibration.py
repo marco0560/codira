@@ -443,6 +443,11 @@ def tmux_command(launch: CalibrationLaunch) -> tuple[str, str]:
     -------
     tuple[str, str]
         Session name and shell command with pre-created durable paths.
+
+    Raises
+    ------
+    CalibrationLaunchError
+        If the manifest has no valid fixture binding for the attempt.
     """
 
     campaign_id = str(launch.manifest["campaign_id"])
@@ -451,6 +456,11 @@ def tmux_command(launch: CalibrationLaunch) -> tuple[str, str]:
     log = launch.execution_root / "logs" / "calibration.log"
     exit_path = launch.execution_root / "calibration.exit"
     image = str(launch.manifest["runtime_image"])
+    attempt = calibration_attempt(launch.manifest)
+    bindings = launch.manifest.get("task_fixture_ids")
+    fixture_id = bindings.get(attempt.task_id) if isinstance(bindings, dict) else None
+    if not isinstance(fixture_id, str):
+        raise CalibrationLaunchError("calibration fixture binding is invalid")
     runner = [
         "uv",
         "--directory",
@@ -464,7 +474,7 @@ def tmux_command(launch: CalibrationLaunch) -> tuple[str, str]:
         "--state-root",
         str(state),
         "--fixture-source",
-        f"codira-public={launch.execution_root / 'fixture'}",
+        f"{fixture_id}={launch.execution_root / 'fixture'}",
         "--image",
         image,
         "--runtime",

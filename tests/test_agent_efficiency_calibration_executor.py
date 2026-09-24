@@ -21,13 +21,17 @@ from scripts.launch_agent_efficiency_calibration import (
 )
 
 
-def _campaign_directory(tmp_path: Path) -> tuple[Path, Path]:
+def _campaign_directory(
+    tmp_path: Path, task_id: str = "symbols-001"
+) -> tuple[Path, Path]:
     """Create one immutable generated calibration campaign for executor tests.
 
     Parameters
     ----------
     tmp_path : pathlib.Path
         Isolated temporary directory supplied by pytest.
+    task_id : str, optional
+        Frozen calibration task whose fixture binding is exercised.
 
     Returns
     -------
@@ -39,7 +43,7 @@ def _campaign_directory(tmp_path: Path) -> tuple[Path, Path]:
         "schema_version": "1.0",
         "campaign_id": "executor-calibration-001",
         "stage": "calibration",
-        "task_ids": ["symbols-001"],
+        "task_ids": [task_id],
         "budgets": {
             "max_total_tokens": 200000,
             "max_output_tokens": 32000,
@@ -108,6 +112,32 @@ def test_prepare_claims_paths_before_tmux_command(tmp_path: Path) -> None:
     assert str(execution_root / "logs" / "calibration.log") in command
     assert str(execution_root / "calibration.exit") in command
     assert "codira-public=" + str((execution_root / "fixture").resolve()) in command
+
+
+def test_tmux_command_uses_the_manifest_fixture_binding(tmp_path: Path) -> None:
+    """Pass the factory-bound fixture ID rather than a Codira-only default.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest.
+
+    Returns
+    -------
+    None
+        Patch calibration is launched with its frozen Click fixture identity.
+    """
+
+    campaign_directory, fixture_source = _campaign_directory(
+        tmp_path, task_id="patch-001"
+    )
+    execution_root = tmp_path / "execution"
+    launch = load_launch(campaign_directory, execution_root, fixture_source, "podman")
+
+    _, command = tmux_command(launch)
+
+    assert "click-public=" + str((execution_root / "fixture").resolve()) in command
+    assert "codira-public=" not in command
 
 
 def test_executor_rejects_reused_execution_root(tmp_path: Path) -> None:
