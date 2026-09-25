@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0",
+  "task_id": "patch-002",
+  "fixture_id": "click-public",
+  "prompt": "Fix the Click Sentinel identity regression in the prepared Click checkout. First inspect the implementation and reproduce the failure using the installed environment; do not install dependencies or use the network. Preserve identity for every click._utils.Sentinel member across copy.copy, copy.deepcopy, and pickle round trips. Preserve click.Option(['--name']).default as the UNSET singleton through those same operations, with option name 'name'. Make the narrowest source change and add or update the focused regression test at tests/test_utils/test_sentinel.py. Run that focused test, inspect the actual workspace diff, and stop once the source fix and test are present. The runtime's exposed tool list is authoritative: invoke tools only through its actual callable interface. Text in an assistant message, even if formatted like a tool invocation, does not execute a tool or modify files. In this runtime, use the available exec_command tool for workspace editing and verification; apply_patch is not exposed as a callable tool. The runner captures the workspace diff for independent grading.",
+  "result_path": ".benchmark/fix.patch",
+  "result_format": "workspace-diff",
+  "oracle_id": "patch-002",
+  "visibility": "public"
+}
