@@ -10,6 +10,7 @@ from typing import cast
 
 import pytest
 
+from scripts.agent_efficiency import runner
 from scripts.agent_efficiency.campaign_state import (
     CampaignStateError,
     CampaignStore,
@@ -27,6 +28,7 @@ from scripts.agent_efficiency.runner import (
     build_environment_preparation_argv,
     build_index_preparation_argv,
     capture_workspace_patch,
+    codex_model_base_instructions,
     execute_container_attempt,
     result_from_execution,
     write_attempt_codex_config,
@@ -41,6 +43,57 @@ from scripts.agent_efficiency.usage import UsageError, normalize_completed_turn
 
 IMAGE = "example.invalid/codira-benchmark@sha256:" + "a" * 64
 INTEGRATION_IMAGE_ENV = "CODIRA_AGENT_EFFICIENCY_INTEGRATION_IMAGE"
+
+
+def test_codex_base_instructions_are_read_from_the_pinned_offline_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Read the bundled Codex prompt without provider access.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Isolate the runtime call and its image-catalog result.
+
+    Returns
+    -------
+    None
+        The helper uses a digest-pinned, network-disabled runtime command.
+    """
+
+    runner.codex_model_base_instructions.cache_clear()
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(
+        command: tuple[str, ...], **_: object
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                {
+                    "models": [
+                        {
+                            "slug": "gpt-5.6-sol",
+                            "base_instructions": "bundled Codex instructions",
+                        }
+                    ]
+                }
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    instructions = codex_model_base_instructions("podman", IMAGE)
+
+    assert instructions == "bundled Codex instructions"
+    assert len(commands) == 1
+    assert "--network=none" in commands[0]
+    assert "--read-only" in commands[0]
+    assert "codex debug models --bundled" in commands[0][-1]
+    codex_model_base_instructions.cache_clear()
 
 
 def test_runner_containerfile_installs_transcript_required_utilities() -> None:
@@ -163,6 +216,8 @@ def test_environment_preparation_runs_offline_before_the_agent(tmp_path: Path) -
 
     fixture = tmp_path / "fixture"
     fixture.mkdir()
+    temporary_root = tmp_path / "temporary"
+    temporary_root.mkdir()
     environment = FixtureEnvironment(
         "uv",
         ("/opt/codira/prepare-fixture-environment", "fixture-public", "uv"),
@@ -171,11 +226,17 @@ def test_environment_preparation_runs_offline_before_the_agent(tmp_path: Path) -
     )
 
     argv = build_environment_preparation_argv(
-        EnvironmentPreparationRequest("podman", IMAGE, fixture, 60, environment)
+        EnvironmentPreparationRequest(
+            "podman", IMAGE, fixture, 60, environment, temporary_root
+        )
     )
 
     assert "--network=none" in argv
     assert "--read-only" in argv
+    assert "dst=/temporary,rw" in " ".join(argv)
+    assert "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m" in argv
+    assert "--env=TMPDIR=/temporary" in argv
+    assert "--env=UV_CACHE_DIR=/temporary/uv-cache" in argv
     assert argv[-3:] == environment.prepare_argv
 
 
@@ -557,13 +618,27 @@ def test_container_argv_and_adapter_preserve_isolation_and_incomplete_usage(
 
     fixture = tmp_path / "fixture"
     state = tmp_path / "state"
+    temporary_root = tmp_path / "temporary"
     fixture.mkdir()
     state.mkdir()
+    temporary_root.mkdir()
     argv = build_container_argv(
-        ContainerAttemptRequest("podman", IMAGE, fixture, state, "do task", 10)
+        ContainerAttemptRequest(
+            "podman",
+            IMAGE,
+            fixture,
+            state,
+            "do task",
+            10,
+            temporary_root=temporary_root,
+        )
     )
     assert "--network=none" in argv
     assert "--read-only" in argv
+    assert "dst=/temporary,rw" in " ".join(argv)
+    assert "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m" in argv
+    assert "--env=TMP=/temporary" in argv
+    assert "--env=UV_CACHE_DIR=/temporary/uv-cache" in argv
     assert argv[argv.index("--sandbox") + 1] == "danger-full-access"
     assert not any("OPENROUTER" in item or "GH_TOKEN" in item for item in argv)
     attempt = build_paired_schedule(("symbols-001",), 1, 1)[0]

@@ -79,6 +79,37 @@ class CheckResult:
     detail: str
 
 
+@dataclass(frozen=True)
+class CodexProviderSettings:
+    """Hold the exact provider model metadata used to prepare an isolated run.
+
+    Parameters
+    ----------
+    model : str
+        Exact provider model identifier selected for the run.
+    reasoning_effort : str
+        Exact reasoning effort selected for the run.
+    context_window : int or None, optional
+        Context size from the provider route preflight.
+    base_instructions : str, optional
+        Codex CLI instructions from the selected image's bundled model.
+
+    Returns
+    -------
+    None
+        Instances are immutable run configuration values.
+    """
+
+    model: str
+    reasoning_effort: str
+    context_window: int | None = None
+    base_instructions: str = (
+        "You are Codex, a coding agent. Follow the task and the actual tools "
+        "available in this session. Inspect the workspace, make scoped changes, "
+        "and verify them with available project tools."
+    )
+
+
 class JsonlEvidenceError(ValueError):
     """Raised when a Codex JSONL transcript is malformed or incomplete.
 
@@ -416,6 +447,10 @@ def isolated_config_check(
             return CheckResult(
                 "isolated-config", False, "OpenRouter proxy URL is missing"
             )
+        if parsed.get("model_catalog_json") != "/codex-state/model-catalog.json":
+            return CheckResult(
+                "isolated-config", False, "selected-model metadata catalog is missing"
+            )
         if (
             parsed.get("model_provider") != "benchmark-openrouter-proxy"
             or parsed.get("model") != model
@@ -684,16 +719,92 @@ def build_isolated_codex_config(
     return (
         root_configuration
         + "\n"
+        + 'model_catalog_json = "/codex-state/model-catalog.json"\n'
         + provider_configuration
         + configuration.removeprefix(root_configuration)
     )
+
+
+def build_isolated_codex_model_catalog(
+    model: str,
+    reasoning_effort: str,
+    context_window: int | None = None,
+    base_instructions: str | None = None,
+) -> str:
+    """Build Codex model metadata for the one model selected by a pilot.
+
+    Parameters
+    ----------
+    model : str
+        Exact OpenRouter model identifier sent through the benchmark proxy.
+    reasoning_effort : str
+        Campaign-pinned reasoning effort for that model.
+    context_window : int or None, optional
+        Context size reported by the authenticated route preflight.
+    base_instructions : str or None, optional
+        Codex CLI instructions copied from the selected image's bundled model;
+        diagnostic probes use a concise local fallback.
+
+    Returns
+    -------
+    str
+        Version-compatible JSON catalog containing only the selected model.
+
+    Raises
+    ------
+    ValueError
+        If model identity, reasoning effort, or an optional context size is
+        invalid.
+
+    Notes
+    -----
+    Codex treats ``model_catalog_json`` as a full replacement. This catalog is
+    safe for the benchmark's fresh, single-model ``CODEX_HOME`` and must not be
+    used as a user-wide catalog.
+    """
+
+    if not model or not reasoning_effort:
+        message = "model and reasoning effort must be non-empty"
+        raise ValueError(message)
+    if context_window is not None and (
+        isinstance(context_window, bool) or context_window < 1
+    ):
+        message = "context window must be a positive integer"
+        raise ValueError(message)
+    model_info: dict[str, object] = {
+        "slug": model,
+        "display_name": model,
+        "base_instructions": (
+            base_instructions
+            or CodexProviderSettings(model, reasoning_effort).base_instructions
+        ),
+        "supported_reasoning_levels": [
+            {"effort": reasoning_effort, "description": "Campaign-selected effort"}
+        ],
+        "default_reasoning_level": reasoning_effort,
+        "shell_type": "unified_exec",
+        "visibility": "none",
+        "supported_in_api": True,
+        "priority": 99,
+        "support_verbosity": False,
+        "truncation_policy": {"mode": "bytes", "limit": 10000},
+        "experimental_supported_tools": [],
+        "context_window": context_window,
+        "max_context_window": context_window,
+        "effective_context_window_percent": 95,
+        "supports_reasoning_summary_parameter": True,
+        "default_reasoning_summary": "auto",
+        "input_modalities": ["text", "image"],
+        "use_responses_lite": False,
+    }
+    return json.dumps({"models": [model_info]}, indent=2) + "\n"
 
 
 def write_isolated_codex_config(
     state_root: Path,
     codira_root: str = "/workspace/fixture",
     proxy_url: str | None = None,
-    provider_settings: tuple[str, str] | None = None,
+    provider_settings: CodexProviderSettings | None = None,
     mcp_command: str | None = "codira-mcp",
 ) -> Path:
     """Write the only user-level Codex configuration for one benchmark run.
@@ -707,9 +818,9 @@ def write_isolated_codex_config(
         Container-visible fixture root passed to the Codira MCP server.
     proxy_url : str or None, optional
         Loopback URL of the runner-side OpenRouter proxy.
-    provider_settings : tuple[str, str] or None, optional
-        Provider model and reasoning effort selected by the approved execution
-        manifest.
+    provider_settings : CodexProviderSettings or None, optional
+        Provider model, reasoning effort, and context size selected by the
+        approved execution manifest and route preflight.
     mcp_command : str or None, optional
         Resolved host-visible Codira MCP executable, or ``None`` for a
         baseline configuration without MCP access.
@@ -721,8 +832,20 @@ def write_isolated_codex_config(
     """
 
     state_root.mkdir(parents=True, exist_ok=False)
-    model, reasoning_effort = provider_settings or (None, None)
+    model = provider_settings.model if provider_settings else None
+    reasoning_effort = provider_settings.reasoning_effort if provider_settings else None
     config_path = state_root / "config.toml"
+    if provider_settings is not None:
+        model_catalog_path = state_root / "model-catalog.json"
+        model_catalog_path.write_text(
+            build_isolated_codex_model_catalog(
+                provider_settings.model,
+                provider_settings.reasoning_effort,
+                provider_settings.context_window,
+                provider_settings.base_instructions,
+            ),
+            encoding="utf-8",
+        )
     config_path.write_text(
         build_isolated_codex_config(
             codira_root, proxy_url, model, reasoning_effort, mcp_command

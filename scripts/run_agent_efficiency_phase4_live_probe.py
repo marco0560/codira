@@ -13,6 +13,7 @@ import json
 import os
 import secrets
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -22,7 +23,9 @@ if __package__ in {None, ""}:
 from scripts.agent_efficiency import phase0, provider_proxy
 from scripts.agent_efficiency.campaign_state import build_paired_schedule
 from scripts.agent_efficiency.runner import (
+    PROJECT_TEMP_ROOT,
     ContainerAttemptRequest,
+    codex_model_base_instructions,
     execute_container_attempt,
     result_from_execution,
     write_proxy_relay,
@@ -94,7 +97,13 @@ def main(arguments: list[str] | None = None) -> int:
             args.state_root,
             "/workspace",
             "http://127.0.0.1:43123/v1",
-            (str(provider["model"]), str(provider["reasoning_effort"])),
+            phase0.CodexProviderSettings(
+                str(provider["model"]),
+                str(provider["reasoning_effort"]),
+                base_instructions=codex_model_base_instructions(
+                    args.runtime, args.image
+                ),
+            ),
             "codira-mcp",
         )
         write_proxy_relay(args.state_root)
@@ -109,18 +118,22 @@ def main(arguments: list[str] | None = None) -> int:
             for item in build_paired_schedule(("phase4-conformance",), 1, 1)
             if item.assistance_mode == "codira-mcp"
         )
-        execution = execute_container_attempt(
-            ContainerAttemptRequest(
-                args.runtime,
-                args.image,
-                args.fixture_root,
-                args.state_root,
-                "Use the required Codira MCP server once, then write a JSON object with status ok to .benchmark/result.json.",
-                int(limits["timeout_seconds"]),
-                proxy_socket=socket_path,
-                proxy_client_token=token,
+        with tempfile.TemporaryDirectory(
+            prefix="ae-probe-", dir=PROJECT_TEMP_ROOT
+        ) as temporary_root:
+            execution = execute_container_attempt(
+                ContainerAttemptRequest(
+                    args.runtime,
+                    args.image,
+                    args.fixture_root,
+                    args.state_root,
+                    "Use the required Codira MCP server once, then write a JSON object with status ok to .benchmark/result.json.",
+                    int(limits["timeout_seconds"]),
+                    proxy_socket=socket_path,
+                    proxy_client_token=token,
+                    temporary_root=Path(temporary_root),
+                )
             )
-        )
         args.events.parent.mkdir(parents=True, exist_ok=True)
         args.events.write_text(execution.stdout, encoding="utf-8")
         result, evidence = result_from_execution(

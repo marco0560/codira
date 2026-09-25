@@ -31,8 +31,8 @@ if __package__ in {None, ""}:
 
 from scripts.agent_efficiency.contracts import canonical_fingerprint, load_document
 from scripts.agent_efficiency.corpus import verify_fixture
+from scripts.agent_efficiency.runner import PROJECT_TEMP_ROOT
 from scripts.run_agent_efficiency_phase6_calibration import calibration_attempt
-from scripts.run_agent_efficiency_phase6_pilot import PROJECT_TEMP_ROOT
 
 FACTORY_VERSION = "1.0"
 SOPS_ENVIRONMENT = (

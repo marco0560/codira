@@ -292,7 +292,7 @@ def main(arguments: list[str] | None = None) -> int:
             args.state_root,
             str(fixture_root),
             f"http://127.0.0.1:{port}/v1",
-            (model, effort),
+            phase0.CodexProviderSettings(model, effort),
             mcp_command,
         )
         environment = phase0.isolated_environment(os.environ, args.state_root)

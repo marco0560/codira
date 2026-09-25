@@ -42,6 +42,10 @@ def test_fixture_environment_selects_locked_uv_and_shared_directive(
         "uv",
     )
     assert ".venv" in plan.directive
+    assert "uv run --offline --no-sync" in plan.directive
+    assert "bare python/python3" in plan.directive
+    assert "MODULE.__file__" in plan.directive
+    assert "inside /workspace" in plan.directive
 
 
 def test_fixture_environment_selects_image_locked_npm_project(tmp_path: Path) -> None:

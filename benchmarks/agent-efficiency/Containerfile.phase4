@@ -17,11 +17,12 @@ RUN apt-get update \
     && python -m pip install --no-cache-dir uv \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
-# The measured container has a read-only root filesystem.  uv needs a cache
-# even when it only executes the system Python, so place it on the runner's
-# bounded writable tmpfs rather than under /root.
-ENV UV_CACHE_DIR=/tmp/uv-cache \
-    UV_PYTHON_INSTALL_DIR=/tmp/uv-python \
+# The runner bind-mounts operation-scoped scratch from the project .Temp policy.
+ENV TMPDIR=/temporary \
+    TMP=/temporary \
+    TEMP=/temporary \
+    UV_CACHE_DIR=/temporary/uv-cache \
+    UV_PYTHON_INSTALL_DIR=/temporary/uv-python \
     UV_NO_MANAGED_PYTHON=1 \
     UV_NO_SYNC=1 \
     UV_SYSTEM_PYTHON=1

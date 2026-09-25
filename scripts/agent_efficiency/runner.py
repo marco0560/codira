@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import difflib
+import json
 import os
 import re
 import subprocess
 import time
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from scripts.agent_efficiency import phase0
@@ -16,10 +19,9 @@ from scripts.agent_efficiency.contracts import CONTRACT_VERSION
 from scripts.agent_efficiency.usage import UsageError, normalize_completed_turn
 
 _CONTAINER_ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+PROJECT_TEMP_ROOT = Path("/home/marco/Personalia/Progetti/.Temp")
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from scripts.agent_efficiency.campaign_state import ScheduledAttempt
     from scripts.agent_efficiency.environment import FixtureEnvironment
 
@@ -74,6 +76,8 @@ class ContainerAttemptRequest:
         Positive wall-clock timeout.
     codex_command : str, optional
         Container-visible Codex executable.
+    temporary_root : pathlib.Path, optional
+        Operation-scoped host scratch directory mounted at ``/temporary``.
 
     Returns
     -------
@@ -91,6 +95,7 @@ class ContainerAttemptRequest:
     proxy_socket: Path | None = None
     proxy_port: int = 43123
     proxy_client_token: str | None = None
+    temporary_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +144,8 @@ class IndexPreparationRequest:
         Positive wall-clock limit for the non-agent preparation step.
     codira_config_path : str
         Absolute container-visible profile used by both index and MCP startup.
+    temporary_root : pathlib.Path, optional
+        Operation-scoped host scratch directory mounted at ``/temporary``.
     """
 
     runtime: str
@@ -146,6 +153,7 @@ class IndexPreparationRequest:
     fixture_root: Path
     timeout_seconds: int
     codira_config_path: str
+    temporary_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -164,6 +172,8 @@ class EnvironmentPreparationRequest:
         Positive wall-clock limit for pre-agent preparation.
     environment : scripts.agent_efficiency.environment.FixtureEnvironment
         Deterministically selected locked package-manager plan.
+    temporary_root : pathlib.Path, optional
+        Operation-scoped host scratch directory mounted at ``/temporary``.
 
     Returns
     -------
@@ -176,6 +186,129 @@ class EnvironmentPreparationRequest:
     fixture_root: Path
     timeout_seconds: int
     environment: FixtureEnvironment
+    temporary_root: Path | None = None
+
+
+def _temporary_mount_options(temporary_root: Path | None) -> tuple[str, ...]:
+    """Build container temp mount and environment options.
+
+    Parameters
+    ----------
+    temporary_root : pathlib.Path or None
+        Existing operation-scoped host scratch directory.
+
+    Returns
+    -------
+        tuple[str, ...]
+        A project-scratch bind mount plus temp variables, or an isolated tmpfs
+        fallback when no host scratch directory is provided.
+
+    Raises
+    ------
+    ValueError
+        If the requested host scratch directory is unavailable.
+    """
+
+    if temporary_root is None:
+        return ("--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m",)
+    root = temporary_root.resolve()
+    if not root.is_dir():
+        raise ValueError("container temporary root must be an existing directory")
+    return (
+        f"--mount=type=bind,src={root},dst=/temporary,rw",
+        "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m",
+        "--env=TMPDIR=/temporary",
+        "--env=TMP=/temporary",
+        "--env=TEMP=/temporary",
+        "--env=UV_CACHE_DIR=/temporary/uv-cache",
+        "--env=UV_PYTHON_INSTALL_DIR=/temporary/uv-python",
+    )
+
+
+@lru_cache(maxsize=8)
+def codex_model_base_instructions(runtime: str, image: str) -> str:
+    """Read the native Codex instruction template from a pinned image.
+
+    Parameters
+    ----------
+    runtime : str
+        Supported container runtime executable.
+    image : str
+        Digest-pinned benchmark image containing the Codex CLI.
+
+    Returns
+    -------
+    str
+        Exact base instructions from the image's bundled Codex catalog.
+
+    Raises
+    ------
+    TypeError
+        If the bundled model catalog has an unexpected shape.
+    ValueError
+        If the runtime image or its bundled model catalog is unavailable.
+    """
+
+    if (
+        runtime not in phase0.SUPPORTED_CONTAINER_RUNTIMES
+        or phase0.IMAGE_DIGEST_PATTERN.fullmatch(image) is None
+    ):
+        raise ValueError("Codex instruction source must use the pinned runtime image")
+    completed = subprocess.run(
+        (
+            runtime,
+            "run",
+            "--rm",
+            "--network=none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--pids-limit=64",
+            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=64m",
+            "--env=CODEX_HOME=/tmp/codex-state",
+            "--env=HOME=/tmp/codex-home",
+            "--workdir=/workspace",
+            image,
+            "/bin/sh",
+            "-c",
+            "mkdir -p /tmp/codex-state /tmp/codex-home && codex debug models --bundled",
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if completed.returncode != 0:
+        raise ValueError("cannot read the bundled Codex model catalog")
+    try:
+        document = json.loads(completed.stdout)
+    except ValueError as error:
+        raise ValueError("bundled Codex model catalog is malformed") from error
+    models = document.get("models") if isinstance(document, dict) else None
+    if not isinstance(models, list):
+        raise TypeError("bundled Codex model catalog is malformed")
+    preferred = next(
+        (
+            item
+            for item in models
+            if isinstance(item, dict) and item.get("slug") == "gpt-5.6-sol"
+        ),
+        None,
+    )
+    candidates = ([preferred] if preferred is not None else []) + models
+    instructions = next(
+        (
+            item.get("base_instructions")
+            for item in candidates
+            if isinstance(item, dict)
+            and isinstance(item.get("base_instructions"), str)
+            and item["base_instructions"].strip()
+        ),
+        None,
+    )
+    if not isinstance(instructions, str):
+        raise TypeError("bundled Codex catalog has no base instructions")
+    return instructions
 
 
 def build_attempt_codex_config(assistance_mode: str) -> str:
@@ -354,7 +487,7 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         "--pids-limit=512",
-        "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m",
+        *_temporary_mount_options(request.temporary_root),
         f"--cidfile={state_root / 'container.cid'}",
         f"--mount=type=bind,src={fixture_root},dst=/workspace,rw",
         f"--mount=type=bind,src={state_root},dst=/codex-state,rw",
@@ -405,7 +538,7 @@ def build_index_preparation_argv(request: IndexPreparationRequest) -> tuple[str,
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         "--pids-limit=512",
-        "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m",
+        *_temporary_mount_options(request.temporary_root),
         f"--mount=type=bind,src={fixture_root},dst=/workspace,rw",
         "--workdir=/workspace",
         request.image,
@@ -497,7 +630,7 @@ def build_environment_preparation_argv(
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         "--pids-limit=512",
-        "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m",
+        *_temporary_mount_options(request.temporary_root),
         f"--mount=type=bind,src={request.fixture_root.resolve()},dst=/workspace,rw",
         "--workdir=/workspace",
         request.image,

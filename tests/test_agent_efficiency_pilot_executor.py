@@ -141,6 +141,9 @@ def test_prepare_claims_paths_and_builds_fixed_paid_command(
     assert str(execution_root / "logs" / "pilot.log") in command
     assert str(execution_root / "pilot.exit") in command
     assert "sops exec-env" in command
+    assert "TMPDIR=/home/marco/Personalia/Progetti/.Temp" in command
+    assert "TMP=/home/marco/Personalia/Progetti/.Temp" in command
+    assert "TEMP=/home/marco/Personalia/Progetti/.Temp" in command
     assert command.count("--task-id") == 3
     assert command.count("--fixture-source") == 3
 

@@ -450,11 +450,42 @@ def test_generated_proxy_config_uses_only_loopback_and_fresh_state(
         state_root,
         "/fixture",
         "http://127.0.0.1:43123/v1",
-        ("openai/gpt-5.6-terra", "medium"),
+        phase0.CodexProviderSettings("minimax/minimax-m2.5", "medium", 204800),
     )
     parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    catalog = json.loads(
+        (state_root / "model-catalog.json").read_text(encoding="utf-8")
+    )
     provider = parsed["model_providers"]["benchmark-openrouter-proxy"]
     assert parsed["model_provider"] == "benchmark-openrouter-proxy"
+    assert parsed["model_catalog_json"] == "/codex-state/model-catalog.json"
+    assert catalog["models"] == [
+        {
+            "slug": "minimax/minimax-m2.5",
+            "display_name": "minimax/minimax-m2.5",
+            "base_instructions": phase0.CodexProviderSettings(
+                "minimax/minimax-m2.5", "medium"
+            ).base_instructions,
+            "supported_reasoning_levels": [
+                {"effort": "medium", "description": "Campaign-selected effort"}
+            ],
+            "default_reasoning_level": "medium",
+            "shell_type": "unified_exec",
+            "visibility": "none",
+            "supported_in_api": True,
+            "priority": 99,
+            "support_verbosity": False,
+            "truncation_policy": {"mode": "bytes", "limit": 10000},
+            "experimental_supported_tools": [],
+            "context_window": 204800,
+            "max_context_window": 204800,
+            "effective_context_window_percent": 95,
+            "supports_reasoning_summary_parameter": True,
+            "default_reasoning_summary": "auto",
+            "input_modalities": ["text", "image"],
+            "use_responses_lite": False,
+        }
+    ]
     assert provider == {
         "name": "Benchmark OpenRouter proxy",
         "base_url": "http://127.0.0.1:43123/v1",
@@ -466,11 +497,35 @@ def test_generated_proxy_config_uses_only_loopback_and_fresh_state(
         phase0.isolated_config_check(
             "/fixture",
             "http://127.0.0.1:43123/v1",
-            "openai/gpt-5.6-terra",
+            "minimax/minimax-m2.5",
             "medium",
         ).passed
         is True
     )
+
+
+def test_model_catalog_uses_preflight_context_for_previous_model() -> None:
+    """Retain the route context size for the previous model's slug.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The generated model metadata matches the DeepSeek route preflight.
+    """
+
+    catalog = json.loads(
+        phase0.build_isolated_codex_model_catalog(
+            "deepseek/deepseek-v4.1-flash", "medium", 1048576
+        )
+    )
+    model = catalog["models"][0]
+    assert model["slug"] == "deepseek/deepseek-v4.1-flash"
+    assert model["context_window"] == 1048576
+    assert model["max_context_window"] == 1048576
 
 
 def test_generated_proxy_config_rejects_non_loopback_url() -> None:

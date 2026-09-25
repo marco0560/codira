@@ -28,6 +28,7 @@ SOPS_ENVIRONMENT = (
     "openrouter_codira_agent_efficiency_pilot.env"
 )
 BENCHMARK_ROOT = Path("benchmarks/agent-efficiency")
+PROJECT_TEMP_ROOT = Path("/home/marco/Personalia/Progetti/.Temp")
 
 
 class PilotLaunchError(ValueError):
@@ -409,6 +410,9 @@ def tmux_command(launch: PilotLaunch) -> tuple[str, str]:
     log = launch.execution_root / "logs" / "pilot.log"
     exit_path = launch.execution_root / "pilot.exit"
     shell = (
+        f"export TMPDIR={shlex.quote(str(PROJECT_TEMP_ROOT))} "
+        f"TMP={shlex.quote(str(PROJECT_TEMP_ROOT))} "
+        f"TEMP={shlex.quote(str(PROJECT_TEMP_ROOT))}; "
         f"{shlex.join(command)} > {shlex.quote(str(log))} 2>&1; "
         f"code=$?; printf '%s\\n' \"$code\" > {shlex.quote(str(exit_path))}"
     )

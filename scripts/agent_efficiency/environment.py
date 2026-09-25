@@ -80,8 +80,16 @@ def fixture_environment(root: Path, fixture_id: str) -> FixtureEnvironment:
             "uv",
             ("/opt/codira/prepare-fixture-environment", fixture_id, "uv"),
             "This fixture's locked uv environment and development dependencies are "
-            "already prepared offline in .venv. Use its installed tools; do not run "
-            "uv sync, install dependencies, or attempt network access.",
+            "already prepared offline in /workspace/.venv. Run Python, tests, and "
+            "project tools from /workspace with `uv run --offline --no-sync ...`; "
+            "do not use bare python/python3, pytest, pip, uv sync, install "
+            "dependencies, or attempt network access. Before relying on a project "
+            "import, inspect the checkout's package layout, then run "
+            "`uv run --offline --no-sync python -c 'import MODULE; "
+            "print(MODULE.__file__)'` (replace MODULE with the actual import name) "
+            "and confirm the resolved file is inside /workspace, not an image-"
+            "installed copy. If it is not, identify and use the correct workspace "
+            "import path; do not proceed on an image copy.",
             fixture_id,
         )
     if (root / "package.json").is_file() and (root / "package-lock.json").is_file():

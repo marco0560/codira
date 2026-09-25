@@ -49,10 +49,12 @@ from scripts.agent_efficiency.environment import (
 )
 from scripts.agent_efficiency.oracles import evaluate_oracle
 from scripts.agent_efficiency.runner import (
+    PROJECT_TEMP_ROOT,
     ContainerAttemptRequest,
     EnvironmentPreparationRequest,
     IndexPreparationRequest,
     capture_workspace_patch,
+    codex_model_base_instructions,
     execute_container_attempt,
     execute_environment_preparation,
     execute_index_preparation,
@@ -61,7 +63,6 @@ from scripts.agent_efficiency.runner import (
 )
 
 BENCHMARK_ROOT = Path("benchmarks/agent-efficiency")
-PROJECT_TEMP_ROOT = Path("/home/marco/Personalia/Progetti/.Temp")
 PROTECTED_ASSET_ROOT = BENCHMARK_ROOT / "protected"
 BENCHMARK_CODIRA_CONFIG = "/opt/codira/benchmark-codira.toml"
 BENCHMARK_MCP_COMMAND = "/opt/codira/codira-mcp-benchmark"
@@ -1205,15 +1206,19 @@ def execute_pilot_attempt(
         environment = fixture_environment(agent_root, fixture_id)
     except EnvironmentPreparationError as error:
         raise PilotLauncherError(str(error)) from error
-    environment_preparation = execute_environment_preparation(
-        EnvironmentPreparationRequest(
-            context.runtime,
-            context.image,
-            agent_root,
-            controls.timeout_seconds,
-            environment,
+    with tempfile.TemporaryDirectory(
+        prefix="ae-env-", dir=PROJECT_TEMP_ROOT
+    ) as temporary_root:
+        environment_preparation = execute_environment_preparation(
+            EnvironmentPreparationRequest(
+                context.runtime,
+                context.image,
+                agent_root,
+                controls.timeout_seconds,
+                environment,
+                Path(temporary_root),
+            )
         )
-    )
     if environment_preparation.timed_out or environment_preparation.returncode != 0:
         raise PilotLauncherError(
             "fixture environment preparation failed before provider setup"
@@ -1225,15 +1230,19 @@ def execute_pilot_attempt(
         profile_target.parent.mkdir(exist_ok=True)
         shutil.copyfile(BENCHMARK_CODIRA_PROFILE, profile_target)
         profile_fingerprint = runtime_profile_fingerprint()
-        preparation = execute_index_preparation(
-            IndexPreparationRequest(
-                context.runtime,
-                context.image,
-                agent_root,
-                controls.timeout_seconds,
-                BENCHMARK_CODIRA_CONFIG,
+        with tempfile.TemporaryDirectory(
+            prefix="ae-idx-", dir=PROJECT_TEMP_ROOT
+        ) as temporary_root:
+            preparation = execute_index_preparation(
+                IndexPreparationRequest(
+                    context.runtime,
+                    context.image,
+                    agent_root,
+                    controls.timeout_seconds,
+                    BENCHMARK_CODIRA_CONFIG,
+                    Path(temporary_root),
+                )
             )
-        )
         if preparation.timed_out or preparation.returncode != 0:
             raise PilotLauncherError(
                 "codira index preparation failed before MCP startup"
@@ -1286,7 +1295,12 @@ def execute_pilot_attempt(
         state_root,
         "/workspace",
         "http://127.0.0.1:43123/v1",
-        (controls.model, controls.reasoning_effort),
+        phase0.CodexProviderSettings(
+            controls.model,
+            controls.reasoning_effort,
+            context.provider_context_length,
+            codex_model_base_instructions(context.runtime, context.image),
+        ),
         BENCHMARK_MCP_COMMAND if attempt.assistance_mode == "codira-mcp" else None,
     )
     write_proxy_relay(state_root)
@@ -1313,6 +1327,8 @@ def execute_pilot_attempt(
     )
     with tempfile.TemporaryDirectory(prefix="ae-", dir=PROJECT_TEMP_ROOT) as socket_dir:
         socket_path = Path(socket_dir) / "p.sock"
+        container_temporary_root = Path(socket_dir) / "tmp"
+        container_temporary_root.mkdir()
         server = provider_proxy.create_unix_server(settings, str(socket_path))
         try:
             threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -1330,6 +1346,7 @@ def execute_pilot_attempt(
                     controls.timeout_seconds,
                     proxy_socket=socket_path,
                     proxy_client_token=token,
+                    temporary_root=container_temporary_root,
                 )
             )
         finally:

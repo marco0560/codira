@@ -989,7 +989,7 @@ def test_proxy_relay_configuration_binds_loopback_to_the_unix_socket(
         state,
         "/workspace",
         "http://127.0.0.1:43123/v1",
-        ("openai/gpt-5.6-terra", "medium"),
+        phase0.CodexProviderSettings("openai/gpt-5.6-terra", "medium", 204800),
         "codira-mcp",
     )
     relay = write_proxy_relay(state)
@@ -1020,7 +1020,7 @@ def test_baseline_configuration_excludes_codira_mcp(tmp_path: Path) -> None:
         state,
         "/workspace",
         "http://127.0.0.1:43123/v1",
-        ("openai/gpt-5.6-terra", "medium"),
+        phase0.CodexProviderSettings("openai/gpt-5.6-terra", "medium", 204800),
         None,
     )
     configuration = (state / "config.toml").read_text(encoding="utf-8")
@@ -1281,6 +1281,9 @@ def test_execute_attempt_records_an_oracle_contract_failure(
         ),
     )
     monkeypatch.setattr(pilot, "capture_workspace_patch", lambda *args: None)
+    monkeypatch.setattr(
+        pilot, "codex_model_base_instructions", lambda *_args: "test Codex instructions"
+    )
     monkeypatch.setattr(
         pilot,
         "evaluate_oracle",

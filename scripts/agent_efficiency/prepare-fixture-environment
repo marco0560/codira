@@ -16,12 +16,14 @@ esac
 case "$ecosystem" in
     uv)
         source_cache="$material_root/uv-cache"
-        cache=".benchmark/uv-cache"
+        cache="${UV_CACHE_DIR:-/temporary/uv-cache}"
         test -d "$source_cache"
         mkdir -p "$cache"
         cp -a "$source_cache/." "$cache"
         SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \
-            UV_CACHE_DIR="$cache" uv sync --offline --frozen --all-groups
+        UV_CACHE_DIR="$cache" uv sync --offline --frozen --all-groups
+        UV_CACHE_DIR="$cache" uv run --offline --frozen --no-sync \
+            python -c 'import sys; from pathlib import Path; assert Path(sys.prefix).resolve() == Path(".venv").resolve()'
         ;;
     npm)
         source_cache="$material_root/npm-cache"
