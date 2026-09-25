@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -70,7 +71,9 @@ def _campaign_directory(
             "tmpfs_size_mib": 128,
         },
         "runtime_image": "localhost/test@sha256:" + "a" * 64,
-        "runtime_profile_fingerprint": "b" * 64,
+        "runtime_profile_fingerprint": hashlib.sha256(
+            Path("scripts/agent_efficiency/benchmark-codira.toml").read_bytes()
+        ).hexdigest(),
         "treatment_protocol": {
             "version": "mcp-required-v1",
             "codira_mcp_instruction": "Call Codira MCP before completing the task.",
