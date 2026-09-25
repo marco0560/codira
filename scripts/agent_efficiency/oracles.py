@@ -411,6 +411,18 @@ def _patch_check(
         return False
     tests = _protected_command(spec.get("command"))
     _validate_patch_paths(patch)
+    required_changed_paths = spec.get("required_changed_paths", [])
+    if not isinstance(required_changed_paths, list) or not all(
+        isinstance(path, str) and path for path in required_changed_paths
+    ):
+        detail = "required_changed_paths must be a list of non-empty paths"
+        raise ContractError.message(detail)
+    patch_text = patch.read_text(encoding="utf-8")
+    for raw_path in required_changed_paths:
+        changed_path = _safe_path(raw_path, label="required_changed_paths")
+        header = f"diff --git a/{changed_path} b/{changed_path}"
+        if header not in patch_text:
+            return False
     with tempfile.TemporaryDirectory(prefix="codira-agent-oracle-") as temporary:
         destination = Path(temporary) / "fixture"
         shutil.copytree(protected_root, destination, symlinks=False)

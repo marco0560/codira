@@ -261,3 +261,31 @@ release is published.
 At calibration-010 preflight the key had `$5.992518944` remaining and
 `$0.007481056` used that day. This is historical evidence; re-check with the
 authenticated preflight before any paid call.
+
+## Current handoff — Pilot 016 (2026-09-25)
+
+The old “Next work” sequence above is historical and superseded by the
+completed Pilot 016 and its post-mortem:
+[`agent-efficiency-pilot-016-postmortem-2026-09-25.md`](agent-efficiency-pilot-016-postmortem-2026-09-25.md).
+
+Pilot 015 stopped before any provider call because the manifest's Codira
+profile fingerprint did not match the prepared Codira profile. The factory
+validation was repaired, and Pilot 016 then completed all six scheduled
+attempts with exit status 0 under `minimax/minimax-m2.5`. Environment
+preparation passed for all assisted attempts. The outcome is still
+inconclusive: only the documentation pair is a complete passing comparison;
+Codira MCP used 256,975 more reported tokens on that pair. The assisted
+symbols and patch attempts failed their frozen task oracles, while the
+baseline patch attempt hit the local 25-logical-request limit after 25
+upstream HTTP 200 responses. It was not an upstream 429.
+
+Do not retry either campaign identity. Keep `.artifacts/ae/016/` intact as
+local immutable evidence. The versioned Pilot 016 input and tracked
+post-mortem are durable; raw responses, records, and generated reports remain
+ignored runtime evidence. The full validation gate passed with `1145 passed,
+4 skipped` (exit 0). Before proposing another paid run, inspect the failed
+symbols and patch outputs against their frozen oracles and decide whether the
+task contract or the model trajectory needs a controlled change. A changed
+task, prompt, runtime, or budget requires a newly generated campaign identity
+and the normal offline validation, authenticated preflight, and explicit
+authorization sequence.

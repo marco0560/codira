@@ -215,7 +215,7 @@ def load_admitted_documents(root: Path) -> tuple[dict[str, object], ...]:
 def load_task_oracles(
     task_root: Path, oracle_root: Path, fixtures: Sequence[Mapping[str, object]]
 ) -> tuple[tuple[dict[str, object], dict[str, object]], ...]:
-    """Load six public task/oracle pairs with complete frozen references.
+    """Load public task/oracle pairs with complete frozen references.
 
     Parameters
     ----------
@@ -244,8 +244,8 @@ def load_task_oracles(
     oracles = tuple(
         load_document(path, "oracle") for path in sorted(oracle_root.glob("*.json"))
     )
-    if len(tasks) != 6 or len(oracles) != 6:
-        _fail("Phase 3 requires exactly six task and oracle records")
+    if len(tasks) != 7 or len(oracles) != 7:
+        _fail("Phase 3 requires exactly seven task and oracle records")
     oracle_by_id = {str(item["oracle_id"]): item for item in oracles}
     if len(oracle_by_id) != len(oracles):
         _fail("oracle identifiers must be unique")

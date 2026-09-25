@@ -209,7 +209,9 @@ def test_patch_oracle_uses_pristine_copy_and_rejects_tampering(tmp_path: Path) -
     write_result(result_root, {})
     patch = result_root / ".benchmark" / "fix.patch"
     patch.write_text(
-        "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-VALUE = 'before'\n+VALUE = 'after'\n",
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n"
+        "-VALUE = 'before'\n+VALUE = 'after'\n",
         encoding="utf-8",
     )
     definition = {
@@ -220,6 +222,24 @@ def test_patch_oracle_uses_pristine_copy_and_rejects_tampering(tmp_path: Path) -
     }
     assert evaluate_oracle(
         definition, result_root=result_root, protected_root=protected
+    ).passed
+    test_file_requirement = {
+        "patch_applies_and_tests_pass": {
+            **definition["patch_applies_and_tests_pass"],
+            "required_changed_paths": ["tests/test_sentinel.py"],
+        }
+    }
+    assert not evaluate_oracle(
+        test_file_requirement, result_root=result_root, protected_root=protected
+    ).passed
+    source_file_requirement = {
+        "patch_applies_and_tests_pass": {
+            **definition["patch_applies_and_tests_pass"],
+            "required_changed_paths": ["app.py"],
+        }
+    }
+    assert evaluate_oracle(
+        source_file_requirement, result_root=result_root, protected_root=protected
     ).passed
     (protected / "fail.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
     failing_command = {

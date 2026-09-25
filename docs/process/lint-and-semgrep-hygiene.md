@@ -34,7 +34,7 @@ scripts/scriptlib.py:270 PLR0913 — public process runner keeps explicit
     command, environment, and failure-boundary inputs for reusable scripts.
 scripts/run_manifest_baseline.py:131 PLR0913 — benchmark invocation inputs are
     independently selectable for reproducible comparisons.
-scripts/agent_efficiency/oracles.py:587 PLR0913 — the public oracle boundary
+scripts/agent_efficiency/oracles.py:599 PLR0913 — the public oracle boundary
     keeps result format, protected root, and evaluator registry explicit so
     grading remains deterministic and auditable.
 scripts/run_retrieval_quality_benchmark.py:617,913 PLR0913 — result rows and
