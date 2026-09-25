@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -159,6 +160,38 @@ def test_factory_rejects_an_invalid_stage_cardinality() -> None:
             _spec("calibration", ["symbols-001", "patch-001"]),
             Path("benchmarks/agent-efficiency"),
         )
+
+
+def test_factory_rejects_a_fingerprint_for_the_wrong_runtime_profile() -> None:
+    """Reject the image fingerprint when the campaign field means Codira profile.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The factory must fail before producing paid-stage artifacts.
+    """
+
+    specification = _spec("pilot", ["symbols-001", "patch-001", "documentation-001"])
+    image_profile = "0" * 64
+    codira_profile = hashlib.sha256(
+        Path("scripts/agent_efficiency/benchmark-codira.toml").read_bytes()
+    ).hexdigest()
+    assert image_profile != codira_profile
+    specification["runtime_profile_fingerprint"] = image_profile
+
+    with pytest.raises(
+        CampaignFactoryError,
+        match="does not match the benchmark Codira profile",
+    ):
+        build_campaign(specification, Path("benchmarks/agent-efficiency"))
+
+    specification["runtime_profile_fingerprint"] = codira_profile
+    manifest, _ = build_campaign(specification, Path("benchmarks/agent-efficiency"))
+    assert manifest["runtime_profile_fingerprint"] == codira_profile
 
 
 def test_factory_refuses_to_overwrite_artifacts(tmp_path: Path) -> None:

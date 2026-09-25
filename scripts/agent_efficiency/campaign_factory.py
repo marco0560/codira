@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from scripts.agent_efficiency.campaign_state import build_paired_schedule
@@ -16,7 +18,6 @@ from scripts.agent_efficiency.contracts import (
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-    from pathlib import Path
 
 FACTORY_VERSION = "1.0"
 
@@ -109,6 +110,24 @@ class CampaignFactoryError(ValueError):
         return cls("campaign accounting does not bound its schedule")
 
     @classmethod
+    def runtime_profile_mismatch(cls) -> CampaignFactoryError:
+        """Build the wrong-runtime-profile failure.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        CampaignFactoryError
+            Stable profile mismatch failure.
+        """
+
+        return cls(
+            "runtime profile fingerprint does not match the benchmark Codira profile"
+        )
+
+    @classmethod
     def existing_output_directory(cls) -> CampaignFactoryError:
         """Build the immutable output-directory collision error.
 
@@ -152,6 +171,15 @@ def build_campaign(
         validate_document("campaign-spec", specification)
     except ContractError as error:
         raise CampaignFactoryError(str(error)) from error
+    runtime_profile = specification.get("runtime_profile_fingerprint")
+    if runtime_profile is not None:
+        profile_path = (
+            Path(__file__).resolve().parents[2]
+            / "scripts/agent_efficiency/benchmark-codira.toml"
+        )
+        expected_profile = hashlib.sha256(profile_path.read_bytes()).hexdigest()
+        if runtime_profile != expected_profile:
+            raise CampaignFactoryError.runtime_profile_mismatch()
     stage = cast("str", specification["stage"])
     task_ids = tuple(cast("list[str]", specification["task_ids"]))
     required_count = 1 if stage == "calibration" else 3
