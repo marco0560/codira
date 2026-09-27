@@ -297,8 +297,9 @@ referenced from `AGENTS.md`. The dated review is
 [`artifact-retention-review-2026-09-27.md`](artifact-retention-review-2026-09-27.md).
 The review found that repeated per-attempt `uv-cache` trees are the only
 plausible cleanup candidate; raw campaign, response, task, and failure evidence
-remains protected. No files were moved or deleted. Removal of the nineteen
-identified cache directories is pending operator approval. The three matching
-prepared image digests remain available locally, and a no-network, read-only
-check confirmed their offline fixture caches. The manifests, review, and this
-handoff update contain repository-relative paths and aggregate inventory only.
+remains protected. No run directories were moved. After explicit approval, the
+nineteen identified attempt-local cache directories were removed; the three
+matching prepared image digests and their offline fixture caches remain
+available. The artifact directory measured about 222 GiB before cleanup and
+about 86 GiB afterward. The manifests, review, and this handoff update contain
+repository-relative paths and aggregate inventory only.

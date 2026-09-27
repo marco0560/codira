@@ -4,7 +4,7 @@ This directory contains ignored run output and local runtime state. Except for
 this manifest and explicitly approved summaries, its contents stay untracked.
 Do not move or delete files in an experiment identity without explicit operator
 approval. See the [retention review](../docs/process/artifact-retention-review-2026-09-27.md)
-for the measured cleanup candidate and keep-versus-summarize decisions.
+for the completed cache cleanup and keep-versus-summarize decisions.
 
 ## Current groups
 
@@ -29,8 +29,9 @@ immutable identity. Use the dated retention review before proposing removal.
   does not replace these audit records by default.
 - Keep logs with their exit-status file. The logs are small relative to the
   dataset and may contain the cause of a failed or unusual run.
-- Reproducible dependency caches are the only current cleanup candidate. They
-  remain in place until the operator approves the specific cleanup and the
-  matching offline source cache is confirmed available.
+- The reviewed per-attempt `uv-cache` directories were removed after explicit
+  approval and confirmation that their prepared image caches remain available.
+  Keep the image caches and all other attempt evidence; review any different
+  cache group separately before proposing cleanup.
 - Keep this directory ignored. Only this manifest and approved, sanitized
   summaries may be tracked; do not unignore raw runtime trees.
