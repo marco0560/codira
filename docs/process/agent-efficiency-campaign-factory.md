@@ -8,7 +8,7 @@ stage cardinality and accounting, and writes immutable artifacts.
 ```bash
 uv run python scripts/generate_agent_efficiency_campaign.py \
   --spec benchmarks/agent-efficiency/campaign-specs/calibration-template.json \
-  --output-dir .artifacts/agent-efficiency/codira-calibration-001
+  --output-dir .artifacts/agent-efficiency/campaigns/codira-calibration-001
 ```
 
 The output directory must not exist. The factory writes:
@@ -109,8 +109,8 @@ both when the receipt is created and immediately before tmux starts:
 ```bash
 uv run python scripts/launch_agent_efficiency_pilot.py \
   --prepare \
-  --campaign-dir .artifacts/agent-efficiency/<campaign-id> \
-  --execution-root .artifacts/agent-efficiency/<campaign-id>-execution \
+  --campaign-dir .artifacts/agent-efficiency/campaigns/<campaign-id> \
+  --execution-root .artifacts/agent-efficiency/executions/<campaign-id>-execution \
   --seed <factory-seed> \
   --fixture-source click-public=/absolute/path/to/click \
   --fixture-source picomatch-public=/absolute/path/to/picomatch \
@@ -118,8 +118,8 @@ uv run python scripts/launch_agent_efficiency_pilot.py \
 
 uv run python scripts/launch_agent_efficiency_pilot.py \
   --launch \
-  --campaign-dir .artifacts/agent-efficiency/<campaign-id> \
-  --execution-root .artifacts/agent-efficiency/<campaign-id>-execution \
+  --campaign-dir .artifacts/agent-efficiency/campaigns/<campaign-id> \
+  --execution-root .artifacts/agent-efficiency/executions/<campaign-id>-execution \
   --seed <factory-seed> \
   --fixture-source click-public=/absolute/path/to/click \
   --fixture-source picomatch-public=/absolute/path/to/picomatch \

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-DEFAULT_ARTIFACT_ROOT = Path(".artifacts") / "benchmarks"
+DEFAULT_ARTIFACT_ROOT = Path(".artifacts") / "benchmarks" / "campaigns"
 DEFAULT_RUNS = 5
 DEFAULT_WARMUP = 1
 DEFAULT_QUERY = "schema migration logic"

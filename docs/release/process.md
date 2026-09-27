@@ -18,7 +18,7 @@ git release-audit
 
 The benchmark command runs the release Hyperfine plan for indexing, context
 retrieval, and docstring audit operations. It writes JSON results to
-`.artifacts/benchmarks/release-hyperfine.json`.
+`.artifacts/benchmarks/release/release-hyperfine.json`.
 
 That audit checks:
 

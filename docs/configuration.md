@@ -458,7 +458,7 @@ parameters.
 
 ## Model Candidate Manifest
 
-`benchmarks/embedding-model-candidates.json` records the model/engine
+`benchmarks/embedding/model-candidates.json` records the model/engine
 combinations used for embedding-engine campaigns. It includes the current
 MiniLM default, `BAAI/bge-small-en-v1.5`,
 `nomic-ai/nomic-embed-text-v1.5`, and

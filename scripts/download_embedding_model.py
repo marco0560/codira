@@ -30,7 +30,7 @@ from codira.contracts import EmbeddingEngineError
 from scripts.embedding_model_manifest import load_manifest
 from scripts.scriptlib import PERSONAL_SECRETS_DIR, sops_exec_env_argv
 
-DEFAULT_MANIFEST = Path("benchmarks/embedding-model-candidates.json")
+DEFAULT_MANIFEST = Path("benchmarks/embedding/model-candidates.json")
 DEFAULT_INSTALL_ROOT = Path(".codira/models")
 DEFAULT_ONNX_MODEL_FILENAME = "onnx/model.onnx"
 DEFAULT_TOKENIZER_FILENAME = "tokenizer.json"

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-DEFAULT_MANIFEST = Path("benchmarks/embedding-model-candidates.json")
+DEFAULT_MANIFEST = Path("benchmarks/embedding/model-candidates.json")
 SUPPORTED_ENGINES = frozenset({"sentence-transformers", "onnx"})
 
 

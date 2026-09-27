@@ -1962,7 +1962,7 @@ def test_benchmark_campaign_helper_builds_dry_run_plan(
     )
     config = helper.CampaignConfig(
         manifest=manifest,
-        artifact_root=tmp_path / ".artifacts" / "benchmarks",
+        artifact_root=tmp_path / ".artifacts" / "benchmarks" / "campaigns",
         run_id="20260430T120000Z",
         codira="/tmp/codira/.venv/bin/codira",
         hyperfine="hyperfine",
@@ -2045,7 +2045,8 @@ def test_benchmark_campaign_helper_builds_dry_run_plan(
     assert any("cProfile" in command for command in display_commands)
     assert all("--output-dir" in command for command in display_commands)
     assert any(
-        ".artifacts/benchmarks/20260430T120000Z/indexes/small-codira" in command
+        ".artifacts/benchmarks/campaigns/20260430T120000Z/indexes/small-codira"
+        in command
         for command in display_commands
     )
 

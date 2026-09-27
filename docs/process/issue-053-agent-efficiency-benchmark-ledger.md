@@ -816,7 +816,7 @@ reached the scoped-key budget check and stopped with `scoped OpenRouter key
 budget is insufficient`: the key's remaining budget was below the frozen USD
 0.90 pilot minimum. No completion request, model response, or provider-usage
 record was created. The empty stdout artifact is retained at
-`.artifacts/agent-efficiency/codira-efficacy-pilot-002/preflight-r3.json`; the
+`.artifacts/agent-efficiency/campaigns/codira-efficacy-pilot-002/preflight-r3.json`; the
 fresh manifest fingerprint is
 `726589024df160997475bb9f432526d4565fdae2b713788e70c290df99f70448`.
 
@@ -825,7 +825,7 @@ to USD 12.00 while the frozen manifest requires USD 6.00; it was not a provider
 completion or a response/admission result. After the operator reset the scoped
 key to its approved USD 6.00 daily cap, a repeated non-billing Stage 1 preflight
 passed. Its sanitized record is
-`.artifacts/agent-efficiency/codira-efficacy-pilot-002/preflight-r4.json`
+`.artifacts/agent-efficiency/campaigns/codira-efficacy-pilot-002/preflight-r4.json`
 (SHA-256 `fab105bfeb8120a321699f7effb71df3f555772ad5ab211149fa4b29ec48212b`).
 It proves the exact DeepSeek route is key-visible with tools and reasoning,
 the active Saturday/Sunday low-price override is USD 0.15/M prompt and USD

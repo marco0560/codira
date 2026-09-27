@@ -20,6 +20,12 @@ venv/
 !.artifacts/MANIFEST.md
 benchmarks/*
 !benchmarks/MANIFEST.md
+!benchmarks/embedding/
+benchmarks/embedding/*
+!benchmarks/embedding/model-candidates.json
+!benchmarks/retrieval-quality/
+benchmarks/retrieval-quality/*
+!benchmarks/retrieval-quality/repos.local.json
 !benchmarks/agent-efficiency/
 !benchmarks/agent-efficiency/Containerfile.phase0
 !benchmarks/agent-efficiency/Containerfile.phase4

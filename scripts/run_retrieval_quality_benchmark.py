@@ -31,10 +31,10 @@ from scripts.scriptlib import resolve_codira, safe_slug
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
-DEFAULT_DATASET = Path(".artifacts/retrieval-quality/dataset.jsonl")
-DEFAULT_MODEL_MANIFEST = Path("benchmarks/embedding-model-candidates.json")
-DEFAULT_REPO_MANIFEST = Path("benchmarks/retrieval-quality-repos.local.json")
-DEFAULT_ARTIFACT_ROOT = Path(".artifacts/retrieval-quality")
+DEFAULT_DATASET = Path(".artifacts/benchmarks/retrieval-quality/dataset.jsonl")
+DEFAULT_MODEL_MANIFEST = Path("benchmarks/embedding/model-candidates.json")
+DEFAULT_REPO_MANIFEST = Path("benchmarks/retrieval-quality/repos.local.json")
+DEFAULT_ARTIFACT_ROOT = Path(".artifacts/benchmarks/retrieval-quality/runs")
 BACKENDS = (*CONCRETE_BACKENDS, "both")
 PATH_KEYS = frozenset({"file", "path", "file_path"})
 

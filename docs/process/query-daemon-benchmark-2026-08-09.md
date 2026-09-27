@@ -43,4 +43,4 @@ uv run python scripts/benchmark_query_daemon.py --runs 10
 ```
 
 The script refuses to overlap an existing endpoint and writes a timestamped
-artifact to `.artifacts/benchmarks/` unless `--output` is supplied.
+artifact to `.artifacts/benchmarks/campaigns/` unless `--output` is supplied.

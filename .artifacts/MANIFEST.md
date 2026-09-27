@@ -1,26 +1,32 @@
 # Generated artifact directory manifest
 
-This directory contains ignored run output and local runtime state. Except for
-this manifest and explicitly approved summaries, its contents stay untracked.
+This directory contains ignored run output and local runtime state. Keep its
+contents untracked except for this manifest and explicitly approved summaries.
 Do not move or delete files in an experiment identity without explicit operator
 approval. See the [retention review](../docs/process/artifact-retention-review-2026-09-27.md)
-for the completed cache cleanup and keep-versus-summarize decisions.
+for the completed cache cleanup and detailed keep-versus-summarize decisions.
 
-## Current groups
+## Directory map
 
-| Path or naming pattern | Contents | Default handling |
+| Path | Contents | Default handling |
 | --- | --- | --- |
-| `ae/<identity>/` | Agent-efficiency factory output, receipts, attempt state, fixture copies, records, provider responses, and attempt workspaces | Preserve as immutable evidence. Do not rewrite, merge, or retry an identity. |
-| `agent-efficiency/` | Campaign-generation and execution artifacts, gates, and handoffs | Preserve manifests, receipts, logs, response evidence, records, and terminal status. |
-| `*T*Z-bk-*/` | Dated backend performance campaigns | Preserve campaign plans, selection data, Hyperfine JSON, phase timings, summaries, profiles, and logs. |
-| `semantic-pipeline-*/` | Semantic pipeline campaign inputs, measurements, corrections, recovery attempts, and reruns | Keep separate by run identity; do not collapse corrected or recovery runs into one directory. |
-| `retrieval-quality/` | Retrieval-quality benchmark datasets and run evidence | Preserve source manifests and measured results; inspect privacy and provenance before sharing. |
-| `validation/`, `*-gate-*.log`, `*-gate-*.exit` | Repository validation output and terminal statuses | Keep recent and failed gate evidence; the log and exit file form one record. |
-| `analysis/`, `callgraphs/` | Derived investigations and generated graphs | Retain while referenced by a report or active work; otherwise review as a group before cleanup. |
-| `worktrees/` | Temporary worktree storage | Check Git worktree registrations and active processes before considering cleanup. |
+| `agent-efficiency/attempts/<identity>/` | Attempt workspaces, records, responses, receipts, and fixture state; moved here from the former `ae/` group | Preserve as immutable evidence. Do not rewrite, merge, or retry an identity. |
+| `agent-efficiency/campaigns/<campaign-id>/` | Factory-generated campaign manifests and launch plans | Preserve each generated identity. |
+| `agent-efficiency/executions/<campaign-id>-execution/` | Execution logs, receipts, preflights, state, and fixture copies | Preserve with the matching campaign and attempt evidence. |
+| `agent-efficiency/environment-images/`, `gates/`, `reviewer-evaluation/` | Prepared image evidence, validation runs, and reviewer evaluations | Keep records grouped by purpose; retain log/exit pairs. |
+| `benchmarks/backend/<run-id>/` | Dated backend campaigns and Hyperfine, phase, profile, and selection artifacts | Preserve each run and its detailed measurement files. |
+| `benchmarks/campaigns/<run-id>/` | Output from the generic benchmark campaign runner | Keep the run plan, result data, and logs together. |
+| `benchmarks/experiments/` | Issue 55 concurrency runs and vector-store authority investigation | Keep each named experiment together. |
+| `benchmarks/embedding/runs/` | Embedding model campaign outputs | Keep generated configs, measurements, and reports together by timestamp. |
+| `benchmarks/retrieval-quality/` | Retrieval-quality dataset and timestamped runs | Preserve dataset provenance and measured results. |
+| `benchmarks/release/` | Release-oriented Hyperfine trace | Keep the trace with release review records. |
+| `benchmarks/semantic-pipeline/<run-id>/` | Semantic-pipeline campaigns, corrections, recovery, and reruns | Preserve separate run identities; do not consolidate similar runs. |
+| `validation/repo-gates/` | Repository-gate logs and exit statuses | Keep each log with its terminal status. |
+| `analysis/`, `callgraphs/`, `worktrees/` | Derived investigations, generated graphs, and temporary worktrees | Retain while referenced; check active worktree registrations before cleanup. |
 
-Names are intentionally listed as patterns because each run directory is an
-immutable identity. Use the dated retention review before proposing removal.
+Historical generated receipts and campaign manifests retain path values from
+when each run occurred. Current scripts and documentation use the grouped paths
+above; do not rewrite immutable run contents to change historical provenance.
 
 ## Rules
 
@@ -29,9 +35,9 @@ immutable identity. Use the dated retention review before proposing removal.
   does not replace these audit records by default.
 - Keep logs with their exit-status file. The logs are small relative to the
   dataset and may contain the cause of a failed or unusual run.
-- The reviewed per-attempt `uv-cache` directories were removed after explicit
-  approval and confirmation that their prepared image caches remain available.
-  Keep the image caches and all other attempt evidence; review any different
-  cache group separately before proposing cleanup.
+- The reviewed per-attempt `uv-cache` copies were removed after approval and
+  confirmation that the prepared image caches remain available. Keep those
+  image caches and all other attempt evidence. Review any different cache group
+  separately before proposing cleanup.
 - Keep this directory ignored. Only this manifest and approved, sanitized
   summaries may be tracked; do not unignore raw runtime trees.

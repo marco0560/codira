@@ -22,7 +22,7 @@ not Python development dependencies.
 Benchmark artifacts are written under:
 
 ```text
-.artifacts/benchmarks/<run-id>/
+.artifacts/benchmarks/campaigns/<run-id>/
 ```
 
 Saved JSON artifacts include:
@@ -38,14 +38,14 @@ Saved JSON artifacts include:
 Profile artifacts are written under:
 
 ```text
-.artifacts/benchmarks/<run-id>/profiles/
+.artifacts/benchmarks/campaigns/<run-id>/profiles/
 ```
 
 Codira index state for campaign commands is isolated from each target
 repository and written under:
 
 ```text
-.artifacts/benchmarks/<run-id>/indexes/<category-label>/
+.artifacts/benchmarks/campaigns/<run-id>/indexes/<category-label>/
 ```
 
 The campaign runner passes this directory through `--output-dir` for `index`
@@ -171,7 +171,7 @@ Resolution rules:
 The selector writes one JSON provenance artifact per repository under:
 
 ```text
-.artifacts/benchmarks/<run-id>/selection/
+.artifacts/benchmarks/campaigns/<run-id>/selection/
 ```
 
 These artifacts record:
@@ -215,9 +215,9 @@ backends before broad campaigns:
 
 ```bash
 CODIRA_INDEX_BACKEND=sqlite python scripts/benchmark_campaign.py \
-  benchmarks/short_benchmark.local.json --run-id issue-30-short-sqlite
+  benchmarks/performance/short_benchmark.local.json --run-id issue-30-short-sqlite
 CODIRA_INDEX_BACKEND=duckdb python scripts/benchmark_campaign.py \
-  benchmarks/short_benchmark.local.json --run-id issue-30-short-duckdb
+  benchmarks/performance/short_benchmark.local.json --run-id issue-30-short-duckdb
 ```
 
 Capture the resulting artifact paths in the branch execution ledger before

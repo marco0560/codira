@@ -9,8 +9,8 @@
 | `tests/` | Behavioral and contract validation |
 | `docs/` | Documentation, architecture, ADRs |
 | `scripts/` | Development and process tooling |
-| `.artifacts/` | Generated measurement artifacts |
-| `benchmarks/` | Measurement-campaign manifests |
+| `.artifacts/` | Generated measurements grouped by agent-efficiency, benchmark family, and validation purpose |
+| `benchmarks/` | Inputs grouped by agent-efficiency, embedding, retrieval-quality, performance, and semantic-pipeline |
 
 For directory layout and retention guidance, read [`benchmarks/MANIFEST.md`](benchmarks/MANIFEST.md)
 and [`.artifacts/MANIFEST.md`](.artifacts/MANIFEST.md). The latter also links

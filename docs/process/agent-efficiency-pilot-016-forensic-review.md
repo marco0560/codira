@@ -135,7 +135,8 @@ runner machinery.
 Codira evidence: [Pilot 016 post-mortem](agent-efficiency-pilot-016-postmortem-2026-09-25.md),
 [calibration handoff](agent-efficiency-calibration-handoff-2026-09-20.md), and
 [Issue #53 execution ledger](issue-053-agent-efficiency-benchmark-ledger.md).
-Raw records and provider responses remain in ignored `.artifacts/ae/016/`
+Raw records and provider responses remain in ignored
+`.artifacts/agent-efficiency/attempts/016/`
 state; this review does not duplicate them into Git.
 
 The supplied ChatGPT conversation at

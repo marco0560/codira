@@ -18,9 +18,9 @@ pair has an assisted oracle failure, and the patch pair has an assisted oracle
 failure plus a baseline local request-cap failure.
 
 The canonical public-safe report generated from the immutable records is in
-ignored runtime state at `.artifacts/ae/016/report/report.md` and
-`.artifacts/ae/016/report/report.json`. The six raw attempt records and exact
-provider responses remain under `.artifacts/ae/016/x/state/`; they are
+ignored runtime state at `.artifacts/agent-efficiency/attempts/016/report/report.md` and
+`.artifacts/agent-efficiency/attempts/016/report/report.json`. The six raw attempt records and exact
+provider responses remain under `.artifacts/agent-efficiency/attempts/016/x/state/`; they are
 intentionally not tracked by Git.
 
 ## Attempt-by-attempt result
@@ -91,12 +91,12 @@ Pilot 016 or reinterpret its incomplete pair as a pass/fail comparison.
 ## Durable evidence and validation
 
 - Versioned input: `benchmarks/agent-efficiency/campaign-specs/codira-efficacy-pilot-016.json`
-- Generated manifest, plan, and launch receipt: `.artifacts/ae/016/factory/` and `.artifacts/ae/016/x/launch-receipt.json`
-- Preflight: `.artifacts/ae/016/x/preflight.json` (passed before launch)
-- Attempt records and exact provider responses: `.artifacts/ae/016/x/state/`
-- Pilot exit: `.artifacts/ae/016/x/pilot.exit` (0)
-- Full repository gate: `.artifacts/ae/016/validation-r11.log` and
-  `.artifacts/ae/016/validation-r11.exit` (`1145 passed, 4 skipped`; exit 0)
+- Generated manifest, plan, and launch receipt: `.artifacts/agent-efficiency/attempts/016/factory/` and `.artifacts/agent-efficiency/attempts/016/x/launch-receipt.json`
+- Preflight: `.artifacts/agent-efficiency/attempts/016/x/preflight.json` (passed before launch)
+- Attempt records and exact provider responses: `.artifacts/agent-efficiency/attempts/016/x/state/`
+- Pilot exit: `.artifacts/agent-efficiency/attempts/016/x/pilot.exit` (0)
+- Full repository gate: `.artifacts/agent-efficiency/attempts/016/validation-r11.log` and
+  `.artifacts/agent-efficiency/attempts/016/validation-r11.exit` (`1145 passed, 4 skipped`; exit 0)
 
 These ignored artifacts preserve operational evidence locally. This tracked
 post-mortem preserves the analysis without copying raw provider responses or

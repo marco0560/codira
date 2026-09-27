@@ -39,9 +39,9 @@ scripts/agent_efficiency/oracles.py:599 PLR0913 — the public oracle boundary
     grading remains deterministic and auditable.
 scripts/run_retrieval_quality_benchmark.py:617,913 PLR0913 — result rows and
     benchmark groups preserve explicit provenance and execution inputs.
-scripts/run_final_embedding_model_campaign.py:430,575,640,791 PLR0913 — the
+scripts/run_final_embedding_model_campaign.py:432,577,642,793 PLR0913 — the
     release-campaign artifact functions retain independently auditable inputs.
-scripts/run_final_embedding_model_campaign.py:858 C901,PLR0912 — CLI phase
+scripts/run_final_embedding_model_campaign.py:860 C901,PLR0912 — CLI phase
     dispatch is intentionally linear so every restart/checkpoint branch remains visible.
 scripts/characterize_similarity_indexes.py:306 PLR0913 — the reproducible
     corpus runner keeps independently selectable corpus and timing inputs.
@@ -126,9 +126,9 @@ fixtures/packages/codira-backend-duckdb/src/full_index_bulk_violation.py:39 N802
     trigger the Semgrep rule.
 
 Location aliases for the grouped entries above:
-scripts/run_final_embedding_model_campaign.py:575,
-scripts/run_final_embedding_model_campaign.py:640,
-scripts/run_final_embedding_model_campaign.py:791,
+scripts/run_final_embedding_model_campaign.py:577,
+scripts/run_final_embedding_model_campaign.py:642,
+scripts/run_final_embedding_model_campaign.py:793,
 scripts/run_retrieval_quality_benchmark.py:913,
 src/codira/docstring.py:1019, src/codira/docstring.py:1114,
 src/codira/index_generation.py:115,

@@ -40,7 +40,7 @@ COPY packages/codira-analyzer-json /opt/codira-analyzer-json
 COPY packages/codira-analyzer-markdown /opt/codira-analyzer-markdown
 COPY packages/codira-analyzer-bash /opt/codira-analyzer-bash
 COPY packages/codira-analyzer-text /opt/codira-analyzer-text
-COPY benchmarks/embedding-model-candidates.json /opt/codira/embedding-model-candidates.json
+COPY benchmarks/embedding/model-candidates.json /opt/codira/embedding-model-candidates.json
 COPY scripts/download_embedding_model.py /opt/codira/scripts/download_embedding_model.py
 COPY scripts/embedding_model_manifest.py /opt/codira/scripts/embedding_model_manifest.py
 COPY scripts/scriptlib.py /opt/codira/scripts/scriptlib.py

@@ -87,11 +87,11 @@ snippets for the selected embedding engine/model entry.
 ## `scripts/download_embedding_model.py`
 
 Download and smoke-test model artifacts named in
-`benchmarks/embedding-model-candidates.json`:
+`benchmarks/embedding/model-candidates.json`:
 
 ```bash
 uv run python scripts/download_embedding_model.py \
-  --manifest benchmarks/embedding-model-candidates.json \
+  --manifest benchmarks/embedding/model-candidates.json \
   --anonymous --allow-remote-code
 ```
 
@@ -124,8 +124,8 @@ commit history as the deterministic fallback:
 
 ```bash
 uv run python -m scripts.build_retrieval_quality_dataset \
-  --repo-manifest benchmarks/retrieval-quality-repos.local.json \
-  --output .artifacts/retrieval-quality/dataset.jsonl \
+  --repo-manifest benchmarks/retrieval-quality/repos.local.json \
+  --output .artifacts/benchmarks/retrieval-quality/dataset.jsonl \
   --source git
 ```
 
@@ -147,16 +147,16 @@ Run model quality measurements against a dataset produced by
 
 ```bash
 uv run python -m scripts.run_retrieval_quality_benchmark \
-  --dataset .artifacts/retrieval-quality/dataset.jsonl \
-  --repo-manifest benchmarks/retrieval-quality-repos.local.json \
-  --model-manifest benchmarks/embedding-model-candidates.json \
+  --dataset .artifacts/benchmarks/retrieval-quality/dataset.jsonl \
+  --repo-manifest benchmarks/retrieval-quality/repos.local.json \
+  --model-manifest benchmarks/embedding/model-candidates.json \
   --backend sqlite \
   --top-k 10
 ```
 
 The runner writes generated configs, isolated `.codira` output directories,
 logs, `results.jsonl`, `summary.json`, and `report.md` under
-`.artifacts/retrieval-quality/<timestamp>/`. It uses `codira emb` by default
+`.artifacts/benchmarks/retrieval-quality/runs/<timestamp>/`. It uses `codira emb` by default
 and records `Recall@K`, `MRR@K`, `nDCG@K`, hit rate, index time, and query
 time. Add `--include-ctx` only when the mixed `ctx` retrieval behavior is also
 part of the quality question.
@@ -166,7 +166,7 @@ after scorer changes, run:
 
 ```bash
 uv run python -m scripts.run_retrieval_quality_benchmark \
-  --rescore-results .artifacts/retrieval-quality/<timestamp>/results.jsonl
+  --rescore-results .artifacts/benchmarks/retrieval-quality/runs/<timestamp>/results.jsonl
 ```
 
 This benchmark performs full indexing unless `--no-full` is supplied. Do not
@@ -179,15 +179,15 @@ Run the final engine/model measuring campaign:
 
 ```bash
 uv run python -m scripts.run_final_embedding_model_campaign \
-  --manifest benchmarks/uv-backed-repos.local.json \
-  --model-manifest benchmarks/embedding-model-candidates.json \
+  --manifest benchmarks/embedding/uv-backed-repos.local.json \
+  --model-manifest benchmarks/embedding/model-candidates.json \
   --backend duckdb \
   --runs 5 \
   --warmup 1
 ```
 
 The wrapper writes artifacts under
-`.artifacts/final-embedding-model-campaign/<timestamp>/`, first runs
+`.artifacts/benchmarks/embedding/runs/<timestamp>/`, first runs
 `scripts/download_embedding_model.py` against the model manifest, records the
 optional baseline path and manifests, writes one generated config per
 model/backend under the artifact directory, and passes that config to benchmark
@@ -228,7 +228,7 @@ The campaign runner builds phase-timing, Hyperfine, cProfile, and optional
 Pyinstrument command plans for each configured repository. Full-index profiling
 comes from the phase-timing helper; cProfile and Pyinstrument are reserved for
 context retrieval. Use `--dry-run` to write and inspect
-`.artifacts/benchmarks/<run-id>/campaign-plan.json` without executing benchmark
+`.artifacts/benchmarks/campaigns/<run-id>/campaign-plan.json` without executing benchmark
 commands. `--dry-run` still validates the manifest before printing the plan. The
 dry run still performs the adaptive discovery pass used to resolve
 repo-specific benchmark commands.
@@ -282,8 +282,8 @@ adaptive discovery pass for each repository:
 
 Discovery index state is the same artifact index used by the later warm-index
 and query measurements. Selector provenance is persisted under
-`.artifacts/benchmarks/<run-id>/selection/*.json`, discovery command output is
-persisted under `.artifacts/benchmarks/<run-id>/logs/discovery/`, and the
+`.artifacts/benchmarks/campaigns/<run-id>/selection/*.json`, discovery command output is
+persisted under `.artifacts/benchmarks/campaigns/<run-id>/logs/discovery/`, and the
 resolved or skipped commands are also recorded in `campaign-plan.json`.
 
 Full-index timing is therefore recorded once and written to
@@ -302,9 +302,10 @@ python scripts/benchmark_campaign.py benchmarks.json --runs 5 --warmup 0
 
 ## `scripts/run_manifest_baseline.py`
 
-Run the paired SQLite and DuckDB `benchmarks/bk-cpp.local.json` torture
-baseline with fixed runtime environment defaults, `--artifact-root .artifacts`,
-and `--continue-on-error`.
+Run the paired SQLite and DuckDB `benchmarks/performance/bk-cpp.local.json`
+torture baseline with fixed runtime environment defaults. Results default to
+`.artifacts/benchmarks/backend/`; set `ARTIFACT_ROOT` to override that root.
+The runner continues after individual benchmark failures.
 
 ```bash
 uv run python -m scripts.run_manifest_baseline --runs 5 --warmup 1
@@ -320,7 +321,7 @@ Run the release-oriented Hyperfine benchmark plan for `codira index --full`,
 `codira ctx --json`, and `codira audit --json`.
 
 The default result file is
-`.artifacts/benchmarks/release-hyperfine.json`. Use `--dry-run` to inspect the
+`.artifacts/benchmarks/release/release-hyperfine.json`. Use `--dry-run` to inspect the
 exact Hyperfine invocation before measuring.
 
 ## `scripts/release_audit.py`

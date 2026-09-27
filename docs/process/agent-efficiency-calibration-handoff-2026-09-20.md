@@ -89,8 +89,9 @@ Relevant changed files:
 ## Calibration evidence
 
 All calibration specs are factory inputs in
-`benchmarks/agent-efficiency/campaign-specs/`; their generated artifacts and
-execution evidence are under `.artifacts/agent-efficiency/`.
+`benchmarks/agent-efficiency/campaign-specs/`; their generated manifests and
+execution evidence are under `.artifacts/agent-efficiency/campaigns/` and
+`.artifacts/agent-efficiency/executions/`.
 
 | Identity | Result | Meaning |
 | --- | --- | --- |
@@ -102,8 +103,8 @@ execution evidence are under `.artifacts/agent-efficiency/`.
 `calibration-010` exact artifacts:
 
 - factory input: `benchmarks/agent-efficiency/campaign-specs/codira-efficacy-calibration-010.json`
-- generated campaign: `.artifacts/agent-efficiency/codira-efficacy-calibration-010/`
-- execution receipt/log/preflight: `.artifacts/agent-efficiency/codira-efficacy-calibration-010-execution/`
+- generated campaign: `.artifacts/agent-efficiency/campaigns/codira-efficacy-calibration-010/`
+- execution receipt/log/preflight: `.artifacts/agent-efficiency/executions/codira-efficacy-calibration-010-execution/`
 - record: `/tmp/codira-ae-69b793e7265833ae/records/symbols-001-calibration-codira-mcp.json`
 - event stream and written answer:
   `/tmp/codira-ae-69b793e7265833ae/attempt-work/symbols-001-calibration-codira-mcp/`
@@ -246,7 +247,7 @@ nonexistent `pm.matcher` export; a package-export check or source-backed
 directive should have prevented that call.
 
 The exact records, response bodies, and replay evidence remain immutable under
-`.artifacts/agent-efficiency/codira-efficacy-pilot-006-execution/` and
+`.artifacts/agent-efficiency/executions/codira-efficacy-pilot-006-execution/` and
 `/tmp/codira-ae-ac494e2b429a2c64/`. Pilot 006 is not a valid paired efficacy
 result and must not be retried under the same identity.
 
@@ -279,7 +280,8 @@ symbols and patch attempts failed their frozen task oracles, while the
 baseline patch attempt hit the local 25-logical-request limit after 25
 upstream HTTP 200 responses. It was not an upstream 429.
 
-Do not retry either campaign identity. Keep `.artifacts/ae/016/` intact as
+Do not retry either campaign identity. Keep
+`.artifacts/agent-efficiency/attempts/016/` intact as
 local immutable evidence. The versioned Pilot 016 input and tracked
 post-mortem are durable; raw responses, records, and generated reports remain
 ignored runtime evidence. The full validation gate passed with `1145 passed,
@@ -293,12 +295,19 @@ authorization sequence.
 ## Directory and artifact retention update — 2026-09-27
 
 Added navigation and retention manifests for `benchmarks/` and `.artifacts/`,
-referenced from `AGENTS.md`. The dated review is
+referenced from `AGENTS.md`, and physically grouped both trees by benchmark
+family and artifact role. Benchmark inputs are under `benchmarks/agent-efficiency/`,
+`embedding/`, `retrieval-quality/`, `performance/`, and `semantic-pipeline/`;
+runtime records are under `.artifacts/agent-efficiency/`,
+`.artifacts/benchmarks/`, and `.artifacts/validation/`. Live script, test,
+documentation, and local-only manifest paths were migrated. Existing run leaf
+names and contents were preserved, and immutable generated records retain
+their historical path values. The dated review is
 [`artifact-retention-review-2026-09-27.md`](artifact-retention-review-2026-09-27.md).
 The review found that repeated per-attempt `uv-cache` trees are the only
 plausible cleanup candidate; raw campaign, response, task, and failure evidence
-remains protected. No run directories were moved. After explicit approval, the
-nineteen identified attempt-local cache directories were removed; the three
+remains protected. After explicit approval, the nineteen identified
+attempt-local cache directories were removed; the three
 matching prepared image digests and their offline fixture caches remain
 available. The artifact directory measured about 222 GiB before cleanup and
 about 86 GiB afterward. The manifests, review, and this handoff update contain
