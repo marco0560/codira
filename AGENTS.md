@@ -12,6 +12,13 @@
 | `.artifacts/` | Generated measurement artifacts |
 | `benchmarks/` | Measurement-campaign manifests |
 
+For directory layout and retention guidance, read [`benchmarks/MANIFEST.md`](benchmarks/MANIFEST.md)
+and [`.artifacts/MANIFEST.md`](.artifacts/MANIFEST.md). The latter also links
+the dated artifact-retention review. Treat campaign/run paths as immutable
+identities; do not move or delete their contents without explicit operator
+approval. Keep raw measurement and attempt evidence unless an approved cleanup
+replaces it with the documented summary.
+
 The core pipeline is `CLI → indexer → query → analyzer → tests`. Keep scanner,
 indexer, query, and CLI responsibilities separate. Plugins are independently
 distributed extensions discovered through `registry.py`; do not move their logic

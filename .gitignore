@@ -15,7 +15,11 @@ venv/
 # Build artifacts
 # -------------------------------
 .artifacts/
+!.artifacts/
+.artifacts/*
+!.artifacts/MANIFEST.md
 benchmarks/*
+!benchmarks/MANIFEST.md
 !benchmarks/agent-efficiency/
 !benchmarks/agent-efficiency/Containerfile.phase0
 !benchmarks/agent-efficiency/Containerfile.phase4
