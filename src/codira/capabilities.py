@@ -705,7 +705,7 @@ def _plugin_payloads(*, root: Path | None = None) -> list[dict[str, object]]:
     ]
 
 
-def _mcp_payload() -> dict[str, object]:
+def _mcp_payload(root: Path | None = None) -> dict[str, object]:
     """Build the discoverable local MCP interface summary.
 
     Returns
@@ -713,7 +713,7 @@ def _mcp_payload() -> dict[str, object]:
     dict[str, object]
         Stable MCP server metadata derived from the public MCP contract.
     """
-    contract = build_contract_document()
+    contract = build_contract_document(root=root)
     tools = contract["tools"]
     if not isinstance(tools, list):
         msg = "MCP contract tools must be a list"
@@ -730,6 +730,11 @@ def _mcp_payload() -> dict[str, object]:
         "transport": contract["transport"],
         "read_only": contract["read_only"],
         "tools": tool_names,
+        "parameters": {
+            str(tool["name"]): tool["request_schema"]
+            for tool in tools
+            if isinstance(tool, dict)
+        },
     }
 
 
@@ -858,7 +863,7 @@ def build_capability_contract(
         "retrieval_producers": _retrieval_producer_payloads(),
         "plugin_families": _plugin_family_payloads(),
         "plugins": _plugin_payloads(root=root),
-        "mcp": _mcp_payload(),
+        "mcp": _mcp_payload(root=root),
         "query_daemon": _query_daemon_payload(root),
         "python_target": {
             **target_contract.payload(),

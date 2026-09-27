@@ -6,6 +6,8 @@ requests never accept repository paths and delegate directly to core APIs.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -38,9 +40,10 @@ from codira.query.exact import (
     find_call_edges,
     find_callable_refs,
     find_symbol,
+    logical_symbol_name,
     symbol_inventory,
 )
-from codira.registry import active_index_backend
+from codira.registry import active_index_backend, active_similarity_search_profile
 from codira.semantic.search import (
     DocumentationCandidatesRequest,
     EmbeddingCandidatesRequest,
@@ -158,7 +161,7 @@ class MCPAdapter:
         """
         return self._envelope(
             {
-                "mcp": build_contract_document(),
+                "mcp": build_contract_document(root=self.root),
                 "codira": build_capability_contract(root=self.root),
             }
         )
@@ -466,7 +469,12 @@ class MCPAdapter:
         )
 
     def context_for_task(
-        self, query: str, *, output_budget: int = DEFAULT_OUTPUT_BUDGET
+        self,
+        query: str,
+        *,
+        cursor: str | None = None,
+        limit: int = 10,
+        search_profile: str | None = None,
     ) -> dict[str, object]:
         """Build deterministic repository context for one natural-language task.
 
@@ -474,21 +482,44 @@ class MCPAdapter:
         ----------
         query : str
             Task description used by Codira's context retrieval pipeline.
-        output_budget : int, optional
-            Maximum serialized character count reported for the result.
+        cursor : str | None, optional
+            Continuation cursor emitted for this exact query and index generation.
+        limit : int, optional
+            Maximum number of complete match and evidence items to return.
+        search_profile : str | None, optional
+            Configured similarity-search profile; ``None`` selects ``default``.
 
         Returns
         -------
         dict[str, object]
             Contract envelope containing the structured direct-core context.
+
+        Raises
+        ------
+        ValueError
+            If the result limit, profile name, or continuation cursor is invalid.
+        TypeError
+            If the core context response contains malformed paging data.
         """
-        context = json.loads(
-            self._query(
-                lambda conn: context_for(
+        self._validate_limit(limit)
+        active_similarity_search_profile(root=self.root, name=search_profile)
+        offset = self._context_cursor_offset(
+            cursor, query=query, limit=limit, search_profile=search_profile
+        )
+
+        def _retrieve(
+            conn: BackendQueryConnection | None,
+        ) -> dict[str, object]:
+            context = json.loads(
+                context_for(
                     ContextRequest(
                         root=self.root,
                         query=query,
                         as_json=True,
+                        search_profile=search_profile,
+                        result_offset=offset,
+                        result_limit=limit,
+                        complete_context_items=True,
                         conn=conn,
                         max_source_file_bytes=(
                             load_effective_config(
@@ -498,8 +529,66 @@ class MCPAdapter:
                     )
                 )
             )
+            matches = cast("list[dict[str, object]]", context.get("top_matches", []))
+            evidence = cast("list[list[str]]", context.get("context", []))
+            items: list[dict[str, object]] = []
+            for index, match in enumerate(matches):
+                item = dict(match)
+                if item.get("type") == "method":
+                    line_number = item.get("lineno")
+                    if not isinstance(line_number, int):
+                        message = "Core context match returned an invalid line number"
+                        raise TypeError(message)
+                    row: SymbolRow = (
+                        str(item["type"]),
+                        str(item["module"]),
+                        str(item["name"]),
+                        str(item["file"]),
+                        line_number,
+                    )
+                    qualified_name = logical_symbol_name(self.root, row, conn=conn)
+                    item["qualified_name"] = qualified_name
+                    item["owner"] = qualified_name.rpartition(".")[0]
+                item["evidence"] = evidence[index] if index < len(evidence) else []
+                items.append(item)
+            page_info = cast("dict[str, object]", context.get("page", {}))
+            return {
+                "status": context.get("status"),
+                "items": items,
+                "_total": page_info.get("total", 0),
+            }
+
+        result = self._query(_retrieve)
+        total_value = result.pop("_total", 0)
+        if not isinstance(total_value, int):
+            message = "Core context page returned an invalid total count"
+            raise TypeError(message)
+        total = total_value
+        next_offset = offset + len(cast("list[object]", result["items"]))
+        has_more = next_offset < total
+        next_cursor = (
+            self._encode_context_cursor(
+                query=query,
+                limit=limit,
+                search_profile=search_profile,
+                offset=next_offset,
+            )
+            if has_more
+            else None
         )
-        return self._envelope({"context": context}, output_budget=output_budget)
+        page: dict[str, object] = {
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+        }
+        return self._envelope(
+            result,
+            page=page,
+            truncation={"truncated": False, "reasons": []},
+            output_budget=None,
+        )
 
     def impact_analysis(
         self,
@@ -1033,7 +1122,7 @@ class MCPAdapter:
         *,
         page: dict[str, object] | None = None,
         truncation: dict[str, object] | None = None,
-        output_budget: int = DEFAULT_OUTPUT_BUDGET,
+        output_budget: int | None = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Wrap a direct core result in the common MCP response envelope.
 
@@ -1051,16 +1140,19 @@ class MCPAdapter:
         dict[str, object]
             Versioned response envelope with provenance and freshness metadata.
         """
-        self._validate_output_budget(output_budget)
-        estimated_output_size = len(json.dumps(result, sort_keys=True))
-        resolved_truncation = {
-            "truncated": estimated_output_size > output_budget,
-            "reasons": (
-                ["output_budget"] if estimated_output_size > output_budget else []
-            ),
-            "output_budget": output_budget,
-            "estimated_output_size": estimated_output_size,
-        }
+        if output_budget is None:
+            resolved_truncation = {"truncated": False, "reasons": []}
+        else:
+            self._validate_output_budget(output_budget)
+            estimated_output_size = len(json.dumps(result, sort_keys=True))
+            resolved_truncation = {
+                "truncated": estimated_output_size > output_budget,
+                "reasons": (
+                    ["output_budget"] if estimated_output_size > output_budget else []
+                ),
+                "output_budget": output_budget,
+                "estimated_output_size": estimated_output_size,
+            }
         if truncation is not None:
             resolved_truncation.update(truncation)
         generation = self._ready_generation_record()
@@ -1179,6 +1271,109 @@ class MCPAdapter:
             raise ValueError(msg)
         return int(value)
 
+    def _context_cursor_offset(
+        self,
+        cursor: str | None,
+        *,
+        query: str,
+        limit: int,
+        search_profile: str | None,
+    ) -> int:
+        """Validate and decode a cursor bound to one context search.
+
+        Parameters
+        ----------
+        cursor : str | None
+            Continuation cursor emitted by a prior context response.
+        query : str
+            Exact natural-language query for this page sequence.
+        limit : int
+            Page size for this sequence.
+        search_profile : str | None
+            Selected similarity-search profile.
+
+        Returns
+        -------
+        int
+            Offset of the next context item.
+
+        Raises
+        ------
+        ValueError
+            If the cursor is malformed or belongs to another search state.
+        """
+        if cursor is None or cursor == "":
+            return 0
+        prefix, separator, encoded = cursor.partition(":")
+        if prefix != "ctx" or not separator:
+            message = "cursor must be a context continuation cursor"
+            raise ValueError(message)
+        try:
+            payload = json.loads(base64.urlsafe_b64decode(encoded + "=="))
+        except (ValueError, json.JSONDecodeError) as error:
+            message = "context cursor is malformed"
+            raise ValueError(message) from error
+        expected = {
+            "root": str(self.root),
+            "query": hashlib.sha256(query.encode("utf-8")).hexdigest(),
+            "profile": search_profile or "default",
+            "limit": limit,
+            "generation": self._generation(),
+        }
+        if not isinstance(payload, dict) or any(
+            payload.get(key) != value for key, value in expected.items()
+        ):
+            message = "context cursor does not match this query or index"
+            raise ValueError(message)
+        offset = payload.get("offset")
+        if not isinstance(offset, int) or offset < 0:
+            message = "context cursor offset is invalid"
+            raise ValueError(message)
+        return offset
+
+    def _encode_context_cursor(
+        self,
+        *,
+        query: str,
+        limit: int,
+        search_profile: str | None,
+        offset: int,
+    ) -> str:
+        """Encode a stable continuation cursor for one context page sequence.
+
+        Parameters
+        ----------
+        query : str
+            Exact natural-language query for this sequence.
+        limit : int
+            Page size for this sequence.
+        search_profile : str | None
+            Selected similarity-search profile.
+        offset : int
+            Next item offset.
+
+        Returns
+        -------
+        str
+            URL-safe opaque context cursor.
+        """
+        payload = {
+            "root": str(self.root),
+            "query": hashlib.sha256(query.encode("utf-8")).hexdigest(),
+            "profile": search_profile or "default",
+            "limit": limit,
+            "generation": self._generation(),
+            "offset": offset,
+        }
+        encoded = (
+            base64.urlsafe_b64encode(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+            )
+            .decode()
+            .rstrip("=")
+        )
+        return f"ctx:{encoded}"
+
     def _embedding_payload(
         self,
         match: ScoredSymbol,
@@ -1205,6 +1400,11 @@ class MCPAdapter:
             "file": self._trusted_relative_path(file_path),
             "line": lineno,
         }
+        if symbol_type == "method":
+            row: SymbolRow = (symbol_type, module, name, file_path, lineno)
+            qualified_name = logical_symbol_name(self.root, row)
+            payload["qualified_name"] = qualified_name
+            payload["owner"] = qualified_name.rpartition(".")[0]
         if resolved is not None:
             payload["similarity"] = similarity_candidate_provenance_payload(
                 resolved.candidate
@@ -1274,13 +1474,18 @@ class MCPAdapter:
             Named, JSON-compatible structural symbol fields.
         """
         kind, module, name, file, line = row
-        return {
+        payload = {
             "module": module,
             "name": name,
             "kind": kind,
             "file": self._trusted_relative_path(file),
             "line": line,
         }
+        if kind == "method":
+            qualified_name = logical_symbol_name(self.root, row)
+            payload["qualified_name"] = qualified_name
+            payload["owner"] = qualified_name.rpartition(".")[0]
+        return payload
 
     @staticmethod
     def _coverage_payload(issue: CoverageIssue) -> dict[str, object]:
@@ -1408,7 +1613,7 @@ class MCPAdapter:
         dict[str, object]
             JSON-compatible symbol and graph-metric fields.
         """
-        return {
+        payload: dict[str, object] = {
             "type": item.symbol_type,
             "module": item.module,
             "name": item.name,
@@ -1419,6 +1624,18 @@ class MCPAdapter:
             "references_out": self._graph_metric_payload(item.refs_out),
             "references_in": self._graph_metric_payload(item.refs_in),
         }
+        if item.symbol_type == "method":
+            row: SymbolRow = (
+                item.symbol_type,
+                item.module,
+                item.name,
+                item.file,
+                item.lineno,
+            )
+            qualified_name = logical_symbol_name(self.root, row)
+            payload["qualified_name"] = qualified_name
+            payload["owner"] = qualified_name.rpartition(".")[0]
+        return payload
 
     @staticmethod
     def _relation_payload(

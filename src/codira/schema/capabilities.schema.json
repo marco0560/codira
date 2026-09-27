@@ -221,7 +221,8 @@
         "contract_version",
         "transport",
         "read_only",
-        "tools"
+        "tools",
+        "parameters"
       ],
       "properties": {
         "server_command": { "const": "codira-mcp" },
@@ -233,6 +234,10 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "uniqueItems": true
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": { "type": "object" }
         }
       },
       "additionalProperties": false

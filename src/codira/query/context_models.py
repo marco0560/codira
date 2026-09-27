@@ -377,6 +377,15 @@ class ContextJsonRenderRequest:
         Confidence values keyed by symbol.
     max_source_file_bytes : int, optional
         Command-scoped source-ingestion byte ceiling.
+    result_offset : int, optional
+        Zero-based offset for the selected context page.
+    result_limit : int, optional
+        Maximum number of primary matches in the page.
+    result_total : int, optional
+        Total primary matches before page selection.
+    complete_context_items : bool, optional
+        Whether evidence is rendered for every selected match without token
+        truncation.
     explain : bool, optional
         Whether explain metadata should be included.
     intent : codira.query.classifier.QueryIntent | None, optional
@@ -428,6 +437,10 @@ class ContextJsonRenderRequest:
     diversity: DiversityDiagnostics | None = None
     expansion: ExpansionDiagnostics | None = None
     max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES
+    result_offset: int = 0
+    result_limit: int = 10
+    result_total: int = 0
+    complete_context_items: bool = False
 
 
 @dataclass(frozen=True)
@@ -514,6 +527,15 @@ class MainContextSectionsRequest:
         Cross-reference locations for selected symbols.
     max_source_file_bytes : int, optional
         Command-scoped source-ingestion byte ceiling.
+    result_offset : int, optional
+        Zero-based offset for the selected context page.
+    result_limit : int, optional
+        Maximum number of primary matches in the page.
+    result_total : int, optional
+        Total primary matches before page selection.
+    complete_context_items : bool, optional
+        Whether evidence is rendered for every selected match without token
+        truncation.
     """
 
     lines: list[str]
@@ -606,6 +628,10 @@ class ContextRenderRequest:
     diversity: DiversityDiagnostics | None = None
     expansion: ExpansionDiagnostics | None = None
     max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES
+    result_offset: int = 0
+    result_limit: int = 10
+    result_total: int = 0
+    complete_context_items: bool = False
 
 
 @dataclass(frozen=True)
@@ -630,6 +656,12 @@ class ContextRequest:
     search_profile : str | None, optional
         Named similarity-index runtime profile for embedding and documentation
         retrieval channels. ``None`` selects ``default``.
+    result_offset : int, optional
+        Zero-based offset for selecting one page of ranked context items.
+    result_limit : int, optional
+        Maximum number of ranked context items in this page.
+    complete_context_items : bool, optional
+        Whether JSON output must include evidence for every selected item.
     conn : codira.contracts.BackendQueryConnection | None, optional
         Existing read connection to reuse. When omitted, context retrieval owns
         and closes a direct backend connection.
@@ -644,6 +676,9 @@ class ContextRequest:
     as_prompt: bool = False
     explain: bool = False
     search_profile: str | None = None
+    result_offset: int = 0
+    result_limit: int = 10
+    complete_context_items: bool = False
     conn: BackendQueryConnection | None = None
     max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES
 

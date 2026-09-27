@@ -438,20 +438,36 @@ def create_server(
         )
 
     @server.tool(name="context_for_task")
-    def context_for_task(query: str, output_budget: int = 4_000) -> dict[str, object]:
+    def context_for_task(
+        query: str,
+        cursor: str | None = None,
+        limit: int = 10,
+        search_profile: str | None = None,
+    ) -> dict[str, object]:
         """Build deterministic repository context for one task description.
 
         Parameters
         ----------
         query : str
             Natural-language task description for context retrieval.
+        cursor : str | None, optional
+            Continuation cursor for the same query, profile, and index generation.
+        limit : int, optional
+            Maximum number of complete context items to return.
+        search_profile : str | None, optional
+            Configured similarity-search profile; ``None`` selects ``default``.
 
         Returns
         -------
         dict[str, object]
             Versioned response envelope containing structured task context.
         """
-        return adapter.context_for_task(query, output_budget=output_budget)
+        return adapter.context_for_task(
+            query,
+            cursor=cursor,
+            limit=limit,
+            search_profile=search_profile,
+        )
 
     @server.tool(name="impact_analysis")
     def impact_analysis(

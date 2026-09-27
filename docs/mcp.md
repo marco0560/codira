@@ -12,6 +12,18 @@ documentation embeddings. Both accept a query, optional repository-relative
 `emb purge`, `emb rebuild`, `emb reset`, or any other vector-store maintenance
 operation.
 
+`context_for_task` returns a page of complete ranked items. Each item includes
+its symbol or documentation match and the associated source evidence. Use
+`limit` to set the number of items and pass `page.next_cursor` to continue the
+same query. The cursor is bound to the query, profile, repository, and index
+generation. This tool does not use a character-count output budget. For method
+matches, the item includes both its owner and fully qualified name.
+
+Call `capabilities` to discover the configured `search_profile` values accepted
+by `context_for_task`, `emb`, and `docs`. Omitting the profile selects
+`default`; profiles tune semantic-search retrieval, while `limit` controls the
+number of returned context items.
+
 ## Start in under five minutes
 
 From the repository you want to inspect, build its local index and generate a

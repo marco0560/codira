@@ -126,9 +126,10 @@ def _context_blocks_payload(
     top_matches: list[SymbolRow],
     *,
     max_source_file_bytes: int,
+    complete_items: bool,
 ) -> list[list[str]]:
     """
-    Build bounded enriched context blocks for JSON rendering.
+    Build enriched context blocks for JSON rendering.
 
     Parameters
     ----------
@@ -138,16 +139,20 @@ def _context_blocks_payload(
         Primary ranked symbols.
     max_source_file_bytes : int
         Command-scoped source-ingestion byte ceiling.
+    complete_items : bool
+        Whether to include every selected item without legacy token limits.
 
     Returns
     -------
     list[list[str]]
-        Token-capped enriched context blocks.
+        Enriched context blocks, capped for legacy CLI output when requested.
     """
     context_blocks: list[list[str]] = []
     current_tokens = 0
-
-    for symbol in top_matches[:ENRICHED_CONTEXT_LIMIT]:
+    selected_matches = (
+        top_matches if complete_items else top_matches[:ENRICHED_CONTEXT_LIMIT]
+    )
+    for symbol in selected_matches:
         block = _format_enriched_symbol(
             root,
             symbol,
@@ -155,7 +160,7 @@ def _context_blocks_payload(
             max_source_file_bytes=max_source_file_bytes,
         )
         block_tokens = _approx_token_count(block)
-        if current_tokens + block_tokens > MAX_TOKENS:
+        if not complete_items and current_tokens + block_tokens > MAX_TOKENS:
             break
         context_blocks.append(block)
         current_tokens += block_tokens
@@ -554,6 +559,13 @@ def _render_context_json(
     result: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "status": status,
+        "page": {
+            "offset": request.result_offset,
+            "limit": request.result_limit,
+            "total": request.result_total,
+            "has_more": request.result_offset + len(request.top_matches)
+            < request.result_total,
+        },
         "top_matches": _top_matches_payload(
             request.top_matches,
             request.confidence_map,
@@ -566,6 +578,7 @@ def _render_context_json(
             request.root,
             request.top_matches,
             max_source_file_bytes=request.max_source_file_bytes,
+            complete_items=request.complete_context_items,
         ),
         "module_expansion": _module_expansion_payload(request.expanded),
         "references": [
@@ -639,6 +652,10 @@ def _render_context(
                 provenance=request.provenance,
                 diversity=request.diversity,
                 expansion=request.expansion,
+                result_offset=request.result_offset,
+                result_limit=request.result_limit,
+                result_total=request.result_total,
+                complete_context_items=request.complete_context_items,
             )
         )
 

@@ -78,6 +78,56 @@ def _indexed_repository(root: Path) -> None:
     index_repo(root)
 
 
+def test_context_items_page_complete_evidence_and_method_owner(tmp_path: Path) -> None:
+    """Return complete context items with stable method ownership and cursors.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root used for the indexed sample.
+
+    Returns
+    -------
+    None
+        The test checks item pagination, evidence alignment, method identity,
+        and query-bound continuation validation.
+    """
+    (tmp_path / "widget.py").write_text(
+        "class Widget:\n    def render(self) -> str:\n        return 'ready'\n\n    def render_async(self) -> str:\n        return 'later'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "preview.py").write_text(
+        "class Preview:\n    def render(self) -> str:\n        return 'preview'\n",
+        encoding="utf-8",
+    )
+    active_index_backend().initialize(tmp_path)
+    index_repo(tmp_path)
+    adapter = MCPAdapter(tmp_path)
+
+    symbol = adapter.symbol("render")
+    symbol_result = cast("dict[str, object]", symbol["result"])
+    method = cast("list[dict[str, object]]", symbol_result["symbols"])[0]
+    assert method["qualified_name"] in {"Widget.render", "Preview.render"}
+    assert method["owner"] in {"Widget", "Preview"}
+
+    first = adapter.context_for_task("render method", limit=1)
+    page = cast("dict[str, object]", first["page"])
+    first_result = cast("dict[str, object]", first["result"])
+    items = cast("list[dict[str, object]]", first_result["items"])
+    assert len(items) == 1
+    assert page["has_more"] is True
+    assert isinstance(items[0]["evidence"], list)
+    assert cast("dict[str, object]", first["truncation"])["truncated"] is False
+    cursor = cast("str", page["next_cursor"])
+    next_page = adapter.context_for_task("render method", cursor=cursor, limit=1)
+    assert cast("dict[str, object]", next_page["page"])["offset"] == 1
+    next_result = cast("dict[str, object]", next_page["result"])
+    next_items = cast("list[dict[str, object]]", next_result["items"])
+    assert next_items[0]["file"] != items[0]["file"]
+    with pytest.raises(ValueError, match="does not match"):
+        adapter.context_for_task("different query", cursor=cursor, limit=1)
+
+
 def test_mcp_surfaces_partial_ready_generation_warning(tmp_path: Path) -> None:
     """
     Expose partial-index state without rejecting ready query responses.
@@ -555,10 +605,12 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     assert references["result"] == {"references": []}
     assert findings["result"] == {"findings": []}
     context_result = cast("dict[str, object]", context["result"])
-    context_payload = cast("dict[str, object]", context_result["context"])
-    top_matches = cast("list[dict[str, object]]", context_payload["top_matches"])
-    assert context_payload["status"] == "ok"
-    assert top_matches[0]["name"] == "answer"
+    context_items = cast("list[dict[str, object]]", context_result["items"])
+    assert context_result["status"] == "ok"
+    assert context_items[0]["name"] == "answer"
+    assert "evidence" in context_items[0]
+    context_page = cast("dict[str, object]", context["page"])
+    assert context_page["has_more"] is False
     assert impact["result"] == {
         "symbols": [
             {
@@ -744,7 +796,7 @@ def test_server_embedding_tools_forward_search_profile(
     None
         The test asserts both public embedding tools preserve the profile name.
     """
-    received: dict[str, str | None] = {}
+    received: dict[str, object] = {}
 
     def response() -> dict[str, object]:
         """Return a minimal adapter envelope for proxy fallback.
@@ -799,13 +851,41 @@ def test_server_embedding_tools_forward_search_profile(
         received["docs"] = search_profile
         return response()
 
+    def fake_context(
+        self: MCPAdapter,
+        query: str,
+        *,
+        cursor: str | None = None,
+        limit: int = 10,
+        search_profile: str | None = None,
+    ) -> dict[str, object]:
+        del self, query
+        received["context"] = (cursor, limit, search_profile)
+        return response()
+
     monkeypatch.setattr(MCPAdapter, "emb", fake_emb)
     monkeypatch.setattr(MCPAdapter, "docs", fake_docs)
+    monkeypatch.setattr(MCPAdapter, "context_for_task", fake_context)
     server = create_server(tmp_path)
 
     asyncio.run(server.call_tool("emb", {"query": "symbol", "search_profile": "named"}))
     asyncio.run(
         server.call_tool("docs", {"query": "documentation", "search_profile": "named"})
     )
+    asyncio.run(
+        server.call_tool(
+            "context_for_task",
+            {
+                "query": "task",
+                "cursor": "ctx:opaque",
+                "limit": 3,
+                "search_profile": "named",
+            },
+        )
+    )
 
-    assert received == {"emb": "named", "docs": "named"}
+    assert received == {
+        "emb": "named",
+        "docs": "named",
+        "context": ("ctx:opaque", 3, "named"),
+    }
