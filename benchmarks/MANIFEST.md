@@ -20,7 +20,7 @@ This tree contains benchmark inputs. Runtime output belongs under
   `agent-efficiency/campaign-specs/`. Generated manifests, executions, and
   attempt evidence are under `.artifacts/agent-efficiency/campaigns/`,
   `.artifacts/agent-efficiency/executions/`, and
-  `.artifacts/agent-efficiency/attempts/` respectively.
+  `.artifacts/agent-efficiency/attempts/<identity>/` respectively.
 - Schemas, fixtures, tasks, oracles, and protected probes are grouped by
   function under `agent-efficiency/`; preserve them as versioned controls.
 - `performance/` and `semantic-pipeline/` keep machine-local manifests out of

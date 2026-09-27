@@ -48,9 +48,9 @@ a reclaimed-space estimate.
 
 | Group | Recommendation | Reason and replacement summary |
 | --- | --- | --- |
-| `.artifacts/agent-efficiency/attempts/**/agent/.benchmark/uv-cache/` (19 trees, about 152 GiB by `du`) | Removed after explicit approval and image-cache verification | The three referenced fixture-image digests were present locally; no-network, read-only checks confirmed the embedded cache in each. Kept this aggregate inventory and the affected attempt identities here. |
-| `.artifacts/agent-efficiency/attempts/**/agent/.venv/` (24 trees, about 82 GiB by separate `du`) | Keep for now | Installed environment from the actual attempt; useful for direct forensic examination and repeatability. |
-| `.artifacts/agent-efficiency/attempts/**/state/attempt-work/` other than the cache candidate | Keep | Contains task workspaces, events, state, provider response evidence, protected baselines, and run records. These are primary experiment evidence. |
+| `.artifacts/agent-efficiency/attempts/*/agent/.benchmark/uv-cache/` (19 trees, about 152 GiB by `du`) | Removed after explicit approval and image-cache verification | The three referenced fixture-image digests were present locally; no-network, read-only checks confirmed the embedded cache in each. Kept this aggregate inventory and the affected attempt identities here. |
+| `.artifacts/agent-efficiency/attempts/*/agent/.venv/` (24 trees, about 82 GiB by separate `du`) | Keep for now | Installed environment from the actual attempt; useful for direct forensic examination and repeatability. |
+| `.artifacts/agent-efficiency/attempts/*/state/attempt-work/` other than the cache candidate | Keep | Contains task workspaces, events, state, provider response evidence, protected baselines, and run records. These are primary experiment evidence. |
 | `.artifacts/benchmarks/**/logs/` and `.artifacts/validation/repo-gates/` logs/exits | Keep | Only about 3.6 MB for benchmark logs; preserve diagnostics and paired terminal exit state. |
 | Hyperfine, phase timing, profile summary, selection, campaign-plan, and profiler files | Keep | Needed for detailed comparison, provenance, or future profiling; a prose summary cannot replace them. |
 | `.artifacts/benchmarks/semantic-pipeline/`, `retrieval-quality/`, backend, and dated campaign roots | Keep for now | Distinct historical identities and recovery/correction provenance have not been proven redundant. |
@@ -67,7 +67,7 @@ were retained under their new parents.
 ## Completed cleanup scope
 
 The approved scope was limited to the nineteen directories matching
-`.artifacts/agent-efficiency/attempts/**/agent/.benchmark/uv-cache/` in
+`.artifacts/agent-efficiency/attempts/*/agent/.benchmark/uv-cache/` in
 completed attempts. All sibling files and directories were preserved,
 especially `.venv`, campaign manifests, logs, response bodies, records,
 workspaces, and exit status. The aggregate before-and-after size and affected

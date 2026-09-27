@@ -12,14 +12,14 @@ for the completed cache cleanup and detailed keep-versus-summarize decisions.
 | --- | --- | --- |
 | `agent-efficiency/attempts/<identity>/` | Attempt workspaces, records, responses, receipts, and fixture state; moved here from the former `ae/` group | Preserve as immutable evidence. Do not rewrite, merge, or retry an identity. |
 | `agent-efficiency/campaigns/<campaign-id>/` | Factory-generated campaign manifests and launch plans | Preserve each generated identity. |
-| `agent-efficiency/executions/<campaign-id>-execution/` | Execution logs, receipts, preflights, state, and fixture copies | Preserve with the matching campaign and attempt evidence. |
+| `agent-efficiency/executions/<record-id>/` | Execution logs, receipts, preflights, source-preparation records, and fixture copies; existing suffixes distinguish execution, rerun, and source records | Preserve each record identity with related campaign and attempt evidence. |
 | `agent-efficiency/environment-images/`, `gates/`, `reviewer-evaluation/` | Prepared image evidence, validation runs, and reviewer evaluations | Keep records grouped by purpose; retain log/exit pairs. |
 | `benchmarks/backend/<run-id>/` | Dated backend campaigns and Hyperfine, phase, profile, and selection artifacts | Preserve each run and its detailed measurement files. |
 | `benchmarks/campaigns/<run-id>/` | Output from the generic benchmark campaign runner | Keep the run plan, result data, and logs together. |
 | `benchmarks/experiments/` | Issue 55 concurrency runs and vector-store authority investigation | Keep each named experiment together. |
-| `benchmarks/embedding/runs/` | Embedding model campaign outputs | Keep generated configs, measurements, and reports together by timestamp. |
-| `benchmarks/retrieval-quality/` | Retrieval-quality dataset and timestamped runs | Preserve dataset provenance and measured results. |
-| `benchmarks/release/` | Release-oriented Hyperfine trace | Keep the trace with release review records. |
+| `benchmarks/embedding/runs/` | Default output destination, created when an embedding campaign runs | Keep generated configs, measurements, and reports together by timestamp. |
+| `benchmarks/retrieval-quality/runs/<dataset-id>/<timestamp>/` | Retrieval-quality campaign outputs grouped by dataset and timestamp | Preserve dataset provenance and measured results. |
+| `benchmarks/release/` | Default destination for the release-oriented Hyperfine trace | Keep the trace with release review records. |
 | `benchmarks/semantic-pipeline/<run-id>/` | Semantic-pipeline campaigns, corrections, recovery, and reruns | Preserve separate run identities; do not consolidate similar runs. |
 | `validation/repo-gates/` | Repository-gate logs and exit statuses | Keep each log with its terminal status. |
 | `analysis/`, `callgraphs/`, `worktrees/` | Derived investigations, generated graphs, and temporary worktrees | Retain while referenced; check active worktree registrations before cleanup. |
