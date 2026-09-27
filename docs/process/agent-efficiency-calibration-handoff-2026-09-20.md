@@ -298,7 +298,7 @@ referenced from `AGENTS.md`. The dated review is
 The review found that repeated per-attempt `uv-cache` trees are the only
 plausible cleanup candidate; raw campaign, response, task, and failure evidence
 remains protected. No files were moved or deleted. Removal of the nineteen
-identified cache directories is pending operator approval and confirmation
-that their matching prepared image cache is available. The manifests, review,
-and this handoff update contain repository-relative paths and aggregate
-inventory only.
+identified cache directories is pending operator approval. The three matching
+prepared image digests remain available locally, and a no-network, read-only
+check confirmed their offline fixture caches. The manifests, review, and this
+handoff update contain repository-relative paths and aggregate inventory only.

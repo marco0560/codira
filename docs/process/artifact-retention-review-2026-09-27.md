@@ -79,10 +79,11 @@ Affected attempt identities are:
 - `c013a`: `patch-001-calibration-codira-mcp`
 - `e014a`: `patch-002-calibration-codira-mcp`
 
-The matching prepared image/cache source has not yet been verified as present,
-so the cache candidate is not ready for execution. Approval should cover this
-exact set only, conditional on confirming the source cache is available. If it
-is unavailable, leave these directories untouched and report that condition.
+The campaign specs reference three distinct prepared fixture-image digests.
+All three digests remain available locally. A no-network, read-only check
+confirmed that each image contains the offline fixture cache. The cleanup
+prerequisite is satisfied; deletion of this exact set still requires explicit
+operator approval.
 
 ## Privacy review
 
