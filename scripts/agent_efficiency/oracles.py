@@ -49,17 +49,23 @@ class OracleResult:
         Stable, content-safe diagnostics for each evaluated oracle component.
     fingerprint : str
         Canonical fingerprint of the oracle definition.
+    trace_manifest_sha256 : str or None
+        Digest of the private protected-command trace manifest, when enabled.
+    trace_command_count : int
+        Number of protected commands captured in the private trace.
 
     """
 
     passed: bool
     checks: tuple[str, ...]
     fingerprint: str
+    trace_manifest_sha256: str | None = None
+    trace_command_count: int = 0
 
 
 @dataclass(frozen=True)
 class ProtectedCommandResult:
-    """Summarize a protected command without retaining its output.
+    """Summarize a protected command while optionally retaining its output.
 
     Parameters
     ----------
@@ -77,7 +83,8 @@ class ProtectedCommandResult:
     Returns
     -------
     None
-        Instances contain only public-safe command metadata.
+        Instances contain public-safe command metadata; raw output is retained
+        separately in the private attempt trace when enabled.
     """
 
     returncode: int | None
@@ -103,6 +110,118 @@ class ProtectedCommandResult:
         """
 
         return self.returncode == 0
+
+
+class _ProtectedTrace:
+    """Persist private stdout and stderr for each protected command.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        New private artifact directory for one attempt.
+
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.root.mkdir(parents=True, mode=0o700, exist_ok=False)
+        self.root.chmod(0o700)
+        self.commands: list[dict[str, object]] = []
+        self.status = "in_progress"
+        self._write_manifest()
+
+    def record(  # noqa: PLR0913
+        self,
+        stage: str,
+        command: Sequence[str],
+        stdout: bytes,
+        stderr: bytes,
+        returncode: int | None,
+        exception_class: str | None,
+        exception_message: str | None,
+    ) -> None:
+        """Write one protected process result and update the manifest.
+
+        Parameters
+        ----------
+        stage : str
+            Oracle DSL path and protected command stage.
+        command : collections.abc.Sequence[str]
+            Exact argument vector passed to the process runner.
+        stdout : bytes
+            Complete captured standard output stream.
+        stderr : bytes
+            Complete captured standard error stream.
+        returncode : int or None
+            Process status, or ``None`` if process startup failed.
+        exception_class : str or None
+            Startup exception class, if any.
+        exception_message : str or None
+            Private startup exception message, if any.
+
+        Returns
+        -------
+        None
+            Artifacts and the updated manifest are durable on return.
+        """
+
+        index = len(self.commands) + 1
+        outputs: dict[str, object] = {}
+        for stream, content in (("stdout", stdout), ("stderr", stderr)):
+            filename = f"command-{index:03d}.{stream}.bin"
+            path = self.root / filename
+            with path.open("xb") as artifact:
+                artifact.write(content)
+            path.chmod(0o600)
+            outputs[stream] = {
+                "path": filename,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size_bytes": len(content),
+            }
+        self.commands.append(
+            {
+                "stage": stage,
+                "argv": list(command),
+                "returncode": returncode,
+                "exception_class": exception_class,
+                "exception_message": exception_message,
+                "outputs": outputs,
+            }
+        )
+        self._write_manifest()
+
+    def finalize(self, status: str) -> tuple[str, int]:
+        """Mark the oracle trace terminal and return its digest and count.
+
+        Parameters
+        ----------
+        status : str
+            ``complete`` after evaluation or ``error`` when evaluation raises.
+
+        Returns
+        -------
+        tuple[str, int]
+            Manifest SHA-256 and number of captured protected commands.
+        """
+
+        self.status = status
+        self._write_manifest()
+        digest = hashlib.sha256((self.root / "manifest.json").read_bytes()).hexdigest()
+        return digest, len(self.commands)
+
+    def _write_manifest(self) -> None:
+        payload = {
+            "schema_version": 1,
+            "status": self.status,
+            "commands": self.commands,
+        }
+        target = self.root / "manifest.json"
+        temporary = self.root / "manifest.json.tmp"
+        temporary.write_text(
+            json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
+        temporary.chmod(0o600)
+        temporary.replace(target)
 
 
 @dataclass(frozen=True)
@@ -313,7 +432,13 @@ def _protected_command(command: object) -> Sequence[str]:
     return cast("Sequence[str]", command)
 
 
-def _run_protected(command: object, root: Path) -> ProtectedCommandResult:
+def _run_protected(
+    command: object,
+    root: Path,
+    *,
+    trace: _ProtectedTrace | None = None,
+    stage: str,
+) -> ProtectedCommandResult:
     """Run a protected command and retain safe output diagnostics.
 
     Parameters
@@ -322,6 +447,10 @@ def _run_protected(command: object, root: Path) -> ProtectedCommandResult:
         Non-shell command argument array.
     root : pathlib.Path
         Protected working directory.
+    trace : _ProtectedTrace or None, optional
+        Private trace collector for this attempt.
+    stage : str
+        Stable oracle stage label used in the private manifest.
 
     Returns
     -------
@@ -335,10 +464,12 @@ def _run_protected(command: object, root: Path) -> ProtectedCommandResult:
     """
 
     try:
-        completed = subprocess.run(
-            _protected_command(command), cwd=root, check=False, capture_output=True
-        )
+        argv = _protected_command(command)
+        completed = subprocess.run(argv, cwd=root, check=False, capture_output=True)
     except OSError as error:
+        argv = _protected_command(command)
+        if trace is not None:
+            trace.record(stage, argv, b"", b"", None, type(error).__name__, str(error))
         return ProtectedCommandResult(
             returncode=None,
             stdout_sha256=hashlib.sha256(b"").hexdigest(),
@@ -349,6 +480,8 @@ def _run_protected(command: object, root: Path) -> ProtectedCommandResult:
         )
     stdout = completed.stdout if isinstance(completed.stdout, bytes) else b""
     stderr = completed.stderr if isinstance(completed.stderr, bytes) else b""
+    if trace is not None:
+        trace.record(stage, argv, stdout, stderr, completed.returncode, None, None)
     diagnostic_text = stderr.decode("utf-8", errors="replace")
     exception_class: str | None = None
     failure_location: str | None = None
@@ -497,7 +630,12 @@ def _validate_patch_paths(patch: Path) -> None:
 
 
 def _patch_check(
-    spec: Mapping[str, object], result_root: Path, protected_root: Path
+    spec: Mapping[str, object],
+    result_root: Path,
+    protected_root: Path,
+    *,
+    trace: _ProtectedTrace | None,
+    stage_prefix: str,
 ) -> tuple[bool, tuple[str, ...]]:
     """Apply an agent patch to a pristine copy and run protected tests.
 
@@ -509,6 +647,10 @@ def _patch_check(
         Agent result root containing the candidate patch.
     protected_root : pathlib.Path
         Pristine fixture source and protected tests.
+    trace : _ProtectedTrace or None
+        Private protected-command trace collector.
+    stage_prefix : str
+        Composite DSL path prefix for this patch primitive.
 
     Returns
     -------
@@ -548,26 +690,42 @@ def _patch_check(
         destination = Path(temporary) / "fixture"
         shutil.copytree(protected_root, destination, symlinks=False)
         apply_check = _run_protected(
-            ["git", "apply", "--check", str(patch)], destination
+            ["git", "apply", "--check", str(patch)],
+            destination,
+            trace=trace,
+            stage=f"{stage_prefix}patch.apply_check",
         )
         checks.extend(_command_checks("patch.apply_check", apply_check))
         if not apply_check.passed:
             return False, tuple(checks)
-        applied = _run_protected(["git", "apply", str(patch)], destination)
+        applied = _run_protected(
+            ["git", "apply", str(patch)],
+            destination,
+            trace=trace,
+            stage=f"{stage_prefix}patch.apply",
+        )
         checks.extend(_command_checks("patch.apply", applied))
         if not applied.passed:
             return False, tuple(checks)
-        protected_result = _run_protected(tests, destination)
+        protected_result = _run_protected(
+            tests,
+            destination,
+            trace=trace,
+            stage=f"{stage_prefix}patch.protected_command",
+        )
         checks.extend(_command_checks("patch.protected_command", protected_result))
         return protected_result.passed, tuple(checks)
 
 
-def _evaluate(
+def _evaluate(  # noqa: PLR0913
     definition: OracleDefinition,
     result: object,
     result_root: Path,
     protected_root: Path,
     evaluators: Mapping[str, ProtectedEvaluator],
+    *,
+    trace: _ProtectedTrace | None,
+    stage_prefix: str = "",
 ) -> tuple[bool, tuple[str, ...]]:
     """Evaluate one DSL node recursively.
 
@@ -583,6 +741,10 @@ def _evaluate(
         Protected grader fixture root.
     evaluators : Mapping[str, ProtectedEvaluator]
         Explicit grader-side custom evaluator registry and script bindings.
+    trace : _ProtectedTrace or None
+        Private protected-command trace collector.
+    stage_prefix : str
+        Composite DSL path prefix for this node.
 
     Returns
     -------
@@ -604,7 +766,13 @@ def _evaluate(
         raise ContractError.message(detail)
     if name in {"all_of", "any_of"}:
         return _evaluate_composite(
-            definition, result, result_root, protected_root, evaluators
+            definition,
+            result,
+            result_root,
+            protected_root,
+            evaluators,
+            trace=trace,
+            stage_prefix=stage_prefix,
         )
     if name == "contains_symbols":
         passed = _is_subset(
@@ -633,14 +801,23 @@ def _evaluate(
         )
         return all(item in result for item in payload), checks
     if name == "command_passes":
-        result = _run_protected(payload, protected_root)
+        result = _run_protected(
+            payload,
+            protected_root,
+            trace=trace,
+            stage=f"{stage_prefix}command_passes",
+        )
         return result.passed, _command_checks("command_passes", result)
     if name == "patch_applies_and_tests_pass":
         if not isinstance(payload, Mapping):
             detail = "patch primitive must be an object"
             raise ContractError.message(detail)
         return _patch_check(
-            cast("Mapping[str, object]", payload), result_root, protected_root
+            cast("Mapping[str, object]", payload),
+            result_root,
+            protected_root,
+            trace=trace,
+            stage_prefix=stage_prefix,
         )
     if not isinstance(result, Mapping):
         detail = "custom evaluator requires a JSON object artifact"
@@ -649,12 +826,15 @@ def _evaluate(
     return passed, (f"custom_evaluator:{'passed' if passed else 'failed'}",)
 
 
-def _evaluate_composite(
+def _evaluate_composite(  # noqa: PLR0913
     definition: OracleDefinition,
     result: object,
     result_root: Path,
     protected_root: Path,
     evaluators: Mapping[str, ProtectedEvaluator],
+    *,
+    trace: _ProtectedTrace | None,
+    stage_prefix: str,
 ) -> tuple[bool, tuple[str, ...]]:
     """Evaluate and trace one recursive ``all_of`` or ``any_of`` node.
 
@@ -672,6 +852,10 @@ def _evaluate_composite(
         Protected grader fixture root.
     evaluators : collections.abc.Mapping[str, ProtectedEvaluator]
         Explicit custom evaluator registry.
+    trace : _ProtectedTrace or None
+        Private protected-command trace collector.
+    stage_prefix : str
+        Parent composite path prefix.
 
     Returns
     -------
@@ -698,8 +882,10 @@ def _evaluate_composite(
             result_root,
             protected_root,
             evaluators,
+            trace=trace,
+            stage_prefix=f"{stage_prefix}{name}[{index}].",
         )
-        for item in payload
+        for index, item in enumerate(payload)
     ]
     child_checks = tuple(
         f"{name}[{index}].{check}"
@@ -795,6 +981,7 @@ def evaluate_oracle(  # noqa: PLR0913
     result_format: str = "json",
     protected_root: Path,
     evaluators: Mapping[str, ProtectedEvaluator] | None = None,
+    trace_root: Path | None = None,
 ) -> OracleResult:
     """Evaluate a declarative oracle against one isolated agent result.
 
@@ -812,6 +999,8 @@ def evaluate_oracle(  # noqa: PLR0913
         Pristine grader-only fixture tree.
     evaluators : Mapping[str, ProtectedEvaluator] | None, optional
         Registered deterministic evaluator functions and reviewed script bindings.
+    trace_root : pathlib.Path or None, optional
+        New private directory for complete protected command output artifacts.
 
     Returns
     -------
@@ -830,13 +1019,28 @@ def evaluate_oracle(  # noqa: PLR0913
     if root not in artifact.resolve().parents:
         detail = "result_path escapes agent result root"
         raise ContractError.message(detail)
-    passed, checks = _evaluate(
-        definition,
-        _result_artifact(artifact, result_format),
-        root,
-        protected_root.resolve(),
-        evaluators or {},
-    )
+    trace = _ProtectedTrace(trace_root) if trace_root is not None else None
+    try:
+        passed, checks = _evaluate(
+            definition,
+            _result_artifact(artifact, result_format),
+            root,
+            protected_root.resolve(),
+            evaluators or {},
+            trace=trace,
+        )
+    except BaseException:
+        if trace is not None:
+            trace.finalize("error")
+        raise
+    trace_digest: str | None = None
+    trace_count = 0
+    if trace is not None:
+        trace_digest, trace_count = trace.finalize("complete")
     return OracleResult(
-        passed=passed, checks=checks, fingerprint=canonical_fingerprint(definition)
+        passed=passed,
+        checks=checks,
+        fingerprint=canonical_fingerprint(definition),
+        trace_manifest_sha256=trace_digest,
+        trace_command_count=trace_count,
     )

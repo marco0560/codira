@@ -111,28 +111,34 @@ the campaign's durable artifacts.
   output ceiling, logical request cap, transport retry cap, timeout,
   per-attempt spend, pilot spend, and daily spend. Reserve each pending request
   before forwarding it, and use the authenticated context and output limits to
-  calculate the attempt's worst-case spend. Pilot 020
-  reached 507,635 reported tokens against a 500,000 whole-session cap before the
-  old admission rule stopped the next request. For the next pilot, use 750,000
-  whole-session tokens and 32,000 output tokens as the starting recommendation;
-  recalculate for the selected task, model, and provider. With the previously
-  admitted price ceilings of $0.25/$0.75 per million tokens and a 1.05-million
-  token context, the attempt reserve is about $0.849: $0.5625 for 750,000
-  tokens, plus $0.2865 for one context-sized prompt and 32,000 output tokens.
-  That implies at least $0.90 per attempt and $5.40 for six attempts, subject to
-  the authenticated route, active price tier, key limit, and daily cap. Require
-  the offline factory and runtime to cover the declared token/output reserve,
-  then require authenticated preflight to cover the actual context-sized
-  response reserve. Do not copy these dollar values to another model or provider.
+  calculate the attempt's worst-case spend. Pilot 020 reached 507,635 reported
+  tokens against its 500,000 whole-session cap. Pilot 021 used a 750,000-token
+  cap, but the patch Codira-MCP attempt had its 21st response denied after 20
+  upstream responses. Its trajectory had no file change after 58 events, 18
+  commands (8 failed), and 2 MCP calls, so the run does not establish that more
+  tokens would make the task converge. For the next pilot, use 1,000,000
+  whole-session tokens and 32,000 output tokens as a diagnostic ceiling, with a
+  progress-based stop rule; recalculate for the selected task, model, and
+  provider. Recalculate the worst-case spend reserve from the authenticated
+  context and active price tiers; the earlier $0.849 reserve was for 750,000
+  tokens and is not valid for the new ceiling. Require the offline factory and
+  runtime to cover the declared token/output reserve, then require authenticated
+  preflight to cover the actual context-sized response reserve. Do not copy
+  dollar values to another model or provider.
 - **Oracle traceability:** confirm the result records each deterministic
   subcheck as pass/fail, including the individual patch/path/protected-command
   stages. Keep protected command exit status, output sizes and digests, and
-  sanitized exception class/location; never put raw command output or private
-  paths in public reports. Verify known-valid equivalent identifiers (such as
-  dotted pytest names and pytest node IDs) are both accepted by the oracle.
-- **Trajectory evidence:** confirm attempt summaries expose event and message
-  counts, command success/failure/repetition, MCP calls and repetitions, and
-  file-change timing without retaining prompt, tool arguments, output, or paths.
+  sanitized exception class/location in the public-safe checks. Retain complete
+  protected stdout/stderr bytes and the exact command/stage manifest under the
+  ignored per-attempt `oracle-trace/` directory for forensic review. Never put
+  raw command output, trace manifests, or private paths in public reports.
+  Verify known-valid equivalent identifiers (such as dotted pytest names and
+  pytest node IDs) are both accepted by the oracle.
+- **Trajectory evidence:** confirm public attempt summaries expose event and
+  message counts, command success/failure/repetition, MCP calls and repetitions,
+  and file-change timing without exposing prompt, tool arguments, output, or
+  paths. The private attempt artifacts retain the full event stream and
+  captured process diagnostics for forensic review.
   Review these summaries alongside token use and the oracle before labeling a
   failure as non-convergence or concluding that it only needed more room. A cap
   exhaustion without progress evidence is inconclusive on that distinction.
@@ -220,8 +226,14 @@ socket is a short-lived artifact under
 `/tmp`, or a user-wide cache.
 
 The provider proxy persists each exact upstream response body to the ignored
-attempt artifact directory before parsing or forwarding it. Public-safe
-observations bind those bodies by digest and byte count. Routing disables
+attempt artifact directory before parsing or forwarding it. The runner also
+retains captured environment/index preparation output, the Codex JSONL event
+stream, container stderr, and protected oracle stdout/stderr there. These
+private traces can contain diagnostics and paths; public reports expose only
+the safe summaries and digests. Keep raw traces while the campaign may need
+forensic review, then remove them when that need has ended; preserve immutable
+records and their fingerprints. Public-safe observations bind provider bodies
+and protected command streams by digest and byte count. Routing disables
 fallbacks and pins the approved model, reasoning, and price controls. Provider
 parameter filtering remains disabled because the complete Responses/tool
 request contains provider-specific fields that would otherwise produce a

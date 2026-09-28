@@ -90,6 +90,44 @@ def runtime_profile_fingerprint() -> str:
     return hashlib.sha256(BENCHMARK_CODIRA_PROFILE.read_bytes()).hexdigest()
 
 
+def _persist_execution_trace(
+    attempt_root: Path, stage: str, stdout: str, stderr: str
+) -> dict[str, dict[str, object]]:
+    """Persist captured container output in the private attempt directory.
+
+    Parameters
+    ----------
+    attempt_root : pathlib.Path
+        Durable ignored artifact root for one attempt.
+    stage : str
+        Fixed preparation or execution stage name.
+    stdout, stderr : str
+        Complete text streams captured by the container runner.
+
+    Returns
+    -------
+    dict[str, dict[str, object]]
+        Relative artifact paths, SHA-256 digests, and byte counts.
+    """
+
+    trace_root = attempt_root / "runtime-traces"
+    trace_root.mkdir(mode=0o700, exist_ok=True)
+    trace_root.chmod(0o700)
+    observations: dict[str, dict[str, object]] = {}
+    for stream, content in (("stdout", stdout), ("stderr", stderr)):
+        relative_path = Path("runtime-traces") / f"{stage}.{stream}.txt"
+        encoded = content.encode("utf-8")
+        target = attempt_root / relative_path
+        target.write_bytes(encoded)
+        target.chmod(0o600)
+        observations[stream] = {
+            "path": relative_path.as_posix(),
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+            "size_bytes": len(encoded),
+        }
+    return observations
+
+
 def validate_prepared_index(root: Path) -> dict[str, object]:
     """Validate one assisted fixture index before provider setup.
 
@@ -1335,6 +1373,12 @@ def execute_pilot_attempt(
                 Path(temporary_root),
             )
         )
+    environment_trace = _persist_execution_trace(
+        attempt_root,
+        "environment-preparation",
+        environment_preparation.stdout,
+        environment_preparation.stderr,
+    )
     if environment_preparation.timed_out or environment_preparation.returncode != 0:
         raise PilotLauncherError(
             "fixture environment preparation failed before provider setup"
@@ -1359,6 +1403,9 @@ def execute_pilot_attempt(
                     Path(temporary_root),
                 )
             )
+        index_trace = _persist_execution_trace(
+            attempt_root, "index-preparation", preparation.stdout, preparation.stderr
+        )
         if preparation.timed_out or preparation.returncode != 0:
             raise PilotLauncherError(
                 "codira index preparation failed before MCP startup"
@@ -1477,6 +1524,10 @@ def execute_pilot_attempt(
         except ValueError as error:
             capture_error = str(error)
     (attempt_root / "events.jsonl").write_text(execution.stdout, encoding="utf-8")
+    (attempt_root / "events.jsonl").chmod(0o600)
+    execution_trace = _persist_execution_trace(
+        attempt_root, "container-execution", "", execution.stderr
+    )
     result, evidence = result_from_execution(
         store.campaign_id,
         attempt,
@@ -1488,7 +1539,11 @@ def execute_pilot_attempt(
         "ecosystem": environment.ecosystem,
         "elapsed_seconds": environment_preparation.elapsed_seconds,
         "returncode": environment_preparation.returncode,
+        "trace": environment_trace,
     }
+    if attempt.assistance_mode == "codira-mcp":
+        evidence["index_preparation_trace"] = index_trace
+    evidence["container_execution_trace"] = execution_trace
     observations = settings.response_observations
     if (
         observations
@@ -1530,6 +1585,7 @@ def execute_pilot_attempt(
                 result_path=str(task["result_path"]),
                 result_format=result_format,
                 protected_root=protected_root,
+                trace_root=attempt_root / "oracle-trace",
             )
             oracle_passed, oracle_fingerprint = outcome.passed, outcome.fingerprint
             oracle_checks = list(outcome.checks)
@@ -1548,6 +1604,15 @@ def execute_pilot_attempt(
             task_oracle_status = "failed"
             task_oracle_failure = "oracle_contract"
             oracle_checks.append(f"oracle_contract:{type(error).__name__}")
+        oracle_manifest = attempt_root / "oracle-trace" / "manifest.json"
+        if oracle_manifest.is_file():
+            manifest_bytes = oracle_manifest.read_bytes()
+            manifest = json.loads(manifest_bytes)
+            evidence["oracle_trace"] = {
+                "path": "oracle-trace/manifest.json",
+                "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+                "command_count": len(manifest.get("commands", [])),
+            }
     result.update(
         {
             "operational_calibration": {

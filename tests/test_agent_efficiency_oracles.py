@@ -322,7 +322,11 @@ def test_patch_oracle_uses_pristine_copy_and_rejects_tampering(tmp_path: Path) -
         source_file_requirement, result_root=result_root, protected_root=protected
     ).passed
     (protected / "fail.py").write_text(
-        "raise AssertionError('private diagnostic text')\n", encoding="utf-8"
+        "print('forensic stdout marker')\n"
+        "import sys\n"
+        "print('private diagnostic text', file=sys.stderr)\n"
+        "raise AssertionError('private diagnostic text')\n",
+        encoding="utf-8",
     )
     failing_command = {
         "patch_applies_and_tests_pass": {
@@ -331,7 +335,10 @@ def test_patch_oracle_uses_pristine_copy_and_rejects_tampering(tmp_path: Path) -
         }
     }
     failed_command = evaluate_oracle(
-        failing_command, result_root=result_root, protected_root=protected
+        failing_command,
+        result_root=result_root,
+        protected_root=protected,
+        trace_root=tmp_path / "oracle-trace",
     )
     assert not failed_command.passed
     assert "patch.protected_command:failed" in failed_command.checks
@@ -340,6 +347,32 @@ def test_patch_oracle_uses_pristine_copy_and_rejects_tampering(tmp_path: Path) -
         failed_command.checks
     )
     assert "private diagnostic text" not in " ".join(failed_command.checks)
+    trace_manifest = json.loads(
+        (tmp_path / "oracle-trace" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert trace_manifest["status"] == "complete"
+    assert failed_command.trace_command_count == 3
+    assert (
+        failed_command.trace_manifest_sha256
+        == hashlib.sha256(
+            (tmp_path / "oracle-trace" / "manifest.json").read_bytes()
+        ).hexdigest()
+    )
+    protected_trace = trace_manifest["commands"][-1]
+    assert protected_trace["stage"] == "patch.protected_command"
+    assert protected_trace["returncode"] == 1
+    stdout_path = (
+        tmp_path / "oracle-trace" / protected_trace["outputs"]["stdout"]["path"]
+    )
+    stderr_path = (
+        tmp_path / "oracle-trace" / protected_trace["outputs"]["stderr"]["path"]
+    )
+    assert stdout_path.read_bytes() == b"forensic stdout marker\n"
+    assert b"private diagnostic text" in stderr_path.read_bytes()
+    assert (
+        protected_trace["outputs"]["stderr"]["sha256"]
+        == hashlib.sha256(stderr_path.read_bytes()).hexdigest()
+    )
     patch.write_text("tampered", encoding="utf-8")
     assert not evaluate_oracle(
         definition, result_root=result_root, protected_root=protected

@@ -160,6 +160,11 @@ def test_report_exposes_safe_oracle_and_trajectory_diagnostics(
         "patch.protected_command:failed:exit=1:stdout_sha256=" + "a" * 64,
         "unsafe /home/private/source.py: redacted",
     ]
+    record["evidence"]["oracle_trace"] = {
+        "path": "oracle-trace/manifest.json",
+        "manifest_sha256": "private-trace-digest",
+        "raw_stderr": "private protected test failure details",
+    }
     record["evidence"]["trajectory"] = {
         "status": "available",
         "event_count": 8,
@@ -202,6 +207,9 @@ def test_report_exposes_safe_oracle_and_trajectory_diagnostics(
     assert "text_contains[0]:passed" in public
     assert "codira_search" in public
     assert "do not publish" not in public
+    assert "private-trace-digest" not in public
+    assert "private protected test failure details" not in public
+    assert "oracle-trace/manifest.json" not in public
     assert "/home/private" not in public
     assert isinstance(attempt, dict)
     assert attempt["trajectory"]["successful_command_count"] == 2

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -1244,7 +1245,11 @@ def test_execute_attempt_records_an_oracle_contract_failure(
         pilot,
         "execute_environment_preparation",
         lambda request: SimpleNamespace(
-            elapsed_seconds=0.1, returncode=0, timed_out=False
+            elapsed_seconds=0.1,
+            returncode=0,
+            timed_out=False,
+            stdout="environment stdout",
+            stderr="environment stderr",
         ),
     )
     monkeypatch.setattr(
@@ -1258,7 +1263,11 @@ def test_execute_attempt_records_an_oracle_contract_failure(
         pilot,
         "execute_environment_preparation",
         lambda request: SimpleNamespace(
-            elapsed_seconds=0.1, returncode=0, timed_out=False
+            elapsed_seconds=0.1,
+            returncode=0,
+            timed_out=False,
+            stdout="environment stdout",
+            stderr="environment stderr",
         ),
     )
     monkeypatch.setattr(
@@ -1340,7 +1349,9 @@ def test_execute_attempt_records_an_oracle_contract_failure(
 
     monkeypatch.setattr(provider_proxy, "create_unix_server", create_server)
     monkeypatch.setattr(
-        pilot, "execute_container_attempt", lambda request: SimpleNamespace(stdout="")
+        pilot,
+        "execute_container_attempt",
+        lambda request: SimpleNamespace(stdout="", stderr=""),
     )
     monkeypatch.setattr(
         pilot,
@@ -1401,6 +1412,30 @@ def test_execute_attempt_records_an_oracle_contract_failure(
     assert (
         store.root / "attempt-work" / attempt.attempt_id / "provider-responses"
     ).is_dir()
+    attempt_root = store.root / "attempt-work" / attempt.attempt_id
+    assert (
+        attempt_root / "runtime-traces" / "environment-preparation.stdout.txt"
+    ).read_text(encoding="utf-8") == "environment stdout"
+    assert (
+        attempt_root / "runtime-traces" / "environment-preparation.stderr.txt"
+    ).read_text(encoding="utf-8") == "environment stderr"
+    environment_evidence = evidence.get("environment_preparation")
+    assert isinstance(environment_evidence, dict)
+    trace_evidence = environment_evidence.get("trace")
+    assert isinstance(trace_evidence, dict)
+    stderr_evidence = trace_evidence.get("stderr")
+    assert isinstance(stderr_evidence, dict)
+    assert (
+        stderr_evidence.get("sha256")
+        == hashlib.sha256(b"environment stderr").hexdigest()
+    )
+    assert (
+        attempt_root / "runtime-traces" / "container-execution.stderr.txt"
+    ).is_file()
+    if assistance_mode == "codira-mcp":
+        assert (
+            attempt_root / "runtime-traces" / "index-preparation.stdout.txt"
+        ).read_text(encoding="utf-8") == "Indexed: 1"
     assert not (
         store.root / "attempt-work" / attempt.attempt_id / "workspace-before" / ".venv"
     ).exists()
