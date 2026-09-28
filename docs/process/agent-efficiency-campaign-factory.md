@@ -60,15 +60,92 @@ then create a fresh campaign identity.
 
 The provider proxy persists each exact response before parsing its terminal
 usage, accounts input and output tokens independently of the Codex transcript,
-and serializes completion requests so only one response can be in flight. Once
-the cumulative whole-session threshold is reached, the next request is denied;
-missing usage on a successful response also blocks further requests. Because
-the threshold is observed only after a response completes, one response may
-cross it. Bound that overage by the model context length and per-response
-output cap, then reserve worst-case token-priced cost plus that one response
-against the attempt spending ceiling before admitting another request. If the
-route cannot establish those bounds, preflight or runtime admission must fail
-closed.
+and serializes completion requests so only one response can be in flight. Before
+forwarding each request, it reserves the UTF-8 request-body byte count plus the
+configured maximum completion tokens against the remaining whole-session token
+ceiling. Missing usage on a successful response blocks further requests. Runtime
+and authenticated preflight also reserve worst-case token-priced cost plus a
+response allowance; if the route cannot establish those bounds, admission must
+fail closed. The byte-based prompt estimate is deliberately conservative and
+must be compared with reported provider usage in every pilot.
+
+## Pre-pilot control checklist
+
+Complete this checklist for every new pilot before generating its campaign. Record
+the selected task IDs, fixture revisions, model/provider controls, budgets, image
+digest, profile fingerprint, and validation evidence in the versioned spec or
+the campaign's durable artifacts.
+
+- **Tasks and scoring:** verify task wording, task IDs, deterministic oracle
+  behavior, required fixture coverage, treatment instructions, repetition
+  count, and schedule seed. Confirm the tasks still test the intended Codira
+  behavior. A task, oracle, prompt, seed, or repetition change requires a fresh
+  campaign identity.
+- **Fixture admission:** verify each fixture's commit, tree SHA, license, and
+  setup-file hashes against its source checkout. Keep the pilot runner's
+  required three-fixture coverage. Rebuild the candidate image when fixture
+  content, dependencies, or environment preparation changes.
+- **Image and runtime:** pin the freshly admitted image digest and the
+  `scripts/agent_efficiency/benchmark-codira.toml` fingerprint. Check offline
+  dependency preparation, runtime network isolation, MCP startup, index
+  readiness and coverage, and the task-relevant capabilities, including cursor
+  and whole-item behavior when the task uses pagination.
+- **Harness qualification:** compare the factory, runner, provider proxy, MCP
+  adapter, prompt construction, schedule, oracle evaluation, and evidence
+  format with the qualified harness. Repair a demonstrated harness defect,
+  add and run focused regression checks, and qualify it offline before creating
+  a fresh campaign. Never change a generated campaign in place.
+- **Model controls:** verify the exact model ID on the authenticated route for
+  the selected key. Confirm Responses API compatibility, supported reasoning
+  effort and mandatory-reasoning rules, context and output limits, usage
+  reporting, and current prompt/completion prices at every relevant price tier.
+  A model change requires a new versioned spec, fresh campaign identity, and
+  recalculated budgets.
+- **Provider controls:** verify the provider endpoint, authentication route,
+  wire protocol, request and response mapping, usage and cost fields, and
+  retry behavior. Confirm the existing proxy adapter supports that provider; a
+  new or changed adapter is a harness change and must be regression-tested and
+  qualified offline before paid use. A provider change requires a fresh
+  campaign identity and authenticated preflight.
+- **Budgets and account admission:** set the whole-session token ceiling,
+  output ceiling, logical request cap, transport retry cap, timeout,
+  per-attempt spend, pilot spend, and daily spend. Reserve each pending request
+  before forwarding it, and use the authenticated context and output limits to
+  calculate the attempt's worst-case spend. Pilot 020
+  reached 507,635 reported tokens against a 500,000 whole-session cap before the
+  old admission rule stopped the next request. For the next pilot, use 750,000
+  whole-session tokens and 32,000 output tokens as the starting recommendation;
+  recalculate for the selected task, model, and provider. With the previously
+  admitted price ceilings of $0.25/$0.75 per million tokens and a 1.05-million
+  token context, the attempt reserve is about $0.849: $0.5625 for 750,000
+  tokens, plus $0.2865 for one context-sized prompt and 32,000 output tokens.
+  That implies at least $0.90 per attempt and $5.40 for six attempts, subject to
+  the authenticated route, active price tier, key limit, and daily cap. Require
+  the offline factory and runtime to cover the declared token/output reserve,
+  then require authenticated preflight to cover the actual context-sized
+  response reserve. Do not copy these dollar values to another model or provider.
+- **Oracle traceability:** confirm the result records each deterministic
+  subcheck as pass/fail, including the individual patch/path/protected-command
+  stages. Keep protected command exit status, output sizes and digests, and
+  sanitized exception class/location; never put raw command output or private
+  paths in public reports. Verify known-valid equivalent identifiers (such as
+  dotted pytest names and pytest node IDs) are both accepted by the oracle.
+- **Trajectory evidence:** confirm attempt summaries expose event and message
+  counts, command success/failure/repetition, MCP calls and repetitions, and
+  file-change timing without retaining prompt, tool arguments, output, or paths.
+  Review these summaries alongside token use and the oracle before labeling a
+  failure as non-convergence or concluding that it only needed more room. A cap
+  exhaustion without progress evidence is inconclusive on that distinction.
+- **Generation and launch gates:** generate only through the factory into a
+  fresh output directory. Run offline manifest validation, verify the fixture
+  receipt, and run the full repository gate in tmux with a durable log and exit
+  status. Then perform authenticated route/key preflight. Start paid execution
+  only under explicit authorization for that campaign, after all checks pass.
+- **Evidence and retries:** preserve the immutable manifest, launch plan,
+  receipt, exact provider responses, usage and cost records, per-attempt
+  operational and oracle results, logs, and final report. Do not reuse an
+  identity or automatically retry after a changed task, model, provider,
+  prompt, budget, runtime, or harness control.
 
 ## Fixture-environment image preparation
 

@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0",
+  "task_id": "context-page-001",
+  "fixture_id": "codira-public",
+  "prompt": "Identify the Codira MCP context method and the regression test that verifies complete context items, pagination, and method ownership. Write a concise investigation note to BENCHMARK_ANSWER.md with the exact qualified method name and source path, plus the exact qualified test name and test path. Verify both names against evidence, then stop.",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "result_format": "text",
+  "oracle_id": "context-page-001",
+  "visibility": "public"
+}

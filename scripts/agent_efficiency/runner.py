@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import time
+from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -889,19 +890,34 @@ def result_from_execution(
     failure_class: str | None = None
     outcome = "infrastructure_failure"
     event_count = 0
+    parsed_events: tuple[dict[str, object], ...] = ()
+    parse_failure: str | None = None
+    try:
+        parsed_events = phase0.parse_jsonl_events(execution.stdout)
+    except phase0.JsonlEvidenceError as error:
+        parse_failure = str(error)
+    trajectory = (
+        summarize_trajectory(parsed_events)
+        if parsed_events
+        else {"status": "unavailable", "reason": "invalid_or_empty_event_stream"}
+    )
     if execution.timed_out:
         outcome = "cancelled"
         failure_class = "timeout"
+        event_count = len(parsed_events)
+    elif parse_failure is not None:
+        failure_class = parse_failure
     else:
         try:
-            events = phase0.parse_jsonl_events(execution.stdout)
-            event_count = len(events)
-            terminal_failure = _terminal_failure_class(events)
+            event_count = len(parsed_events)
+            terminal_failure = _terminal_failure_class(parsed_events)
             if terminal_failure is not None:
                 failure_class = terminal_failure
             else:
-                check = phase0.jsonl_conformance_check(events, attempt.assistance_mode)
-                normalized = normalize_completed_turn(events)
+                check = phase0.jsonl_conformance_check(
+                    parsed_events, attempt.assistance_mode
+                )
+                normalized = normalize_completed_turn(parsed_events)
                 usage_complete = normalized.complete
                 usage = normalized.as_document()
                 total_tokens = normalized.observed_total_tokens
@@ -936,6 +952,7 @@ def result_from_execution(
         "jsonl_event_count": event_count,
         "stdout_sha256": _text_sha256(execution.stdout),
         "stderr_sha256": _text_sha256(execution.stderr),
+        "trajectory": trajectory,
     }
     return result, evidence
 
@@ -983,3 +1000,169 @@ def _text_sha256(value: str) -> str:
     import hashlib
 
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _command_progress(
+    item: dict[str, object], signatures: set[str]
+) -> tuple[bool, bool, bool, str | None]:
+    """Classify one completed command without retaining its text.
+
+    Parameters
+    ----------
+    item : dict[str, object]
+        Completed command event item.
+    signatures : set[str]
+        Digests of previously observed normalized commands.
+
+    Returns
+    -------
+    tuple[bool, bool, bool, str or None]
+        Repetition, success, failure, and safe progress marker kind.
+    """
+
+    command = item.get("command")
+    repeated = False
+    if isinstance(command, str) and command.strip():
+        signature = _text_sha256(" ".join(command.split()))
+        repeated = signature in signatures
+        signatures.add(signature)
+    exit_code = item.get("exit_code")
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        return repeated, False, False, None
+    if exit_code == 0:
+        return repeated, True, False, "command_succeeded"
+    return repeated, False, True, "command_failed"
+
+
+def _mcp_progress(item: dict[str, object], signatures: set[str]) -> tuple[str, bool]:
+    """Summarize one completed MCP call by safe tool name and digest.
+
+    Parameters
+    ----------
+    item : dict[str, object]
+        Completed MCP tool-call event item.
+    signatures : set[str]
+        Digests of previously observed tool/argument pairs.
+
+    Returns
+    -------
+    tuple[str, bool]
+        Allowlisted tool name and whether the call repeated earlier arguments.
+    """
+
+    tool = item.get("tool")
+    safe_tool = (
+        tool
+        if isinstance(tool, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", tool)
+        else "other"
+    )
+    try:
+        signature_text = json.dumps(
+            {"tool": safe_tool, "arguments": item.get("arguments")},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        signature_text = safe_tool
+    signature = _text_sha256(signature_text)
+    repeated = signature in signatures
+    signatures.add(signature)
+    return safe_tool, repeated
+
+
+def summarize_trajectory(
+    events: tuple[dict[str, object], ...],
+) -> dict[str, object]:
+    """Summarize attempt progress without retaining commands or model content.
+
+    Parameters
+    ----------
+    events : tuple[dict[str, object], ...]
+        Parsed Codex JSONL events in their original order.
+
+    Returns
+    -------
+    dict[str, object]
+        Bounded counters and event positions useful for reviewing progress,
+        repetition, and validation behavior without copying private content.
+    """
+
+    item_type_counts: Counter[str] = Counter()
+    mcp_tool_counts: Counter[str] = Counter()
+    command_signatures: set[str] = set()
+    mcp_signatures: set[str] = set()
+    repeated_command_count = 0
+    repeated_mcp_call_count = 0
+    successful_command_count = 0
+    failed_command_count = 0
+    unknown_command_exit_count = 0
+    file_change_event_indices: list[int] = []
+    changed_file_count = 0
+    progress_markers: list[dict[str, object]] = []
+    omitted_progress_marker_count = 0
+
+    for event_index, event in enumerate(events):
+        if event.get("type") != "item.completed":
+            continue
+        item = event.get("item")
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if not isinstance(item_type, str):
+            continue
+        item_type_counts[item_type] += 1
+
+        if item_type == "command_execution":
+            repeated, succeeded, failed, marker = _command_progress(
+                item, command_signatures
+            )
+            repeated_command_count += repeated
+            successful_command_count += succeeded
+            failed_command_count += failed
+            if marker is None:
+                unknown_command_exit_count += 1
+            else:
+                progress_markers.append({"event_index": event_index, "kind": marker})
+        elif item_type == "mcp_tool_call":
+            safe_tool, repeated = _mcp_progress(item, mcp_signatures)
+            mcp_tool_counts[safe_tool] += 1
+            repeated_mcp_call_count += repeated
+            progress_markers.append({"event_index": event_index, "kind": "mcp_call"})
+        elif item_type == "file_change":
+            file_change_event_indices.append(event_index)
+            changes = item.get("changes")
+            if isinstance(changes, list):
+                changed_file_count += len(changes)
+            progress_markers.append({"event_index": event_index, "kind": "file_change"})
+        if len(progress_markers) > 256:
+            progress_markers.pop()
+            omitted_progress_marker_count += 1
+
+    return {
+        "status": "available",
+        "event_count": len(events),
+        "agent_message_count": item_type_counts["agent_message"],
+        "reasoning_item_count": item_type_counts["reasoning"],
+        "command_execution_count": item_type_counts["command_execution"],
+        "successful_command_count": successful_command_count,
+        "failed_command_count": failed_command_count,
+        "unknown_command_exit_count": unknown_command_exit_count,
+        "repeated_command_count": repeated_command_count,
+        "mcp_call_count": item_type_counts["mcp_tool_call"],
+        "mcp_repeated_call_count": repeated_mcp_call_count,
+        "mcp_tool_counts": [
+            {"tool": tool, "calls": count}
+            for tool, count in sorted(mcp_tool_counts.items())
+        ],
+        "file_change_event_count": len(file_change_event_indices),
+        "changed_file_count": changed_file_count,
+        "first_file_change_event_index": (
+            file_change_event_indices[0] if file_change_event_indices else None
+        ),
+        "last_file_change_event_index": (
+            file_change_event_indices[-1] if file_change_event_indices else None
+        ),
+        "progress_markers": progress_markers,
+        "progress_markers_truncated": omitted_progress_marker_count > 0,
+        "omitted_progress_marker_count": omitted_progress_marker_count,
+    }

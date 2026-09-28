@@ -797,6 +797,90 @@ def test_runner_does_not_double_count_cached_input_against_manifest_cap() -> Non
     assert result["outcome"] == "success"
 
 
+def test_trajectory_summary_records_progress_without_retaining_content() -> None:
+    """Expose repeated work and progress markers without source or query text.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The summary contains only counts, tool names, exit statuses, and indexes.
+    """
+
+    events = cast(
+        "tuple[dict[str, object], ...]",
+        (
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "mcp_tool_call",
+                    "tool": "context_for_task",
+                    "arguments": {"query": "private search phrase"},
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "command": "rg private_symbol src",
+                    "exit_code": 0,
+                    "aggregated_output": "private source excerpt",
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "file_change",
+                    "changes": [
+                        {"path": "/private/workspace/result.py", "diff": "secret"}
+                    ],
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "command": "rg private_symbol src",
+                    "exit_code": 1,
+                    "aggregated_output": "private source excerpt",
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "mcp_tool_call",
+                    "tool": "context_for_task",
+                    "arguments": {"query": "private search phrase"},
+                },
+            },
+        ),
+    )
+
+    summary = runner.summarize_trajectory(events)
+
+    assert summary["event_count"] == 5
+    assert summary["command_execution_count"] == 2
+    assert summary["successful_command_count"] == 1
+    assert summary["failed_command_count"] == 1
+    assert summary["repeated_command_count"] == 1
+    assert summary["mcp_call_count"] == 2
+    assert summary["mcp_repeated_call_count"] == 1
+    assert summary["file_change_event_count"] == 1
+    assert summary["changed_file_count"] == 1
+    rendered = json.dumps(summary)
+    for private_value in (
+        "private search phrase",
+        "private_symbol",
+        "private source excerpt",
+        "/private/workspace",
+        "secret",
+    ):
+        assert private_value not in rendered
+
+
 def test_variant_configuration_exposes_required_mcp_only_to_assisted_runs(
     tmp_path: Path,
 ) -> None:

@@ -77,9 +77,9 @@ def _manifest() -> dict[str, object]:
             "max_completion_usd_per_million": 3,
         },
         "accounting": {
-            "max_daily_spend_usd": 2,
-            "max_estimated_attempt_spend_usd": 0.3,
-            "max_estimated_pilot_spend_usd": 1.8,
+            "max_daily_spend_usd": 6,
+            "max_estimated_attempt_spend_usd": 0.4,
+            "max_estimated_pilot_spend_usd": 2.4,
             "max_response_requests_per_attempt": 1,
         },
         "resource_controls": {
@@ -832,8 +832,8 @@ def test_preflight_admits_only_the_exact_route_and_scoped_budget(
     accounting.update(
         {
             "max_daily_spend_usd": 6,
-            "max_estimated_attempt_spend_usd": 0.3,
-            "max_estimated_pilot_spend_usd": 1.8,
+            "max_estimated_attempt_spend_usd": 0.4,
+            "max_estimated_pilot_spend_usd": 2.4,
         }
     )
     model = {
@@ -917,12 +917,15 @@ def test_preflight_admits_only_the_exact_route_and_scoped_budget(
         "max_total_tokens_scope": "per-continuation",
         "max_response_requests_per_attempt": 1,
         "max_transport_attempts_per_response": 1,
-        "max_estimated_attempt_spend_usd": 0.3,
-        "max_estimated_pilot_spend_usd": 1.8,
+        "max_estimated_attempt_spend_usd": 0.4,
+        "worst_case_reserved_attempt_spend_usd": pytest.approx(0.34992),
+        "max_estimated_pilot_spend_usd": 2.4,
         "max_daily_spend_usd": 6.0,
     }
     assert record["public_route"] == {
         "context_length": 204800,
+        "token_spend_bound_usd": 0.3,
+        "context_response_reserve_usd": pytest.approx(0.04992),
         "max_completion_tokens": 393216,
         "max_prompt_usd_per_million": 0.15,
         "max_completion_usd_per_million": 0.6,
@@ -938,6 +941,89 @@ def test_preflight_admits_only_the_exact_route_and_scoped_budget(
         "limit_reset": "2026-09-20T00:00:00Z",
         "usage_daily_usd": 0.25,
     }
+
+    accounting["max_estimated_attempt_spend_usd"] = 0.34
+    accounting["max_estimated_pilot_spend_usd"] = 2.04
+    responses[:] = [Response({"data": [model]})]
+    with pytest.raises(PilotLauncherError, match="authenticated token reservation"):
+        preflight_openrouter_route(
+            manifest,
+            execution_controls(manifest),
+            "scoped-token",
+            now_utc=datetime(2026, 9, 20, 12, tzinfo=UTC),
+        )
+
+
+def test_active_pricing_reserves_token_tier_and_cache_write_maxima() -> None:
+    """Use the maximum published token-tier and cache-input rates.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The rate bound covers every tier without knowing future prompt sizes.
+    """
+
+    pricing = {
+        "prompt": "0.0000001",
+        "completion": "0.0000005",
+        "input_cache_read": "0.00000001",
+        "input_cache_write": "0.000000125",
+        "overrides": [
+            {
+                "min_prompt_tokens": 272000,
+                "prompt": "0.0000002",
+                "completion": "0.00000075",
+                "input_cache_read": "0.00000002",
+                "input_cache_write": "0.00000025",
+            }
+        ],
+    }
+
+    active, selection = pilot._active_pricing(pricing)
+
+    assert isinstance(active["prompt"], str)
+    assert isinstance(active["completion"], str)
+    assert float(active["prompt"]) == pytest.approx(0.00000025)
+    assert float(active["completion"]) == pytest.approx(0.00000075)
+    assert selection == {
+        "kind": "token_threshold_worst_case",
+        "tier_count": 1,
+        "max_min_prompt_tokens": 272000,
+    }
+
+
+def test_active_pricing_rejects_mixed_override_shapes() -> None:
+    """Reject an unbounded mixture of time and prompt-token pricing rules.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The malformed combination fails closed before route admission.
+    """
+
+    pricing = {
+        "prompt": "0.0000001",
+        "completion": "0.0000005",
+        "overrides": [
+            {
+                "min_prompt_tokens": 272000,
+                "prompt": "0.0000002",
+                "completion": "0.00000075",
+            },
+            {"utc_days": ["monday"], "prompt": "0.0000003"},
+        ],
+    }
+
+    with pytest.raises(PilotLauncherError, match="overrides are malformed"):
+        pilot._active_pricing(pricing)
 
 
 def test_prepare_protected_fixture_rejects_git_clone_failure(
@@ -1304,6 +1390,7 @@ def test_execute_attempt_records_an_oracle_contract_failure(
         "status": "failed",
         "failure_class": "oracle_contract",
         "fingerprint": None,
+        "checks": ["oracle_contract:ContractError"],
     }
     assert evidence["oracle_passed"] is False
     assert mcp_commands == [expected_mcp_command]

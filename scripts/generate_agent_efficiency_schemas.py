@@ -304,6 +304,10 @@ SCHEMAS = {
                         "type": ["string", "null"],
                         "pattern": "^[0-9a-f]{64}$",
                     },
+                    "checks": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                    },
                 },
             },
             "usage_complete": {"type": "boolean"},

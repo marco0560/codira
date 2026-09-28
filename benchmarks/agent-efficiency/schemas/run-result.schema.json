@@ -84,6 +84,13 @@
     "task_oracle": {
       "additionalProperties": false,
       "properties": {
+        "checks": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
         "failure_class": {
           "type": [
             "string",

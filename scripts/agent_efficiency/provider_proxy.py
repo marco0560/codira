@@ -336,26 +336,42 @@ class ProxySettings:
             ):
                 object.__setattr__(self, "token_accounting_failed", True)
 
-    def local_token_cap_reason(self) -> str | None:
+    def local_token_cap_reason(self, request_payload_bytes: int = 0) -> str | None:
         """Return why another completion cannot be admitted, if applicable.
 
         Parameters
         ----------
-        None
+        request_payload_bytes : int, optional
+            UTF-8 request-body size used as a conservative upper bound for the
+            next request's input-token allowance.
 
         Returns
         -------
         str or None
             Stable public-safe reason for stopping further upstream requests.
+
+        Raises
+        ------
+        ValueError
+            If the pending request body size is not a non-negative integer.
         """
 
+        if (
+            not isinstance(request_payload_bytes, int)
+            or isinstance(request_payload_bytes, bool)
+            or request_payload_bytes < 0
+        ):
+            detail = "request payload size must be a non-negative integer"
+            raise ValueError(detail)
         if self.token_accounting_failed:
             return "provider_usage_unavailable"
-        if (
-            self.max_total_tokens is not None
-            and self.provider_total_tokens >= self.max_total_tokens
-        ):
-            return "session_token_budget_exhausted"
+        if self.max_total_tokens is not None:
+            remaining_tokens = self.max_total_tokens - self.provider_total_tokens
+            if remaining_tokens <= 0:
+                return "session_token_budget_exhausted"
+            required_reserve = request_payload_bytes + self.max_output_tokens
+            if required_reserve > remaining_tokens:
+                return "session_token_reservation_exceeded"
         if (
             self.max_attempt_spend_usd is not None
             and self.provider_estimated_cost_usd >= self.max_attempt_spend_usd
@@ -377,7 +393,7 @@ class ProxySettings:
                 / 1_000_000
             )
             one_response_spend = (
-                self.max_context_tokens * self.max_prompt_usd_per_million
+                request_payload_bytes * self.max_prompt_usd_per_million
                 + self.max_output_tokens * self.max_completion_usd_per_million
             ) / 1_000_000
             if (
@@ -855,7 +871,9 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
                 self.settings.response_lock.release()
                 self.send_error(HTTPStatus.TOO_MANY_REQUESTS)
                 return
-            token_cap_reason = self.settings.local_token_cap_reason()
+            token_cap_reason = self.settings.local_token_cap_reason(
+                request_payload_bytes=len(payload)
+            )
             if token_cap_reason is not None:
                 self.settings.record_response(
                     HTTPStatus.TOO_MANY_REQUESTS,

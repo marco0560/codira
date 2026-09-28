@@ -22,7 +22,7 @@ import subprocess
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -1237,6 +1237,71 @@ def test_provider_proxy_accounts_terminal_sse_usage_and_stops_at_session_cap(
     assert settings.provider_estimated_cost_usd == pytest.approx(0.0000033)
 
 
+def test_provider_proxy_reserves_request_and_one_bounded_completion(
+    tmp_path: Path,
+) -> None:
+    """Deny a next request that cannot fit its conservative token reserve.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated provider-response evidence directory.
+
+    Returns
+    -------
+    None
+        Request bytes and the maximum completion are reserved before forwarding.
+    """
+
+    settings = provider_proxy.ProxySettings(
+        "client",
+        "upstream",
+        0,
+        max_output_tokens=100,
+        max_total_tokens=500,
+        response_artifact_root=tmp_path / "provider-responses",
+    )
+    object.__setattr__(settings, "provider_total_tokens", 300)
+
+    assert settings.local_token_cap_reason(request_payload_bytes=100) is None
+    assert (
+        settings.local_token_cap_reason(request_payload_bytes=101)
+        == "session_token_reservation_exceeded"
+    )
+    object.__setattr__(settings, "provider_total_tokens", 401)
+    assert (
+        settings.local_token_cap_reason(request_payload_bytes=0)
+        == "session_token_reservation_exceeded"
+    )
+
+
+def test_provider_proxy_rejects_invalid_request_size(tmp_path: Path) -> None:
+    """Reject ambiguous sizes before applying the token reserve.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated provider-response evidence directory.
+
+    Returns
+    -------
+    None
+        Booleans, negative sizes, and non-integers are not accepted.
+    """
+
+    settings = provider_proxy.ProxySettings(
+        "client",
+        "upstream",
+        0,
+        response_artifact_root=tmp_path / "provider-responses",
+    )
+    for invalid_size in (True, -1, 1.5):
+        with pytest.raises(ValueError, match="non-negative integer"):
+            settings.local_token_cap_reason(
+                request_payload_bytes=cast("int", invalid_size)
+            )
+
+
 def test_provider_proxy_fails_closed_when_success_usage_is_missing(
     tmp_path: Path,
 ) -> None:
@@ -1301,8 +1366,11 @@ def test_provider_proxy_reserves_one_bounded_response_against_attempt_spend() ->
         max_attempt_spend_usd=0.6998,
     )
 
-    assert admitted.local_token_cap_reason() is None
-    assert rejected.local_token_cap_reason() == "attempt_spend_cap_reservation_exceeded"
+    assert admitted.local_token_cap_reason(request_payload_bytes=204800) is None
+    assert (
+        rejected.local_token_cap_reason(request_payload_bytes=204800)
+        == "attempt_spend_cap_reservation_exceeded"
+    )
 
 
 def test_provider_proxy_fails_closed_after_transport_uncertainty() -> None:

@@ -168,13 +168,18 @@ def test_text_artifact_oracle_requires_each_declared_fact(tmp_path: Path) -> Non
             "src/codira/mcp/adapter.py",
         ]
     }
-    assert evaluate_oracle(
+    passed = evaluate_oracle(
         definition,
         result_root=result_root,
         result_path="answer.md",
         result_format="text",
         protected_root=protected,
-    ).passed
+    )
+    assert passed.passed
+    assert passed.checks == (
+        "text_contains[0]:passed",
+        "text_contains[1]:passed",
+    )
     (result_root / "answer.md").write_text(
         "MCPAdapter.context_for_task\n", encoding="utf-8"
     )
@@ -185,6 +190,76 @@ def test_text_artifact_oracle_requires_each_declared_fact(tmp_path: Path) -> Non
         result_format="text",
         protected_root=protected,
     ).passed
+
+
+def test_text_oracle_reports_missing_clauses_and_accepts_alternative_spellings(
+    tmp_path: Path,
+) -> None:
+    """Show which text clause failed while accepting equivalent test IDs.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated agent and protected fixture roots.
+
+    Returns
+    -------
+    None
+        Both documented test-ID spellings pass and omissions are indexed.
+    """
+
+    result_root = tmp_path / "agent"
+    protected = tmp_path / "protected"
+    result_root.mkdir()
+    protected.mkdir()
+    answer = result_root / "answer.md"
+    answer.write_text(
+        "codira.mcp.adapter.MCPAdapter.context_for_task "
+        "src/codira/mcp/adapter.py tests/test_mcp_server.py "
+        "tests/test_mcp_server.py::test_context_page\n",
+        encoding="utf-8",
+    )
+    definition = {
+        "all_of": [
+            {
+                "text_contains": [
+                    "codira.mcp.adapter.MCPAdapter.context_for_task",
+                    "src/codira/mcp/adapter.py",
+                    "tests/test_mcp_server.py",
+                ]
+            },
+            {
+                "any_of": [
+                    {"text_contains": ["tests.test_mcp_server.test_context_page"]},
+                    {"text_contains": ["tests/test_mcp_server.py::test_context_page"]},
+                ]
+            },
+        ]
+    }
+
+    passed = evaluate_oracle(
+        definition,
+        result_root=result_root,
+        result_path="answer.md",
+        result_format="text",
+        protected_root=protected,
+    )
+    assert passed.passed
+    assert "all_of[0].text_contains[2]:passed" in passed.checks
+    assert "all_of[1].any_of[1].text_contains[0]:passed" in passed.checks
+
+    answer.write_text(
+        "codira.mcp.adapter.MCPAdapter.context_for_task\n", encoding="utf-8"
+    )
+    failed = evaluate_oracle(
+        definition,
+        result_root=result_root,
+        result_path="answer.md",
+        result_format="text",
+        protected_root=protected,
+    )
+    assert not failed.passed
+    assert "all_of[0].text_contains[1]:missing" in failed.checks
 
 
 def test_patch_oracle_uses_pristine_copy_and_rejects_tampering(tmp_path: Path) -> None:
@@ -220,9 +295,14 @@ def test_patch_oracle_uses_pristine_copy_and_rejects_tampering(tmp_path: Path) -
             "command": [sys.executable, "verify.py"],
         }
     }
-    assert evaluate_oracle(
+    passed = evaluate_oracle(
         definition, result_root=result_root, protected_root=protected
-    ).passed
+    )
+    assert passed.passed
+    assert "patch.apply_check:passed" in passed.checks
+    assert "patch.apply:passed" in passed.checks
+    assert "patch.protected_command:passed" in passed.checks
+    assert "patch.protected_command.exit_code:0" in passed.checks
     test_file_requirement = {
         "patch_applies_and_tests_pass": {
             **definition["patch_applies_and_tests_pass"],
@@ -241,16 +321,25 @@ def test_patch_oracle_uses_pristine_copy_and_rejects_tampering(tmp_path: Path) -
     assert evaluate_oracle(
         source_file_requirement, result_root=result_root, protected_root=protected
     ).passed
-    (protected / "fail.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
+    (protected / "fail.py").write_text(
+        "raise AssertionError('private diagnostic text')\n", encoding="utf-8"
+    )
     failing_command = {
         "patch_applies_and_tests_pass": {
             **definition["patch_applies_and_tests_pass"],
             "command": [sys.executable, "fail.py"],
         }
     }
-    assert not evaluate_oracle(
+    failed_command = evaluate_oracle(
         failing_command, result_root=result_root, protected_root=protected
-    ).passed
+    )
+    assert not failed_command.passed
+    assert "patch.protected_command:failed" in failed_command.checks
+    assert "patch.protected_command.exit_code:1" in failed_command.checks
+    assert "patch.protected_command.exception_class:AssertionError" in (
+        failed_command.checks
+    )
+    assert "private diagnostic text" not in " ".join(failed_command.checks)
     patch.write_text("tampered", encoding="utf-8")
     assert not evaluate_oracle(
         definition, result_root=result_root, protected_root=protected

@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "oracle_id": "context-page-001",
+  "task_id": "context-page-001",
+  "definition": {
+    "all_of": [
+      {
+        "text_contains": [
+          "codira.mcp.adapter.MCPAdapter.context_for_task",
+          "src/codira/mcp/adapter.py",
+          "tests/test_mcp_server.py"
+        ]
+      },
+      {
+        "any_of": [
+          {
+            "text_contains": [
+              "tests.test_mcp_server.test_context_items_page_complete_evidence_and_method_owner"
+            ]
+          },
+          {
+            "text_contains": [
+              "tests/test_mcp_server.py::test_context_items_page_complete_evidence_and_method_owner"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "visibility": "public"
+}

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -45,7 +46,7 @@ class OracleResult:
     passed : bool
         Whether every required condition held.
     checks : tuple[str, ...]
-        Stable diagnostics without protected fixture content.
+        Stable, content-safe diagnostics for each evaluated oracle component.
     fingerprint : str
         Canonical fingerprint of the oracle definition.
 
@@ -54,6 +55,54 @@ class OracleResult:
     passed: bool
     checks: tuple[str, ...]
     fingerprint: str
+
+
+@dataclass(frozen=True)
+class ProtectedCommandResult:
+    """Summarize a protected command without retaining its output.
+
+    Parameters
+    ----------
+    returncode : int or None
+        Process status, or ``None`` when the command could not be started.
+    stdout_sha256, stderr_sha256 : str
+        Digests of captured output bytes.
+    stdout_size_bytes, stderr_size_bytes : int
+        Captured output sizes.
+    exception_class : str or None
+        Exception class parsed from a traceback, without its message.
+    failure_location : str or None
+        Basename and line number parsed from the final traceback frame.
+
+    Returns
+    -------
+    None
+        Instances contain only public-safe command metadata.
+    """
+
+    returncode: int | None
+    stdout_sha256: str
+    stderr_sha256: str
+    stdout_size_bytes: int
+    stderr_size_bytes: int
+    exception_class: str | None = None
+    failure_location: str | None = None
+
+    @property
+    def passed(self) -> bool:
+        """Return whether the protected command exited successfully.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        bool
+            ``True`` only for exit status zero.
+        """
+
+        return self.returncode == 0
 
 
 @dataclass(frozen=True)
@@ -264,8 +313,8 @@ def _protected_command(command: object) -> Sequence[str]:
     return cast("Sequence[str]", command)
 
 
-def _run_protected(command: object, root: Path) -> bool:
-    """Run a validated argument-vector command in the protected fixture.
+def _run_protected(command: object, root: Path) -> ProtectedCommandResult:
+    """Run a protected command and retain safe output diagnostics.
 
     Parameters
     ----------
@@ -276,8 +325,8 @@ def _run_protected(command: object, root: Path) -> bool:
 
     Returns
     -------
-    bool
-        ``True`` only for zero exit status.
+    ProtectedCommandResult
+        Exit status and output digests without raw command output.
 
     Raises
     ------
@@ -285,12 +334,76 @@ def _run_protected(command: object, root: Path) -> bool:
         If the command is not a safe argument vector.
     """
 
-    return (
-        subprocess.run(
+    try:
+        completed = subprocess.run(
             _protected_command(command), cwd=root, check=False, capture_output=True
-        ).returncode
-        == 0
+        )
+    except OSError as error:
+        return ProtectedCommandResult(
+            returncode=None,
+            stdout_sha256=hashlib.sha256(b"").hexdigest(),
+            stderr_sha256=hashlib.sha256(b"").hexdigest(),
+            stdout_size_bytes=0,
+            stderr_size_bytes=0,
+            exception_class=type(error).__name__,
+        )
+    stdout = completed.stdout if isinstance(completed.stdout, bytes) else b""
+    stderr = completed.stderr if isinstance(completed.stderr, bytes) else b""
+    diagnostic_text = stderr.decode("utf-8", errors="replace")
+    exception_class: str | None = None
+    failure_location: str | None = None
+    if "Traceback (most recent call last):" in diagnostic_text:
+        lines = [line.strip() for line in diagnostic_text.splitlines() if line.strip()]
+        if lines:
+            match = re.match(r"([A-Za-z_][A-Za-z0-9_.]*)(?::|$)", lines[-1])
+            if match is not None:
+                exception_class = match.group(1)
+        locations = re.findall(
+            r'File "[^"/]+/([^"/]+)", line ([0-9]+)', diagnostic_text
+        )
+        if locations:
+            filename, line_number = locations[-1]
+            failure_location = f"{filename}:{line_number}"
+    return ProtectedCommandResult(
+        returncode=completed.returncode,
+        stdout_sha256=hashlib.sha256(stdout).hexdigest(),
+        stderr_sha256=hashlib.sha256(stderr).hexdigest(),
+        stdout_size_bytes=len(stdout),
+        stderr_size_bytes=len(stderr),
+        exception_class=exception_class,
+        failure_location=failure_location,
     )
+
+
+def _command_checks(label: str, result: ProtectedCommandResult) -> tuple[str, ...]:
+    """Convert command execution facts into content-safe check strings.
+
+    Parameters
+    ----------
+    label : str
+        Stable oracle-stage identifier.
+    result : ProtectedCommandResult
+        Captured protected command metadata.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Stable status and digest checks suitable for immutable attempt records.
+    """
+
+    checks = [
+        f"{label}:{'passed' if result.passed else 'failed'}",
+        f"{label}.exit_code:{result.returncode}",
+        f"{label}.stdout_sha256:{result.stdout_sha256}",
+        f"{label}.stdout_size_bytes:{result.stdout_size_bytes}",
+        f"{label}.stderr_sha256:{result.stderr_sha256}",
+        f"{label}.stderr_size_bytes:{result.stderr_size_bytes}",
+    ]
+    if result.exception_class is not None:
+        checks.append(f"{label}.exception_class:{result.exception_class}")
+    if result.failure_location is not None:
+        checks.append(f"{label}.failure_location:{result.failure_location}")
+    return tuple(checks)
 
 
 def _validate_fixture_relative_patch_path(raw: str) -> None:
@@ -385,7 +498,7 @@ def _validate_patch_paths(patch: Path) -> None:
 
 def _patch_check(
     spec: Mapping[str, object], result_root: Path, protected_root: Path
-) -> bool:
+) -> tuple[bool, tuple[str, ...]]:
     """Apply an agent patch to a pristine copy and run protected tests.
 
     Parameters
@@ -399,8 +512,8 @@ def _patch_check(
 
     Returns
     -------
-    bool
-        ``True`` only when apply and protected tests both pass.
+    tuple[bool, tuple[str, ...]]
+        Combined decision and the result of each patch validation stage.
     """
 
     patch = result_root / _safe_path(spec.get("patch_path"), label="patch_path")
@@ -408,9 +521,11 @@ def _patch_check(
         detail = "patch_path escapes agent result root"
         raise ContractError.message(detail)
     if not patch.is_file():
-        return False
+        return False, ("patch.file:missing",)
+    checks = ["patch.file:present"]
     tests = _protected_command(spec.get("command"))
     _validate_patch_paths(patch)
+    checks.append("patch.path_validation:passed")
     required_changed_paths = spec.get("required_changed_paths", [])
     if not isinstance(required_changed_paths, list) or not all(
         isinstance(path, str) and path for path in required_changed_paths
@@ -418,19 +533,33 @@ def _patch_check(
         detail = "required_changed_paths must be a list of non-empty paths"
         raise ContractError.message(detail)
     patch_text = patch.read_text(encoding="utf-8")
-    for raw_path in required_changed_paths:
+    required_paths_passed = True
+    for index, raw_path in enumerate(required_changed_paths):
         changed_path = _safe_path(raw_path, label="required_changed_paths")
         header = f"diff --git a/{changed_path} b/{changed_path}"
-        if header not in patch_text:
-            return False
+        present = header in patch_text
+        required_paths_passed = required_paths_passed and present
+        checks.append(
+            f"patch.required_changed_path[{index}]:{'present' if present else 'missing'}"
+        )
+    if not required_paths_passed:
+        return False, tuple(checks)
     with tempfile.TemporaryDirectory(prefix="codira-agent-oracle-") as temporary:
         destination = Path(temporary) / "fixture"
         shutil.copytree(protected_root, destination, symlinks=False)
-        if not _run_protected(["git", "apply", "--check", str(patch)], destination):
-            return False
-        if not _run_protected(["git", "apply", str(patch)], destination):
-            return False
-        return _run_protected(tests, destination)
+        apply_check = _run_protected(
+            ["git", "apply", "--check", str(patch)], destination
+        )
+        checks.extend(_command_checks("patch.apply_check", apply_check))
+        if not apply_check.passed:
+            return False, tuple(checks)
+        applied = _run_protected(["git", "apply", str(patch)], destination)
+        checks.extend(_command_checks("patch.apply", applied))
+        if not applied.passed:
+            return False, tuple(checks)
+        protected_result = _run_protected(tests, destination)
+        checks.extend(_command_checks("patch.protected_command", protected_result))
+        return protected_result.passed, tuple(checks)
 
 
 def _evaluate(
@@ -439,7 +568,7 @@ def _evaluate(
     result_root: Path,
     protected_root: Path,
     evaluators: Mapping[str, ProtectedEvaluator],
-) -> tuple[bool, str]:
+) -> tuple[bool, tuple[str, ...]]:
     """Evaluate one DSL node recursively.
 
     Parameters
@@ -457,8 +586,8 @@ def _evaluate(
 
     Returns
     -------
-    tuple[bool, str]
-        Decision and stable primitive label.
+    tuple[bool, tuple[str, ...]]
+        Decision and content-safe check results for the oracle node.
 
     Raises
     ------
@@ -473,54 +602,116 @@ def _evaluate(
     if name not in _PRIMITIVES:
         detail = f"unsupported oracle primitive: {name}"
         raise ContractError.message(detail)
+    if name in {"all_of", "any_of"}:
+        return _evaluate_composite(
+            definition, result, result_root, protected_root, evaluators
+        )
     if name == "contains_symbols":
-        return _is_subset(
+        passed = _is_subset(
             payload, result.get("symbols", []) if isinstance(result, Mapping) else []
-        ), name
+        )
+        return passed, (f"contains_symbols:{'passed' if passed else 'failed'}",)
     if name == "contains_paths":
-        return _is_subset(
+        passed = _is_subset(
             payload, result.get("paths", []) if isinstance(result, Mapping) else []
-        ), name
+        )
+        return passed, (f"contains_paths:{'passed' if passed else 'failed'}",)
     if name == "normalized_artifact":
-        return _is_subset(normalize(payload), normalize(result)), name
+        passed = _is_subset(normalize(payload), normalize(result))
+        return passed, (f"normalized_artifact:{'passed' if passed else 'failed'}",)
     if name == "text_contains":
         if not isinstance(payload, list) or not all(
             isinstance(item, str) and item for item in payload
         ):
             detail = "text_contains requires non-empty strings"
             raise ContractError.message(detail)
-        return isinstance(result, str) and all(item in result for item in payload), name
+        if not isinstance(result, str):
+            return False, ("text_contains:artifact_not_text",)
+        checks = tuple(
+            f"text_contains[{index}]:{'passed' if item in result else 'missing'}"
+            for index, item in enumerate(payload)
+        )
+        return all(item in result for item in payload), checks
     if name == "command_passes":
-        return _run_protected(payload, protected_root), name
+        result = _run_protected(payload, protected_root)
+        return result.passed, _command_checks("command_passes", result)
     if name == "patch_applies_and_tests_pass":
         if not isinstance(payload, Mapping):
             detail = "patch primitive must be an object"
             raise ContractError.message(detail)
         return _patch_check(
             cast("Mapping[str, object]", payload), result_root, protected_root
-        ), name
-    if name in {"all_of", "any_of"}:
-        if not isinstance(payload, list) or not payload:
-            detail = f"{name} requires a non-empty list"
-            raise ContractError.message(detail)
-        if not all(isinstance(item, Mapping) for item in payload):
-            detail = f"{name} children must be objects"
-            raise ContractError.message(detail)
-        children = [
-            _evaluate(
-                cast("OracleDefinition", item),
-                result,
-                result_root,
-                protected_root,
-                evaluators,
-            )[0]
-            for item in payload
-        ]
-        return (all(children) if name == "all_of" else any(children)), name
+        )
     if not isinstance(result, Mapping):
         detail = "custom evaluator requires a JSON object artifact"
         raise ContractError.message(detail)
-    return _custom_evaluator(payload, result, protected_root, evaluators), name
+    passed = _custom_evaluator(payload, result, protected_root, evaluators)
+    return passed, (f"custom_evaluator:{'passed' if passed else 'failed'}",)
+
+
+def _evaluate_composite(
+    definition: OracleDefinition,
+    result: object,
+    result_root: Path,
+    protected_root: Path,
+    evaluators: Mapping[str, ProtectedEvaluator],
+) -> tuple[bool, tuple[str, ...]]:
+    """Evaluate and trace one recursive ``all_of`` or ``any_of`` node.
+
+    Parameters
+    ----------
+    name : str
+        Composite operator name.
+    payload : object
+        Candidate child definitions.
+    result : object
+        Parsed task result passed to each child.
+    result_root : pathlib.Path
+        Agent artifact root.
+    protected_root : pathlib.Path
+        Protected grader fixture root.
+    evaluators : collections.abc.Mapping[str, ProtectedEvaluator]
+        Explicit custom evaluator registry.
+
+    Returns
+    -------
+    tuple[bool, tuple[str, ...]]
+        Composite decision and path-qualified child diagnostics.
+
+    Raises
+    ------
+    ContractError
+        If children are absent or malformed.
+    """
+
+    name, payload = next(iter(definition.items()))
+    if not isinstance(payload, list) or not payload:
+        detail = f"{name} requires a non-empty list"
+        raise ContractError.message(detail)
+    if not all(isinstance(item, Mapping) for item in payload):
+        detail = f"{name} children must be objects"
+        raise ContractError.message(detail)
+    children = [
+        _evaluate(
+            cast("OracleDefinition", item),
+            result,
+            result_root,
+            protected_root,
+            evaluators,
+        )
+        for item in payload
+    ]
+    child_checks = tuple(
+        f"{name}[{index}].{check}"
+        for index, (_, checks) in enumerate(children)
+        for check in checks
+    )
+    passed = (
+        all(child_passed for child_passed, _ in children)
+        if name == "all_of"
+        else any(child_passed for child_passed, _ in children)
+    )
+    return passed, (f"{name}:{'passed' if passed else 'failed'}", *child_checks)
 
 
 def _custom_evaluator(
@@ -639,7 +830,7 @@ def evaluate_oracle(  # noqa: PLR0913
     if root not in artifact.resolve().parents:
         detail = "result_path escapes agent result root"
         raise ContractError.message(detail)
-    passed, label = _evaluate(
+    passed, checks = _evaluate(
         definition,
         _result_artifact(artifact, result_format),
         root,
@@ -647,5 +838,5 @@ def evaluate_oracle(  # noqa: PLR0913
         evaluators or {},
     )
     return OracleResult(
-        passed=passed, checks=(label,), fingerprint=canonical_fingerprint(definition)
+        passed=passed, checks=checks, fingerprint=canonical_fingerprint(definition)
     )

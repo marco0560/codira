@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import secrets
 import shutil
@@ -322,30 +323,67 @@ def _model_catalog(
 def _active_pricing(
     pricing: Mapping[str, object], now_utc: datetime | None = None
 ) -> tuple[Mapping[str, object], dict[str, object]]:
-    """Return the one published UTC pricing window active at admission time.
+    """Return conservative prices for the model's active published route.
 
     Parameters
     ----------
     pricing : collections.abc.Mapping[str, object]
-        OpenRouter model pricing with optional UTC weekday overrides.
+        OpenRouter model pricing with optional UTC-window or prompt-token tiers.
     now_utc : datetime.datetime or None, optional
-        UTC instant used for deterministic window selection. ``None`` uses the
-        current UTC time.
+        UTC instant used for deterministic time-window selection in tests.
 
     Returns
     -------
     tuple[collections.abc.Mapping[str, object], dict[str, object]]
-        Active pricing mapping and a public-safe selected-window record.
+        Conservative pricing mapping and a public-safe selection record.
 
     Raises
     ------
     PilotLauncherError
-        If pricing overrides are malformed, overlap, or cannot be interpreted.
+        If pricing overrides are malformed, overlap, or cannot be bounded.
+
+    Notes
+    -----
+    Prompt-token tiers use the highest listed prompt, cache-input, and completion
+    rates. This bounds a session without assuming future prompt sizes or cache
+    behavior.
     """
 
     overrides = pricing.get("overrides", [])
     if not isinstance(overrides, list):
         raise PilotLauncherError("OpenRouter model pricing overrides are malformed")
+    token_tiers = [
+        override
+        for override in overrides
+        if isinstance(override, Mapping) and "min_prompt_tokens" in override
+    ]
+    if token_tiers:
+        if len(token_tiers) != len(overrides):
+            raise PilotLauncherError("OpenRouter model pricing overrides are malformed")
+        thresholds: list[int] = []
+        tier_prices: list[Mapping[str, object]] = [pricing]
+        for tier in token_tiers:
+            threshold = tier.get("min_prompt_tokens")
+            if (
+                not isinstance(threshold, int)
+                or isinstance(threshold, bool)
+                or threshold < 1
+                or any(key in tier for key in ("utc_days", "utc_start", "utc_end"))
+            ):
+                raise PilotLauncherError(
+                    "OpenRouter model pricing token tiers are malformed"
+                )
+            thresholds.append(threshold)
+            tier_prices.append({**pricing, **tier})
+        if len(set(thresholds)) != len(thresholds):
+            raise PilotLauncherError("OpenRouter model pricing token tiers overlap")
+        return _conservative_pricing(tier_prices), {
+            "kind": "token_threshold_worst_case",
+            "tier_count": len(token_tiers),
+            "max_min_prompt_tokens": max(thresholds),
+        }
+    if not overrides:
+        return _conservative_pricing([pricing]), {"kind": "base"}
     instant = now_utc or datetime.now(UTC)
     if instant.tzinfo is None or instant.utcoffset() != UTC.utcoffset(instant):
         raise PilotLauncherError("OpenRouter pricing instant must be UTC")
@@ -385,7 +423,7 @@ def _active_pricing(
     if len(selected) > 1:
         raise PilotLauncherError("OpenRouter model pricing windows overlap")
     if not selected:
-        return pricing, {"kind": "base"}
+        return _conservative_pricing([pricing]), {"kind": "base"}
     override = selected[0]
     window: dict[str, object] = {
         "kind": "override",
@@ -394,7 +432,58 @@ def _active_pricing(
     if "utc_start" in override:
         window["utc_start"] = cast("int", override["utc_start"])
         window["utc_end"] = cast("int", override["utc_end"])
-    return override, window
+    return _conservative_pricing([pricing, {**pricing, **override}]), window
+
+
+def _conservative_pricing(
+    sources: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Bound input and output token prices across the supplied price records.
+
+    Parameters
+    ----------
+    sources : collections.abc.Sequence[collections.abc.Mapping[str, object]]
+        Base pricing and every applicable or potentially active override.
+
+    Returns
+    -------
+    dict[str, object]
+        Pricing record with prompt set to the highest prompt/cache input rate
+        and completion set to the highest output rate.
+
+    Raises
+    ------
+    PilotLauncherError
+        If any required prompt or completion price cannot be parsed.
+    """
+
+    if not sources:
+        raise PilotLauncherError("OpenRouter model pricing is unavailable")
+    prompt_prices: list[float] = []
+    completion_prices: list[float] = []
+    for source in sources:
+        prompt_prices.append(_token_price(source, "prompt"))
+        completion_prices.append(_token_price(source, "completion"))
+        for field in ("input_cache_read", "input_cache_write"):
+            value = source.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, str | int | float) or isinstance(value, bool):
+                raise PilotLauncherError("OpenRouter model cache price is malformed")
+            try:
+                cache_price = float(value)
+            except ValueError as error:
+                raise PilotLauncherError(
+                    "OpenRouter model cache price is malformed"
+                ) from error
+            if not math.isfinite(cache_price) or cache_price < 0:
+                raise PilotLauncherError("OpenRouter model cache price is malformed")
+            prompt_prices.append(cache_price)
+    bounded = dict(sources[0])
+    bounded.pop("overrides", None)
+    bounded["prompt"] = str(max(prompt_prices))
+    bounded["completion"] = str(max(completion_prices))
+    return bounded
 
 
 def _utc_hhmm_minutes(value: int) -> int:
@@ -423,14 +512,14 @@ def _utc_hhmm_minutes(value: int) -> int:
 
 
 def _token_price(pricing: Mapping[str, object], field: str) -> float:
-    """Return one positive per-token price from the active OpenRouter window.
+    """Return one positive per-token price from an OpenRouter price record.
 
     Parameters
     ----------
     pricing : collections.abc.Mapping[str, object]
-        Active base or override price mapping.
+        Base, merged, or override price mapping.
     field : str
-        Required ``prompt`` or ``completion`` price field.
+        Required per-token prompt or completion price field.
 
     Returns
     -------
@@ -440,7 +529,7 @@ def _token_price(pricing: Mapping[str, object], field: str) -> float:
     Raises
     ------
     PilotLauncherError
-        If the selected window omits or corrupts a required price.
+        If the selected price record omits or corrupts a required price.
     """
 
     value = pricing.get(field)
@@ -450,7 +539,7 @@ def _token_price(pricing: Mapping[str, object], field: str) -> float:
         result = float(value)
     except ValueError as error:
         raise PilotLauncherError("OpenRouter model price is malformed") from error
-    if result <= 0:
+    if not math.isfinite(result) or result <= 0:
         raise PilotLauncherError("OpenRouter model price is unavailable")
     return result
 
@@ -524,6 +613,26 @@ def preflight_openrouter_route(
         or completion_price > controls.max_completion_price
     ):
         raise PilotLauncherError("OpenRouter model price exceeds the frozen ceiling")
+    reservation_multiplier = (
+        1
+        if controls.max_total_tokens_scope == "whole-session"
+        else controls.max_response_requests
+        * controls.max_transport_attempts_per_response
+    )
+    token_spend_bound = (
+        reservation_multiplier
+        * controls.max_total_tokens
+        * max(prompt_price, completion_price)
+        / 1_000_000
+    )
+    response_reserve = (
+        context_length * prompt_price + controls.max_output_tokens * completion_price
+    ) / 1_000_000
+    worst_case_attempt_spend = token_spend_bound + response_reserve
+    if controls.max_attempt_spend < worst_case_attempt_spend:
+        raise PilotLauncherError(
+            "attempt spend cap cannot cover the authenticated token reservation"
+        )
 
     authenticated_catalog = _model_catalog(
         _openrouter_json(
@@ -587,11 +696,14 @@ def preflight_openrouter_route(
                 controls.max_transport_attempts_per_response
             ),
             "max_estimated_attempt_spend_usd": controls.max_attempt_spend,
+            "worst_case_reserved_attempt_spend_usd": worst_case_attempt_spend,
             "max_estimated_pilot_spend_usd": controls.max_pilot_spend,
             "max_daily_spend_usd": controls.max_daily_spend,
         },
         "public_route": {
             "context_length": context_length,
+            "token_spend_bound_usd": token_spend_bound,
+            "context_response_reserve_usd": response_reserve,
             "max_completion_tokens": top_provider.get("max_completion_tokens"),
             "max_prompt_usd_per_million": prompt_price,
             "max_completion_usd_per_million": completion_price,
@@ -1119,17 +1231,21 @@ def execution_controls(
         if token_scope_value == "whole-session"
         else request_limit_value * transport_limit_value
     )
+    token_spend_bound = (
+        reservation_multiplier
+        * max_total_tokens
+        * max(float(prompt_price), float(completion_price))
+        / 1_000_000
+    )
+    output_reserve = max_output_tokens * float(completion_price) / 1_000_000
     if (
         float(daily_spend_value) <= 0
         or float(attempt_spend_value) <= 0
         or float(pilot_spend_value) <= 0
         or float(pilot_spend_value) > float(daily_spend_value)
-        or float(pilot_spend_value) < float(attempt_spend_value) * scheduled_attempts
-        or float(attempt_spend_value)
-        < reservation_multiplier
-        * max_total_tokens
-        * max(float(prompt_price), float(completion_price))
-        / 1_000_000
+        or float(pilot_spend_value) + 1e-12
+        < float(attempt_spend_value) * scheduled_attempts
+        or float(attempt_spend_value) < token_spend_bound + output_reserve
     ):
         raise PilotLauncherError("campaign accounting controls are invalid")
     return ExecutionControls(
@@ -1382,6 +1498,7 @@ def execute_pilot_attempt(
         local_reason = observations[-1].get("reason")
         result["failure_class"] = {
             "session_token_budget_exhausted": "session_token_cap_exceeded",
+            "session_token_reservation_exceeded": "session_token_cap_exceeded",
             "provider_usage_unavailable": "provider_usage_unavailable",
             "attempt_spend_budget_exhausted": "attempt_spend_cap_exceeded",
             "attempt_spend_cap_reservation_exceeded": "attempt_spend_cap_exceeded",
@@ -1391,6 +1508,7 @@ def execute_pilot_attempt(
         None if operational_status == "passed" else result["failure_class"]
     )
     oracle_passed, oracle_fingerprint = False, None
+    oracle_checks: list[str] = []
     task_oracle_status = "not_evaluated"
     task_oracle_failure: str | None = None
     if result["outcome"] == "success" and capture_error is not None:
@@ -1400,6 +1518,7 @@ def execute_pilot_attempt(
         )
         task_oracle_status = "failed"
         task_oracle_failure = "workspace_capture"
+        oracle_checks.append("workspace_capture:failed")
     elif result["outcome"] == "success":
         try:
             definition = context.oracles[attempt.task_id]["definition"]
@@ -1413,6 +1532,7 @@ def execute_pilot_attempt(
                 protected_root=protected_root,
             )
             oracle_passed, oracle_fingerprint = outcome.passed, outcome.fingerprint
+            oracle_checks = list(outcome.checks)
             task_oracle_status = "passed" if outcome.passed else "failed"
             if not outcome.passed:
                 result["outcome"], result["failure_class"] = (
@@ -1420,13 +1540,14 @@ def execute_pilot_attempt(
                     "deterministic_oracle",
                 )
                 task_oracle_failure = "deterministic_oracle"
-        except (ContractError, KeyError, TypeError):
+        except (ContractError, KeyError, TypeError) as error:
             result["outcome"], result["failure_class"] = (
                 "oracle_failure",
                 "oracle_contract",
             )
             task_oracle_status = "failed"
             task_oracle_failure = "oracle_contract"
+            oracle_checks.append(f"oracle_contract:{type(error).__name__}")
     result.update(
         {
             "operational_calibration": {
@@ -1437,6 +1558,7 @@ def execute_pilot_attempt(
                 "status": task_oracle_status,
                 "failure_class": task_oracle_failure,
                 "fingerprint": oracle_fingerprint,
+                "checks": oracle_checks,
             },
         }
     )

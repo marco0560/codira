@@ -21,7 +21,7 @@ from scripts.agent_efficiency.campaign_state import CampaignStateError, Campaign
 if TYPE_CHECKING:
     from pathlib import Path
 
-REPORT_VERSION = "1.0"
+REPORT_VERSION = "1.1"
 _SENSITIVE = re.compile(
     r"(?:[A-Za-z][A-Za-z0-9+.-]*://|/(?:[^\s/]+/)+|\b(?:sk|key|token)[_-][^\s]+)",
     re.IGNORECASE,
@@ -194,6 +194,7 @@ def _outcome_axes(result: Mapping[str, object]) -> dict[str, dict[str, object]]:
                 "status": persisted_oracle.get("status"),
                 "failure_class": oracle_failure,
                 "fingerprint": persisted_oracle.get("fingerprint"),
+                "checks": _safe_oracle_checks(persisted_oracle.get("checks")),
                 "redaction_applied": oracle_redacted,
                 "source": "persisted",
             },
@@ -219,10 +220,131 @@ def _outcome_axes(result: Mapping[str, object]) -> dict[str, dict[str, object]]:
             "status": oracle_status,
             "failure_class": failure if oracle_status == "failed" else None,
             "fingerprint": None,
+            "checks": [],
             "redaction_applied": redacted if oracle_status == "failed" else False,
             "source": "legacy_derived",
         },
     }
+
+
+def _safe_oracle_checks(value: object) -> list[str]:
+    """Project deterministic oracle checks without unsafe text or paths.
+
+    Parameters
+    ----------
+    value : object
+        Candidate persisted list of stable oracle check strings.
+
+    Returns
+    -------
+    list[str]
+        Public-safe checks with path-like or overlong values withheld.
+    """
+
+    if not isinstance(value, list):
+        return []
+    checks: list[str] = []
+    for item in value:
+        safe, redacted = _redact_failure(item)
+        if safe is not None:
+            checks.append("redacted" if redacted else safe)
+    return checks
+
+
+def _trajectory_public(value: object) -> dict[str, object] | None:
+    """Return an allowlisted trajectory summary for public reporting.
+
+    Parameters
+    ----------
+    value : object
+        Private runtime trajectory evidence.
+
+    Returns
+    -------
+    dict[str, object] or None
+        Public-safe counters, tool names, and progress markers, or ``None`` when
+        no trajectory summary was recorded.
+
+    Raises
+    ------
+    ReportError
+        If a present trajectory summary has invalid counter or marker fields.
+    """
+
+    if not isinstance(value, Mapping):
+        return None
+    status = value.get("status")
+    if status == "unavailable":
+        return {"status": "unavailable"}
+    if status != "available":
+        raise ReportError("trajectory status is invalid")
+    count_fields = (
+        "event_count",
+        "agent_message_count",
+        "reasoning_item_count",
+        "command_execution_count",
+        "successful_command_count",
+        "failed_command_count",
+        "unknown_command_exit_count",
+        "repeated_command_count",
+        "mcp_call_count",
+        "mcp_repeated_call_count",
+        "file_change_event_count",
+        "changed_file_count",
+    )
+    summary: dict[str, object] = {
+        "status": "available",
+        **{key: _integer(value.get(key), f"trajectory.{key}") for key in count_fields},
+    }
+    for key in ("first_file_change_event_index", "last_file_change_event_index"):
+        field = value.get(key)
+        if field is not None:
+            summary[key] = _integer(field, f"trajectory.{key}")
+        else:
+            summary[key] = None
+    tool_counts = value.get("mcp_tool_counts")
+    if not isinstance(tool_counts, list):
+        raise ReportError("trajectory mcp_tool_counts is invalid")
+    safe_tools: list[dict[str, object]] = []
+    for item in tool_counts:
+        if not isinstance(item, Mapping):
+            raise ReportError("trajectory MCP tool entry is invalid")
+        tool = item.get("tool")
+        if not isinstance(tool, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", tool):
+            raise ReportError("trajectory MCP tool name is invalid")
+        safe_tools.append({"tool": tool, "calls": _integer(item.get("calls"), "calls")})
+    summary["mcp_tool_counts"] = safe_tools
+    markers = value.get("progress_markers")
+    if not isinstance(markers, list):
+        raise ReportError("trajectory progress_markers is invalid")
+    safe_markers: list[dict[str, object]] = []
+    allowed_kinds = {
+        "command_succeeded",
+        "command_failed",
+        "mcp_call",
+        "file_change",
+    }
+    for marker in markers:
+        if not isinstance(marker, Mapping):
+            raise ReportError("trajectory progress marker is invalid")
+        kind = marker.get("kind")
+        if kind not in allowed_kinds:
+            raise ReportError("trajectory progress marker kind is invalid")
+        safe_markers.append(
+            {
+                "event_index": _integer(marker.get("event_index"), "event_index"),
+                "kind": kind,
+            }
+        )
+    summary["progress_markers"] = safe_markers
+    summary["progress_markers_truncated"] = (
+        value.get("progress_markers_truncated") is True
+    )
+    summary["omitted_progress_marker_count"] = _integer(
+        value.get("omitted_progress_marker_count"),
+        "trajectory.omitted_progress_marker_count",
+    )
+    return summary
 
 
 def _axis_status_count(
@@ -314,6 +436,7 @@ def _attempt_public(record: Mapping[str, object]) -> dict[str, object]:
         "tool_call_count": _integer(
             evidence.get("jsonl_event_count"), "jsonl_event_count"
         ),
+        "trajectory": _trajectory_public(evidence.get("trajectory")),
     }
     public.update(_outcome_axes(result))
     return public
@@ -429,6 +552,88 @@ def build_report(store: CampaignStore) -> dict[str, object]:
     }
 
 
+def _oracle_check_lines(attempts: list[object]) -> list[str]:
+    """Render validated oracle diagnostics as table rows.
+
+    Parameters
+    ----------
+    attempts : list[object]
+        Canonical public attempt projections.
+
+    Returns
+    -------
+    list[str]
+        Markdown heading, table header, and rows.
+
+    Raises
+    ------
+    ReportError
+        If an attempt or its task-oracle check list is malformed.
+    """
+
+    lines = ["", "## Oracle checks", "", "| Attempt | Checks |", "| --- | --- |"]
+    for attempt in attempts:
+        if not isinstance(attempt, Mapping):
+            raise ReportError("report attempt is invalid")
+        oracle = attempt.get("task_oracle")
+        if not isinstance(oracle, Mapping):
+            raise ReportError("report task-oracle axis is invalid")
+        checks = oracle.get("checks")
+        if not isinstance(checks, list) or not all(
+            isinstance(item, str) for item in checks
+        ):
+            raise ReportError("report oracle checks are invalid")
+        lines.append(
+            f"| {attempt['attempt_id']} | {'; '.join(checks) if checks else 'none recorded'} |"
+        )
+    return lines
+
+
+def _trajectory_lines(attempts: list[object]) -> list[str]:
+    """Render validated safe trajectory summaries as table rows.
+
+    Parameters
+    ----------
+    attempts : list[object]
+        Canonical public attempt projections.
+
+    Returns
+    -------
+    list[str]
+        Markdown heading, table header, and rows.
+
+    Raises
+    ------
+    ReportError
+        If an attempt projection is malformed.
+    """
+
+    lines = [
+        "",
+        "## Trajectory progress",
+        "",
+        "| Attempt | Commands ok/failed | Repeated commands | MCP calls/repeats | File changes |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for attempt in attempts:
+        if not isinstance(attempt, Mapping):
+            raise ReportError("report attempt is invalid")
+        trajectory = attempt.get("trajectory")
+        if (
+            not isinstance(trajectory, Mapping)
+            or trajectory.get("status") != "available"
+        ):
+            lines.append(f"| {attempt['attempt_id']} | unavailable | — | — | — |")
+            continue
+        lines.append(
+            f"| {attempt['attempt_id']} | {trajectory['successful_command_count']}/{trajectory['failed_command_count']} | "
+            f"{trajectory['repeated_command_count']} | "
+            f"{trajectory['mcp_call_count']}/{trajectory['mcp_repeated_call_count']} | "
+            f"{trajectory['file_change_event_count']}/{trajectory['changed_file_count']} |"
+        )
+    return lines
+
+
 def render_markdown(report: Mapping[str, object]) -> str:
     """Render deterministic Markdown only from a canonical public report.
 
@@ -503,6 +708,8 @@ def render_markdown(report: Mapping[str, object]) -> str:
         lines.append(
             f"| {attempt['attempt_id']} | {operational['status']} | {oracle['status']} | {source} |"
         )
+    lines.extend(_oracle_check_lines(attempts))
+    lines.extend(_trajectory_lines(attempts))
     lines.extend(
         [
             "",

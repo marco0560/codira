@@ -295,7 +295,16 @@ def _validate_accounting(manifest: Mapping[str, object], attempts: int) -> None:
         )
         / 1_000_000
     )
-    if total > daily or total < per_attempt * attempts or per_attempt < token_bound:
+    output_reserve = (
+        int(cast("int", budgets["max_output_tokens"]))
+        * float(cast("int | float", provider["max_completion_usd_per_million"]))
+        / 1_000_000
+    )
+    if (
+        total > daily
+        or total + 1e-12 < per_attempt * attempts
+        or per_attempt < token_bound + output_reserve
+    ):
         raise CampaignFactoryError.unbounded_accounting()
 
 

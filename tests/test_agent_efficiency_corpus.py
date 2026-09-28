@@ -20,7 +20,7 @@ BENCHMARK_ROOT = ROOT / "benchmarks" / "agent-efficiency"
 
 
 def test_public_phase3_records_are_complete_and_cross_referenced() -> None:
-    """Load exactly the admitted fixtures and seven coherent task/oracle pairs.
+    """Load exactly the admitted fixtures and eight coherent task/oracle pairs.
 
     Parameters
     ----------
@@ -49,6 +49,7 @@ def test_public_phase3_records_are_complete_and_cross_referenced() -> None:
         "patch-002",
         "architecture-001",
         "documentation-001",
+        "context-page-001",
     }
 
 
