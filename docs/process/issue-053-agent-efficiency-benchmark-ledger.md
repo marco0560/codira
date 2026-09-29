@@ -62,7 +62,7 @@ do not replace end-to-end task success or token accounting.
   approval of this plan. Report completion readiness and remaining actions.
 
 Implementation base at planning: `32603dcddd0325939fc3f3c1b36d7d90e4a038b0`.
-Validated campaign base: pending.
+Validated campaign base: `ccbb7aa0ca0c7db7929b862dace84d8ca352e620` (full repository gate passed after the Pilot 025 comparison was added; the qualification closeout that follows is documentation-only).
 
 ## Fixture and task register
 
@@ -992,9 +992,37 @@ limits, retry allowance, and estimate with explicit uncertainty. Fix defects
 through the implementation branch and assign a new experiment identity when
 inputs change. Do not fabricate provider usage or silently substitute a model.
 
+### Bounded-pilot qualification closeout (2026-09-29)
+
+Pilot 025 is the latest completed run. Its exact OpenRouter Responses route
+(`openai/gpt-6-luna`, high reasoning), `mcp-required-v2` treatment, 1,000,000
+whole-session token cap, 32,000 output-token cap, 30-request attempt limit,
+runtime image digest, and runtime-profile fingerprint are preserved in its
+immutable campaign manifest. Authenticated preflight and the six-attempt run
+both exited successfully; all six attempts passed operational calibration and
+their task oracle. The largest attempt used 648,626 input-plus-output tokens,
+24 requests, and 196.8 seconds, below the configured limits.
+
+This closes the bounded pilot and qualifies only that recorded route/harness
+combination. It does not establish a general model or provider qualification,
+or a stable Codira-MCP efficacy result: the pilot has one paired repetition per
+task, and `patch-002` changed since Pilot 023. The [Pilot 025 comparison](agent-efficiency-pilot-025-comparison-2026-09-29.md)
+contains the analysis and links to the campaign, execution, and protected-asset
+evidence. The canonical [campaign factory](agent-efficiency-campaign-factory.md)
+now records this qualification boundary and still requires a fresh authenticated
+route and harness check before every campaign.
+
+The implementation branch has passed the full repository gate at the validated
+campaign base above. The local campaign branch can now fast-forward to the
+reviewed implementation and this closeout. No full 60-run campaign has been
+approved or launched; Phase 7 and its separate manifest, budget, and execution
+approval remain pending.
+
 ### Gate
 
-Pilot evidence reviewed and full-campaign manifest/budget approved.
+Bounded-pilot evidence reviewed and route-specific qualification documented.
+Before Phase 7, separately approve its full-campaign manifest, budget, and
+execution.
 
 ## Phase 7 — Full campaign and evidence validation
 

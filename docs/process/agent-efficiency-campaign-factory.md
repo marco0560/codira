@@ -157,6 +157,22 @@ the campaign's durable artifacts.
   identity or automatically retry after a changed task, model, provider,
   prompt, budget, runtime, or harness control.
 
+## Recorded route qualification
+
+Pilot 025 provides a bounded qualification record for the exact OpenRouter
+Responses route `openai/gpt-6-luna` at high reasoning, using the harness
+revision recorded by its campaign, the `mcp-required-v2` treatment, and its
+pinned runtime image and profile. Authenticated preflight and all six scheduled
+attempts completed successfully; see the [Pilot 025 comparison](agent-efficiency-pilot-025-comparison-2026-09-29.md)
+and its linked immutable evidence.
+
+This qualifies that route and harness combination for the recorded pilot only.
+It does not establish general model quality, an MCP treatment effect, or
+qualification of another OpenRouter model, provider, reasoning setting, or
+harness revision. The pre-pilot checklist above remains mandatory: verify the
+current authenticated route, limits, prices, usage contract, and harness before
+every campaign, even when its proposed settings match Pilot 025.
+
 ## Fixture-environment image preparation
 
 Before generating a replacement pilot, build a fresh candidate image from the
