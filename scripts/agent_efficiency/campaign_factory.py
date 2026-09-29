@@ -62,12 +62,13 @@ class CampaignFactoryError(ValueError):
         return cls(detail)
 
     @classmethod
-    def missing_seed(cls) -> CampaignFactoryError:
-        """Build the pilot seed requirement error.
+    def missing_seed(cls, stage: str = "pilot") -> CampaignFactoryError:
+        """Build the paired-stage seed requirement error.
 
         Parameters
         ----------
-        None
+        stage : str, optional
+            Paired execution stage requiring a deterministic seed.
 
         Returns
         -------
@@ -75,7 +76,7 @@ class CampaignFactoryError(ValueError):
             Stable missing-seed failure.
         """
 
-        return cls("pilot requires a deterministic schedule seed")
+        return cls(f"{stage} requires a deterministic schedule seed")
 
     @classmethod
     def invalid_fixture_binding(cls) -> CampaignFactoryError:
@@ -181,14 +182,21 @@ def build_campaign(
         if runtime_profile != expected_profile:
             raise CampaignFactoryError.runtime_profile_mismatch()
     stage = cast("str", specification["stage"])
+    accounting = cast("Mapping[str, object]", specification["accounting"])
+    shared_pool = _uses_shared_campaign_pool(stage, accounting)
     task_ids = tuple(cast("list[str]", specification["task_ids"]))
-    required_count = 1 if stage == "calibration" else 3
+    required_count = {"calibration": 1, "pilot": 3, "full-campaign": 6}[stage]
     if len(task_ids) != required_count:
         raise CampaignFactoryError.stage_cardinality(stage, required_count)
-    if stage == "pilot" and "seed" not in specification:
-        raise CampaignFactoryError.missing_seed()
+    if stage != "calibration" and "seed" not in specification:
+        raise CampaignFactoryError.missing_seed(stage)
+    required_repetitions = 5 if stage == "full-campaign" else 1
+    if specification.get("repetitions", 1) != required_repetitions:
+        detail = f"{stage} requires exactly {required_repetitions} repetitions"
+        raise CampaignFactoryError.message(detail)
     tasks: dict[str, Mapping[str, object]] = {}
     fixtures: dict[str, Mapping[str, object]] = {}
+    oracle_fingerprints: dict[str, str] = {}
     for task_id in task_ids:
         task = load_document(benchmark_root / "tasks" / f"{task_id}.json", "task")
         fixture_id = task.get("fixture_id")
@@ -198,6 +206,22 @@ def build_campaign(
         fixtures[fixture_id] = load_document(
             benchmark_root / "fixtures" / f"{fixture_id}.json", "fixture"
         )
+        if stage == "full-campaign":
+            oracle_id = task["oracle_id"]
+            oracle = load_document(
+                benchmark_root / "oracles" / f"{oracle_id}.json", "oracle"
+            )
+            if (
+                task["task_id"] != task_id
+                or oracle["task_id"] != task_id
+                or oracle["oracle_id"] != oracle_id
+            ):
+                detail = "task oracle binding is invalid"
+                raise CampaignFactoryError.message(detail)
+            oracle_fingerprints[task_id] = canonical_fingerprint(oracle)
+    if stage == "full-campaign" and len(fixtures) != 3:
+        detail = "full-campaign requires exactly three immutable fixtures"
+        raise CampaignFactoryError.message(detail)
     manifest = {
         "schema_version": specification["schema_version"],
         "campaign_id": specification["campaign_id"],
@@ -228,7 +252,7 @@ def build_campaign(
         raise CampaignFactoryError(str(error)) from error
     schedule = _schedule(stage, task_ids, specification)
     _validate_accounting(manifest, len(schedule))
-    plan = {
+    plan: dict[str, object] = {
         "factory_version": FACTORY_VERSION,
         "stage": stage,
         "campaign_id": manifest["campaign_id"],
@@ -245,13 +269,77 @@ def build_campaign(
             "requires_tmux_durable_log_and_exit_status": True,
         },
     }
+    if stage == "full-campaign":
+        from scripts.agent_efficiency.full_campaign import (
+            CHECKPOINT_SECONDS,
+            harness_fingerprint,
+        )
+
+        plan.update(
+            seed=specification["seed"],
+            repetitions=required_repetitions,
+            oracle_fingerprints=oracle_fingerprints,
+            harness_fingerprint=harness_fingerprint(),
+            checkpoint_seconds=CHECKPOINT_SECONDS,
+        )
+        cast("dict[str, object]", plan["execution"]).update(
+            requires_full_campaign_executor_qualification=True,
+            requires_registry_image_admission=True,
+        )
+        if shared_pool:
+            cast("dict[str, object]", plan["execution"])[
+                "requires_shared_campaign_budget_enforcement"
+            ] = True
     return manifest, plan
+
+
+def _uses_shared_campaign_pool(stage: str, accounting: Mapping[str, object]) -> bool:
+    """Admit pooled accounting only for a full-campaign specification.
+
+    Parameters
+    ----------
+    stage : str
+        Validated factory stage.
+    accounting : collections.abc.Mapping[str, object]
+        Validated accounting controls.
+
+    Returns
+    -------
+    bool
+        Whether the declared reservation mode uses a shared pool.
+
+    Raises
+    ------
+    CampaignFactoryError
+        If an existing pilot or calibration requests pooled accounting.
+    """
+
+    shared_pool = accounting.get("budget_reservation_mode") == "shared-pool"
+    if shared_pool and stage != "full-campaign":
+        detail = "shared campaign budgets require the full-campaign stage"
+        raise CampaignFactoryError.message(detail)
+    return shared_pool
 
 
 def _schedule(
     stage: str, task_ids: tuple[str, ...], specification: Mapping[str, object]
 ) -> list[dict[str, object]]:
-    """Return the stage-constrained deterministic attempt schedule."""
+    """Return the stage-constrained deterministic attempt schedule.
+
+    Parameters
+    ----------
+    stage : str
+        Calibration, pilot, or full-campaign stage.
+    task_ids : tuple[str, ...]
+        Validated unique task identities.
+    specification : collections.abc.Mapping[str, object]
+        Validated specification containing the paired-stage seed.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Frozen schedule with one, six, or sixty attempts.
+    """
 
     if stage == "calibration":
         task_id = task_ids[0]
@@ -265,11 +353,38 @@ def _schedule(
             }
         ]
     seed = cast("int", specification["seed"])
-    return [item.__dict__ for item in build_paired_schedule(task_ids, 1, seed)]
+    repetitions = 5 if stage == "full-campaign" else 1
+    return [
+        item.__dict__ for item in build_paired_schedule(task_ids, repetitions, seed)
+    ]
 
 
 def _validate_accounting(manifest: Mapping[str, object], attempts: int) -> None:
-    """Reject spending ceilings that cannot bound the frozen schedule."""
+    """Validate attempt reserves and the declared aggregate reservation mode.
+
+    Parameters
+    ----------
+    manifest : collections.abc.Mapping[str, object]
+        Validated campaign with explicit price and spending controls.
+    attempts : int
+        Number of scheduled executions.
+
+    Returns
+    -------
+    None
+        Sum mode funds every ceiling; shared mode funds at least one reserve.
+
+    Raises
+    ------
+    CampaignFactoryError
+        If attempt, aggregate, or daily controls cannot fund their reserves.
+
+    Notes
+    -----
+    A shared pool requires a qualified executor that persists aggregate usage
+    and reserves the next attempt before starting it. Factory validation alone
+    does not enforce that pool during execution.
+    """
 
     accounting = cast("Mapping[str, object]", manifest["accounting"])
     budgets = cast("Mapping[str, object]", manifest["budgets"])
@@ -300,9 +415,12 @@ def _validate_accounting(manifest: Mapping[str, object], attempts: int) -> None:
         * float(cast("int | float", provider["max_completion_usd_per_million"]))
         / 1_000_000
     )
+    required_total = per_attempt * (
+        1 if accounting.get("budget_reservation_mode") == "shared-pool" else attempts
+    )
     if (
         total > daily
-        or total + 1e-12 < per_attempt * attempts
+        or total + 1e-12 < required_total
         or per_attempt < token_bound + output_reserve
     ):
         raise CampaignFactoryError.unbounded_accounting()
@@ -341,6 +459,48 @@ def write_campaign_artifacts(
     _atomic_json(manifest_path, manifest)
     _atomic_json(plan_path, plan)
     return manifest_path, plan_path
+
+
+def validate_campaign_artifacts(
+    output_directory: Path, manifest: Mapping[str, object], plan: Mapping[str, object]
+) -> None:
+    """Check existing factory artifacts against the current frozen inputs.
+
+    Parameters
+    ----------
+    output_directory : pathlib.Path
+        Existing immutable campaign directory.
+    manifest : collections.abc.Mapping[str, object]
+        Expected manifest rebuilt from the validated specification.
+    plan : collections.abc.Mapping[str, object]
+        Expected launch plan including schedule and oracle fingerprints.
+
+    Returns
+    -------
+    None
+        Successful validation leaves both artifacts unchanged.
+
+    Raises
+    ------
+    CampaignFactoryError
+        If artifacts are malformed or differ from the frozen inputs.
+    OSError
+        If an artifact cannot be read.
+    """
+
+    for filename, expected in (("campaign.json", manifest), ("launch-plan.json", plan)):
+        try:
+            actual = json.loads(
+                (output_directory / filename).read_text(encoding="utf-8")
+            )
+        except json.JSONDecodeError as error:
+            detail = "generated campaign artifact is malformed"
+            raise CampaignFactoryError.message(detail) from error
+        if not isinstance(actual, dict) or canonical_fingerprint(
+            actual
+        ) != canonical_fingerprint(expected):
+            detail = "generated campaign artifact differs from frozen inputs"
+            raise CampaignFactoryError.message(detail)
 
 
 def _atomic_json(path: Path, document: Mapping[str, object]) -> None:

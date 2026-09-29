@@ -22,6 +22,47 @@ Stages are intentionally constrained:
 - `calibration`: exactly one task and one Codira-MCP request;
 - `pilot`: exactly three tasks, a required deterministic `seed`, and six
   paired baseline/Codira-MCP requests.
+- `full-campaign`: exactly six tasks across three admitted fixtures, a
+  deterministic `seed`, and exactly five repetitions per task: sixty paired
+  baseline/Codira-MCP attempts. The specification must pin the runtime image
+  and profile. Its launch plan also freezes each selected oracle fingerprint
+  and the host harness fingerprint, and requires executor qualification and
+  registry image admission.
+
+Check an existing factory output against the current specification, tasks,
+fixtures, and (for a full campaign) oracles without rewriting its artifacts:
+
+```bash
+uv run python scripts/generate_agent_efficiency_campaign.py \
+  --check \
+  --spec benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-005.json \
+  --output-dir .artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-005
+```
+
+Generation and this offline check do not admit paid execution. The deterministic
+executor accepts both pilots and full campaigns. Full campaigns
+use the registered pilot runner with `--full-campaign --launch-plan`; a pilot
+invocation still rejects shared-pool accounting. Full-plan verification checks
+all sixty schedule members, the six oracles, the harness fingerprint, and the
+six-hour checkpoint before credential access.
+The legacy accounting field `max_estimated_pilot_spend_usd` means the aggregate
+spending allowance for the selected stage, including a full campaign.
+
+`accounting.budget_reservation_mode` accepts `sum-attempt-ceilings` (the
+default) or `shared-pool`. The default requires funding every scheduled
+attempt's maximum upfront. A full campaign may instead declare a smaller
+shared pool, funding at least one complete attempt reserve. Its launch plan
+then requires shared-budget enforcement by the full-campaign executor: persist
+aggregate usage, reserve the next attempt before starting it, release unused
+reserve only after complete usage is known, and stop when another attempt
+cannot be funded. Preserve that pool across checkpoints, resumes, and daily
+key resets. Before a fresh pair, fund both remaining arms at their per-attempt
+reserves. The runner uses an exclusive process lock and immutable reservation
+and settlement files under `state/budget/`. A settlement is accepted only with
+complete received provider usage and a matching immutable result record.
+Unfinished reservations, unknown billing, changed budget identity, operational
+failures, and oracle-contract defects block automatic resumption. Scored task
+failures remain results and do not add attempts.
 
 Accounting declares the meaning of `budgets.max_total_tokens` through the
 optional `accounting.max_total_tokens_scope`. Fresh multi-continuation pilots
@@ -127,6 +168,11 @@ the campaign's durable artifacts.
   runtime to cover the declared token/output reserve, then require authenticated
   preflight to cover the actual context-sized response reserve. Do not copy
   dollar values to another model or provider.
+  For a full campaign using a shared pool, verify persistent aggregate
+  accounting and next-attempt reservation independently of the daily key cap.
+  A smaller campaign pool can stop execution before all scheduled attempts
+  complete; preserve those pending identities rather than silently expanding
+  the pool. The factory's offline admission is not proof of runtime enforcement.
 - **Oracle traceability:** confirm the result records each deterministic
   subcheck as pass/fail, including the individual patch/path/protected-command
   stages. For patch tasks, require the exact necessary source and test paths and
@@ -156,6 +202,30 @@ the campaign's durable artifacts.
   operational and oracle results, logs, and final report. Do not reuse an
   identity or automatically retry after a changed task, model, provider,
   prompt, budget, runtime, or harness control.
+
+## Full-campaign checkpoints and resume
+
+Full campaigns checkpoint between complete pairs after six hours. The original
+launch receipt and frozen schedule remain unchanged. Use the deterministic
+executor with the same campaign directory, execution root, seed, runtime, and
+fixture sources, replacing `--launch` with `--resume`. Each invocation gets a
+separate `resume-NNN-receipt.json`, log, exit file, and tmux session; no completed
+result or earlier log is overwritten. The runner revalidates the entire budget
+journal before executing pending attempts.
+
+A key top-up can resolve a clean authenticated admission stop, and a daily
+allowance reset can fund a later invocation. Current route admission requires
+the entire declared aggregate allowance to remain available on the key;
+execution in smaller funded chunks is not yet qualified. Neither changes the campaign's
+fixed aggregate ceiling. If that pool cannot fund another pair, the campaign
+stops with its pending schedule preserved. An allowance change needs explicit
+approval and a new immutable experiment identity; do not edit the budget journal.
+
+A provider or transport failure during an attempt requires diagnosis: topping
+up does not make uncertain billing or an unfinished reservation safe to retry.
+Preserve the failed attempt and its raw evidence. Automatic retries of failed
+attempts are not qualified. Explicit paid authorization remains required for
+initial launch and for a restart after a diagnosed stop.
 
 ## Recorded route qualification
 

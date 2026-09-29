@@ -14,6 +14,7 @@ if __package__ in {None, ""}:
 from scripts.agent_efficiency.campaign_factory import (
     CampaignFactoryError,
     build_campaign,
+    validate_campaign_artifacts,
     write_campaign_artifacts,
 )
 from scripts.agent_efficiency.contracts import ContractError, load_document
@@ -29,17 +30,22 @@ def build_parser() -> argparse.ArgumentParser:
     Returns
     -------
     argparse.ArgumentParser
-        Parser requiring a versioned specification and fresh output directory.
+        Parser requiring a specification and output directory for generation or checks.
     """
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Validate existing immutable artifacts without rewriting them.",
+    )
     return parser
 
 
 def main(arguments: list[str] | None = None) -> int:
-    """Generate fresh immutable artifacts from a versioned specification.
+    """Generate or check immutable artifacts from a versioned specification.
 
     Parameters
     ----------
@@ -58,9 +64,14 @@ def main(arguments: list[str] | None = None) -> int:
         manifest, plan = build_campaign(
             specification, Path("benchmarks") / "agent-efficiency"
         )
-        manifest_path, plan_path = write_campaign_artifacts(
-            args.output_dir, manifest, plan
-        )
+        if args.check:
+            validate_campaign_artifacts(args.output_dir, manifest, plan)
+            manifest_path = args.output_dir / "campaign.json"
+            plan_path = args.output_dir / "launch-plan.json"
+        else:
+            manifest_path, plan_path = write_campaign_artifacts(
+                args.output_dir, manifest, plan
+            )
     except (CampaignFactoryError, ContractError, OSError) as error:
         print(f"campaign factory error: {error}", file=sys.stderr)
         return 2
@@ -70,6 +81,8 @@ def main(arguments: list[str] | None = None) -> int:
                 "campaign_manifest": str(manifest_path),
                 "launch_plan": str(plan_path),
                 "manifest_fingerprint": plan["manifest_fingerprint"],
+                "scheduled_attempt_count": plan["scheduled_attempt_count"],
+                "validation": "passed" if args.check else "generated",
             },
             sort_keys=True,
         )

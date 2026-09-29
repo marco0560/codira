@@ -5,6 +5,12 @@
     "accounting": {
       "additionalProperties": false,
       "properties": {
+        "budget_reservation_mode": {
+          "enum": [
+            "sum-attempt-ceilings",
+            "shared-pool"
+          ]
+        },
         "max_daily_spend_usd": {
           "exclusiveMinimum": 0,
           "type": "number"

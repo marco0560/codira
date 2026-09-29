@@ -212,6 +212,9 @@ SCHEMAS = {
                     "max_total_tokens_scope": {
                         "enum": ["whole-session", "per-continuation"]
                     },
+                    "budget_reservation_mode": {
+                        "enum": ["sum-attempt-ceilings", "shared-pool"]
+                    },
                 },
             },
             "resource_controls": {
@@ -348,7 +351,7 @@ _CAMPAIGN_SPEC_PROPERTIES.pop("task_fingerprints")
 _CAMPAIGN_SPEC_PROPERTIES.pop("task_fixture_ids")
 _CAMPAIGN_SPEC_PROPERTIES.update(
     {
-        "stage": {"enum": ["calibration", "pilot"]},
+        "stage": {"enum": ["calibration", "pilot", "full-campaign"]},
         "task_ids": {
             "type": "array",
             "minItems": 1,
@@ -356,6 +359,7 @@ _CAMPAIGN_SPEC_PROPERTIES.update(
             "uniqueItems": True,
         },
         "seed": {"type": "integer", "minimum": 0},
+        "repetitions": {"type": "integer", "minimum": 1},
     }
 )
 SCHEMAS["campaign-spec"] = schema(
@@ -371,6 +375,19 @@ SCHEMAS["campaign-spec"] = schema(
     ],
     _CAMPAIGN_SPEC_PROPERTIES,
 )
+SCHEMAS["campaign-spec"]["allOf"] = [
+    {
+        "if": {"properties": {"stage": {"const": "full-campaign"}}},
+        "then": {
+            "required": [
+                "seed",
+                "repetitions",
+                "runtime_image",
+                "runtime_profile_fingerprint",
+            ],
+        },
+    }
+]
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -790,6 +790,27 @@ def test_execution_controls_reject_drift_before_attempt_side_effects() -> None:
         execution_controls(manifest)
 
 
+def test_pilot_executor_rejects_shared_campaign_accounting() -> None:
+    """Block pooled budgets until a full-campaign executor is qualified.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        No pilot execution path can silently omit aggregate pool enforcement.
+    """
+
+    manifest = _manifest()
+    accounting = manifest["accounting"]
+    assert isinstance(accounting, dict)
+    accounting["budget_reservation_mode"] = "shared-pool"
+    with pytest.raises(PilotLauncherError, match="qualified full-campaign executor"):
+        execution_controls(manifest)
+
+
 def test_execution_controls_reject_an_unfunded_token_ceiling() -> None:
     """Reject accounting that cannot cover the configured maximum token spend.
 

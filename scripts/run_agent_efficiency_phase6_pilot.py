@@ -23,6 +23,7 @@ import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import cast
 from urllib.error import HTTPError, URLError
@@ -233,6 +234,8 @@ class PilotExecutionContext:
     provider_context_length : int or None, optional
         Context size from the immediately preceding authenticated route
         preflight; absent only in deterministic unit-test contexts.
+    full_campaign : bool, optional
+        Use the qualified sixty-attempt controls and persistent shared budget.
 
     Returns
     -------
@@ -249,6 +252,7 @@ class PilotExecutionContext:
     upstream_token: str
     manifest: Mapping[str, object]
     provider_context_length: int | None = None
+    full_campaign: bool = False
 
 
 @dataclass(frozen=True)
@@ -1283,7 +1287,10 @@ def prepare_protected_fixture(
 
 
 def execution_controls(
-    manifest: Mapping[str, object], *, scheduled_attempts: int = 6
+    manifest: Mapping[str, object],
+    *,
+    scheduled_attempts: int = 6,
+    full_campaign: bool = False,
 ) -> ExecutionControls:
     """Return complete typed execution controls before any attempt side effect.
 
@@ -1295,6 +1302,8 @@ def execution_controls(
         Number of frozen provider attempts whose aggregate cap must fit the
         declared pilot spending ceiling. The paired pilot defaults to six;
         the dedicated route calibration supplies one.
+    full_campaign : bool, optional
+        Admit the shared pool only for the qualified sixty-attempt runner.
 
     Returns
     -------
@@ -1359,6 +1368,14 @@ def execution_controls(
     request_limit = accounting.get("max_response_requests_per_attempt")
     transport_limit = accounting.get("max_transport_attempts_per_response", 1)
     token_scope = accounting.get("max_total_tokens_scope", "per-continuation")
+    reservation_mode = accounting.get("budget_reservation_mode", "sum-attempt-ceilings")
+    shared_pool = reservation_mode == "shared-pool"
+    if reservation_mode not in {"shared-pool", "sum-attempt-ceilings"} or (
+        shared_pool and not (full_campaign and scheduled_attempts == 60)
+    ):
+        raise PilotLauncherError(
+            "shared campaign budgets require a qualified full-campaign executor"
+        )
     daily_spend_value = cast("int | float", daily_spend)
     attempt_spend_value = cast("int | float", attempt_spend)
     pilot_spend_value = cast("int | float", pilot_spend)
@@ -1397,7 +1414,7 @@ def execution_controls(
         or float(pilot_spend_value) <= 0
         or float(pilot_spend_value) > float(daily_spend_value)
         or float(pilot_spend_value) + 1e-12
-        < float(attempt_spend_value) * scheduled_attempts
+        < float(attempt_spend_value) * (1 if shared_pool else scheduled_attempts)
         or float(attempt_spend_value) < token_spend_bound + output_reserve
     ):
         raise PilotLauncherError("campaign accounting controls are invalid")
@@ -1457,7 +1474,9 @@ def execute_pilot_attempt(
     fixture_id = str(task["fixture_id"])
     fixture = context.fixtures[fixture_id]
     controls = execution_controls(
-        context.manifest, scheduled_attempts=len(store.schedule)
+        context.manifest,
+        scheduled_attempts=len(store.schedule),
+        full_campaign=context.full_campaign,
     )
     attempt_root = store.root / "attempt-work" / attempt.attempt_id
     if attempt_root.exists():
@@ -1776,7 +1795,62 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime", default="podman")
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--full-campaign", action="store_true")
+    parser.add_argument("--launch-plan", type=Path)
     return parser
+
+
+def execution_plan(
+    manifest: Mapping[str, object],
+    task_ids: Sequence[str],
+    seed: int,
+    launch_plan: Path | None,
+    *,
+    full_campaign: bool,
+) -> tuple[dict[str, object], tuple[ScheduledAttempt, ...]]:
+    """Admit the selected pilot or frozen full-campaign schedule.
+
+    Parameters
+    ----------
+    manifest : Mapping[str, object]
+        Schema-validated campaign manifest.
+    task_ids : Sequence[str]
+        Requested frozen task identities.
+    seed : int
+        Approved deterministic schedule seed.
+    launch_plan : pathlib.Path or None
+        Required factory artifact for a full campaign.
+    full_campaign : bool
+        Select the qualified sixty-attempt planning contract.
+
+    Returns
+    -------
+    tuple[dict[str, object], tuple[ScheduledAttempt, ...]]
+        Validated plan and exact schedule before credential access.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the full plan is missing, malformed, or selects different tasks.
+    ValueError
+        If a frozen plan, oracle, or harness identity differs.
+    """
+
+    if not full_campaign:
+        return build_pilot_plan(manifest, task_ids, seed), build_paired_schedule(
+            task_ids, 1, seed
+        )
+    from scripts.agent_efficiency.full_campaign import validate_full_plan
+
+    if launch_plan is None:
+        raise PilotLauncherError("full campaign requires its factory launch plan")
+    plan = json.loads(launch_plan.read_text(encoding="utf-8"))
+    if not isinstance(plan, dict):
+        raise PilotLauncherError("factory launch plan must be an object")
+    schedule = validate_full_plan(manifest, plan, seed)
+    if set(task_ids) != {item.task_id for item in schedule} or len(task_ids) != 6:
+        raise PilotLauncherError("selected tasks differ from the full campaign")
+    return plan, schedule
 
 
 def main(arguments: list[str] | None = None) -> int:
@@ -1801,11 +1875,21 @@ def main(arguments: list[str] | None = None) -> int:
     args = build_parser().parse_args(arguments)
     try:
         manifest = load_document(args.campaign_manifest, "campaign")
-        plan = build_pilot_plan(manifest, args.task_id, args.seed)
+        plan, schedule = execution_plan(
+            manifest,
+            args.task_id,
+            args.seed,
+            args.launch_plan,
+            full_campaign=args.full_campaign,
+        )
         if args.preflight and args.execute:
             raise PilotLauncherError("preflight and paid execution are separate stages")
         if args.preflight:
-            controls = execution_controls(manifest)
+            controls = execution_controls(
+                manifest,
+                scheduled_attempts=len(schedule),
+                full_campaign=args.full_campaign,
+            )
             upstream = os.environ.get(provider_proxy.UPSTREAM_TOKEN_ENV, "")
             if not upstream:
                 raise PilotLauncherError("pilot OpenRouter credential is unavailable")
@@ -1840,7 +1924,15 @@ def main(arguments: list[str] | None = None) -> int:
             raise PilotLauncherError(
                 "local Codira profile differs from manifest fingerprint"
             )
-        controls = execution_controls(manifest)
+        controls = execution_controls(
+            manifest, scheduled_attempts=len(schedule), full_campaign=args.full_campaign
+        )
+        if args.full_campaign and not runtime_image.startswith(
+            "ghcr.io/marco0560/codira-agent-benchmark@sha256:"
+        ):
+            raise PilotLauncherError(
+                "full campaign requires the admitted registry image"
+            )
         validate_treatment_protocol(manifest)
         sources = parse_fixture_sources(args.fixture_source)
         tasks, oracles, fixtures = load_pilot_inputs(manifest, args.task_id, sources)
@@ -1864,8 +1956,9 @@ def main(arguments: list[str] | None = None) -> int:
                 "image": args.image,
                 "runtime": args.runtime,
                 "seed": args.seed,
+                **({"launch_plan": plan} if args.full_campaign else {}),
             },
-            build_paired_schedule(args.task_id, 1, args.seed),
+            schedule,
         )
         store.initialize()
         context = PilotExecutionContext(
@@ -1878,7 +1971,21 @@ def main(arguments: list[str] | None = None) -> int:
             upstream,
             manifest,
             provider_context_length,
+            args.full_campaign,
         )
+        if args.full_campaign:
+            from scripts.agent_efficiency.full_campaign import run_full_campaign
+
+            report = run_full_campaign(
+                store,
+                lambda attempt: execute_pilot_attempt(store, attempt, context),
+                pool=Decimal(str(controls.max_pilot_spend)),
+                reserve=Decimal(str(controls.max_attempt_spend)),
+                prompt_price=Decimal(str(controls.max_prompt_price)),
+                completion_price=Decimal(str(controls.max_completion_price)),
+            )
+            print(json.dumps(report, sort_keys=True))
+            return 0 if report["status"] in {"complete", "checkpoint"} else 2
         written = run_pending(
             store, lambda attempt: execute_pilot_attempt(store, attempt, context)
         )
