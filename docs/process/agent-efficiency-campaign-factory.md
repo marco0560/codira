@@ -35,8 +35,8 @@ fixtures, and (for a full campaign) oracles without rewriting its artifacts:
 ```bash
 uv run python scripts/generate_agent_efficiency_campaign.py \
   --check \
-  --spec benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-005.json \
-  --output-dir .artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-005
+  --spec benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-006.json \
+  --output-dir .artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-006
 ```
 
 Generation and this offline check do not admit paid execution. The deterministic
@@ -214,12 +214,17 @@ result or earlier log is overwritten. The runner revalidates the entire budget
 journal before executing pending attempts.
 
 A key top-up can resolve a clean authenticated admission stop, and a daily
-allowance reset can fund a later invocation. Current route admission requires
+allowance reset can fund a later invocation. Neither changes the campaign's
+fixed aggregate ceiling. Current route admission requires
 the entire declared aggregate allowance to remain available on the key;
-execution in smaller funded chunks is not yet qualified. Neither changes the campaign's
-fixed aggregate ceiling. If that pool cannot fund another pair, the campaign
-stops with its pending schedule preserved. An allowance change needs explicit
-approval and a new immutable experiment identity; do not edit the budget journal.
+execution in smaller funded chunks is not yet qualified. The key's `limit`
+may exceed the local campaign ceiling when earlier key usage leaves the
+full allowance available. The persistent campaign pool remains the binding
+local spending ceiling; the ordinary pilot retains its stricter key-limit
+check. If that pool cannot fund another pair, the campaign stops with its
+pending schedule preserved. Changing the frozen campaign ceiling needs
+explicit approval and a new immutable experiment identity; do not edit the
+budget journal.
 
 A provider or transport failure during an attempt requires diagnosis: topping
 up does not make uncertain billing or an unfinished reservation safe to retry.

@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+import scripts.run_agent_efficiency_phase6_pilot as pilot
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
@@ -43,7 +45,10 @@ from scripts.launch_agent_efficiency_pilot import (
     load_launch,
     tmux_command,
 )
-from scripts.run_agent_efficiency_phase6_pilot import execution_controls
+from scripts.run_agent_efficiency_phase6_pilot import (
+    execution_controls,
+    preflight_openrouter_route,
+)
 
 
 def _store(root: Path) -> CampaignStore:
@@ -516,4 +521,70 @@ def test_factory_executor_builds_full_and_resume_commands(
             sources,
             "podman",
             int(specification["seed"]),
+        )
+
+
+def test_shared_pool_accepts_higher_key_limit_with_full_remaining_allowance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Separate the key's outer limit from the fixed campaign pool.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replace three unpaid admission responses with safe fixed metadata.
+
+    Returns
+    -------
+    None
+        A key limit of $11 admits a $10 pool only while $10 remains available;
+        the ordinary pilot contract retains its narrower key-limit rule.
+    """
+
+    spec = json.loads(
+        Path(
+            "benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-005.json"
+        ).read_text()
+    )
+    manifest, _ = build_campaign(spec, Path("benchmarks/agent-efficiency"))
+    model = {
+        "id": "openai/gpt-6-luna",
+        "pricing": {"prompt": "0.00000025", "completion": "0.00000075"},
+        "supported_parameters": ["tools", "reasoning"],
+        "top_provider": {"max_completion_tokens": 65536},
+        "context_length": 1000000,
+    }
+    key_data = {
+        "limit": 11,
+        "limit_remaining": 10.5,
+        "usage_daily": 0.5,
+        "limit_reset": "daily",
+    }
+    monkeypatch.setattr(
+        pilot,
+        "_openrouter_json",
+        lambda request, detail: (
+            {"data": key_data}
+            if request.full_url.endswith("/key")
+            else {"data": [model]}
+        ),
+    )
+    controls = execution_controls(manifest, scheduled_attempts=60, full_campaign=True)
+    admitted = preflight_openrouter_route(manifest, controls, "not-a-real-token")
+    key_budget = admitted["key_budget"]
+    assert isinstance(key_budget, dict)
+    assert key_budget["limit_usd"] == 11
+    assert key_budget["limit_remaining_usd"] == 10.5
+    key_data["limit_remaining"] = 9.99
+    with pytest.raises(ValueError, match="budget is insufficient"):
+        preflight_openrouter_route(manifest, controls, "not-a-real-token")
+    key_data["limit_remaining"] = 10.5
+    accounting = manifest["accounting"]
+    assert isinstance(accounting, dict)
+    accounting["budget_reservation_mode"] = "sum-attempt-ceilings"
+    with pytest.raises(ValueError, match="budget is insufficient"):
+        preflight_openrouter_route(
+            manifest,
+            execution_controls(manifest, scheduled_attempts=6),
+            "not-a-real-token",
         )

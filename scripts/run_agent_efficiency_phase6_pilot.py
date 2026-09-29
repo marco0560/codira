@@ -713,6 +713,11 @@ def preflight_openrouter_route(
     remaining = budget.get("limit_remaining")
     daily_usage = budget.get("usage_daily")
     reset = budget.get("limit_reset")
+    accounting = manifest.get("accounting")
+    shared_pool = (
+        isinstance(accounting, Mapping)
+        and accounting.get("budget_reservation_mode") == "shared-pool"
+    )
     if (
         not isinstance(limit, int | float)
         or not isinstance(remaining, int | float)
@@ -720,7 +725,8 @@ def preflight_openrouter_route(
         or isinstance(limit, bool)
         or isinstance(remaining, bool)
         or isinstance(daily_usage, bool)
-        or limit > controls.max_daily_spend
+        or limit < controls.max_pilot_spend
+        or (limit > controls.max_daily_spend and not shared_pool)
         or remaining < controls.max_pilot_spend
         or (reset is not None and not isinstance(reset, str))
     ):

@@ -1033,9 +1033,9 @@ execution.
 
 Candidate controls were prepared on 2026-09-29 at the operator's request,
 using the factory's new `full-campaign` stage. The proposed specification is
-[`codira-efficacy-campaign-005.json`](../../benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-005.json).
-Its generated [manifest](../../.artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-005/campaign.json)
-and [launch plan](../../.artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-005/launch-plan.json)
+[`codira-efficacy-campaign-006.json`](../../benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-006.json).
+Its generated [manifest](../../.artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-006/campaign.json)
+and [launch plan](../../.artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-006/launch-plan.json)
 freeze sixty attempts, thirty pairs, the three fixture identities, and task and
 oracle fingerprints. The factory's `--check` mode verifies these artifacts
 without changing them. Fixture revisions, trees, licenses, setup files, and
@@ -1046,27 +1046,29 @@ Candidate 002 superseded the unapproved candidate 001 after the operator
 rejected its $70 daily proposal. Candidate 001's specification and generated
 artifacts remain intact. The matrix, seed, model, token/request controls,
 image, tasks, and oracles are unchanged; only the spending controls and their
-reservation mode changed. No paid attempt used either candidate. Candidate 003 supersedes 002 after
+reservation mode changed. No paid attempt used either candidate. Candidate 003
+supersedes 002 after
 qualification of the full executor and publication of the approved runtime to
 GHCR. Candidates 001 and 002 remain immutable offline evidence. Candidate 004
 supersedes 003 after extracting schedule planning to satisfy the full gate
 branch-count limit; candidate 003 and its prepared receipt remain intact.
 Candidate 005 supersedes 004 after fixing the final docstring audit.
-Candidates 003 and 004 remain preserved with their original receipts.
-Frozen experiment controls are unchanged across 003, 004, and 005. The new
-launch plan additionally freezes the qualified host harness fingerprint and
+Candidate 006 supersedes 005 after correcting a key-limit admission defect
+exposed by the live preflight. Candidates 003-005 remain preserved with
+their original receipts. Frozen experiment controls are unchanged across
+003-006. The launch plan additionally freezes the host harness fingerprint and
 six-hour checkpoint. No paid completion has been requested for Phase 7.
 
-### Approved controls (2026-09-29; key admission blocked)
+### Approved controls (2026-09-29; candidate 006 qualified for launch)
 
-| Control | Proposed value and reason |
+| Control | Approved value and reason |
 | --- | --- |
 | Matrix | Six categories, two arms, five independent paired repetitions: 60 attempts. Seed `20261003`; the generated order is immutable. |
 | Model and provider | P025's OpenRouter Responses route: `openai/gpt-6-luna`, high reasoning. Reverify authenticated availability, reasoning, context/output limits, pricing tiers, usage, and account admission before paid use. |
 | Per-attempt limits | 1,000,000 whole-session input-plus-output tokens; 32,000 output tokens per response; 30 logical response requests; at most two transport attempts per response; 1,800-second attempt timeout. Keep the successful pilot's controls for this comparison. |
 | Price ceilings | P025's configured ceilings: $0.25/M prompt tokens and $0.75/M completion tokens. These are admission limits, not a claim about current live prices or invoices. |
-| Spending admission | $10 shared campaign pool, retaining the $1.05 per-attempt allowance. The operator confirmed that the `codira-agent-efficiency-pilot` key's daily limit was raised to $10. Reserve the next attempt against the remaining pool and stop when it cannot be funded; Persistent pool reservation and settlement are qualified offline. Authenticated admission rejected the key budget before any paid completion; the current check requires the full $10 key allowance to remain available. |
-| Runtime | P025's image is published and independently pulled as `ghcr.io/marco0560/codira-agent-benchmark@sha256:3d21c3c2bd82f00ccdc4a4f0b1d22bca38155ed1f00377b5e9ab6b7d9ac8b37c`. Its configuration digest matches the pilot image. Retain the Codira profile, network isolation, read-only root, 512 PID limit, and 128 MiB tmpfs. Candidate 005 binds the registry reference. |
+| Spending admission | $10 shared campaign pool, retaining the $1.05 per-attempt allowance. The operator reported an outer key limit above $10 and more than $10 remaining. Reserve each attempt against the persistent local pool; stop when another pair cannot be funded. The full $10 key allowance must remain available at preflight. |
+| Runtime | P025's image is published and independently pulled as `ghcr.io/marco0560/codira-agent-benchmark@sha256:3d21c3c2bd82f00ccdc4a4f0b1d22bca38155ed1f00377b5e9ab6b7d9ac8b37c`. Its configuration digest matches the pilot image. Retain the Codira profile, network isolation, read-only root, 512 PID limit, and 128 MiB tmpfs. Candidate 006 binds the registry reference. |
 | Execution and resume | Serial execution in durable tmux, with atomic completed records and a checkpoint between pairs at six hours. Explicit `--resume` preserves prior invocation logs and receipts and revalidates budget settlements. Incomplete or uncertain attempts require diagnosis; no automatic retry is permitted. |
 | Failures and retries | Record task failures and cap exhaustion without adding repetitions or changing limits. Stop for infrastructure, missing-usage, admission, or billing uncertainty; preserve the interrupted evidence. No automatic attempt retry or favorable-outcome retry is approved. |
 | Evidence | Retain complete events, provider bodies, preparation diagnostics, patch diffs, and oracle traces in ignored per-attempt storage. Public reports retain safe checks, fingerprints, usage completeness, and every scheduled outcome. |
@@ -1084,8 +1086,9 @@ six-hour checkpoint. No paid completion has been requested for Phase 7.
 At the operator's request, estimate spending from `(P023 + P025) × 10`.
 Recalculation from the twelve saved usage records at their configured price
 ceilings gives P023 = $0.42194525 and P025 = $0.50606675, hence
-`($0.42194525 + $0.50606675) × 10 = $9.28012`. Round to a $10 shared pool and
-a $10 daily key limit. This already includes a comfortable empirical margin:
+`($0.42194525 + $0.50606675) × 10 = $9.28012`. Round to a $10 shared
+campaign pool. The operator configured extra key headroom to leave the full
+$10 available after prior daily usage. This includes an empirical margin:
 each pilot has six attempts, so the formula scales twelve observed attempts
 to 120 attempt equivalents for the sixty-attempt campaign. This is a planning
 estimate, not a provider invoice or a guarantee of completing all attempts.
@@ -1108,15 +1111,24 @@ accounting. Focused qualification covers all sixty outcomes, pair checkpoints,
 safe resume, immutable oracle/harness identities, concurrent execution locks,
 persistent reservations, missing usage, transport uncertainty, and settlement
 tampering. Registry publication and digest pull verification are complete.
-The final repository gate passed on 2026-09-29: 1,188 tests passed, three
-skipped, 86% coverage, and zero docstring findings. The operator authorized the
+Candidate 005 passed the repository gate on 2026-09-29: 1,188 tests passed,
+three skipped, 86% coverage, and zero docstring findings. The operator authorized the
 sixty-attempt campaign under the $10 aggregate ceiling. Authenticated preflight
 then rejected the scoped key budget; no Phase 7 paid completion was started.
-The current preflight requires the entire $10 allowance to remain available
-on the key. Its safe error does not identify the exact remaining amount.
-Key admission must pass before launch. Generation has made no provider completion
-request alone does not authorize paid execution. Operator authorization is now recorded,
-but failed key admission keeps launch blocked and Phase 7 pending.
+Both failed preflights reached key admission with no paid completion. The
+operator reported more than $10 remaining under a higher outer key limit with
+a daily reset. Exact key usage and headroom remain in ignored admission
+evidence. The original preflight erroneously required the key
+limit itself to be no greater than the local $10 ceiling; this rejected
+sufficient key headroom. Candidate 006 preserves the $10 local pool, requires
+at least $10 key headroom, and admits a higher outer key limit for this
+shared-pool mode. The six-attempt pilot still enforces its previous key-limit
+rule. Offline tests cover both modes and insufficient remaining allowance.
+Candidate 006 passed the full repository gate: 1,189 tests passed, three skipped,
+86% coverage, and zero docstring findings. Authenticated `/models/user` and key
+preflight passed for the frozen route, pricing, output/context limits, and at
+least $10 available key allowance. No Phase 7 paid completion had started at
+this qualification checkpoint.
 
 ### Launch preparation record
 
@@ -1124,19 +1136,24 @@ The operator authorized the scoped GHCR login and image push on 2026-09-29.
 The registered OpenRouter credential consumer remains
 `scripts/run_agent_efficiency_phase6_pilot.py`; full mode does not introduce a
 new credential recipient. The prepared launch receipt is
-[`.artifacts/agent-efficiency/executions/c005/launch-receipt.json`](../../.artifacts/agent-efficiency/executions/c005/launch-receipt.json).
+[`.artifacts/agent-efficiency/executions/c006/launch-receipt.json`](../../.artifacts/agent-efficiency/executions/c006/launch-receipt.json).
 It re-admits the same three fixture revisions and trees. It contains local
 source locations and remains ignored; tracked documentation contains only
 repository-relative artifact references and safe hashes.
 
 Qualification evidence:
 
-- [Final repository gate log](../../.artifacts/validation/repo-gates/phase7-full-qualification-r3-20260929/validation.log)
+- [Candidate 005 repository gate log](../../.artifacts/validation/repo-gates/phase7-full-qualification-r3-20260929/validation.log)
   and [exit status](../../.artifacts/validation/repo-gates/phase7-full-qualification-r3-20260929/validation.exit): `0`.
 - [Recorded controls](../../.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c005-control-checklist.json)
   and [paid authorization](../../.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c005-paid-authorization.json).
 - [Authenticated admission error](../../.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c005-preflight.stderr):
   `scoped OpenRouter key budget is insufficient`; exit `2`.
+- [Candidate 006 gate log](../../.artifacts/validation/repo-gates/phase7-c006-qualification-r2-20260929/validation.log)
+  and [exit status](../../.artifacts/validation/repo-gates/phase7-c006-qualification-r2-20260929/validation.exit): `0`.
+- [Candidate 006 authenticated preflight](../../.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c006-preflight.json):
+  route, price, and key allowance admitted. Keep the exact key usage metadata
+  in this ignored local artifact.
 
 The $10 campaign pool persists across top-ups, daily resets, and restarts.
 After a clean admission stop or pair checkpoint, the operator may authorize
