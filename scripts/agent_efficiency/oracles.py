@@ -591,7 +591,7 @@ def _validate_patch_path(raw: str) -> None:
     _validate_fixture_relative_patch_path(raw[2:])
 
 
-def _validate_patch_paths(patch: Path) -> None:
+def _validate_patch_paths(patch: Path) -> tuple[str, ...]:
     """Validate all file targets declared by an untrusted unified diff.
 
     Parameters
@@ -601,8 +601,8 @@ def _validate_patch_paths(patch: Path) -> None:
 
     Returns
     -------
-    None
-        The patch is safe for ``git apply`` target resolution.
+    tuple[str, ...]
+        Sorted unique fixture-relative paths changed by the patch.
 
     Raises
     ------
@@ -615,6 +615,7 @@ def _validate_patch_paths(patch: Path) -> None:
     except OSError as error:
         detail = f"patch cannot be read: {error}"
         raise ContractError.message(detail) from error
+    changed_paths: set[str] = set()
     for line in lines:
         if line.startswith(("--- ", "+++ ")):
             _validate_patch_path(line[4:].split("\t", maxsplit=1)[0])
@@ -625,8 +626,11 @@ def _validate_patch_paths(patch: Path) -> None:
                 raise ContractError.message(detail)
             for target in targets:
                 _validate_patch_path(target)
+                if target != "/dev/null":
+                    changed_paths.add(target[2:])
         elif line.startswith(("rename from ", "rename to ", "copy from ", "copy to ")):
             _validate_fixture_relative_patch_path(line.split(" ", maxsplit=2)[2])
+    return tuple(sorted(changed_paths))
 
 
 def _patch_check(
@@ -666,7 +670,7 @@ def _patch_check(
         return False, ("patch.file:missing",)
     checks = ["patch.file:present"]
     tests = _protected_command(spec.get("command"))
-    _validate_patch_paths(patch)
+    changed_paths = _validate_patch_paths(patch)
     checks.append("patch.path_validation:passed")
     required_changed_paths = spec.get("required_changed_paths", [])
     if not isinstance(required_changed_paths, list) or not all(
@@ -674,6 +678,32 @@ def _patch_check(
     ):
         detail = "required_changed_paths must be a list of non-empty paths"
         raise ContractError.message(detail)
+    allowed_changed_paths = spec.get("allowed_changed_paths")
+    allowed_paths: set[str] | None = None
+    if allowed_changed_paths is not None:
+        if (
+            not isinstance(allowed_changed_paths, list)
+            or not allowed_changed_paths
+            or not all(isinstance(path, str) and path for path in allowed_changed_paths)
+            or len(set(allowed_changed_paths)) != len(allowed_changed_paths)
+        ):
+            detail = "allowed_changed_paths must be a unique list of non-empty paths"
+            raise ContractError.message(detail)
+        allowed_paths = {
+            _safe_path(path, label="allowed_changed_paths").as_posix()
+            for path in allowed_changed_paths
+        }
+        required_paths = {
+            _safe_path(path, label="required_changed_paths").as_posix()
+            for path in required_changed_paths
+        }
+        if not required_paths <= allowed_paths:
+            detail = "required_changed_paths must be included in allowed_changed_paths"
+            raise ContractError.message(detail)
+        if set(changed_paths) - allowed_paths:
+            checks.append("patch.allowed_changed_paths:unexpected")
+            return False, tuple(checks)
+        checks.append("patch.allowed_changed_paths:passed")
     patch_text = patch.read_text(encoding="utf-8")
     required_paths_passed = True
     for index, raw_path in enumerate(required_changed_paths):

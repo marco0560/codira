@@ -37,12 +37,12 @@ scripts/run_manifest_baseline.py:131 PLR0913 — benchmark invocation inputs are
 scripts/agent_efficiency/oracles.py:133 PLR0913 — the protected trace writer
   keeps command metadata, complete output streams, and trace identity explicit
   so forensic evidence remains deterministic and auditable.
-scripts/agent_efficiency/oracles.py:720 PLR0913 — oracle-node evaluation keeps
+scripts/agent_efficiency/oracles.py:750 PLR0913 — oracle-node evaluation keeps
   evaluation context and trace propagation explicit so grading remains
   deterministic and auditable.
-scripts/agent_efficiency/oracles.py:829 PLR0913 — composite evaluation keeps
+scripts/agent_efficiency/oracles.py:859 PLR0913 — composite evaluation keeps
   recursive trace propagation explicit alongside the grader inputs.
-scripts/agent_efficiency/oracles.py:976 PLR0913 — the public oracle boundary
+scripts/agent_efficiency/oracles.py:1006 PLR0913 — the public oracle boundary
   keeps result format, protected root, evaluator registry, and optional trace
   root explicit.
 scripts/run_retrieval_quality_benchmark.py:617,913 PLR0913 — result rows and

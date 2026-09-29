@@ -6,6 +6,11 @@
     "patch_applies_and_tests_pass": {
       "patch_path": ".benchmark/fix.patch",
       "required_changed_paths": [
+        "src/click/_utils.py",
+        "tests/test_utils/test_sentinel.py"
+      ],
+      "allowed_changed_paths": [
+        "src/click/_utils.py",
         "tests/test_utils/test_sentinel.py"
       ],
       "command": [

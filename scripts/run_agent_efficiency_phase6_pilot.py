@@ -1044,12 +1044,127 @@ def load_pilot_inputs(
                 "public fixture identity differs from the approved manifest"
             )
         verify_fixture(fixture, sources[fixture_id])
+        validate_protected_task_assets(task_id, oracle, sources[fixture_id])
         tasks[task_id], oracles[task_id], fixtures[fixture_id] = task, oracle, fixture
     if set(sources) != set(fixtures):
         raise PilotLauncherError(
             "fixture sources must exactly match the approved pilot fixtures"
         )
     return tasks, oracles, fixtures
+
+
+def validate_protected_task_assets(
+    task_id: str, oracle: Mapping[str, object], fixture_source: Path
+) -> None:
+    """Verify every Python script required by protected oracle commands.
+
+    Parameters
+    ----------
+    task_id : str
+        Frozen task whose oracle commands are being admitted.
+    oracle : Mapping[str, object]
+        Validated oracle document bound to the task.
+    fixture_source : pathlib.Path
+        Exact source checkout for the task's frozen fixture.
+
+    Returns
+    -------
+    None
+        Every referenced script exists in the fixture or has verified
+        protected provenance.
+
+    Raises
+    ------
+    PilotLauncherError
+        If a command references a missing script or invalid protected asset.
+    """
+
+    referenced_scripts: set[str] = set()
+
+    def collect_commands(value: object) -> None:
+        """Collect relative Python script arguments from oracle definitions.
+
+        Parameters
+        ----------
+        value : object
+            Oracle definition node being inspected.
+
+        Returns
+        -------
+        None
+            Script paths are added to the enclosing set.
+        """
+
+        if isinstance(value, Mapping):
+            command = value.get("command")
+            if isinstance(command, list):
+                referenced_scripts.update(
+                    item
+                    for item in command
+                    if isinstance(item, str) and item.endswith(".py")
+                )
+            for child in value.values():
+                collect_commands(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_commands(child)
+
+    collect_commands(oracle.get("definition"))
+    for raw_path in referenced_scripts:
+        relative = PurePosixPath(raw_path)
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or "." in relative.parts
+            or ".." in relative.parts
+            or "\\" in raw_path
+        ):
+            raise PilotLauncherError("protected oracle script path is invalid")
+        fixture_script = fixture_source.joinpath(*relative.parts)
+        if fixture_script.is_file():
+            continue
+
+        asset_root = PROTECTED_ASSET_ROOT / task_id
+        provenance_path = asset_root / "provenance.json"
+        try:
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise PilotLauncherError(
+                "protected oracle script lacks verified asset provenance"
+            ) from error
+        asset_path = (
+            provenance.get("asset_path") if isinstance(provenance, dict) else None
+        )
+        expected = (
+            provenance.get("asset_sha256") if isinstance(provenance, dict) else None
+        )
+        asset_relative = (
+            PurePosixPath(asset_path) if isinstance(asset_path, str) else None
+        )
+        if (
+            asset_relative is None
+            or asset_relative.as_posix() != relative.as_posix()
+            or not isinstance(asset_path, str)
+            or not isinstance(expected, str)
+            or asset_relative.is_absolute()
+            or "." in asset_relative.parts
+            or ".." in asset_relative.parts
+            or "\\" in asset_path
+        ):
+            raise PilotLauncherError(
+                "protected oracle script provenance does not match its command"
+            )
+        asset = asset_root.joinpath(*asset_relative.parts)
+        try:
+            resolved_asset = asset.resolve(strict=True)
+            resolved_asset.relative_to(asset_root.resolve(strict=True))
+            actual = hashlib.sha256(resolved_asset.read_bytes()).hexdigest()
+        except (OSError, ValueError) as error:
+            raise PilotLauncherError(
+                "protected oracle script path is unavailable"
+            ) from error
+        if actual != expected:
+            raise PilotLauncherError("protected oracle script digest is invalid")
 
 
 def install_protected_asset(

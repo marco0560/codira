@@ -78,9 +78,11 @@ the campaign's durable artifacts.
 
 - **Tasks and scoring:** verify task wording, task IDs, deterministic oracle
   behavior, required fixture coverage, treatment instructions, repetition
-  count, and schedule seed. Confirm the tasks still test the intended Codira
-  behavior. A task, oracle, prompt, seed, or repetition change requires a fresh
-  campaign identity.
+  count, and schedule seed. Confirm every protected command script is present
+  in the admitted fixture or has a matching, digest-verified protected asset
+  record, and that the grader can prepare and execute it offline. Confirm the
+  tasks still test the intended Codira behavior. A task, oracle, prompt, seed,
+  or repetition change requires a fresh campaign identity.
 - **Fixture admission:** verify each fixture's commit, tree SHA, license, and
   setup-file hashes against its source checkout. Keep the pilot runner's
   required three-fixture coverage. Rebuild the candidate image when fixture
@@ -127,11 +129,13 @@ the campaign's durable artifacts.
   dollar values to another model or provider.
 - **Oracle traceability:** confirm the result records each deterministic
   subcheck as pass/fail, including the individual patch/path/protected-command
-  stages. Keep protected command exit status, output sizes and digests, and
-  sanitized exception class/location in the public-safe checks. Retain complete
-  protected stdout/stderr bytes and the exact command/stage manifest under the
-  ignored per-attempt `oracle-trace/` directory for forensic review. Never put
-  raw command output, trace manifests, or private paths in public reports.
+  stages. For patch tasks, require the exact necessary source and test paths and
+  reject every undeclared changed path. Keep protected command exit status,
+  output sizes and digests, and sanitized exception class/location in the
+  public-safe checks. Retain complete protected stdout/stderr bytes and the
+  exact command/stage manifest under the ignored per-attempt `oracle-trace/`
+  directory for forensic review. Never put raw command output, trace manifests,
+  or private paths in public reports.
   Verify known-valid equivalent identifiers (such as dotted pytest names and
   pytest node IDs) are both accepted by the oracle.
 - **Trajectory evidence:** confirm public attempt summaries expose event and

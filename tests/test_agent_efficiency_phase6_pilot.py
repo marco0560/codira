@@ -29,6 +29,7 @@ from scripts.run_agent_efficiency_phase6_pilot import (
     prepare_protected_fixture,
     prompt_for_attempt,
     validate_prepared_index,
+    validate_protected_task_assets,
     validate_treatment_protocol,
 )
 
@@ -706,6 +707,68 @@ def test_protected_asset_rejects_a_provenance_path_escape(
     protected.mkdir()
     with pytest.raises(PilotLauncherError, match="beneath"):
         install_protected_asset("patch-001", protected)
+
+
+def test_patch_002_probe_is_installed_with_verified_provenance(
+    tmp_path: Path,
+) -> None:
+    """Install the patch-002 command asset from its recorded source digest.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Fresh protected fixture destination.
+
+    Returns
+    -------
+    None
+        The exact probe named by the oracle is available to the grader.
+    """
+
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    installed = install_protected_asset("patch-002", protected)
+    assert installed is not None
+    assert installed["asset_path"] == "patch_002_probe.py"
+    assert (protected / "patch_002_probe.py").is_file()
+
+
+def test_protected_oracle_asset_is_admitted_before_provider_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Require command scripts to exist in the fixture or verified assets.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary fixture and asset roots for deterministic admission checks.
+    monkeypatch : pytest.MonkeyPatch
+        Temporary protected asset root.
+
+    Returns
+    -------
+    None
+        Missing scripts and digest drift fail during campaign admission.
+    """
+
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    asset_root = tmp_path / "assets" / "patch-002"
+    asset_root.mkdir(parents=True)
+    asset = asset_root / "probe.py"
+    asset.write_text("print('protected')\n", encoding="utf-8")
+    digest = hashlib.sha256(asset.read_bytes()).hexdigest()
+    (asset_root / "provenance.json").write_text(
+        json.dumps({"asset_path": "probe.py", "asset_sha256": digest}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pilot, "PROTECTED_ASSET_ROOT", tmp_path / "assets")
+    oracle = {"definition": {"patch": {"command": ["python", "probe.py"]}}}
+
+    validate_protected_task_assets("patch-002", oracle, fixture)
+    asset.write_text("print('changed')\n", encoding="utf-8")
+    with pytest.raises(PilotLauncherError, match="digest"):
+        validate_protected_task_assets("patch-002", oracle, fixture)
 
 
 def test_execution_controls_reject_drift_before_attempt_side_effects() -> None:

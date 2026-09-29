@@ -20,7 +20,10 @@ if __package__ in {None, ""}:
 from scripts.agent_efficiency.campaign_state import build_paired_schedule
 from scripts.agent_efficiency.contracts import canonical_fingerprint, load_document
 from scripts.agent_efficiency.corpus import verify_fixture
-from scripts.run_agent_efficiency_phase6_pilot import parse_fixture_sources
+from scripts.run_agent_efficiency_phase6_pilot import (
+    parse_fixture_sources,
+    validate_protected_task_assets,
+)
 
 FACTORY_VERSION = "1.0"
 SOPS_ENVIRONMENT = (
@@ -190,6 +193,28 @@ def load_launch(
         or plan.get("attempts") != expected_attempts
     ):
         raise PilotLaunchError("factory launch plan differs from manifest or seed")
+    task_fingerprints = manifest.get("task_fingerprints")
+    if not isinstance(task_fingerprints, dict):
+        raise PilotLaunchError("pilot task fingerprints are invalid")
+    for task_id in task_ids:
+        try:
+            task = load_document(BENCHMARK_ROOT / "tasks" / f"{task_id}.json", "task")
+            oracle = load_document(
+                BENCHMARK_ROOT / "oracles" / f"{task['oracle_id']}.json", "oracle"
+            )
+            fixture_id = bindings.get(task_id)
+        except (KeyError, TypeError, ValueError) as error:
+            raise PilotLaunchError("campaign task assets are unavailable") from error
+        if not isinstance(fixture_id, str) or fixture_id not in sources:
+            raise PilotLaunchError("campaign fixture binding is invalid")
+        fixture_source = sources[fixture_id]
+        if (
+            task.get("task_id") != task_id
+            or canonical_fingerprint(task) != task_fingerprints.get(task_id)
+            or task.get("oracle_id") != oracle.get("oracle_id")
+        ):
+            raise PilotLaunchError("campaign task differs from its frozen identity")
+        validate_protected_task_assets(task_id, oracle, fixture_source)
     return PilotLaunch(
         campaign_directory,
         execution_root,

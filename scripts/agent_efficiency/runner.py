@@ -744,7 +744,15 @@ def capture_workspace_patch(
         If a candidate workspace contains a symlink or non-text changed file.
     """
 
-    ignored = {".benchmark", ".git", ".venv", "__pycache__"}
+    ignored = {
+        ".benchmark",
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+    }
 
     def files(root: Path) -> set[Path]:
         """Return safe regular workspace files excluding runner metadata."""

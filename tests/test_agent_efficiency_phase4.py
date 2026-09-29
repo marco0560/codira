@@ -376,6 +376,10 @@ def test_runner_captures_workspace_diff_without_agent_git_history(
     virtualenv = workspace / ".venv" / "bin"
     virtualenv.mkdir(parents=True)
     (virtualenv / "python").symlink_to("python3")
+    for cache_name in (".mypy_cache", ".pytest_cache", ".ruff_cache"):
+        cache = workspace / cache_name
+        cache.mkdir()
+        (cache / "generated").write_text("cache output", encoding="utf-8")
 
     patch = workspace / ".benchmark" / "fix.patch"
     capture_workspace_patch(baseline, workspace, patch)
@@ -385,6 +389,9 @@ def test_runner_captures_workspace_diff_without_agent_git_history(
     assert "b/module.py" in source
     assert ".git" not in source
     assert ".venv" not in source
+    assert ".mypy_cache" not in source
+    assert ".pytest_cache" not in source
+    assert ".ruff_cache" not in source
 
 
 def test_index_preparation_precedes_mcp_with_hardened_runtime(

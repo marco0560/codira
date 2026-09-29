@@ -321,6 +321,33 @@ def test_patch_oracle_uses_pristine_copy_and_rejects_tampering(tmp_path: Path) -
     assert evaluate_oracle(
         source_file_requirement, result_root=result_root, protected_root=protected
     ).passed
+    allowed_paths = {
+        "patch_applies_and_tests_pass": {
+            **definition["patch_applies_and_tests_pass"],
+            "allowed_changed_paths": ["app.py"],
+        }
+    }
+    assert evaluate_oracle(
+        allowed_paths, result_root=result_root, protected_root=protected
+    ).passed
+    patch.write_text(
+        patch.read_text(encoding="utf-8")
+        + "diff --git a/noise.py b/noise.py\n"
+        + "--- /dev/null\n+++ b/noise.py\n"
+        + "@@ -0,0 +1 @@\n+UNRELATED = True\n",
+        encoding="utf-8",
+    )
+    unexpected = evaluate_oracle(
+        allowed_paths, result_root=result_root, protected_root=protected
+    )
+    assert not unexpected.passed
+    assert "patch.allowed_changed_paths:unexpected" in unexpected.checks
+    patch.write_text(
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n"
+        "-VALUE = 'before'\n+VALUE = 'after'\n",
+        encoding="utf-8",
+    )
     (protected / "fail.py").write_text(
         "print('forensic stdout marker')\n"
         "import sys\n"
