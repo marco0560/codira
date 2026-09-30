@@ -1189,6 +1189,18 @@ slots, but its new harness provenance must be reported separately from the 54
 completed task results of campaign 006. This remediation record does not
 launch a paid supplement.
 
+The operator then authorized those six slots. The factory's new `completion`
+stage selects exactly the failed patch arm and five pending arms from campaign
+006, binds all 55 parent records by exact byte digest, and rejects a partial
+selection or changed parent evidence. Candidate 007 was generated before the
+last qualification edits and remains an unused offline artifact. Candidate
+008 carries the same selected tasks and a $2 observed spend pool under the
+qualified harness. The completion-stage gate passed with 1,203 tests and three
+skips; its durable record is
+`.artifacts/validation/repo-gates/completion-stage-r3-20260930/validation.log`
+with exit status `0`. Factory generation, offline admission, authenticated
+preflight, and paid execution for candidate 008 remain separate steps.
+
 ### Gate
 
 Every scheduled execution is accounted for, valid results reproducible,

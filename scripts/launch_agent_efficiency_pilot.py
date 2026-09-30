@@ -177,12 +177,20 @@ def load_launch(
         raise PilotLaunchError("factory artifacts are unavailable") from error
     if not isinstance(plan, dict):
         raise PilotLaunchError("factory launch plan is malformed")
-    full_campaign = plan.get("stage") == "full-campaign"
+    stage = plan.get("stage")
+    full_campaign = stage == "full-campaign"
+    completion = stage == "completion"
     task_ids = _task_ids(manifest, full_campaign=full_campaign)
     if full_campaign:
         from scripts.agent_efficiency.full_campaign import validate_full_plan
 
         validate_full_plan(manifest, plan, seed)
+    elif completion:
+        from scripts.agent_efficiency.completion_campaign import (
+            validate_completion_plan,
+        )
+
+        validate_completion_plan(manifest, plan, Path.cwd(), seed)
     bindings = manifest.get("task_fixture_ids")
     if not isinstance(bindings, dict):
         raise PilotLaunchError("pilot fixture bindings are invalid")
@@ -192,13 +200,19 @@ def load_launch(
         or set(sources) != fixture_ids
     ):
         raise PilotLaunchError("fixture sources differ from manifest bindings")
-    expected_attempts = [
-        attempt.__dict__
-        for attempt in build_paired_schedule(task_ids, 5 if full_campaign else 1, seed)
-    ]
+    expected_attempts = (
+        plan.get("attempts")
+        if completion
+        else [
+            attempt.__dict__
+            for attempt in build_paired_schedule(
+                task_ids, 5 if full_campaign else 1, seed
+            )
+        ]
+    )
     if (
         plan.get("factory_version") != FACTORY_VERSION
-        or plan.get("stage") not in {"pilot", "full-campaign"}
+        or plan.get("stage") not in {"pilot", "full-campaign", "completion"}
         or plan.get("campaign_id") != manifest.get("campaign_id")
         or plan.get("manifest_fingerprint") != canonical_fingerprint(manifest)
         or plan.get("scheduled_attempt_count") != (60 if full_campaign else 6)
@@ -430,7 +444,7 @@ def tmux_command(launch: PilotLaunch, *, invocation: int = 0) -> tuple[str, str]
         "--campaign-manifest",
         str(launch.campaign_directory / "campaign.json"),
     ]
-    full_campaign = launch.plan.get("stage") == "full-campaign"
+    full_campaign = launch.plan.get("stage") in {"full-campaign", "completion"}
     if full_campaign:
         runner.extend(
             (
@@ -492,12 +506,12 @@ def start_tmux(launch: PilotLaunch, *, resume: bool = False) -> str:
 
     invocation = 0
     if resume:
-        if launch.plan.get("stage") != "full-campaign":
+        if launch.plan.get("stage") not in {"full-campaign", "completion"}:
             raise PilotLaunchError("resume is qualified only for full campaigns")
         journal = runtime_state_root(launch) / "budget"
-        reservations = {
-            path.stem.removesuffix(".reserved")
-            for path in journal.glob("*.reserved.json")
+        starts = {
+            path.stem.removesuffix(".started")
+            for path in journal.glob("*.started.json")
         }
         settlements = {
             path.stem.removesuffix(".settled")
@@ -509,7 +523,7 @@ def start_tmux(launch: PilotLaunch, *, resume: bool = False) -> str:
             and not any(state.iterdir())
             and (launch.execution_root / "pilot.exit").is_file()
         )
-        if reservations != settlements or (
+        if starts != settlements or (
             not (journal / "identity.json").is_file() and not clean_admission_stop
         ):
             raise PilotLaunchError("unfinished budget evidence blocks resume")

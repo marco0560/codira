@@ -159,6 +159,11 @@
     "schema_version": {
       "const": "1.0"
     },
+    "stage": {
+      "enum": [
+        "completion"
+      ]
+    },
     "task_fingerprints": {
       "additionalProperties": {
         "pattern": "^[0-9a-f]{64}$",

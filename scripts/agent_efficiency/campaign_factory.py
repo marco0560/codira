@@ -1,4 +1,5 @@
 """Build immutable, non-executing agent-efficiency campaign artifacts."""
+# ruff: noqa: C901, PLR0912
 
 from __future__ import annotations
 
@@ -185,12 +186,17 @@ def build_campaign(
     accounting = cast("Mapping[str, object]", specification["accounting"])
     shared_pool = _uses_shared_campaign_pool(stage, accounting)
     task_ids = tuple(cast("list[str]", specification["task_ids"]))
-    required_count = {"calibration": 1, "pilot": 3, "full-campaign": 6}[stage]
+    required_count = {
+        "calibration": 1,
+        "pilot": 3,
+        "full-campaign": 6,
+        "completion": 3,
+    }[stage]
     if len(task_ids) != required_count:
         raise CampaignFactoryError.stage_cardinality(stage, required_count)
     if stage != "calibration" and "seed" not in specification:
         raise CampaignFactoryError.missing_seed(stage)
-    required_repetitions = 5 if stage == "full-campaign" else 1
+    required_repetitions = 5 if stage in {"full-campaign", "completion"} else 1
     if specification.get("repetitions", 1) != required_repetitions:
         detail = f"{stage} requires exactly {required_repetitions} repetitions"
         raise CampaignFactoryError.message(detail)
@@ -206,7 +212,7 @@ def build_campaign(
         fixtures[fixture_id] = load_document(
             benchmark_root / "fixtures" / f"{fixture_id}.json", "fixture"
         )
-        if stage == "full-campaign":
+        if stage in {"full-campaign", "completion"}:
             oracle_id = task["oracle_id"]
             oracle = load_document(
                 benchmark_root / "oracles" / f"{oracle_id}.json", "oracle"
@@ -219,8 +225,8 @@ def build_campaign(
                 detail = "task oracle binding is invalid"
                 raise CampaignFactoryError.message(detail)
             oracle_fingerprints[task_id] = canonical_fingerprint(oracle)
-    if stage == "full-campaign" and len(fixtures) != 3:
-        detail = "full-campaign requires exactly three immutable fixtures"
+    if stage in {"full-campaign", "completion"} and len(fixtures) != 3:
+        detail = f"{stage} requires exactly three immutable fixtures"
         raise CampaignFactoryError.message(detail)
     manifest = {
         "schema_version": specification["schema_version"],
@@ -246,11 +252,26 @@ def build_campaign(
         "visibility": specification["visibility"],
     }
     manifest = {key: value for key, value in manifest.items() if value is not None}
+    if stage == "completion":
+        manifest["stage"] = stage
     try:
         validate_document("campaign", manifest)
     except ContractError as error:
         raise CampaignFactoryError(str(error)) from error
-    schedule = _schedule(stage, task_ids, specification)
+    completion_snapshot: dict[str, object] | None = None
+    if stage == "completion":
+        from scripts.agent_efficiency.completion_campaign import source_snapshot
+
+        source = cast("Mapping[str, object]", specification["completion_source"])
+        selected, completion_snapshot = source_snapshot(
+            source, manifest, benchmark_root.resolve().parents[1]
+        )
+        schedule = [item.__dict__ for item in selected]
+        if {item.task_id for item in selected} != set(task_ids):
+            detail = "completion tasks differ from selection"
+            raise CampaignFactoryError.message(detail)
+    else:
+        schedule = _schedule(stage, task_ids, specification)
     _validate_accounting(manifest, len(schedule))
     plan: dict[str, object] = {
         "factory_version": FACTORY_VERSION,
@@ -269,7 +290,7 @@ def build_campaign(
             "requires_tmux_durable_log_and_exit_status": True,
         },
     }
-    if stage == "full-campaign":
+    if stage in {"full-campaign", "completion"}:
         from scripts.agent_efficiency.full_campaign import (
             CHECKPOINT_SECONDS,
             harness_fingerprint,
@@ -282,6 +303,9 @@ def build_campaign(
             harness_fingerprint=harness_fingerprint(),
             checkpoint_seconds=CHECKPOINT_SECONDS,
         )
+        if stage == "completion":
+            plan["completion_source"] = specification["completion_source"]
+            plan["source_snapshot"] = completion_snapshot
         cast("dict[str, object]", plan["execution"]).update(
             requires_full_campaign_executor_qualification=True,
             requires_registry_image_admission=True,
@@ -315,10 +339,10 @@ def _uses_shared_campaign_pool(stage: str, accounting: Mapping[str, object]) -> 
     """
 
     shared_pool = accounting.get("budget_reservation_mode") == "shared-pool"
-    if shared_pool and stage != "full-campaign":
+    if shared_pool and stage not in {"full-campaign", "completion"}:
         detail = "shared campaign budgets require the full-campaign stage"
         raise CampaignFactoryError.message(detail)
-    if stage == "full-campaign" and not shared_pool:
+    if stage in {"full-campaign", "completion"} and not shared_pool:
         detail = "full campaigns require observed shared-pool accounting"
         raise CampaignFactoryError.message(detail)
     return shared_pool

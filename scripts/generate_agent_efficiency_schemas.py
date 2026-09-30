@@ -342,16 +342,42 @@ SCHEMAS["run-result"]["dependentRequired"] = {
 }
 
 _CAMPAIGN_PROPERTIES = cast(
-    "Mapping[str, object]",
+    "dict[str, object]",
     cast("Mapping[str, object]", SCHEMAS["campaign"])["properties"],
 )
+_CAMPAIGN_PROPERTIES["stage"] = {
+    "enum": ["completion"],
+}
 _CAMPAIGN_SPEC_PROPERTIES = dict(_CAMPAIGN_PROPERTIES)
 _CAMPAIGN_SPEC_PROPERTIES.pop("fixture_fingerprints")
 _CAMPAIGN_SPEC_PROPERTIES.pop("task_fingerprints")
 _CAMPAIGN_SPEC_PROPERTIES.pop("task_fixture_ids")
 _CAMPAIGN_SPEC_PROPERTIES.update(
     {
-        "stage": {"enum": ["calibration", "pilot", "full-campaign"]},
+        "stage": {"enum": ["calibration", "pilot", "full-campaign", "completion"]},
+        "completion_source": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "campaign_id",
+                "campaign_dir",
+                "state_root",
+                "seed",
+                "attempt_ids",
+            ],
+            "properties": {
+                "campaign_id": {"type": "string", "minLength": 1},
+                "campaign_dir": {"type": "string", "minLength": 1},
+                "state_root": {"type": "string", "minLength": 1},
+                "seed": {"type": "integer", "minimum": 0},
+                "attempt_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": True,
+                    "items": {"type": "string", "minLength": 1},
+                },
+            },
+        },
         "task_ids": {
             "type": "array",
             "minItems": 1,
@@ -386,7 +412,19 @@ SCHEMAS["campaign-spec"]["allOf"] = [
                 "runtime_profile_fingerprint",
             ],
         },
-    }
+    },
+    {
+        "if": {"properties": {"stage": {"const": "completion"}}},
+        "then": {
+            "required": [
+                "seed",
+                "repetitions",
+                "runtime_image",
+                "runtime_profile_fingerprint",
+                "completion_source",
+            ],
+        },
+    },
 ]
 
 

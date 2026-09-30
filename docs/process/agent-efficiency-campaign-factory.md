@@ -28,6 +28,14 @@ Stages are intentionally constrained:
   and profile. Its launch plan also freezes each selected oracle fingerprint
   and the host harness fingerprint, and requires executor qualification and
   registry image admission.
+- `completion`: exactly six unfinished slots in three complete pairs of a
+  frozen parent full campaign. The versioned specification names the parent
+  campaign directory, state root, seed, and six attempt IDs with paths inside
+  this repository. The factory checks the parent schedule and saved records,
+  then freezes their exact byte digests. It rejects cherry-picked subsets,
+  completed slots, and changed parent evidence. A completion uses a fresh
+  campaign identity and observed shared pool. Its results can join the parent
+  in a labeled composite analysis, not an unchanged-harness run.
 
 Check an existing factory output against the current specification, tasks,
 fixtures, and (for a full campaign) oracles without rewriting its artifacts:
@@ -40,11 +48,12 @@ uv run python scripts/generate_agent_efficiency_campaign.py \
 ```
 
 Generation and this offline check do not admit paid execution. The deterministic
-executor accepts both pilots and full campaigns. Full campaigns
-use the registered pilot runner with `--full-campaign --launch-plan`; a pilot
-invocation still rejects shared-pool accounting. Full-plan verification checks
-all sixty schedule members, the six oracles, the harness fingerprint, and the
-six-hour checkpoint before credential access.
+executor accepts pilots, full campaigns, and completions. Full campaigns and
+completions use the registered pilot runner with `--full-campaign --launch-plan`;
+a pilot invocation still rejects shared-pool accounting. Plan verification
+checks all sixty members of a full campaign or the six selected parent members
+of a completion, plus the applicable oracles, harness fingerprint, and six-hour
+checkpoint before credential access.
 The legacy accounting field `max_estimated_pilot_spend_usd` means the aggregate
 spending allowance for the selected stage, including a full campaign.
 

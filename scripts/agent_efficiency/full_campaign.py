@@ -244,7 +244,7 @@ def run_full_campaign(
     result evidence and survive daily resets.
     """
 
-    if len(store.schedule) != FULL_ATTEMPTS or pool <= 0 or attempt_estimate <= 0:
+    if not store.schedule or pool <= 0 or attempt_estimate <= 0:
         raise ValueError("full campaign schedule or budget is invalid")
     journal = store.root / "budget"
     journal.mkdir(exist_ok=True)

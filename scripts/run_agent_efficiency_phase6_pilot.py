@@ -1323,7 +1323,8 @@ def execution_controls(
         declared pilot spending ceiling. The paired pilot defaults to six;
         the dedicated route calibration supplies one.
     full_campaign : bool, optional
-        Admit the shared pool only for the qualified sixty-attempt runner.
+        Admit the shared pool only for a factory-validated full or completion
+        schedule.
 
     Returns
     -------
@@ -1391,7 +1392,14 @@ def execution_controls(
     reservation_mode = accounting.get("budget_reservation_mode", "sum-attempt-ceilings")
     shared_pool = reservation_mode == "shared-pool"
     if reservation_mode not in {"shared-pool", "sum-attempt-ceilings"} or (
-        shared_pool and not (full_campaign and scheduled_attempts == 60)
+        shared_pool
+        and not (
+            full_campaign
+            and (
+                scheduled_attempts == 60
+                or (scheduled_attempts == 6 and manifest.get("stage") == "completion")
+            )
+        )
     ):
         raise PilotLauncherError(
             "shared campaign budgets require a qualified full-campaign executor"
@@ -1968,8 +1976,20 @@ def execution_plan(
     plan = json.loads(launch_plan.read_text(encoding="utf-8"))
     if not isinstance(plan, dict):
         raise PilotLauncherError("factory launch plan must be an object")
-    schedule = validate_full_plan(manifest, plan, seed)
-    if set(task_ids) != {item.task_id for item in schedule} or len(task_ids) != 6:
+    if plan.get("stage") == "completion":
+        from scripts.agent_efficiency.completion_campaign import (
+            validate_completion_plan,
+        )
+
+        schedule = validate_completion_plan(manifest, plan, Path.cwd(), seed)
+        expected_tasks = 3
+    else:
+        schedule = validate_full_plan(manifest, plan, seed)
+        expected_tasks = 6
+    if (
+        set(task_ids) != {item.task_id for item in schedule}
+        or len(task_ids) != expected_tasks
+    ):
         raise PilotLauncherError("selected tasks differ from the full campaign")
     return plan, schedule
 

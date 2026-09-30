@@ -18,6 +18,24 @@
           "runtime_profile_fingerprint"
         ]
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "stage": {
+            "const": "completion"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "seed",
+          "repetitions",
+          "runtime_image",
+          "runtime_profile_fingerprint",
+          "completion_source"
+        ]
+      }
     }
   ],
   "properties": {
@@ -91,6 +109,44 @@
     "campaign_id": {
       "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
       "type": "string"
+    },
+    "completion_source": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "campaign_dir": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "campaign_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "seed": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state_root": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "campaign_dir",
+        "state_root",
+        "seed",
+        "attempt_ids"
+      ],
+      "type": "object"
     },
     "provider": {
       "additionalProperties": false,
@@ -182,7 +238,8 @@
       "enum": [
         "calibration",
         "pilot",
-        "full-campaign"
+        "full-campaign",
+        "completion"
       ]
     },
     "task_ids": {
