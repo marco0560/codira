@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -14,7 +15,6 @@ from scripts.agent_efficiency.oracles import ProtectedEvaluator, evaluate_oracle
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-    from pathlib import Path
 
 
 def write_result(root: Path, payload: object) -> None:
@@ -260,6 +260,86 @@ def test_text_oracle_reports_missing_clauses_and_accepts_alternative_spellings(
     )
     assert not failed.passed
     assert "all_of[0].text_contains[1]:missing" in failed.checks
+
+
+@pytest.mark.parametrize(
+    ("oracle_id", "answer"),
+    [
+        (
+            "context-page-001",
+            "codira.mcp.adapter.MCPAdapter.context_for_task in "
+            "src/codira/mcp/adapter.py; "
+            "test_mcp_server.test_context_items_page_complete_evidence_and_method_owner "
+            "in tests/test_mcp_server.py",
+        ),
+        (
+            "impact-001",
+            "MCPAdapter._query is the adapter query boundary in "
+            "src/codira/mcp/adapter.py",
+        ),
+        (
+            "localize-001",
+            "Sentinel.UNSET in src/click/_utils.py uses an object() value "
+            "that cannot survive pickle reconstruction",
+        ),
+    ],
+)
+def test_public_oracles_accept_equivalent_identifiers_and_require_source_path(
+    tmp_path: Path, oracle_id: str, answer: str
+) -> None:
+    """Accept equivalent task answers while retaining source-path checks.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary isolated agent and protected roots.
+    oracle_id : str
+        Public oracle to evaluate.
+    answer : str
+        Correct answer with a previously rejected spelling.
+
+    Returns
+    -------
+    None
+        Correct variants pass, and answers without the source path fail.
+    """
+
+    oracle_path = (
+        Path(__file__).resolve().parents[1]
+        / "benchmarks"
+        / "agent-efficiency"
+        / "oracles"
+        / f"{oracle_id}.json"
+    )
+    definition = json.loads(oracle_path.read_text(encoding="utf-8"))["definition"]
+    result_root = tmp_path / "agent"
+    protected_root = tmp_path / "protected"
+    result_root.mkdir()
+    protected_root.mkdir()
+    artifact = result_root / "BENCHMARK_ANSWER.md"
+    artifact.write_text(answer, encoding="utf-8")
+    assert evaluate_oracle(
+        definition,
+        result_root=result_root,
+        result_path=artifact.name,
+        result_format="text",
+        protected_root=protected_root,
+    ).passed
+    missing_path = (
+        "src/click/_utils.py"
+        if oracle_id == "localize-001"
+        else "src/codira/mcp/adapter.py"
+    )
+    artifact.write_text(
+        answer.replace(missing_path, "omitted source path"), encoding="utf-8"
+    )
+    assert not evaluate_oracle(
+        definition,
+        result_root=result_root,
+        result_path=artifact.name,
+        result_format="text",
+        protected_root=protected_root,
+    ).passed
 
 
 def test_patch_oracle_uses_pristine_copy_and_rejects_tampering(tmp_path: Path) -> None:

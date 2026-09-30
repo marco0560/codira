@@ -1,1 +1,1 @@
-{"schema_version":"1.0","oracle_id":"localize-001","task_id":"localize-001","definition":{"text_contains":["click._utils.Sentinel","src/click/_utils.py"]},"visibility":"public"}
+{"schema_version":"1.0","oracle_id":"localize-001","task_id":"localize-001","definition":{"text_contains":["Sentinel","src/click/_utils.py"]},"visibility":"public"}

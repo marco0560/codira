@@ -1026,7 +1026,7 @@ execution.
 
 ## Phase 7 — Full campaign and evidence validation
 
-**Status:** `pending`
+**Status:** `incomplete; 006 adjudicated`
 **Commit:** pending
 
 ### Evidence
@@ -1167,6 +1167,12 @@ reservation or authorize retrying a failed attempt.
 Execute the approved 60-run matrix on the campaign branch with frozen identities
 and resumable records. Preserve failures and interrupted attempts. Generate
 public sanitized reports and validate their provenance and exclusions.
+
+Campaign 006 stopped after 55 attempts. The retrospective answer adjudication,
+prospective oracle changes, and patch token-cap investigation are recorded in
+[the dated campaign 006 report](agent-efficiency-campaign-006-adjudication-2026-09-30.md).
+Its original frozen results are preserved; the changed oracles require a new
+campaign identity before any paid rerun.
 
 ### Gate
 

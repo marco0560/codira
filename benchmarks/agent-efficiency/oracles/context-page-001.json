@@ -22,6 +22,11 @@
             "text_contains": [
               "tests/test_mcp_server.py::test_context_items_page_complete_evidence_and_method_owner"
             ]
+          },
+          {
+            "text_contains": [
+              "test_mcp_server.test_context_items_page_complete_evidence_and_method_owner"
+            ]
           }
         ]
       }
