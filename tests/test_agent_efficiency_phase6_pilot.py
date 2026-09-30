@@ -1523,3 +1523,32 @@ def test_execute_attempt_records_an_oracle_contract_failure(
     assert not (
         store.root / "attempt-work" / attempt.attempt_id / "workspace-before" / ".venv"
     ).exists()
+
+
+def test_local_campaign_budget_refusal_takes_precedence_over_retry_noise() -> None:
+    """Classify a measured budget stop despite later local request refusals.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Local budget exhaustion remains distinct from provider throttling.
+    """
+
+    observations: list[dict[str, object]] = [
+        {"source": "upstream", "status": 200},
+        {"source": "local", "reason": "campaign_spend_limit_reached"},
+        {"source": "local", "reason": "response_request_limit_exceeded"},
+    ]
+    assert pilot._local_proxy_failure_class(observations) == (
+        "campaign_spend_limit_reached"
+    )
+    assert pilot._local_proxy_failure_class([observations[0]]) is None
+    assert (
+        pilot._normalized_proxy_failure_class("provider_rate_limited", observations)
+        == "campaign_spend_limit_reached"
+    )
+    assert pilot._normalized_proxy_failure_class("timeout", observations) == "timeout"

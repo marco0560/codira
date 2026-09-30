@@ -1275,6 +1275,73 @@ def test_provider_proxy_reserves_request_and_one_bounded_completion(
     )
 
 
+def test_provider_proxy_full_campaign_stops_on_observed_spend_only(
+    tmp_path: Path,
+) -> None:
+    """Do not reserve a worst-case request against a measured campaign pool.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated durable-equivalent response evidence directory.
+
+    Returns
+    -------
+    None
+        A response may cross the threshold, then another request is refused.
+    """
+
+    settings = provider_proxy.ProxySettings(
+        "client",
+        "upstream",
+        0,
+        max_output_tokens=32000,
+        max_prompt_usd_per_million=1.0,
+        max_completion_usd_per_million=1.0,
+        max_campaign_spend_usd=0.15,
+        response_artifact_root=tmp_path / "provider-responses",
+    )
+    assert settings.local_token_cap_reason(request_payload_bytes=1_000_000) is None
+    settings.record_response(
+        200,
+        [],
+        body=b'{"usage":{"input_tokens":200000,"output_tokens":0,"total_tokens":200000}}',
+    )
+    assert settings.provider_estimated_cost_usd == pytest.approx(0.2)
+    assert (
+        settings.local_token_cap_reason(request_payload_bytes=1)
+        == "campaign_spend_limit_reached"
+    )
+
+
+def test_provider_proxy_rejects_unpriced_or_nonfinite_campaign_allowance() -> None:
+    """Require usable price evidence before measuring a campaign allowance.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Missing prices and nonfinite thresholds fail before proxy startup.
+    """
+
+    with pytest.raises(ValueError, match="must be positive"):
+        provider_proxy.ProxySettings(
+            "client", "upstream", 0, max_campaign_spend_usd=0.1
+        )
+    with pytest.raises(ValueError, match="must be positive"):
+        provider_proxy.ProxySettings(
+            "client",
+            "upstream",
+            0,
+            max_prompt_usd_per_million=1.0,
+            max_completion_usd_per_million=1.0,
+            max_campaign_spend_usd=float("nan"),
+        )
+
+
 def test_provider_proxy_rejects_invalid_request_size(tmp_path: Path) -> None:
     """Reject ambiguous sizes before applying the token reserve.
 

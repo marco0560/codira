@@ -274,8 +274,7 @@ def test_text_oracle_reports_missing_clauses_and_accepts_alternative_spellings(
         ),
         (
             "impact-001",
-            "MCPAdapter._query is the adapter query boundary in "
-            "src/codira/mcp/adapter.py",
+            "MCPAdapter._query dispatches reads in src/codira/mcp/adapter.py",
         ),
         (
             "localize-001",
@@ -332,6 +331,56 @@ def test_public_oracles_accept_equivalent_identifiers_and_require_source_path(
     )
     artifact.write_text(
         answer.replace(missing_path, "omitted source path"), encoding="utf-8"
+    )
+    assert not evaluate_oracle(
+        definition,
+        result_root=result_root,
+        result_path=artifact.name,
+        result_format="text",
+        protected_root=protected_root,
+    ).passed
+
+
+def test_impact_oracle_requires_query_method_without_prose_phrase(
+    tmp_path: Path,
+) -> None:
+    """Keep the impact identity check independent of explanatory wording.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary isolated agent and protected roots.
+
+    Returns
+    -------
+    None
+        The method and source path are required, while prose is unrestricted.
+    """
+
+    oracle_path = (
+        Path(__file__).resolve().parents[1]
+        / "benchmarks/agent-efficiency/oracles/impact-001.json"
+    )
+    definition = json.loads(oracle_path.read_text(encoding="utf-8"))["definition"]
+    result_root = tmp_path / "agent"
+    protected_root = tmp_path / "protected"
+    result_root.mkdir()
+    protected_root.mkdir()
+    artifact = result_root / "BENCHMARK_ANSWER.md"
+    artifact.write_text(
+        "Adapter reads route through MCPAdapter._query in src/codira/mcp/adapter.py",
+        encoding="utf-8",
+    )
+    assert evaluate_oracle(
+        definition,
+        result_root=result_root,
+        result_path=artifact.name,
+        result_format="text",
+        protected_root=protected_root,
+    ).passed
+    artifact.write_text(
+        "Adapter reads route through another method in src/codira/mcp/adapter.py",
+        encoding="utf-8",
     )
     assert not evaluate_oracle(
         definition,

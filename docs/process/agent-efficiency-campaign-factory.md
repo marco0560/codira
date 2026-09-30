@@ -49,27 +49,30 @@ The legacy accounting field `max_estimated_pilot_spend_usd` means the aggregate
 spending allowance for the selected stage, including a full campaign.
 
 `accounting.budget_reservation_mode` accepts `sum-attempt-ceilings` (the
-default) or `shared-pool`. The default requires funding every scheduled
-attempt's maximum upfront. A full campaign may instead declare a smaller
-shared pool, funding at least one complete attempt reserve. Its launch plan
-then requires shared-budget enforcement by the full-campaign executor: persist
-aggregate usage, reserve the next attempt before starting it, release unused
-reserve only after complete usage is known, and stop when another attempt
-cannot be funded. Preserve that pool across checkpoints, resumes, and daily
-key resets. Before a fresh pair, fund both remaining arms at their per-attempt
-reserves. The runner uses an exclusive process lock and immutable reservation
-and settlement files under `state/budget/`. A settlement is accepted only with
-complete received provider usage and a matching immutable result record.
-Unfinished reservations, unknown billing, changed budget identity, operational
-failures, and oracle-contract defects block automatic resumption. Scored task
-failures remain results and do not add attempts.
+default) or `shared-pool`. The default retains the bounded pilot's upfront
+attempt reservations. A full campaign's `shared-pool` instead stops on
+observed aggregate charges priced from received provider usage at the frozen
+price ceilings. It admits the next attempt while the recorded total is below
+the pool, and its proxy admits the next completion while that attempt has not
+used the remaining pool. The final response may cross the threshold; no
+further completion or attempt is admitted. This can leave an incomplete pair.
+The full-campaign token and per-attempt dollar figures are planning estimates,
+not additional execution stops. The output-per-response, logical request,
+transport retry, and timeout controls remain enforced. The runner uses an
+exclusive process lock and immutable start and settlement files under
+`state/budget/`. A settlement requires complete received provider usage and
+a matching immutable result record. Unfinished starts, unknown billing,
+changed budget identity, operational failures, and oracle-contract defects
+block automatic resumption. Scored task failures remain results and do not
+add attempts.
 
 Accounting declares the meaning of `budgets.max_total_tokens` through the
 optional `accounting.max_total_tokens_scope`. Fresh multi-continuation pilots
 use `whole-session`, so the ceiling is reserved once per execution; historical
 manifests without the field retain the conservative `per-continuation`
-reservation. Logical continuation and transport-retry caps remain independent
-operational limits and do not multiply a declared whole-session token ceiling.
+reservation. For full-campaign `shared-pool` mode, that field is a planning
+estimate; the measured dollar pool is the budget stop. Logical continuation
+and transport-retry caps remain independent operational limits.
 
 Fresh campaign specifications may declare `treatment_protocol.agent_instruction`
 for a directive applied identically to baseline and assisted prompts. Protocol
@@ -101,14 +104,15 @@ then create a fresh campaign identity.
 
 The provider proxy persists each exact response before parsing its terminal
 usage, accounts input and output tokens independently of the Codex transcript,
-and serializes completion requests so only one response can be in flight. Before
-forwarding each request, it reserves the UTF-8 request-body byte count plus the
-configured maximum completion tokens against the remaining whole-session token
-ceiling. Missing usage on a successful response blocks further requests. Runtime
-and authenticated preflight also reserve worst-case token-priced cost plus a
-response allowance; if the route cannot establish those bounds, admission must
-fail closed. The byte-based prompt estimate is deliberately conservative and
-must be compared with reported provider usage in every pilot.
+and serializes completion requests so only one response can be in flight.
+Bounded pilots still reserve the UTF-8 request-body byte count plus maximum
+completion tokens against their token ceiling. Full campaigns use observed
+ceiling-priced provider usage against their shared pool instead. Missing usage
+on a successful response blocks further requests in either mode. Authenticated
+preflight still verifies the selected route, price ceilings, context/output
+limits, and at least the declared pool remaining on the scoped key. Its
+`context_response_upper_bound_usd` is an informational upper bound for the
+authorized final-response overshoot, not an upfront reservation.
 
 ## Pre-pilot control checklist
 
@@ -150,11 +154,11 @@ the campaign's durable artifacts.
   new or changed adapter is a harness change and must be regression-tested and
   qualified offline before paid use. A provider change requires a fresh
   campaign identity and authenticated preflight.
-- **Budgets and account admission:** set the whole-session token ceiling,
+- **Budgets and account admission:** set the planning token amount,
   output ceiling, logical request cap, transport retry cap, timeout,
-  per-attempt spend, pilot spend, and daily spend. Reserve each pending request
-  before forwarding it, and use the authenticated context and output limits to
-  calculate the attempt's worst-case spend. Pilot 020 reached 507,635 reported
+  per-attempt estimate, campaign pool, and daily spend. For bounded pilots,
+  retain request and attempt reservations and calculate worst-case spend from
+  authenticated context/output limits. Pilot 020 reached 507,635 reported
   tokens against its 500,000 whole-session cap. Pilot 021 used a 750,000-token
   cap, but the patch Codira-MCP attempt had its 21st response denied after 20
   upstream responses. Its trajectory had no file change after 58 events, 18
@@ -168,12 +172,18 @@ the campaign's durable artifacts.
   runtime to cover the declared token/output reserve, then require authenticated
   preflight to cover the actual context-sized response reserve. Do not copy
   dollar values to another model or provider.
-  For a full campaign using a shared pool, verify persistent aggregate
-  accounting and next-attempt reservation independently of the daily key cap.
-  A smaller campaign pool can stop execution before all scheduled attempts
-  complete; preserve those pending identities rather than silently expanding
-  the pool. The factory's offline admission is not proof of runtime enforcement.
-- **Oracle traceability:** confirm the result records each deterministic
+  For a full campaign using a shared pool, verify persisted observed charges,
+  per-response stopping at the remaining pool, and the authorized possibility
+  of one response crossing the threshold. Do not apply the pilot's token or
+  per-attempt dollar stops to this mode. A smaller pool can stop execution
+  before all scheduled attempts complete, including within a pair; preserve
+  pending identities rather than silently expanding the pool. The factory's
+  offline admission is not proof of runtime enforcement.
+- **Oracle traceability:** check known-correct answer variants against each
+  text oracle, including paraphrases that retain the requested facts, and
+  known-wrong answers that omit a required identity or path. Do not make an
+  explanatory phrase an exact-match requirement unless the task explicitly
+  asks for that phrase. Confirm the result records each deterministic
   subcheck as pass/fail, including the individual patch/path/protected-command
   stages. For patch tasks, require the exact necessary source and test paths and
   reject every undeclared changed path. Keep protected command exit status,
@@ -219,15 +229,16 @@ fixed aggregate ceiling. Current route admission requires
 the entire declared aggregate allowance to remain available on the key;
 execution in smaller funded chunks is not yet qualified. The key's `limit`
 may exceed the local campaign ceiling when earlier key usage leaves the
-full allowance available. The persistent campaign pool remains the binding
-local spending ceiling; the ordinary pilot retains its stricter key-limit
-check. If that pool cannot fund another pair, the campaign stops with its
-pending schedule preserved. Changing the frozen campaign ceiling needs
+full allowance available. The persistent campaign pool is a soft observed
+spending threshold, and the final response may cross it; the ordinary pilot
+retains its stricter key-limit check. Once observed charges reach the pool,
+the campaign stops with its pending schedule preserved, possibly including
+the unmatched arm of a pair. Changing the frozen campaign ceiling needs
 explicit approval and a new immutable experiment identity; do not edit the
 budget journal.
 
 A provider or transport failure during an attempt requires diagnosis: topping
-up does not make uncertain billing or an unfinished reservation safe to retry.
+up does not make uncertain billing or an unfinished start safe to retry.
 Preserve the failed attempt and its raw evidence. Automatic retries of failed
 attempts are not qualified. Explicit paid authorization remains required for
 initial launch and for a restart after a diagnosed stop.

@@ -318,6 +318,9 @@ def _uses_shared_campaign_pool(stage: str, accounting: Mapping[str, object]) -> 
     if shared_pool and stage != "full-campaign":
         detail = "shared campaign budgets require the full-campaign stage"
         raise CampaignFactoryError.message(detail)
+    if stage == "full-campaign" and not shared_pool:
+        detail = "full campaigns require observed shared-pool accounting"
+        raise CampaignFactoryError.message(detail)
     return shared_pool
 
 
@@ -372,18 +375,18 @@ def _validate_accounting(manifest: Mapping[str, object], attempts: int) -> None:
     Returns
     -------
     None
-        Sum mode funds every ceiling; shared mode funds at least one reserve.
+        Sum mode funds every ceiling; shared mode records its observed pool.
 
     Raises
     ------
     CampaignFactoryError
-        If attempt, aggregate, or daily controls cannot fund their reserves.
+        If the applicable aggregate or daily controls are invalid.
 
     Notes
     -----
     A shared pool requires a qualified executor that persists aggregate usage
-    and reserves the next attempt before starting it. Factory validation alone
-    does not enforce that pool during execution.
+    and stops new paid work once observed charges reach its threshold. Factory
+    validation alone does not enforce that pool during execution.
     """
 
     accounting = cast("Mapping[str, object]", manifest["accounting"])
@@ -415,13 +418,12 @@ def _validate_accounting(manifest: Mapping[str, object], attempts: int) -> None:
         * float(cast("int | float", provider["max_completion_usd_per_million"]))
         / 1_000_000
     )
-    required_total = per_attempt * (
-        1 if accounting.get("budget_reservation_mode") == "shared-pool" else attempts
-    )
+    shared_pool = accounting.get("budget_reservation_mode") == "shared-pool"
+    required_total = per_attempt * attempts
     if (
         total > daily
-        or total + 1e-12 < required_total
-        or per_attempt < token_bound + output_reserve
+        or (not shared_pool and total + 1e-12 < required_total)
+        or (not shared_pool and per_attempt < token_bound + output_reserve)
     ):
         raise CampaignFactoryError.unbounded_accounting()
 

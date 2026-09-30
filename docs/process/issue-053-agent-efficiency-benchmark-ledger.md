@@ -1174,6 +1174,21 @@ prospective oracle changes, and patch token-cap investigation are recorded in
 Its original frozen results are preserved; the changed oracles require a new
 campaign identity before any paid rerun.
 
+On 2026-09-30 the operator selected observed spending for the $10 full-campaign
+pool and allowed the final provider response to cross that threshold. The
+full-campaign harness now persists immutable start and settlement records,
+checks the charged total before each new attempt, and passes the remaining
+pool to the proxy for a check before each subsequent completion. It no longer
+applies the pilot's worst-case token, per-attempt dollar, or pair reservations
+to full campaigns. Missing provider usage still blocks further paid work, and
+the output, request-count, retry, timeout, and route controls remain in force.
+Campaign 006's older reservation journal is not interpreted under these rules.
+The impact oracle now checks `_query` and its path without requiring the prose
+word `boundary`. A linked completion campaign could fill the six unfinished
+slots, but its new harness provenance must be reported separately from the 54
+completed task results of campaign 006. This remediation record does not
+launch a paid supplement.
+
 ### Gate
 
 Every scheduled execution is accounted for, valid results reproducible,

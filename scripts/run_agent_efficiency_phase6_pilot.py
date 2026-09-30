@@ -266,15 +266,16 @@ class ExecutionControls:
     max_prompt_price, max_completion_price : float
         Positive OpenRouter price ceilings per million tokens.
     max_total_tokens : int
-        Positive token ceiling with scope declared by
-        ``max_total_tokens_scope``.
+        Positive token ceiling for bounded pilots; planning estimate for full
+        campaigns. Its scope is declared by ``max_total_tokens_scope``.
     max_total_tokens_scope : str
         Whether the total-token ceiling covers the whole agent session or each
         logical continuation for conservative legacy accounting.
     max_output_tokens, timeout_seconds, max_response_requests : int
         Positive output, time, and provider-request ceilings.
     max_daily_spend, max_attempt_spend, max_pilot_spend : float
-        Positive bounded accounting controls in USD.
+        Positive accounting values in USD. Full campaigns enforce the
+        observed aggregate pool; their attempt amount is an estimate.
 
     Returns
     -------
@@ -671,7 +672,12 @@ def preflight_openrouter_route(
         context_length * prompt_price + controls.max_output_tokens * completion_price
     ) / 1_000_000
     worst_case_attempt_spend = token_spend_bound + response_reserve
-    if controls.max_attempt_spend < worst_case_attempt_spend:
+    accounting = manifest.get("accounting")
+    shared_pool = (
+        isinstance(accounting, Mapping)
+        and accounting.get("budget_reservation_mode") == "shared-pool"
+    )
+    if not shared_pool and controls.max_attempt_spend < worst_case_attempt_spend:
         raise PilotLauncherError(
             "attempt spend cap cannot cover the authenticated token reservation"
         )
@@ -713,11 +719,6 @@ def preflight_openrouter_route(
     remaining = budget.get("limit_remaining")
     daily_usage = budget.get("usage_daily")
     reset = budget.get("limit_reset")
-    accounting = manifest.get("accounting")
-    shared_pool = (
-        isinstance(accounting, Mapping)
-        and accounting.get("budget_reservation_mode") == "shared-pool"
-    )
     if (
         not isinstance(limit, int | float)
         or not isinstance(remaining, int | float)
@@ -744,14 +745,27 @@ def preflight_openrouter_route(
                 controls.max_transport_attempts_per_response
             ),
             "max_estimated_attempt_spend_usd": controls.max_attempt_spend,
-            "worst_case_reserved_attempt_spend_usd": worst_case_attempt_spend,
+            **({"observed_campaign_spend_only": True} if shared_pool else {}),
+            (
+                "planned_attempt_spend_usd_at_ceiling"
+                if shared_pool
+                else "worst_case_reserved_attempt_spend_usd"
+            ): worst_case_attempt_spend,
             "max_estimated_pilot_spend_usd": controls.max_pilot_spend,
             "max_daily_spend_usd": controls.max_daily_spend,
         },
         "public_route": {
             "context_length": context_length,
-            "token_spend_bound_usd": token_spend_bound,
-            "context_response_reserve_usd": response_reserve,
+            (
+                "planned_token_spend_usd_at_ceiling"
+                if shared_pool
+                else "token_spend_bound_usd"
+            ): token_spend_bound,
+            (
+                "context_response_upper_bound_usd"
+                if shared_pool
+                else "context_response_reserve_usd"
+            ): response_reserve,
             "max_completion_tokens": top_provider.get("max_completion_tokens"),
             "max_prompt_usd_per_million": prompt_price,
             "max_completion_usd_per_million": completion_price,
@@ -1382,6 +1396,10 @@ def execution_controls(
         raise PilotLauncherError(
             "shared campaign budgets require a qualified full-campaign executor"
         )
+    if full_campaign and not shared_pool:
+        raise PilotLauncherError(
+            "full campaigns require observed shared-pool accounting"
+        )
     daily_spend_value = cast("int | float", daily_spend)
     attempt_spend_value = cast("int | float", attempt_spend)
     pilot_spend_value = cast("int | float", pilot_spend)
@@ -1419,9 +1437,15 @@ def execution_controls(
         or float(attempt_spend_value) <= 0
         or float(pilot_spend_value) <= 0
         or float(pilot_spend_value) > float(daily_spend_value)
-        or float(pilot_spend_value) + 1e-12
-        < float(attempt_spend_value) * (1 if shared_pool else scheduled_attempts)
-        or float(attempt_spend_value) < token_spend_bound + output_reserve
+        or (
+            not shared_pool
+            and float(pilot_spend_value) + 1e-12
+            < float(attempt_spend_value) * scheduled_attempts
+        )
+        or (
+            not shared_pool
+            and float(attempt_spend_value) < token_spend_bound + output_reserve
+        )
     ):
         raise PilotLauncherError("campaign accounting controls are invalid")
     return ExecutionControls(
@@ -1441,10 +1465,105 @@ def execution_controls(
     )
 
 
+def _attempt_budget_limits(
+    context: PilotExecutionContext,
+    controls: ExecutionControls,
+    campaign_budget_remaining: Decimal | None,
+) -> tuple[int | None, float | None, float | None]:
+    """Select bounded-pilot or observed full-campaign proxy limits.
+
+    Parameters
+    ----------
+    context : PilotExecutionContext
+        Frozen campaign mode and dependencies.
+    controls : ExecutionControls
+        Validated manifest controls.
+    campaign_budget_remaining : decimal.Decimal or None
+        Observed pool remaining before a full-campaign attempt.
+
+    Returns
+    -------
+    tuple[int | None, float | None, float | None]
+        Session-token, attempt-dollar, and campaign-dollar proxy limits.
+
+    Raises
+    ------
+    PilotLauncherError
+        If full-campaign allowance is absent or exhausted.
+    """
+
+    if context.full_campaign:
+        if campaign_budget_remaining is None or campaign_budget_remaining <= 0:
+            raise PilotLauncherError(
+                "full campaign requires positive observed allowance"
+            )
+        return None, None, float(campaign_budget_remaining)
+    return controls.max_total_tokens, controls.max_attempt_spend, None
+
+
+def _local_proxy_failure_class(
+    observations: Sequence[Mapping[str, object]],
+) -> str | None:
+    """Classify a local proxy refusal without mistaking it for provider throttling.
+
+    Parameters
+    ----------
+    observations : collections.abc.Sequence[collections.abc.Mapping[str, object]]
+        Sanitized provider and local response observations for one attempt.
+
+    Returns
+    -------
+    str or None
+        Stable local failure class, or ``None`` without a local refusal.
+    """
+
+    reasons = [
+        str(observation.get("reason"))
+        for observation in observations
+        if observation.get("source") == "local"
+    ]
+    if not reasons:
+        return None
+    if "campaign_spend_limit_reached" in reasons:
+        return "campaign_spend_limit_reached"
+    return {
+        "session_token_budget_exhausted": "session_token_cap_exceeded",
+        "session_token_reservation_exceeded": "session_token_cap_exceeded",
+        "provider_usage_unavailable": "provider_usage_unavailable",
+        "attempt_spend_budget_exhausted": "attempt_spend_cap_exceeded",
+        "attempt_spend_cap_reservation_exceeded": "attempt_spend_cap_exceeded",
+    }.get(reasons[-1], "local_request_cap_exceeded")
+
+
+def _normalized_proxy_failure_class(
+    failure_class: str | None,
+    observations: Sequence[Mapping[str, object]],
+) -> str | None:
+    """Replace a generic rate-limit class only when the proxy refused locally.
+
+    Parameters
+    ----------
+    failure_class : str or None
+        Terminal class derived from the agent event stream.
+    observations : collections.abc.Sequence[collections.abc.Mapping[str, object]]
+        Sanitized response observations for the attempt.
+
+    Returns
+    -------
+    str or None
+        Specific local class when available, otherwise the original class.
+    """
+
+    if failure_class != "provider_rate_limited":
+        return failure_class
+    return _local_proxy_failure_class(observations) or failure_class
+
+
 def execute_pilot_attempt(
     store: CampaignStore,
     attempt: ScheduledAttempt,
     context: PilotExecutionContext,
+    campaign_budget_remaining: Decimal | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Run one bounded paid attempt and retain only non-secret evidence facts.
 
@@ -1456,6 +1575,8 @@ def execute_pilot_attempt(
         One pending paired execution.
     context : PilotExecutionContext
         Immutable validated execution dependencies.
+    campaign_budget_remaining : decimal.Decimal or None, optional
+        Observed shared-pool allowance before this full-campaign attempt.
 
     Returns
     -------
@@ -1483,6 +1604,9 @@ def execute_pilot_attempt(
         context.manifest,
         scheduled_attempts=len(store.schedule),
         full_campaign=context.full_campaign,
+    )
+    token_limit, attempt_spend_limit, campaign_spend_limit = _attempt_budget_limits(
+        context, controls, campaign_budget_remaining
     )
     attempt_root = store.root / "attempt-work" / attempt.attempt_id
     if attempt_root.exists():
@@ -1621,11 +1745,12 @@ def execute_pilot_attempt(
         constraints,
         controls.max_response_requests,
         controls.max_transport_attempts_per_response,
-        max_total_tokens=controls.max_total_tokens,
+        max_total_tokens=token_limit,
         max_context_tokens=context.provider_context_length,
         max_prompt_usd_per_million=controls.max_prompt_price,
         max_completion_usd_per_million=controls.max_completion_price,
-        max_attempt_spend_usd=controls.max_attempt_spend,
+        max_attempt_spend_usd=attempt_spend_limit,
+        max_campaign_spend_usd=campaign_spend_limit,
         response_artifact_root=attempt_root / "provider-responses",
     )
     with tempfile.TemporaryDirectory(prefix="ae-", dir=PROJECT_TEMP_ROOT) as socket_dir:
@@ -1672,7 +1797,7 @@ def execute_pilot_attempt(
         store.campaign_id,
         attempt,
         execution,
-        max_total_tokens=controls.max_total_tokens,
+        max_total_tokens=token_limit,
     )
     evidence["provider_responses"] = list(settings.response_observations)
     evidence["environment_preparation"] = {
@@ -1685,19 +1810,9 @@ def execute_pilot_attempt(
         evidence["index_preparation_trace"] = index_trace
     evidence["container_execution_trace"] = execution_trace
     observations = settings.response_observations
-    if (
-        observations
-        and observations[-1].get("source") == "local"
-        and result["failure_class"] == "provider_rate_limited"
-    ):
-        local_reason = observations[-1].get("reason")
-        result["failure_class"] = {
-            "session_token_budget_exhausted": "session_token_cap_exceeded",
-            "session_token_reservation_exceeded": "session_token_cap_exceeded",
-            "provider_usage_unavailable": "provider_usage_unavailable",
-            "attempt_spend_budget_exhausted": "attempt_spend_cap_exceeded",
-            "attempt_spend_cap_reservation_exceeded": "attempt_spend_cap_exceeded",
-        }.get(str(local_reason), "local_request_cap_exceeded")
+    result["failure_class"] = _normalized_proxy_failure_class(
+        cast("str | None", result["failure_class"]), observations
+    )
     operational_status = "passed" if result["outcome"] == "success" else "failed"
     operational_failure = (
         None if operational_status == "passed" else result["failure_class"]
@@ -1984,9 +2099,11 @@ def main(arguments: list[str] | None = None) -> int:
 
             report = run_full_campaign(
                 store,
-                lambda attempt: execute_pilot_attempt(store, attempt, context),
+                lambda attempt, remaining: execute_pilot_attempt(
+                    store, attempt, context, remaining
+                ),
                 pool=Decimal(str(controls.max_pilot_spend)),
-                reserve=Decimal(str(controls.max_attempt_spend)),
+                attempt_estimate=Decimal(str(controls.max_attempt_spend)),
                 prompt_price=Decimal(str(controls.max_prompt_price)),
                 completion_price=Decimal(str(controls.max_completion_price)),
             )

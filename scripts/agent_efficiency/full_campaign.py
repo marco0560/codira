@@ -195,11 +195,12 @@ def evidence_cost(
 def run_full_campaign(
     store: CampaignStore,
     execute: Callable[
-        [ScheduledAttempt], tuple[Mapping[str, object], Mapping[str, object]]
+        [ScheduledAttempt, Decimal],
+        tuple[Mapping[str, object], Mapping[str, object]],
     ],
     *,
     pool: Decimal,
-    reserve: Decimal,
+    attempt_estimate: Decimal,
     prompt_price: Decimal,
     completion_price: Decimal,
     clock: Callable[[], float] = time.monotonic,
@@ -211,11 +212,12 @@ def run_full_campaign(
     store : CampaignStore
         Frozen sixty-attempt state.
     execute : Callable
-        Qualified attempt executor returning result and response evidence.
+        Qualified attempt executor receiving the remaining campaign allowance
+        and returning result and response evidence.
     pool : decimal.Decimal
         Fixed aggregate campaign ceiling.
-    reserve : decimal.Decimal
-        Allowance reserved before each attempt.
+    attempt_estimate : decimal.Decimal
+        Informational per-attempt price estimate frozen in the journal.
     prompt_price : decimal.Decimal
         Frozen input-token price per million tokens.
     completion_price : decimal.Decimal
@@ -235,12 +237,14 @@ def run_full_campaign(
 
     Notes
     -----
-    Reservations precede all attempt side effects. Interrupted reservations,
-    failed operational records, and uncertain billing prohibit resumption.
-    Settlements reference immutable result evidence and survive daily resets.
+    Start markers precede all attempt side effects. Interrupted starts, failed
+    operational records, and uncertain billing prohibit resumption. The soft
+    pool stops new attempts when observed charges reach its threshold; the
+    final received response may cross it. Settlements reference immutable
+    result evidence and survive daily resets.
     """
 
-    if len(store.schedule) != FULL_ATTEMPTS or not (0 < reserve <= pool):
+    if len(store.schedule) != FULL_ATTEMPTS or pool <= 0 or attempt_estimate <= 0:
         raise ValueError("full campaign schedule or budget is invalid")
     journal = store.root / "budget"
     journal.mkdir(exist_ok=True)
@@ -255,10 +259,12 @@ def run_full_campaign(
         identity = {
             "configuration_fingerprint": store.configuration_fingerprint,
             "pool_usd": str(pool),
-            "reserve_usd": str(reserve),
+            "attempt_estimate_usd": str(attempt_estimate),
             "prompt_price": str(prompt_price),
             "completion_price": str(completion_price),
         }
+        if any(journal.glob("*.reserved.json")):
+            raise ValueError("legacy reservation journal cannot use observed spending")
         identity_path = journal / "identity.json"
         if identity_path.exists():
             if json.loads(identity_path.read_text()) != identity:
@@ -266,21 +272,19 @@ def run_full_campaign(
         else:
             _atomic_write(identity_path, identity)
         records = store.validated_records()
-        reservations = {
-            path.stem.removesuffix(".reserved")
-            for path in journal.glob("*.reserved.json")
+        starts = {
+            path.stem.removesuffix(".started")
+            for path in journal.glob("*.started.json")
         }
         settlements = {
             path.stem.removesuffix(".settled")
             for path in journal.glob("*.settled.json")
         }
-        if reservations != settlements or reservations != set(records):
+        if starts != settlements or starts != set(records):
             raise ValueError("unfinished or inconsistent budget evidence blocks resume")
         spent = Decimal(0)
         for attempt_id, record in records.items():
-            reservation = json.loads(
-                (journal / f"{attempt_id}.reserved.json").read_text()
-            )
+            start = json.loads((journal / f"{attempt_id}.started.json").read_text())
             settlement = json.loads(
                 (journal / f"{attempt_id}.settled.json").read_text()
             )
@@ -290,49 +294,36 @@ def run_full_campaign(
                 prompt_price,
                 completion_price,
             )
-            if (
-                reservation != expected
-                or settlement
-                != {
-                    **expected,
-                    "charged_usd": str(charge),
-                    "record_fingerprint": canonical_fingerprint(record),
-                }
-                or charge > reserve
-            ):
+            if start != expected or settlement != {
+                **expected,
+                "charged_usd": str(charge),
+                "record_fingerprint": canonical_fingerprint(record),
+            }:
                 raise ValueError(
                     "shared budget settlement differs from immutable evidence"
                 )
             if _requires_stop(cast("Mapping[str, object]", record["result"])):
                 raise ValueError("terminal execution failure blocks automatic resume")
             spent += charge
-        if spent > pool:
-            raise ValueError("shared campaign budget exceeded")
         started = clock()
         written: list[str] = []
         status = "complete"
         previous_pair: str | None = None
         for attempt in store.pending_attempts():
+            if spent >= pool:
+                status = "budget_exhausted"
+                break
             if (
                 attempt.pair_id != previous_pair
                 and clock() - started >= CHECKPOINT_SECONDS
             ):
                 status = "checkpoint"
                 break
-            # Reserve both arms before beginning a fresh pair where possible.
-            pair_pending = sum(
-                item.pair_id == attempt.pair_id for item in store.pending_attempts()
-            )
-            if spent + reserve * pair_pending > pool:
-                status = "budget_exhausted"
-                break
             expected = {**identity, "attempt_id": attempt.attempt_id}
-            _atomic_write(journal / f"{attempt.attempt_id}.reserved.json", expected)
-            result, evidence = execute(attempt)
+            _atomic_write(journal / f"{attempt.attempt_id}.started.json", expected)
+            result, evidence = execute(attempt, pool - spent)
             path = store.store_result(attempt.attempt_id, result, evidence)
             charge = evidence_cost(evidence, prompt_price, completion_price)
-            if charge > reserve or spent + charge > pool:
-                raise ValueError("received usage exceeds the reserved campaign budget")
             record = json.loads(path.read_text())
             _atomic_write(
                 journal / f"{attempt.attempt_id}.settled.json",
@@ -346,7 +337,11 @@ def run_full_campaign(
             written.append(attempt.attempt_id)
             previous_pair = attempt.pair_id
             if _requires_stop(result):
-                status = "execution_failed"
+                status = (
+                    "budget_exhausted"
+                    if result.get("failure_class") == "campaign_spend_limit_reached"
+                    else "execution_failed"
+                )
                 break
         report: dict[str, object] = {
             "status": status,

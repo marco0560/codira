@@ -77,6 +77,7 @@ def _store(root: Path) -> CampaignStore:
 
 def _execute(
     attempt: ScheduledAttempt,
+    remaining: Decimal | None = None,
 ) -> tuple[Mapping[str, object], Mapping[str, object]]:
     """Return a scored task failure with complete billing evidence.
 
@@ -84,6 +85,8 @@ def _execute(
     ----------
     attempt : ScheduledAttempt
         Frozen schedule member.
+    remaining : decimal.Decimal or None, optional
+        Observed campaign allowance passed by the executor.
 
     Returns
     -------
@@ -132,13 +135,15 @@ def _execute(
 def _run(
     store: CampaignStore,
     execute: Callable[
-        [ScheduledAttempt], tuple[Mapping[str, object], Mapping[str, object]]
+        [ScheduledAttempt, Decimal],
+        tuple[Mapping[str, object], Mapping[str, object]],
     ] = _execute,
     *,
     pool: str = "10",
+    estimate: str = "1",
     clock: Callable[[], float] = lambda: 0.0,
 ) -> dict[str, object]:
-    """Run a synthetic campaign with a one-dollar attempt reserve.
+    """Run a synthetic campaign with a one-dollar attempt estimate.
 
     Parameters
     ----------
@@ -148,6 +153,8 @@ def _run(
         Injectable result producer.
     pool : str, optional
         Decimal campaign ceiling.
+    estimate : str, optional
+        Informational per-attempt price estimate.
     clock : Callable, optional
         Injectable checkpoint clock.
 
@@ -161,7 +168,7 @@ def _run(
         store,
         execute,
         pool=Decimal(pool),
-        reserve=Decimal(1),
+        attempt_estimate=Decimal(estimate),
         prompt_price=Decimal(1),
         completion_price=Decimal(1),
         clock=clock,
@@ -212,7 +219,7 @@ def test_checkpoint_preserves_complete_pairs_and_resumes(tmp_path: Path) -> None
     assert _run(store)["charged_usd"] == "6.0"
 
 
-def test_campaign_pool_stops_before_unaffordable_pair_and_survives_resume(
+def test_campaign_pool_stops_at_observed_spend_and_survives_resume(
     tmp_path: Path,
 ) -> None:
     """Preserve aggregate spending across restarts with the same ceiling.
@@ -231,13 +238,48 @@ def test_campaign_pool_stops_before_unaffordable_pair_and_survives_resume(
     store = _store(tmp_path)
     first = _run(store, pool="2")
     assert first["status"] == "budget_exhausted"
-    assert first["charged_usd"] == "0.2"
+    assert first["charged_usd"] == "2.0"
     assert _run(store, pool="2")["new_attempt_ids"] == []
     with pytest.raises(ValueError, match="identity differs"):
         _run(store, pool="10")
 
 
-def test_interrupted_attempt_keeps_reservation_and_blocks_retry(tmp_path: Path) -> None:
+def test_campaign_pool_admits_work_until_observed_spend_crosses_limit(
+    tmp_path: Path,
+) -> None:
+    """Allow a final billed response to cross the soft campaign threshold.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary state root.
+
+    Returns
+    -------
+    None
+        Both arms start below the limit and the next pair is not started.
+    """
+
+    store = _store(tmp_path)
+    remaining: list[Decimal] = []
+
+    def execute(
+        attempt: ScheduledAttempt, allowance: Decimal
+    ) -> tuple[Mapping[str, object], Mapping[str, object]]:
+        remaining.append(allowance)
+        return _execute(attempt)
+
+    report = _run(store, execute=execute, pool="0.15", estimate="0.05")
+    assert report["status"] == "budget_exhausted"
+    assert report["charged_usd"] == "0.2"
+    assert remaining == [Decimal("0.15"), Decimal("0.05")]
+    assert len(store.validated_records()) == 2
+    assert _run(store, pool="0.15", estimate="0.05")["new_attempt_ids"] == []
+
+
+def test_interrupted_attempt_keeps_start_marker_and_blocks_retry(
+    tmp_path: Path,
+) -> None:
     """Keep evidence of an interrupted execution and reject automatic retry.
 
     Parameters
@@ -248,24 +290,45 @@ def test_interrupted_attempt_keeps_reservation_and_blocks_retry(tmp_path: Path) 
     Returns
     -------
     None
-        An interruption never releases the reserved allowance.
+        An interruption never erases its durable start marker.
     """
 
     store = _store(tmp_path)
     with pytest.raises(StopIteration):
-        _run(store, execute=lambda _: next(iter(())))
-    assert len(list((tmp_path / "budget").glob("*.reserved.json"))) == 1
+        _run(store, execute=lambda _attempt, _remaining: next(iter(())))
+    assert len(list((tmp_path / "budget").glob("*.started.json"))) == 1
     with pytest.raises(ValueError, match="unfinished"):
         _run(store)
 
 
-@pytest.mark.parametrize(
-    "mutation", ["missing_usage", "bad_total", "transport_error", "overspend"]
-)
-def test_uncertain_or_excess_usage_blocks_release_and_resume(
+def test_observed_executor_rejects_legacy_reservation_journal(tmp_path: Path) -> None:
+    """Prevent interpreting an older frozen journal with new semantics.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary state root.
+
+    Returns
+    -------
+    None
+        A legacy marker blocks execution before another attempt starts.
+    """
+
+    store = _store(tmp_path)
+    journal = tmp_path / "budget"
+    journal.mkdir()
+    (journal / "legacy.reserved.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="legacy reservation journal"):
+        _run(store)
+    assert not list(journal.glob("*.started.json"))
+
+
+@pytest.mark.parametrize("mutation", ["missing_usage", "bad_total", "transport_error"])
+def test_uncertain_usage_blocks_settlement_and_resume(
     tmp_path: Path, mutation: str
 ) -> None:
-    """Preserve a terminal record and reservation when billing is uncertain.
+    """Preserve a terminal record and start marker when billing is uncertain.
 
     Parameters
     ----------
@@ -290,14 +353,8 @@ def test_uncertain_or_excess_usage_blocks_release_and_resume(
         observation["provider_usage"]["total_tokens"] = 1
     elif mutation == "transport_error":
         observation["status"] = 504
-    else:
-        observation["provider_usage"] = {
-            "input_tokens": 2000000,
-            "output_tokens": 0,
-            "total_tokens": 2000000,
-        }
     with pytest.raises(ValueError):
-        _run(store, execute=lambda _: (result, mutable))
+        _run(store, execute=lambda _attempt, _remaining: (result, mutable))
     assert len(store.validated_records()) == 1
     assert not list((tmp_path / "budget").glob("*.settled.json"))
     with pytest.raises(ValueError, match="unfinished"):
@@ -403,12 +460,49 @@ def test_operational_failure_stops_after_one_record(tmp_path: Path) -> None:
         "failure_class": "provider_error",
     }
     assert (
-        _run(store, execute=lambda _: (mutable, evidence))["status"]
+        _run(store, execute=lambda _attempt, _remaining: (mutable, evidence))["status"]
         == "execution_failed"
     )
     assert len(store.validated_records()) == 1
     with pytest.raises(ValueError, match="terminal execution failure"):
         _run(store)
+
+
+def test_observed_campaign_budget_stop_is_distinct_from_other_failures(
+    tmp_path: Path,
+) -> None:
+    """Label a local observed-spend stop as budget exhaustion.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary state root.
+
+    Returns
+    -------
+    None
+        The billed incomplete attempt is retained without starting another.
+    """
+
+    store = _store(tmp_path)
+    result, evidence = _execute(store.schedule[0])
+    stopped = dict(result)
+    stopped["outcome"] = "infrastructure_failure"
+    stopped["failure_class"] = "campaign_spend_limit_reached"
+    stopped["operational_calibration"] = {
+        "status": "failed",
+        "failure_class": "campaign_spend_limit_reached",
+    }
+    report = _run(
+        store,
+        execute=lambda _attempt, _remaining: (stopped, evidence),
+        pool="0.05",
+    )
+    assert report["status"] == "budget_exhausted"
+    assert report["charged_usd"] == "0.1"
+    assert len(store.validated_records()) == 1
+    with pytest.raises(ValueError, match="terminal execution failure"):
+        _run(store, pool="0.05")
 
 
 def test_full_executor_admits_shared_pool_but_pilot_does_not() -> None:
@@ -442,8 +536,46 @@ def test_full_executor_admits_shared_pool_but_pilot_does_not() -> None:
         execution_controls(manifest, scheduled_attempts=6, full_campaign=True)
 
 
+def test_full_campaign_uses_pool_instead_of_attempt_token_and_dollar_caps() -> None:
+    """Select only the measured aggregate limit for a full campaign.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Bounded pilots retain their separate attempt controls.
+    """
+
+    spec = json.loads(
+        Path(
+            "benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-002.json"
+        ).read_text()
+    )
+    manifest, _ = build_campaign(spec, Path("benchmarks/agent-efficiency"))
+    controls = execution_controls(manifest, scheduled_attempts=60, full_campaign=True)
+    context = pilot.PilotExecutionContext(
+        {}, {}, {}, {}, "", "", "", manifest, full_campaign=True
+    )
+    assert pilot._attempt_budget_limits(context, controls, Decimal("0.25")) == (
+        None,
+        None,
+        0.25,
+    )
+    with pytest.raises(ValueError, match="positive observed allowance"):
+        pilot._attempt_budget_limits(context, controls, Decimal(0))
+    bounded = pilot.PilotExecutionContext({}, {}, {}, {}, "", "", "", manifest)
+    assert pilot._attempt_budget_limits(bounded, controls, None) == (
+        controls.max_total_tokens,
+        controls.max_attempt_spend,
+        None,
+    )
+
+
 def test_exclusive_lock_rejects_concurrent_execution(tmp_path: Path) -> None:
-    """Reject another executor before any reservation or paid side effect.
+    """Reject another executor before any start marker or paid side effect.
 
     Parameters
     ----------
@@ -463,7 +595,7 @@ def test_exclusive_lock_rejects_concurrent_execution(tmp_path: Path) -> None:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with pytest.raises(ValueError, match="another campaign executor"):
             _run(store)
-    assert not list(journal.glob("*.reserved.json"))
+    assert not list(journal.glob("*.started.json"))
 
 
 def test_factory_executor_builds_full_and_resume_commands(
@@ -575,12 +707,26 @@ def test_shared_pool_accepts_higher_key_limit_with_full_remaining_allowance(
     assert isinstance(key_budget, dict)
     assert key_budget["limit_usd"] == 11
     assert key_budget["limit_remaining_usd"] == 10.5
+    preflight_accounting = admitted["accounting"]
+    assert isinstance(preflight_accounting, dict)
+    assert preflight_accounting["observed_campaign_spend_only"] is True
+    assert "worst_case_reserved_attempt_spend_usd" not in preflight_accounting
+    assert "planned_attempt_spend_usd_at_ceiling" in preflight_accounting
+    public_route = admitted["public_route"]
+    assert isinstance(public_route, dict)
+    assert "context_response_upper_bound_usd" in public_route
+    accounting = manifest["accounting"]
+    assert isinstance(accounting, dict)
+    accounting["max_estimated_attempt_spend_usd"] = 0.001
+    observed_controls = execution_controls(
+        manifest, scheduled_attempts=60, full_campaign=True
+    )
+    assert preflight_openrouter_route(manifest, observed_controls, "not-a-real-token")
     key_data["limit_remaining"] = 9.99
     with pytest.raises(ValueError, match="budget is insufficient"):
         preflight_openrouter_route(manifest, controls, "not-a-real-token")
     key_data["limit_remaining"] = 10.5
-    accounting = manifest["accounting"]
-    assert isinstance(accounting, dict)
+    accounting["max_estimated_attempt_spend_usd"] = 1.05
     accounting["budget_reservation_mode"] = "sum-attempt-ceilings"
     with pytest.raises(ValueError, match="budget is insufficient"):
         preflight_openrouter_route(

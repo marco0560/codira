@@ -24,6 +24,7 @@ import hashlib
 import hmac
 import http.client
 import json
+import math
 import os
 import socket
 import sys
@@ -121,6 +122,9 @@ class ProxySettings:
         Maximum output-token allowance applied to every Responses request.
     constraints : ResponseConstraints, optional
         Immutable model, reasoning, and price constraints for one request.
+    max_campaign_spend_usd : float or None, optional
+        Remaining observed campaign allowance. A response may cross it; the
+        next completion request is then refused locally.
 
     Returns
     -------
@@ -140,6 +144,7 @@ class ProxySettings:
     max_prompt_usd_per_million: float | None = None
     max_completion_usd_per_million: float | None = None
     max_attempt_spend_usd: float | None = None
+    max_campaign_spend_usd: float | None = None
     response_artifact_root: Path | None = None
     limiter: ResponseRequestLimiter = field(init=False, repr=False)
     response_observations: list[dict[str, object]] = field(
@@ -180,6 +185,15 @@ class ProxySettings:
             or (
                 self.max_attempt_spend_usd is not None
                 and self.max_attempt_spend_usd <= 0
+            )
+            or (
+                self.max_campaign_spend_usd is not None
+                and (
+                    not math.isfinite(self.max_campaign_spend_usd)
+                    or self.max_campaign_spend_usd <= 0
+                    or self.max_prompt_usd_per_million is None
+                    or self.max_completion_usd_per_million is None
+                )
             )
         ):
             message = "proxy max response requests must be positive"
@@ -365,6 +379,11 @@ class ProxySettings:
             raise ValueError(detail)
         if self.token_accounting_failed:
             return "provider_usage_unavailable"
+        if (
+            self.max_campaign_spend_usd is not None
+            and self.provider_estimated_cost_usd >= self.max_campaign_spend_usd
+        ):
+            return "campaign_spend_limit_reached"
         if self.max_total_tokens is not None:
             remaining_tokens = self.max_total_tokens - self.provider_total_tokens
             if remaining_tokens <= 0:

@@ -122,7 +122,7 @@ def _full_spec() -> dict[str, object]:
     Returns
     -------
     dict[str, object]
-        Specification with sufficient reserve for all sixty attempts.
+        Specification with a measured full-campaign pool.
     """
 
     specification = _spec(
@@ -146,7 +146,11 @@ def _full_spec() -> dict[str, object]:
     )
     accounting = specification["accounting"]
     assert isinstance(accounting, dict)
-    accounting.update(max_daily_spend_usd=10, max_estimated_pilot_spend_usd=9)
+    accounting.update(
+        max_daily_spend_usd=10,
+        max_estimated_pilot_spend_usd=9,
+        budget_reservation_mode="shared-pool",
+    )
     return specification
 
 
@@ -210,8 +214,8 @@ def test_full_campaign_rejects_an_unapproved_repetition_count(repetitions: int) 
         build_campaign(specification, Path("benchmarks/agent-efficiency"))
 
 
-def test_full_campaign_rejects_a_pilot_sized_budget() -> None:
-    """Reserve the complete sixty-attempt schedule rather than six attempts.
+def test_full_campaign_rejects_a_pool_above_its_daily_limit() -> None:
+    """Keep the observed pool within the declared daily account allowance.
 
     Parameters
     ----------
@@ -220,19 +224,19 @@ def test_full_campaign_rejects_a_pilot_sized_budget() -> None:
     Returns
     -------
     None
-        Insufficient aggregate spend cannot produce a generated campaign.
+        A pool above its daily ceiling cannot produce a campaign.
     """
 
     specification = _full_spec()
     accounting = specification["accounting"]
     assert isinstance(accounting, dict)
-    accounting["max_estimated_pilot_spend_usd"] = 0.9
+    accounting["max_estimated_pilot_spend_usd"] = 10.1
     with pytest.raises(CampaignFactoryError, match="does not bound its schedule"):
         build_campaign(specification, Path("benchmarks/agent-efficiency"))
 
 
-def test_shared_campaign_pool_requires_a_qualified_budget_executor() -> None:
-    """Permit a finite pool without reserving all sixty attempt maxima.
+def test_full_campaign_requires_observed_shared_pool() -> None:
+    """Reject reserve-based accounting for the measured full executor.
 
     Parameters
     ----------
@@ -241,7 +245,28 @@ def test_shared_campaign_pool_requires_a_qualified_budget_executor() -> None:
     Returns
     -------
     None
-        A smaller pool retains every attempt limit and an explicit launch gate.
+        A full campaign cannot silently use incompatible budget semantics.
+    """
+
+    specification = _full_spec()
+    accounting = specification["accounting"]
+    assert isinstance(accounting, dict)
+    accounting["budget_reservation_mode"] = "sum-attempt-ceilings"
+    with pytest.raises(CampaignFactoryError, match="observed shared-pool"):
+        build_campaign(specification, Path("benchmarks/agent-efficiency"))
+
+
+def test_shared_campaign_pool_requires_a_qualified_budget_executor() -> None:
+    """Admit measured spend without reserving any attempt maximum.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        A smaller pool retains an explicit full-executor launch gate.
     """
 
     specification = _full_spec()
@@ -257,6 +282,9 @@ def test_shared_campaign_pool_requires_a_qualified_budget_executor() -> None:
     assert isinstance(gates, dict)
     assert gates["requires_shared_campaign_budget_enforcement"] is True
     accounting["max_estimated_pilot_spend_usd"] = 0.14
+    accounting["max_estimated_attempt_spend_usd"] = 0.001
+    build_campaign(specification, Path("benchmarks/agent-efficiency"))
+    accounting["max_daily_spend_usd"] = 0.13
     with pytest.raises(CampaignFactoryError, match="does not bound its schedule"):
         build_campaign(specification, Path("benchmarks/agent-efficiency"))
 

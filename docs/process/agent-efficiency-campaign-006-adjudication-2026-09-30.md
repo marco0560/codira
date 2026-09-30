@@ -45,7 +45,9 @@ oracle accepted two test-ID formats but omitted the module-qualified spelling
 used in the saved answer.
 
 The revised public oracle definitions accept these equivalent spellings while
-still requiring the named symbol or method and source path. A read-only replay
+still requiring the named symbol or method and source path. The subsequent
+impact-oracle refinement also dropped the literal prose word `boundary`:
+`_query` and its source path are the required identifiers. A read-only replay
 of all 28 completed text-task artifacts under the revised definitions passed
 28/28: all 17 former failures and all 11 former passes. This is a retrospective
 diagnostic, **not** a replacement for campaign 006's frozen grades or a new
@@ -99,7 +101,8 @@ raw provider bodies, or paths outside the repository.
 
 ## Validation
 
-Focused oracle and corpus checks passed: 13 tests. The first full gate stopped
+For the original adjudication commit `51e77df`, focused oracle and corpus
+checks passed: 13 tests. The first full gate stopped
 at a test-file formatting check; the file was formatted and that failed gate
 record was retained. The final full gate passed with 1,192 tests passed, three
 skipped, and 86% coverage. Its durable evidence is
