@@ -1194,12 +1194,17 @@ stage selects exactly the failed patch arm and five pending arms from campaign
 006, binds all 55 parent records by exact byte digest, and rejects a partial
 selection or changed parent evidence. Candidate 007 was generated before the
 last qualification edits and remains an unused offline artifact. Candidate
-008 carries the same selected tasks and a $2 observed spend pool under the
-qualified harness. The completion-stage gate passed with 1,203 tests and three
-skips; its durable record is
-`.artifacts/validation/repo-gates/completion-stage-r3-20260930/validation.log`
-with exit status `0`. Factory generation, offline admission, authenticated
-preflight, and paid execution for candidate 008 remain separate steps.
+008 carried the same selected tasks and a $2 observed spend pool. Its factory,
+offline fixture admission, and authenticated preflight passed. Its launcher
+then rejected the three-task completion command before tmux or any paid request
+because that command builder expected six task identities. The prepared
+receipt and failed launch evidence remain intact. Candidate 009 repairs this
+demonstrated harness defect and adds a command-builder regression check. The
+updated completion-stage gate passed with 1,204 tests and three skips; its
+durable record is
+`.artifacts/validation/repo-gates/completion-stage-r5-20260930/validation.log`
+with exit status `0`. Candidate 009 requires fresh factory generation,
+offline admission, and authenticated preflight before paid execution.
 
 ### Gate
 

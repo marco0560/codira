@@ -17,13 +17,29 @@ from scripts.agent_efficiency.campaign_factory import (
 from scripts.agent_efficiency.campaign_state import CampaignStore, ScheduledAttempt
 from scripts.agent_efficiency.completion_campaign import validate_completion_plan
 from scripts.agent_efficiency.full_campaign import run_full_campaign
+from scripts.launch_agent_efficiency_pilot import PilotLaunch, tmux_command
 from scripts.run_agent_efficiency_phase6_pilot import execution_controls
 
 
 def _result(
     campaign_id: str, attempt: ScheduledAttempt, *, failed: bool = False
 ) -> dict[str, object]:
-    """Build one schema-valid synthetic parent result."""
+    """Build one schema-valid synthetic parent result.
+
+    Parameters
+    ----------
+    campaign_id : str
+        Synthetic parent identity.
+    attempt : ScheduledAttempt
+        Source schedule member.
+    failed : bool, optional
+        Mark one attempted slot as an operational failure.
+
+    Returns
+    -------
+    dict[str, object]
+        Public result compatible with the run-result schema.
+    """
 
     return {
         "schema_version": "1.0",
@@ -54,7 +70,18 @@ def _result(
 
 
 def _fixture(tmp_path: Path) -> tuple[dict[str, object], dict[str, object], Path]:
-    """Create a source with 54 completed slots and one failed record."""
+    """Create a source with 54 completed slots and one failed record.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated root for parent and benchmark documents.
+
+    Returns
+    -------
+    tuple[dict[str, object], dict[str, object], pathlib.Path]
+        Completion specification, parent plan, and copied benchmark root.
+    """
 
     repository = Path.cwd()
     root = tmp_path / "repository"
@@ -117,7 +144,18 @@ def _fixture(tmp_path: Path) -> tuple[dict[str, object], dict[str, object], Path
 def test_completion_factory_selects_only_unfinished_parent_slots(
     tmp_path: Path,
 ) -> None:
-    """Freeze the exact failed and missing slots with parent provenance."""
+    """Freeze the exact failed and missing slots with parent provenance.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated parent campaign and generated completion artifacts.
+
+    Returns
+    -------
+    None
+        Assertions cover selection, digests, and shared-pool controls.
+    """
 
     specification, parent_plan, benchmark_root = _fixture(tmp_path)
     manifest, plan = build_campaign(specification, benchmark_root)
@@ -139,7 +177,18 @@ def test_completion_factory_selects_only_unfinished_parent_slots(
 
 
 def test_completion_rejects_cherry_picking_and_source_drift(tmp_path: Path) -> None:
-    """Reject omitted unfinished slots and changed parent evidence."""
+    """Reject omitted unfinished slots and changed parent evidence.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated parent campaign with mutable synthetic evidence.
+
+    Returns
+    -------
+    None
+        Assertions cover incomplete selection and source-byte changes.
+    """
 
     specification, _, benchmark_root = _fixture(tmp_path)
     source = specification["completion_source"]
@@ -170,7 +219,18 @@ def test_completion_rejects_cherry_picking_and_source_drift(tmp_path: Path) -> N
 
 
 def test_completion_runner_settles_only_its_six_slots(tmp_path: Path) -> None:
-    """Run the six selected attempts without importing parent result records."""
+    """Run the six selected attempts without importing parent result records.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated parent and completion state roots.
+
+    Returns
+    -------
+    None
+        Assertions cover six fresh settlements and no pending attempts.
+    """
 
     specification, _, benchmark_root = _fixture(tmp_path)
     manifest, plan = build_campaign(specification, benchmark_root)
@@ -188,7 +248,20 @@ def test_completion_runner_settles_only_its_six_slots(tmp_path: Path) -> None:
     def execute(
         attempt: ScheduledAttempt, remaining: Decimal
     ) -> tuple[dict[str, object], dict[str, object]]:
-        """Produce complete synthetic provider usage for one selected slot."""
+        """Produce complete synthetic provider usage for one selected slot.
+
+        Parameters
+        ----------
+        attempt : ScheduledAttempt
+            Selected completion schedule member.
+        remaining : decimal.Decimal
+            Positive observed campaign allowance.
+
+        Returns
+        -------
+        tuple[dict[str, object], dict[str, object]]
+            Schema-valid result and complete provider observations.
+        """
 
         assert remaining > 0
         return _result(cast("str", manifest["campaign_id"]), attempt), {
@@ -217,3 +290,34 @@ def test_completion_runner_settles_only_its_six_slots(tmp_path: Path) -> None:
     assert report["status"] == "complete"
     assert report["pending_attempt_ids"] == []
     assert len(store.validated_records()) == 6
+
+
+def test_completion_launcher_builds_three_task_paid_command(tmp_path: Path) -> None:
+    """Keep the shared-pool flag while selecting three task identities.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source used to build a completion launch plan.
+
+    Returns
+    -------
+    None
+        Assertions cover the paid command's exact task cardinality.
+    """
+
+    specification, _, benchmark_root = _fixture(tmp_path)
+    manifest, plan = build_campaign(specification, benchmark_root)
+    launch = PilotLaunch(
+        tmp_path / "campaign",
+        tmp_path / "execution",
+        {},
+        "podman",
+        cast("int", specification["seed"]),
+        manifest,
+        plan,
+    )
+    _, command = tmux_command(launch)
+    assert "--full-campaign" in command
+    assert command.count("--task-id") == 3
+    assert "--task-id patch-002" in command

@@ -453,7 +453,9 @@ def tmux_command(launch: PilotLaunch, *, invocation: int = 0) -> tuple[str, str]
                 str(launch.campaign_directory / "launch-plan.json"),
             )
         )
-    for task_id in _task_ids(launch.manifest, full_campaign=full_campaign):
+    for task_id in _task_ids(
+        launch.manifest, full_campaign=launch.plan.get("stage") == "full-campaign"
+    ):
         runner.extend(("--task-id", task_id))
     runner.extend(
         ("--seed", str(launch.seed), "--state-root", str(runtime_state_root(launch)))

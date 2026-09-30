@@ -25,7 +25,25 @@ from scripts.agent_efficiency.full_campaign import (
 
 
 def _repository_path(root: Path, value: object) -> Path:
-    """Resolve one existing repository-relative evidence path."""
+    """Resolve one repository-relative evidence path.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Trusted repository root.
+    value : object
+        Requested repository-relative path.
+
+    Returns
+    -------
+    pathlib.Path
+        Resolved path within the trusted root.
+
+    Raises
+    ------
+    ValueError
+        If the path is absolute or escapes the repository.
+    """
 
     if not isinstance(value, str) or not value or Path(value).is_absolute():
         raise ValueError("completion source path must be repository-relative")
@@ -36,7 +54,18 @@ def _repository_path(root: Path, value: object) -> Path:
 
 
 def _sha256(path: Path) -> str:
-    """Return the exact byte digest of one immutable source artifact."""
+    """Return the exact byte digest of one immutable source artifact.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Existing artifact to digest.
+
+    Returns
+    -------
+    str
+        Lowercase SHA-256 digest.
+    """
 
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -187,7 +216,29 @@ def source_snapshot(
 def validate_completion_plan(
     manifest: Mapping[str, object], plan: Mapping[str, object], root: Path, seed: int
 ) -> tuple[ScheduledAttempt, ...]:
-    """Recheck a generated completion plan and its parent evidence."""
+    """Recheck a generated completion plan and its parent evidence.
+
+    Parameters
+    ----------
+    manifest : Mapping[str, object]
+        New campaign manifest with frozen task and provider controls.
+    plan : Mapping[str, object]
+        Factory-generated completion schedule and source snapshot.
+    root : pathlib.Path
+        Repository root containing the saved parent evidence and task assets.
+    seed : int
+        Requested seed matching the frozen parent schedule.
+
+    Returns
+    -------
+    tuple[ScheduledAttempt, ...]
+        Exact six source-ordered attempts admitted for completion.
+
+    Raises
+    ------
+    ValueError
+        If the plan, parent evidence, task, oracle, or harness has changed.
+    """
 
     source = plan.get("completion_source")
     if not isinstance(source, Mapping):
