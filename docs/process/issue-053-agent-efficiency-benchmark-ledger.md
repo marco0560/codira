@@ -1206,6 +1206,16 @@ durable record is
 with exit status `0`. Candidate 009 requires fresh factory generation,
 offline admission, and authenticated preflight before paid execution.
 
+After a power failure interrupted candidate 009 before authenticated
+preflight, its generated artifacts, prepared receipt, and full gate remained
+valid; there was no attempt state or paid response. Repeated factory and
+authenticated route checks passed after restart. Candidate 009 then completed
+all six selected attempts with exit `0`, all six operational and task-oracle
+passes, complete usage, and $0.48971925 in ceiling-priced charges. The linked
+[completion report](agent-efficiency-completion-009-results-2026-09-30.md)
+records the six results, composite interpretation, total spending, and
+provenance limits. Campaign 006's original records remain unchanged.
+
 ### Gate
 
 Every scheduled execution is accounted for, valid results reproducible,
