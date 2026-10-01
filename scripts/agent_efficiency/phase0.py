@@ -957,6 +957,8 @@ def parse_jsonl_events(text: str) -> tuple[dict[str, object], ...]:
 def jsonl_conformance_check(
     events: Sequence[Mapping[str, object]],
     assistance_mode: str = "codira-mcp",
+    *,
+    require_mcp: bool = True,
 ) -> CheckResult:
     """Validate the minimum evidence needed to admit one assisted run.
 
@@ -967,6 +969,9 @@ def jsonl_conformance_check(
     assistance_mode : str, optional
         ``"codira-mcp"`` requires a Codira MCP event; ``"baseline"`` rejects
         all MCP events to prevent alternate retrieval access.
+
+    require_mcp : bool, optional
+        Require assisted MCP use; false admits the optional-use protocol.
 
     Returns
     -------
@@ -997,7 +1002,7 @@ def jsonl_conformance_check(
     has_mcp_event = any(
         isinstance(item_type, str) and "mcp" in item_type for item_type in item_types
     )
-    if assistance_mode == "codira-mcp" and not has_mcp_event:
+    if assistance_mode == "codira-mcp" and require_mcp and not has_mcp_event:
         return CheckResult("jsonl-evidence", False, "MCP tool event is absent")
     if assistance_mode == "baseline" and has_mcp_event:
         return CheckResult(

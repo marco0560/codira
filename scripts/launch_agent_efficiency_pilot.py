@@ -20,6 +20,7 @@ if __package__ in {None, ""}:
 from scripts.agent_efficiency.campaign_state import build_paired_schedule
 from scripts.agent_efficiency.contracts import canonical_fingerprint, load_document
 from scripts.agent_efficiency.corpus import verify_fixture
+from scripts.agent_efficiency.panels import panel_document_path
 from scripts.run_agent_efficiency_phase6_pilot import (
     parse_fixture_sources,
     validate_protected_task_assets,
@@ -115,7 +116,9 @@ def _task_ids(
 
     fingerprints = manifest.get("task_fingerprints")
     if not isinstance(fingerprints, dict) or len(fingerprints) != (
-        6 if full_campaign else 3
+        (24 if manifest.get("stage") == "representative-campaign" else 6)
+        if full_campaign
+        else 3
     ):
         raise PilotLaunchError("pilot task fingerprints are invalid")
     task_ids = tuple(sorted(fingerprints))
@@ -178,7 +181,7 @@ def load_launch(
     if not isinstance(plan, dict):
         raise PilotLaunchError("factory launch plan is malformed")
     stage = plan.get("stage")
-    full_campaign = stage == "full-campaign"
+    full_campaign = stage in {"full-campaign", "representative-campaign"}
     completion = stage == "completion"
     task_ids = _task_ids(manifest, full_campaign=full_campaign)
     if full_campaign:
@@ -206,16 +209,23 @@ def load_launch(
         else [
             attempt.__dict__
             for attempt in build_paired_schedule(
-                task_ids, 5 if full_campaign else 1, seed
+                task_ids, int(plan.get("repetitions", 5)) if full_campaign else 1, seed
             )
         ]
     )
     if (
-        plan.get("factory_version") != FACTORY_VERSION
-        or plan.get("stage") not in {"pilot", "full-campaign", "completion"}
+        plan.get("factory_version")
+        != (
+            "1.1"
+            if manifest.get("stage") == "representative-campaign"
+            else FACTORY_VERSION
+        )
+        or plan.get("stage")
+        not in {"pilot", "full-campaign", "completion", "representative-campaign"}
         or plan.get("campaign_id") != manifest.get("campaign_id")
         or plan.get("manifest_fingerprint") != canonical_fingerprint(manifest)
-        or plan.get("scheduled_attempt_count") != (60 if full_campaign else 6)
+        or plan.get("scheduled_attempt_count")
+        != (len(task_ids) * int(plan.get("repetitions", 5)) * 2 if full_campaign else 6)
         or plan.get("attempts") != expected_attempts
     ):
         raise PilotLaunchError("factory launch plan differs from manifest or seed")
@@ -224,9 +234,12 @@ def load_launch(
         raise PilotLaunchError("pilot task fingerprints are invalid")
     for task_id in task_ids:
         try:
-            task = load_document(BENCHMARK_ROOT / "tasks" / f"{task_id}.json", "task")
+            task = load_document(
+                panel_document_path(BENCHMARK_ROOT, "tasks", task_id), "task"
+            )
             oracle = load_document(
-                BENCHMARK_ROOT / "oracles" / f"{task['oracle_id']}.json", "oracle"
+                panel_document_path(BENCHMARK_ROOT, "oracles", str(task["oracle_id"])),
+                "oracle",
             )
             fixture_id = bindings.get(task_id)
         except (KeyError, TypeError, ValueError) as error:
@@ -444,7 +457,11 @@ def tmux_command(launch: PilotLaunch, *, invocation: int = 0) -> tuple[str, str]
         "--campaign-manifest",
         str(launch.campaign_directory / "campaign.json"),
     ]
-    full_campaign = launch.plan.get("stage") in {"full-campaign", "completion"}
+    full_campaign = launch.plan.get("stage") in {
+        "full-campaign",
+        "completion",
+        "representative-campaign",
+    }
     if full_campaign:
         runner.extend(
             (
@@ -454,7 +471,9 @@ def tmux_command(launch: PilotLaunch, *, invocation: int = 0) -> tuple[str, str]
             )
         )
     for task_id in _task_ids(
-        launch.manifest, full_campaign=launch.plan.get("stage") == "full-campaign"
+        launch.manifest,
+        full_campaign=launch.plan.get("stage")
+        in {"full-campaign", "representative-campaign"},
     ):
         runner.extend(("--task-id", task_id))
     runner.extend(
@@ -508,7 +527,11 @@ def start_tmux(launch: PilotLaunch, *, resume: bool = False) -> str:
 
     invocation = 0
     if resume:
-        if launch.plan.get("stage") not in {"full-campaign", "completion"}:
+        if launch.plan.get("stage") not in {
+            "full-campaign",
+            "completion",
+            "representative-campaign",
+        }:
             raise PilotLaunchError("resume is qualified only for full campaigns")
         journal = runtime_state_root(launch) / "budget"
         starts = {

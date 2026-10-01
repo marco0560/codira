@@ -49,6 +49,7 @@ from codira.registry import (
     plugin_config_key,
     plugin_registrations,
 )
+from codira.runtime_identity import runtime_identity
 from codira.target_python import (
     PYTHON_TARGET_GRAMMAR,
     PYTHON_TARGET_GRAMMAR_MAXIMUM_MINOR,
@@ -246,10 +247,29 @@ COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
         "intent": "task_focused_context_retrieval",
         "channels": ["symbol", "semantic", "embedding", "docs"],
         "guarantee": "deterministic_channel_merge_for_current_index",
+        "parameters": {
+            "max_results": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "default": 10,
+            },
+            "cursor": {"type": ["string", "null"], "default": None},
+        },
         "limitations": [
             "ranking depends on declared producer capabilities",
             "semantic and embedding channels are supporting evidence",
         ],
+    },
+    "evidence": {
+        "intent": "verified_whole_definition",
+        "channels": ["symbol", "references", "call_graph"],
+        "guarantee": "generation_and_source_hash_bound_evidence",
+        "limitations": ["static relations do not prove complete dynamic coverage"],
+        "parameters": {
+            "identity": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
+        },
     },
     "plugins": {
         "intent": "plugin_registration_diagnostics",
@@ -820,6 +840,7 @@ def build_capability_contract(
 
     return {
         "schema_version": CAPABILITY_SCHEMA_VERSION,
+        "runtime": runtime_identity(),
         "ontology": _ontology_payload(),
         "commands": dict(sorted(COMMAND_CONTRACTS.items())),
         "channels": {

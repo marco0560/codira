@@ -1,0 +1,17 @@
+{
+  "family": "tracing",
+  "fixture_id": "picomatch-public",
+  "oracle_id": "panel-t1",
+  "prompt": "Trace matcher, ignore and callbacks for a match, an ignored match and a nonmatching path. Give executable observations of event order. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "onResult",
+    "onIgnore",
+    "onMatch"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "development",
+  "task_id": "panel-t1",
+  "visibility": "public"
+}

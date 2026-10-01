@@ -20,6 +20,7 @@ if __package__ in {None, ""}:
 from scripts.agent_efficiency import phase0
 from scripts.agent_efficiency.contracts import canonical_fingerprint, load_document
 from scripts.agent_efficiency.corpus import export_fixture
+from scripts.agent_efficiency.panels import panel_document_path
 
 BENCHMARK_ROOT = Path("benchmarks/agent-efficiency")
 ENVIRONMENT_ROOT = "/opt/codira/fixture-environments"
@@ -133,9 +134,16 @@ def build_plan(base_image: str, sources: dict[str, Path]) -> EnvironmentImagePla
     for fixture_id, source in sorted(sources.items()):
         try:
             fixture = load_document(
-                BENCHMARK_ROOT / "fixtures" / f"{fixture_id}.json", "fixture"
+                panel_document_path(BENCHMARK_ROOT, "fixtures", str(fixture_id)),
+                "fixture",
             )
-            revision, tree_sha = _admit_revision(source, fixture)
+            if fixture.get("transport") == "directory-snapshot":
+                from scripts.agent_efficiency.corpus import verify_fixture
+
+                admitted = verify_fixture(fixture, source)
+                revision, tree_sha = admitted.revision, admitted.tree_sha
+            else:
+                revision, tree_sha = _admit_revision(source, fixture)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             raise EnvironmentImageBuildError(
                 f"fixture source fails immutable admission: {fixture_id}"
@@ -206,10 +214,36 @@ def write_build_context(plan: EnvironmentImagePlan, destination: Path) -> Path:
     shutil.copy2(HELPER_ROOT / "prepare-fixture-environment", destination)
     shutil.copy2(HELPER_ROOT / "build-fixture-environments", destination)
     shutil.copy2(BENCHMARK_PROFILE, destination)
+    product = destination / "serving-product"
+    product.mkdir()
+    for name in ("pyproject.toml", "README.md", "LICENSE"):
+        shutil.copy2(Path(name), product / name)
+    shutil.copytree(
+        Path("src"),
+        product / "src",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    shutil.copy2(HELPER_ROOT / "runtime_admission.py", destination)
+    shutil.copy2(HELPER_ROOT / "codira-mcp-benchmark", destination)
+    for name in ("python", "typescript", "go"):
+        shutil.copytree(
+            Path("packages") / f"codira-analyzer-{name}",
+            destination / f"codira-analyzer-{name}",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".venv"),
+        )
     containerfile = destination / "Containerfile"
     containerfile.write_text(
         "ARG BASE_IMAGE\n"
         "FROM ${BASE_IMAGE}\n"
+        "USER root\n"
+        "RUN apt-get update && apt-get install --no-install-recommends --yes golang-go && rm -rf /var/lib/apt/lists/*\n"
+        "COPY serving-product /opt/codira-serving-product\n"
+        "COPY codira-analyzer-python /opt/codira-analyzer-python\n"
+        "COPY codira-analyzer-typescript /opt/codira-analyzer-typescript\n"
+        "COPY codira-analyzer-go /opt/codira-analyzer-go\n"
+        "RUN SETUPTOOLS_SCM_PRETEND_VERSION=2.0.2 python -m pip install --no-cache-dir --force-reinstall --no-deps /opt/codira-serving-product /opt/codira-analyzer-python /opt/codira-analyzer-typescript /opt/codira-analyzer-go\n"
+        "COPY runtime_admission.py /opt/codira/runtime_admission.py\n"
+        "COPY --chmod=755 codira-mcp-benchmark /opt/codira/codira-mcp-benchmark\n"
         "COPY --chmod=755 prepare-fixture-environment /opt/codira/prepare-fixture-environment\n"
         "COPY --chmod=755 build-fixture-environments /opt/codira/build-fixture-environments\n"
         "COPY benchmark-codira.toml /opt/codira/benchmark-codira.toml\n"
@@ -254,7 +288,9 @@ def build_image(
         or output_profile.exists()
     ):
         raise EnvironmentImageBuildError("candidate image build arguments are invalid")
-    with tempfile.TemporaryDirectory(prefix="codira-fixture-image-") as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="codira-fixture-image-", dir="/home/marco/Personalia/Progetti/.Temp"
+    ) as temporary:
         context = Path(temporary) / "context"
         write_build_context(plan, context)
         profile_path = context / "fixture-environments" / "environment-profile.json"
@@ -357,6 +393,8 @@ def _ecosystem(source: Path) -> str:
         return "npm"
     if (source / "requirements.txt").is_file():
         return "pip"
+    if (source / "go.mod").is_file():
+        return "go"
     raise EnvironmentImageBuildError("fixture has no supported environment")
 
 

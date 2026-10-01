@@ -1,0 +1,45 @@
+{
+  "definition": {
+    "quality_rubric": {
+      "criteria": [
+        {
+          "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+          "dimension": "correctness",
+          "id": "substance",
+          "requirement": "compileRe uses opts.flags || (opts.nocase ? i : empty); empty flags fall back to nocase, nonempty flags override that fallback.",
+          "semantic": true
+        },
+        {
+          "dimension": "completeness",
+          "id": "requested-coverage",
+          "requirement": "Explain matching with nocase and absent, empty and nonempty flags. Provide positive and negative executable cases and identify the source branch. Write your answer to BENCHMARK_ANSWER.md and stop.",
+          "semantic": true
+        },
+        {
+          "dimension": "evidence",
+          "id": "grounding",
+          "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+          "semantic": true
+        },
+        {
+          "dimension": "usability",
+          "id": "usability",
+          "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+          "semantic": true
+        },
+        {
+          "dimension": "causality",
+          "id": "causal-chain",
+          "requirement": "Explain or implement the causal relationship, including requested negative controls.",
+          "semantic": true
+        }
+      ],
+      "task_id": "panel-d2",
+      "version": 1
+    }
+  },
+  "oracle_id": "panel-d2",
+  "schema_version": "1.0",
+  "task_id": "panel-d2",
+  "visibility": "public"
+}

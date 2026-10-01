@@ -1,0 +1,18 @@
+{
+  "family": "navigation",
+  "fixture_id": "typescript-workspace-synthetic",
+  "oracle_id": "panel-n3",
+  "prompt": "Trace public format from its re-export through the implementation. List runtime consumers and distinguish the unrelated format. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "format",
+    "convert",
+    "transform",
+    "display"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "holdout",
+  "task_id": "panel-n3",
+  "visibility": "public"
+}

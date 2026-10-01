@@ -1,0 +1,54 @@
+{
+  "fixture_id": "typescript-workspace-synthetic",
+  "license": "MIT",
+  "license_path": "LICENSE",
+  "license_sha256": "c5dfbaa5f716f470a4c096a88726a7e12a1959c8f89ffe86640457adeb9046f0",
+  "revision": "8ecd2a385061d34d374eec372e64d4d0e982eca3",
+  "schema_version": "1.0",
+  "setup_files": [
+    {
+      "path": "LICENSE",
+      "sha256": "c5dfbaa5f716f470a4c096a88726a7e12a1959c8f89ffe86640457adeb9046f0"
+    },
+    {
+      "path": "consumer.ts",
+      "sha256": "fc1fb4f4d9af0a392b5f52d5ebb5b86fd90941548857b3809e0e71813cdb9f0a"
+    },
+    {
+      "path": "impl.ts",
+      "sha256": "bb3ead3154ba9d83d0417b1c154488218882104771d328ce80f7c594efc3fdae"
+    },
+    {
+      "path": "index.ts",
+      "sha256": "ec4af2a4cda0b934ee5eed60b735d3e8b0de3333cc715f4784a9466df819661b"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "d5fdd844f836bb96c598a64c01ae2506e4e6363d10b4c469d9605518ce37296f"
+    },
+    {
+      "path": "package.json",
+      "sha256": "e5641027b645231c689a74c397551c40b2b5270328904072aa719f155fd8bb64"
+    },
+    {
+      "path": "tests.ts",
+      "sha256": "108358b2e60a9b4d726cc99e4f6cdbadde35b523cff469103d7b74ceadc882b1"
+    },
+    {
+      "path": "type-consumer.ts",
+      "sha256": "eefb0f04f95191c7316d99f2b2e39b98a97499db23559cb8cd0451b9879f80a6"
+    },
+    {
+      "path": "unrelated.ts",
+      "sha256": "ceb6184a45be062dbac967b340961aedd7be7db84e5130976dcd980c3cd94570"
+    },
+    {
+      "path": "wrapper.ts",
+      "sha256": "2ee0a84a325d050ef588accbf157211f0eb6cfaee8946393f865d62ac9a2bc49"
+    }
+  ],
+  "source_url": "https://github.com/marco0560/codira",
+  "transport": "directory-snapshot",
+  "tree_sha": "8ecd2a385061d34d374eec372e64d4d0e982eca3",
+  "visibility": "public"
+}

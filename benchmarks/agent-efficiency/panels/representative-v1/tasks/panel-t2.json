@@ -1,0 +1,17 @@
+{
+  "family": "tracing",
+  "fixture_id": "codira-public",
+  "oracle_id": "panel-t2",
+  "prompt": "Trace context --search-profile from argument parsing through configuration, query execution and backend selection. Explain configuration precedence and errors for an unknown profile. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "search_profile",
+    "ContextRequest",
+    "active_similarity_search_profile"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "development",
+  "task_id": "panel-t2",
+  "visibility": "public"
+}

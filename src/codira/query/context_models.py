@@ -440,7 +440,7 @@ class ContextJsonRenderRequest:
     result_offset: int = 0
     result_limit: int = 10
     result_total: int = 0
-    complete_context_items: bool = False
+    complete_context_items: bool = True
 
 
 @dataclass(frozen=True)
@@ -631,7 +631,7 @@ class ContextRenderRequest:
     result_offset: int = 0
     result_limit: int = 10
     result_total: int = 0
-    complete_context_items: bool = False
+    complete_context_items: bool = True
 
 
 @dataclass(frozen=True)
@@ -678,7 +678,7 @@ class ContextRequest:
     search_profile: str | None = None
     result_offset: int = 0
     result_limit: int = 10
-    complete_context_items: bool = False
+    complete_context_items: bool = True
     conn: BackendQueryConnection | None = None
     max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES
 

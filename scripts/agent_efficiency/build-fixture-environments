@@ -4,7 +4,7 @@ set -eu
 
 root="$1"
 fixtures="$root/fixtures"
-mkdir -p "$root/uv-cache" "$root/npm-cache" "$root/npm-locks" "$root/pip-wheels"
+mkdir -p "$root/uv-cache" "$root/npm-cache" "$root/npm-locks" "$root/pip-wheels" "$root/go-mod"
 
 for source in "$fixtures"/*; do
     test -d "$source" || continue
@@ -39,6 +39,9 @@ for source in "$fixtures"/*; do
         python -m venv "$source/.venv"
         "$source/.venv/bin/python" -m pip install --no-index --find-links="$root/pip-wheels" -r "$source/requirements.txt"
         rm -rf "$source/.venv"
+    elif test -f "$source/go.mod"; then
+        (cd "$source" && GOTOOLCHAIN=local GOMODCACHE="$root/go-mod" go mod download)
+        (cd "$source" && GOTOOLCHAIN=local GOPROXY=off GOMODCACHE="$root/go-mod" go test ./...)
     else
         printf '%s\n' "fixture has no supported environment: $fixture_id" >&2
         exit 2

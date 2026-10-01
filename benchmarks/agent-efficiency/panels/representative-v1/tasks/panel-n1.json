@@ -1,0 +1,16 @@
+{
+  "family": "navigation",
+  "fixture_id": "click-public",
+  "oracle_id": "panel-n1",
+  "prompt": "Resolve UNSET, Sentinel.UNSET and the defining class. Explain the alias chain and cite exact declaration ranges. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "UNSET",
+    "Sentinel"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "development",
+  "task_id": "panel-n1",
+  "visibility": "public"
+}

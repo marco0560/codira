@@ -19,6 +19,7 @@ from codira.mcp.adapter import MCPAdapter
 from codira.mcp.contract import MCP_CONTRACT_VERSION
 from codira.mcp.proxy import QueryDaemonMCPProxy, build_mcp_operations
 from codira.mcp.server import create_server, resolve_startup_binding
+from codira.query.evidence import symbol_identity
 from codira.query_daemon import QueryDaemonIdentity, QueryRuntime, WarmQuerySession
 from codira.query_daemon_ipc import QueryDaemonIpcServer
 from codira.registry import active_index_backend
@@ -153,7 +154,7 @@ def test_mcp_surfaces_partial_ready_generation_warning(tmp_path: Path) -> None:
     assert report.failed == 1
 
     adapter = MCPAdapter(tmp_path)
-    status = cast("dict[str, object]", adapter.index_status()["result"])
+    status = cast("dict[str, object]", adapter.index_status(detail=True)["result"])
     assert status["generation"] == {
         "number": 1,
         "state": "ready",
@@ -337,6 +338,11 @@ def test_adapter_returns_direct_core_symbol_result(tmp_path: Path) -> None:
                 "kind": "function",
                 "file": "sample.py",
                 "line": 5,
+                "canonical_name": "sample.answer",
+                "identity": symbol_identity(
+                    tmp_path,
+                    ("function", "sample", "answer", str(tmp_path / "sample.py"), 5),
+                ),
             }
         ]
     }
@@ -460,6 +466,7 @@ def test_server_exposes_initial_approved_tools(tmp_path: Path) -> None:
         "index_status",
         "references",
         "symbol",
+        "symbol_evidence",
         "symbols",
         "repository_map",
         "arch",
@@ -495,6 +502,7 @@ def test_stdio_entry_point_completes_mcp_initialization(tmp_path: Path) -> None:
         "index_status",
         "references",
         "symbol",
+        "symbol_evidence",
         "symbols",
         "repository_map",
         "arch",
@@ -519,7 +527,7 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     _indexed_repository(tmp_path)
     adapter = MCPAdapter(tmp_path)
 
-    capabilities = adapter.capabilities()
+    capabilities = adapter.capabilities(detail=True)
     status = adapter.index_status()
     inventory = adapter.symbols(limit=2)
     callees = adapter.callees("answer")
@@ -552,7 +560,11 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
 
     status_result = cast("dict[str, object]", status["result"])
     assert status_result["indexed"] is True
-    assert status_result["coverage"] == {"status": "complete", "issues": []}
+    assert status_result["coverage"] == {
+        "status": "complete",
+        "issue_count": 0,
+        "issues": [],
+    }
     status_metadata = cast("dict[str, str]", status_result["metadata"])
     assert status_metadata["schema_version"] == "25"
     assert status_metadata["backend_name"] == "sqlite"
@@ -611,18 +623,16 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     assert "evidence" in context_items[0]
     context_page = cast("dict[str, object]", context["page"])
     assert context_page["has_more"] is False
-    assert impact["result"] == {
-        "symbols": [
-            {
-                "module": "sample",
-                "name": "helper",
-                "kind": "function",
-                "file": "sample.py",
-                "line": 1,
-            }
-        ],
-        "incoming_calls": [expected_call],
-        "incoming_references": [],
+    impact_result = cast("dict[str, object]", impact["result"])
+    items = cast("list[dict[str, object]]", impact_result["items"])
+    assert [item["category"] for item in items] == ["symbol", "call"]
+    assert items[0]["canonical_name"] == "sample.helper"
+    assert {
+        key: value for key, value in items[1].items() if key != "category"
+    } == expected_call
+    assert impact_result["coverage"] == {
+        "dynamic_complete": False,
+        "relation_provenance": "static_analyzer",
     }
     repository_map_result = cast("dict[str, object]", repository_map["result"])
     repository_map_truncation = cast("dict[str, object]", repository_map["truncation"])
@@ -640,13 +650,13 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     }
     assert repository_map_truncation["truncated"] is False
     assert repository_map_truncation["reasons"] == []
-    assert repository_map_truncation["output_budget"] == 4_000
+    assert "output_budget" not in repository_map_truncation
     assert repository_map_truncation["estimated_output_size"] == len(
         json.dumps(repository_map_result, sort_keys=True)
     )
-    assert truncated_map_result == {"modules": []}
-    assert truncated_map_truncation["truncated"] is True
-    assert truncated_map_truncation["reasons"] == ["output_budget"]
+    assert truncated_map_result == repository_map_result
+    assert truncated_map_truncation["truncated"] is False
+    assert truncated_map_truncation["reasons"] == []
     architecture_result = cast("dict[str, object]", architecture["result"])
     architecture_truncation = cast("dict[str, object]", architecture["truncation"])
     truncated_architecture_result = cast(
@@ -665,9 +675,9 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
     )
     assert [module["name"] for module in architecture_modules] == ["sample"]
     assert architecture_truncation["truncated"] is False
-    assert truncated_architecture_result["modules"] == []
-    assert truncated_architecture_truncation["truncated"] is True
-    assert truncated_architecture_truncation["reasons"] == ["output_budget"]
+    assert truncated_architecture_result == architecture_result
+    assert truncated_architecture_truncation["truncated"] is False
+    assert truncated_architecture_truncation["reasons"] == []
     assert "matches" in cast("dict[str, object]", embedding_matches["result"])
     assert "matches" in cast("dict[str, object]", documentation_matches["result"])
     with pytest.raises(ValueError, match="stay under"):
@@ -692,11 +702,18 @@ def test_adapter_paginates_and_rejects_path_like_cursors(tmp_path: Path) -> None
 
     first_page = adapter.symbols(limit=1)
     empty_cursor_page = adapter.symbols(cursor="", limit=1)
-    second_page = adapter.symbols(cursor="offset:1", limit=1)
+    second_page = adapter.symbols(
+        cursor=str(cast("dict[str, object]", first_page["page"])["next_cursor"]),
+        limit=1,
+    )
 
-    assert first_page["page"] == {"limit": 1, "next_cursor": "offset:1"}
+    assert cast("dict[str, object]", first_page["page"])["offset"] == 0
+    assert str(cast("dict[str, object]", first_page["page"])["next_cursor"]).startswith(
+        "ctx:"
+    )
     assert empty_cursor_page == first_page
-    assert second_page["page"] == {"limit": 1, "next_cursor": "offset:2"}
+    assert cast("dict[str, object]", second_page["page"])["offset"] == 1
+    assert cast("dict[str, object]", second_page["page"])["has_more"] is True
     first_result = cast("dict[str, object]", first_page["result"])
     first_symbols = cast("list[dict[str, object]]", first_result["symbols"])
     assert first_symbols[0]["file"] == "sample.py"
@@ -722,7 +739,7 @@ def test_adapter_rejects_queries_against_a_zero_file_index(tmp_path: Path) -> No
     index_repo(tmp_path)
     adapter = MCPAdapter(tmp_path)
 
-    status = cast("dict[str, object]", adapter.index_status()["result"])
+    status = cast("dict[str, object]", adapter.index_status(detail=True)["result"])
     coverage = cast("dict[str, object]", status["coverage"])
     assert status["indexed"] is True
     assert status["usable"] is False
@@ -761,6 +778,11 @@ def test_server_symbol_tool_invokes_the_direct_adapter(tmp_path: Path) -> None:
                 "kind": "function",
                 "file": "sample.py",
                 "line": 5,
+                "canonical_name": "sample.answer",
+                "identity": symbol_identity(
+                    tmp_path,
+                    ("function", "sample", "answer", str(tmp_path / "sample.py"), 5),
+                ),
             }
         ]
     }
@@ -774,7 +796,13 @@ def test_server_symbol_tool_invokes_the_direct_adapter(tmp_path: Path) -> None:
     freshness = cast("dict[str, str]", structured["freshness"])
     assert freshness["schema_version"] == "25"
     assert freshness["backend_name"] == "sqlite"
-    assert structured["page"] == {"limit": 100, "next_cursor": None}
+    assert structured["page"] == {
+        "offset": 0,
+        "limit": 10,
+        "total": 1,
+        "has_more": False,
+        "next_cursor": None,
+    }
     truncation = cast("dict[str, object]", structured["truncation"])
     assert truncation["truncated"] is False
 
@@ -830,11 +858,12 @@ def test_server_embedding_tools_forward_search_profile(
         query: str,
         *,
         prefix: str | None = None,
+        cursor: str | None = None,
         limit: int = 100,
         search_profile: str | None = None,
         output_budget: int = 4_000,
     ) -> dict[str, object]:
-        del self, query, prefix, limit, output_budget
+        del self, query, prefix, cursor, limit, output_budget
         received["emb"] = search_profile
         return response()
 
@@ -843,11 +872,12 @@ def test_server_embedding_tools_forward_search_profile(
         query: str,
         *,
         prefix: str | None = None,
+        cursor: str | None = None,
         limit: int = 100,
         search_profile: str | None = None,
         output_budget: int = 4_000,
     ) -> dict[str, object]:
-        del self, query, prefix, limit, output_budget
+        del self, query, prefix, cursor, limit, output_budget
         received["docs"] = search_profile
         return response()
 
@@ -858,8 +888,9 @@ def test_server_embedding_tools_forward_search_profile(
         cursor: str | None = None,
         limit: int = 10,
         search_profile: str | None = None,
+        explain: bool = False,
     ) -> dict[str, object]:
-        del self, query
+        del self, query, explain
         received["context"] = (cursor, limit, search_profile)
         return response()
 
@@ -868,9 +899,13 @@ def test_server_embedding_tools_forward_search_profile(
     monkeypatch.setattr(MCPAdapter, "context_for_task", fake_context)
     server = create_server(tmp_path)
 
-    asyncio.run(server.call_tool("emb", {"query": "symbol", "search_profile": "named"}))
     asyncio.run(
-        server.call_tool("docs", {"query": "documentation", "search_profile": "named"})
+        server.call_tool("emb", {"query": "symbol", "search_profile": "default"})
+    )
+    asyncio.run(
+        server.call_tool(
+            "docs", {"query": "documentation", "search_profile": "default"}
+        )
     )
     asyncio.run(
         server.call_tool(
@@ -879,13 +914,13 @@ def test_server_embedding_tools_forward_search_profile(
                 "query": "task",
                 "cursor": "ctx:opaque",
                 "limit": 3,
-                "search_profile": "named",
+                "search_profile": "default",
             },
         )
     )
 
     assert received == {
-        "emb": "named",
-        "docs": "named",
-        "context": ("ctx:opaque", 3, "named"),
+        "emb": "default",
+        "docs": "default",
+        "context": ("ctx:opaque", 3, "default"),
     }

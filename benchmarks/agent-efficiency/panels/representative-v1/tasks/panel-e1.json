@@ -1,0 +1,15 @@
+{
+  "family": "evidence",
+  "fixture_id": "codira-public",
+  "oracle_id": "panel-e1",
+  "prompt": "Investigate an alleged codira teleport_repository API. State what the repository and index evidence can establish; cite the search scope and avoid inventing an implementation. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "teleport_repository"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "development",
+  "task_id": "panel-e1",
+  "visibility": "public"
+}

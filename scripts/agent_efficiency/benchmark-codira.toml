@@ -28,6 +28,12 @@ exclude_paths = [".benchmark"]
 [plugins.analyzer-text]
 exclude_paths = [".benchmark"]
 
+[plugins.analyzer-go]
+exclude_paths = [".benchmark"]
+
+[plugins.analyzer-typescript]
+exclude_paths = [".benchmark"]
+
 [plugins.embedding-onnx]
 model_path = "/opt/codira/.codira/models/bge-small-en-v1.5/model.onnx"
 tokenizer_path = "/opt/codira/.codira/models/bge-small-en-v1.5/tokenizer.json"

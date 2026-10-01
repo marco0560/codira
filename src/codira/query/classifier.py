@@ -127,6 +127,11 @@ def _primary_intent(
     IntentFamily
         Deterministic primary intent family.
     """
+    # Preserve the causal task when tests are requested as supporting evidence.
+    if re.search(
+        r"\b(diagnos\w*|fail\w*|regression|bug|why|incorrect|broken)\b", query
+    ):
+        return "behavior"
     if is_test_related:
         return "test"
 

@@ -1,0 +1,39 @@
+{
+  "definition": {
+    "quality_rubric": {
+      "criteria": [
+        {
+          "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+          "dimension": "correctness",
+          "id": "substance",
+          "requirement": "No such API is declared in the frozen source; absence is scoped to the inspected repository and usable index, not every external plugin.",
+          "semantic": true
+        },
+        {
+          "dimension": "completeness",
+          "id": "requested-coverage",
+          "requirement": "Investigate an alleged codira teleport_repository API. State what the repository and index evidence can establish; cite the search scope and avoid inventing an implementation. Write your answer to BENCHMARK_ANSWER.md and stop.",
+          "semantic": true
+        },
+        {
+          "dimension": "evidence",
+          "id": "grounding",
+          "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+          "semantic": true
+        },
+        {
+          "dimension": "usability",
+          "id": "usability",
+          "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+          "semantic": true
+        }
+      ],
+      "task_id": "panel-e1",
+      "version": 1
+    }
+  },
+  "oracle_id": "panel-e1",
+  "schema_version": "1.0",
+  "task_id": "panel-e1",
+  "visibility": "public"
+}

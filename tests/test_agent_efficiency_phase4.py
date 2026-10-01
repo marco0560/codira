@@ -133,7 +133,7 @@ def test_runner_containerfile_installs_transcript_required_utilities() -> None:
     assert "batch_size = 1" in profile
     for analyzer in ("bash", "javascript", "json", "markdown", "python", "text"):
         assert f"[plugins.analyzer-{analyzer}]" in profile
-    assert profile.count('exclude_paths = [".benchmark"]') == 6
+    assert profile.count('exclude_paths = [".benchmark"]') == 8
 
 
 @pytest.mark.integration
@@ -154,9 +154,12 @@ def test_runtime_admission_executes_an_indexed_mcp_query(tmp_path: Path) -> None
     if os.environ.get("CODIRA_AGENT_EFFICIENCY_RUNTIME_ADMISSION") != "1":
         pytest.skip("set CODIRA_AGENT_EFFICIENCY_RUNTIME_ADMISSION=1 to run")
     (tmp_path / "sample.py").write_text(
-        "def helper() -> int:\n    return 42\n", encoding="utf-8"
+        "class Qualification:\n    def probe(self):\n        return 42\n\ndef helper():\n    return Qualification().probe()\n",
+        encoding="utf-8",
     )
-    admit_runtime(tmp_path, "helper")
+    (tmp_path / "other.py").write_text("def helper_two():\n    return 42\n")
+    receipt = admit_runtime(tmp_path, "Qualification probe helper")
+    assert receipt["qualification_version"] == 3
 
 
 def test_runtime_admission_requires_the_agent_fixture_git_representation(

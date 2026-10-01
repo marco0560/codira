@@ -30,6 +30,7 @@ _PRIMITIVES = frozenset(
         "patch_applies_and_tests_pass",
         "normalized_artifact",
         "text_contains",
+        "quality_rubric",
         "all_of",
         "any_of",
         "custom_evaluator",
@@ -747,6 +748,44 @@ def _patch_check(
         return protected_result.passed, tuple(checks)
 
 
+def _quality_check(
+    payload: object, result: object, trace: _ProtectedTrace | None
+) -> tuple[bool, tuple[str, ...]]:
+    """Evaluate a rubric and retain complete blinded evidence.
+
+    Parameters
+    ----------
+    payload : object
+        Explicit task-specific quality rubric.
+    result : object
+        Complete answer artifact.
+    trace : _ProtectedTrace or None
+        Durable private attempt trace.
+
+    Returns
+    -------
+    tuple[bool, tuple[str, ...]]
+        Quality decision and stable per-criterion statuses.
+    """
+    from scripts.agent_efficiency.quality import grade_quality, write_blinded_packet
+
+    if not isinstance(payload, Mapping) or not isinstance(result, str):
+        detail = "quality_rubric requires a rubric object and text artifact"
+        raise ContractError.message(detail)
+    report = grade_quality(result, payload)
+    if trace is not None:
+        path = trace.root / f"quality-{canonical_fingerprint(payload)}.json"
+        if not path.exists():
+            write_blinded_packet(result, payload, path)
+        grade_path = trace.root / f"quality-{canonical_fingerprint(payload)}-grade.json"
+        with grade_path.open("x", encoding="utf-8") as stream:
+            stream.write(json.dumps(report, sort_keys=True, indent=2))
+    findings = cast("list[dict[str, object]]", report["criteria"])
+    return report["status"] == "passed", tuple(
+        f"quality[{item['id']}]:{item['status']}" for item in findings
+    )
+
+
 def _evaluate(  # noqa: PLR0913
     definition: OracleDefinition,
     result: object,
@@ -830,6 +869,8 @@ def _evaluate(  # noqa: PLR0913
             for index, item in enumerate(payload)
         )
         return all(item in result for item in payload), checks
+    if name == "quality_rubric":
+        return _quality_check(payload, result, trace)
     if name == "command_passes":
         result = _run_protected(
             payload,

@@ -1,0 +1,1 @@
+SERVICE_MODE supplies the environment mode; command arguments mode=upper override it. This deliberately unsupported text evidence must not be mistaken for missing repository content when the text analyzer is disabled.

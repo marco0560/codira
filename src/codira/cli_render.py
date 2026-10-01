@@ -243,6 +243,11 @@ def _run_capabilities(
                 + f"{mcp['server_command']} ({mcp['transport']}, "
                 + f"read-only, tools: {', '.join(str(tool) for tool in tools)})"
             )
+    runtime = payload.get("runtime")
+    if isinstance(runtime, dict):
+        print(f"runtime: {runtime['version']} source_sha256={runtime['source_sha256']}")
+    if isinstance(mcp, dict) and isinstance(mcp.get("parameters"), dict):
+        print("mcp_parameters: " + json.dumps(mcp["parameters"], sort_keys=True))
     if isinstance(validation, dict):
         print(f"validation: {validation['status']}")
         issues = validation.get("issues")

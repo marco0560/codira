@@ -1,0 +1,39 @@
+{
+  "definition": {
+    "quality_rubric": {
+      "criteria": [
+        {
+          "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+          "dimension": "correctness",
+          "id": "substance",
+          "requirement": "Disabling the text analyzer omits the file from the index; the file still exists and describes environment/argument precedence.",
+          "semantic": true
+        },
+        {
+          "dimension": "completeness",
+          "id": "requested-coverage",
+          "requirement": "Investigate operator-notes.txt with the text analyzer disabled. Explain missing index coverage, distinguish absent retrieval from absent repository evidence, and use a safe source fallback. Write your answer to BENCHMARK_ANSWER.md and stop.",
+          "semantic": true
+        },
+        {
+          "dimension": "evidence",
+          "id": "grounding",
+          "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+          "semantic": true
+        },
+        {
+          "dimension": "usability",
+          "id": "usability",
+          "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+          "semantic": true
+        }
+      ],
+      "task_id": "panel-e2",
+      "version": 1
+    }
+  },
+  "oracle_id": "panel-e2",
+  "schema_version": "1.0",
+  "task_id": "panel-e2",
+  "visibility": "public"
+}

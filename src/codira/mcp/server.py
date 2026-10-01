@@ -8,9 +8,10 @@ import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import anyio
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 from mcp import types
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.message import SessionMessage
@@ -25,6 +26,32 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping, Sequence
 
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
+
+
+class ContractMCP(FastMCP):
+    """Validate the advertised request contract before SDK argument coercion."""
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any]
+    ) -> Sequence[types.ContentBlock] | dict[str, Any]:
+        """Reject unknown parameters, invalid enums and out-of-range counts.
+
+        Parameters
+        ----------
+        name : str
+            Registered tool identity.
+        arguments : dict[str, typing.Any]
+            Untrusted MCP transport object before SDK coercion.
+
+        Returns
+        -------
+        collections.abc.Sequence[mcp.types.ContentBlock] or dict[str, typing.Any]
+            Registered tool output; invalid requests raise a contract error.
+        """
+        tool = self._tool_manager.get_tool(name)
+        if tool is not None:
+            Draft202012Validator(tool.parameters).validate(arguments)
+        return await super().call_tool(name, arguments)
 
 
 @dataclass(frozen=True)
@@ -227,6 +254,66 @@ async def _run_stdio_server(server: FastMCP) -> None:
         )
 
 
+def _publish_request_schemas(server: FastMCP, root: Path) -> None:
+    """Publish exactly the same accepted parameters as capability discovery.
+
+    Parameters
+    ----------
+    server : mcp.server.fastmcp.FastMCP
+        Registered FastMCP server.
+    root : pathlib.Path
+        Trusted root selecting configured profile values.
+
+    Returns
+    -------
+    None
+        Actual model-visible tool schemas are aligned with core discovery.
+    """
+    from codira.mcp.contract import build_contract_document
+
+    for declaration in cast(
+        "list[dict[str, object]]", build_contract_document(root=root)["tools"]
+    ):
+        tool = server._tool_manager.get_tool(str(declaration["name"]))
+        if tool is not None:
+            tool.parameters = cast("dict[str, object]", declaration["request_schema"])
+
+
+def _register_evidence_tool(server: FastMCP, adapter: QueryDaemonMCPProxy) -> None:
+    """Register source expansion separately from discovery tools.
+
+    Parameters
+    ----------
+    server : mcp.server.fastmcp.FastMCP
+        Server receiving the read-only tool.
+    adapter : codira.mcp.proxy.QueryDaemonMCPProxy
+        Startup-bound query adapter.
+
+    Returns
+    -------
+    None
+        The evidence tool is registered in place.
+    """
+
+    @server.tool(name="symbol_evidence")
+    def symbol_evidence(identity: str, limit: int = 10) -> dict[str, object]:
+        """Expand a discovery identity into a complete verified definition.
+
+        Parameters
+        ----------
+        identity : str
+            Generation-bound indexed symbol identity.
+        limit : int, optional
+            Maximum complete static relation items.
+
+        Returns
+        -------
+        dict[str, object]
+            Source range, owner, hash, static relations and coverage limits.
+        """
+        return adapter.symbol_evidence(identity, limit=limit)
+
+
 def create_server(
     root: Path,
     *,
@@ -247,7 +334,7 @@ def create_server(
         Server exposing the implemented read-only Codira tools.
     """
     adapter = QueryDaemonMCPProxy(root, startup_provenance=startup_provenance)
-    server = FastMCP(
+    server = ContractMCP(
         "Codira",
         instructions=(
             "Local read-only repository intelligence. "
@@ -257,7 +344,7 @@ def create_server(
     )
 
     @server.tool(name="capabilities")
-    def capabilities() -> dict[str, object]:
+    def capabilities(detail: bool = False) -> dict[str, object]:
         """Discover the MCP and Codira capability contracts.
 
         Parameters
@@ -269,14 +356,15 @@ def create_server(
         dict[str, object]
             Versioned capability contract envelope.
         """
-        return adapter.capabilities()
+        return adapter.capabilities(detail=detail)
+
+    _register_evidence_tool(server, adapter)
 
     @server.tool(name="symbol")
     def symbol(
         name: str,
         cursor: str | None = None,
-        limit: int = 100,
-        output_budget: int = 4_000,
+        limit: int = 10,
     ) -> dict[str, object]:
         """Look up one exact symbol name in the trusted repository.
 
@@ -292,12 +380,10 @@ def create_server(
         dict[str, object]
             Versioned response envelope containing symbol matches.
         """
-        return adapter.symbol(
-            name, cursor=cursor, limit=limit, output_budget=output_budget
-        )
+        return adapter.symbol(name, cursor=cursor, limit=limit)
 
     @server.tool(name="index_status")
-    def index_status() -> dict[str, object]:
+    def index_status(detail: bool = False) -> dict[str, object]:
         """Inspect persisted index identity and analyzer-coverage status.
 
         Parameters
@@ -309,13 +395,12 @@ def create_server(
         dict[str, object]
             Versioned response envelope containing index status.
         """
-        return adapter.index_status()
+        return adapter.index_status(detail=detail)
 
     @server.tool(name="symbols")
     def symbols(
         cursor: str | None = None,
-        limit: int = 100,
-        output_budget: int = 4_000,
+        limit: int = 10,
     ) -> dict[str, object]:
         """List graph-enriched indexed symbols from the trusted repository.
 
@@ -329,15 +414,14 @@ def create_server(
         dict[str, object]
             Versioned response envelope containing symbol inventory rows.
         """
-        return adapter.symbols(cursor=cursor, limit=limit, output_budget=output_budget)
+        return adapter.symbols(cursor=cursor, limit=limit)
 
     @server.tool(name="references")
     def references(
         name: str,
         direction: str = "outgoing",
         cursor: str | None = None,
-        limit: int = 100,
-        output_budget: int = 4_000,
+        limit: int = 10,
     ) -> dict[str, object]:
         """Traverse callable references for one exact logical name.
 
@@ -360,15 +444,13 @@ def create_server(
             direction=direction,
             cursor=cursor,
             limit=limit,
-            output_budget=output_budget,
         )
 
     @server.tool(name="callers")
     def callers(
         name: str,
         cursor: str | None = None,
-        limit: int = 100,
-        output_budget: int = 4_000,
+        limit: int = 10,
     ) -> dict[str, object]:
         """List static callers for one exact logical callable name.
 
@@ -384,16 +466,13 @@ def create_server(
         dict[str, object]
             Versioned response envelope containing caller edges.
         """
-        return adapter.callers(
-            name, cursor=cursor, limit=limit, output_budget=output_budget
-        )
+        return adapter.callers(name, cursor=cursor, limit=limit)
 
     @server.tool(name="callees")
     def callees(
         name: str,
         cursor: str | None = None,
-        limit: int = 100,
-        output_budget: int = 4_000,
+        limit: int = 10,
     ) -> dict[str, object]:
         """List static callees for one exact logical callable name.
 
@@ -409,15 +488,12 @@ def create_server(
         dict[str, object]
             Versioned response envelope containing callee edges.
         """
-        return adapter.callees(
-            name, cursor=cursor, limit=limit, output_budget=output_budget
-        )
+        return adapter.callees(name, cursor=cursor, limit=limit)
 
     @server.tool(name="documentation_findings")
     def documentation_findings(
         cursor: str | None = None,
-        limit: int = 100,
-        output_budget: int = 4_000,
+        limit: int = 10,
     ) -> dict[str, object]:
         """List documentation-audit findings from the trusted repository.
 
@@ -434,7 +510,6 @@ def create_server(
         return adapter.documentation_findings(
             cursor=cursor,
             limit=limit,
-            output_budget=output_budget,
         )
 
     @server.tool(name="context_for_task")
@@ -443,6 +518,7 @@ def create_server(
         cursor: str | None = None,
         limit: int = 10,
         search_profile: str | None = None,
+        explain: bool = False,
     ) -> dict[str, object]:
         """Build deterministic repository context for one task description.
 
@@ -467,14 +543,14 @@ def create_server(
             cursor=cursor,
             limit=limit,
             search_profile=search_profile,
+            explain=explain,
         )
 
     @server.tool(name="impact_analysis")
     def impact_analysis(
         name: str,
         cursor: str | None = None,
-        limit: int = 100,
-        output_budget: int = 4_000,
+        limit: int = 10,
     ) -> dict[str, object]:
         """Inspect static dependencies that can be affected by one symbol.
 
@@ -494,14 +570,12 @@ def create_server(
             name,
             cursor=cursor,
             limit=limit,
-            output_budget=output_budget,
         )
 
     @server.tool(name="repository_map")
     def repository_map(
         cursor: str | None = None,
-        limit: int = 100,
-        output_budget: int = 4_000,
+        limit: int = 10,
     ) -> dict[str, object]:
         """Return a compact deterministic map of the trusted repository.
 
@@ -521,14 +595,12 @@ def create_server(
         return adapter.repository_map(
             cursor=cursor,
             limit=limit,
-            output_budget=output_budget,
         )
 
     @server.tool(name="arch")
     def arch(
         cursor: str | None = None,
-        limit: int = 100,
-        output_budget: int = 4_000,
+        limit: int = 10,
     ) -> dict[str, object]:
         """Return a bounded architecture model for the trusted repository.
 
@@ -549,16 +621,15 @@ def create_server(
         return adapter.arch(
             cursor=cursor,
             limit=limit,
-            output_budget=output_budget,
         )
 
     @server.tool(name="emb")
     def emb(
         query: str,
         prefix: str | None = None,
-        limit: int = 100,
+        cursor: str | None = None,
+        limit: int = 10,
         search_profile: str | None = None,
-        output_budget: int = 4_000,
     ) -> dict[str, object]:
         """Search stored symbol embeddings without maintenance operations.
 
@@ -572,8 +643,8 @@ def create_server(
             Maximum number of ranked embedding matches to return.
         search_profile : str | None, optional
             Named similarity-index profile, or the configured default.
-        output_budget : int, optional
-            Maximum serialized character count for the result payload.
+        cursor : str or None, optional
+            Continue the same ranked candidate set without clipping items.
 
         Returns
         -------
@@ -583,18 +654,18 @@ def create_server(
         return adapter.emb(
             query,
             prefix=prefix,
+            cursor=cursor,
             limit=limit,
             search_profile=search_profile,
-            output_budget=output_budget,
         )
 
     @server.tool(name="docs")
     def docs(
         query: str,
         prefix: str | None = None,
-        limit: int = 100,
+        cursor: str | None = None,
+        limit: int = 10,
         search_profile: str | None = None,
-        output_budget: int = 4_000,
     ) -> dict[str, object]:
         """Search stored documentation embeddings without mutating the index.
 
@@ -608,8 +679,8 @@ def create_server(
             Maximum number of ranked documentation matches to return.
         search_profile : str | None, optional
             Named similarity-index profile, or the configured default.
-        output_budget : int, optional
-            Maximum serialized character count for the result payload.
+        cursor : str or None, optional
+            Continue the same ranked candidate set without clipping items.
 
         Returns
         -------
@@ -619,11 +690,12 @@ def create_server(
         return adapter.docs(
             query,
             prefix=prefix,
+            cursor=cursor,
             limit=limit,
             search_profile=search_profile,
-            output_budget=output_budget,
         )
 
+    _publish_request_schemas(server, root)
     return server
 
 

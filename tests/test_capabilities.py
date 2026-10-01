@@ -305,6 +305,7 @@ def test_capability_contract_validates_against_schema() -> None:
     assert mcp["tools"] == [
         "capabilities",
         "index_status",
+        "symbol_evidence",
         "symbol",
         "symbols",
         "references",

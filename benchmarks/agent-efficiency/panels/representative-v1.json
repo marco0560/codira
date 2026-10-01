@@ -1,0 +1,388 @@
+{
+  "panel_id": "representative-v1",
+  "version": 1,
+  "synthetic_size_policy": "small measured source fixtures; no medium-repository efficacy claim",
+  "tasks": [
+    {
+      "candidate": "N1",
+      "task_id": "panel-n1",
+      "fixture_id": "click-public",
+      "family": "navigation",
+      "split": "development",
+      "prompt": "Resolve UNSET, Sentinel.UNSET and the defining class. Explain the alias chain and cite exact declaration ranges. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "UNSET",
+        "Sentinel"
+      ],
+      "reference": "UNSET aliases Sentinel.UNSET; the enum member is an object-valued singleton."
+    },
+    {
+      "candidate": "N2",
+      "task_id": "panel-n2",
+      "fixture_id": "python-service-synthetic",
+      "family": "navigation",
+      "split": "development",
+      "prompt": "Select the method that converts text to lower case among the identically named methods. Identify its owner, adapter dispatch and distractors. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "Lower",
+        "Upper",
+        "Adapter"
+      ],
+      "reference": "Lower.render lowercases; Upper.render uppercases; Adapter.render delegates to the plugin interface."
+    },
+    {
+      "candidate": "N3",
+      "task_id": "panel-n3",
+      "fixture_id": "typescript-workspace-synthetic",
+      "family": "navigation",
+      "split": "holdout",
+      "prompt": "Trace public format from its re-export through the implementation. List runtime consumers and distinguish the unrelated format. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "format",
+        "convert",
+        "transform",
+        "display"
+      ],
+      "reference": "index.ts exports wrapper.convert as format; wrapper calls impl.transform; consumer.display calls format; unrelated.format is a different declaration."
+    },
+    {
+      "candidate": "D1",
+      "task_id": "panel-d1",
+      "fixture_id": "click-public",
+      "family": "diagnosis",
+      "split": "development",
+      "prompt": "An unset option default survives shallow and deep copying but pickling raises an enum value lookup error. Diagnose the cause without assuming copying also fails. Give a minimal reproduction and source evidence. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "Sentinel",
+        "object",
+        "pickle"
+      ],
+      "reference": "Default enum pickling reconstructs by value; a fresh object cannot equal the original singleton value; copying already preserves identity."
+    },
+    {
+      "candidate": "D2",
+      "task_id": "panel-d2",
+      "fixture_id": "picomatch-public",
+      "family": "diagnosis",
+      "split": "holdout",
+      "prompt": "Explain matching with nocase and absent, empty and nonempty flags. Provide positive and negative executable cases and identify the source branch. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "flags",
+        "nocase",
+        "compileRe"
+      ],
+      "reference": "compileRe uses opts.flags || (opts.nocase ? i : empty); empty flags fall back to nocase, nonempty flags override that fallback."
+    },
+    {
+      "candidate": "D3",
+      "task_id": "panel-d3",
+      "fixture_id": "typescript-workspace-synthetic",
+      "family": "diagnosis",
+      "split": "holdout",
+      "prompt": "Diagnose why format(text, {enabled:false}) changes case. Trace the wrapper boundary, explain the default rule and provide a reproduction. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "enabled",
+        "convert",
+        "transform"
+      ],
+      "reference": "convert uses options.enabled || true, so false is overwritten; transform itself correctly preserves text when enabled is false."
+    },
+    {
+      "candidate": "T1",
+      "task_id": "panel-t1",
+      "fixture_id": "picomatch-public",
+      "family": "tracing",
+      "split": "development",
+      "prompt": "Trace matcher, ignore and callbacks for a match, an ignored match and a nonmatching path. Give executable observations of event order. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "onResult",
+        "onIgnore",
+        "onMatch"
+      ],
+      "reference": "onResult precedes no-match and ignore decisions; ignored matches call onIgnore, never onMatch; accepted matches call onMatch."
+    },
+    {
+      "candidate": "T2",
+      "task_id": "panel-t2",
+      "fixture_id": "codira-public",
+      "family": "tracing",
+      "split": "development",
+      "prompt": "Trace context --search-profile from argument parsing through configuration, query execution and backend selection. Explain configuration precedence and errors for an unknown profile. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "search_profile",
+        "ContextRequest",
+        "active_similarity_search_profile"
+      ],
+      "reference": "The parser passes search_profile through ContextRequest; active_similarity_search_profile selects the configured profile and rejects unknown values; CLI overrides task selection, profile configuration uses effective precedence."
+    },
+    {
+      "candidate": "T3",
+      "task_id": "panel-t3",
+      "fixture_id": "go-service-synthetic",
+      "family": "tracing",
+      "split": "holdout",
+      "prompt": "Trace SERVICE_MODE and mode=lower from startup configuration to formatting. Give the package boundaries, call order and executable output. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "Resolve",
+        "Format",
+        "main"
+      ],
+      "reference": "main builds environment and argument maps; config.Resolve applies defaults then environment then arguments; store.Format formats MiXeD."
+    },
+    {
+      "candidate": "I1",
+      "task_id": "panel-i1",
+      "fixture_id": "codira-public",
+      "family": "impact",
+      "split": "development",
+      "prompt": "Assess a change to MCPAdapter._query. List every direct caller, the warm connection executor, operations that bypass it, and relevant tests. Label dynamic uncertainty. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "_query",
+        "_ConnectionExecutor",
+        "capabilities",
+        "index_status"
+      ],
+      "reference": "Direct callers include symbol, symbols, references, documentation_findings, context_for_task, impact_analysis, repository_map, arch, emb, docs, _call_edges; callers/callees dispatch through _call_edges; capabilities and index_status bypass _query; warm _ConnectionExecutor.execute forwards a supplied connection."
+    },
+    {
+      "candidate": "I2",
+      "task_id": "panel-i2",
+      "fixture_id": "codira-public",
+      "family": "impact",
+      "split": "holdout",
+      "prompt": "Assess changing BackendQueryConnection.execute. Identify first-party implementations and warm/proxy adapters, affected query callers and contract tests. Distinguish static evidence from dynamic completeness. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "BackendQueryConnection",
+        "execute",
+        "sqlite"
+      ],
+      "reference": "Structural query connections and warm adapters must preserve execute semantics; backend implementations and query contract tests must be included, with unresolved dynamic use explicitly scoped."
+    },
+    {
+      "candidate": "I3",
+      "task_id": "panel-i3",
+      "fixture_id": "typescript-workspace-synthetic",
+      "family": "impact",
+      "split": "holdout",
+      "prompt": "Assess changing the exported default for format. Enumerate runtime and type consumers, wrapper behavior and negative controls. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "display",
+        "Options",
+        "defaults",
+        "convert"
+      ],
+      "reference": "consumer.display consumes runtime format; type-consumer.defaults consumes Options only; wrapper.convert propagates runtime options; unrelated.format is a negative control."
+    },
+    {
+      "candidate": "P1",
+      "task_id": "panel-p1",
+      "fixture_id": "click-public",
+      "family": "patch",
+      "split": "development",
+      "prompt": "Fix sentinel pickling by name while preserving every member identity for copy, deepcopy and pickle and complete Option name/default behavior. Add regression tests. Produce .benchmark/fix.patch and stop.",
+      "result_path": ".benchmark/fix.patch",
+      "result_format": "workspace-diff",
+      "reference_anchors": [
+        "Sentinel",
+        "pickle"
+      ],
+      "reference": "The correct patch uses name-based enum reduction; every member and full Option retain identity, name and default."
+    },
+    {
+      "candidate": "P2",
+      "task_id": "panel-p2",
+      "fixture_id": "picomatch-public",
+      "family": "patch",
+      "split": "development",
+      "prompt": "Repair the seeded ignore regression. Ensure an ignored matching path returns false and onIgnore runs instead of onMatch; nonignored matches remain true. Add regression tests. Produce .benchmark/fix.patch and stop.",
+      "result_path": ".benchmark/fix.patch",
+      "result_format": "workspace-diff",
+      "reference_anchors": [
+        "isIgnored",
+        "onIgnore"
+      ],
+      "reference": "The seed disables the isIgnored branch. Restore ignore handling and independently check matching, nonmatching and ignored paths."
+    },
+    {
+      "candidate": "P3",
+      "task_id": "panel-p3",
+      "fixture_id": "go-service-synthetic",
+      "family": "patch",
+      "split": "holdout",
+      "prompt": "Repair the seeded zero-limit defect: zero means unlimited, including empty text, while negative limits remain errors and positive truncation remains unchanged. Add Go regression tests. Produce .benchmark/fix.patch and stop.",
+      "result_path": ".benchmark/fix.patch",
+      "result_format": "workspace-diff",
+      "reference_anchors": [
+        "Limit",
+        "Format"
+      ],
+      "reference": "Format must reject only negative limits; zero bypasses truncation; positive truncation and case conversion remain unchanged."
+    },
+    {
+      "candidate": "F1",
+      "task_id": "panel-f1",
+      "fixture_id": "codira-public",
+      "family": "feature",
+      "split": "development",
+      "prompt": "Add context --max-results as a bounded integer from 1 to 100, default 10. Connect it through CLI to core paging without cutting evidence items. Test valid values, errors and default compatibility. Produce .benchmark/fix.patch and stop.",
+      "result_path": ".benchmark/fix.patch",
+      "result_format": "workspace-diff",
+      "reference_anchors": [
+        "max_results",
+        "ContextRequest"
+      ],
+      "reference": "CLI validates a bounded result count and passes it to the existing core result limit; default behavior remains ten complete items."
+    },
+    {
+      "candidate": "F2",
+      "task_id": "panel-f2",
+      "fixture_id": "python-service-synthetic",
+      "family": "feature",
+      "split": "holdout",
+      "prompt": "Add Adapter.capabilities() returning a case_conversion boolean. Built-in Upper/Lower advertise true through the plugin interface; legacy render-only plugins work and advertise false. Add tests and produce .benchmark/fix.patch.",
+      "result_path": ".benchmark/fix.patch",
+      "result_format": "workspace-diff",
+      "reference_anchors": [
+        "capabilities",
+        "case_conversion",
+        "Adapter"
+      ],
+      "reference": "Adapter delegates optional capability discovery through the public plugin interface with a false fallback for legacy plugins."
+    },
+    {
+      "candidate": "F3",
+      "task_id": "panel-f3",
+      "fixture_id": "typescript-workspace-synthetic",
+      "family": "feature",
+      "split": "holdout",
+      "prompt": "Add an optional third suffix parameter to the public format API, wrapper and implementation. Append it after conversion; default empty suffix preserves existing calls and declarations. Add tests and produce .benchmark/fix.patch.",
+      "result_path": ".benchmark/fix.patch",
+      "result_format": "workspace-diff",
+      "reference_anchors": [
+        "suffix",
+        "format",
+        "convert",
+        "transform"
+      ],
+      "reference": "The suffix travels across re-export, wrapper and implementation; old two-argument and one-argument calls preserve outputs."
+    },
+    {
+      "candidate": "U1",
+      "task_id": "panel-u1",
+      "fixture_id": "picomatch-public",
+      "family": "usage",
+      "split": "development",
+      "prompt": "Write a concise usage guide with runnable matching/nonmatching examples, ignore callbacks and flags precedence including the empty-flags exception. State actual expected outputs. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "picomatch",
+        "flags",
+        "nocase"
+      ],
+      "reference": "The public picomatch API returns a matcher; guides must include positive and negative matches and distinguish empty/nonempty flags."
+    },
+    {
+      "candidate": "U2",
+      "task_id": "panel-u2",
+      "fixture_id": "python-service-synthetic",
+      "family": "usage",
+      "split": "development",
+      "prompt": "Write a runnable operator/API recipe using the actual exported signature. Demonstrate both modes and unsupported-mode failure; cite public adapter behavior. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "render",
+        "upper",
+        "lower",
+        "ValueError"
+      ],
+      "reference": "service.render(text, mode=upper) supports upper/lower and raises ValueError for unknown modes; Adapter accepts a Plugin."
+    },
+    {
+      "candidate": "U3",
+      "task_id": "panel-u3",
+      "fixture_id": "go-service-synthetic",
+      "family": "usage",
+      "split": "holdout",
+      "prompt": "Write an operator runbook with executable startup commands. Explain default/environment/argument precedence, expected outputs and the current zero-limit failure. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "SERVICE_MODE",
+        "Resolve",
+        "limit"
+      ],
+      "reference": "Defaults are upper/10; environment overrides defaults; command arguments override environment; current Format rejects zero."
+    },
+    {
+      "candidate": "E1",
+      "task_id": "panel-e1",
+      "fixture_id": "codira-public",
+      "family": "evidence",
+      "split": "development",
+      "prompt": "Investigate an alleged codira teleport_repository API. State what the repository and index evidence can establish; cite the search scope and avoid inventing an implementation. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "teleport_repository"
+      ],
+      "reference": "No such API is declared in the frozen source; absence is scoped to the inspected repository and usable index, not every external plugin."
+    },
+    {
+      "candidate": "E2",
+      "task_id": "panel-e2",
+      "fixture_id": "go-service-synthetic",
+      "family": "evidence",
+      "split": "holdout",
+      "prompt": "Investigate operator-notes.txt with the text analyzer disabled. Explain missing index coverage, distinguish absent retrieval from absent repository evidence, and use a safe source fallback. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "operator-notes.txt",
+        "coverage"
+      ],
+      "reference": "Disabling the text analyzer omits the file from the index; the file still exists and describes environment/argument precedence."
+    },
+    {
+      "candidate": "E3",
+      "task_id": "panel-e3",
+      "fixture_id": "typescript-workspace-synthetic",
+      "family": "evidence",
+      "split": "holdout",
+      "prompt": "Index the fixture, request paged context, then edit transform and reindex. Demonstrate that the old cursor is rejected and new discovery/evidence reflects the edit. Explain index generation and source freshness. Write your answer to BENCHMARK_ANSWER.md and stop.",
+      "result_path": "BENCHMARK_ANSWER.md",
+      "result_format": "text",
+      "reference_anchors": [
+        "cursor",
+        "generation",
+        "transform"
+      ],
+      "reference": "Cursors bind query/profile/page size/generation; old continuation is invalid after reindexing, and source expansion rejects modified files before indexing."
+    }
+  ]
+}

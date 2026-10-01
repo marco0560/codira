@@ -1,0 +1,17 @@
+{
+  "family": "impact",
+  "fixture_id": "codira-public",
+  "oracle_id": "panel-i2",
+  "prompt": "Assess changing BackendQueryConnection.execute. Identify first-party implementations and warm/proxy adapters, affected query callers and contract tests. Distinguish static evidence from dynamic completeness. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "BackendQueryConnection",
+    "execute",
+    "sqlite"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "holdout",
+  "task_id": "panel-i2",
+  "visibility": "public"
+}

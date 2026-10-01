@@ -312,3 +312,14 @@ matching prepared image digests and their offline fixture caches remain
 available. The artifact directory measured about 222 GiB before cleanup and
 about 86 GiB afterward. The manifests, review, and this handoff update contain
 repository-relative paths and aggregate inventory only.
+
+## Session handoff — 2026-10-01
+
+Implemented the approved C1–C5 core/MCP and H1–H3 harness improvements. Added
+a separately generated 24-task representative bank, protected probes, source
+snapshot admission, installed-product qualification and immutable semantic
+adjudication. Updated pre-pilot controls; historical campaign identities and
+raw evidence remain unchanged. No paid campaign was launched. See
+[implementation, validation and remaining qualifications](agent-product-harness-improvements-2026-10-01.md).
+The next paid campaign requires a rebuilt, admitted serving image and
+task-specific rubric calibration before authorization.

@@ -1,0 +1,16 @@
+{
+  "family": "patch",
+  "fixture_id": "picomatch-public",
+  "oracle_id": "panel-p2",
+  "prompt": "Repair the seeded ignore regression. Ensure an ignored matching path returns false and onIgnore runs instead of onMatch; nonignored matches remain true. Add regression tests. Produce .benchmark/fix.patch and stop.",
+  "reference_anchors": [
+    "isIgnored",
+    "onIgnore"
+  ],
+  "result_format": "workspace-diff",
+  "result_path": ".benchmark/fix.patch",
+  "schema_version": "1.0",
+  "split": "development",
+  "task_id": "panel-p2",
+  "visibility": "public"
+}

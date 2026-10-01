@@ -1,0 +1,39 @@
+{
+  "definition": {
+    "quality_rubric": {
+      "criteria": [
+        {
+          "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+          "dimension": "correctness",
+          "id": "substance",
+          "requirement": "Cursors bind query/profile/page size/generation; old continuation is invalid after reindexing, and source expansion rejects modified files before indexing.",
+          "semantic": true
+        },
+        {
+          "dimension": "completeness",
+          "id": "requested-coverage",
+          "requirement": "Index the fixture, request paged context, then edit transform and reindex. Demonstrate that the old cursor is rejected and new discovery/evidence reflects the edit. Explain index generation and source freshness. Write your answer to BENCHMARK_ANSWER.md and stop.",
+          "semantic": true
+        },
+        {
+          "dimension": "evidence",
+          "id": "grounding",
+          "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+          "semantic": true
+        },
+        {
+          "dimension": "usability",
+          "id": "usability",
+          "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+          "semantic": true
+        }
+      ],
+      "task_id": "panel-e3",
+      "version": 1
+    }
+  },
+  "oracle_id": "panel-e3",
+  "schema_version": "1.0",
+  "task_id": "panel-e3",
+  "visibility": "public"
+}

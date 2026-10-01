@@ -1,0 +1,45 @@
+{
+  "definition": {
+    "quality_rubric": {
+      "criteria": [
+        {
+          "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+          "dimension": "correctness",
+          "id": "substance",
+          "requirement": "Default enum pickling reconstructs by value; a fresh object cannot equal the original singleton value; copying already preserves identity.",
+          "semantic": true
+        },
+        {
+          "dimension": "completeness",
+          "id": "requested-coverage",
+          "requirement": "An unset option default survives shallow and deep copying but pickling raises an enum value lookup error. Diagnose the cause without assuming copying also fails. Give a minimal reproduction and source evidence. Write your answer to BENCHMARK_ANSWER.md and stop.",
+          "semantic": true
+        },
+        {
+          "dimension": "evidence",
+          "id": "grounding",
+          "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+          "semantic": true
+        },
+        {
+          "dimension": "usability",
+          "id": "usability",
+          "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+          "semantic": true
+        },
+        {
+          "dimension": "causality",
+          "id": "causal-chain",
+          "requirement": "Explain or implement the causal relationship, including requested negative controls.",
+          "semantic": true
+        }
+      ],
+      "task_id": "panel-d1",
+      "version": 1
+    }
+  },
+  "oracle_id": "panel-d1",
+  "schema_version": "1.0",
+  "task_id": "panel-d1",
+  "visibility": "public"
+}

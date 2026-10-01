@@ -336,7 +336,7 @@ process exits successfully.
 Use a short execution-root name: the receipt keeps all resumable state beneath
 `<execution-root>/state`, including records and response evidence. The provider
 socket is a short-lived artifact under
-`/home/marco/Personalia/Progetti/.Temp`, mounted at the stable in-container path
+the operator temporary directory defined in `AGENTS.md`, mounted at the stable in-container path
 `/codex-state/provider.sock`; do not put durable campaign state in `.Temp`,
 `/tmp`, or a user-wide cache.
 
@@ -354,3 +354,31 @@ parameter filtering remains disabled because the complete Responses/tool
 request contains provider-specific fields that would otherwise produce a
 false no-endpoint rejection; the proxy still rejects model or reasoning
 substitution locally.
+
+## Additional pre-pilot controls: product and representative panel
+
+Apply these checks before every fresh pilot or campaign, including model or
+provider changes; they extend the existing Pre-pilot control checklist.
+
+- [ ] Pin serving core/analyzer source hashes, actual registered MCP schemas,
+  profile hash and image digest. Require offline indexed image qualification
+  before authenticated provider preflight; reject legacy or mismatched images.
+- [ ] Probe limit-one continuation, wrong-query/stale cursors, owner-qualified
+  methods, whole definition expansion and truthful static coverage.
+- [ ] Calibrate each task rubric on known-correct, incomplete, subtly wrong and
+  equivalent answers. Plan blinded quote-bound review; pending review is not a
+  passing task. Preserve original oracle decisions and all raw traces.
+- [ ] For `representative-campaign`, check `representative-v1` generated assets,
+  all 24 tasks, eight families, 12/12 development/holdout balance and frozen
+  synthetic inventories/protected hashes. Admit one to five repetitions.
+- [ ] Separate optional MCP (`mcp-optional-v3`, shared common prompt) from the
+  required-use ablation (`mcp-required-v3`). Identify interface-only controls
+  in analysis and inspect baseline CLI use.
+- [ ] Confirm byte/timing/cache/failure-cost instrumentation and task-level
+  paired distributions. First-reference detection is a proxy, not semantic
+  quality. Use small synthetic fixture results within their measured scope.
+- [ ] Generate a fresh immutable factory identity after any control change;
+  re-run offline validation and the full gate, then authenticated route checks
+  and explicit paid authorization. No qualification check is a paid launch.
+
+See [implementation and limits](agent-product-harness-improvements-2026-10-01.md).

@@ -69,3 +69,16 @@ charge. Neither amount is an invoice total.
 Raw provider bodies, protected-command traces, and fixture locations remain
 only in ignored per-attempt evidence. This report contains no credential
 values or paths outside the repository.
+
+## Subsequent runtime qualification finding
+
+The [full audience findings](issue-053-audience-findings.md) and
+[internal product assessment](issue-053-internal-product-assessment.md)
+record the 2026-09-30 forensic follow-up. Offline inspection showed that the
+pinned image served the older character-budget `result.context` protocol,
+while the public Codira source fixture contained the newer item/cursor code.
+The saved context calls confirm the older deployed shape. These results
+therefore do not evaluate the current pagination implementation. Composite
+selection, spending, original grades, and immutable attempt records are
+unchanged; the follow-up adds substantive quality review and corrects protocol
+attribution.

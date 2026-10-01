@@ -4,17 +4,20 @@ This program runs inside the candidate runner image against a writable public
 fixture mount.  It deliberately has no provider connection and never invokes a
 benchmark agent.
 """
-# ruff: noqa: EM101, TRY003
+# ruff: noqa: EM101, TRY003, TRY301
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import hashlib
 import json
 import shutil
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -113,73 +116,174 @@ def _require_history_free_staged_fixture(root: Path) -> int:
     return count
 
 
-async def _call_context(root: Path, query: str, mcp_command: str) -> None:
-    """Initialize the installed stdio server and require a usable context call.
+async def _call_context(root: Path, query: str, mcp_command: str) -> dict[str, object]:
+    """Qualify the actual registered server and whole-item protocol offline.
 
     Parameters
     ----------
     root : pathlib.Path
-        Indexed fixture root trusted by the server.
+        Indexed fixture trusted by the server.
     query : str
-        Non-empty fixture-local retrieval request.
+        Retrieval request matching at least two discovery items.
+    mcp_command : str
+        Installed image-local server entry point.
+
+    Returns
+    -------
+    dict[str, object]
+        Installed runtime, actual schemas, status and behavioral probe receipt.
 
     Raises
     ------
     RuntimeAdmissionError
-        If initialization or the context tool fails.
+        If the installed protocol is legacy, incomplete or unusable.
     """
-
     parameters = StdioServerParameters(command=mcp_command, args=["--root", str(root)])
-    try:
-        async with (
-            stdio_client(parameters) as streams,
-            ClientSession(*streams) as session,
-            asyncio.timeout(30),
+    async with (
+        stdio_client(parameters) as streams,
+        ClientSession(*streams) as session,
+        asyncio.timeout(60),
+    ):
+        await session.initialize()
+        tools = await session.list_tools()
+        schemas = {tool.name: tool.inputSchema for tool in tools.tools}
+        context_schema = schemas.get("context_for_task", {}).get("properties", {})
+        if (
+            "limit" not in context_schema
+            or "cursor" not in context_schema
+            or "output_budget" in context_schema
         ):
-            await session.initialize()
-            status_response = await session.call_tool("index_status", arguments={})
-            status_document = _tool_document(status_response)
-            status_result = status_document.get("result")
-            if not isinstance(status_result, Mapping):
-                raise RuntimeAdmissionError("Codira MCP index status is malformed")
-            metadata = status_result.get("metadata")
-            generation = status_result.get("generation")
-            indexed_file_count = (
-                metadata.get("indexed_file_count")
-                if isinstance(metadata, Mapping)
-                else None
+            raise RuntimeAdmissionError(
+                "installed runtime does not serve the whole-item protocol"
             )
-            if (
-                status_result.get("usable") is not True
-                or not isinstance(metadata, Mapping)
-                or not isinstance(indexed_file_count, str | int)
-                or isinstance(indexed_file_count, bool)
-                or not str(indexed_file_count).isdecimal()
-                or int(indexed_file_count) < 1
-                or not isinstance(generation, Mapping)
-                or generation.get("state") != "ready"
-                or generation.get("partial") is not False
-                or generation.get("failed_file_count") != 0
-            ):
-                raise RuntimeAdmissionError("Codira MCP index is not usable")
-            response = await session.call_tool(
-                "context_for_task", arguments={"query": query, "output_budget": 512}
+        discovery = _tool_document(
+            await session.call_tool("capabilities", arguments={})
+        )
+        capability_result = discovery.get("result")
+        advertised = (
+            capability_result.get("mcp")
+            if isinstance(capability_result, Mapping)
+            else None
+        )
+        declared_tools = (
+            advertised.get("tools") if isinstance(advertised, Mapping) else None
+        )
+        if (
+            not isinstance(declared_tools, list)
+            or {item["name"]: item["request_schema"] for item in declared_tools}
+            != schemas
+        ):
+            raise RuntimeAdmissionError("registered schemas differ from discovery")
+        status = _tool_document(await session.call_tool("index_status", arguments={}))
+        status_result = status.get("result")
+        if (
+            not isinstance(status_result, Mapping)
+            or status_result.get("usable") is not True
+        ):
+            raise RuntimeAdmissionError("installed runtime index is not usable")
+        first = _tool_document(
+            await session.call_tool(
+                "context_for_task", arguments={"query": query, "limit": 1}
             )
-    except TimeoutError as error:
-        detail = "Codira MCP context query exceeded the admission timeout"
-        raise RuntimeAdmissionError(detail) from error
-    if response.isError or not response.content:
-        detail = repr(response.content)[:500]
-        message = f"Codira MCP context query was not usable: {detail}"
-        raise RuntimeAdmissionError(message)
-    document = _tool_document(response)
-    result = document.get("result")
-    context = result.get("context") if isinstance(result, Mapping) else None
-    if not isinstance(context, Mapping) or context.get("status") != "ok":
-        raise RuntimeAdmissionError("Codira MCP context query found no fixture context")
+        )
+        first_result, page = first.get("result"), first.get("page")
+        if not isinstance(first_result, Mapping) or not isinstance(page, Mapping):
+            raise RuntimeAdmissionError("installed runtime context is malformed")
+        items = first_result.get("items")
+        cursor = page.get("next_cursor")
+        if (
+            not isinstance(items, list)
+            or len(items) != 1
+            or not isinstance(cursor, str)
+        ):
+            raise RuntimeAdmissionError(
+                "qualification requires one whole item and a continuation"
+            )
+        second = _tool_document(
+            await session.call_tool(
+                "context_for_task",
+                arguments={"query": query, "limit": 1, "cursor": cursor},
+            )
+        )
+        second_result = second.get("result")
+        if (
+            not isinstance(second_result, Mapping)
+            or second_result.get("items") == items
+        ):
+            raise RuntimeAdmissionError(
+                "cursor did not advance to the next complete item"
+            )
+        wrong = await session.call_tool(
+            "context_for_task",
+            arguments={"query": query + " different", "limit": 1, "cursor": cursor},
+        )
+        payload = json.loads(base64.urlsafe_b64decode(cursor.split(":", 1)[1] + "=="))
+        payload["generation"] = -1
+        stale_cursor = (
+            "ctx:" + base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+        )
+        stale = await session.call_tool(
+            "context_for_task",
+            arguments={"query": query, "limit": 1, "cursor": stale_cursor},
+        )
+        if not wrong.isError or not stale.isError:
+            raise RuntimeAdmissionError("runtime accepts wrong-query or stale cursors")
+        inventory = _tool_document(
+            await session.call_tool("symbol", arguments={"name": "probe", "limit": 10})
+        )
+        result = inventory.get("result")
+        symbols = result.get("symbols") if isinstance(result, Mapping) else None
+        if (
+            not isinstance(symbols, list)
+            or not symbols
+            or symbols[0].get("owner") != "Qualification"
+        ):
+            raise RuntimeAdmissionError(
+                "runtime does not preserve qualified method ownership"
+            )
+        expanded = _tool_document(
+            await session.call_tool(
+                "symbol_evidence", arguments={"identity": symbols[0]["identity"]}
+            )
+        )
+        evidence = expanded.get("result")
+        if (
+            not isinstance(evidence, Mapping)
+            or "return 42" not in str(evidence.get("source"))
+            or not isinstance(evidence.get("coverage"), Mapping)
+        ):
+            raise RuntimeAdmissionError("runtime cannot expand whole verified evidence")
+        caps = discovery.get("result")
+        runtime = caps.get("runtime") if isinstance(caps, Mapping) else None
+        if not isinstance(runtime, Mapping) or not isinstance(
+            runtime.get("source_sha256"), str
+        ):
+            raise RuntimeAdmissionError(
+                "runtime does not identify the installed source"
+            )
+        return {
+            "qualification_version": 3,
+            "runtime": dict(runtime),
+            "tool_schemas": schemas,
+            "tool_schemas_sha256": hashlib.sha256(
+                json.dumps(schemas, sort_keys=True).encode()
+            ).hexdigest(),
+            "index": dict(status_result),
+            "probes": [
+                "limit-one",
+                "continuation",
+                "wrong-query",
+                "stale-cursor",
+                "owner",
+                "whole-source",
+                "coverage",
+            ],
+        }
 
 
-def admit_runtime(root: Path, query: str, config_path: str | None = None) -> None:
+def admit_runtime(
+    root: Path, query: str, config_path: str | None = None
+) -> dict[str, object]:
     """Index one fixture and validate its installed Codira MCP service.
 
     Parameters
@@ -194,8 +298,8 @@ def admit_runtime(root: Path, query: str, config_path: str | None = None) -> Non
 
     Returns
     -------
-    None
-        The function returns only after index and MCP admission succeed.
+    dict[str, object]
+        Exact registered schemas, installed source identity and probe receipt.
 
     Raises
     ------
@@ -236,7 +340,12 @@ def admit_runtime(root: Path, query: str, config_path: str | None = None) -> Non
         detail = "codira index failed during runtime admission"
         raise RuntimeAdmissionError(detail)
     mcp_command = "/opt/codira/codira-mcp-benchmark" if config_path else "codira-mcp"
-    asyncio.run(_call_context(root, query, mcp_command))
+    try:
+        return asyncio.run(_call_context(root, query, mcp_command))
+    except (TimeoutError, ExceptionGroup) as error:
+        raise RuntimeAdmissionError(
+            "MCP qualification failed; retained exception chain identifies the probe"
+        ) from error
 
 
 def main(arguments: list[str] | None = None) -> int:
@@ -251,15 +360,30 @@ def main(arguments: list[str] | None = None) -> int:
     -------
     int
         Zero only after an indexed MCP context query succeeds.
+
+    Raises
+    ------
+    SystemExit
+        If argument parsing or runtime admission fails.
     """
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--query", required=True)
     parser.add_argument("--config-path", default="/opt/codira/benchmark-codira.toml")
+    parser.add_argument("--expected-core-sha256", required=True)
     parsed = parser.parse_args(arguments)
     try:
-        admit_runtime(parsed.root, parsed.query, parsed.config_path)
+        receipt = admit_runtime(parsed.root, parsed.query, parsed.config_path)
+        runtime = cast("Mapping[str, object]", receipt["runtime"])
+        if runtime["source_sha256"] != parsed.expected_core_sha256:
+            raise RuntimeAdmissionError(
+                "installed core source differs from approved serving product"
+            )
+        receipt["profile_sha256"] = hashlib.sha256(
+            Path(parsed.config_path).read_bytes()
+        ).hexdigest()
+        print(json.dumps(receipt, sort_keys=True))
     except RuntimeAdmissionError as error:
         parser.error(str(error))
     return 0

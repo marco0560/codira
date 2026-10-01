@@ -224,3 +224,18 @@ host-target parser migration, a production `ast` import would silently violate
 the package-owned Tree-sitter boundary. Its dedicated fixture proves the rule
 fires while analyzer tests remain free to compare normalized output with the
 host parser.
+
+## Updated integration locations — 2026-10-01
+
+- `scripts/agent_efficiency/oracles.py:134` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:789` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:900` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:1047` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/cli.py:406` (E402): Compatibility imports retain their established initialization order.
+- `src/codira/cli.py:411` (E402): Compatibility imports retain their established initialization order.
+- `src/codira/cli.py:450` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/cli_queries.py:2365` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/mcp/server.py:250` (SLF001 - required SDK transport boundary): The MCP transport adapter requires the SDK private server boundary.
+- `src/codira/query/context_scoring.py:638` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/query/context_scoring.py:787` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/query/context_scoring.py:822` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.

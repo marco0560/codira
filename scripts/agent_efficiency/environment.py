@@ -120,6 +120,13 @@ def fixture_environment(root: Path, fixture_id: str) -> FixtureEnvironment:
             "dependencies or attempt network access.",
             fixture_id,
         )
+    if (root / "go.mod").is_file():
+        return FixtureEnvironment(
+            "go",
+            ("/opt/codira/prepare-fixture-environment", fixture_id, "go"),
+            "Use the image-qualified Go toolchain offline with GOTOOLCHAIN=local and GOPROXY=off. Run go test ./...; do not fetch modules or toolchains.",
+            fixture_id,
+        )
     detail = "fixture has no supported locked environment"
     raise EnvironmentPreparationError(detail)
 

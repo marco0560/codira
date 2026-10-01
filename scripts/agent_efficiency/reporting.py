@@ -13,7 +13,7 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from statistics import median
+from statistics import mean, median
 from typing import TYPE_CHECKING, cast
 
 from scripts.agent_efficiency.campaign_state import CampaignStateError, CampaignStore
@@ -505,11 +505,11 @@ def build_report(store: CampaignStore) -> dict[str, object]:
         )
         baseline_total = sum(
             _integer(baseline_usage.get(key), key)
-            for key in ("input_tokens", "output_tokens", "reasoning_output_tokens")
+            for key in ("input_tokens", "output_tokens")
         )
         assisted_total = sum(
             _integer(assisted_usage.get(key), key)
-            for key in ("input_tokens", "output_tokens", "reasoning_output_tokens")
+            for key in ("input_tokens", "output_tokens")
         )
         delta = assisted_total - baseline_total
         deltas.append(float(delta))
@@ -528,6 +528,7 @@ def build_report(store: CampaignStore) -> dict[str, object]:
         "attempts": attempts,
         "paired_token_differences": pairs,
         "exclusions": exclusions,
+        "instrumented_comparison": _instrumented_comparison(attempts, records),
         "summary": {
             "attempt_count": len(attempts),
             "pair_count": len(pairs),
@@ -764,3 +765,140 @@ def write_report(store: CampaignStore, output_dir: Path) -> ReportArtifacts:
     )
     markdown_path.write_text(render_markdown(report), encoding="utf-8")
     return ReportArtifacts(json_path, markdown_path)
+
+
+def _instrumented_comparison(
+    attempts: list[dict[str, object]], records: Mapping[str, Mapping[str, object]]
+) -> dict[str, object]:
+    """Report all measured trajectories and task-level paired uncertainty.
+
+    Parameters
+    ----------
+    attempts : list[dict[str, object]]
+        Validated public attempt projections, including failures.
+    records : collections.abc.Mapping[str, collections.abc.Mapping[str, object]]
+        Immutable private records; only numeric observations are projected.
+
+    Returns
+    -------
+    dict[str, object]
+        All-attempt costs/cache/payload counters and independent task means.
+        Missing observations remain unknown rather than assumed zero.
+    """
+    from scripts.agent_efficiency.instrumentation import paired_distribution
+
+    measured: list[dict[str, object]] = []
+    pairs: dict[str, dict[str, dict[str, object]]] = {}
+    costs: list[float] = []
+    failed_costs: list[float] = []
+    for attempt in attempts:
+        identifier = str(attempt["attempt_id"])
+        evidence = cast("Mapping[str, object]", records[identifier]["evidence"])
+        responses = evidence.get("provider_responses", [])
+        upstream = (
+            [
+                item
+                for item in responses
+                if isinstance(item, Mapping) and item.get("source") == "upstream"
+            ]
+            if isinstance(responses, list)
+            else []
+        )
+        known = bool(upstream) and all(
+            isinstance(item.get("estimated_cost_usd_at_ceiling"), (int, float))
+            for item in upstream
+        )
+        cost = (
+            sum(float(item["estimated_cost_usd_at_ceiling"]) for item in upstream)
+            if known
+            else None
+        )
+        if cost is not None:
+            costs.append(cost)
+            if (
+                cast("Mapping[str, object]", attempt["task_oracle"])["status"]
+                != "passed"
+            ):
+                failed_costs.append(cost)
+        usage = cast("Mapping[str, object]", attempt["usage"])
+        stage = evidence.get("stage_measurement", {})
+        stage = stage if isinstance(stage, Mapping) else {}
+        payloads = stage.get("payloads", [])
+        payload_bytes = (
+            sum(
+                int(item["bytes"])
+                for item in payloads
+                if isinstance(item, Mapping) and isinstance(item.get("bytes"), int)
+            )
+            if isinstance(payloads, list)
+            else None
+        )
+        preparation = evidence.get("environment_preparation", {})
+        prep_seconds = (
+            preparation.get("elapsed_seconds")
+            if isinstance(preparation, Mapping)
+            else None
+        )
+        phases = evidence.get("phase_timings", {})
+        phases = phases if isinstance(phases, Mapping) else {}
+        measured.append(
+            {
+                "attempt_id": identifier,
+                "cost_usd_at_ceiling": cost,
+                "cost_scope": "all received upstream responses; invoice cost unknown",
+                "cached_input_tokens": usage["cached_input_tokens"],
+                "uncached_input_tokens": int(str(usage["input_tokens"]))
+                - int(str(usage["cached_input_tokens"])),
+                "tool_payload_bytes": payload_bytes,
+                "first_reference_evidence_event": stage.get(
+                    "first_reference_evidence_event"
+                ),
+                "followup_source_reads": stage.get("followup_source_reads"),
+                "phase_seconds": {
+                    key: value
+                    for key, value in phases.items()
+                    if key
+                    in {
+                        "fixture_export_seconds",
+                        "environment_preparation_seconds",
+                        "index_preparation_seconds",
+                        "container_execution_seconds",
+                        "grading_seconds",
+                    }
+                    and isinstance(value, (int, float))
+                    and math.isfinite(value)
+                    and value >= 0
+                },
+                "preparation_seconds": prep_seconds
+                if isinstance(prep_seconds, (int, float))
+                else None,
+            }
+        )
+        if attempt["usage_complete"]:
+            pairs.setdefault(str(attempt["pair_id"]), {})[
+                str(attempt["assistance_mode"])
+            ] = attempt
+    task_deltas: dict[str, list[float]] = {}
+    for pair in pairs.values():
+        if "baseline" not in pair or "codira-mcp" not in pair:
+            continue
+        baseline, assisted = pair["baseline"], pair["codira-mcp"]
+        bu, au = (
+            cast("Mapping[str, object]", baseline["usage"]),
+            cast("Mapping[str, object]", assisted["usage"]),
+        )
+        difference = sum(
+            int(str(au[key])) - int(str(bu[key]))
+            for key in ("input_tokens", "output_tokens")
+        )
+        task_deltas.setdefault(str(baseline["task_id"]), []).append(float(difference))
+    return {
+        "attempts": measured,
+        "known_cost_usd_at_ceiling": sum(costs),
+        "unknown_cost_attempt_count": len(attempts) - len(costs),
+        "nonpassing_known_cost_usd_at_ceiling": sum(failed_costs),
+        "all_usage_complete_pairs": paired_distribution(
+            [mean(values) for values in task_deltas.values()]
+        ),
+        "uncertainty_scope": "bootstrap over independent task means; includes unsuccessful trajectories; quality reported separately",
+    }

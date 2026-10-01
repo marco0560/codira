@@ -92,7 +92,7 @@ SCHEMAS = {
                     },
                 },
             },
-            "transport": {"const": "git-archive"},
+            "transport": {"enum": ["git-archive", "directory-snapshot"]},
         },
     ),
     "task": schema(
@@ -103,6 +103,23 @@ SCHEMAS = {
             "prompt": {"type": "string", "minLength": 1},
             "result_path": {"type": "string", "format": "safe-relative-path"},
             "result_format": {"enum": ["json", "text", "workspace-diff"]},
+            "family": {
+                "enum": [
+                    "navigation",
+                    "diagnosis",
+                    "tracing",
+                    "impact",
+                    "patch",
+                    "feature",
+                    "usage",
+                    "evidence",
+                ]
+            },
+            "split": {"enum": ["development", "holdout"]},
+            "reference_anchors": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
             "oracle_id": {"type": "string"},
             "visibility": VISIBILITY,
         },
@@ -233,6 +250,11 @@ SCHEMAS = {
                     "tmpfs_size_mib": {"type": "integer", "minimum": 1},
                 },
             },
+            "panel_id": {"const": "representative-v1"},
+            "runtime_source_fingerprint": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
             "runtime_image": {"type": "string", "pattern": "^.+@sha256:[0-9a-f]{64}$"},
             "runtime_profile_fingerprint": {
                 "type": "string",
@@ -346,7 +368,7 @@ _CAMPAIGN_PROPERTIES = cast(
     cast("Mapping[str, object]", SCHEMAS["campaign"])["properties"],
 )
 _CAMPAIGN_PROPERTIES["stage"] = {
-    "enum": ["completion"],
+    "enum": ["completion", "representative-campaign"],
 }
 _CAMPAIGN_SPEC_PROPERTIES = dict(_CAMPAIGN_PROPERTIES)
 _CAMPAIGN_SPEC_PROPERTIES.pop("fixture_fingerprints")
@@ -354,7 +376,15 @@ _CAMPAIGN_SPEC_PROPERTIES.pop("task_fingerprints")
 _CAMPAIGN_SPEC_PROPERTIES.pop("task_fixture_ids")
 _CAMPAIGN_SPEC_PROPERTIES.update(
     {
-        "stage": {"enum": ["calibration", "pilot", "full-campaign", "completion"]},
+        "stage": {
+            "enum": [
+                "calibration",
+                "pilot",
+                "full-campaign",
+                "completion",
+                "representative-campaign",
+            ]
+        },
         "completion_source": {
             "type": "object",
             "additionalProperties": False,

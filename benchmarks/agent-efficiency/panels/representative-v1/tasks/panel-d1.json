@@ -1,0 +1,17 @@
+{
+  "family": "diagnosis",
+  "fixture_id": "click-public",
+  "oracle_id": "panel-d1",
+  "prompt": "An unset option default survives shallow and deep copying but pickling raises an enum value lookup error. Diagnose the cause without assuming copying also fails. Give a minimal reproduction and source evidence. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "Sentinel",
+    "object",
+    "pickle"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "development",
+  "task_id": "panel-d1",
+  "visibility": "public"
+}

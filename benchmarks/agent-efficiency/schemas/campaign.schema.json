@@ -81,6 +81,9 @@
       "minProperties": 1,
       "type": "object"
     },
+    "panel_id": {
+      "const": "representative-v1"
+    },
     "provider": {
       "additionalProperties": false,
       "properties": {
@@ -156,12 +159,17 @@
       "pattern": "^[0-9a-f]{64}$",
       "type": "string"
     },
+    "runtime_source_fingerprint": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
     "schema_version": {
       "const": "1.0"
     },
     "stage": {
       "enum": [
-        "completion"
+        "completion",
+        "representative-campaign"
       ]
     },
     "task_fingerprints": {

@@ -147,6 +147,10 @@ class ProxySettings:
     max_campaign_spend_usd: float | None = None
     response_artifact_root: Path | None = None
     limiter: ResponseRequestLimiter = field(init=False, repr=False)
+    request_observations: list[dict[str, object]] = field(
+        default_factory=list, repr=False
+    )
+    request_started_at: float | None = None
     response_observations: list[dict[str, object]] = field(
         default_factory=list, repr=False
     )
@@ -258,6 +262,13 @@ class ProxySettings:
                 "status": status,
                 "source": source,
             }
+            if self.request_observations:
+                observation["request_measurement"] = dict(self.request_observations[-1])
+                observation["request_index"] = len(self.request_observations)
+            if self.request_started_at is not None:
+                observation["request_elapsed_seconds"] = (
+                    time.monotonic() - self.request_started_at
+                )
             if retry_after is not None:
                 observation["retry_after"] = retry_after
             if source == "local" and reason is not None:
@@ -880,6 +891,10 @@ class ProviderProxyHandler(BaseHTTPRequestHandler):
                 self.send_error(HTTPStatus.BAD_REQUEST)
                 return
             self.settings.response_lock.acquire()
+            from scripts.agent_efficiency.instrumentation import request_measurement
+
+            self.settings.request_observations.append(request_measurement(payload))
+            object.__setattr__(self.settings, "request_started_at", time.monotonic())
             if not self.settings.limiter.admit():
                 self.settings.record_response(
                     HTTPStatus.TOO_MANY_REQUESTS,

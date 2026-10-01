@@ -1224,12 +1224,36 @@ Phase 7 does not close the issue: Phase 8 is required.
 
 ## Phase 8 — Findings and product direction
 
-**Status:** `pending`
+**Status:** `reports prepared; independent claim review pending`
 **Commit:** pending
 
 ### Evidence
 
-Pending.
+The [audience findings](issue-053-audience-findings.md) persist the complete
+Campaign 006 / Completion 009 composite measurements and all 30 paired deltas.
+The [internal product assessment](issue-053-internal-product-assessment.md)
+reviews all 60 selected outputs, investigates the five Sentinel diagnosis
+pairs, defines 24 candidate tasks, and proposes five core/MCP improvements and
+three harness/procedure improvements. Derived input digests, measurements,
+guide checks, and offline runtime inspection are retained under
+`.artifacts/analysis/c006-c009-forensic-20260930/`.
+
+The runtime inspection found that the campaign-pinned image contains the
+legacy `result.context` / character-budget MCP implementation rather than the
+current item/cursor implementation. All successful saved context calls used
+the legacy shape. The context-page task correctly investigated newer source
+in the public fixture but did not exercise the newer installed tool. The
+reports therefore correct protocol attribution while preserving all records
+and numerical results. Exact inside-image contract qualification is required
+before another campaign can measure the current changes.
+
+The analyst reviewed 50 notes/guides and ten selected patch diffs. All 73
+expected outcomes in 31 guide example blocks passed against the frozen
+Picomatch source using host Node. The full gate for this report batch passed
+with exit `0`, 1,204 tests passed, three skipped, and 86% coverage; its evidence
+is `.artifacts/validation/repo-gates/phase8-assessment-20260930/`.
+Independent claim review remains pending; Phase 8 and issue closure are not
+marked complete by report persistence.
 
 ### Required work
 
@@ -1296,3 +1320,11 @@ Official sources consulted during planning:
 | Full campaign permission | Pending pilot estimate and resource approval. |
 | Independent reviews | Pending phase-specific evidence. |
 | Publication / merge / issue closure | Not performed by plan persistence. |
+
+## 2026-10-01 product/harness implementation
+
+C1–C5 and H1–H3 are implemented with offline regression coverage and a separate
+representative panel. The historical paid comparisons remain unchanged; no new
+efficacy result is claimed. See
+[implementation record](agent-product-harness-improvements-2026-10-01.md) and the
+updated campaign-factory checklist for deployment and calibration requirements.

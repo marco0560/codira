@@ -410,6 +410,7 @@ def test_full_plan_detects_frozen_control_drift(field: str) -> None:
             "benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-002.json"
         ).read_text()
     )
+    spec["runtime_profile_fingerprint"] = pilot.runtime_profile_fingerprint()
     manifest, plan = build_campaign(spec, Path("benchmarks/agent-efficiency"))
     assert len(validate_full_plan(manifest, plan, int(spec["seed"]))) == 60
     plan[field] = None
@@ -523,6 +524,7 @@ def test_full_executor_admits_shared_pool_but_pilot_does_not() -> None:
             "benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-002.json"
         ).read_text()
     )
+    spec["runtime_profile_fingerprint"] = pilot.runtime_profile_fingerprint()
     manifest, _ = build_campaign(spec, Path("benchmarks/agent-efficiency"))
     assert (
         execution_controls(
@@ -554,6 +556,7 @@ def test_full_campaign_uses_pool_instead_of_attempt_token_and_dollar_caps() -> N
             "benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-002.json"
         ).read_text()
     )
+    spec["runtime_profile_fingerprint"] = pilot.runtime_profile_fingerprint()
     manifest, _ = build_campaign(spec, Path("benchmarks/agent-efficiency"))
     controls = execution_controls(manifest, scheduled_attempts=60, full_campaign=True)
     context = pilot.PilotExecutionContext(
@@ -622,6 +625,7 @@ def test_factory_executor_builds_full_and_resume_commands(
             "benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-002.json"
         ).read_text()
     )
+    specification["runtime_profile_fingerprint"] = pilot.runtime_profile_fingerprint()
     manifest, plan = build_campaign(specification, Path("benchmarks/agent-efficiency"))
     campaign = tmp_path / "campaign"
     write_campaign_artifacts(campaign, manifest, plan)
@@ -678,6 +682,7 @@ def test_shared_pool_accepts_higher_key_limit_with_full_remaining_allowance(
             "benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-005.json"
         ).read_text()
     )
+    spec["runtime_profile_fingerprint"] = pilot.runtime_profile_fingerprint()
     manifest, _ = build_campaign(spec, Path("benchmarks/agent-efficiency"))
     model = {
         "id": "openai/gpt-6-luna",

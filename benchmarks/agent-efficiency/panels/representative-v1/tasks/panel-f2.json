@@ -1,0 +1,17 @@
+{
+  "family": "feature",
+  "fixture_id": "python-service-synthetic",
+  "oracle_id": "panel-f2",
+  "prompt": "Add Adapter.capabilities() returning a case_conversion boolean. Built-in Upper/Lower advertise true through the plugin interface; legacy render-only plugins work and advertise false. Add tests and produce .benchmark/fix.patch.",
+  "reference_anchors": [
+    "capabilities",
+    "case_conversion",
+    "Adapter"
+  ],
+  "result_format": "workspace-diff",
+  "result_path": ".benchmark/fix.patch",
+  "schema_version": "1.0",
+  "split": "holdout",
+  "task_id": "panel-f2",
+  "visibility": "public"
+}

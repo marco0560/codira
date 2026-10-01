@@ -29,3 +29,13 @@ This tree contains benchmark inputs. Runtime output belongs under
 - For runtime output groups, retention decisions, and the completed cache
   cleanup, see [`.artifacts/MANIFEST.md`](../.artifacts/MANIFEST.md) and the
   [retention review](../docs/process/artifact-retention-review-2026-09-27.md).
+
+## Representative agent panel
+
+`agent-efficiency/panels/representative-v1.json` is the editable 24-task bank;
+`panels/representative-v1/{fixtures,tasks,oracles}/` and its receipt are generated
+by `scripts/generate_agent_efficiency_panel.py`. `synthetic/` contains frozen
+small Python, TypeScript and Go inputs. `protected/panel-*/` contains protected
+behavior probes and digest provenance. Keep this panel separate from legacy
+task/oracle identities. `panels/sentinel-retrieval-v1.json` drives the offline
+retrieval evaluator, not paid model execution.

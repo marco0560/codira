@@ -64,6 +64,7 @@ _REPO_PATH_COMMANDS = frozenset(
         "refs",
         "audit",
         "ctx",
+        "evidence",
         "config",
         "daemon",
         "query-daemon",
@@ -71,6 +72,35 @@ _REPO_PATH_COMMANDS = frozenset(
     }
 )
 _CONFIG_INSPECTION_ACTIONS = frozenset({"dump", "explain", "validate"})
+
+
+def _item_limit(value: str) -> int:
+    """Parse a bounded whole-item count.
+
+    Parameters
+    ----------
+    value : str
+        User-supplied count.
+
+    Returns
+    -------
+    int
+        Count between one and one hundred.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If the value is outside the supported integer range.
+    """
+    try:
+        count = int(value)
+    except ValueError as error:
+        detail = "item limit must be an integer from 1 to 100"
+        raise argparse.ArgumentTypeError(detail) from error
+    if not 1 <= count <= 100:
+        detail = "item limit must be between 1 and 100"
+        raise argparse.ArgumentTypeError(detail)
+    return count
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -795,10 +825,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Restrict retrieval to files under this repo-root-relative path prefix",
     )
     context_parser.add_argument(
+        "--max-results",
+        type=_item_limit,
+        default=10,
+        help="Complete items per page, 1..100 (default 10)",
+    )
+    context_parser.add_argument(
+        "--cursor", help="Continue a JSON page for the same query and index"
+    )
+    context_parser.add_argument(
         "--search-profile",
         help="Use a named similarity-index search profile for semantic channels",
     )
     _add_repo_path_arguments(context_parser)
+
+    evidence_parser = sub.add_parser(
+        "evidence", help="Expand a generation-bound whole symbol definition"
+    )
+    evidence_parser.add_argument("identity")
+    evidence_parser.add_argument("--limit", type=_item_limit, default=10)
+    _add_repo_path_arguments(evidence_parser)
 
     plugins_parser = sub.add_parser(
         "plugins",

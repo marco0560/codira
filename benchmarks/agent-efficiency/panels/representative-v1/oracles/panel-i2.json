@@ -1,0 +1,39 @@
+{
+  "definition": {
+    "quality_rubric": {
+      "criteria": [
+        {
+          "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+          "dimension": "correctness",
+          "id": "substance",
+          "requirement": "Structural query connections and warm adapters must preserve execute semantics; backend implementations and query contract tests must be included, with unresolved dynamic use explicitly scoped.",
+          "semantic": true
+        },
+        {
+          "dimension": "completeness",
+          "id": "requested-coverage",
+          "requirement": "Assess changing BackendQueryConnection.execute. Identify first-party implementations and warm/proxy adapters, affected query callers and contract tests. Distinguish static evidence from dynamic completeness. Write your answer to BENCHMARK_ANSWER.md and stop.",
+          "semantic": true
+        },
+        {
+          "dimension": "evidence",
+          "id": "grounding",
+          "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+          "semantic": true
+        },
+        {
+          "dimension": "usability",
+          "id": "usability",
+          "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+          "semantic": true
+        }
+      ],
+      "task_id": "panel-i2",
+      "version": 1
+    }
+  },
+  "oracle_id": "panel-i2",
+  "schema_version": "1.0",
+  "task_id": "panel-i2",
+  "visibility": "public"
+}

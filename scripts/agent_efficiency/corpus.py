@@ -12,7 +12,12 @@ from io import BytesIO
 from pathlib import Path, PurePosixPath
 from typing import Never
 
-from scripts.agent_efficiency.contracts import ContractError, load_document
+from scripts.agent_efficiency.contracts import (
+    ContractError,
+    canonical_fingerprint,
+    load_document,
+)
+from scripts.agent_efficiency.snapshots import export_snapshot, snapshot_files
 
 type CommandRunner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
 GIT_EXECUTABLE = shutil.which("git")
@@ -149,6 +154,28 @@ def verify_fixture(
         If identity, license, setup files, or transport policy differs.
     """
 
+    if document.get("transport") == "directory-snapshot":
+        snapshot = snapshot_files(root)
+        digest = canonical_fingerprint(snapshot)
+        expected = document.get("setup_files")
+        if (
+            digest[:40] != document.get("revision")
+            or digest[:40] != document.get("tree_sha")
+            or expected
+            != [{"path": path, "sha256": value} for path, value in snapshot.items()]
+        ):
+            _fail("synthetic fixture inventory differs from admission")
+        if snapshot.get(str(document.get("license_path"))) != document.get(
+            "license_sha256"
+        ):
+            _fail("synthetic fixture license differs from admission")
+        snapshot_inventory: dict[str, int] = {}
+        for snapshot_path in snapshot:
+            suffix = Path(snapshot_path).suffix.removeprefix(".") or "none"
+            snapshot_inventory[suffix] = snapshot_inventory.get(suffix, 0) + 1
+        return FixtureReport(
+            str(document["fixture_id"]), digest[:40], digest[:40], snapshot_inventory
+        )
     required = {
         "tree_sha",
         "license_path",
@@ -288,22 +315,28 @@ def export_fixture(source: Path, revision: str, destination: Path) -> None:
         _fail("fixture export destination must be empty")
     if GIT_EXECUTABLE is None:
         _fail("fixture Git executable is unavailable")
-    result = subprocess.run(
-        (GIT_EXECUTABLE, "archive", "--format=tar", revision),
-        cwd=source,
-        check=False,
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        _fail("fixture Git archive export failed")
-    destination.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(fileobj=BytesIO(result.stdout), mode="r:") as archive:
-        members = archive.getmembers()
-        for member in members:
-            path = PurePosixPath(member.name)
-            if path.is_absolute() or ".." in path.parts:
-                _fail("fixture archive contains an unsafe path")
-        archive.extractall(destination, filter="data")
+    if (
+        not (source / ".git").exists()
+        and canonical_fingerprint(snapshot_files(source))[:40] == revision
+    ):
+        export_snapshot(source, revision, destination)
+    else:
+        result = subprocess.run(
+            (GIT_EXECUTABLE, "archive", "--format=tar", revision),
+            cwd=source,
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            _fail("fixture Git archive export failed")
+        destination.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(fileobj=BytesIO(result.stdout), mode="r:") as archive:
+            members = archive.getmembers()
+            for member in members:
+                path = PurePosixPath(member.name)
+                if path.is_absolute() or ".." in path.parts:
+                    _fail("fixture archive contains an unsafe path")
+            archive.extractall(destination, filter="data")
     initialized = subprocess.run(
         (GIT_EXECUTABLE, "init", "--quiet"),
         cwd=destination,

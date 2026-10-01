@@ -49,6 +49,7 @@ from codira.query.signals import (
     RetrievalSignalKind,
     signal_sort_key,
 )
+from codira.query.task_anchors import source_candidates, symptom_terms
 from codira.version import package_version
 
 if TYPE_CHECKING:
@@ -106,10 +107,10 @@ def _extract_target_symbol(query_tokens: list[str]) -> str | None:
     Returns
     -------
     str | None
-        Longest identifier-like token when present.
+        Explicit underscore identifier when present; ordinary prose is ignored.
     """
     for token in sorted(query_tokens, key=len, reverse=True):
-        if "_" in token or token.isidentifier():
+        if "_" in token and token.isidentifier():
             return token
     return None
 
@@ -673,8 +674,11 @@ def _retrieve_symbol_candidates(  # noqa: PLR0913
     del search_profile
     matches = find_symbol(root, query, prefix=prefix, conn=conn)
     query_tokens = sorted(_tokenize(query))
+    anchors = symptom_terms(query)
+    source_matches = source_candidates(conn, anchors, prefix)
 
     candidate_map: dict[SymbolRow, None] = {match: None for match in matches}
+    candidate_map.update(dict.fromkeys(source_matches))
 
     search_terms = sorted({token for token in query_tokens if len(token) >= 4})
     prefix_sql, prefix_params = prefix_clause(prefix, "f.path")
@@ -747,9 +751,13 @@ def _retrieve_symbol_candidates(  # noqa: PLR0913
             raw_query=query,
             target_symbol=target_symbol,
         )
-        if not _candidate_has_signal(signals, "strong_token_hit"):
+        if (
+            not _candidate_has_signal(signals, "strong_token_hit")
+            and candidate not in source_matches
+        ):
             continue
         score = _aggregate_candidate_signals(signals, PRIMARY_SYMBOL_AGGREGATION_RULES)
+        score += source_matches.get(candidate, 0) * 12
         if score >= _MIN_SCORE:
             scored.append((float(score), candidate))
 
@@ -987,9 +995,12 @@ def _rank_signals_with_provenance(
     merged_rrf: dict[SymbolRow, float] = {}
     channel_scores: dict[SymbolRow, dict[str, float]] = {}
     family_scores_by_symbol: dict[SymbolRow, dict[str, float]] = {}
+    source_anchor_bonus: dict[SymbolRow, float] = {}
 
     for signal in sorted(signals, key=signal_sort_key):
         symbol = signal.target
+        if signal.evidence_detail == "source_anchors":
+            source_anchor_bonus[symbol] = min(signal.strength or 0.0, 4.0) * 0.6
         channel_name = signal.channel_name
         if channel_name is None:
             continue
@@ -1024,7 +1035,9 @@ def _rank_signals_with_provenance(
         family_scores = family_scores_by_symbol.get(symbol, {})
         role = _classify_file_role(symbol[3], symbol[1])
         role_bias = _file_role_bias(role, intent)
-        evidence_bonus = _merge_evidence_bonus(family_scores)
+        evidence_bonus = _merge_evidence_bonus(family_scores) + source_anchor_bonus.get(
+            symbol, 0.0
+        )
         role_bonus = float(role_bias) / 4.0
         docs_path_bonus = _documentation_docs_path_bonus(symbol, symbol_channel_scores)
         merge_score = rrf_score + evidence_bonus + role_bonus + docs_path_bonus

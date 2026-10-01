@@ -1,0 +1,18 @@
+{
+  "family": "impact",
+  "fixture_id": "typescript-workspace-synthetic",
+  "oracle_id": "panel-i3",
+  "prompt": "Assess changing the exported default for format. Enumerate runtime and type consumers, wrapper behavior and negative controls. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "display",
+    "Options",
+    "defaults",
+    "convert"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "holdout",
+  "task_id": "panel-i3",
+  "visibility": "public"
+}

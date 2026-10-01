@@ -42,79 +42,95 @@ class ToolContract:
 
 
 _TOOLS: Final = (
-    ToolContract("capabilities", "Discover supported contract tools and capabilities."),
-    ToolContract("index_status", "Inspect index identity, freshness, and coverage."),
+    ToolContract(
+        "capabilities",
+        "Discover supported contract tools and capabilities.",
+        (),
+        ("detail",),
+    ),
+    ToolContract(
+        "index_status",
+        "Inspect index identity, freshness, and coverage.",
+        (),
+        ("detail",),
+    ),
+    ToolContract(
+        "symbol_evidence",
+        "Expand a verified whole definition and static relationships.",
+        ("identity",),
+        ("limit",),
+    ),
     ToolContract(
         "symbol",
         "Look up one exact symbol name.",
         ("name",),
-        ("cursor", "limit", "output_budget"),
+        ("cursor", "limit"),
     ),
     ToolContract(
         "symbols",
         "List symbols using bounded deterministic pagination.",
         (),
-        ("cursor", "limit", "output_budget"),
+        ("cursor", "limit"),
     ),
     ToolContract(
         "references",
         "Traverse callable references.",
         ("name",),
-        ("direction", "cursor", "limit", "output_budget"),
+        ("direction", "cursor", "limit"),
     ),
     ToolContract(
         "callers",
         "List incoming static call edges.",
         ("name",),
-        ("cursor", "limit", "output_budget"),
+        ("cursor", "limit"),
     ),
     ToolContract(
         "callees",
         "List outgoing static call edges.",
         ("name",),
-        ("cursor", "limit", "output_budget"),
+        ("cursor", "limit"),
     ),
     ToolContract(
         "documentation_findings",
         "List documentation audit findings.",
         (),
-        ("cursor", "limit", "output_budget"),
+        ("cursor", "limit"),
     ),
     ToolContract(
         "context_for_task",
         "Build paginated provenance-rich task context.",
         ("query",),
-        ("cursor", "limit", "search_profile"),
+        ("cursor", "limit", "search_profile", "explain"),
     ),
     ToolContract(
         "impact_analysis",
         "Inspect structural impact for a symbol.",
         ("name",),
-        ("cursor", "limit", "output_budget"),
+        ("cursor", "limit"),
     ),
     ToolContract(
         "repository_map",
         "Return a compact agent-oriented repository map.",
         (),
-        ("cursor", "limit", "output_budget"),
+        ("cursor", "limit"),
     ),
     ToolContract(
         "arch",
         "Return a bounded read-only repository architecture model.",
         (),
-        ("cursor", "limit", "output_budget"),
+        ("cursor", "limit"),
     ),
     ToolContract(
         "emb",
         "Search stored symbol embeddings without maintenance operations.",
         ("query",),
-        ("prefix", "search_profile", "limit", "output_budget"),
+        ("prefix", "search_profile", "cursor", "limit"),
     ),
     ToolContract(
         "docs",
         "Search stored documentation embeddings.",
         ("query",),
-        ("prefix", "search_profile", "limit", "output_budget"),
+        ("prefix", "search_profile", "cursor", "limit"),
     ),
 )
 
@@ -137,6 +153,10 @@ def _request_schema(
     properties: dict[str, object] = {}
     for name in (*tool.required, *tool.optional):
         properties[name] = {"type": "string", "minLength": 1}
+    if "explain" in tool.optional:
+        properties["explain"] = {"type": "boolean", "default": False}
+    if "detail" in tool.optional:
+        properties["detail"] = {"type": "boolean", "default": False}
     if "cursor" in tool.optional:
         properties["cursor"] = {
             "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}],
@@ -152,7 +172,7 @@ def _request_schema(
             "type": "integer",
             "minimum": 1,
             "maximum": 100,
-            "default": 10 if tool.name == "context_for_task" else 100,
+            "default": 10 if tool.name == "context_for_task" else 10,
         }
     if "output_budget" in tool.optional:
         properties["output_budget"] = {

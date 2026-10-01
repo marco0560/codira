@@ -98,7 +98,10 @@ def _fixture(tmp_path: Path) -> tuple[dict[str, object], dict[str, object], Path
             / "benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-006.json"
         ).read_text()
     )
+    from scripts.run_agent_efficiency_phase6_pilot import runtime_profile_fingerprint
+
     parent_spec["campaign_id"] = "synthetic-parent-001"
+    parent_spec["runtime_profile_fingerprint"] = runtime_profile_fingerprint()
     parent_manifest, parent_plan = build_campaign(parent_spec, benchmark_root)
     campaign_dir = root / "source-campaign"
     write_campaign_artifacts(campaign_dir, parent_manifest, parent_plan)
@@ -131,6 +134,7 @@ def _fixture(tmp_path: Path) -> tuple[dict[str, object], dict[str, object], Path
         ).read_text()
     )
     completion_spec["campaign_id"] = "synthetic-completion-001"
+    completion_spec["runtime_profile_fingerprint"] = runtime_profile_fingerprint()
     completion_spec["completion_source"] = {
         "campaign_id": "synthetic-parent-001",
         "campaign_dir": "source-campaign",

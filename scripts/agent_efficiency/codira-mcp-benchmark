@@ -1,3 +1,11 @@
 #!/bin/sh
-# Start MCP with the same pinned ONNX profile used for pre-agent indexing.
-exec env CODIRA_CONFIG_FILE=/opt/codira/benchmark-codira.toml codira-mcp "$@"
+# Prefer the frozen task profile placed beside the prebuilt workspace index.
+profile=/opt/codira/benchmark-codira.toml
+previous=
+for argument in "$@"; do
+    if test "$previous" = --root && test -f "$argument/.codira/config.toml"; then
+        profile="$argument/.codira/config.toml"
+    fi
+    previous="$argument"
+done
+exec env CODIRA_CONFIG_FILE="$profile" codira-mcp "$@"

@@ -1,0 +1,17 @@
+{
+  "family": "usage",
+  "fixture_id": "picomatch-public",
+  "oracle_id": "panel-u1",
+  "prompt": "Write a concise usage guide with runnable matching/nonmatching examples, ignore callbacks and flags precedence including the empty-flags exception. State actual expected outputs. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "picomatch",
+    "flags",
+    "nocase"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "development",
+  "task_id": "panel-u1",
+  "visibility": "public"
+}

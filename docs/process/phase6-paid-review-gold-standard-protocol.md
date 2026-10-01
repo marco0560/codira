@@ -121,3 +121,11 @@ This protocol incorporates strict JSON-Schema output and required provider
 parameters from OpenRouter's Structured Outputs guidance, the versioned cases,
 deterministic assertions, and captured actual-provider-event pattern documented
 by Promptfoo, and repeatable documented TEVV controls from NIST AI RMF.
+
+## Product and quality qualification update
+
+Before new paid work, apply the campaign-factory additional pre-pilot controls
+for installed-image source/schema qualification, blinded semantic adjudication,
+representative-panel admission and measured failure costs. See
+[the implementation record](agent-product-harness-improvements-2026-10-01.md).
+Pending semantic review remains unevaluated; original attempts are immutable.

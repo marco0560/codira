@@ -62,7 +62,9 @@ def test_typescript_analyzer_extracts_issue_37_constructs(tmp_path: Path) -> Non
     result = TypeScriptAnalyzer().analyze_file(source, tmp_path)
 
     assert result.module.stable_id == "typescript:module:src/widget.tsx"
-    assert [item.name for item in result.imports] == ["./format"]
+    assert [item.name for item in result.imports] == ["./format", "src.format.format"]
+    assert result.imports[1].alias == "format"
+    assert result.imports[1].kind == "import"
     assert [(item.kind, item.name) for item in result.declarations] == [
         ("struct", "Box"),
         ("type_alias", "Result"),
@@ -172,7 +174,13 @@ def test_typescript_analyzer_handles_ambient_abstract_and_reexports(
     ] == [
         ("Base", ["run"]),
     ]
-    assert [item.name for item in result.imports] == ["./widget", "./shared"]
+    assert [item.name for item in result.imports] == [
+        "./widget",
+        "./shared",
+        "widget.widget",
+    ]
+    assert result.imports[2].alias == "default"
+    assert result.imports[2].kind == "reexport"
 
 
 def test_typescript_analyzer_disambiguates_overload_stable_ids(tmp_path: Path) -> None:

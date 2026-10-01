@@ -495,6 +495,11 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
         *proxy_mount,
         "--env=HOME=/codex-state/home",
         "--env=CODEX_HOME=/codex-state",
+        "--env=GOTOOLCHAIN=local",
+        "--env=GOPROXY=off",
+        "--env=GOSUMDB=off",
+        "--env=GOCACHE=/workspace/.benchmark/go-build",
+        "--env=GOMODCACHE=/workspace/.benchmark/go-mod",
         *(("--env=CODIRA_PROXY_CLIENT_TOKEN",) if proxy_enabled else ()),
         "--workdir=/workspace",
         request.image,
@@ -867,6 +872,7 @@ def result_from_execution(
     execution: ContainerExecution,
     *,
     max_total_tokens: int | None = None,
+    require_mcp: bool = True,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Convert captured execution facts into a schema-valid run-result record.
 
@@ -881,6 +887,9 @@ def result_from_execution(
     max_total_tokens : int or None, optional
         Manifest-bound total provider-token ceiling. ``None`` retains the
         generic runner behavior used by non-pilot callers.
+
+    require_mcp : bool, optional
+        Require assisted MCP use; false admits the optional-use protocol.
 
     Returns
     -------
@@ -923,7 +932,7 @@ def result_from_execution(
                 failure_class = terminal_failure
             else:
                 check = phase0.jsonl_conformance_check(
-                    parsed_events, attempt.assistance_mode
+                    parsed_events, attempt.assistance_mode, require_mcp=require_mcp
                 )
                 normalized = normalize_completed_turn(parsed_events)
                 usage_complete = normalized.complete

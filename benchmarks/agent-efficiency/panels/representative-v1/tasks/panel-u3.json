@@ -1,0 +1,17 @@
+{
+  "family": "usage",
+  "fixture_id": "go-service-synthetic",
+  "oracle_id": "panel-u3",
+  "prompt": "Write an operator runbook with executable startup commands. Explain default/environment/argument precedence, expected outputs and the current zero-limit failure. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "SERVICE_MODE",
+    "Resolve",
+    "limit"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "holdout",
+  "task_id": "panel-u3",
+  "visibility": "public"
+}

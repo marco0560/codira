@@ -41,3 +41,12 @@ above; do not rewrite immutable run contents to change historical provenance.
   separately before proposing cleanup.
 - Keep this directory ignored. Only this manifest and approved, sanitized
   summaries may be tracked; do not unignore raw runtime trees.
+
+## Product/harness qualification evidence
+
+Retain per-campaign runtime qualification receipts and complete stdout/stderr,
+protected oracle traces, blinded quality packets, append-only adjudications and
+example replay manifests/streams alongside attempt evidence. These may contain
+complete answers and repository-local runtime paths; keep them ignored. Offline
+retrieval receipts belong in `analysis/` under a fresh investigation identity.
+Summaries must distinguish offline qualification from paid task efficacy.

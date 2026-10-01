@@ -1435,7 +1435,7 @@ def test_execute_attempt_records_an_oracle_contract_failure(
     monkeypatch.setattr(
         pilot,
         "execute_container_attempt",
-        lambda request: SimpleNamespace(stdout="", stderr=""),
+        lambda request: SimpleNamespace(stdout="", stderr="", elapsed_seconds=0.0),
     )
     monkeypatch.setattr(
         pilot,

@@ -29,6 +29,7 @@ from scripts.agent_efficiency.campaign_state import (
     build_paired_schedule,
 )
 from scripts.agent_efficiency.contracts import canonical_fingerprint, load_document
+from scripts.agent_efficiency.panels import panel_document_path
 
 CHECKPOINT_SECONDS = 6 * 60 * 60
 FULL_ATTEMPTS = 60
@@ -86,18 +87,22 @@ def validate_full_plan(
     """
 
     hashes = manifest.get("task_fingerprints")
-    if not isinstance(hashes, Mapping) or len(hashes) != 6:
+    representative = manifest.get("stage") == "representative-campaign"
+    expected_count = 24 if representative else 6
+    repetitions = int(str(plan.get("repetitions", 1))) if representative else 5
+    if not isinstance(hashes, Mapping) or len(hashes) != expected_count:
         raise ValueError("full campaign requires six frozen tasks")
     task_ids = tuple(str(task_id) for task_id in hashes)
-    schedule = build_paired_schedule(task_ids, 5, seed)
+    schedule = build_paired_schedule(task_ids, repetitions, seed)
     if (
-        plan.get("factory_version") != "1.0"
-        or plan.get("stage") != "full-campaign"
+        plan.get("factory_version") != ("1.1" if representative else "1.0")
+        or plan.get("stage")
+        != ("representative-campaign" if representative else "full-campaign")
         or plan.get("campaign_id") != manifest.get("campaign_id")
         or plan.get("manifest_fingerprint") != canonical_fingerprint(manifest)
         or plan.get("seed") != seed
-        or plan.get("repetitions") != 5
-        or plan.get("scheduled_attempt_count") != FULL_ATTEMPTS
+        or plan.get("repetitions") != repetitions
+        or plan.get("scheduled_attempt_count") != expected_count * repetitions * 2
         or canonical_fingerprint({"attempts": plan.get("attempts")})
         != canonical_fingerprint({"attempts": [item.__dict__ for item in schedule]})
         or plan.get("harness_fingerprint") != harness_fingerprint()
@@ -109,10 +114,13 @@ def validate_full_plan(
         raise ValueError("full campaign oracle identities are incomplete")
     for task_id in task_ids:
         task = load_document(
-            Path("benchmarks/agent-efficiency/tasks") / f"{task_id}.json", "task"
+            panel_document_path(Path("benchmarks/agent-efficiency"), "tasks", task_id),
+            "task",
         )
         oracle = load_document(
-            Path("benchmarks/agent-efficiency/oracles") / f"{task['oracle_id']}.json",
+            panel_document_path(
+                Path("benchmarks/agent-efficiency"), "oracles", str(task["oracle_id"])
+            ),
             "oracle",
         )
         if (

@@ -178,3 +178,24 @@ This preserves output and pagination semantics while making failures
 non-blocking. Multiple MCP processes for one repository can share its one
 daemon; another repository or output directory has a distinct identity and is
 rejected before connection.
+
+## Compact discovery and complete evidence
+
+Ordinary tools default to ten items; use `limit` (1–100) and the returned
+opaque cursor to continue. Keep the query, limit and profile unchanged. Context
+cursors also bind the serving source and effective configuration, and stale
+cursors are rejected. `context_for_task` labels its source snippets as discovery
+evidence. Pass a returned `sym:` identity to `symbol_evidence` for the whole
+verified definition and bounded static callers/references/tests with locations.
+A changed source digest or index generation requires a fresh lookup.
+
+Use `index_status(detail=true)` and `capabilities(detail=true)` for full
+diagnostics; ordinary responses remain compact. `explain=true` adds retrieval
+reasons and may be considerably larger. `ranking_score` is a heuristic rank
+score, not a probability of correctness. Static relationships and test-path
+heuristics do not establish complete runtime coverage.
+
+CLI equivalents include `codira ctx QUERY --json --max-results 10 --cursor CURSOR`,
+`codira evidence IDENTITY --limit 10`, and `codira caps --json`. Capabilities and
+actual MCP schemas expose accepted parameter values and installed runtime hashes.
+Embedding/document cursors page over a ranked pool of at most 100 candidates.

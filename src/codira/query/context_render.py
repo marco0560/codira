@@ -195,13 +195,14 @@ def _top_matches_payload(
             "name": name,
             "file": file_path,
             "lineno": lineno,
-            "confidence": (
+            "ranking_score": (
                 confidence_map.get(
-                    (symbol_type, module_name, name, file_path, lineno), 1.0
+                    (symbol_type, module_name, name, file_path, lineno), 0.0
                 )
                 if confidence_map
-                else 1.0
+                else 0.0
             ),
+            "score_kind": "heuristic_rank_not_probability",
         }
         if symbol_type == "documentation":
             row["source_format"] = module_name

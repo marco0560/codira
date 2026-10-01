@@ -1,0 +1,16 @@
+{
+  "family": "evidence",
+  "fixture_id": "go-service-synthetic",
+  "oracle_id": "panel-e2",
+  "prompt": "Investigate operator-notes.txt with the text analyzer disabled. Explain missing index coverage, distinguish absent retrieval from absent repository evidence, and use a safe source fallback. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "operator-notes.txt",
+    "coverage"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "holdout",
+  "task_id": "panel-e2",
+  "visibility": "public"
+}

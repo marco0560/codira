@@ -51,6 +51,7 @@ from codira.query.context_source import (
 )
 from codira.query.producers import selected_enrichment_producers
 from codira.query.signals import signal_sort_key
+from codira.query.task_anchors import source_signals
 from codira.registry import active_index_backend, with_active_plugin_instance_cache
 
 if TYPE_CHECKING:
@@ -136,6 +137,7 @@ def _initial_context_state(
             key=signal_sort_key,
         )
 
+    retrieval_signals.extend(source_signals(conn, request.query, normalized_prefix))
     ranked_merged, provenance = _rank_signals_with_provenance(
         retrieval_signals,
         intent=intent,
@@ -458,10 +460,12 @@ def context_for(
             return _empty_context_result(request, state)
 
         _apply_graph_signal_rerank(state, conn, request.root)
-        confidence_map = _confidence_map_for_matches(
-            request.query,
-            state.top_matches,
-        )
+        confidence_map = {
+            symbol: float(
+                str((state.provenance or {}).get(symbol, {}).get("merge_score", 0.0))
+            )
+            for symbol in state.top_matches
+        }
         if state.plan.include_doc_issues:
             doc_issues, related_symbols = _collect_doc_issues_and_related(
                 request.root,

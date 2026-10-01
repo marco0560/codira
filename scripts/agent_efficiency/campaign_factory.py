@@ -16,6 +16,7 @@ from scripts.agent_efficiency.contracts import (
     load_document,
     validate_document,
 )
+from scripts.agent_efficiency.panels import panel_document_path
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -191,12 +192,22 @@ def build_campaign(
         "pilot": 3,
         "full-campaign": 6,
         "completion": 3,
+        "representative-campaign": 24,
     }[stage]
     if len(task_ids) != required_count:
         raise CampaignFactoryError.stage_cardinality(stage, required_count)
     if stage != "calibration" and "seed" not in specification:
         raise CampaignFactoryError.missing_seed(stage)
-    required_repetitions = 5 if stage in {"full-campaign", "completion"} else 1
+    required_repetitions = (
+        int(str(specification.get("repetitions", 1)))
+        if stage == "representative-campaign"
+        else 5
+        if stage in {"full-campaign", "completion", "representative-campaign"}
+        else 1
+    )
+    if not 1 <= required_repetitions <= 5:
+        detail = "representative repetitions must be between one and five"
+        raise CampaignFactoryError.message(detail)
     if specification.get("repetitions", 1) != required_repetitions:
         detail = f"{stage} requires exactly {required_repetitions} repetitions"
         raise CampaignFactoryError.message(detail)
@@ -204,18 +215,20 @@ def build_campaign(
     fixtures: dict[str, Mapping[str, object]] = {}
     oracle_fingerprints: dict[str, str] = {}
     for task_id in task_ids:
-        task = load_document(benchmark_root / "tasks" / f"{task_id}.json", "task")
+        task = load_document(
+            panel_document_path(benchmark_root, "tasks", str(task_id)), "task"
+        )
         fixture_id = task.get("fixture_id")
         if not isinstance(fixture_id, str):
             raise CampaignFactoryError.invalid_fixture_binding()
         tasks[task_id] = task
         fixtures[fixture_id] = load_document(
-            benchmark_root / "fixtures" / f"{fixture_id}.json", "fixture"
+            panel_document_path(benchmark_root, "fixtures", str(fixture_id)), "fixture"
         )
-        if stage in {"full-campaign", "completion"}:
+        if stage in {"full-campaign", "completion", "representative-campaign"}:
             oracle_id = task["oracle_id"]
             oracle = load_document(
-                benchmark_root / "oracles" / f"{oracle_id}.json", "oracle"
+                panel_document_path(benchmark_root, "oracles", str(oracle_id)), "oracle"
             )
             if (
                 task["task_id"] != task_id
@@ -225,8 +238,10 @@ def build_campaign(
                 detail = "task oracle binding is invalid"
                 raise CampaignFactoryError.message(detail)
             oracle_fingerprints[task_id] = canonical_fingerprint(oracle)
-    if stage in {"full-campaign", "completion"} and len(fixtures) != 3:
-        detail = f"{stage} requires exactly three immutable fixtures"
+    if stage in {"full-campaign", "completion", "representative-campaign"} and len(
+        fixtures
+    ) != (6 if stage == "representative-campaign" else 3):
+        detail = f"{stage} requires exactly {6 if stage == 'representative-campaign' else 3} immutable fixtures"
         raise CampaignFactoryError.message(detail)
     manifest = {
         "schema_version": specification["schema_version"],
@@ -249,10 +264,16 @@ def build_campaign(
         "runtime_image": specification.get("runtime_image"),
         "runtime_profile_fingerprint": specification.get("runtime_profile_fingerprint"),
         "treatment_protocol": specification.get("treatment_protocol"),
+        "panel_id": specification.get("panel_id"),
+        "runtime_source_fingerprint": specification.get("runtime_source_fingerprint"),
         "visibility": specification["visibility"],
     }
+    if stage == "representative-campaign":
+        from scripts.agent_efficiency.panels import validate_panel_tasks
+
+        validate_panel_tasks(tasks, specification)
     manifest = {key: value for key, value in manifest.items() if value is not None}
-    if stage == "completion":
+    if stage in {"completion", "representative-campaign"}:
         manifest["stage"] = stage
     try:
         validate_document("campaign", manifest)
@@ -274,7 +295,9 @@ def build_campaign(
         schedule = _schedule(stage, task_ids, specification)
     _validate_accounting(manifest, len(schedule))
     plan: dict[str, object] = {
-        "factory_version": FACTORY_VERSION,
+        "factory_version": "1.1"
+        if stage == "representative-campaign"
+        else FACTORY_VERSION,
         "stage": stage,
         "campaign_id": manifest["campaign_id"],
         "manifest_fingerprint": canonical_fingerprint(manifest),
@@ -290,7 +313,7 @@ def build_campaign(
             "requires_tmux_durable_log_and_exit_status": True,
         },
     }
-    if stage in {"full-campaign", "completion"}:
+    if stage in {"full-campaign", "completion", "representative-campaign"}:
         from scripts.agent_efficiency.full_campaign import (
             CHECKPOINT_SECONDS,
             harness_fingerprint,
@@ -339,10 +362,17 @@ def _uses_shared_campaign_pool(stage: str, accounting: Mapping[str, object]) -> 
     """
 
     shared_pool = accounting.get("budget_reservation_mode") == "shared-pool"
-    if shared_pool and stage not in {"full-campaign", "completion"}:
+    if shared_pool and stage not in {
+        "full-campaign",
+        "completion",
+        "representative-campaign",
+    }:
         detail = "shared campaign budgets require the full-campaign stage"
         raise CampaignFactoryError.message(detail)
-    if stage in {"full-campaign", "completion"} and not shared_pool:
+    if (
+        stage in {"full-campaign", "completion", "representative-campaign"}
+        and not shared_pool
+    ):
         detail = "full campaigns require observed shared-pool accounting"
         raise CampaignFactoryError.message(detail)
     return shared_pool
@@ -380,7 +410,13 @@ def _schedule(
             }
         ]
     seed = cast("int", specification["seed"])
-    repetitions = 5 if stage == "full-campaign" else 1
+    repetitions = (
+        int(str(specification.get("repetitions", 1)))
+        if stage == "representative-campaign"
+        else 5
+        if stage == "full-campaign"
+        else 1
+    )
     return [
         item.__dict__ for item in build_paired_schedule(task_ids, repetitions, seed)
     ]

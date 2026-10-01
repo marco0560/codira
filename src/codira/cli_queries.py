@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -2241,6 +2242,27 @@ def _run_context_command(
     int
         Zero after printing the rendered context output.
     """
+    limit = getattr(args, "max_results", 10)
+    cursor = getattr(args, "cursor", None)
+    if cursor is not None and (not args.json or prefix is not None):
+        detail = "context cursors require JSON output without a prefix"
+        raise ValueError(detail)
+    if args.json and prefix is None:
+        from codira.mcp.adapter import MCPAdapter
+
+        _ensure_index(root)
+        print(
+            json.dumps(
+                MCPAdapter(root).context_for_task(
+                    args.query,
+                    limit=limit,
+                    cursor=cursor,
+                    search_profile=args.search_profile,
+                    explain=args.explain,
+                )
+            )
+        )
+        return 0
     routing = _route_eligible_cli_read(
         root,
         "cli.ctx",
@@ -2251,7 +2273,7 @@ def _run_context_command(
             "explain": args.explain,
             "search_profile": args.search_profile,
         },
-        supported=prefix is None,
+        supported=prefix is None and limit == 10,
     )
     if routing.stdout is not None:
         print(routing.stdout, end="")
@@ -2263,6 +2285,8 @@ def _run_context_command(
             root=root,
             query=args.query,
             prefix=prefix,
+            result_limit=limit,
+            complete_context_items=True,
             as_json=args.json,
             as_prompt=args.prompt,
             explain=args.explain,
@@ -2410,3 +2434,25 @@ def _config_origin_payload(origin: ConfigOrigin) -> dict[str, object]:
         "path": None if origin.path is None else str(origin.path),
         "detail": origin.detail,
     }
+
+
+def _run_evidence_command(args: argparse.Namespace, root: Path) -> int:
+    """Print a complete verified definition and bounded static evidence as JSON.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed identity and relation limit.
+    root : pathlib.Path
+        Trusted repository root.
+
+    Returns
+    -------
+    int
+        Zero after a fresh verified read.
+    """
+    from codira.query.evidence import expand_symbol
+
+    _ensure_index(root)
+    print(json.dumps(expand_symbol(root, args.identity, limit=args.limit)))
+    return 0

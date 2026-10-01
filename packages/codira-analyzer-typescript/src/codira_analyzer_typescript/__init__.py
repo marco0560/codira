@@ -870,6 +870,31 @@ class TypeScriptAnalyzer:
         root_node = _parser(path).parse(source).root_node
         for child in root_node.named_children:
             visit(child)
+        for match in re.finditer(
+            r"(?:export(?:\s+type)?|import)\s*\{([^}]+)\}\s*from\s*['\"]([^'\"]+)['\"]",
+            source.decode("utf-8"),
+        ):
+            target_path = match[2]
+            if not target_path.startswith("."):
+                continue
+            resolved_target = (path.parent / target_path).resolve()
+            if not resolved_target.is_relative_to(root.resolve()):
+                continue
+            target_module = ".".join(
+                resolved_target.relative_to(root.resolve()).with_suffix("").parts
+            )
+            for specifier in match[1].split(","):
+                names = re.split(r"\s+as\s+", specifier.strip().removeprefix("type "))
+                if not names[0].isidentifier() or not names[-1].isidentifier():
+                    continue
+                imports.append(
+                    ImportArtifact(
+                        name=f"{target_module}.{names[0]}",
+                        alias=names[-1],
+                        kind="reexport" if match[0].startswith("export") else "import",
+                        lineno=source.decode("utf-8")[: match.start()].count("\n") + 1,
+                    )
+                )
         return AnalysisResult(
             source_path=path,
             module=ModuleArtifact(

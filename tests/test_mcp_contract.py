@@ -161,6 +161,6 @@ def test_context_tool_schema_uses_item_pagination_and_profiles() -> None:
     tools = cast("list[dict[str, Any]]", build_contract_document()["tools"])
     context = next(tool for tool in tools if tool["name"] == "context_for_task")
     properties = context["request_schema"]["properties"]
-    assert set(properties) == {"query", "cursor", "limit", "search_profile"}
+    assert set(properties) == {"query", "cursor", "limit", "search_profile", "explain"}
     assert properties["limit"]["default"] == 10
     assert properties["search_profile"]["anyOf"][0]["enum"] == ["default"]

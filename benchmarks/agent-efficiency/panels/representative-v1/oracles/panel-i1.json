@@ -1,0 +1,39 @@
+{
+  "definition": {
+    "quality_rubric": {
+      "criteria": [
+        {
+          "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+          "dimension": "correctness",
+          "id": "substance",
+          "requirement": "Direct callers include symbol, symbols, references, documentation_findings, context_for_task, impact_analysis, repository_map, arch, emb, docs, _call_edges; callers/callees dispatch through _call_edges; capabilities and index_status bypass _query; warm _ConnectionExecutor.execute forwards a supplied connection.",
+          "semantic": true
+        },
+        {
+          "dimension": "completeness",
+          "id": "requested-coverage",
+          "requirement": "Assess a change to MCPAdapter._query. List every direct caller, the warm connection executor, operations that bypass it, and relevant tests. Label dynamic uncertainty. Write your answer to BENCHMARK_ANSWER.md and stop.",
+          "semantic": true
+        },
+        {
+          "dimension": "evidence",
+          "id": "grounding",
+          "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+          "semantic": true
+        },
+        {
+          "dimension": "usability",
+          "id": "usability",
+          "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+          "semantic": true
+        }
+      ],
+      "task_id": "panel-i1",
+      "version": 1
+    }
+  },
+  "oracle_id": "panel-i1",
+  "schema_version": "1.0",
+  "task_id": "panel-i1",
+  "visibility": "public"
+}

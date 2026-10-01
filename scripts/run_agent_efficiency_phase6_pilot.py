@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -50,6 +51,7 @@ from scripts.agent_efficiency.environment import (
     fixture_environment,
 )
 from scripts.agent_efficiency.oracles import evaluate_oracle
+from scripts.agent_efficiency.panels import panel_document_path, prepare_panel_fixture
 from scripts.agent_efficiency.runner import (
     PROJECT_TEMP_ROOT,
     ContainerAttemptRequest,
@@ -837,6 +839,8 @@ def prompt_for_attempt(
     if assistance_mode == "baseline":
         return task
     if assistance_mode == "codira-mcp":
+        if version == "mcp-optional-v3":
+            return task
         return f"{instruction.strip()}\n\n{task}"
     raise PilotLauncherError("scheduled assistance mode is invalid")
 
@@ -1038,9 +1042,12 @@ def load_pilot_inputs(
     oracles: dict[str, Mapping[str, object]] = {}
     fixtures: dict[str, Mapping[str, object]] = {}
     for task_id in task_ids:
-        task = load_document(BENCHMARK_ROOT / "tasks" / f"{task_id}.json", "task")
+        task = load_document(
+            panel_document_path(BENCHMARK_ROOT, "tasks", str(task_id)), "task"
+        )
         oracle = load_document(
-            BENCHMARK_ROOT / "oracles" / f"{task['oracle_id']}.json", "oracle"
+            panel_document_path(BENCHMARK_ROOT, "oracles", str(task["oracle_id"])),
+            "oracle",
         )
         fixture_id = task.get("fixture_id")
         if (
@@ -1058,7 +1065,7 @@ def load_pilot_inputs(
                 "public task fingerprint differs from the approved manifest"
             )
         fixture = load_document(
-            BENCHMARK_ROOT / "fixtures" / f"{fixture_id}.json", "fixture"
+            panel_document_path(BENCHMARK_ROOT, "fixtures", str(fixture_id)), "fixture"
         )
         if (
             canonical_fingerprint(fixture) != fixture_hashes.get(fixture_id)
@@ -1285,6 +1292,10 @@ def prepare_protected_fixture(
     git = shutil.which("git")
     if git is None:
         raise PilotLauncherError("Git is unavailable for protected fixture preparation")
+    if task_id.startswith("panel-") and not (source / ".git").exists():
+        export_fixture(source, revision, destination)
+        prepare_panel_fixture(destination, task_id)
+        return install_protected_asset(task_id, destination)
     clone = subprocess.run(
         (git, "clone", "--no-checkout", "--no-local", str(source), str(destination)),
         check=False,
@@ -1303,6 +1314,7 @@ def prepare_protected_fixture(
     )
     if clone.returncode != 0 or checkout is None or checkout.returncode != 0:
         raise PilotLauncherError("cannot create protected immutable fixture checkout")
+    prepare_panel_fixture(destination, task_id)
     return install_protected_asset(task_id, destination)
 
 
@@ -1397,6 +1409,10 @@ def execution_controls(
             full_campaign
             and (
                 scheduled_attempts == 60
+                or (
+                    manifest.get("stage") == "representative-campaign"
+                    and scheduled_attempts in {48, 96, 144, 192, 240}
+                )
                 or (scheduled_attempts == 6 and manifest.get("stage") == "completion")
             )
         )
@@ -1567,6 +1583,94 @@ def _normalized_proxy_failure_class(
     return _local_proxy_failure_class(observations) or failure_class
 
 
+def _prepare_task_profile(destination: Path, task_id: str) -> str:
+    """Bind a task-specific coverage override to both indexing and MCP startup.
+
+    Parameters
+    ----------
+    destination : pathlib.Path
+        Workspace profile beneath the already created state directory.
+    task_id : str
+        Frozen task selecting an explicit disabled-analyzer control.
+
+    Returns
+    -------
+    str
+        SHA-256 of the exact task profile.
+    """
+    shutil.copyfile(BENCHMARK_CODIRA_PROFILE, destination)
+    if task_id == "panel-e2":
+        with destination.open("a") as handle:
+            handle.write('\n[plugins]\ndisabled_analyzers = ["text"]\n')
+    return hashlib.sha256(destination.read_bytes()).hexdigest()
+
+
+def _semantic_review_pending(checks: Sequence[str]) -> bool:
+    """Distinguish pending semantic review from an executable or factual failure.
+
+    Parameters
+    ----------
+    checks : collections.abc.Sequence[str]
+        Complete path-qualified oracle findings.
+
+    Returns
+    -------
+    bool
+        True only when review is pending and no required leaf check failed.
+    """
+    return any(check.endswith(":review_required") for check in checks) and not any(
+        check.endswith((":missing", ":contradicted"))
+        or check.endswith(":failed")
+        and not check.split(":", 1)[0].endswith(("all_of", "any_of"))
+        for check in checks
+    )
+
+
+def _record_example_replays(
+    task: Mapping[str, object],
+    operational_status: str,
+    context: PilotExecutionContext,
+    attempt_root: Path,
+    evidence: dict[str, object],
+) -> None:
+    """Retain isolated example traces for completed usage tasks.
+
+    Parameters
+    ----------
+    task : collections.abc.Mapping[str, object]
+        Frozen task requirements.
+    operational_status : str
+        Agent transport status independent of task quality.
+    context : PilotExecutionContext
+        Qualified runtime and image identity.
+    attempt_root : pathlib.Path
+        Durable attempt root containing its prepared agent workspace.
+    evidence : dict[str, object]
+        Mutable attempt measurements receiving replay metadata.
+
+    Returns
+    -------
+    None
+        Raw output remains in private durable artifacts.
+    """
+    from scripts.agent_efficiency.examples import replay_examples
+
+    agent_root = attempt_root / "agent"
+    answer_path = agent_root / str(task["result_path"])
+    if (
+        task.get("family") == "usage"
+        and operational_status == "passed"
+        and answer_path.is_file()
+    ):
+        evidence["example_replays"] = replay_examples(
+            answer_path.read_text(),
+            context.runtime,
+            context.image,
+            agent_root,
+            attempt_root / "example-trace",
+        )
+
+
 def execute_pilot_attempt(
     store: CampaignStore,
     attempt: ScheduledAttempt,
@@ -1627,7 +1731,10 @@ def execute_pilot_attempt(
         attempt_root / "state",
     )
     attempt_root.mkdir(parents=True)
+    export_started = time.perf_counter()
     export_fixture(context.sources[fixture_id], str(fixture["revision"]), agent_root)
+    prepare_panel_fixture(agent_root, attempt.task_id)
+    export_seconds = time.perf_counter() - export_started
     try:
         environment = fixture_environment(agent_root, fixture_id)
     except EnvironmentPreparationError as error:
@@ -1660,8 +1767,7 @@ def execute_pilot_attempt(
             raise PilotLauncherError("benchmark Codira profile is unavailable")
         profile_target = agent_root / ".codira" / "config.toml"
         profile_target.parent.mkdir(exist_ok=True)
-        shutil.copyfile(BENCHMARK_CODIRA_PROFILE, profile_target)
-        profile_fingerprint = runtime_profile_fingerprint()
+        profile_fingerprint = _prepare_task_profile(profile_target, attempt.task_id)
         with tempfile.TemporaryDirectory(
             prefix="ae-idx-", dir=PROJECT_TEMP_ROOT
         ) as temporary_root:
@@ -1671,7 +1777,9 @@ def execute_pilot_attempt(
                     context.image,
                     agent_root,
                     controls.timeout_seconds,
-                    BENCHMARK_CODIRA_CONFIG,
+                    "/workspace/.codira/config.toml"
+                    if attempt.task_id.startswith("panel-")
+                    else BENCHMARK_CODIRA_CONFIG,
                     Path(temporary_root),
                 )
             )
@@ -1761,6 +1869,13 @@ def execute_pilot_attempt(
         max_campaign_spend_usd=campaign_spend_limit,
         response_artifact_root=attempt_root / "provider-responses",
     )
+    prompt = (
+        prompt_for_attempt(
+            str(task["prompt"]), attempt.assistance_mode, context.manifest
+        )
+        + "\n\n"
+        + environment.directive
+    )
     with tempfile.TemporaryDirectory(prefix="ae-", dir=PROJECT_TEMP_ROOT) as socket_dir:
         socket_path = Path(socket_dir) / "p.sock"
         container_temporary_root = Path(socket_dir) / "tmp"
@@ -1774,11 +1889,7 @@ def execute_pilot_attempt(
                     context.image,
                     agent_root,
                     state_root,
-                    prompt_for_attempt(
-                        str(task["prompt"]), attempt.assistance_mode, context.manifest
-                    )
-                    + "\n\n"
-                    + environment.directive,
+                    prompt,
                     controls.timeout_seconds,
                     proxy_socket=socket_path,
                     proxy_client_token=token,
@@ -1788,6 +1899,7 @@ def execute_pilot_attempt(
         finally:
             server.shutdown()
             server.server_close()
+    grading_started = time.perf_counter()
     capture_error: str | None = None
     if result_format == "workspace-diff":
         try:
@@ -1806,8 +1918,28 @@ def execute_pilot_attempt(
         attempt,
         execution,
         max_total_tokens=token_limit,
+        require_mcp=cast(
+            "Mapping[str, object]", context.manifest.get("treatment_protocol", {})
+        ).get("version")
+        != "mcp-optional-v3",
     )
     evidence["provider_responses"] = list(settings.response_observations)
+    from scripts.agent_efficiency.instrumentation import evidence_measurement
+
+    try:
+        measured_events = phase0.parse_jsonl_events(execution.stdout)
+    except (ValueError, TypeError):
+        measured_events = ()
+    evidence["stage_measurement"] = evidence_measurement(
+        measured_events,
+        cast("Sequence[str]", task.get("reference_anchors", [])),
+    )
+    evidence["provider_requests"] = list(settings.request_observations)
+    evidence["initial_prompt_measurement"] = {
+        "chars": len(prompt),
+        "bytes": len(prompt.encode()),
+        "sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+    }
     evidence["environment_preparation"] = {
         "ecosystem": environment.ecosystem,
         "elapsed_seconds": environment_preparation.elapsed_seconds,
@@ -1853,7 +1985,14 @@ def execute_pilot_attempt(
             oracle_passed, oracle_fingerprint = outcome.passed, outcome.fingerprint
             oracle_checks = list(outcome.checks)
             task_oracle_status = "passed" if outcome.passed else "failed"
-            if not outcome.passed:
+            semantic_pending = _semantic_review_pending(oracle_checks)
+            task_oracle_status = (
+                "not_evaluated" if semantic_pending else task_oracle_status
+            )
+            task_oracle_failure = (
+                "semantic_review_required" if semantic_pending else task_oracle_failure
+            )
+            if not outcome.passed and not semantic_pending:
                 result["outcome"], result["failure_class"] = (
                     "oracle_failure",
                     "deterministic_oracle",
@@ -1876,6 +2015,17 @@ def execute_pilot_attempt(
                 "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
                 "command_count": len(manifest.get("commands", [])),
             }
+    evidence["phase_timings"] = {
+        "fixture_export_seconds": export_seconds,
+        "environment_preparation_seconds": environment_preparation.elapsed_seconds,
+        "index_preparation_seconds": preparation.elapsed_seconds
+        if attempt.assistance_mode == "codira-mcp"
+        else 0.0,
+        "container_execution_seconds": execution.elapsed_seconds,
+        "grading_seconds": time.perf_counter() - grading_started,
+        "cache_policy": "fresh workspace and index per attempt; image-baked dependency caches",
+    }
+    _record_example_replays(task, operational_status, context, attempt_root, evidence)
     result.update(
         {
             "operational_calibration": {
@@ -1985,7 +2135,7 @@ def execution_plan(
         expected_tasks = 3
     else:
         schedule = validate_full_plan(manifest, plan, seed)
-        expected_tasks = 6
+        expected_tasks = 24 if manifest.get("stage") == "representative-campaign" else 6
     if (
         set(task_ids) != {item.task_id for item in schedule}
         or len(task_ids) != expected_tasks
@@ -2080,6 +2230,9 @@ def main(arguments: list[str] | None = None) -> int:
         upstream = os.environ.get(provider_proxy.UPSTREAM_TOKEN_ENV, "")
         if not upstream:
             raise PilotLauncherError("pilot OpenRouter credential is unavailable")
+        from scripts.agent_efficiency.runtime_qualification import qualify_image
+
+        qualify_image(args.runtime, args.image, args.state_root)
         route_preflight = preflight_openrouter_route(manifest, controls, upstream)
         public_route = route_preflight.get("public_route")
         provider_context_length = (

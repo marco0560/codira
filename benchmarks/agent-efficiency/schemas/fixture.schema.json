@@ -55,7 +55,10 @@
       "type": "string"
     },
     "transport": {
-      "const": "git-archive"
+      "enum": [
+        "git-archive",
+        "directory-snapshot"
+      ]
     },
     "tree_sha": {
       "pattern": "^[0-9a-f]{40}$",
