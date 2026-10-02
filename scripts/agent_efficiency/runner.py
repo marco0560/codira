@@ -33,6 +33,13 @@ _PROXY_RELAY_BOOTSTRAP = (
     "exit $status"
 )
 
+_SUBSCRIPTION_RELAY_BOOTSTRAP = (
+    "python /codex-state/provider_relay.py & relay_pid=$!; "
+    '"$2" --no-daemon exec --json --ephemeral --ignore-rules '
+    '--skip-git-repo-check "$1"; status=$?; kill $relay_pid; '
+    "wait $relay_pid 2>/dev/null; exit $status"
+)
+
 _PROXY_RELAY_SOURCE = """import socket
 import threading
 
@@ -79,6 +86,11 @@ class ContainerAttemptRequest:
         Container-visible Codex executable.
     temporary_root : pathlib.Path, optional
         Operation-scoped host scratch directory mounted at ``/temporary``.
+    provider_transport : str, optional
+        Frozen OpenRouter proxy or native Codex subscription transport.
+    subscription_auth : pathlib.Path or None, optional
+        Existing managed login file bound read-only for the native client;
+        the native permissions profile denies model tools access to state.
 
     Returns
     -------
@@ -97,6 +109,8 @@ class ContainerAttemptRequest:
     proxy_port: int = 43123
     proxy_client_token: str | None = None
     temporary_root: Path | None = None
+    provider_transport: str = "openrouter-proxy"
+    subscription_auth: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -420,8 +434,8 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
     Returns
     -------
     tuple[str, ...]
-        Runtime command without host-home, credential, or grader mounts; an
-        enabled provider proxy socket is mounted at its stable container path.
+        Runtime command without host-home or grader mounts. Native subscription
+        uses one managed auth-file mount denied to model tools.
 
     Raises
     ------
@@ -432,6 +446,8 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
     -----
     The container has no network route.  When provider proxying is enabled,
     only its Unix socket is mounted separately at ``/codex-state/provider.sock``.
+    Native subscription uses an allowlisted TLS tunnel through that socket and
+    a permissions profile that denies model tools access to Codex state.
     """
 
     if request.runtime not in phase0.SUPPORTED_CONTAINER_RUNTIMES:
@@ -445,7 +461,21 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
     if not fixture_root.is_dir() or not state_root.is_dir():
         raise ValueError("fixture and fresh state roots must exist")
     proxy_enabled = request.proxy_socket is not None
-    if proxy_enabled != (request.proxy_client_token is not None):
+    subscription = request.provider_transport == "codex-subscription"
+    if request.provider_transport not in {"openrouter-proxy", "codex-subscription"}:
+        raise ValueError("provider transport is unsupported")
+    if subscription:
+        if (
+            not proxy_enabled
+            or request.proxy_client_token is not None
+            or request.subscription_auth is None
+            or not request.subscription_auth.is_file()
+        ):
+            raise ValueError("subscription requires a tunnel and existing auth file")
+    elif (
+        proxy_enabled != (request.proxy_client_token is not None)
+        or request.subscription_auth is not None
+    ):
         raise ValueError("proxy socket and client token must be supplied together")
     if proxy_enabled:
         assert request.proxy_socket is not None
@@ -461,7 +491,7 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
         (
             "/bin/sh",
             "-c",
-            _PROXY_RELAY_BOOTSTRAP,
+            _SUBSCRIPTION_RELAY_BOOTSTRAP if subscription else _PROXY_RELAY_BOOTSTRAP,
             "phase4-proxy-runner",
             request.prompt,
             request.codex_command,
@@ -479,6 +509,15 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
             request.prompt,
         )
     )
+    subscription_options: tuple[str, ...] = ()
+    if subscription:
+        assert request.subscription_auth is not None
+        subscription_options = (
+            "--cap-add=SETFCAP",
+            f"--mount=type=bind,src={request.subscription_auth.resolve()},dst=/codex-state/auth.json,ro",
+            f"--env=HTTPS_PROXY=http://127.0.0.1:{request.proxy_port}",
+            f"--env=HTTP_PROXY=http://127.0.0.1:{request.proxy_port}",
+        )
     return (
         request.runtime,
         "run",
@@ -493,6 +532,7 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
         f"--mount=type=bind,src={fixture_root},dst=/workspace,rw",
         f"--mount=type=bind,src={state_root},dst=/codex-state,rw",
         *proxy_mount,
+        *subscription_options,
         "--env=HOME=/codex-state/home",
         "--env=CODEX_HOME=/codex-state",
         "--env=GOTOOLCHAIN=local",
@@ -500,7 +540,11 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
         "--env=GOSUMDB=off",
         "--env=GOCACHE=/workspace/.benchmark/go-build",
         "--env=GOMODCACHE=/workspace/.benchmark/go-mod",
-        *(("--env=CODIRA_PROXY_CLIENT_TOKEN",) if proxy_enabled else ()),
+        *(
+            ("--env=CODIRA_PROXY_CLIENT_TOKEN",)
+            if proxy_enabled and not subscription
+            else ()
+        ),
         "--workdir=/workspace",
         request.image,
         *command,

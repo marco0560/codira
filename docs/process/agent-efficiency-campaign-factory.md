@@ -382,3 +382,26 @@ provider changes; they extend the existing Pre-pilot control checklist.
   and explicit paid authorization. No qualification check is a paid launch.
 
 See [implementation and limits](agent-product-harness-improvements-2026-10-01.md).
+
+## Native subscription controls
+
+See [Native Codex subscription provider](agent-efficiency-subscription-provider.md)
+for the route contract, isolation qualification and evidence limitations.
+Extend the pre-pilot checklist when selecting this route:
+
+- [ ] Freeze a separate provider identity and native model ID; never reuse an
+  OpenRouter campaign or silently switch routes during a campaign.
+- [ ] Confirm the exact client executable, bundled sandbox binary and image
+  digest. Run the public credential-denial canary before mounting managed login.
+- [ ] Read plan, exact model/effort and quota through the actual container route,
+  without a model turn; retain only sanitized admission facts.
+- [ ] Treat native USD accounting as not applicable. Confirm timeout, quota and
+  checkpoint controls, and acknowledge that native request/output caps are not
+  proxy-enforced and the session token ceiling is checked after a completed turn.
+- [ ] Retain complete native events and diagnostics. Label raw provider HTTP
+  evidence unavailable rather than reporting empty evidence as successful capture.
+- [ ] Exercise quota exhaustion, interrupted starts, explicit resume, rejected
+  routes and provider/accounting schema combinations in focused checks.
+- [ ] Calibrate every task against the admitted frozen source, including whole
+  responses and applied patch behavior. A correct reference phrase alone is not
+  proof that the complete rubric or protected oracle accepts correct work.

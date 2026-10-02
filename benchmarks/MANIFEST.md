@@ -39,3 +39,11 @@ small Python, TypeScript and Go inputs. `protected/panel-*/` contains protected
 behavior probes and digest provenance. Keep this panel separate from legacy
 task/oracle identities. `panels/sentinel-retrieval-v1.json` drives the offline
 retrieval evaluator, not paid model execution.
+
+`representative-v1-calibration.json` contains full source-curated answer examples.
+`representative-v1-patch-calibration.json` summarizes the 18 applied patch checks
+without local paths. Reproduce them with
+`scripts/calibrate_agent_efficiency_panel.py`; retain complete traces under
+the image qualification record. Campaign specs 010 and 011 select the same
+panel through OpenRouter and native subscription routes respectively. See the
+[preparation report](../docs/process/agent-efficiency-campaign-preparation-2026-10-02.md).

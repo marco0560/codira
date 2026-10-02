@@ -14,11 +14,19 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
 
 from scripts.agent_efficiency.contracts import ContractError, canonical_fingerprint
+
+type CommandExecutor = Callable[
+    [Sequence[str], Path], subprocess.CompletedProcess[bytes]
+]
+_COMMAND_EXECUTOR: ContextVar[CommandExecutor | None] = ContextVar(
+    "oracle_command_executor", default=None
+)
 
 type OracleDefinition = Mapping[str, object]
 type CustomEvaluator = Callable[[Mapping[str, object], Path], bool]
@@ -466,7 +474,12 @@ def _run_protected(
 
     try:
         argv = _protected_command(command)
-        completed = subprocess.run(argv, cwd=root, check=False, capture_output=True)
+        executor = _COMMAND_EXECUTOR.get()
+        completed = (
+            executor(argv, root)
+            if executor is not None
+            else subprocess.run(argv, cwd=root, check=False, capture_output=True)
+        )
     except OSError as error:
         argv = _protected_command(command)
         if trace is not None:
@@ -482,7 +495,15 @@ def _run_protected(
     stdout = completed.stdout if isinstance(completed.stdout, bytes) else b""
     stderr = completed.stderr if isinstance(completed.stderr, bytes) else b""
     if trace is not None:
-        trace.record(stage, argv, stdout, stderr, completed.returncode, None, None)
+        trace.record(
+            stage,
+            cast("Sequence[str]", completed.args),
+            stdout,
+            stderr,
+            completed.returncode,
+            None,
+            None,
+        )
     diagnostic_text = stderr.decode("utf-8", errors="replace")
     exception_class: str | None = None
     failure_location: str | None = None
@@ -717,7 +738,9 @@ def _patch_check(
         )
     if not required_paths_passed:
         return False, tuple(checks)
-    with tempfile.TemporaryDirectory(prefix="codira-agent-oracle-") as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="codira-agent-oracle-", dir="/home/marco/Personalia/Progetti/.Temp"
+    ) as temporary:
         destination = Path(temporary) / "fixture"
         shutil.copytree(protected_root, destination, symlinks=False)
         apply_check = _run_protected(
@@ -1053,6 +1076,7 @@ def evaluate_oracle(  # noqa: PLR0913
     protected_root: Path,
     evaluators: Mapping[str, ProtectedEvaluator] | None = None,
     trace_root: Path | None = None,
+    command_executor: CommandExecutor | None = None,
 ) -> OracleResult:
     """Evaluate a declarative oracle against one isolated agent result.
 
@@ -1073,6 +1097,9 @@ def evaluate_oracle(  # noqa: PLR0913
     trace_root : pathlib.Path or None, optional
         New private directory for complete protected command output artifacts.
 
+    command_executor : CommandExecutor or None, optional
+        Image-bound behavioral runner; isolated host execution for unit tests.
+
     Returns
     -------
     OracleResult
@@ -1091,6 +1118,7 @@ def evaluate_oracle(  # noqa: PLR0913
         detail = "result_path escapes agent result root"
         raise ContractError.message(detail)
     trace = _ProtectedTrace(trace_root) if trace_root is not None else None
+    token = _COMMAND_EXECUTOR.set(command_executor)
     try:
         passed, checks = _evaluate(
             definition,
@@ -1104,6 +1132,8 @@ def evaluate_oracle(  # noqa: PLR0913
         if trace is not None:
             trace.finalize("error")
         raise
+    finally:
+        _COMMAND_EXECUTOR.reset(token)
     trace_digest: str | None = None
     trace_count = 0
     if trace is not None:

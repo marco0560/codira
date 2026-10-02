@@ -323,3 +323,13 @@ raw evidence remain unchanged. No paid campaign was launched. See
 [implementation, validation and remaining qualifications](agent-product-harness-improvements-2026-10-01.md).
 The next paid campaign requires a rebuilt, admitted serving image and
 task-specific rubric calibration before authorization.
+
+## Session handoff — 2026-10-02
+
+Prepared an admitted image, separate OpenRouter and native Plus/Codex routes,
+full-rubric calibration and image-bound protected checks. With operator approval,
+kept panel-f1 and updated its Codira fixture to committed current product source;
+legacy identities remain intact. No paid campaign was launched. See the
+[preparation report](agent-efficiency-campaign-preparation-2026-10-02.md) and
+[future paying launch prompt](agent-efficiency-campaign-010-launch-prompt.md).
+Live provider allowance must be checked again immediately before execution.

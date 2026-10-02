@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from codira.runtime_identity import runtime_identity
-from scripts.agent_efficiency.campaign_factory import build_campaign
+from scripts.agent_efficiency.campaign_factory import (
+    CampaignFactoryError,
+    build_campaign,
+)
 from scripts.agent_efficiency.contracts import load_document
 from scripts.agent_efficiency.corpus import export_fixture, verify_fixture
 from scripts.agent_efficiency.examples import replay_examples
@@ -300,3 +303,47 @@ def test_example_replay_is_isolated_and_traceable(
     assert report["answer_sha256"] == hashlib.sha256(answer.encode()).hexdigest()
     assert report["expected_output_accuracy"] == "review_required"
     assert (tmp_path / "trace/example-0.stdout").read_bytes() == b"42\n"
+
+
+def test_native_subscription_factory_requires_distinct_accounting() -> None:
+    """Admit native quota and reject crossed API billing declarations.
+
+    Parameters
+    ----------
+    None
+        Uses the public panel factory specification.
+
+    Returns
+    -------
+    None
+        Provider selection is frozen rather than silently falling back.
+    """
+    from scripts.run_agent_efficiency_phase6_pilot import execution_controls
+
+    spec = _spec()
+    provider = cast("dict[str, object]", spec["provider"])
+    provider.update(
+        name="codex-subscription",
+        model="gpt-6-luna",
+        wire_api="codex-cli",
+        max_prompt_usd_per_million=0,
+        max_completion_usd_per_million=0,
+    )
+    accounting = cast("dict[str, object]", spec["accounting"])
+    accounting.update(
+        budget_reservation_mode="subscription-quota",
+        max_daily_spend_usd=0,
+        max_estimated_attempt_spend_usd=0,
+        max_estimated_pilot_spend_usd=0,
+    )
+    manifest, plan = build_campaign(spec, BASE)
+    assert plan["scheduled_attempt_count"] == 48
+    assert (
+        execution_controls(
+            manifest, scheduled_attempts=48, full_campaign=True
+        ).max_daily_spend
+        == 0
+    )
+    provider["wire_api"] = "responses"
+    with pytest.raises(CampaignFactoryError):
+        build_campaign(spec, BASE)

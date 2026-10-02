@@ -183,19 +183,19 @@ SCHEMAS = {
                     "max_completion_usd_per_million",
                 ],
                 "properties": {
-                    "name": {"const": "openrouter"},
+                    "name": {"enum": ["openrouter", "codex-subscription"]},
                     "model": {"type": "string", "minLength": 1},
                     "reasoning_effort": {
                         "enum": ["none", "low", "medium", "high", "xhigh"]
                     },
-                    "wire_api": {"const": "responses"},
+                    "wire_api": {"enum": ["responses", "codex-cli"]},
                     "max_prompt_usd_per_million": {
                         "type": "number",
-                        "exclusiveMinimum": 0,
+                        "minimum": 0,
                     },
                     "max_completion_usd_per_million": {
                         "type": "number",
-                        "exclusiveMinimum": 0,
+                        "minimum": 0,
                     },
                 },
             },
@@ -209,14 +209,14 @@ SCHEMAS = {
                     "max_response_requests_per_attempt",
                 ],
                 "properties": {
-                    "max_daily_spend_usd": {"type": "number", "exclusiveMinimum": 0},
+                    "max_daily_spend_usd": {"type": "number", "minimum": 0},
                     "max_estimated_attempt_spend_usd": {
                         "type": "number",
-                        "exclusiveMinimum": 0,
+                        "minimum": 0,
                     },
                     "max_estimated_pilot_spend_usd": {
                         "type": "number",
-                        "exclusiveMinimum": 0,
+                        "minimum": 0,
                     },
                     "max_response_requests_per_attempt": {
                         "type": "integer",
@@ -230,7 +230,11 @@ SCHEMAS = {
                         "enum": ["whole-session", "per-continuation"]
                     },
                     "budget_reservation_mode": {
-                        "enum": ["sum-attempt-ceilings", "shared-pool"]
+                        "enum": [
+                            "sum-attempt-ceilings",
+                            "shared-pool",
+                            "subscription-quota",
+                        ]
                     },
                 },
             },
@@ -456,6 +460,60 @@ SCHEMAS["campaign-spec"]["allOf"] = [
         },
     },
 ]
+
+_PROVIDER_ACCOUNTING = {
+    "if": {
+        "properties": {
+            "provider": {"properties": {"name": {"const": "codex-subscription"}}}
+        }
+    },
+    "then": {
+        "required": ["stage"],
+        "properties": {
+            "stage": {"const": "representative-campaign"},
+            "provider": {
+                "properties": {
+                    "wire_api": {"const": "codex-cli"},
+                    "max_prompt_usd_per_million": {"const": 0},
+                    "max_completion_usd_per_million": {"const": 0},
+                }
+            },
+            "accounting": {
+                "required": ["budget_reservation_mode"],
+                "properties": {
+                    "budget_reservation_mode": {"const": "subscription-quota"},
+                    "max_daily_spend_usd": {"const": 0},
+                    "max_estimated_attempt_spend_usd": {"const": 0},
+                    "max_estimated_pilot_spend_usd": {"const": 0},
+                },
+            },
+        },
+    },
+    "else": {
+        "properties": {
+            "provider": {
+                "properties": {
+                    "name": {"const": "openrouter"},
+                    "wire_api": {"const": "responses"},
+                    "max_prompt_usd_per_million": {"exclusiveMinimum": 0},
+                    "max_completion_usd_per_million": {"exclusiveMinimum": 0},
+                }
+            },
+            "accounting": {
+                "properties": {
+                    "budget_reservation_mode": {
+                        "enum": ["sum-attempt-ceilings", "shared-pool"]
+                    },
+                    "max_daily_spend_usd": {"exclusiveMinimum": 0},
+                    "max_estimated_attempt_spend_usd": {"exclusiveMinimum": 0},
+                    "max_estimated_pilot_spend_usd": {"exclusiveMinimum": 0},
+                }
+            },
+        }
+    },
+}
+SCHEMAS["campaign"]["allOf"] = [_PROVIDER_ACCOUNTING]
+cast("list[object]", SCHEMAS["campaign-spec"]["allOf"]).append(_PROVIDER_ACCOUNTING)
 
 
 def main(argv: list[str] | None = None) -> int:

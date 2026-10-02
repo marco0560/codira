@@ -1,6 +1,6 @@
 {
   "family": "tracing",
-  "fixture_id": "codira-public",
+  "fixture_id": "codira-current-public",
   "oracle_id": "panel-t2",
   "prompt": "Trace context --search-profile from argument parsing through configuration, query execution and backend selection. Explain configuration precedence and errors for an unknown profile. Write your answer to BENCHMARK_ANSWER.md and stop.",
   "reference_anchors": [

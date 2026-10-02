@@ -17,6 +17,8 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from codira.runtime_identity import runtime_identity
+from codira.version import package_version
 from scripts.agent_efficiency import phase0
 from scripts.agent_efficiency.contracts import canonical_fingerprint, load_document
 from scripts.agent_efficiency.corpus import export_fixture
@@ -56,6 +58,8 @@ class EnvironmentImagePlan:
         Admitted public fixture source roots by immutable identity.
     profile : dict[str, object]
         Credential-free immutable metadata embedded in the resulting image.
+    codex_bin : pathlib.Path or None
+        Directory containing the pinned native Codex binaries, when supplied.
 
     Returns
     -------
@@ -66,6 +70,7 @@ class EnvironmentImagePlan:
     base_image: str
     fixtures: dict[str, Path]
     profile: dict[str, object]
+    codex_bin: Path | None = None
 
 
 def parse_fixture_sources(values: list[str]) -> dict[str, Path]:
@@ -105,7 +110,9 @@ def parse_fixture_sources(values: list[str]) -> dict[str, Path]:
     return sources
 
 
-def build_plan(base_image: str, sources: dict[str, Path]) -> EnvironmentImagePlan:
+def build_plan(
+    base_image: str, sources: dict[str, Path], codex_bin: Path | None = None
+) -> EnvironmentImagePlan:
     """Verify sources and construct the immutable embedded profile.
 
     Parameters
@@ -114,6 +121,8 @@ def build_plan(base_image: str, sources: dict[str, Path]) -> EnvironmentImagePla
         Existing exact digest-pinned benchmark image.
     sources : dict[str, pathlib.Path]
         Candidate public fixture checkout paths.
+    codex_bin : pathlib.Path or None, optional
+        Pinned native Codex binary directory without credentials.
 
     Returns
     -------
@@ -157,6 +166,23 @@ def build_plan(base_image: str, sources: dict[str, Path]) -> EnvironmentImagePla
         }
     profile = {
         "version": 1,
+        "serving_product": runtime_identity(),
+        "node_version": "22.22.0",
+        "node_archive_sha256": "9aa8e9d2298ab68c600bd6fb86a6c13bce11a4eca1ba9b39d79fa021755d7c37",
+        "analyzer_grammars": {
+            "tree-sitter-go": "0.25.0",
+            "tree-sitter-typescript": "0.23.2",
+        },
+        "codex_binaries": {
+            name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for name, path in (
+                ("codex", codex_bin / "codex"),
+                ("codex-code-mode-host", codex_bin / "codex-code-mode-host"),
+                ("bwrap", codex_bin.parent / "codex-resources/bwrap"),
+            )
+        }
+        if codex_bin is not None
+        else {},
         "base_image": base_image,
         "fixtures": fixtures,
         "benchmark_profile_sha256": hashlib.sha256(
@@ -164,7 +190,7 @@ def build_plan(base_image: str, sources: dict[str, Path]) -> EnvironmentImagePla
         ).hexdigest(),
         "validation": {"offline_preparation": "required-by-build"},
     }
-    return EnvironmentImagePlan(base_image, dict(sources), profile)
+    return EnvironmentImagePlan(base_image, dict(sources), profile, codex_bin)
 
 
 def write_build_context(plan: EnvironmentImagePlan, destination: Path) -> Path:
@@ -205,7 +231,8 @@ def write_build_context(plan: EnvironmentImagePlan, destination: Path) -> Path:
             raise EnvironmentImageBuildError("fixture revision is invalid")
         destination_root = fixture_destination / fixture_id
         export_fixture(source, revision, destination_root)
-        shutil.rmtree(destination_root / ".git")
+        if (destination_root / ".git").is_dir():
+            shutil.rmtree(destination_root / ".git")
     profile = dict(plan.profile)
     profile["fingerprint"] = canonical_fingerprint(profile)
     (destination / "fixture-environments" / "environment-profile.json").write_text(
@@ -231,17 +258,30 @@ def write_build_context(plan: EnvironmentImagePlan, destination: Path) -> Path:
             destination / f"codira-analyzer-{name}",
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".venv"),
         )
+    native_codex = ""
+    if plan.codex_bin is not None:
+        native = destination / "codex-native"
+        native.mkdir()
+        for name in ("codex", "codex-code-mode-host"):
+            shutil.copy2(plan.codex_bin / name, native / name)
+        shutil.copy2(plan.codex_bin.parent / "codex-resources/bwrap", native / "bwrap")
+        native_codex = "COPY --chmod=755 codex-native/ /usr/local/bin/\n"
     containerfile = destination / "Containerfile"
     containerfile.write_text(
         "ARG BASE_IMAGE\n"
         "FROM ${BASE_IMAGE}\n"
         "USER root\n"
-        "RUN apt-get update && apt-get install --no-install-recommends --yes golang-go && rm -rf /var/lib/apt/lists/*\n"
-        "COPY serving-product /opt/codira-serving-product\n"
+        "RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends --yes golang-go xz-utils && rm -rf /var/lib/apt/lists/*\n"
+        "RUN curl --fail --silent --show-error https://nodejs.org/dist/v22.22.0/node-v22.22.0-linux-x64.tar.xz -o /tmp/node.tar.xz && echo '9aa8e9d2298ab68c600bd6fb86a6c13bce11a4eca1ba9b39d79fa021755d7c37  /tmp/node.tar.xz' | sha256sum --check - && tar -xJf /tmp/node.tar.xz --strip-components=1 -C /usr/local && rm /tmp/node.tar.xz\n"
+        "RUN python -m pip install --no-cache-dir tree-sitter-go==0.25.0 tree-sitter-typescript==0.23.2\n"
+        + native_codex
+        + "COPY serving-product /opt/codira-serving-product\n"
         "COPY codira-analyzer-python /opt/codira-analyzer-python\n"
         "COPY codira-analyzer-typescript /opt/codira-analyzer-typescript\n"
         "COPY codira-analyzer-go /opt/codira-analyzer-go\n"
-        "RUN SETUPTOOLS_SCM_PRETEND_VERSION=2.0.2 python -m pip install --no-cache-dir --force-reinstall --no-deps /opt/codira-serving-product /opt/codira-analyzer-python /opt/codira-analyzer-typescript /opt/codira-analyzer-go\n"
+        "RUN cp /opt/codira-serving-product/src/codira/_version.py /opt/codira/source-version.py\n"
+        f"RUN SETUPTOOLS_SCM_PRETEND_VERSION={package_version()} python -m pip install --no-cache-dir --force-reinstall --no-deps /opt/codira-serving-product /opt/codira-analyzer-python /opt/codira-analyzer-typescript /opt/codira-analyzer-go\n"
+        'RUN python -c \'import shutil, codira; from pathlib import Path; shutil.copyfile(Path("/opt/codira/source-version.py"), Path(codira.__file__).parent / "_version.py")\'\n'
         "COPY runtime_admission.py /opt/codira/runtime_admission.py\n"
         "COPY --chmod=755 codira-mcp-benchmark /opt/codira/codira-mcp-benchmark\n"
         "COPY --chmod=755 prepare-fixture-environment /opt/codira/prepare-fixture-environment\n"
@@ -317,6 +357,10 @@ def build_image(
             text=True,
             capture_output=True,
         )
+    output_profile.parent.mkdir(parents=True, exist_ok=True)
+    for stream, content in (("stdout", completed.stdout), ("stderr", completed.stderr)):
+        with output_profile.with_suffix(f".build.{stream}.txt").open("x") as handle:
+            handle.write(content)
     if completed.returncode != 0:
         detail = _terminal_build_detail(completed)
         raise EnvironmentImageBuildError(f"candidate image build failed: {detail}")
@@ -494,6 +538,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-image", required=True)
+    parser.add_argument("--codex-bin", type=Path)
     parser.add_argument("--fixture-source", action="append", required=True)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--output-profile", type=Path, required=True)
@@ -517,7 +562,9 @@ def main(arguments: list[str] | None = None) -> int:
 
     args = build_parser().parse_args(arguments)
     try:
-        plan = build_plan(args.base_image, parse_fixture_sources(args.fixture_source))
+        plan = build_plan(
+            args.base_image, parse_fixture_sources(args.fixture_source), args.codex_bin
+        )
         runtime_image = build_image(plan, args.runtime, args.tag, args.output_profile)
     except (EnvironmentImageBuildError, OSError) as error:
         print(f"environment image build error: {error}", file=sys.stderr)

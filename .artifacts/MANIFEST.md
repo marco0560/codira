@@ -50,3 +50,10 @@ example replay manifests/streams alongside attempt evidence. These may contain
 complete answers and repository-local runtime paths; keep them ignored. Offline
 retrieval receipts belong in `analysis/` under a fresh investigation identity.
 Summaries must distinguish offline qualification from paid task efficacy.
+
+`agent-efficiency/environment-images/representative-20261002-r8/` groups runtime,
+freshness, patch and subscription admission evidence for the representative
+panel. Preserve preceding image attempts too. Full patch traces and sanitized
+provider admission receipts are qualification evidence, not paid campaign
+results. Factory 010/011 and their prepared execution records remain separate
+immutable identities. See the [preparation report](../docs/process/agent-efficiency-campaign-preparation-2026-10-02.md).

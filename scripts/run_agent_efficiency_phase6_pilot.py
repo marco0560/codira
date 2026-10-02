@@ -26,7 +26,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    import socketserver
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -55,6 +58,7 @@ from scripts.agent_efficiency.panels import panel_document_path, prepare_panel_f
 from scripts.agent_efficiency.runner import (
     PROJECT_TEMP_ROOT,
     ContainerAttemptRequest,
+    ContainerExecution,
     EnvironmentPreparationRequest,
     IndexPreparationRequest,
     capture_workspace_patch,
@@ -238,6 +242,8 @@ class PilotExecutionContext:
         preflight; absent only in deterministic unit-test contexts.
     full_campaign : bool, optional
         Use the qualified sixty-attempt controls and persistent shared budget.
+    subscription_auth : pathlib.Path or None, optional
+        Existing managed ChatGPT login file for the native client only.
 
     Returns
     -------
@@ -255,6 +261,7 @@ class PilotExecutionContext:
     manifest: Mapping[str, object]
     provider_context_length: int | None = None
     full_campaign: bool = False
+    subscription_auth: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -1370,13 +1377,14 @@ def execution_controls(
         or not effort
     ):
         raise PilotLauncherError("campaign provider controls are invalid")
+    subscription = provider.get("name") == "codex-subscription"
     if (
         not isinstance(prompt_price, (int, float))
         or isinstance(prompt_price, bool)
-        or prompt_price <= 0
+        or (prompt_price != 0 if subscription else prompt_price <= 0)
         or not isinstance(completion_price, (int, float))
         or isinstance(completion_price, bool)
-        or completion_price <= 0
+        or (completion_price != 0 if subscription else completion_price <= 0)
     ):
         raise PilotLauncherError("campaign provider controls are invalid")
     max_total_tokens = budgets.get("max_total_tokens")
@@ -1402,6 +1410,45 @@ def execution_controls(
     transport_limit = accounting.get("max_transport_attempts_per_response", 1)
     token_scope = accounting.get("max_total_tokens_scope", "per-continuation")
     reservation_mode = accounting.get("budget_reservation_mode", "sum-attempt-ceilings")
+    if subscription:
+        if (
+            provider.get("wire_api") != "codex-cli"
+            or reservation_mode != "subscription-quota"
+            or not isinstance(request_limit, int)
+            or isinstance(request_limit, bool)
+            or request_limit < 1
+            or not isinstance(transport_limit, int)
+            or isinstance(transport_limit, bool)
+            or transport_limit < 1
+            or token_scope != "whole-session"
+            or not full_campaign
+            or manifest.get("stage") != "representative-campaign"
+            or scheduled_attempts not in {48, 96, 144, 192, 240}
+            or any(
+                accounting.get(key) != 0
+                for key in (
+                    "max_daily_spend_usd",
+                    "max_estimated_attempt_spend_usd",
+                    "max_estimated_pilot_spend_usd",
+                )
+            )
+        ):
+            raise PilotLauncherError("subscription campaign controls are invalid")
+        return ExecutionControls(
+            model,
+            effort,
+            0.0,
+            0.0,
+            max_total_tokens,
+            "whole-session",
+            max_output_tokens,
+            timeout_seconds,
+            request_limit,
+            transport_limit,
+            0.0,
+            0.0,
+            0.0,
+        )
     shared_pool = reservation_mode == "shared-pool"
     if reservation_mode not in {"shared-pool", "sum-attempt-ceilings"} or (
         shared_pool
@@ -1517,6 +1564,13 @@ def _attempt_budget_limits(
     """
 
     if context.full_campaign:
+        if (
+            cast("Mapping[str, object]", context.manifest.get("provider", {})).get(
+                "name"
+            )
+            == "codex-subscription"
+        ):
+            return None, None, None
         if campaign_budget_remaining is None or campaign_budget_remaining <= 0:
             raise PilotLauncherError(
                 "full campaign requires positive observed allowance"
@@ -1671,6 +1725,153 @@ def _record_example_replays(
         )
 
 
+def _execute_provider_attempt(
+    context: PilotExecutionContext,
+    store: CampaignStore,
+    attempt: ScheduledAttempt,
+    prompt: str,
+    limits: tuple[int | None, float | None, float | None],
+) -> tuple[
+    ContainerExecution,
+    list[dict[str, object]],
+    list[dict[str, object]],
+    dict[str, object] | None,
+    int | None,
+]:
+    """Run one frozen provider route and capture its available wire evidence.
+
+    Parameters
+    ----------
+    context : PilotExecutionContext
+        Frozen image, provider and managed authentication bindings.
+    store : CampaignStore
+        Frozen schedule and durable attempt directory.
+    attempt : ScheduledAttempt
+        Frozen task and assistance condition.
+    prompt : str
+        Exact common task and environment instructions.
+    limits : tuple
+        Proxy token, attempt and campaign ceilings, when applicable.
+
+    Returns
+    -------
+    tuple
+        Captured execution, response/request observations and native tunnel facts.
+    """
+    attempt_root = store.root / "attempt-work" / attempt.attempt_id
+    controls = execution_controls(
+        context.manifest,
+        scheduled_attempts=len(store.schedule),
+        full_campaign=context.full_campaign,
+    )
+    subscription = (
+        cast("Mapping[str, object]", context.manifest["provider"]).get("name")
+        == "codex-subscription"
+    )
+    state_root, agent_root = attempt_root / "state", attempt_root / "agent"
+    token_limit, attempt_spend_limit, campaign_spend_limit = limits
+    token = secrets.token_urlsafe(32) if not subscription else None
+    mcp_command = (
+        BENCHMARK_MCP_COMMAND if attempt.assistance_mode == "codira-mcp" else None
+    )
+    if subscription:
+        from scripts.agent_efficiency.codex_subscription import (
+            write_subscription_config,
+        )
+
+        write_subscription_config(
+            state_root, controls.model, controls.reasoning_effort, mcp_command
+        )
+    else:
+        phase0.write_isolated_codex_config(
+            state_root,
+            "/workspace",
+            "http://127.0.0.1:43123/v1",
+            phase0.CodexProviderSettings(
+                controls.model,
+                controls.reasoning_effort,
+                context.provider_context_length,
+                codex_model_base_instructions(context.runtime, context.image),
+            ),
+            mcp_command,
+        )
+    write_proxy_relay(state_root)
+    with tempfile.TemporaryDirectory(prefix="ae-", dir=PROJECT_TEMP_ROOT) as socket_dir:
+        socket_path = Path(socket_dir) / "p.sock"
+        container_temporary_root = Path(socket_dir) / "tmp"
+        container_temporary_root.mkdir()
+        server: socketserver.BaseServer
+        if subscription:
+            from scripts.agent_efficiency.codex_subscription import SubscriptionTunnel
+
+            server = SubscriptionTunnel(str(socket_path))
+        else:
+            assert token is not None
+            constraints = provider_proxy.ResponseConstraints(
+                controls.model,
+                controls.reasoning_effort,
+                controls.max_prompt_price,
+                controls.max_completion_price,
+            )
+            settings = provider_proxy.ProxySettings(
+                token,
+                context.upstream_token,
+                0,
+                controls.max_output_tokens,
+                constraints,
+                controls.max_response_requests,
+                controls.max_transport_attempts_per_response,
+                max_total_tokens=token_limit,
+                max_context_tokens=context.provider_context_length,
+                max_prompt_usd_per_million=controls.max_prompt_price,
+                max_completion_usd_per_million=controls.max_completion_price,
+                max_attempt_spend_usd=attempt_spend_limit,
+                max_campaign_spend_usd=campaign_spend_limit,
+                response_artifact_root=attempt_root / "provider-responses",
+            )
+            server = provider_proxy.create_unix_server(settings, str(socket_path))
+        try:
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            execution = execute_container_attempt(
+                ContainerAttemptRequest(
+                    context.runtime,
+                    context.image,
+                    agent_root,
+                    state_root,
+                    prompt,
+                    controls.timeout_seconds,
+                    proxy_socket=socket_path,
+                    proxy_client_token=token,
+                    temporary_root=container_temporary_root,
+                    provider_transport=(
+                        "codex-subscription" if subscription else "openrouter-proxy"
+                    ),
+                    subscription_auth=context.subscription_auth,
+                )
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+        if subscription:
+            assert isinstance(server, SubscriptionTunnel)
+            tunnel_evidence = {
+                "connections": dict(server.connections),
+                "encrypted_bytes": server.bytes_relayed,
+            }
+            observations: list[dict[str, object]] = []
+            request_observations: list[dict[str, object]] = []
+        else:
+            observations = list(settings.response_observations)
+            request_observations = list(settings.request_observations)
+    return (
+        execution,
+        observations,
+        request_observations,
+        tunnel_evidence if subscription else None,
+        None if subscription else settings.limiter.count,
+    )
+
+
 def execute_pilot_attempt(
     store: CampaignStore,
     attempt: ScheduledAttempt,
@@ -1725,10 +1926,9 @@ def execute_pilot_attempt(
         raise PilotLauncherError(
             "unfinished attempt work exists; do not risk duplicate billing"
         )
-    agent_root, protected_root, state_root = (
+    agent_root, protected_root = (
         attempt_root / "agent",
         attempt_root / "protected",
-        attempt_root / "state",
     )
     attempt_root.mkdir(parents=True)
     export_started = time.perf_counter()
@@ -1833,41 +2033,9 @@ def execute_pilot_attempt(
         protected_root,
         attempt.task_id,
     )
-    token = secrets.token_urlsafe(32)
-    phase0.write_isolated_codex_config(
-        state_root,
-        "/workspace",
-        "http://127.0.0.1:43123/v1",
-        phase0.CodexProviderSettings(
-            controls.model,
-            controls.reasoning_effort,
-            context.provider_context_length,
-            codex_model_base_instructions(context.runtime, context.image),
-        ),
-        BENCHMARK_MCP_COMMAND if attempt.assistance_mode == "codira-mcp" else None,
-    )
-    write_proxy_relay(state_root)
-    constraints = provider_proxy.ResponseConstraints(
-        controls.model,
-        controls.reasoning_effort,
-        controls.max_prompt_price,
-        controls.max_completion_price,
-    )
-    settings = provider_proxy.ProxySettings(
-        token,
-        context.upstream_token,
-        0,
-        controls.max_output_tokens,
-        constraints,
-        controls.max_response_requests,
-        controls.max_transport_attempts_per_response,
-        max_total_tokens=token_limit,
-        max_context_tokens=context.provider_context_length,
-        max_prompt_usd_per_million=controls.max_prompt_price,
-        max_completion_usd_per_million=controls.max_completion_price,
-        max_attempt_spend_usd=attempt_spend_limit,
-        max_campaign_spend_usd=campaign_spend_limit,
-        response_artifact_root=attempt_root / "provider-responses",
+    subscription = (
+        cast("Mapping[str, object]", context.manifest["provider"]).get("name")
+        == "codex-subscription"
     )
     prompt = (
         prompt_for_attempt(
@@ -1876,29 +2044,15 @@ def execute_pilot_attempt(
         + "\n\n"
         + environment.directive
     )
-    with tempfile.TemporaryDirectory(prefix="ae-", dir=PROJECT_TEMP_ROOT) as socket_dir:
-        socket_path = Path(socket_dir) / "p.sock"
-        container_temporary_root = Path(socket_dir) / "tmp"
-        container_temporary_root.mkdir()
-        server = provider_proxy.create_unix_server(settings, str(socket_path))
-        try:
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-            execution = execute_container_attempt(
-                ContainerAttemptRequest(
-                    context.runtime,
-                    context.image,
-                    agent_root,
-                    state_root,
-                    prompt,
-                    controls.timeout_seconds,
-                    proxy_socket=socket_path,
-                    proxy_client_token=token,
-                    temporary_root=container_temporary_root,
-                )
-            )
-        finally:
-            server.shutdown()
-            server.server_close()
+    execution, observations, request_observations, tunnel_evidence, response_count = (
+        _execute_provider_attempt(
+            context,
+            store,
+            attempt,
+            prompt,
+            (token_limit, attempt_spend_limit, campaign_spend_limit),
+        )
+    )
     grading_started = time.perf_counter()
     capture_error: str | None = None
     if result_format == "workspace-diff":
@@ -1917,13 +2071,16 @@ def execute_pilot_attempt(
         store.campaign_id,
         attempt,
         execution,
-        max_total_tokens=token_limit,
+        max_total_tokens=controls.max_total_tokens if subscription else token_limit,
         require_mcp=cast(
             "Mapping[str, object]", context.manifest.get("treatment_protocol", {})
         ).get("version")
         != "mcp-optional-v3",
     )
-    evidence["provider_responses"] = list(settings.response_observations)
+    evidence["provider_responses"] = observations
+    if subscription:
+        evidence["subscription_tunnel"] = tunnel_evidence
+        evidence["provider_wire_evidence"] = "unavailable-from-native-codex"
     from scripts.agent_efficiency.instrumentation import evidence_measurement
 
     try:
@@ -1934,7 +2091,7 @@ def execute_pilot_attempt(
         measured_events,
         cast("Sequence[str]", task.get("reference_anchors", [])),
     )
-    evidence["provider_requests"] = list(settings.request_observations)
+    evidence["provider_requests"] = request_observations
     evidence["initial_prompt_measurement"] = {
         "chars": len(prompt),
         "bytes": len(prompt.encode()),
@@ -1949,7 +2106,6 @@ def execute_pilot_attempt(
     if attempt.assistance_mode == "codira-mcp":
         evidence["index_preparation_trace"] = index_trace
     evidence["container_execution_trace"] = execution_trace
-    observations = settings.response_observations
     result["failure_class"] = _normalized_proxy_failure_class(
         cast("str | None", result["failure_class"]), observations
     )
@@ -1974,6 +2130,8 @@ def execute_pilot_attempt(
             definition = context.oracles[attempt.task_id]["definition"]
             if not isinstance(definition, Mapping):
                 raise ContractError.message("oracle definition must be an object")
+            from scripts.agent_efficiency.protected_runtime import ImageOracleExecutor
+
             outcome = evaluate_oracle(
                 definition,
                 result_root=agent_root,
@@ -1981,6 +2139,13 @@ def execute_pilot_attempt(
                 result_format=result_format,
                 protected_root=protected_root,
                 trace_root=attempt_root / "oracle-trace",
+                command_executor=ImageOracleExecutor(
+                    context.runtime,
+                    context.image,
+                    fixture_id,
+                    agent_root,
+                    controls.timeout_seconds,
+                ),
             )
             oracle_passed, oracle_fingerprint = outcome.passed, outcome.fingerprint
             oracle_checks = list(outcome.checks)
@@ -2045,7 +2210,7 @@ def execute_pilot_attempt(
             "oracle_passed": oracle_passed,
             "oracle_fingerprint": oracle_fingerprint,
             "protected_asset": protected_asset,
-            "response_request_count": settings.limiter.count,
+            "response_request_count": response_count,
         }
     )
     return result, evidence
@@ -2076,6 +2241,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--full-campaign", action="store_true")
     parser.add_argument("--launch-plan", type=Path)
+    parser.add_argument("--subscription-codex", type=Path)
+    parser.add_argument("--subscription-auth-source", type=Path)
     return parser
 
 
@@ -2144,6 +2311,72 @@ def execution_plan(
     return plan, schedule
 
 
+def _authenticated_route(
+    args: argparse.Namespace,
+    manifest: Mapping[str, object],
+    controls: ExecutionControls,
+) -> tuple[str, Mapping[str, object], int | None, Path | None]:
+    """Admit the frozen provider without mixing its credentials or accounting.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Explicit preflight or execution arguments.
+    manifest : Mapping[str, object]
+        Factory-frozen provider selection.
+    controls : ExecutionControls
+        Validated model and accounting controls.
+
+    Returns
+    -------
+    tuple
+        Proxy credential, sanitized receipt, context length and native auth binding.
+    """
+    provider = cast("Mapping[str, object]", manifest["provider"])
+    if provider.get("name") == "codex-subscription":
+        from scripts.agent_efficiency.subscription_qualification import (
+            SubscriptionRoute,
+            preflight_subscription_in_image,
+        )
+
+        if (
+            args.subscription_codex is None
+            or args.state_root is None
+            or args.image != manifest.get("runtime_image")
+        ):
+            raise PilotLauncherError(
+                "native preflight requires its frozen image, state root and --subscription-codex"
+            )
+        auth_source = args.subscription_auth_source or Path.home() / ".codex/auth.json"
+        if not auth_source.is_file():
+            raise PilotLauncherError("managed ChatGPT login file is unavailable")
+        receipt = preflight_subscription_in_image(
+            SubscriptionRoute(
+                args.runtime,
+                args.image,
+                args.subscription_codex,
+                auth_source,
+                controls.model,
+                controls.reasoning_effort,
+            ),
+            args.state_root,
+        )
+        return "", receipt, None, auth_source
+    upstream = os.environ.get(provider_proxy.UPSTREAM_TOKEN_ENV, "")
+    if not upstream:
+        raise PilotLauncherError("pilot OpenRouter credential is unavailable")
+    receipt = preflight_openrouter_route(manifest, controls, upstream)
+    public_route = receipt.get("public_route")
+    context_length = (
+        public_route.get("context_length")
+        if isinstance(public_route, Mapping)
+        else None
+    )
+    if not isinstance(context_length, int):
+        raise PilotLauncherError("authenticated route context is unavailable")
+    return upstream, receipt, context_length, None
+
+
 def main(arguments: list[str] | None = None) -> int:
     """Print a dry-run plan or execute only the approved bounded pilot.
 
@@ -2181,15 +2414,8 @@ def main(arguments: list[str] | None = None) -> int:
                 scheduled_attempts=len(schedule),
                 full_campaign=args.full_campaign,
             )
-            upstream = os.environ.get(provider_proxy.UPSTREAM_TOKEN_ENV, "")
-            if not upstream:
-                raise PilotLauncherError("pilot OpenRouter credential is unavailable")
-            print(
-                json.dumps(
-                    preflight_openrouter_route(manifest, controls, upstream),
-                    sort_keys=True,
-                )
-            )
+            _, receipt, _, _ = _authenticated_route(args, manifest, controls)
+            print(json.dumps(receipt, sort_keys=True))
             return 0
         if not args.execute:
             print(json.dumps(plan, sort_keys=True))
@@ -2227,21 +2453,26 @@ def main(arguments: list[str] | None = None) -> int:
         validate_treatment_protocol(manifest)
         sources = parse_fixture_sources(args.fixture_source)
         tasks, oracles, fixtures = load_pilot_inputs(manifest, args.task_id, sources)
-        upstream = os.environ.get(provider_proxy.UPSTREAM_TOKEN_ENV, "")
-        if not upstream:
-            raise PilotLauncherError("pilot OpenRouter credential is unavailable")
+        provider = cast("Mapping[str, object]", manifest["provider"])
+        subscription = provider.get("name") == "codex-subscription"
         from scripts.agent_efficiency.runtime_qualification import qualify_image
 
         qualify_image(args.runtime, args.image, args.state_root)
-        route_preflight = preflight_openrouter_route(manifest, controls, upstream)
-        public_route = route_preflight.get("public_route")
-        provider_context_length = (
-            public_route.get("context_length")
-            if isinstance(public_route, Mapping)
-            else None
+        if subscription:
+            from scripts.agent_efficiency.subscription_qualification import (
+                qualify_subscription_image,
+            )
+
+            qualify_subscription_image(
+                args.runtime,
+                args.image,
+                args.state_root,
+                controls.model,
+                controls.reasoning_effort,
+            )
+        upstream, route_preflight, provider_context_length, auth_source = (
+            _authenticated_route(args, manifest, controls)
         )
-        if not isinstance(provider_context_length, int):
-            raise PilotLauncherError("authenticated route context is unavailable")
         store = CampaignStore(
             args.state_root,
             str(manifest["campaign_id"]),
@@ -2266,8 +2497,24 @@ def main(arguments: list[str] | None = None) -> int:
             manifest,
             provider_context_length,
             args.full_campaign,
+            auth_source,
         )
         if args.full_campaign:
+            if subscription:
+                from scripts.agent_efficiency.subscription_campaign import (
+                    run_subscription_campaign,
+                )
+
+                assert args.subscription_codex is not None
+                report = run_subscription_campaign(
+                    store,
+                    lambda attempt: execute_pilot_attempt(store, attempt, context),
+                    check_quota=lambda: _authenticated_route(args, manifest, controls)[
+                        1
+                    ],
+                )
+                print(json.dumps(report, sort_keys=True))
+                return 0 if report["status"] in {"complete", "checkpoint"} else 2
             from scripts.agent_efficiency.full_campaign import run_full_campaign
 
             report = run_full_campaign(

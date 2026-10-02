@@ -1,6 +1,6 @@
 {
   "family": "impact",
-  "fixture_id": "codira-public",
+  "fixture_id": "codira-current-public",
   "oracle_id": "panel-i1",
   "prompt": "Assess a change to MCPAdapter._query. List every direct caller, the warm connection executor, operations that bypass it, and relevant tests. Label dynamic uncertainty. Write your answer to BENCHMARK_ANSWER.md and stop.",
   "reference_anchors": [

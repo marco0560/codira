@@ -138,6 +138,19 @@ def prepare_panel_fixture(root: Path, task_id: str) -> None:
         if source.count(anchor) != 1:
             raise ValueError("frozen ignore seed anchor differs")
         path.write_text(source.replace(anchor, "if (false && isIgnored(input)) {"))
+    if task_id == "panel-f1":
+        parser = root / "src/codira/cli_parser.py"
+        source = parser.read_text()
+        option = '    context_parser.add_argument(\n        "--max-results",\n        type=_item_limit,\n        default=10,\n        help="Complete items per page, 1..100 (default 10)",\n    )\n'
+        if source.count(option) != 1:
+            raise ValueError("frozen max-results seed anchor differs")
+        parser.write_text(source.replace(option, ""))
+        query = root / "src/codira/cli_queries.py"
+        source = query.read_text()
+        option = '    limit = getattr(args, "max_results", 10)'
+        if source.count(option) != 1:
+            raise ValueError("frozen context limit seed anchor differs")
+        query.write_text(source.replace(option, "    limit = 10"))
     git = shutil.which("git")
     if git is None:
         raise ValueError("Git is required to prepare panel fixtures")

@@ -1,0 +1,135 @@
+{
+  "image": "ghcr.io/marco0560/codira-agent-benchmark@sha256:6a1979bae149069c67058d66aad9abc73fefc86f68fce4f6fc868f8e51f7f4ab",
+  "case_count": 18,
+  "status": "passed",
+  "bank_sha256": "7d03a3fe9047a29ef3e1af96013841881ec38d1a3243cc7d64598c5f8ab36fbf",
+  "calibration_sha256": "53d4918cebac27bb473e84135a80fee67d12c671aca5af95641cf8d36ffc91da",
+  "cases": [
+    {
+      "task_id": "panel-p1",
+      "case": "correct",
+      "passed": true,
+      "expected": true,
+      "patch_sha256": "5d47427f1421a4418fdc3ae7dfa4d76f850ca99841ef3c7bdf7069b6b593fda9"
+    },
+    {
+      "task_id": "panel-p1",
+      "case": "incomplete",
+      "passed": false,
+      "expected": false,
+      "patch_sha256": "97141e67267de4b07ec82bec7a349ecd77a7a42dead03b5324f694d068052e68"
+    },
+    {
+      "task_id": "panel-p1",
+      "case": "subtly_wrong",
+      "passed": false,
+      "expected": false,
+      "patch_sha256": "932ab23b77f129e26d9639e1da8f3382e3bf3293cb43afcf25f9d98608b16c23"
+    },
+    {
+      "task_id": "panel-p2",
+      "case": "correct",
+      "passed": true,
+      "expected": true,
+      "patch_sha256": "e40dec3b7f541802cb9235500150907a99216630933a9cb96a2e6cfdbdbdc436"
+    },
+    {
+      "task_id": "panel-p2",
+      "case": "incomplete",
+      "passed": false,
+      "expected": false,
+      "patch_sha256": "3b99988e14b766bd8f6cdeb26ce2a0da1e1891295f46621f2066501656a8ba54"
+    },
+    {
+      "task_id": "panel-p2",
+      "case": "subtly_wrong",
+      "passed": false,
+      "expected": false,
+      "patch_sha256": "ac39ffd17f78c250f5184045c00f8e96a8af61aac3736375f00f07316bfbd289"
+    },
+    {
+      "task_id": "panel-p3",
+      "case": "correct",
+      "passed": true,
+      "expected": true,
+      "patch_sha256": "c1b9ac26c50e044c076084ea053dd8257b387a9c8f66ebc03b5cd13b60088d65"
+    },
+    {
+      "task_id": "panel-p3",
+      "case": "incomplete",
+      "passed": false,
+      "expected": false,
+      "patch_sha256": "75283f3fc343ad45c6a57f71dc4e49c75793e709b0d14a018fa52c2ba637ea6e"
+    },
+    {
+      "task_id": "panel-p3",
+      "case": "subtly_wrong",
+      "passed": false,
+      "expected": false,
+      "patch_sha256": "02ab9494826b48cc50088c00d09b47c51e982a8b375f2cc096647a983269a9a9"
+    },
+    {
+      "task_id": "panel-f1",
+      "case": "correct",
+      "passed": true,
+      "expected": true,
+      "patch_sha256": "c6f1a9be2247ea9ac86e6fa5c5d8d53d6957ade8405aeb8d724fb8ae3417c011"
+    },
+    {
+      "task_id": "panel-f1",
+      "case": "incomplete",
+      "passed": false,
+      "expected": false,
+      "patch_sha256": "b9c9fc4439607b6494a52dab0526455841a220fb3424f4cd04ea656ea0a5e572"
+    },
+    {
+      "task_id": "panel-f1",
+      "case": "subtly_wrong",
+      "passed": false,
+      "expected": false,
+      "patch_sha256": "a06d966337c3b5c982b8e003166a76938cb8fa92006502e36fd293eaa1806bbf"
+    },
+    {
+      "task_id": "panel-f2",
+      "case": "correct",
+      "passed": true,
+      "expected": true,
+      "patch_sha256": "3118c751de91a3d9f59954b6eab5b1acebeba761789684fd83b49ddc28544b1d"
+    },
+    {
+      "task_id": "panel-f2",
+      "case": "incomplete",
+      "passed": false,
+      "expected": false,
+      "patch_sha256": "5676bcf7d348aaa9939771cf77a2b371cf1af0d57eebd92f80762644cfb73fef"
+    },
+    {
+      "task_id": "panel-f2",
+      "case": "subtly_wrong",
+      "passed": false,
+      "expected": false,
+      "patch_sha256": "c693c7f2d7f43e5c8b24717f028027ad339ebb8b7582a89b6aa35704769a91b1"
+    },
+    {
+      "task_id": "panel-f3",
+      "case": "correct",
+      "passed": true,
+      "expected": true,
+      "patch_sha256": "213506efff7d017987f3b6a78d87b7c7af8f558210a8e96756b06ca9cb307f43"
+    },
+    {
+      "task_id": "panel-f3",
+      "case": "incomplete",
+      "passed": false,
+      "expected": false,
+      "patch_sha256": "8892bc9ae093aec4e694964e00f5c394a923b69a83638c2e481487577a9654c9"
+    },
+    {
+      "task_id": "panel-f3",
+      "case": "subtly_wrong",
+      "passed": false,
+      "expected": false,
+      "patch_sha256": "07e80d71c3ad80fcea52728e731a91932e90289c57f30ed11bee4bbcb20798a9"
+    }
+  ]
+}

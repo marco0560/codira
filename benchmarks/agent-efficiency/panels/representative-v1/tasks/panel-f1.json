@@ -1,6 +1,6 @@
 {
   "family": "feature",
-  "fixture_id": "codira-public",
+  "fixture_id": "codira-current-public",
   "oracle_id": "panel-f1",
   "prompt": "Add context --max-results as a bounded integer from 1 to 100, default 10. Connect it through CLI to core paging without cutting evidence items. Test valid values, errors and default compatibility. Produce .benchmark/fix.patch and stop.",
   "reference_anchors": [

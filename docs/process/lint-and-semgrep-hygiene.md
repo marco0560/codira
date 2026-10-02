@@ -227,10 +227,10 @@ host parser.
 
 ## Updated integration locations — 2026-10-01
 
-- `scripts/agent_efficiency/oracles.py:134` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `scripts/agent_efficiency/oracles.py:789` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `scripts/agent_efficiency/oracles.py:900` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `scripts/agent_efficiency/oracles.py:1047` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:142` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:812` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:923` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:1070` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
 - `src/codira/cli.py:406` (E402): Compatibility imports retain their established initialization order.
 - `src/codira/cli.py:411` (E402): Compatibility imports retain their established initialization order.
 - `src/codira/cli.py:450` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
@@ -239,3 +239,12 @@ host parser.
 - `src/codira/query/context_scoring.py:638` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
 - `src/codira/query/context_scoring.py:787` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
 - `src/codira/query/context_scoring.py:822` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+
+### Native subscription preparation
+
+- `scripts/agent_efficiency/codex_subscription.py:2`: explicit boundary errors use direct diagnostic strings; account data is sanitized before persistence.
+- `scripts/agent_efficiency/subscription_campaign.py:2`: immutable scheduler and quota admission errors follow the existing campaign exception convention.
+- `scripts/agent_efficiency/subscription_qualification.py:2`: offline admission errors identify retained traces without embedding their contents.
+- `scripts/calibrate_agent_efficiency_panel.py:2`: generator errors identify inconsistent frozen calibration cases.
+
+- `scripts/agent_efficiency/panel_patch_calibration.py:2`: curated source-edit and admission errors identify the mismatched case without logging provider or credential data.

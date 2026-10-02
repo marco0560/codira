@@ -186,6 +186,13 @@ def build_campaign(
     stage = cast("str", specification["stage"])
     accounting = cast("Mapping[str, object]", specification["accounting"])
     shared_pool = _uses_shared_campaign_pool(stage, accounting)
+    provider = cast("Mapping[str, object]", specification["provider"])
+    if (
+        provider.get("name") == "codex-subscription"
+        and stage != "representative-campaign"
+    ):
+        detail = "Codex subscription is admitted only for the representative stage"
+        raise CampaignFactoryError.message(detail)
     task_ids = tuple(cast("list[str]", specification["task_ids"]))
     required_count = {
         "calibration": 1,
@@ -337,6 +344,10 @@ def build_campaign(
             cast("dict[str, object]", plan["execution"])[
                 "requires_shared_campaign_budget_enforcement"
             ] = True
+        if provider.get("name") == "codex-subscription":
+            cast("dict[str, object]", plan["execution"])[
+                "requires_subscription_quota_enforcement"
+            ] = True
     return manifest, plan
 
 
@@ -361,7 +372,12 @@ def _uses_shared_campaign_pool(stage: str, accounting: Mapping[str, object]) -> 
         If an existing pilot or calibration requests pooled accounting.
     """
 
-    shared_pool = accounting.get("budget_reservation_mode") == "shared-pool"
+    mode = accounting.get("budget_reservation_mode")
+    shared_pool = mode == "shared-pool"
+    subscription = mode == "subscription-quota"
+    if subscription and stage != "representative-campaign":
+        detail = "subscription quota requires the representative stage"
+        raise CampaignFactoryError.message(detail)
     if shared_pool and stage not in {
         "full-campaign",
         "completion",
@@ -369,9 +385,8 @@ def _uses_shared_campaign_pool(stage: str, accounting: Mapping[str, object]) -> 
     }:
         detail = "shared campaign budgets require the full-campaign stage"
         raise CampaignFactoryError.message(detail)
-    if (
-        stage in {"full-campaign", "completion", "representative-campaign"}
-        and not shared_pool
+    if stage in {"full-campaign", "completion", "representative-campaign"} and not (
+        shared_pool or subscription
     ):
         detail = "full campaigns require observed shared-pool accounting"
         raise CampaignFactoryError.message(detail)
@@ -452,6 +467,39 @@ def _validate_accounting(manifest: Mapping[str, object], attempts: int) -> None:
     accounting = cast("Mapping[str, object]", manifest["accounting"])
     budgets = cast("Mapping[str, object]", manifest["budgets"])
     provider = cast("Mapping[str, object]", manifest["provider"])
+    subscription = provider.get("name") == "codex-subscription"
+    if subscription:
+        if (
+            provider.get("wire_api") != "codex-cli"
+            or accounting.get("budget_reservation_mode") != "subscription-quota"
+            or any(
+                provider.get(key) != 0
+                for key in (
+                    "max_prompt_usd_per_million",
+                    "max_completion_usd_per_million",
+                )
+            )
+            or any(
+                accounting.get(key) != 0
+                for key in (
+                    "max_daily_spend_usd",
+                    "max_estimated_attempt_spend_usd",
+                    "max_estimated_pilot_spend_usd",
+                )
+            )
+        ):
+            detail = "subscription accounting route is invalid"
+            raise CampaignFactoryError.message(detail)
+        return
+    if provider.get("name") != "openrouter" or provider.get("wire_api") != "responses":
+        detail = "OpenRouter provider route is invalid"
+        raise CampaignFactoryError.message(detail)
+    if (
+        accounting.get("budget_reservation_mode", "sum-attempt-ceilings")
+        == "subscription-quota"
+    ):
+        detail = "OpenRouter cannot use subscription quota"
+        raise CampaignFactoryError.message(detail)
     daily = float(cast("int | float", accounting["max_daily_spend_usd"]))
     per_attempt = float(
         cast("int | float", accounting["max_estimated_attempt_spend_usd"])
@@ -481,7 +529,13 @@ def _validate_accounting(manifest: Mapping[str, object], attempts: int) -> None:
     shared_pool = accounting.get("budget_reservation_mode") == "shared-pool"
     required_total = per_attempt * attempts
     if (
-        total > daily
+        min(daily, per_attempt, total) <= 0
+        or min(
+            float(cast("int | float", provider["max_prompt_usd_per_million"])),
+            float(cast("int | float", provider["max_completion_usd_per_million"])),
+        )
+        <= 0
+        or total > daily
         or (not shared_pool and total + 1e-12 < required_total)
         or (not shared_pool and per_attempt < token_bound + output_reserve)
     ):

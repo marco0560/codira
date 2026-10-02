@@ -63,6 +63,8 @@ class PilotLaunch:
         Seed whose schedule must exactly reproduce the factory launch plan.
     manifest, plan : dict[str, object]
         Validated generated campaign artifacts.
+    subscription_codex, subscription_auth_source : pathlib.Path or None
+        Explicit native CLI and managed login bindings for a subscription route.
     """
 
     campaign_directory: Path
@@ -72,6 +74,8 @@ class PilotLaunch:
     seed: int
     manifest: dict[str, object]
     plan: dict[str, object]
+    subscription_codex: Path | None = None
+    subscription_auth_source: Path | None = None
 
 
 def _sha256(path: Path) -> str:
@@ -135,6 +139,8 @@ def load_launch(
     seed: int,
     *,
     allow_prepared_root: bool = False,
+    subscription_codex: Path | None = None,
+    subscription_auth_source: Path | None = None,
 ) -> PilotLaunch:
     """Validate generated artifacts before any directory or tmux side effect.
 
@@ -152,6 +158,10 @@ def load_launch(
         Candidate schedule seed checked against the factory plan.
     allow_prepared_root : bool, optional
         Permit an existing root only for receipt-verified launch mode.
+    subscription_codex : pathlib.Path or None, optional
+        Existing native CLI when that route is frozen.
+    subscription_auth_source : pathlib.Path or None, optional
+        Existing managed login binding for the native route.
 
     Returns
     -------
@@ -180,6 +190,9 @@ def load_launch(
         raise PilotLaunchError("factory artifacts are unavailable") from error
     if not isinstance(plan, dict):
         raise PilotLaunchError("factory launch plan is malformed")
+    _validate_subscription_inputs(
+        manifest, subscription_codex, subscription_auth_source
+    )
     stage = plan.get("stage")
     full_campaign = stage in {"full-campaign", "representative-campaign"}
     completion = stage == "completion"
@@ -262,7 +275,46 @@ def load_launch(
         seed,
         manifest,
         plan,
+        subscription_codex,
+        subscription_auth_source,
     )
+
+
+def _validate_subscription_inputs(
+    manifest: dict[str, object], codex: Path | None, auth_source: Path | None
+) -> None:
+    """Validate native login bindings before a launcher side effect.
+
+    Parameters
+    ----------
+    manifest : dict[str, object]
+        Frozen provider selection.
+    codex, auth_source : pathlib.Path or None
+        Existing binary and managed login file, without reading tokens.
+
+    Raises
+    ------
+    PilotLaunchError
+        If native bindings are missing or supplied to another provider.
+    """
+    provider = manifest.get("provider")
+    subscription = (
+        isinstance(provider, dict) and provider.get("name") == "codex-subscription"
+    )
+    if subscription:
+        if (
+            codex is None
+            or not codex.is_file()
+            or auth_source is None
+            or not auth_source.is_file()
+        ):
+            raise PilotLaunchError(
+                "subscription requires the native Codex binary and managed login"
+            )
+    elif codex is not None or auth_source is not None:
+        raise PilotLaunchError(
+            "OpenRouter launch cannot accept subscription credentials"
+        )
 
 
 def _atomic_json(path: Path, document: dict[str, object]) -> None:
@@ -333,7 +385,7 @@ def _receipt(launch: PilotLaunch) -> dict[str, object]:
     reports: dict[str, object] = {}
     for fixture_id, source in sorted(launch.fixture_sources.items()):
         fixture = load_document(
-            BENCHMARK_ROOT / "fixtures" / f"{fixture_id}.json", "fixture"
+            panel_document_path(BENCHMARK_ROOT, "fixtures", fixture_id), "fixture"
         )
         try:
             report = verify_fixture(fixture, source)
@@ -357,6 +409,11 @@ def _receipt(launch: PilotLaunch) -> dict[str, object]:
         "state_root": str(runtime_state_root(launch)),
         "log_path": str(launch.execution_root / "logs" / "pilot.log"),
         "exit_path": str(launch.execution_root / "pilot.exit"),
+        **(
+            {"subscription_codex_sha256": _sha256(launch.subscription_codex)}
+            if launch.subscription_codex is not None
+            else {}
+        ),
     }
 
 
@@ -489,7 +546,19 @@ def tmux_command(launch: PilotLaunch, *, invocation: int = 0) -> tuple[str, str]
             launch.runtime,
         )
     )
-    command = ["sops", "exec-env", SOPS_ENVIRONMENT, shlex.join(runner)]
+    if launch.subscription_codex is not None:
+        assert launch.subscription_auth_source is not None
+        runner.extend(
+            (
+                "--subscription-codex",
+                str(launch.subscription_codex),
+                "--subscription-auth-source",
+                str(launch.subscription_auth_source),
+            )
+        )
+        command = runner
+    else:
+        command = ["sops", "exec-env", SOPS_ENVIRONMENT, shlex.join(runner)]
     stem = "pilot" if invocation == 0 else f"resume-{invocation:03d}"
     log = launch.execution_root / "logs" / f"{stem}.log"
     exit_path = launch.execution_root / f"{stem}.exit"
@@ -533,38 +602,31 @@ def start_tmux(launch: PilotLaunch, *, resume: bool = False) -> str:
             "representative-campaign",
         }:
             raise PilotLaunchError("resume is qualified only for full campaigns")
-        journal = runtime_state_root(launch) / "budget"
-        starts = {
-            path.stem.removesuffix(".started")
-            for path in journal.glob("*.started.json")
-        }
-        settlements = {
-            path.stem.removesuffix(".settled")
-            for path in journal.glob("*.settled.json")
-        }
-        state = runtime_state_root(launch)
-        clean_admission_stop = (
-            not (journal / "identity.json").exists()
-            and not any(state.iterdir())
-            and (launch.execution_root / "pilot.exit").is_file()
-        )
-        if starts != settlements or (
-            not (journal / "identity.json").is_file() and not clean_admission_stop
-        ):
-            raise PilotLaunchError("unfinished budget evidence blocks resume")
-        invocation = 1 + len(tuple(launch.execution_root.glob("resume-*-receipt.json")))
-        _atomic_json(
-            launch.execution_root / f"resume-{invocation:03d}-receipt.json",
-            {
-                "launch_receipt_sha256": _sha256(
-                    launch.execution_root / "launch-receipt.json"
-                ),
-                "invocation": invocation,
-                "launch_plan_sha256": _sha256(
-                    launch.campaign_directory / "launch-plan.json"
-                ),
-            },
-        )
+        if launch.subscription_codex is not None:
+            state = runtime_state_root(launch)
+            starts = state / "subscription-starts"
+            if any(
+                not (state / "records" / f"{path.stem}.json").is_file()
+                for path in starts.glob("*.json")
+            ):
+                raise PilotLaunchError("unfinished subscription attempt blocks resume")
+            invocation = 1 + len(
+                tuple(launch.execution_root.glob("resume-*-receipt.json"))
+            )
+            _atomic_json(
+                launch.execution_root / f"resume-{invocation:03d}-receipt.json",
+                {
+                    "launch_receipt_sha256": _sha256(
+                        launch.execution_root / "launch-receipt.json"
+                    ),
+                    "invocation": invocation,
+                    "launch_plan_sha256": _sha256(
+                        launch.campaign_directory / "launch-plan.json"
+                    ),
+                },
+            )
+        else:
+            invocation = _openrouter_resume_invocation(launch)
     elif (launch.execution_root / "logs" / "pilot.log").exists() or (
         launch.execution_root / "pilot.exit"
     ).exists():
@@ -579,6 +641,52 @@ def start_tmux(launch: PilotLaunch, *, resume: bool = False) -> str:
     if completed.returncode != 0:
         raise PilotLaunchError("tmux launch failed")
     return session
+
+
+def _openrouter_resume_invocation(launch: PilotLaunch) -> int:
+    """Verify paid proxy settlement before selecting a new resume receipt.
+
+    Parameters
+    ----------
+    launch : PilotLaunch
+        Prepared OpenRouter campaign.
+
+    Returns
+    -------
+    int
+        New immutable invocation number.
+    """
+    journal = runtime_state_root(launch) / "budget"
+    starts = {
+        path.stem.removesuffix(".started") for path in journal.glob("*.started.json")
+    }
+    settlements = {
+        path.stem.removesuffix(".settled") for path in journal.glob("*.settled.json")
+    }
+    state = runtime_state_root(launch)
+    clean_admission_stop = (
+        not (journal / "identity.json").exists()
+        and not any(state.iterdir())
+        and (launch.execution_root / "pilot.exit").is_file()
+    )
+    if starts != settlements or (
+        not (journal / "identity.json").is_file() and not clean_admission_stop
+    ):
+        raise PilotLaunchError("unfinished budget evidence blocks resume")
+    invocation = 1 + len(tuple(launch.execution_root.glob("resume-*-receipt.json")))
+    _atomic_json(
+        launch.execution_root / f"resume-{invocation:03d}-receipt.json",
+        {
+            "launch_receipt_sha256": _sha256(
+                launch.execution_root / "launch-receipt.json"
+            ),
+            "invocation": invocation,
+            "launch_plan_sha256": _sha256(
+                launch.campaign_directory / "launch-plan.json"
+            ),
+        },
+    )
+    return invocation
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -600,6 +708,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixture-source", action="append", required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--runtime", default="podman")
+    parser.add_argument("--subscription-codex", type=Path)
+    parser.add_argument("--subscription-auth-source", type=Path)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--prepare", action="store_true")
     mode.add_argument("--launch", action="store_true")
@@ -630,6 +740,8 @@ def main(arguments: list[str] | None = None) -> int:
             args.runtime,
             args.seed,
             allow_prepared_root=args.launch or args.resume,
+            subscription_codex=args.subscription_codex,
+            subscription_auth_source=args.subscription_auth_source,
         )
         receipt = (
             verify_prepared_launch(launch)

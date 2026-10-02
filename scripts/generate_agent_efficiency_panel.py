@@ -9,6 +9,7 @@ Returns
 None
     Reproducible public definitions; never launches a provider request.
 """
+# ruff: noqa: EM101, EM102, TRY003
 
 from __future__ import annotations
 
@@ -26,6 +27,9 @@ from scripts.agent_efficiency.snapshots import snapshot_files
 
 ROOT = Path(__file__).resolve().parents[1]
 BANK = ROOT / "benchmarks/agent-efficiency/panels/representative-v1.json"
+CALIBRATION = (
+    ROOT / "benchmarks/agent-efficiency/panels/representative-v1-calibration.json"
+)
 BASE = ROOT / "benchmarks/agent-efficiency"
 
 
@@ -47,8 +51,23 @@ def generated_documents() -> dict[Path, str]:
         If panel controls or protected asset digests are invalid.
     """
     bank = json.loads(BANK.read_text())
+    calibration = json.loads(CALIBRATION.read_text())
+    if calibration.get("panel_id") != bank.get("panel_id"):
+        raise ValueError("panel calibration identity differs")
+    cases = calibration.get("cases")
+    if not isinstance(cases, dict) or set(cases) != {
+        row["task_id"] for row in bank["tasks"]
+    }:
+        raise ValueError("panel calibration must cover every task exactly once")
     documents: dict[Path, str] = {}
     protected_assets: dict[str, str] = {}
+    for fixture in bank.get("fixtures", []):
+        validate_document("fixture", fixture)
+        documents[
+            BASE
+            / "panels/representative-v1/fixtures"
+            / (fixture["fixture_id"] + ".json")
+        ] = json.dumps(fixture, sort_keys=True, indent=2) + "\n"
     for folder in sorted((BASE / "synthetic").iterdir()):
         inventory = snapshot_files(folder)
         fixture_id = folder.name + "-synthetic"
@@ -73,6 +92,16 @@ def generated_documents() -> dict[Path, str]:
             BASE / "panels/representative-v1/fixtures" / (fixture_id + ".json")
         ] = json.dumps(fixture, sort_keys=True, indent=2) + "\n"
     for row in bank["tasks"]:
+        case = cases[row["task_id"]]
+        if (
+            not isinstance(case, dict)
+            or any(
+                not isinstance(case.get(key), str) or not case[key].strip()
+                for key in ("correct", "incomplete", "wrong", "distinction")
+            )
+            or case["wrong"] == row["reference"]
+        ):
+            raise ValueError(f"invalid substantive calibration: {row['task_id']}")
         task = {
             key: value
             for key, value in row.items()
@@ -156,6 +185,7 @@ def generated_documents() -> dict[Path, str]:
         "panel_id": bank["panel_id"],
         "protected_assets": protected_assets,
         "bank_sha256": hashlib.sha256(BANK.read_bytes()).hexdigest(),
+        "calibration_sha256": hashlib.sha256(CALIBRATION.read_bytes()).hexdigest(),
         "documents": {
             str(path.relative_to(ROOT)): hashlib.sha256(value.encode()).hexdigest()
             for path, value in documents.items()

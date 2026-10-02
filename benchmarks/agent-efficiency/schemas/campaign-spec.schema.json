@@ -36,6 +36,100 @@
           "completion_source"
         ]
       }
+    },
+    {
+      "else": {
+        "properties": {
+          "accounting": {
+            "properties": {
+              "budget_reservation_mode": {
+                "enum": [
+                  "sum-attempt-ceilings",
+                  "shared-pool"
+                ]
+              },
+              "max_daily_spend_usd": {
+                "exclusiveMinimum": 0
+              },
+              "max_estimated_attempt_spend_usd": {
+                "exclusiveMinimum": 0
+              },
+              "max_estimated_pilot_spend_usd": {
+                "exclusiveMinimum": 0
+              }
+            }
+          },
+          "provider": {
+            "properties": {
+              "max_completion_usd_per_million": {
+                "exclusiveMinimum": 0
+              },
+              "max_prompt_usd_per_million": {
+                "exclusiveMinimum": 0
+              },
+              "name": {
+                "const": "openrouter"
+              },
+              "wire_api": {
+                "const": "responses"
+              }
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "provider": {
+            "properties": {
+              "name": {
+                "const": "codex-subscription"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "accounting": {
+            "properties": {
+              "budget_reservation_mode": {
+                "const": "subscription-quota"
+              },
+              "max_daily_spend_usd": {
+                "const": 0
+              },
+              "max_estimated_attempt_spend_usd": {
+                "const": 0
+              },
+              "max_estimated_pilot_spend_usd": {
+                "const": 0
+              }
+            },
+            "required": [
+              "budget_reservation_mode"
+            ]
+          },
+          "provider": {
+            "properties": {
+              "max_completion_usd_per_million": {
+                "const": 0
+              },
+              "max_prompt_usd_per_million": {
+                "const": 0
+              },
+              "wire_api": {
+                "const": "codex-cli"
+              }
+            }
+          },
+          "stage": {
+            "const": "representative-campaign"
+          }
+        },
+        "required": [
+          "stage"
+        ]
+      }
     }
   ],
   "properties": {
@@ -45,19 +139,20 @@
         "budget_reservation_mode": {
           "enum": [
             "sum-attempt-ceilings",
-            "shared-pool"
+            "shared-pool",
+            "subscription-quota"
           ]
         },
         "max_daily_spend_usd": {
-          "exclusiveMinimum": 0,
+          "minimum": 0,
           "type": "number"
         },
         "max_estimated_attempt_spend_usd": {
-          "exclusiveMinimum": 0,
+          "minimum": 0,
           "type": "number"
         },
         "max_estimated_pilot_spend_usd": {
-          "exclusiveMinimum": 0,
+          "minimum": 0,
           "type": "number"
         },
         "max_response_requests_per_attempt": {
@@ -155,11 +250,11 @@
       "additionalProperties": false,
       "properties": {
         "max_completion_usd_per_million": {
-          "exclusiveMinimum": 0,
+          "minimum": 0,
           "type": "number"
         },
         "max_prompt_usd_per_million": {
-          "exclusiveMinimum": 0,
+          "minimum": 0,
           "type": "number"
         },
         "model": {
@@ -167,7 +262,10 @@
           "type": "string"
         },
         "name": {
-          "const": "openrouter"
+          "enum": [
+            "openrouter",
+            "codex-subscription"
+          ]
         },
         "reasoning_effort": {
           "enum": [
@@ -179,7 +277,10 @@
           ]
         },
         "wire_api": {
-          "const": "responses"
+          "enum": [
+            "responses",
+            "codex-cli"
+          ]
         }
       },
       "required": [
