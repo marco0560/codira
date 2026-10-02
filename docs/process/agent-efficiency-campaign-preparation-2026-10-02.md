@@ -133,6 +133,9 @@ The [launch prompt](agent-efficiency-campaign-010-launch-prompt.md) authorizes
 only the paying OpenRouter campaign in a new conversation. Preparation itself
 does not authorize starting either campaign here.
 
+For the subscription alternative, use the
+[campaign 011 launch prompt](agent-efficiency-campaign-011-launch-prompt.md).
+
 ## Final admission results
 
 The full gate passed with exit 0: 1,227 tests passed, three skipped, 86% coverage,
