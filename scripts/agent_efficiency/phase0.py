@@ -360,7 +360,7 @@ def build_container_probe_argv(request: ContainerProbeRequest) -> tuple[str, ...
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         "--pids-limit=256",
-        "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=64m",
+        "--tmpfs=/tmp:rw,nosuid,nodev,noexec,mode=1777,size=64m",
         f"--mount=type=bind,src={fixture_root},dst=/workspace",
         "--workdir=/workspace",
         request.image,
@@ -680,6 +680,7 @@ def build_isolated_codex_config(
             f'command = "{escaped_mcp_command}"\n'
             f'args = ["--root", "{escaped_root}"]\n'
             "required = true\n"
+            'default_tools_approval_mode = "approve"\n'
         )
     if proxy_url is None:
         if model is not None or reasoning_effort is not None:

@@ -100,6 +100,7 @@ def qualify_image(runtime: str, image: str, evidence_root: Path) -> dict[str, ob
             raise ValueError(
                 "retained runtime receipt differs; use a fresh campaign identity"
             )
+        receipt["status"] = "passed"
         return receipt
     evidence_root.mkdir(parents=True, exist_ok=True)
     git = shutil.which("git")
@@ -176,7 +177,7 @@ def qualify_image(runtime: str, image: str, evidence_root: Path) -> dict[str, ob
             "--read-only",
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
-            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m",
+            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,mode=1777,size=128m",
             image,
             "codira",
             "caps",
@@ -200,6 +201,7 @@ def qualify_image(runtime: str, image: str, evidence_root: Path) -> dict[str, ob
     with receipt_path.open("x") as handle:
         json.dump(receipt, handle, sort_keys=True, indent=2)
         handle.write("\n")
+    receipt["status"] = "passed"
     return receipt
 
 

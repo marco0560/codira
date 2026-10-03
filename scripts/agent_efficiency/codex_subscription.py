@@ -89,6 +89,7 @@ def write_subscription_config(
             f"command = {json.dumps(mcp_command)}\n"
             'args = ["--root", "/workspace"]\n'
             "required = true\n"
+            'default_tools_approval_mode = "approve"\n'
         )
     destination = state_root / "config.toml"
     destination.write_text(configuration, encoding="utf-8")

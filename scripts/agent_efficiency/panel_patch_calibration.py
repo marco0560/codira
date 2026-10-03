@@ -6,17 +6,23 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import cast
 
 from scripts.agent_efficiency.contracts import load_document
 from scripts.agent_efficiency.corpus import export_fixture
+from scripts.agent_efficiency.environment import fixture_environment
 from scripts.agent_efficiency.oracles import evaluate_oracle
 from scripts.agent_efficiency.panels import panel_document_path, prepare_panel_fixture
 from scripts.agent_efficiency.protected_runtime import ImageOracleExecutor
-from scripts.agent_efficiency.runner import PROJECT_TEMP_ROOT
+from scripts.agent_efficiency.runner import (
+    PROJECT_TEMP_ROOT,
+    EnvironmentPreparationRequest,
+    capture_workspace_patch,
+    execute_environment_preparation,
+    snapshot_workspace,
+)
 from scripts.run_agent_efficiency_phase6_pilot import install_protected_asset
 
 BASE = Path("benchmarks/agent-efficiency")
@@ -253,9 +259,7 @@ def qualify_patch_cases(
             panel_document_path(BASE, "fixtures", fixture_id), "fixture"
         )
         oracle = load_document(panel_document_path(BASE, "oracles", task_id), "oracle")
-        definition = cast("dict[str, list[dict[str, object]]]", oracle["definition"])[
-            "all_of"
-        ][0]
+        definition = cast("dict[str, object]", oracle["definition"])
         for label in ("correct", "incomplete", "subtly_wrong"):
             case_root = evidence_root / f"{task_id}-{label}"
             case_root.mkdir()
@@ -268,24 +272,31 @@ def qualify_patch_cases(
                 prepare_panel_fixture(agent, task_id)
                 shutil.copytree(agent, protected)
                 install_protected_asset(task_id, protected)
-                baseline = subprocess.check_output(
-                    (git, "-C", str(agent), "write-tree"), text=True
-                ).strip()
+                (root / "temporary").mkdir()
+                environment = execute_environment_preparation(
+                    EnvironmentPreparationRequest(
+                        runtime,
+                        image,
+                        agent,
+                        180,
+                        fixture_environment(agent, fixture_id),
+                        root / "temporary",
+                    )
+                )
+                (case_root / "environment.stdout").write_text(environment.stdout)
+                (case_root / "environment.stderr").write_text(environment.stderr)
+                if environment.returncode != 0 or environment.timed_out:
+                    raise ValueError("calibration environment preparation failed")
+                snapshot = root / "before"
+                snapshot_workspace(agent, snapshot)
                 if task_id.startswith("panel-p"):
                     _patch_case(agent, task_id, label)
                 else:
                     _feature_case(agent, task_id, label)
-                subprocess.run(
-                    (git, "-C", str(agent), "add", "--all"),
-                    check=True,
-                    capture_output=True,
-                )
-                patch = subprocess.check_output(
-                    (git, "-C", str(agent), "diff", "--cached", "--binary", baseline)
-                )
                 artifact = agent / ".benchmark/fix.patch"
                 artifact.parent.mkdir(exist_ok=True)
-                artifact.write_bytes(patch)
+                capture_workspace_patch(snapshot, agent, artifact)
+                patch = artifact.read_bytes()
                 (case_root / "fix.patch").write_bytes(patch)
                 outcome = evaluate_oracle(
                     definition,
@@ -299,17 +310,23 @@ def qualify_patch_cases(
                     ),
                 )
                 expected = label == "correct"
+                from scripts.run_agent_efficiency_phase6_pilot import (
+                    _semantic_review_pending,
+                )
+
+                behavior_passed = _semantic_review_pending(outcome.checks)
                 row = {
                     "task_id": task_id,
                     "case": label,
-                    "passed": outcome.passed,
+                    "passed": behavior_passed,
+                    "semantic_status": "review_required",
                     "expected": expected,
                     "patch_sha256": hashlib.sha256(patch).hexdigest(),
                     "checks": list(outcome.checks),
                 }
                 rows.append(row)
                 (case_root / "result.json").write_text(json.dumps(row, indent=2) + "\n")
-                if outcome.passed != expected:
+                if behavior_passed != expected:
                     raise ValueError(
                         f"protected calibration differs: {task_id}/{label}"
                     )

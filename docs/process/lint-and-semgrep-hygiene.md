@@ -248,3 +248,20 @@ host parser.
 - `scripts/calibrate_agent_efficiency_panel.py:2`: generator errors identify inconsistent frozen calibration cases.
 
 - `scripts/agent_efficiency/panel_patch_calibration.py:2`: curated source-edit and admission errors identify the mismatched case without logging provider or credential data.
+
+### Mechanical campaign readiness
+
+- `scripts/agent_efficiency/readiness.py:12`, `scripts/agent_efficiency/preparation.py:12`, and `scripts/agent_efficiency/native_tool_qualification.py:12` (EM101, EM102, TRY003): preparation boundary errors use concise public diagnostics, following the existing immutable campaign exception convention.
+- `scripts/agent_efficiency/native_tool_qualification.py:210` (PLR0913): offline qualification keeps the exact runtime, image, workspace, evidence, model, reasoning and exposure bindings explicit rather than obtaining them from ambient state.
+- `scripts/launch_agent_efficiency_pilot.py:861` and `scripts/launch_agent_efficiency_pilot.py:871` (TRY301): CLI binding errors remain inside the common safe-rejection boundary and cannot reach preparation or launch side effects.
+
+
+
+- `scripts/agent_efficiency/model_tool_qualification.py:12` (EM101, EM102, TRY003): the model canary uses explicit preparation boundary diagnostics and preserves full ignored native evidence.
+
+
+
+- `scripts/agent_efficiency/preparation.py:358` (TRY301): retain a failed boundary record before propagating rejection; changed controls stop before model work.
+
+- `scripts/agent_efficiency/preparation.py:364` (TRY301): retain a failed boundary record before propagating rejection; changed controls stop before model work.
+- `scripts/run_agent_efficiency_phase6_pilot.py:1728` (PLR0913): readiness supplies an already indexed canary workspace to the same provider executor used by campaign attempts; ordinary attempts retain their original agent workspace.

@@ -1725,12 +1725,14 @@ def _record_example_replays(
         )
 
 
-def _execute_provider_attempt(
+def _execute_provider_attempt(  # noqa: PLR0913 - readiness supplies an indexed workspace to the shared executor
     context: PilotExecutionContext,
     store: CampaignStore,
     attempt: ScheduledAttempt,
     prompt: str,
     limits: tuple[int | None, float | None, float | None],
+    *,
+    workspace: Path | None = None,
 ) -> tuple[
     ContainerExecution,
     list[dict[str, object]],
@@ -1752,6 +1754,8 @@ def _execute_provider_attempt(
         Exact common task and environment instructions.
     limits : tuple
         Proxy token, attempt and campaign ceilings, when applicable.
+    workspace : pathlib.Path or None, optional
+        Prepared readiness workspace; ordinary attempts use their agent root.
 
     Returns
     -------
@@ -1769,6 +1773,8 @@ def _execute_provider_attempt(
         == "codex-subscription"
     )
     state_root, agent_root = attempt_root / "state", attempt_root / "agent"
+    if workspace is not None:
+        agent_root = workspace
     token_limit, attempt_spend_limit, campaign_spend_limit = limits
     token = secrets.token_urlsafe(32) if not subscription else None
     mcp_command = (
@@ -1962,12 +1968,16 @@ def execute_pilot_attempt(
         raise PilotLauncherError(
             "fixture environment preparation failed before provider setup"
         )
+    # CLI is available in both arms; bind its qualified profile in both as well.
+    profile_target = agent_root / ".codira" / "config.toml"
+    profile_target.parent.mkdir(exist_ok=True)
+    profile_fingerprint = _prepare_task_profile(profile_target, attempt.task_id)
+    (agent_root / ".benchmark/home").mkdir(parents=True, exist_ok=True)
     if attempt.assistance_mode == "codira-mcp":
         if not BENCHMARK_CODIRA_PROFILE.is_file():
             raise PilotLauncherError("benchmark Codira profile is unavailable")
         profile_target = agent_root / ".codira" / "config.toml"
         profile_target.parent.mkdir(exist_ok=True)
-        profile_fingerprint = _prepare_task_profile(profile_target, attempt.task_id)
         with tempfile.TemporaryDirectory(
             prefix="ae-idx-", dir=PROJECT_TEMP_ROOT
         ) as temporary_root:
@@ -2022,11 +2032,9 @@ def execute_pilot_attempt(
     result_format = str(task.get("result_format", "json"))
     snapshot_root = attempt_root / "workspace-before"
     if result_format == "workspace-diff":
-        shutil.copytree(
-            agent_root,
-            snapshot_root,
-            ignore=shutil.ignore_patterns(".benchmark", ".git", ".venv", "__pycache__"),
-        )
+        from scripts.agent_efficiency.runner import snapshot_workspace
+
+        snapshot_workspace(agent_root, snapshot_root)
     protected_asset = prepare_protected_fixture(
         context.sources[fixture_id],
         str(fixture["revision"]),
@@ -2239,6 +2247,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime", default="podman")
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--readiness-receipt", type=Path)
     parser.add_argument("--full-campaign", action="store_true")
     parser.add_argument("--launch-plan", type=Path)
     parser.add_argument("--subscription-codex", type=Path)
@@ -2422,6 +2431,31 @@ def main(arguments: list[str] | None = None) -> int:
             return 0
         if args.state_root is None or not args.image:
             raise PilotLauncherError("paid execution requires --state-root and --image")
+        if (
+            args.readiness_receipt is None
+            or args.readiness_receipt.resolve()
+            != (args.state_root.parent / "readiness-receipt.json").resolve()
+        ):
+            raise PilotLauncherError(
+                "paid execution requires its machine-validated readiness receipt"
+            )
+        from scripts.agent_efficiency.readiness import verify_readiness
+        from scripts.launch_agent_efficiency_pilot import load_prepared_inputs
+
+        prepared = load_prepared_inputs(args.state_root.parent)
+        verify_readiness(prepared)
+        if (
+            prepared.manifest != manifest
+            or prepared.seed != args.seed
+            or prepared.runtime != args.runtime
+            or prepared.manifest.get("runtime_image") != args.image
+            or prepared.fixture_sources != parse_fixture_sources(args.fixture_source)
+            or prepared.subscription_codex != args.subscription_codex
+            or prepared.subscription_auth_source != args.subscription_auth_source
+        ):
+            raise PilotLauncherError(
+                "execution arguments differ from readiness bindings"
+            )
         runtime_image = manifest.get("runtime_image")
         if (
             not isinstance(runtime_image, str)

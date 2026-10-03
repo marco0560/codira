@@ -72,7 +72,7 @@ class ImageOracleExecutor:
                 "--pids-limit=512",
                 f"--mount=type=bind,src={root.resolve()},dst=/workspace,rw",
                 f"--mount=type=bind,src={temporary},dst=/temporary,rw",
-                "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m",
+                "--tmpfs=/tmp:rw,nosuid,nodev,noexec,mode=1777,size=128m",
                 "--env=TMPDIR=/temporary",
                 "--env=UV_CACHE_DIR=/temporary/uv-cache",
                 "--env=GOTOOLCHAIN=local",

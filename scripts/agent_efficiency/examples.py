@@ -87,7 +87,7 @@ def replay_examples(
                 "--pids-limit=128",
                 "--memory=512m",
                 "--cpus=1",
-                "--tmpfs=/tmp:rw,size=128m",
+                "--tmpfs=/tmp:rw,mode=1777,size=128m",
                 f"--mount=type=bind,src={workspace},dst=/workspace,rw",
                 "--workdir=/workspace",
                 "--env=PYTHONPATH=/workspace/src:/workspace",

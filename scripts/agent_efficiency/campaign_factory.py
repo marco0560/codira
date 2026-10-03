@@ -314,6 +314,7 @@ def build_campaign(
         "execution": {
             "credential_free_generation_only": True,
             "requires_offline_validation": True,
+            "requires_machine_validated_readiness": True,
             "requires_authenticated_preflight": True,
             "requires_explicit_paid_authorization": True,
             "requires_fresh_state_root": True,

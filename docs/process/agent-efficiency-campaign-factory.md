@@ -130,6 +130,45 @@ the selected task IDs, fixture revisions, model/provider controls, budgets, imag
 digest, profile fingerprint, and validation evidence in the versioned spec or
 the campaign's durable artifacts.
 
+The [campaign 011 forensic review](agent-efficiency-campaign-011-forensic-analysis-2026-10-02.md)
+adds mandatory qualification of the actual execution boundaries. Component
+checks alone do not qualify a runner. Before another campaign:
+
+- Qualify rootless Podman and tmux from the actual authorized host launch
+  context. Record which operations require that context instead of repeatedly
+  attempting them inside an incompatible outer agent sandbox.
+- Resolve source/interpreter, native client and fixture bindings once into the
+  prepared receipt. Verify imports, standard-library resolution and source
+  fingerprints inside the generated tmux child. Do not depend on hand-entered
+  paths or mutate tmux's global environment to recover a frozen product source.
+- Exercise ordinary shell, Git, uv, Codira CLI and task tests under the exact
+  native permissions profile. Keep writable tool home/config/cache separate
+  from denied credential state; consistently bind the qualified profile,
+  offline model assets and index paths in both arms.
+- Prove successful native MCP authorization and dispatch, rather than only
+  server startup, tool discovery or direct MCP qualification. Optional agent
+  tool use does not waive tool availability. Count successful, denied and
+  unattempted MCP exposure separately; systemic denial blocks an efficacy claim.
+- Replay correct, incomplete and wrong cases through the full campaign path:
+  export, prepare, snapshot, edits, runner patch capture, complete composite
+  oracle, record and report. Include installed dependency symlinks and new test
+  files. Patch-only or curated-text calibration cannot substitute for this
+  replay. Preserve prior subcheck results if a later rubric branch errors.
+- Validate semantic decisions against frozen source and execution evidence.
+  Digests and answer quotes establish integrity, not factual correctness.
+
+The deterministic executor now assembles these checks in one `--prepare` pass
+and writes `readiness-receipt.json` only after every required boundary passes.
+The launch path and the generated runner independently enforce that receipt.
+Both OpenRouter and native subscription representative campaigns use this
+pipeline. OpenRouter authentication and its genuine model-requested MCP canary
+run in scoped SOPS children through the campaign proxy; preparation records
+their USD usage separately and repeats key-budget admission afterward.
+See [mechanical readiness admission](agent-efficiency-readiness-2026-10-02.md)
+for the exact check inventory, expiration rule, commands and coverage limits.
+Changed harness controls require a fresh factory identity; campaign 011 remains
+an immutable historical record.
+
 - **Tasks and scoring:** verify task wording, task IDs, deterministic oracle
   behavior, required fixture coverage, treatment instructions, repetition
   count, and schedule seed. Confirm every protected command script is present
@@ -138,8 +177,10 @@ the campaign's durable artifacts.
   tasks still test the intended Codira behavior. A task, oracle, prompt, seed,
   or repetition change requires a fresh campaign identity.
 - **Fixture admission:** verify each fixture's commit, tree SHA, license, and
-  setup-file hashes against its source checkout. Keep the pilot runner's
-  required three-fixture coverage. Rebuild the candidate image when fixture
+  setup-file hashes against its source checkout. Keep the selected stage's
+  required fixture coverage; representative campaigns use their generated
+  panel inventory rather than the legacy pilot's three-fixture rule.
+  Rebuild the candidate image when fixture
   content, dependencies, or environment preparation changes.
 - **Image and runtime:** pin the freshly admitted image digest and the
   `scripts/agent_efficiency/benchmark-codira.toml` fingerprint. Check offline
@@ -151,10 +192,13 @@ the campaign's durable artifacts.
   format with the qualified harness. Repair a demonstrated harness defect,
   add and run focused regression checks, and qualify it offline before creating
   a fresh campaign. Never change a generated campaign in place.
-- **Model controls:** verify the exact model ID on the authenticated route for
-  the selected key. Confirm Responses API compatibility, supported reasoning
-  effort and mandatory-reasoning rules, context and output limits, usage
-  reporting, and current prompt/completion prices at every relevant price tier.
+- **Model controls:** verify the exact model ID on the selected authenticated
+  route. Confirm supported reasoning effort, mandatory-reasoning rules, model
+  limits and usage reporting. For OpenRouter, check Responses compatibility and
+  current prompt/completion prices at every relevant tier through the scoped
+  key. For native subscription, check the qualified native client, managed login,
+  exact model/effort and quota; dollar prices are not applicable and planning
+  limits must not be represented as proxy-enforced controls.
   A model change requires a new versioned spec, fresh campaign identity, and
   recalculated budgets.
 - **Provider controls:** verify the provider endpoint, authentication route,
@@ -299,10 +343,11 @@ then authenticated route/key admission. A distinct explicit authorization is
 required before any paid execution. Never edit a generated manifest, reuse its
 output directory, or assemble a replacement launch command by hand.
 
-For a paired pilot, prepare and then launch the factory artifacts through the
-deterministic executor. The supplied seed is accepted only when it reproduces
-the immutable six-attempt schedule, and every fixture source is re-admitted
-both when the receipt is created and immediately before tmux starts:
+For the representative campaign, prepare and then launch the factory artifacts
+through the deterministic executor. Other inventories require complete calibration
+coverage before this executor admits them. The supplied seed must reproduce
+the complete frozen schedule. Every fixture source is re-admitted both during
+preparation and immediately before tmux starts:
 
 ```bash
 uv run python scripts/launch_agent_efficiency_pilot.py \
@@ -310,18 +355,18 @@ uv run python scripts/launch_agent_efficiency_pilot.py \
   --campaign-dir .artifacts/agent-efficiency/campaigns/<campaign-id> \
   --execution-root .artifacts/agent-efficiency/executions/<campaign-id>-execution \
   --seed <factory-seed> \
-  --fixture-source click-public=/absolute/path/to/click \
-  --fixture-source picomatch-public=/absolute/path/to/picomatch \
-  --fixture-source codira-public=/absolute/path/to/codira
+  --subscription-codex <qualified-native-executable> \
+  --subscription-auth-source <existing-managed-login-path> \
+  --fixture-source click-public=<absolute-click-source> \
+  --fixture-source picomatch-public=<absolute-picomatch-source> \
+  --fixture-source codira-current-public=<absolute-codira-source> \
+  --fixture-source python-service-synthetic=<absolute-python-source> \
+  --fixture-source typescript-workspace-synthetic=<absolute-typescript-source> \
+  --fixture-source go-service-synthetic=<absolute-go-source>
 
 uv run python scripts/launch_agent_efficiency_pilot.py \
   --launch \
-  --campaign-dir .artifacts/agent-efficiency/campaigns/<campaign-id> \
-  --execution-root .artifacts/agent-efficiency/executions/<campaign-id>-execution \
-  --seed <factory-seed> \
-  --fixture-source click-public=/absolute/path/to/click \
-  --fixture-source picomatch-public=/absolute/path/to/picomatch \
-  --fixture-source codira-public=/absolute/path/to/codira
+  --execution-root .artifacts/agent-efficiency/executions/<campaign-id>-execution
 ```
 
 The exported agent fixture deliberately has no commit or remote, but its
@@ -346,8 +391,9 @@ retains captured environment/index preparation output, the Codex JSONL event
 stream, container stderr, and protected oracle stdout/stderr there. These
 private traces can contain diagnostics and paths; public reports expose only
 the safe summaries and digests. Keep raw traces while the campaign may need
-forensic review, then remove them when that need has ended; preserve immutable
-records and their fingerprints. Public-safe observations bind provider bodies
+forensic review; remove them only with explicit operator approval under the
+repository artifact retention policy. Preserve immutable records and their
+fingerprints. Public-safe observations bind provider bodies
 and protected command streams by digest and byte count. Routing disables
 fallbacks and pins the approved model, reasoning, and price controls. Provider
 parameter filtering remains disabled because the complete Responses/tool

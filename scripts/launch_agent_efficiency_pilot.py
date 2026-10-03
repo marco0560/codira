@@ -176,6 +176,14 @@ def load_launch(
 
     campaign_directory = campaign_directory.resolve()
     execution_root = execution_root.resolve()
+    subscription_codex = (
+        subscription_codex.resolve() if subscription_codex is not None else None
+    )
+    subscription_auth_source = (
+        subscription_auth_source.resolve()
+        if subscription_auth_source is not None
+        else None
+    )
     sources = {key: value.resolve() for key, value in fixture_sources.items()}
     if execution_root.exists() and not allow_prepared_root:
         raise PilotLaunchError("execution root already exists")
@@ -400,6 +408,7 @@ def _receipt(launch: PilotLaunch) -> dict[str, object]:
         }
     return {
         "campaign_id": launch.manifest["campaign_id"],
+        "campaign_directory": str(launch.campaign_directory),
         "manifest_fingerprint": canonical_fingerprint(launch.manifest),
         "manifest_sha256": _sha256(launch.campaign_directory / "campaign.json"),
         "launch_plan_sha256": _sha256(launch.campaign_directory / "launch-plan.json"),
@@ -410,7 +419,15 @@ def _receipt(launch: PilotLaunch) -> dict[str, object]:
         "log_path": str(launch.execution_root / "logs" / "pilot.log"),
         "exit_path": str(launch.execution_root / "pilot.exit"),
         **(
-            {"subscription_codex_sha256": _sha256(launch.subscription_codex)}
+            {
+                "subscription_codex_sha256": _sha256(launch.subscription_codex),
+                "subscription_codex": str(launch.subscription_codex.resolve()),
+                "subscription_auth_source": str(
+                    launch.subscription_auth_source.resolve()
+                )
+                if launch.subscription_auth_source is not None
+                else None,
+            }
             if launch.subscription_codex is not None
             else {}
         ),
@@ -487,30 +504,26 @@ def verify_prepared_launch(launch: PilotLaunch) -> Path:
     return path
 
 
-def tmux_command(launch: PilotLaunch, *, invocation: int = 0) -> tuple[str, str]:
-    """Build the fixed credential-scoped shell command after preparation.
+def runner_argv(launch: PilotLaunch, *, execute: bool = True) -> list[str]:
+    """Build one shared runner command for preparation and execution.
 
     Parameters
     ----------
     launch : PilotLaunch
         Validated and prepared paired-pilot launch.
-    invocation : int, optional
-        Zero for initial launch; positive resume ordinal preserves earlier logs.
+    execute : bool, optional
+        Select paid execution or read-only authenticated admission.
 
     Returns
     -------
-    tuple[str, str]
-        Deterministic tmux session name and shell command.
+    list[str]
+        Exact absolute interpreter and resolved factory bindings.
     """
 
     runner = [
-        "uv",
-        "--directory",
-        str(Path.cwd()),
-        "run",
-        "python",
+        str(Path(sys.executable).absolute()),
         "scripts/run_agent_efficiency_phase6_pilot.py",
-        "--execute",
+        "--execute" if execute else "--preflight",
         "--campaign-manifest",
         str(launch.campaign_directory / "campaign.json"),
     ]
@@ -556,18 +569,68 @@ def tmux_command(launch: PilotLaunch, *, invocation: int = 0) -> tuple[str, str]
                 str(launch.subscription_auth_source),
             )
         )
-        command = runner
-    else:
-        command = ["sops", "exec-env", SOPS_ENVIRONMENT, shlex.join(runner)]
+    if execute:
+        runner.extend(
+            (
+                "--readiness-receipt",
+                str(launch.execution_root / "readiness-receipt.json"),
+            )
+        )
+    return runner
+
+
+def child_environment() -> str:
+    """Bind the verified child environment without modifying the tmux server.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    str
+        Shell assignments preserving present and absent qualification bindings.
+    """
+    return " ".join(
+        f"export {name}={shlex.quote(os.environ[name])};"
+        if name in os.environ
+        else f"unset {name};"
+        for name in ("PYTHONPATH", "PATH", "XDG_RUNTIME_DIR")
+    )
+
+
+def tmux_command(launch: PilotLaunch, *, invocation: int = 0) -> tuple[str, str]:
+    """Build a fixed child environment without changing tmux global state.
+
+    Parameters
+    ----------
+    launch : PilotLaunch
+        Prepared immutable execution bindings.
+    invocation : int, optional
+        Separate initial or resume log identity.
+
+    Returns
+    -------
+    tuple[str, str]
+        Named session and exact credential-scoped command.
+    """
+    runner = runner_argv(launch)
+    command = (
+        runner
+        if launch.subscription_codex is not None
+        else ["sops", "exec-env", SOPS_ENVIRONMENT, shlex.join(runner)]
+    )
     stem = "pilot" if invocation == 0 else f"resume-{invocation:03d}"
     log = launch.execution_root / "logs" / f"{stem}.log"
     exit_path = launch.execution_root / f"{stem}.exit"
     shell = (
+        f"cd {shlex.quote(str(Path.cwd()))}; "
+        f"{child_environment()} "
         f"export TMPDIR={shlex.quote(str(PROJECT_TEMP_ROOT))} "
         f"TMP={shlex.quote(str(PROJECT_TEMP_ROOT))} "
         f"TEMP={shlex.quote(str(PROJECT_TEMP_ROOT))}; "
         f"{shlex.join(command)} > {shlex.quote(str(log))} 2>&1; "
-        f"code=$?; printf '%s\\n' \"$code\" > {shlex.quote(str(exit_path))}"
+        f'code=$?; printf \'%s\\n\' "$code" > {shlex.quote(str(exit_path))}; exit "$code"'
     )
     suffix = "" if invocation == 0 else f"-resume-{invocation:03d}"
     return f"agent-efficiency-{launch.manifest['campaign_id']}{suffix}", shell
@@ -595,6 +658,9 @@ def start_tmux(launch: PilotLaunch, *, resume: bool = False) -> str:
     """
 
     invocation = 0
+    from scripts.agent_efficiency.readiness import verify_readiness
+
+    verify_readiness(launch)
     if resume:
         if launch.plan.get("stage") not in {
             "full-campaign",
@@ -633,7 +699,22 @@ def start_tmux(launch: PilotLaunch, *, resume: bool = False) -> str:
         raise PilotLaunchError("initial launch evidence exists; use explicit resume")
     session, command = tmux_command(launch, invocation=invocation)
     completed = subprocess.run(
-        ("tmux", "new-session", "-d", "-s", session, "bash", "-lc", command),
+        (
+            "tmux",
+            "new-session",
+            "-d",
+            "-s",
+            session,
+            "bash",
+            "-c",
+            command,
+            ";",
+            "set-option",
+            "-t",
+            session,
+            "remain-on-exit",
+            "on",
+        ),
         check=False,
         capture_output=True,
         text=True,
@@ -689,6 +770,37 @@ def _openrouter_resume_invocation(launch: PilotLaunch) -> int:
     return invocation
 
 
+def load_prepared_inputs(execution_root: Path) -> PilotLaunch:
+    """Load mechanical launch bindings from the original prepared receipt.
+
+    Parameters
+    ----------
+    execution_root : pathlib.Path
+        Prepared execution identity.
+
+    Returns
+    -------
+    PilotLaunch
+        Re-admitted bindings without re-entering paths or credentials.
+    """
+    receipt = json.loads((execution_root / "launch-receipt.json").read_text())
+    sources = {
+        name: Path(row["source"]) for name, row in receipt["fixture_sources"].items()
+    }
+    native = receipt.get("subscription_codex")
+    auth = receipt.get("subscription_auth_source")
+    return load_launch(
+        Path(receipt["campaign_directory"]),
+        execution_root,
+        sources,
+        receipt["runtime"],
+        receipt["seed"],
+        allow_prepared_root=True,
+        subscription_codex=Path(native) if native else None,
+        subscription_auth_source=Path(auth) if auth else None,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the deterministic paired-pilot executor parser.
 
@@ -703,11 +815,11 @@ def build_parser() -> argparse.ArgumentParser:
     """
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--campaign-dir", type=Path, required=True)
+    parser.add_argument("--campaign-dir", type=Path)
     parser.add_argument("--execution-root", type=Path, required=True)
-    parser.add_argument("--fixture-source", action="append", required=True)
-    parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--runtime", default="podman")
+    parser.add_argument("--fixture-source", action="append")
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--runtime")
     parser.add_argument("--subscription-codex", type=Path)
     parser.add_argument("--subscription-auth-source", type=Path)
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -729,34 +841,76 @@ def main(arguments: list[str] | None = None) -> int:
     -------
     int
         Zero on successful preparation or launch; two on safe rejection.
+
+    Raises
+    ------
+    SystemExit
+        If CLI arguments violate the parser contract.
     """
 
     args = build_parser().parse_args(arguments)
     try:
-        launch = load_launch(
-            args.campaign_dir,
-            args.execution_root,
-            parse_fixture_sources(args.fixture_source),
-            args.runtime,
-            args.seed,
-            allow_prepared_root=args.launch or args.resume,
-            subscription_codex=args.subscription_codex,
-            subscription_auth_source=args.subscription_auth_source,
-        )
+        if (args.launch or args.resume) and args.campaign_dir is None:
+            if (
+                args.fixture_source
+                or args.seed is not None
+                or args.subscription_codex
+                or args.subscription_auth_source
+                or args.runtime is not None
+            ):
+                raise PilotLaunchError(  # noqa: TRY301 - CLI validation boundary
+                    "receipt-based launch cannot accept replacement bindings"
+                )
+            launch = load_prepared_inputs(args.execution_root)
+        else:
+            if (
+                args.campaign_dir is None
+                or args.seed is None
+                or not args.fixture_source
+            ):
+                raise PilotLaunchError(  # noqa: TRY301 - CLI validation boundary
+                    "preparation requires campaign, seed and all fixture sources"
+                )
+            launch = load_launch(
+                args.campaign_dir,
+                args.execution_root,
+                parse_fixture_sources(args.fixture_source),
+                args.runtime or "podman",
+                args.seed,
+                allow_prepared_root=args.launch or args.resume,
+                subscription_codex=args.subscription_codex,
+                subscription_auth_source=args.subscription_auth_source,
+            )
         receipt = (
             verify_prepared_launch(launch)
             if args.launch or args.resume
             else prepare_launch(launch)
+        )
+        from scripts.agent_efficiency.preparation import prepare_readiness
+        from scripts.agent_efficiency.readiness import verify_readiness
+
+        readiness = (
+            verify_readiness(launch)
+            if args.launch or args.resume
+            else prepare_readiness(launch)
         )
         session = (
             start_tmux(launch, resume=args.resume)
             if args.launch or args.resume
             else None
         )
-    except (OSError, PilotLaunchError, ValueError) as error:
+    except (OSError, PilotLaunchError, ValueError, TypeError, KeyError) as error:
         print(f"pilot executor error: {error}", file=sys.stderr)
         return 2
-    print(json.dumps({"launch_receipt": str(receipt), "tmux_session": session}))
+    print(
+        json.dumps(
+            {
+                "launch_receipt": str(receipt),
+                "readiness_receipt": str(readiness),
+                "tmux_session": session,
+            }
+        )
+    )
     return 0
 
 

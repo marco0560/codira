@@ -379,7 +379,7 @@ def _result_artifact(result_path: Path, result_format: str) -> object:
     Returns
     -------
     object
-        A JSON object, UTF-8 text, or ``None`` for a runner-captured diff.
+        A JSON object or UTF-8 text, including the runner-captured patch.
 
     Raises
     ------
@@ -399,7 +399,7 @@ def _result_artifact(result_path: Path, result_format: str) -> object:
         if not result_path.is_file():
             detail = "runner-captured patch is missing"
             raise ContractError.message(detail)
-        return None
+        return result_path.read_text(encoding="utf-8")
     detail = "task result format is unsupported"
     raise ContractError.message(detail)
 

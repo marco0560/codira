@@ -7,6 +7,7 @@ import difflib
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from collections import Counter
@@ -225,13 +226,13 @@ def _temporary_mount_options(temporary_root: Path | None) -> tuple[str, ...]:
     """
 
     if temporary_root is None:
-        return ("--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m",)
+        return ("--tmpfs=/tmp:rw,nosuid,nodev,noexec,mode=1777,size=128m",)
     root = temporary_root.resolve()
     if not root.is_dir():
         raise ValueError("container temporary root must be an existing directory")
     return (
         f"--mount=type=bind,src={root},dst=/temporary,rw",
-        "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m",
+        "--tmpfs=/tmp:rw,nosuid,nodev,noexec,mode=1777,size=128m",
         "--env=TMPDIR=/temporary",
         "--env=TMP=/temporary",
         "--env=TEMP=/temporary",
@@ -279,7 +280,7 @@ def codex_model_base_instructions(runtime: str, image: str) -> str:
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
             "--pids-limit=64",
-            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=64m",
+            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,mode=1777,size=64m",
             "--env=CODEX_HOME=/tmp/codex-state",
             "--env=HOME=/tmp/codex-home",
             "--workdir=/workspace",
@@ -533,8 +534,12 @@ def build_container_argv(request: ContainerAttemptRequest) -> tuple[str, ...]:
         f"--mount=type=bind,src={state_root},dst=/codex-state,rw",
         *proxy_mount,
         *subscription_options,
-        "--env=HOME=/codex-state/home",
+        "--env=HOME=/workspace/.benchmark/home",
         "--env=CODEX_HOME=/codex-state",
+        "--env=XDG_CONFIG_HOME=/workspace/.benchmark/home/.config",
+        "--env=XDG_CACHE_HOME=/workspace/.benchmark/home/.cache",
+        "--env=UV_CACHE_DIR=/workspace/.benchmark/uv-cache",
+        "--env=CODIRA_CONFIG_FILE=/workspace/.codira/config.toml",
         "--env=GOTOOLCHAIN=local",
         "--env=GOPROXY=off",
         "--env=GOSUMDB=off",
@@ -764,6 +769,49 @@ def remove_timed_out_container(request: ContainerAttemptRequest) -> None:
         return
 
 
+def snapshot_workspace(workspace_root: Path, snapshot_root: Path) -> None:
+    """Snapshot admitted source without prepared dependencies or tool state.
+
+    Parameters
+    ----------
+    workspace_root : pathlib.Path
+        Prepared workspace.
+    snapshot_root : pathlib.Path
+        Absent private baseline destination.
+
+    Returns
+    -------
+    None
+        The same exclusion policy is used for capture and calibration.
+    """
+    shutil.copytree(
+        workspace_root,
+        snapshot_root,
+        symlinks=True,
+        ignore=shutil.ignore_patterns(*WORKSPACE_CAPTURE_EXCLUDES),
+    )
+
+
+WORKSPACE_CAPTURE_EXCLUDES = frozenset(
+    {
+        ".benchmark",
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+        ".codira",
+    }
+)
+MCP_APPROVAL_DENIAL_MARKERS = (
+    "requires approval",
+    "approval denied",
+    "approval policy",
+)
+
+
 def capture_workspace_patch(
     baseline_root: Path, workspace_root: Path, patch_path: Path
 ) -> None:
@@ -793,15 +841,7 @@ def capture_workspace_patch(
         If a candidate workspace contains a symlink or non-text changed file.
     """
 
-    ignored = {
-        ".benchmark",
-        ".git",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".venv",
-        "__pycache__",
-    }
+    ignored = WORKSPACE_CAPTURE_EXCLUDES
 
     def files(root: Path) -> set[Path]:
         """Return safe regular workspace files excluding runner metadata."""
@@ -989,7 +1029,23 @@ def result_from_execution(
                 ):
                     failure_class = "usage_cap_exceeded"
                 elif execution.returncode == 0 and check.passed:
-                    outcome = "success"
+                    denied_mcp = False
+                    for event in parsed_events:
+                        item = event.get("item")
+                        if (
+                            event.get("type") == "item.completed"
+                            and isinstance(item, dict)
+                            and item.get("type") == "mcp_tool_call"
+                            and any(
+                                reason in str(item.get("error", "")).casefold()
+                                for reason in MCP_APPROVAL_DENIAL_MARKERS
+                            )
+                        ):
+                            denied_mcp = True
+                    if denied_mcp:
+                        failure_class = "mcp_approval_denied"
+                    else:
+                        outcome = "success"
                 else:
                     failure_class = check.detail if not check.passed else "nonzero_exit"
         except (phase0.JsonlEvidenceError, UsageError) as error:
@@ -1150,6 +1206,7 @@ def summarize_trajectory(
 
     item_type_counts: Counter[str] = Counter()
     mcp_tool_counts: Counter[str] = Counter()
+    mcp_outcomes: Counter[str] = Counter()
     command_signatures: set[str] = set()
     mcp_signatures: set[str] = set()
     repeated_command_count = 0
@@ -1185,6 +1242,22 @@ def summarize_trajectory(
             else:
                 progress_markers.append({"event_index": event_index, "kind": marker})
         elif item_type == "mcp_tool_call":
+            response = item.get("result")
+            if (
+                item.get("error")
+                or item.get("status") == "failed"
+                or (isinstance(response, dict) and response.get("isError") is True)
+            ):
+                mcp_outcomes["failed"] += 1
+            elif item.get("status") == "completed":
+                mcp_outcomes["successful"] += 1
+            else:
+                mcp_outcomes["unknown"] += 1
+            if any(
+                reason in str(item.get("error", "")).casefold()
+                for reason in MCP_APPROVAL_DENIAL_MARKERS
+            ):
+                mcp_outcomes["denied"] += 1
             safe_tool, repeated = _mcp_progress(item, mcp_signatures)
             mcp_tool_counts[safe_tool] += 1
             repeated_mcp_call_count += repeated
@@ -1210,6 +1283,10 @@ def summarize_trajectory(
         "unknown_command_exit_count": unknown_command_exit_count,
         "repeated_command_count": repeated_command_count,
         "mcp_call_count": item_type_counts["mcp_tool_call"],
+        "mcp_successful_call_count": mcp_outcomes["successful"],
+        "mcp_failed_call_count": mcp_outcomes["failed"],
+        "mcp_denied_call_count": mcp_outcomes["denied"],
+        "mcp_unknown_call_count": mcp_outcomes["unknown"],
         "mcp_repeated_call_count": repeated_mcp_call_count,
         "mcp_tool_counts": [
             {"tool": tool, "calls": count}

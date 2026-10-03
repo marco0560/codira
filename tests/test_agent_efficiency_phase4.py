@@ -237,7 +237,7 @@ def test_environment_preparation_runs_offline_before_the_agent(tmp_path: Path) -
     assert "--network=none" in argv
     assert "--read-only" in argv
     assert "dst=/temporary,rw" in " ".join(argv)
-    assert "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m" in argv
+    assert "--tmpfs=/tmp:rw,nosuid,nodev,noexec,mode=1777,size=128m" in argv
     assert "--env=TMPDIR=/temporary" in argv
     assert "--env=UV_CACHE_DIR=/temporary/uv-cache" in argv
     assert argv[-3:] == environment.prepare_argv
@@ -646,7 +646,7 @@ def test_container_argv_and_adapter_preserve_isolation_and_incomplete_usage(
     assert "--network=none" in argv
     assert "--read-only" in argv
     assert "dst=/temporary,rw" in " ".join(argv)
-    assert "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m" in argv
+    assert "--tmpfs=/tmp:rw,nosuid,nodev,noexec,mode=1777,size=128m" in argv
     assert "--env=TMP=/temporary" in argv
     assert "--env=UV_CACHE_DIR=/temporary/uv-cache" in argv
     assert argv[argv.index("--sandbox") + 1] == "danger-full-access"
