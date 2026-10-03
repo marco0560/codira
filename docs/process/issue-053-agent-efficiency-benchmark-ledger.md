@@ -1026,8 +1026,8 @@ execution.
 
 ## Phase 7 — Full campaign and evidence validation
 
-**Status:** `incomplete; 006 adjudicated`
-**Commit:** pending
+**Status:** `execution accounted for; evidence closeout pending`
+**Commit:** completion results `44e1fb8`; final evidence closeout pending
 
 ### Evidence
 
@@ -1221,6 +1221,41 @@ provenance limits. Campaign 006's original records remain unchanged.
 Every scheduled execution is accounted for, valid results reproducible,
 review findings resolved, repository gate passes, and evidence commits recorded.
 Phase 7 does not close the issue: Phase 8 is required.
+
+### Campaign requirement assessment — 2026-10-03
+
+Another campaign is not required merely to fill the Phase 7 schedule. Campaign
+006 retains 55 records, including its failed patch trajectory; the authorized
+Completion 009 adds six records. The documented selection accounts for all
+60 logical slots in 30 pairs, retaining the abandoned attempt separately.
+A read-only check on 2026-10-03 verified all 55 parent-record digests bound by
+Completion 009, complete usage and operational passes for all 60 selected
+records, and all 180 record/event/answer digests in the persisted forensic
+analysis. Selected frozen grades are 43 passes and 17 failures; the documented
+retrospective text adjudication must remain separate from those frozen grades.
+
+The completion report was committed as `44e1fb8`. Its final retained repository
+gate has exit `0`. The composite is not a single unchanged-harness/oracle run:
+reports must retain the parent/completion provenance and retrospective-scoring
+qualification. The pinned image served the legacy context protocol, so these
+results cannot establish efficacy of the current item/cursor implementation.
+The objective accepts accurate negative or inconclusive findings; deployment
+and scoring defects restrict conclusions rather than automatically mandate a
+new paid comparison.
+
+Phase 7 remains open for evidence closeout: verify the reported retrospective
+grading and exclusions, resolve review findings with traceable corrections or
+explicit limitations, and record final validation and evidence commits. Phase 8
+still requires independent review of both findings documents. Campaign 011's
+withdrawn semantic scores and denied MCP calls must not be used as substitute
+proof; its source-grounded rerating is separate evidence work.
+
+A fresh campaign is required only for a new claim about the corrected current
+product/runtime, a corrected treatment, or changed experimental controls. Such
+a campaign needs a fresh factory identity, complete readiness qualification,
+and separate execution authorization. It is follow-up measurement, not an
+unfilled slot in the original Phase 7 matrix. This assessment authorizes no
+provider/model call and does not mark either Phase 7 or Phase 8 complete.
 
 ## Phase 8 — Findings and product direction
 
