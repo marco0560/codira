@@ -21,7 +21,7 @@ for the completed cache cleanup and detailed keep-versus-summarize decisions.
 | `benchmarks/retrieval-quality/runs/<dataset-id>/<timestamp>/` | Retrieval-quality campaign outputs grouped by dataset and timestamp | Preserve dataset provenance and measured results. |
 | `benchmarks/release/` | Default destination for the release-oriented Hyperfine trace | Keep the trace with release review records. |
 | `benchmarks/semantic-pipeline/<run-id>/` | Semantic-pipeline campaigns, corrections, recovery, and reruns | Preserve separate run identities; do not consolidate similar runs. |
-| `validation/repo-gates/` | Repository-gate logs and exit statuses | Keep each log with its terminal status. |
+| `validation/repo-gates/` | Repository-gate logs and exit statuses | Keep each log with its terminal status until examined and reported; then remove unless designated for retention. |
 | `analysis/`, `callgraphs/`, `worktrees/` | Derived investigations, generated graphs, and temporary worktrees | Retain while referenced; check active worktree registrations before cleanup. |
 
 Historical generated receipts and campaign manifests retain path values from

@@ -68,17 +68,21 @@ reading implementation details. High-value entry points are `cli.py`,
 uv run python scripts/validate_repo.py
 ```
 
-Run the full gate in a tmux session with a durable log and separately written
-exit-status file. Wait at least three minutes before the first status check,
-then poll no more often than once per minute. When a successful gate has
-finished, leave its completed session and evidence intact; do not terminate it
-merely as cleanup.
+Run the full gate in a named tmux session with a log and a separately
+written exit-status file under `.artifacts/validation/repo-gates/`.
+Wait at least four minutes before the first status check, then poll
+no more often than once per minute.
 
-If the primary gate cannot run, report why and use the closest repository-local
-fallback. Commit scopes and release/version rules are defined by the repository
-hooks and documentation.
+Keep the session, log, and exit-status file until the result has been
+examined and reported. After examination, terminate the completed
+session and delete these temporary validation files. Preserve evidence
+still needed to investigate a failure or explicitly designated for
+retention. This cleanup permission applies only to repository-gate
+artifacts, not campaign or raw measurement evidence.
 
-For a full gate expected to exceed foreground observation, run it in a named
-tmux session with a durable log, then capture its terminal exit status before
-reporting the result. Do not restart an already-confirmed live gate merely to
-move it under tmux; preserve and report that existing terminal record.
+If the primary gate cannot run, report why and use the closest
+repository-local fallback. Commit scopes and release/version rules
+are defined by the repository hooks and documentation.
+
+Do not restart an already-confirmed live gate merely to move it under
+tmux; examine and report its existing terminal record before cleanup.
