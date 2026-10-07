@@ -31,8 +31,8 @@ compatibility contract.
 - Named workspaces, a shared per-user model store, and workspace-scoped MCP
   and services are implemented alongside retained direct-path routing.
 
-The complete ordered work and acceptance criteria live in the
-[host-target runtime decoupling execution ledger](../process/host-target-runtime-decoupling-execution-ledger.md).
+The implementation closeout and full historical execution record are linked in the
+[host-target runtime decoupling closeout](../process/host-target-runtime-decoupling-execution-ledger.md).
 ADR-028 supersedes the host/target interpretation of ADR-017, while retaining
 ADR-017 as the host-runtime policy.
 

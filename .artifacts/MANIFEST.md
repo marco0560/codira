@@ -39,6 +39,12 @@ above; do not rewrite immutable run contents to change historical provenance.
   confirmation that the prepared image caches remain available. Keep those
   image caches and all other attempt evidence. Review any different cache group
   separately before proposing cleanup.
+- The operator-approved [2026-10-07 cleanup](../docs/process/artifact-retention-cleanup-2026-10-07.md)
+  replaced the 171 reviewed `.venv` trees with exact package inventories,
+  installation metadata and verified archives of unrecognized files. All
+  surrounding run evidence was hash-verified unchanged. This is approval for
+  the listed existing environments, not automatic permission to delete future
+  environments or other runtime state.
 - Keep this directory ignored. Only this manifest and approved, sanitized
   summaries may be tracked; do not unignore raw runtime trees.
 - Store durable campaign findings and analysis in tracked `docs/process/`

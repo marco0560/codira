@@ -5,6 +5,15 @@ Responsibilities
 - Verify prerequisite checks fail closed without external Codex or containers.
 - Verify JSONL evidence validation requires MCP, tool, and complete usage data.
 
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    The module retains offline conformance checks and historical probe helpers.
+
 Design principles
 -----------------
 Tests use controlled subprocess results so they never create agent sessions or
@@ -18,6 +27,8 @@ This module belongs to the tooling verification layer for issue #53.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -29,13 +40,6 @@ import pytest
 from scripts.agent_efficiency import phase0, provider_proxy
 from scripts.check_agent_efficiency_environment import build_parser
 from scripts.run_agent_efficiency_phase0_escape_probes import blocked, probe_commands
-from scripts.run_agent_efficiency_phase0_live_probe import (
-    build_codex_argv,
-    load_manifest,
-    main as run_live_probe,
-    prepare_disposable_fixture,
-    resolve_executable,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -45,6 +49,149 @@ if TYPE_CHECKING:
 
 IMAGE = "example.invalid/codira-benchmark@sha256:" + "a" * 64
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+PROMPT = (
+    "Use the required Codira MCP server once to inspect this fixture. Then write "
+    "a JSON object with key 'status' and value 'ok' to .benchmark/result.json."
+)
+
+
+def load_manifest(path: Path) -> dict[str, object]:
+    """Load and validate the approved conformance-only probe manifest.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        TOML manifest path.
+
+    Returns
+    -------
+    dict[str, object]
+        Validated manifest mapping.
+
+    Raises
+    ------
+    ValueError
+        If required bounded-probe fields are missing or invalid.
+    """
+
+    manifest = tomllib.loads(path.read_text(encoding="utf-8"))
+    provider = manifest.get("provider")
+    limits = manifest.get("limits")
+    admission = manifest.get("admission")
+    if (
+        manifest.get("purpose") != "runner-and-isolation-conformance"
+        or manifest.get("attempts") != 1
+        or not isinstance(provider, dict)
+        or not isinstance(limits, dict)
+        or not isinstance(admission, dict)
+        or provider.get("name") != "openrouter"
+        or not isinstance(provider.get("model"), str)
+        or not isinstance(provider.get("reasoning_effort"), str)
+        or limits.get("max_attempts") != 1
+        or limits.get("timeout_seconds") != 600
+        or limits.get("max_output_tokens") != 12000
+        or limits.get("observed_total_tokens_ceiling") != 80000
+        or admission.get("exclude_from_paired_savings_analysis") is not True
+    ):
+        message = "live-probe manifest is not the approved bounded conformance manifest"
+        raise ValueError(message)
+    return manifest
+
+
+def build_codex_argv(codex: str, fixture_root: Path) -> tuple[str, ...]:
+    """Build the fixed Codex command for one conformance-only turn.
+
+    Parameters
+    ----------
+    codex : str
+        Codex executable name or absolute path.
+    fixture_root : pathlib.Path
+        Agent-visible fixture directory.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Shell-free command vector for JSONL, ephemeral Codex execution.
+    """
+
+    return (
+        codex,
+        "exec",
+        "--json",
+        "--ephemeral",
+        "--sandbox",
+        "workspace-write",
+        "--ignore-rules",
+        "--skip-git-repo-check",
+        "--cd",
+        str(fixture_root),
+        PROMPT,
+    )
+
+
+def prepare_disposable_fixture(root: Path) -> None:
+    """Create the small agent-visible fixture for one conformance execution.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Empty or absent fixture directory outside the implementation checkout.
+
+    Returns
+    -------
+    None
+        A deterministic Python fixture and writable result directory are made.
+
+    Raises
+    ------
+    ValueError
+        If the requested fixture directory contains prior-run state.
+    """
+
+    if root.exists() and any(root.iterdir()):
+        message = "fixture root must be absent or empty for a fresh probe"
+        raise ValueError(message)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "README.md").write_text(
+        "# Phase 0 fixture\n\nA disposable Codira MCP conformance fixture.\n",
+        encoding="utf-8",
+    )
+    (root / "sample.py").write_text(
+        '"""Minimal symbol for Codira MCP conformance."""\n\n\ndef greeting() -> str:\n'
+        '    """Return the deterministic fixture greeting.\n\n'
+        "    Returns\n"
+        "    -------\n"
+        "    str\n"
+        "        Stable greeting value.\n"
+        '    """\n\n'
+        '    return "hello"\n',
+        encoding="utf-8",
+    )
+    (root / ".benchmark").mkdir()
+
+
+def resolve_executable(executable: str) -> str | None:
+    """Resolve one executable without accepting a missing relative path.
+
+    Parameters
+    ----------
+    executable : str
+        Executable name or absolute path.
+
+    Returns
+    -------
+    str or None
+        Absolute executable path, or ``None`` when unavailable.
+    """
+
+    if Path(executable).name != executable:
+        path = Path(executable)
+        return (
+            str(path.resolve()) if path.is_file() and os.access(path, os.X_OK) else None
+        )
+    return shutil.which(executable)
 
 
 def _successful_runner(arguments: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -804,8 +951,8 @@ def test_approved_live_probe_manifest_is_bounded_and_conformance_only() -> None:
     }
 
 
-def test_live_probe_dry_run_has_fixed_jsonl_command(tmp_path: Path) -> None:
-    """Render the paid probe command without starting an agent or proxy.
+def test_historical_probe_has_fixed_jsonl_command(tmp_path: Path) -> None:
+    """Retain the historical command contract without an executable paid probe.
 
     Parameters
     ----------
@@ -815,13 +962,11 @@ def test_live_probe_dry_run_has_fixed_jsonl_command(tmp_path: Path) -> None:
     Returns
     -------
     None
-        The test asserts dry run is non-billed and retains required Codex flags.
+        The test asserts the archived command retains required Codex flags.
     """
 
     fixture_root = tmp_path / "fixture"
     fixture_root.mkdir()
-    events = tmp_path / "events.jsonl"
-    state_root = tmp_path / "state"
     manifest = load_manifest(
         REPOSITORY_ROOT / "benchmarks" / "agent-efficiency" / "phase0-live-probe.toml"
     )
@@ -833,54 +978,11 @@ def test_live_probe_dry_run_has_fixed_jsonl_command(tmp_path: Path) -> None:
         "credential_environment": "codira-tests-openrouter",
         "provider_key_daily_limit_usd": 0.25,
     }
-    assert (
-        run_live_probe(
-            [
-                "--fixture-root",
-                str(fixture_root),
-                "--state-root",
-                str(state_root),
-                "--events",
-                str(events),
-            ]
-        )
-        == 0
-    )
     argv = build_codex_argv("codex", fixture_root)
     assert "--json" in argv
     assert "--ephemeral" in argv
     assert "--ignore-rules" in argv
     assert "--skip-git-repo-check" in argv
-
-
-def test_live_probe_parser_accepts_declared_cancellation_delay() -> None:
-    """Expose cancellation only through an explicit positive CLI input.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    None
-        The test asserts the launcher parser retains the declared delay value.
-    """
-
-    from scripts.run_agent_efficiency_phase0_live_probe import build_parser
-
-    args = build_parser().parse_args(
-        [
-            "--fixture-root",
-            "/tmp/fixture",
-            "--state-root",
-            "/tmp/state",
-            "--events",
-            "/tmp/events.jsonl",
-            "--cancel-after-seconds",
-            "1.5",
-        ]
-    )
-    assert args.cancel_after_seconds == 1.5
 
 
 def test_live_probe_prepares_a_fresh_disposable_fixture(tmp_path: Path) -> None:

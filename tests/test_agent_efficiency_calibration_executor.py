@@ -1,9 +1,20 @@
-"""Test deterministic factory-backed calibration execution preparation."""
+"""Test deterministic factory-backed calibration execution preparation.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Tests use a disposable source with its frozen revision reachable at HEAD.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -37,7 +48,13 @@ def _campaign_directory(
     Returns
     -------
     tuple[pathlib.Path, pathlib.Path]
-        Generated campaign directory and an existing fixture-source directory.
+        Generated campaign directory and a disposable Git source whose frozen
+        Codira revision is reachable independently of the current branch.
+
+    Raises
+    ------
+    subprocess.CalledProcessError
+        If the local source cannot expose the retained fixture commit.
     """
 
     specification: dict[str, object] = {
@@ -83,7 +100,37 @@ def _campaign_directory(
     manifest, plan = build_campaign(specification, Path("benchmarks/agent-efficiency"))
     campaign_directory = tmp_path / "campaign"
     write_campaign_artifacts(campaign_directory, manifest, plan)
-    fixture_source = Path.cwd()
+    fixture_source = tmp_path / "fixture-source"
+    revision = json.loads(
+        Path("benchmarks/agent-efficiency/fixtures/codira-public.json").read_text()
+    )["revision"]
+    subprocess.run(
+        (
+            "git",
+            "clone",
+            "--shared",
+            "--no-checkout",
+            str(Path.cwd()),
+            str(fixture_source),
+        ),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        (
+            "git",
+            "-C",
+            str(fixture_source),
+            "update-ref",
+            "--no-deref",
+            "HEAD",
+            revision,
+        ),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     return campaign_directory, fixture_source
 
 

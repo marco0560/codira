@@ -2,7 +2,7 @@
 
 This is a reproducible, source-curated calibration of all 24 complete task rubrics. Correct cases use eighteen text exemplars with source grounding and six actual protected-test-qualified patches. Incomplete cases omit a required distinction; wrong cases assert a plausible contrary fact. Every rubric criterion is reviewed against the exact artifact and frozen rubric digest. Real campaign answers still require blinded semantic adjudication; this replay is not an automatic semantic classifier.
 
-All 72 answer probes bind exact response and rubric digests to source-curated adjudications. Correct exemplars support every required criterion; incomplete and wrong responses fail the substantive and requested-coverage criteria. The table highlights each task's decisive distinction. The full exemplars are in the [versioned calibration JSON](../../benchmarks/agent-efficiency/panels/representative-v1-calibration.json). Applied patch behavior is also checked independently in the exact admitted image.
+All 72 answer probes bind exact response and rubric digests to source-curated adjudications. Correct exemplars support every required criterion; incomplete and wrong responses fail the substantive and requested-coverage criteria. The table highlights each task's decisive distinction. The full exemplars are in the [versioned calibration JSON](https://github.com/marco0560/codira/blob/main/benchmarks/agent-efficiency/panels/representative-v1-calibration.json). Applied patch behavior is also checked independently in the exact admitted image.
 
 | Task | Correct claim | Incomplete claim | Subtly wrong claim | Decisive distinction |
 | --- | --- | --- | --- | --- |

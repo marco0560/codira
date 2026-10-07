@@ -1,10 +1,13 @@
 # Approved campaign 015 controls — 2026-10-04
 
-The operator approved this price-control revision and continued bounded preparation.
-The specification is
+Historical approved price controls. Campaign 015 was superseded after a local
+canary rejection; its original specification and evidence remain immutable.
+See [the preparation history](agent-efficiency-preparation-history-2026-10-07.md)
+for outcomes and replacements. This record is not a preparation instruction
+or renewed authorization.
+
+The specification remains
 `benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-015.json`.
-Generate its immutable artifacts through the factory;
-complete preparation still requires a fresh execution root and all checks.
 
 Campaign 014 passed the image, both native tool arms, fixture freshness, rubric
 calibration, all 18 applied-patch cases and the full repository gate. The gate

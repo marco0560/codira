@@ -1,135 +1,78 @@
-# Multirepo Split Manifest
+# Distribution repository export manifest
 
-## Purpose
+The canonical monorepo remains the development source of truth under
+[ADR-014](../adr/ADR-014-canonical-monorepo-generated-distribution-repositories.md).
+Exports are generated distribution/rehearsal trees; routine source development
+stays here. These tools remain maintained compatibility contracts, not a plan
+to move development into autonomous repositories.
 
-This note records the path-level ownership manifest for the accepted future
-repositories.
+## Source of truth
 
-The goal is to make the actual repository extraction step mechanical:
+`scripts/future_repo_split_manifest.py` declares ownership;
+`scripts/future_repo_export.py` materializes it, with coverage in
+`tests/test_future_repo_split_manifest.py` and `tests/test_future_repo_export.py`.
+The inventory below reflects the current executable manifest, not every
+first-party distribution in `packages/`. Do not assume an unlisted package can
+be exported by this helper. Expanding that contract requires a separate change.
 
-* which paths move into each future repository
-* which relevant compatibility or integration paths still stay in core
+## Declared exports
 
-## Source Of Truth
+| Repository | Exported package paths | Operational paths retained in core |
+| --- | --- | --- |
+| `codira-analyzer-python` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-analyzer-json` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-analyzer-c` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-analyzer-cpp` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-analyzer-rust` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-analyzer-javascript` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-analyzer-typescript` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-analyzer-go` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-analyzer-bash` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-analyzer-markdown` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-analyzer-text` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-documentation-audit-rustdoc` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-documentation-audit-jsdoc` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-documentation-audit-tsdoc` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-documentation-audit-go-doc-comments` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-backend-sqlite` | `README.md`, `pyproject.toml`, `src/`, `tests/` | `src/codira/indexer.py`, `tests/test_plugins.py` |
+| `codira-backend-duckdb` | `README.md`, `pyproject.toml`, `src/`, `tests/` | `tests/test_plugins.py` |
+| `codira-installer` | `README.md`, `pyproject.toml`, `src/`, `tests/` | None declared |
+| `codira-bundle-official` | `README.md`, `pyproject.toml`, `tests/` | `tests/test_plugins.py` |
 
-The executable source of truth for this manifest is:
+The `codira` export declares these monorepo paths:
 
-* `scripts/future_repo_split_manifest.py`
+- `.gitignore`
+- `.github/workflows/ci.yml`
+- `.github/workflows/commit-message-check.yml`
+- `.github/workflows/docs.yml`
+- `.github/workflows/release.yml`
+- `.pre-commit-config.yaml`
+- `.releaserc.json`
+- `CHANGELOG.md`
+- `LICENSE`
+- `README.md`
+- `docs/`
+- `examples/`
+- `mkdocs.yml`
+- `package-lock.json`
+- `package.json`
+- `pyproject.toml`
+- `scripts/`
+- `src/codira/`
+- `tests/`
 
-The regression coverage for that contract lives in:
+## Rehearsal
 
-* `tests/test_future_repo_split_manifest.py`
-
-The mechanical export helper for rehearsing one future repository from that
-manifest lives in:
-
-* `scripts/future_repo_export.py`
-
-The regression coverage for the export helper lives in:
-
-* `tests/test_future_repo_export.py`
-
-## Core Repository
-
-Repository:
-
-* `codira`
-
-Owned paths:
-
-* `.gitignore`
-* `.github/workflows/`
-* `.pre-commit-config.yaml`
-* `.releaserc.json`
-* `CHANGELOG.md`
-* `LICENSE`
-* `README.md`
-* `docs/`
-* `examples/`
-* `mkdocs.yml`
-* `package-lock.json`
-* `package.json`
-* `pyproject.toml`
-* `scripts/`
-* `src/codira/`
-* `tests/`
-
-Notes:
-
-* The core repository retains the installed-wheel integration tests.
-* The core repository retains the compatibility surfaces until `#13` removes
-  them after the split.
-* The core repository also retains the root files required by its kept CI,
-  docs, and release workflows.
-
-## Analyzer Repositories
-
-Repositories:
-
-* `codira-analyzer-python`
-* `codira-analyzer-json`
-* `codira-analyzer-c`
-* `codira-analyzer-bash`
-
-Owned paths per repository:
-
-* `README.md`
-* `pyproject.toml`
-* `src/`
-* `tests/`
-
-No analyzer compatibility shim paths remain in core. Analyzer behavior is
-owned by package-local source trees and discovered through entry-point
-metadata.
-
-## Backend Repository
-
-Repository:
-
-* `codira-backend-sqlite`
-
-Owned paths:
-
-* `README.md`
-* `pyproject.toml`
-* `src/`
-* `tests/`
-
-Core paths that still matter operationally after the split:
-
-* `src/codira/indexer.py`
-* `tests/test_plugins.py`
-
-## Bundle Repository
-
-Repository:
-
-* `codira-bundle-official`
-
-Owned paths:
-
-* `README.md`
-* `pyproject.toml`
-* `tests/`
-
-Core paths that still matter operationally after the split:
-
-* `tests/test_plugins.py`
-
-## Use During The Split
-
-During the actual multirepo extraction:
-
-1. copy the owned paths into the target repository
-2. keep the listed core paths in `codira`
-3. verify the copied repository against the CI contract in
-   `docs/process/multirepo-ci-decomposition.md`
-4. only after the repositories exist and validate independently, proceed to
-   the `#13` cleanup in core
-
-For split rehearsal from the monorepo checkout, use:
+Inspect the declared export before materializing it into a fresh disposable
+workspace beneath the designated scratch root:
 
 ```bash
-python scripts/future_repo_export.py codira-analyzer-python
-python scripts/future_repo_export.py codira-analyzer-python --destination-root /tmp/codira-split
+uv run python scripts/future_repo_export.py codira-analyzer-python
+uv run python scripts/future_repo_export.py codira-analyzer-python \
+  --destination-root '/home/marco/Personalia/Progetti/.Temp/codira-split-<fresh-identity>'
 ```
+
+The helper refuses an occupied destination and excludes generated Python
+artifacts. This scratch export is disposable; durable release artifacts must
+use a durable release location. See [the CI contract](multirepo-ci-decomposition.md)
+for declared validation commands and the local-core rehearsal boundary.

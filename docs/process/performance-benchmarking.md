@@ -3,6 +3,10 @@
 Codira performance measurements are developer-facing tooling. They must not
 change normal CLI behavior or make timing values part of the test contract.
 
+[Historical benchmark reports](benchmark-history/index.md) preserve dated
+findings, corrected evidence locations, and explicit gaps in retained evidence.
+Treat them as historical observations rather than current performance claims.
+
 ## Tools
 
 Required system tools:

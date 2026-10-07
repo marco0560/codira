@@ -129,12 +129,12 @@ Those sections are now complete; the focused Codira audit reports zero findings.
 The second gate's complete failed record is preserved under the matching `r2/`
 directory.
 
-The [launch prompt](agent-efficiency-campaign-010-launch-prompt.md) authorizes
-only the paying OpenRouter campaign in a new conversation. Preparation itself
-does not authorize starting either campaign here.
-
-For the subscription alternative, use the
-[campaign 011 launch prompt](agent-efficiency-campaign-011-launch-prompt.md).
+The [Campaign 010 prompt](agent-efficiency-campaign-010-launch-prompt.md) is
+archived authorization wording, not reusable launch guidance. Campaign 011 has
+completed [initial results](agent-efficiency-campaign-011-results-2026-10-02.md)
+and a [correcting forensic audit](agent-efficiency-campaign-011-forensic-analysis-2026-10-02.md);
+its completed launch prompt was retired. Use the current
+[campaign procedure](campaign-creation-instructions-2026-10-03.md) for fresh work.
 
 ## Final admission results
 

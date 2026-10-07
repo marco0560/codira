@@ -94,10 +94,10 @@ per pilot.
 
 ## Evidence
 
-- [Pilot 023 campaign manifest](../../.artifacts/agent-efficiency/campaigns/codira-efficacy-pilot-023/campaign.json)
-- [Pilot 025 campaign manifest](../../.artifacts/agent-efficiency/campaigns/codira-efficacy-pilot-025/campaign.json)
-- [Pilot 023 baseline patch record](../../.artifacts/agent-efficiency/executions/p023/state/records/patch-002-r01-baseline.json) and [MCP patch record](../../.artifacts/agent-efficiency/executions/p023/state/records/patch-002-r01-codira-mcp.json)
-- [Pilot 023 baseline protected-command stderr](../../.artifacts/agent-efficiency/executions/p023/state/attempt-work/patch-002-r01-baseline/oracle-trace/command-003.stderr.bin)
-- [Pilot 023 MCP protected-command stderr](../../.artifacts/agent-efficiency/executions/p023/state/attempt-work/patch-002-r01-codira-mcp/oracle-trace/command-003.stderr.bin)
-- [Pilot 025 baseline patch record](../../.artifacts/agent-efficiency/executions/p025/state/records/patch-002-r01-baseline.json) and [MCP patch record](../../.artifacts/agent-efficiency/executions/p025/state/records/patch-002-r01-codira-mcp.json)
-- [Pilot 025 protected-asset provenance](../../benchmarks/agent-efficiency/protected/patch-002/provenance.json)
+- Pilot 023 campaign manifest (`.artifacts/agent-efficiency/campaigns/codira-efficacy-pilot-023/campaign.json`)
+- Pilot 025 campaign manifest (`.artifacts/agent-efficiency/campaigns/codira-efficacy-pilot-025/campaign.json`)
+- Pilot 023 baseline patch record (`.artifacts/agent-efficiency/executions/p023/state/records/patch-002-r01-baseline.json`) and MCP patch record (`.artifacts/agent-efficiency/executions/p023/state/records/patch-002-r01-codira-mcp.json`)
+- Pilot 023 baseline protected-command stderr (`.artifacts/agent-efficiency/executions/p023/state/attempt-work/patch-002-r01-baseline/oracle-trace/command-003.stderr.bin`)
+- Pilot 023 MCP protected-command stderr (`.artifacts/agent-efficiency/executions/p023/state/attempt-work/patch-002-r01-codira-mcp/oracle-trace/command-003.stderr.bin`)
+- Pilot 025 baseline patch record (`.artifacts/agent-efficiency/executions/p025/state/records/patch-002-r01-baseline.json`) and MCP patch record (`.artifacts/agent-efficiency/executions/p025/state/records/patch-002-r01-codira-mcp.json`)
+- [Pilot 025 protected-asset provenance](https://github.com/marco0560/codira/blob/main/benchmarks/agent-efficiency/protected/patch-002/provenance.json)

@@ -1,5 +1,10 @@
 # Benchmark and artifact retention review — 2026-09-27
 
+The historical whole-environment retention decision below was revised by the
+operator-approved [2026-10-07 cleanup](artifact-retention-cleanup-2026-10-07.md).
+Package inventories and retained installation metadata now replace the reviewed
+`.venv` trees. The raw-evidence retention rules remain in force.
+
 ## Scope and method
 
 Inventory, physical reorganization, and approved cleanup of `benchmarks/` and

@@ -90,8 +90,8 @@ pair has both arms from Completion 009. This composite is a retrospective
 diagnostic, not one homogeneous execution under a single scoring revision.
 
 The source specifications are
-[campaign 006](../../benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-006.json)
-and [completion 009](../../benchmarks/agent-efficiency/campaign-specs/codira-efficacy-completion-009.json).
+[campaign 006](https://github.com/marco0560/codira/blob/main/benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-006.json)
+and [completion 009](https://github.com/marco0560/codira/blob/main/benchmarks/agent-efficiency/campaign-specs/codira-efficacy-completion-009.json).
 The fixtures are the admitted public Codira, Click, and Picomatch snapshots;
 repetitions are repeated tasks, not 30 independent repository problems.
 

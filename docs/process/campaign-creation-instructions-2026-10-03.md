@@ -16,14 +16,14 @@ do not continue through a partial preparation.
 
 Read these current sources before acting:
 
-- [AGENTS.md](../../AGENTS.md).
+- [AGENTS.md](https://github.com/marco0560/codira/blob/main/AGENTS.md).
 - [Factory and pre-pilot checklist](../process/agent-efficiency-campaign-factory.md).
 - [Mechanical readiness](../process/agent-efficiency-readiness-2026-10-02.md).
 - [OpenRouter readiness](../process/agent-efficiency-openrouter-readiness-2026-10-03.md).
 - [Native subscription provider](../process/agent-efficiency-subscription-provider.md).
 - [Historical preparation](../process/agent-efficiency-campaign-preparation-2026-10-02.md),
   for experiment intent and historical evidence, not current prices or capacity.
-- [Artifact layout and retention](../../.artifacts/MANIFEST.md).
+- [Artifact layout and retention](https://github.com/marco0560/codira/blob/main/.artifacts/MANIFEST.md).
 
 The current complete readiness pipeline admits `representative-campaign` with
 the existing representative panel: 24 tasks in eight families, two paired arms,
@@ -249,7 +249,7 @@ image. Its shell probe must use the same permissions as the measured transport:
 The outer measured container retains `--network=none`, its read-only root,
 `--cap-drop=ALL`, `no-new-privileges` and resource limits. Fix a probe/attempt
 policy mismatch in
-[`native_tool_qualification.py`](../../scripts/agent_efficiency/native_tool_qualification.py);
+[`native_tool_qualification.py`](https://github.com/marco0560/codira/blob/main/scripts/agent_efficiency/native_tool_qualification.py);
 do not change those outer controls to make the probe pass. The regression test
 `test_native_shell_probe_matches_transport_and_retains_failures` verifies
 transport selection, retained shell responses and blocking failures.
@@ -916,6 +916,8 @@ tmux pane with successful task execution.
 The forensic record for `glm016-20261004-r1` remains in its ignored execution
 root; the reconciled analysis is under
 `.artifacts/agent-efficiency/reports/campaign-016-failure-analysis-20261004-r1/`.
+The [tracked historical analysis](benchmark-history/2026-10-04-campaign-016-failure-analysis.md)
+preserves the authored findings separately from the ignored forensic evidence.
 Its 45 verified provider bodies contain 3,435,330 total tokens, including
 3,197,888 cached input tokens and 4,090 reasoning output tokens. Provider-reported
 cost sums to $0.1250259408; its conservative pool settlement is $0.55353624.

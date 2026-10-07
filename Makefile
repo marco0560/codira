@@ -27,7 +27,7 @@ ARGS ?=
 .PHONY: lg
 .PHONY: new-decision new-decision-alias
 .PHONY: provision-embedding-model
-.PHONY: re-clean rehearse-release-installs rel release-audit release-audit-script release-check release-rel-script release-system-selfcheck ri-fix run-manifest-baseline run-repo-tool run-with-repo-python
+.PHONY: re-clean rehearse-release-installs rel release-audit release-audit-script release-check release-rel-script release-system-selfcheck run-manifest-baseline run-repo-tool run-with-repo-python
 .PHONY: safe-push
 .PHONY: tag-guard txz
 .PHONY: validate-repo validate-semgrep-rules verify-exported-split-repos
@@ -117,10 +117,6 @@ release-rel-script: ## Run scripts/release_rel.py directly
 
 release-system-selfcheck: ## Run release tooling self-check
 	@$(UV) run python -m scripts.release_system_selfcheck
-
-ri-fix: ## Build a Codex prompt from codira ctx; set QUERY='...'
-	@test -n "$(QUERY)" || { echo "QUERY is required"; exit 2; }
-	@$(UV) run python scripts/ri_fix.py "$(QUERY)"
 
 run-manifest-baseline: ## Run paired SQLite/DuckDB baseline; set MANIFEST or ARGS
 	@$(UV) run python -m scripts.run_manifest_baseline $(MANIFEST) $(ARGS)

@@ -65,3 +65,53 @@ scripts, ADRs, roadmap, and GitHub issues.
 | `tests/test_split_embedding_engine_experiment.py` | Tests dedicated to removed split-engine experiment. |
 | `tests/test_onnx_parameter_sweep.py` | Tests dedicated to removed ONNX sweep. |
 | `tests/test_embedding_engine_matrix_plan.py` | Tests dedicated to removed matrix planner. |
+
+## Approved scripts and documentation cleanup — 2026-10-07
+
+The operator approved the complete cleanup review. The pre-cleanup snapshot is
+`f7d27c8b66777a5d0ec0b5bd231e4ddedb36ec42`. Unlike the older objects above, the objects in this
+section are recovered from this snapshot:
+
+```bash
+git show 'f7d27c8b66777a5d0ec0b5bd231e4ddedb36ec42:<path>'
+```
+
+For binary assets redirect the `git show` output to a disposable file; do not
+print image bytes to the terminal. Campaign specifications, generated manifests,
+receipts, provider responses and measurement evidence were not removed or moved.
+
+| Removed object | Reason / retained replacement |
+| --- | --- |
+| `scripts/run_agent_efficiency_phase0_live_probe.py` | Completed one-off paid probe; offline manifest/command/fixture/executable helpers and checks remain in `tests/test_agent_efficiency_phase0.py`. |
+| `scripts/run_agent_efficiency_phase4_live_probe.py` | Completed, unreferenced one-off paid probe; current paid work uses the campaign factory. |
+| `docs/process/agent-efficiency-campaign-011-launch-prompt.md` | Completed identity; retained initial results and correcting forensic audit. |
+| `docs/badges/cartoon_cold.png` | Unused alternative badge. |
+| `docs/badges/cartoon_warm.png` | Unused alternative badge. |
+| `docs/badges/realistic.png` | Unused alternative badge. |
+| `docs/badges/small.png` | Unused alternative badge. |
+| `docs/favicon.ico` | Unused icon; MkDocs uses `favicon.png`. |
+| `docs/images/IA_image.png` | Unreferenced image. |
+| `docs/process/agent-efficiency-campaign-012-handoff-2026-10-04.md` | Superseded handoff; controls, failures, provenance and approval boundaries consolidated in the preparation history. |
+| `docs/process/agent-efficiency-campaign-013-handoff-2026-10-04.md` | Superseded handoff; controls, failures, provenance and approval boundaries consolidated in the preparation history. |
+| `docs/process/agent-efficiency-campaign-014-handoff-2026-10-04.md` | Superseded handoff; controls, failures, provenance and approval boundaries consolidated in the preparation history. |
+| `docs/process/agent-efficiency-campaign-015-handoff-2026-10-04.md` | Superseded handoff; controls, failures, provenance and approval boundaries consolidated in the preparation history. |
+| `docs/process/dual-campaign-017-018-preparation-2026-10-04.md` | Superseded handoff; controls, failures, provenance and approval boundaries consolidated in the preparation history. |
+| `docs/process/luna-completion-024-2026-10-04.md` | Superseded handoff; controls, failures, provenance and approval boundaries consolidated in the preparation history. |
+
+[Preparation history](agent-efficiency-preparation-history-2026-10-07.md) preserves
+selected fingerprints, source/image bindings, financial controls and failure
+chronology. Complete original prose and authorization wording remain in Git.
+
+Five completed implementation ledgers and the calibration handoff retain their
+original paths as concise closeouts with recovery commands. The architecture
+squash-message correction and Qdrant live-server verification limitation remain
+explicit. Campaign 010's prompt is marked historical without claiming it ran.
+The dangling `ri_fix.py` documentation and Make target were removed; that script
+was already absent from this snapshot. The retrieval evaluator, line inventory
+and distribution export tools remain documented maintenance utilities.
+
+Cleanup validation also exposed two calibration tests whose `--no-local` source
+clone depended on the frozen fixture commit being reachable from the current
+branch. Their test setup now exposes the unchanged retained Codira fixture
+revision at a disposable source repository's detached HEAD. The production
+launcher and frozen fixture definition are unchanged.

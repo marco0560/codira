@@ -1,6 +1,12 @@
-# Prompt to launch the prepared paying campaign
+# Historical Campaign 010 launch prompt
 
-Paste the following into a new conversation in this repository:
+Archived on 2026-10-07. This is the original authorization wording, not a current
+launch instruction. Its historical receipt and frozen source are not current
+readiness. Any future execution requires the current campaign procedure, valid
+receipt bindings and fresh explicit authorization; do not paste this prompt as
+a reusable launch template. This archive makes no claim that Campaign 010 ran.
+
+Original prompt:
 
 ```text
 Launch the prepared OpenRouter representative campaign codira-efficacy-campaign-010.

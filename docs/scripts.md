@@ -346,9 +346,41 @@ reachable release tag.
 
 Run a read-only consistency check of the installed local release tooling.
 
-## `scripts/ri_fix.py`
+## `scripts/evaluate_agent_efficiency_retrieval.py`
 
-Repository helper for local maintenance tasks used during development.
+Measure source-reference retrieval against the frozen Sentinel panel without
+model calls. Run from the repository root with the exact admitted Click fixture
+revision specified by `benchmarks/agent-efficiency/fixtures/click-public.json`:
 
-Review the script directly before use if you need exact behavior for a given
-operation.
+```bash
+uv run python scripts/evaluate_agent_efficiency_retrieval.py \
+  --source /path/to/frozen/click \
+  --panel benchmarks/agent-efficiency/panels/sentinel-retrieval-v1.json \
+  --output '.artifacts/analysis/sentinel-retrieval-<fresh-identity>.json'
+```
+
+The script exports and indexes a disposable fixture in a temporary workspace. Its durable receipt contains reference recall/precision, first-reference
+rank, negative controls, payload bytes and provenance. The reference set is
+narrow: these metrics do not establish general relevance or paid task efficacy.
+Use a fresh output path; retain the receipt with its investigation.
+
+## `scripts/python_line_inventory.py`
+
+List Python files above a physical code-line threshold, separating code,
+comments/docstrings and blank lines. This is an optional maintenance utility:
+
+```bash
+uv run python scripts/python_line_inventory.py --threshold 1500
+uv run python scripts/python_line_inventory.py src scripts --threshold 500 --format json
+```
+
+It reads the selected roots and writes the inventory to stdout. Counts guide
+maintenance review; they are not a code-quality gate.
+
+## Retired conformance probes
+
+The one-off Phase 0 and Phase 4 paid probe executables were retired after their
+conformance work completed. Offline manifest, command, fixture and executable
+checks remain in `tests/test_agent_efficiency_phase0.py`. New paid work follows
+the campaign factory and current preparation procedure; historical commands
+and evidence can be recovered through [the cleanup register](process/deleted-artifacts.md).

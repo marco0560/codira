@@ -1033,14 +1033,14 @@ execution.
 
 Candidate controls were prepared on 2026-09-29 at the operator's request,
 using the factory's new `full-campaign` stage. The proposed specification is
-[`codira-efficacy-campaign-006.json`](../../benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-006.json).
-Its generated [manifest](../../.artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-006/campaign.json)
-and [launch plan](../../.artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-006/launch-plan.json)
+[`codira-efficacy-campaign-006.json`](https://github.com/marco0560/codira/blob/main/benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-006.json).
+Its generated manifest (`.artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-006/campaign.json`)
+and launch plan (`.artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-006/launch-plan.json`)
 freeze sixty attempts, thirty pairs, the three fixture identities, and task and
 oracle fingerprints. The factory's `--check` mode verifies these artifacts
 without changing them. Fixture revisions, trees, licenses, setup files, and
 protected task assets were re-admitted offline; the safe receipt is
-[`fixture-admission.json`](../../.artifacts/agent-efficiency/gates/phase7-campaign-002-20260929/fixture-admission.json).
+`fixture-admission.json` (`.artifacts/agent-efficiency/gates/phase7-campaign-002-20260929/fixture-admission.json`).
 
 Candidate 002 superseded the unapproved candidate 001 after the operator
 rejected its $70 daily proposal. Candidate 001's specification and generated
@@ -1092,7 +1092,7 @@ $10 available after prior daily usage. This includes an empirical margin:
 each pilot has six attempts, so the formula scales twelve observed attempts
 to 120 attempt equivalents for the sixty-attempt campaign. This is a planning
 estimate, not a provider invoice or a guarantee of completing all attempts.
-The [cost evidence](../../.artifacts/agent-efficiency/gates/phase7-campaign-002-20260929/cost-estimate.json)
+The cost evidence (`.artifacts/agent-efficiency/gates/phase7-campaign-002-20260929/cost-estimate.json`)
 retains the exact token counts, configured rates, and source-record digests.
 Cached input and reasoning tokens are already subsets of the reported totals
 and are not added a second time.
@@ -1136,22 +1136,22 @@ The operator authorized the scoped GHCR login and image push on 2026-09-29.
 The registered OpenRouter credential consumer remains
 `scripts/run_agent_efficiency_phase6_pilot.py`; full mode does not introduce a
 new credential recipient. The prepared launch receipt is
-[`.artifacts/agent-efficiency/executions/c006/launch-receipt.json`](../../.artifacts/agent-efficiency/executions/c006/launch-receipt.json).
+`.artifacts/agent-efficiency/executions/c006/launch-receipt.json` (`.artifacts/agent-efficiency/executions/c006/launch-receipt.json`).
 It re-admits the same three fixture revisions and trees. It contains local
 source locations and remains ignored; tracked documentation contains only
 repository-relative artifact references and safe hashes.
 
 Qualification evidence:
 
-- [Candidate 005 repository gate log](../../.artifacts/validation/repo-gates/phase7-full-qualification-r3-20260929/validation.log)
-  and [exit status](../../.artifacts/validation/repo-gates/phase7-full-qualification-r3-20260929/validation.exit): `0`.
-- [Recorded controls](../../.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c005-control-checklist.json)
-  and [paid authorization](../../.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c005-paid-authorization.json).
-- [Authenticated admission error](../../.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c005-preflight.stderr):
+- Candidate 005 repository gate log (`.artifacts/validation/repo-gates/phase7-full-qualification-r3-20260929/validation.log`)
+  and exit status (`.artifacts/validation/repo-gates/phase7-full-qualification-r3-20260929/validation.exit`): `0`.
+- Recorded controls (`.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c005-control-checklist.json`)
+  and paid authorization (`.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c005-paid-authorization.json`).
+- Authenticated admission error (`.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c005-preflight.stderr`):
   `scoped OpenRouter key budget is insufficient`; exit `2`.
-- [Candidate 006 gate log](../../.artifacts/validation/repo-gates/phase7-c006-qualification-r2-20260929/validation.log)
-  and [exit status](../../.artifacts/validation/repo-gates/phase7-c006-qualification-r2-20260929/validation.exit): `0`.
-- [Candidate 006 authenticated preflight](../../.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c006-preflight.json):
+- Candidate 006 gate log (`.artifacts/validation/repo-gates/phase7-c006-qualification-r2-20260929/validation.log`)
+  and exit status (`.artifacts/validation/repo-gates/phase7-c006-qualification-r2-20260929/validation.exit`): `0`.
+- Candidate 006 authenticated preflight (`.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c006-preflight.json`):
   route, price, and key allowance admitted. Keep the exact key usage metadata
   in this ignored local artifact.
 

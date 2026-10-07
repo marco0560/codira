@@ -110,7 +110,7 @@ alongside the legacy character budget and still received ten top matches,
 with an empty page object. Other context-page queries asked for one-item pages
 in prose, then used the legacy tool. Successful answers concealed this mismatch.
 
-The existing [runtime admission](../../scripts/agent_efficiency/runtime_admission.py)
+The existing [runtime admission](https://github.com/marco0560/codira/blob/main/scripts/agent_efficiency/runtime_admission.py)
 calls `context_for_task` with `output_budget=512` and requires
 `result.context.status == "ok"`. It neither verifies current item pagination
 nor qualifies the current signature. Its check is aligned with the older
@@ -373,9 +373,9 @@ they are not presented as new missing work.
 | 5 / C5 | Expose interpretable retrieval/coverage diagnostics and exact runtime identity. | Irrelevant matches carried `confidence=1.0`; global ready status did not establish task-relevant coverage; package mismatch was invisible in outcomes. Let users see why a match was selected, which channel contributed, what is indexed, what is uncertain, and which core/analyzer build is serving the request. | Clearly distinguish ranking score from probability. Report task-relevant coverage and unresolved relationships. A compact discovery receipt identifies package/build/schema/profile/generation and all accepted parameter values. Explain-mode evidence must reproduce ranking decisions without dumping it into every ordinary answer. |
 
 C1 should use existing retrieval planning, scoring, and explain infrastructure
-in [classifier](../../src/codira/query/classifier.py),
-[context scoring](../../src/codira/query/context_scoring.py), and
-[context orchestration](../../src/codira/query/context_orchestration.py).
+in [classifier](https://github.com/marco0560/codira/blob/main/src/codira/query/classifier.py),
+[context scoring](https://github.com/marco0560/codira/blob/main/src/codira/query/context_scoring.py), and
+[context orchestration](https://github.com/marco0560/codira/blob/main/src/codira/query/context_orchestration.py).
 Current classification prioritizes test vocabulary and option-related
 configuration; `_extract_target_symbol` chooses an identifier-like token by
 length, which can select ordinary task words. These mechanisms warrant
@@ -398,7 +398,7 @@ limit range, optional value, and profile remains discoverable through both
 CLI caps and MCP capabilities, as already required by the operator.
 
 C5 must not call heuristic rank confidence a probability of correctness.
-Current [context rendering](../../src/codira/query/context_render.py) defaults
+Current [context rendering](https://github.com/marco0560/codira/blob/main/src/codira/query/context_render.py) defaults
 confidence to 1.0 when no supplied map is available. A match score and its
 reasons are more actionable than a certainty-like number. Compact ordinary
 output and detailed operator diagnostics are compatible goals.
