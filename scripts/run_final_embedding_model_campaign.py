@@ -166,9 +166,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Run the final embedding model campaign."
     )
     parser.add_argument("--baseline", default="")
-    parser.add_argument("--manifest", default="benchmarks/uv-backed-repos.local.json")
     parser.add_argument(
-        "--model-manifest", default="benchmarks/embedding-model-candidates.json"
+        "--manifest", default="benchmarks/embedding/uv-backed-repos.local.json"
+    )
+    parser.add_argument(
+        "--model-manifest", default="benchmarks/embedding/model-candidates.json"
     )
     parser.add_argument(
         "--backend",
@@ -879,7 +881,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901, PLR0912
     python = resolve_python()
     codira = resolve_codira()
     artifact_root = Path(
-        os.environ.get("ARTIFACT_ROOT", ".artifacts/final-embedding-model-campaign")
+        os.environ.get("ARTIFACT_ROOT", ".artifacts/benchmarks/embedding/runs")
     )
     restart_from = args.restart_from
 

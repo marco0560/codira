@@ -667,7 +667,8 @@ def test_retrieve_documentation_candidates_renders_explicit_provenance(
             "name": "Plugin Loading",
             "file": str(tmp_path / "docs" / "architecture.md"),
             "lineno": 7,
-            "confidence": 1.0,
+            "ranking_score": 0.0,
+            "score_kind": "heuristic_rank_not_probability",
             "source_format": "markdown_section",
             "provenance": "markdown_section",
         }

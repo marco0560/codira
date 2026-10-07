@@ -1,0 +1,2691 @@
+#!/usr/bin/env python3
+"""Run the bounded, resumable Issue #53 Phase 6 pilot.
+
+The public manifest is validated before the runner reads its OpenRouter
+credential. Agent containers receive only a fresh proxy token and an exported
+fixture; protected graders receive a separate immutable checkout.
+"""
+# ruff: noqa: C901, EM101, EM102, TRY003, TRY004, TRY301
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    import socketserver
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.agent_efficiency import phase0, provider_proxy
+from scripts.agent_efficiency.campaign_state import (
+    CampaignStore,
+    ScheduledAttempt,
+    build_paired_schedule,
+    run_pending,
+)
+from scripts.agent_efficiency.contracts import (
+    ContractError,
+    canonical_fingerprint,
+    load_document,
+)
+from scripts.agent_efficiency.corpus import export_fixture, verify_fixture
+from scripts.agent_efficiency.environment import (
+    EnvironmentPreparationError,
+    fixture_environment,
+)
+from scripts.agent_efficiency.oracles import evaluate_oracle
+from scripts.agent_efficiency.panels import panel_document_path, prepare_panel_fixture
+from scripts.agent_efficiency.runner import (
+    PROJECT_TEMP_ROOT,
+    ContainerAttemptRequest,
+    ContainerExecution,
+    EnvironmentPreparationRequest,
+    IndexPreparationRequest,
+    capture_workspace_patch,
+    codex_model_base_instructions,
+    execute_container_attempt,
+    execute_environment_preparation,
+    execute_index_preparation,
+    result_from_execution,
+    write_proxy_relay,
+)
+
+BENCHMARK_ROOT = Path("benchmarks/agent-efficiency")
+PROTECTED_ASSET_ROOT = BENCHMARK_ROOT / "protected"
+BENCHMARK_CODIRA_CONFIG = "/opt/codira/benchmark-codira.toml"
+BENCHMARK_MCP_COMMAND = "/opt/codira/codira-mcp-benchmark"
+BENCHMARK_CODIRA_PROFILE = Path("scripts/agent_efficiency/benchmark-codira.toml")
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+OPENROUTER_USER_MODELS_URL = "https://openrouter.ai/api/v1/models/user"
+OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
+GIT_EXECUTABLE = shutil.which("git")
+
+
+def runtime_profile_fingerprint() -> str:
+    """Return the identity of the Codira profile used by assisted attempts.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    str
+        SHA-256 digest of the exact profile copied into every assisted fixture.
+    """
+
+    return hashlib.sha256(BENCHMARK_CODIRA_PROFILE.read_bytes()).hexdigest()
+
+
+def _persist_execution_trace(
+    attempt_root: Path, stage: str, stdout: str, stderr: str
+) -> dict[str, dict[str, object]]:
+    """Persist captured container output in the private attempt directory.
+
+    Parameters
+    ----------
+    attempt_root : pathlib.Path
+        Durable ignored artifact root for one attempt.
+    stage : str
+        Fixed preparation or execution stage name.
+    stdout, stderr : str
+        Complete text streams captured by the container runner.
+
+    Returns
+    -------
+    dict[str, dict[str, object]]
+        Relative artifact paths, SHA-256 digests, and byte counts.
+    """
+
+    trace_root = attempt_root / "runtime-traces"
+    trace_root.mkdir(mode=0o700, exist_ok=True)
+    trace_root.chmod(0o700)
+    observations: dict[str, dict[str, object]] = {}
+    for stream, content in (("stdout", stdout), ("stderr", stderr)):
+        relative_path = Path("runtime-traces") / f"{stage}.{stream}.txt"
+        encoded = content.encode("utf-8")
+        target = attempt_root / relative_path
+        target.write_bytes(encoded)
+        target.chmod(0o600)
+        observations[stream] = {
+            "path": relative_path.as_posix(),
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+            "size_bytes": len(encoded),
+        }
+    return observations
+
+
+def validate_prepared_index(root: Path) -> dict[str, object]:
+    """Validate one assisted fixture index before provider setup.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        History-free staged fixture containing a completed Codira index.
+
+    Returns
+    -------
+    dict[str, object]
+        Public-safe tracked-file and index-generation evidence.
+
+    Raises
+    ------
+    PilotLauncherError
+        If Git has no staged baseline or the Codira index is empty, partial,
+        failed, implausibly large, or internally inconsistent.
+    """
+
+    if GIT_EXECUTABLE is None:
+        raise PilotLauncherError("Git is unavailable for index validation")
+    try:
+        tracked = subprocess.run(
+            (GIT_EXECUTABLE, "ls-files", "--cached", "-z"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+        ).stdout
+        tracked_file_count = len([item for item in tracked.split(b"\0") if item])
+        metadata = json.loads(
+            (root / ".codira" / "metadata.json").read_text(encoding="utf-8")
+        )
+        generation = json.loads(
+            (root / ".codira" / "index-generation.json").read_text(encoding="utf-8")
+        )
+        indexed_file_count = int(metadata["indexed_file_count"])
+        generation_indexed_file_count = int(generation["indexed_file_count"])
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        subprocess.CalledProcessError,
+    ) as error:
+        raise PilotLauncherError(
+            "Codira index preparation evidence is invalid"
+        ) from error
+    if (
+        tracked_file_count < 1
+        or indexed_file_count < 1
+        or indexed_file_count > tracked_file_count
+        or generation_indexed_file_count != indexed_file_count
+        or generation.get("state") != "ready"
+        or generation.get("partial") is not False
+        or generation.get("failed_file_count") != 0
+    ):
+        raise PilotLauncherError("Codira index preparation is not usable")
+    return {
+        "tracked_file_count": tracked_file_count,
+        "indexed_file_count": indexed_file_count,
+        "generation": generation.get("generation"),
+        "generation_state": generation.get("state"),
+        "partial": generation.get("partial"),
+        "failed_file_count": generation.get("failed_file_count"),
+    }
+
+
+class PilotLauncherError(ValueError):
+    """Report a deterministic, non-secret Phase 6 pilot failure.
+
+    Parameters
+    ----------
+    detail : str
+        Public-safe validation or execution failure.
+
+    Returns
+    -------
+    None
+        The exception carries the stable failure detail.
+    """
+
+
+@dataclass(frozen=True)
+class PilotExecutionContext:
+    """Collect immutable dependencies needed to execute one pilot attempt.
+
+    Parameters
+    ----------
+    tasks, oracles, fixtures : Mapping[str, Mapping[str, object]]
+        Validated public records bound to the approved manifest.
+    sources : Mapping[str, pathlib.Path]
+        Verified local immutable fixture checkouts.
+    image : str
+        Digest-pinned benchmark image.
+    runtime : str
+        Supported container runtime.
+    upstream_token : str
+        Runner-only provider credential, never persisted.
+    manifest : Mapping[str, object]
+        Approved execution controls.
+    provider_context_length : int or None, optional
+        Context size from the immediately preceding authenticated route
+        preflight; absent only in deterministic unit-test contexts.
+    full_campaign : bool, optional
+        Use the qualified sixty-attempt controls and persistent shared budget.
+    subscription_auth : pathlib.Path or None, optional
+        Existing managed ChatGPT login file for the native client only.
+
+    Returns
+    -------
+    None
+        Instances are immutable per-process runner dependencies.
+    """
+
+    tasks: Mapping[str, Mapping[str, object]]
+    oracles: Mapping[str, Mapping[str, object]]
+    fixtures: Mapping[str, Mapping[str, object]]
+    sources: Mapping[str, Path]
+    image: str
+    runtime: str
+    upstream_token: str
+    manifest: Mapping[str, object]
+    provider_context_length: int | None = None
+    full_campaign: bool = False
+    subscription_auth: Path | None = None
+
+
+@dataclass(frozen=True)
+class ExecutionControls:
+    """Hold validated scalar execution controls from the approved manifest.
+
+    Parameters
+    ----------
+    model, reasoning_effort : str
+        Exact provider settings fixed for the pilot.
+    max_prompt_price, max_completion_price : float
+        Positive OpenRouter price ceilings per million tokens.
+    max_total_tokens : int
+        Positive token ceiling for bounded pilots; planning estimate for full
+        campaigns. Its scope is declared by ``max_total_tokens_scope``.
+    max_total_tokens_scope : str
+        Whether the total-token ceiling covers the whole agent session or each
+        logical continuation for conservative legacy accounting.
+    max_output_tokens, timeout_seconds, max_response_requests : int
+        Positive output, time, and provider-request ceilings.
+    max_daily_spend, max_attempt_spend, max_pilot_spend : float
+        Positive accounting values in USD. Full campaigns enforce the
+        observed aggregate pool; their attempt amount is an estimate.
+
+    Returns
+    -------
+    None
+        Instances are typed immutable values safe to use after validation.
+    """
+
+    model: str
+    reasoning_effort: str
+    max_prompt_price: float
+    max_completion_price: float
+    max_total_tokens: int
+    max_total_tokens_scope: str
+    max_output_tokens: int
+    timeout_seconds: int
+    max_response_requests: int
+    max_transport_attempts_per_response: int
+    max_daily_spend: float
+    max_attempt_spend: float
+    max_pilot_spend: float
+
+
+def _openrouter_json(request: Request, detail: str) -> Mapping[str, object]:
+    """Fetch a JSON object from the fixed OpenRouter admission endpoints.
+
+    Parameters
+    ----------
+    request : urllib.request.Request
+        Fixed public or authenticated metadata request without a request body.
+    detail : str
+        Public-safe failure category for transport or JSON decoding errors.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, object]
+        Parsed OpenRouter response object.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the endpoint fails, emits invalid JSON, or returns a non-object.
+    """
+
+    try:
+        with urlopen(request, timeout=30) as response:
+            document = json.loads(response.read())
+    except HTTPError as error:
+        raise PilotLauncherError(f"{detail}: HTTP {error.code}") from error
+    except (OSError, URLError, json.JSONDecodeError) as error:
+        raise PilotLauncherError(detail) from error
+    if not isinstance(document, Mapping):
+        raise PilotLauncherError(f"{detail}: malformed response")
+    return document
+
+
+def _model_catalog(
+    document: Mapping[str, object],
+) -> Mapping[str, Mapping[str, object]]:
+    """Return the model-ID mapping from one OpenRouter catalog document.
+
+    Parameters
+    ----------
+    document : collections.abc.Mapping[str, object]
+        Parsed public or authenticated OpenRouter catalog object.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, collections.abc.Mapping[str, object]]
+        Exact model IDs mapped to their public-safe metadata.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the catalog does not expose a model list.
+    """
+
+    entries = document.get("data")
+    if not isinstance(entries, list):
+        raise PilotLauncherError("OpenRouter model catalog is malformed")
+    return {
+        identifier: entry
+        for entry in entries
+        if isinstance(entry, Mapping)
+        and isinstance((identifier := entry.get("id")), str)
+    }
+
+
+def _active_pricing(
+    pricing: Mapping[str, object], now_utc: datetime | None = None
+) -> tuple[Mapping[str, object], dict[str, object]]:
+    """Return conservative prices for the model's active published route.
+
+    Parameters
+    ----------
+    pricing : collections.abc.Mapping[str, object]
+        OpenRouter model pricing with optional UTC-window or prompt-token tiers.
+    now_utc : datetime.datetime or None, optional
+        UTC instant used for deterministic time-window selection in tests.
+
+    Returns
+    -------
+    tuple[collections.abc.Mapping[str, object], dict[str, object]]
+        Conservative pricing mapping and a public-safe selection record.
+
+    Raises
+    ------
+    PilotLauncherError
+        If pricing overrides are malformed, overlap, or cannot be bounded.
+
+    Notes
+    -----
+    Prompt-token tiers use the highest listed prompt, cache-input, and completion
+    rates. This bounds a session without assuming future prompt sizes or cache
+    behavior.
+    """
+
+    overrides = pricing.get("overrides", [])
+    if not isinstance(overrides, list):
+        raise PilotLauncherError("OpenRouter model pricing overrides are malformed")
+    token_tiers = [
+        override
+        for override in overrides
+        if isinstance(override, Mapping) and "min_prompt_tokens" in override
+    ]
+    if token_tiers:
+        if len(token_tiers) != len(overrides):
+            raise PilotLauncherError("OpenRouter model pricing overrides are malformed")
+        thresholds: list[int] = []
+        tier_prices: list[Mapping[str, object]] = [pricing]
+        for tier in token_tiers:
+            threshold = tier.get("min_prompt_tokens")
+            if (
+                not isinstance(threshold, int)
+                or isinstance(threshold, bool)
+                or threshold < 1
+                or any(key in tier for key in ("utc_days", "utc_start", "utc_end"))
+            ):
+                raise PilotLauncherError(
+                    "OpenRouter model pricing token tiers are malformed"
+                )
+            thresholds.append(threshold)
+            tier_prices.append({**pricing, **tier})
+        if len(set(thresholds)) != len(thresholds):
+            raise PilotLauncherError("OpenRouter model pricing token tiers overlap")
+        return _conservative_pricing(tier_prices), {
+            "kind": "token_threshold_worst_case",
+            "tier_count": len(token_tiers),
+            "max_min_prompt_tokens": max(thresholds),
+        }
+    if not overrides:
+        return _conservative_pricing([pricing]), {"kind": "base"}
+    instant = now_utc or datetime.now(UTC)
+    if instant.tzinfo is None or instant.utcoffset() != UTC.utcoffset(instant):
+        raise PilotLauncherError("OpenRouter pricing instant must be UTC")
+    minute = instant.hour * 60 + instant.minute
+    weekday = instant.strftime("%A").lower()
+    selected: list[Mapping[str, object]] = []
+    for override in overrides:
+        if not isinstance(override, Mapping):
+            raise PilotLauncherError("OpenRouter model pricing overrides are malformed")
+        raw_days = override.get("utc_days")
+        raw_start = override.get("utc_start")
+        raw_end = override.get("utc_end")
+        if not isinstance(raw_days, list) or not all(
+            isinstance(day, str) for day in raw_days
+        ):
+            raise PilotLauncherError("OpenRouter model pricing overrides are malformed")
+        days = tuple(day.lower() for day in raw_days)
+        if raw_start is None and raw_end is None:
+            in_window = True
+        elif (
+            isinstance(raw_start, int)
+            and not isinstance(raw_start, bool)
+            and isinstance(raw_end, int)
+            and not isinstance(raw_end, bool)
+        ):
+            start = _utc_hhmm_minutes(raw_start)
+            end = _utc_hhmm_minutes(raw_end)
+            in_window = (
+                start <= minute < end
+                if start < end
+                else minute >= start or minute < end
+            )
+        else:
+            raise PilotLauncherError("OpenRouter model pricing overrides are malformed")
+        if weekday in days and in_window:
+            selected.append(override)
+    if len(selected) > 1:
+        raise PilotLauncherError("OpenRouter model pricing windows overlap")
+    if not selected:
+        return _conservative_pricing([pricing]), {"kind": "base"}
+    override = selected[0]
+    window: dict[str, object] = {
+        "kind": "override",
+        "utc_days": list(cast("list[str]", override["utc_days"])),
+    }
+    if "utc_start" in override:
+        window["utc_start"] = cast("int", override["utc_start"])
+        window["utc_end"] = cast("int", override["utc_end"])
+    return _conservative_pricing([pricing, {**pricing, **override}]), window
+
+
+def _conservative_pricing(
+    sources: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Bound input and output token prices across the supplied price records.
+
+    Parameters
+    ----------
+    sources : collections.abc.Sequence[collections.abc.Mapping[str, object]]
+        Base pricing and every applicable or potentially active override.
+
+    Returns
+    -------
+    dict[str, object]
+        Pricing record with prompt set to the highest prompt/cache input rate
+        and completion set to the highest output rate.
+
+    Raises
+    ------
+    PilotLauncherError
+        If any required prompt or completion price cannot be parsed.
+    """
+
+    if not sources:
+        raise PilotLauncherError("OpenRouter model pricing is unavailable")
+    prompt_prices: list[float] = []
+    completion_prices: list[float] = []
+    for source in sources:
+        prompt_prices.append(_token_price(source, "prompt"))
+        completion_prices.append(_token_price(source, "completion"))
+        for field in ("input_cache_read", "input_cache_write"):
+            value = source.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, str | int | float) or isinstance(value, bool):
+                raise PilotLauncherError("OpenRouter model cache price is malformed")
+            try:
+                cache_price = float(value)
+            except ValueError as error:
+                raise PilotLauncherError(
+                    "OpenRouter model cache price is malformed"
+                ) from error
+            if not math.isfinite(cache_price) or cache_price < 0:
+                raise PilotLauncherError("OpenRouter model cache price is malformed")
+            prompt_prices.append(cache_price)
+    bounded = dict(sources[0])
+    bounded.pop("overrides", None)
+    bounded["prompt"] = str(max(prompt_prices))
+    bounded["completion"] = str(max(completion_prices))
+    return bounded
+
+
+def _utc_hhmm_minutes(value: int) -> int:
+    """Convert an OpenRouter integer UTC ``HHMM`` value to minutes after midnight.
+
+    Parameters
+    ----------
+    value : int
+        Integer UTC clock value without a colon.
+
+    Returns
+    -------
+    int
+        Minute offset in the inclusive range zero through 1,439.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the value is not a valid UTC ``HHMM`` clock value.
+    """
+
+    hour, minute = divmod(value, 100)
+    if value < 0 or hour > 23 or minute > 59:
+        raise PilotLauncherError("OpenRouter pricing window is malformed")
+    return hour * 60 + minute
+
+
+def _token_price(pricing: Mapping[str, object], field: str) -> float:
+    """Return one non-negative per-token price from an OpenRouter price record.
+
+    Parameters
+    ----------
+    pricing : collections.abc.Mapping[str, object]
+        Base, merged, or override price mapping.
+    field : str
+        Required per-token prompt or completion price field.
+
+    Returns
+    -------
+    float
+        Non-negative per-token price before conversion to per-million units.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the selected price record omits or corrupts a required price.
+    """
+
+    value = pricing.get(field)
+    if not isinstance(value, str | int | float) or isinstance(value, bool):
+        raise PilotLauncherError("OpenRouter model price is unavailable")
+    try:
+        result = float(value)
+    except ValueError as error:
+        raise PilotLauncherError("OpenRouter model price is malformed") from error
+    if not math.isfinite(result) or result < 0:
+        raise PilotLauncherError("OpenRouter model price is unavailable")
+    return result
+
+
+def _validate_model_reasoning(model: Mapping[str, object], effort: str) -> None:
+    """Check exposed model-specific reasoning requirements before inference.
+
+    Parameters
+    ----------
+    model : collections.abc.Mapping[str, object]
+        Public or key-visible catalog entry.
+    effort : str
+        Frozen effort requested by the campaign.
+
+    Returns
+    -------
+    None
+        Older entries without reasoning metadata retain capability admission.
+
+    Raises
+    ------
+    PilotLauncherError
+        If exposed metadata rejects the exact effort or disables mandatory reasoning.
+    """
+    reasoning = model.get("reasoning")
+    if reasoning is None:
+        return
+    if not isinstance(reasoning, Mapping):
+        raise PilotLauncherError("OpenRouter reasoning metadata is malformed")
+    efforts = reasoning.get("supported_efforts")
+    if reasoning.get("mandatory") is True and effort == "none":
+        raise PilotLauncherError("OpenRouter model requires reasoning")
+    if efforts is not None and (
+        not isinstance(efforts, list)
+        or not all(isinstance(value, str) for value in efforts)
+        or effort not in efforts
+    ):
+        raise PilotLauncherError("OpenRouter model rejects the frozen reasoning effort")
+
+
+def preflight_openrouter_route(
+    manifest: Mapping[str, object],
+    controls: ExecutionControls,
+    token: str,
+    *,
+    now_utc: datetime | None = None,
+) -> dict[str, object]:
+    """Verify the exact agent route and scoped key without a completion request.
+
+    Parameters
+    ----------
+    manifest : collections.abc.Mapping[str, object]
+        Frozen pilot manifest whose fingerprint is persisted in the result.
+    controls : ExecutionControls
+        Validated model, price, token, and accounting ceilings.
+    token : str
+        Scoped OpenRouter key supplied only through the approved SOPS child.
+    now_utc : datetime.datetime or None, optional
+        UTC instant used for deterministic pricing-window admission in tests.
+
+    Returns
+    -------
+    dict[str, object]
+        Public-safe model and key-budget admission record.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the public route, key-visible route, price, capability, or budget
+        differs from the frozen manifest.
+    """
+
+    public_catalog = _model_catalog(
+        _openrouter_json(
+            Request(OPENROUTER_MODELS_URL, method="GET"),
+            "cannot fetch public OpenRouter catalog",
+        )
+    )
+    public_model = public_catalog.get(controls.model)
+    if not isinstance(public_model, Mapping):
+        raise PilotLauncherError("frozen OpenRouter model is unavailable")
+    _validate_model_reasoning(public_model, controls.reasoning_effort)
+    pricing = public_model.get("pricing")
+    parameters = public_model.get("supported_parameters")
+    top_provider = public_model.get("top_provider")
+    context_length = public_model.get("context_length")
+    max_completion_tokens = (
+        top_provider.get("max_completion_tokens")
+        if isinstance(top_provider, Mapping)
+        else None
+    )
+    if (
+        not isinstance(pricing, Mapping)
+        or not isinstance(parameters, list)
+        or not {"tools", "reasoning"}.issubset(parameters)
+        or not isinstance(top_provider, Mapping)
+        or not isinstance(context_length, int)
+        or context_length < controls.max_output_tokens
+        or not isinstance(max_completion_tokens, int)
+        or max_completion_tokens < controls.max_output_tokens
+    ):
+        raise PilotLauncherError("public OpenRouter model contract is incomplete")
+    active_pricing, pricing_window = _active_pricing(pricing, now_utc)
+    prompt_price = _token_price(active_pricing, "prompt") * 1_000_000
+    completion_price = _token_price(active_pricing, "completion") * 1_000_000
+    if (
+        prompt_price > controls.max_prompt_price
+        or completion_price > controls.max_completion_price
+    ):
+        raise PilotLauncherError("OpenRouter model price exceeds the frozen ceiling")
+    reservation_multiplier = (
+        1
+        if controls.max_total_tokens_scope == "whole-session"
+        else controls.max_response_requests
+        * controls.max_transport_attempts_per_response
+    )
+    token_spend_bound = (
+        reservation_multiplier
+        * controls.max_total_tokens
+        * max(prompt_price, completion_price)
+        / 1_000_000
+    )
+    response_reserve = (
+        context_length * prompt_price + controls.max_output_tokens * completion_price
+    ) / 1_000_000
+    worst_case_attempt_spend = token_spend_bound + response_reserve
+    accounting = manifest.get("accounting")
+    shared_pool = (
+        isinstance(accounting, Mapping)
+        and accounting.get("budget_reservation_mode") == "shared-pool"
+    )
+    if not shared_pool and controls.max_attempt_spend < worst_case_attempt_spend:
+        raise PilotLauncherError(
+            "attempt spend cap cannot cover the authenticated token reservation"
+        )
+
+    authenticated_catalog = _model_catalog(
+        _openrouter_json(
+            Request(
+                OPENROUTER_USER_MODELS_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                method="GET",
+            ),
+            "cannot fetch authenticated OpenRouter catalog",
+        )
+    )
+    authenticated_model = authenticated_catalog.get(controls.model)
+    authenticated_parameters = (
+        authenticated_model.get("supported_parameters")
+        if isinstance(authenticated_model, Mapping)
+        else None
+    )
+    if not isinstance(authenticated_parameters, list) or not {
+        "tools",
+        "reasoning",
+    }.issubset(authenticated_parameters):
+        raise PilotLauncherError("scoped key cannot admit the frozen model route")
+    assert isinstance(authenticated_model, Mapping)
+    _validate_model_reasoning(authenticated_model, controls.reasoning_effort)
+
+    budget_payload = _openrouter_json(
+        Request(
+            OPENROUTER_KEY_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            method="GET",
+        ),
+        "cannot fetch scoped OpenRouter key budget",
+    )
+    budget = budget_payload.get("data")
+    if not isinstance(budget, Mapping):
+        raise PilotLauncherError("scoped OpenRouter key budget is malformed")
+    limit = budget.get("limit")
+    remaining = budget.get("limit_remaining")
+    daily_usage = budget.get("usage_daily")
+    reset = budget.get("limit_reset")
+    if (
+        not isinstance(limit, int | float)
+        or not isinstance(remaining, int | float)
+        or not isinstance(daily_usage, int | float)
+        or isinstance(limit, bool)
+        or isinstance(remaining, bool)
+        or isinstance(daily_usage, bool)
+        or limit < controls.max_pilot_spend
+        or (limit > controls.max_daily_spend and not shared_pool)
+        or remaining < controls.max_pilot_spend
+        or (reset is not None and not isinstance(reset, str))
+    ):
+        raise PilotLauncherError("scoped OpenRouter key budget is insufficient")
+    return {
+        "campaign_id": manifest["campaign_id"],
+        "manifest_fingerprint": canonical_fingerprint(manifest),
+        "model": controls.model,
+        "reasoning_effort": controls.reasoning_effort,
+        "key_visible_reasoning": authenticated_model.get("reasoning"),
+        "accounting": {
+            "max_total_tokens": controls.max_total_tokens,
+            "max_total_tokens_scope": controls.max_total_tokens_scope,
+            "max_response_requests_per_attempt": controls.max_response_requests,
+            "max_transport_attempts_per_response": (
+                controls.max_transport_attempts_per_response
+            ),
+            "max_estimated_attempt_spend_usd": controls.max_attempt_spend,
+            **({"observed_campaign_spend_only": True} if shared_pool else {}),
+            (
+                "planned_attempt_spend_usd_at_ceiling"
+                if shared_pool
+                else "worst_case_reserved_attempt_spend_usd"
+            ): worst_case_attempt_spend,
+            "max_estimated_pilot_spend_usd": controls.max_pilot_spend,
+            "max_daily_spend_usd": controls.max_daily_spend,
+        },
+        "public_route": {
+            "context_length": context_length,
+            (
+                "planned_token_spend_usd_at_ceiling"
+                if shared_pool
+                else "token_spend_bound_usd"
+            ): token_spend_bound,
+            (
+                "context_response_upper_bound_usd"
+                if shared_pool
+                else "context_response_reserve_usd"
+            ): response_reserve,
+            "max_completion_tokens": top_provider.get("max_completion_tokens"),
+            "max_prompt_usd_per_million": prompt_price,
+            "max_completion_usd_per_million": completion_price,
+            "pricing_window": pricing_window,
+            "supported_parameters": sorted(str(value) for value in parameters),
+        },
+        "authenticated_route": {
+            "supported_parameters": sorted(
+                str(value) for value in authenticated_parameters
+            )
+        },
+        "key_budget": {
+            "limit_usd": float(limit),
+            "limit_remaining_usd": float(remaining),
+            "limit_reset": reset,
+            "usage_daily_usd": float(daily_usage),
+        },
+    }
+
+
+def prompt_for_attempt(
+    task_prompt: str, assistance_mode: str, manifest: Mapping[str, object]
+) -> str:
+    """Bind the approved treatment instruction to an agent invocation.
+
+    Parameters
+    ----------
+    task_prompt : str
+        Frozen public task prompt shared by both variants.
+    assistance_mode : str
+        Scheduled treatment identity.
+    manifest : collections.abc.Mapping[str, object]
+        Approved campaign manifest containing the treatment protocol.
+
+    Returns
+    -------
+    str
+        Common protocol guidance plus the public task prompt, with the
+        assisted-only Codira instruction prepended for the treatment arm.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the manifest lacks a valid treatment protocol.
+    """
+
+    protocol = manifest.get("treatment_protocol")
+    if not isinstance(protocol, Mapping):
+        raise PilotLauncherError("campaign treatment protocol is invalid")
+    version = protocol.get("version")
+    instruction = protocol.get("codira_mcp_instruction")
+    common_instruction = protocol.get("agent_instruction")
+    if (
+        not isinstance(version, str)
+        or not version
+        or not isinstance(instruction, str)
+        or not instruction.strip()
+    ):
+        raise PilotLauncherError("campaign treatment protocol is invalid")
+    if common_instruction is not None and (
+        not isinstance(common_instruction, str) or not common_instruction.strip()
+    ):
+        raise PilotLauncherError("campaign treatment protocol is invalid")
+    if version == "mcp-required-v2" and not isinstance(common_instruction, str):
+        raise PilotLauncherError("campaign treatment protocol is invalid")
+    task = task_prompt
+    if isinstance(common_instruction, str):
+        task = f"{common_instruction.strip()}\n\n{task}"
+    if assistance_mode == "baseline":
+        return task
+    if assistance_mode == "codira-mcp":
+        if version == "mcp-optional-v3":
+            return task
+        return f"{instruction.strip()}\n\n{task}"
+    raise PilotLauncherError("scheduled assistance mode is invalid")
+
+
+def validate_treatment_protocol(manifest: Mapping[str, object]) -> None:
+    """Reject paid execution without both approved treatment prompts.
+
+    Parameters
+    ----------
+    manifest : collections.abc.Mapping[str, object]
+        Approved campaign manifest.
+
+    Returns
+    -------
+    None
+        Successful return means both scheduled treatment identities have an
+        unambiguous prompt construction.
+    """
+
+    for assistance_mode in ("baseline", "codira-mcp"):
+        prompt_for_attempt("", assistance_mode, manifest)
+
+
+def build_pilot_plan(
+    manifest: Mapping[str, object], task_ids: Sequence[str], seed: int
+) -> dict[str, object]:
+    """Build the fixed six-attempt Phase 6 plan without side effects.
+
+    Parameters
+    ----------
+    manifest : Mapping[str, object]
+        Approved campaign manifest.
+    task_ids : Sequence[str]
+        Exactly three selected task identities.
+    seed : int
+        Persisted paired-schedule seed.
+
+    Returns
+    -------
+    dict[str, object]
+        Public deterministic plan summary.
+
+    Raises
+    ------
+    PilotLauncherError
+        If manifest bindings or pilot cardinality are invalid.
+    """
+
+    if len(task_ids) != 3 or len(set(task_ids)) != 3:
+        raise PilotLauncherError("Phase 6 pilot requires exactly three unique tasks")
+    raw_tasks = manifest.get("task_fingerprints")
+    raw_bindings = manifest.get("task_fixture_ids")
+    raw_fixtures = manifest.get("fixture_fingerprints")
+    if not all(
+        isinstance(item, Mapping) for item in (raw_tasks, raw_bindings, raw_fixtures)
+    ):
+        raise PilotLauncherError("campaign manifest lacks immutable task bindings")
+    tasks = cast("Mapping[str, object]", raw_tasks)
+    bindings = cast("Mapping[str, object]", raw_bindings)
+    fixtures = cast("Mapping[str, object]", raw_fixtures)
+    requested_task_ids = set(task_ids)
+    if not requested_task_ids <= set(tasks) or not requested_task_ids <= set(bindings):
+        raise PilotLauncherError("pilot task is absent from manifest bindings")
+    if requested_task_ids != set(tasks) or requested_task_ids != set(bindings):
+        raise PilotLauncherError("pilot tasks must exactly match manifest bindings")
+    bound = set(bindings.values())
+    if (
+        len(bound) != 3
+        or not all(isinstance(item, str) for item in bound)
+        or not bound <= set(fixtures)
+    ):
+        raise PilotLauncherError("pilot requires three bound immutable fixtures")
+    budgets, accounting, campaign_id = (
+        manifest.get("budgets"),
+        manifest.get("accounting"),
+        manifest.get("campaign_id"),
+    )
+    if (
+        not isinstance(budgets, Mapping)
+        or not isinstance(accounting, Mapping)
+        or not isinstance(campaign_id, str)
+    ):
+        raise PilotLauncherError("campaign manifest lacks required pilot fields")
+    runtime_image = manifest.get("runtime_image")
+    if runtime_image is not None and (
+        not isinstance(runtime_image, str)
+        or phase0.IMAGE_DIGEST_PATTERN.fullmatch(runtime_image) is None
+    ):
+        raise PilotLauncherError("campaign manifest has an invalid runtime image")
+    runtime_profile = manifest.get("runtime_profile_fingerprint")
+    if runtime_profile is not None and (
+        not isinstance(runtime_profile, str)
+        or len(runtime_profile) != 64
+        or any(character not in "0123456789abcdef" for character in runtime_profile)
+    ):
+        raise PilotLauncherError("campaign manifest has an invalid runtime profile")
+    try:
+        schedule = build_paired_schedule(task_ids, 1, seed)
+    except ValueError as error:
+        raise PilotLauncherError("pilot schedule cannot be constructed") from error
+    return {
+        "campaign_id": campaign_id,
+        "manifest_fingerprint": canonical_fingerprint(manifest),
+        "seed": seed,
+        "task_ids": sorted(task_ids),
+        "task_fingerprints": {task_id: tasks[task_id] for task_id in sorted(task_ids)},
+        "task_fixture_ids": {
+            task_id: bindings[task_id] for task_id in sorted(task_ids)
+        },
+        "fixture_fingerprints": {
+            fixture_id: fixtures[fixture_id] for fixture_id in sorted(map(str, bound))
+        },
+        "repetitions": 1,
+        "scheduled_execution_count": len(schedule),
+        "budgets": dict(budgets),
+        "accounting": dict(accounting),
+        "runtime_image": runtime_image,
+        "runtime_profile_fingerprint": runtime_profile,
+        "attempts": [item.__dict__ for item in schedule],
+        "execution_authorized": False,
+    }
+
+
+def parse_fixture_sources(values: Sequence[str]) -> dict[str, Path]:
+    """Parse unique ``fixture_id=/absolute/source`` bindings.
+
+    Parameters
+    ----------
+    values : Sequence[str]
+        Command-line fixture source bindings.
+
+    Returns
+    -------
+    dict[str, pathlib.Path]
+        Fixture IDs mapped to absolute source checkouts.
+
+    Raises
+    ------
+    PilotLauncherError
+        If a binding is relative, malformed, or duplicated.
+    """
+
+    sources: dict[str, Path] = {}
+    for value in values:
+        fixture_id, separator, raw_path = value.partition("=")
+        path = Path(raw_path)
+        if (
+            not separator
+            or not fixture_id
+            or not path.is_absolute()
+            or fixture_id in sources
+        ):
+            raise PilotLauncherError(
+                "fixture sources must be unique fixture_id=/absolute/path bindings"
+            )
+        sources[fixture_id] = path
+    return sources
+
+
+def load_pilot_inputs(
+    manifest: Mapping[str, object], task_ids: Sequence[str], sources: Mapping[str, Path]
+) -> tuple[
+    dict[str, Mapping[str, object]],
+    dict[str, Mapping[str, object]],
+    dict[str, Mapping[str, object]],
+]:
+    """Load public task, oracle, and fixture records bound to the manifest.
+
+    Parameters
+    ----------
+    manifest : Mapping[str, object]
+        Approved campaign manifest.
+    task_ids : Sequence[str]
+        Selected frozen public task IDs.
+    sources : Mapping[str, pathlib.Path]
+        Local source checkouts for each required fixture.
+
+    Returns
+    -------
+    tuple[dict[str, Mapping[str, object]], dict[str, Mapping[str, object]], dict[str, Mapping[str, object]]]
+        Validated task, oracle, and fixture lookup mappings.
+
+    Raises
+    ------
+    PilotLauncherError
+        If public inputs or their immutable bindings drift.
+    """
+
+    bindings = manifest.get("task_fixture_ids")
+    task_hashes = manifest.get("task_fingerprints")
+    fixture_hashes = manifest.get("fixture_fingerprints")
+    if not (
+        isinstance(bindings, Mapping)
+        and isinstance(task_hashes, Mapping)
+        and isinstance(fixture_hashes, Mapping)
+    ):
+        raise PilotLauncherError("campaign manifest lacks immutable task bindings")
+    tasks: dict[str, Mapping[str, object]] = {}
+    oracles: dict[str, Mapping[str, object]] = {}
+    fixtures: dict[str, Mapping[str, object]] = {}
+    for task_id in task_ids:
+        task = load_document(
+            panel_document_path(BENCHMARK_ROOT, "tasks", str(task_id)), "task"
+        )
+        oracle = load_document(
+            panel_document_path(BENCHMARK_ROOT, "oracles", str(task["oracle_id"])),
+            "oracle",
+        )
+        fixture_id = task.get("fixture_id")
+        if (
+            task.get("task_id") != task_id
+            or task.get("oracle_id") != oracle.get("oracle_id")
+            or fixture_id != bindings.get(task_id)
+        ):
+            raise PilotLauncherError(
+                "public task bindings differ from the approved manifest"
+            )
+        if canonical_fingerprint(task) != task_hashes.get(task_id) or not isinstance(
+            fixture_id, str
+        ):
+            raise PilotLauncherError(
+                "public task fingerprint differs from the approved manifest"
+            )
+        fixture = load_document(
+            panel_document_path(BENCHMARK_ROOT, "fixtures", str(fixture_id)), "fixture"
+        )
+        if (
+            canonical_fingerprint(fixture) != fixture_hashes.get(fixture_id)
+            or fixture_id not in sources
+        ):
+            raise PilotLauncherError(
+                "public fixture identity differs from the approved manifest"
+            )
+        verify_fixture(fixture, sources[fixture_id])
+        validate_protected_task_assets(task_id, oracle, sources[fixture_id])
+        tasks[task_id], oracles[task_id], fixtures[fixture_id] = task, oracle, fixture
+    if set(sources) != set(fixtures):
+        raise PilotLauncherError(
+            "fixture sources must exactly match the approved pilot fixtures"
+        )
+    return tasks, oracles, fixtures
+
+
+def validate_protected_task_assets(
+    task_id: str, oracle: Mapping[str, object], fixture_source: Path
+) -> None:
+    """Verify every Python script required by protected oracle commands.
+
+    Parameters
+    ----------
+    task_id : str
+        Frozen task whose oracle commands are being admitted.
+    oracle : Mapping[str, object]
+        Validated oracle document bound to the task.
+    fixture_source : pathlib.Path
+        Exact source checkout for the task's frozen fixture.
+
+    Returns
+    -------
+    None
+        Every referenced script exists in the fixture or has verified
+        protected provenance.
+
+    Raises
+    ------
+    PilotLauncherError
+        If a command references a missing script or invalid protected asset.
+    """
+
+    referenced_scripts: set[str] = set()
+
+    def collect_commands(value: object) -> None:
+        """Collect relative Python script arguments from oracle definitions.
+
+        Parameters
+        ----------
+        value : object
+            Oracle definition node being inspected.
+
+        Returns
+        -------
+        None
+            Script paths are added to the enclosing set.
+        """
+
+        if isinstance(value, Mapping):
+            command = value.get("command")
+            if isinstance(command, list):
+                referenced_scripts.update(
+                    item
+                    for item in command
+                    if isinstance(item, str) and item.endswith(".py")
+                )
+            for child in value.values():
+                collect_commands(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_commands(child)
+
+    collect_commands(oracle.get("definition"))
+    for raw_path in referenced_scripts:
+        relative = PurePosixPath(raw_path)
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or "." in relative.parts
+            or ".." in relative.parts
+            or "\\" in raw_path
+        ):
+            raise PilotLauncherError("protected oracle script path is invalid")
+        fixture_script = fixture_source.joinpath(*relative.parts)
+        if fixture_script.is_file():
+            continue
+
+        asset_root = PROTECTED_ASSET_ROOT / task_id
+        provenance_path = asset_root / "provenance.json"
+        try:
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise PilotLauncherError(
+                "protected oracle script lacks verified asset provenance"
+            ) from error
+        asset_path = (
+            provenance.get("asset_path") if isinstance(provenance, dict) else None
+        )
+        expected = (
+            provenance.get("asset_sha256") if isinstance(provenance, dict) else None
+        )
+        asset_relative = (
+            PurePosixPath(asset_path) if isinstance(asset_path, str) else None
+        )
+        if (
+            asset_relative is None
+            or asset_relative.as_posix() != relative.as_posix()
+            or not isinstance(asset_path, str)
+            or not isinstance(expected, str)
+            or asset_relative.is_absolute()
+            or "." in asset_relative.parts
+            or ".." in asset_relative.parts
+            or "\\" in asset_path
+        ):
+            raise PilotLauncherError(
+                "protected oracle script provenance does not match its command"
+            )
+        asset = asset_root.joinpath(*asset_relative.parts)
+        try:
+            resolved_asset = asset.resolve(strict=True)
+            resolved_asset.relative_to(asset_root.resolve(strict=True))
+            actual = hashlib.sha256(resolved_asset.read_bytes()).hexdigest()
+        except (OSError, ValueError) as error:
+            raise PilotLauncherError(
+                "protected oracle script path is unavailable"
+            ) from error
+        if actual != expected:
+            raise PilotLauncherError("protected oracle script digest is invalid")
+
+
+def install_protected_asset(
+    task_id: str, protected_root: Path
+) -> dict[str, object] | None:
+    """Copy a reviewed protected grader asset after verifying its identity.
+
+    Parameters
+    ----------
+    task_id : str
+        Task whose grader may require a protected asset.
+    protected_root : pathlib.Path
+        Fresh grader-only fixture checkout.
+
+    Returns
+    -------
+    dict[str, object] or None
+        Provenance summary, or ``None`` for tasks with no asset.
+
+    Raises
+    ------
+    PilotLauncherError
+        If protected asset provenance or content is invalid.
+    """
+
+    asset_root = PROTECTED_ASSET_ROOT / task_id
+    provenance_path = asset_root / "provenance.json"
+    if not provenance_path.exists():
+        return None
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    if not isinstance(provenance, dict):
+        raise PilotLauncherError("protected asset provenance must be an object")
+    asset_path, expected = provenance.get("asset_path"), provenance.get("asset_sha256")
+    if not isinstance(asset_path, str) or not isinstance(expected, str):
+        raise PilotLauncherError("protected asset provenance is incomplete")
+    relative = PurePosixPath(asset_path)
+    if (
+        relative.is_absolute()
+        or "." in relative.parts
+        or ".." in relative.parts
+        or "\\" in asset_path
+    ):
+        raise PilotLauncherError(
+            "protected asset path must remain beneath its asset root"
+        )
+    source = asset_root.joinpath(*relative.parts)
+    actual = hashlib.sha256(source.read_bytes()).hexdigest() if source.is_file() else ""
+    if actual != expected:
+        raise PilotLauncherError("protected asset identity does not match provenance")
+    destination = protected_root.joinpath(*relative.parts)
+    if not source.is_relative_to(asset_root) or not destination.is_relative_to(
+        protected_root
+    ):
+        raise PilotLauncherError(
+            "protected asset path must remain beneath its asset root"
+        )
+    if destination.exists():
+        raise PilotLauncherError("protected asset conflicts with frozen fixture")
+    shutil.copy2(source, destination)
+    return {
+        "asset_path": asset_path,
+        "asset_sha256": actual,
+        "source_commit": provenance.get("source_commit"),
+    }
+
+
+def prepare_protected_fixture(
+    source: Path, revision: str, destination: Path, task_id: str
+) -> dict[str, object] | None:
+    """Create a pristine Git checkout for protected patch grading.
+
+    Parameters
+    ----------
+    source : pathlib.Path
+        Verified local source checkout holding the frozen revision.
+    revision : str
+        Frozen fixture commit SHA.
+    destination : pathlib.Path
+        Absent grader-only checkout destination.
+    task_id : str
+        Task selecting any reviewed protected asset.
+
+    Returns
+    -------
+    dict[str, object] or None
+        Installed protected-asset provenance, if applicable.
+
+    Raises
+    ------
+    PilotLauncherError
+        If Git cannot create the exact protected checkout.
+    """
+
+    git = shutil.which("git")
+    if git is None:
+        raise PilotLauncherError("Git is unavailable for protected fixture preparation")
+    if task_id.startswith("panel-") and not (source / ".git").exists():
+        export_fixture(source, revision, destination)
+        prepare_panel_fixture(destination, task_id)
+        return install_protected_asset(task_id, destination)
+    clone = subprocess.run(
+        (git, "clone", "--no-checkout", "--no-local", str(source), str(destination)),
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    checkout = (
+        subprocess.run(
+            (git, "-C", str(destination), "checkout", "--detach", revision),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if clone.returncode == 0
+        else None
+    )
+    if clone.returncode != 0 or checkout is None or checkout.returncode != 0:
+        raise PilotLauncherError("cannot create protected immutable fixture checkout")
+    prepare_panel_fixture(destination, task_id)
+    return install_protected_asset(task_id, destination)
+
+
+def execution_controls(
+    manifest: Mapping[str, object],
+    *,
+    scheduled_attempts: int = 6,
+    full_campaign: bool = False,
+) -> ExecutionControls:
+    """Return complete typed execution controls before any attempt side effect.
+
+    Parameters
+    ----------
+    manifest : Mapping[str, object]
+        Approved campaign manifest.
+    scheduled_attempts : int, optional
+        Number of frozen provider attempts whose aggregate cap must fit the
+        declared pilot spending ceiling. The paired pilot defaults to six;
+        the dedicated route calibration supplies one.
+    full_campaign : bool, optional
+        Admit the shared pool only for a factory-validated full or completion
+        schedule.
+
+    Returns
+    -------
+    ExecutionControls
+        Typed provider, accounting, and budget ceilings.
+
+    Raises
+    ------
+    PilotLauncherError
+        If any required runtime control is absent or has an invalid type.
+    """
+
+    if scheduled_attempts < 1:
+        raise PilotLauncherError("scheduled attempt count must be positive")
+    provider = manifest.get("provider")
+    accounting = manifest.get("accounting")
+    budgets = manifest.get("budgets")
+    if not all(isinstance(item, Mapping) for item in (provider, accounting, budgets)):
+        raise PilotLauncherError("campaign manifest has invalid execution controls")
+    provider = cast("Mapping[str, object]", provider)
+    accounting = cast("Mapping[str, object]", accounting)
+    budgets = cast("Mapping[str, object]", budgets)
+    model = provider.get("model")
+    effort = provider.get("reasoning_effort")
+    prompt_price = provider.get("max_prompt_usd_per_million")
+    completion_price = provider.get("max_completion_usd_per_million")
+    if (
+        not isinstance(model, str)
+        or not model
+        or not isinstance(effort, str)
+        or not effort
+    ):
+        raise PilotLauncherError("campaign provider controls are invalid")
+    subscription = provider.get("name") == "codex-subscription"
+    if (
+        not isinstance(prompt_price, (int, float))
+        or isinstance(prompt_price, bool)
+        or (prompt_price != 0 if subscription else prompt_price <= 0)
+        or not isinstance(completion_price, (int, float))
+        or isinstance(completion_price, bool)
+        or (completion_price != 0 if subscription else completion_price <= 0)
+    ):
+        raise PilotLauncherError("campaign provider controls are invalid")
+    max_total_tokens = budgets.get("max_total_tokens")
+    max_output_tokens = budgets.get("max_output_tokens")
+    timeout_seconds = budgets.get("timeout_seconds")
+    if (
+        not isinstance(max_total_tokens, int)
+        or isinstance(max_total_tokens, bool)
+        or max_total_tokens < 1
+        or not isinstance(max_output_tokens, int)
+        or isinstance(max_output_tokens, bool)
+        or max_output_tokens < 1
+        or max_total_tokens < max_output_tokens
+        or not isinstance(timeout_seconds, int)
+        or isinstance(timeout_seconds, bool)
+        or timeout_seconds < 1
+    ):
+        raise PilotLauncherError("campaign budget controls are invalid")
+    daily_spend = accounting.get("max_daily_spend_usd")
+    attempt_spend = accounting.get("max_estimated_attempt_spend_usd")
+    pilot_spend = accounting.get("max_estimated_pilot_spend_usd")
+    request_limit = accounting.get("max_response_requests_per_attempt")
+    transport_limit = accounting.get("max_transport_attempts_per_response", 1)
+    token_scope = accounting.get("max_total_tokens_scope", "per-continuation")
+    reservation_mode = accounting.get("budget_reservation_mode", "sum-attempt-ceilings")
+    spend_basis = accounting.get("spend_basis", "price-ceilings")
+    if spend_basis not in {"price-ceilings", "provider-reported"} or (
+        spend_basis == "provider-reported"
+        and (subscription or not full_campaign or reservation_mode != "shared-pool")
+    ):
+        raise PilotLauncherError(
+            "reported spending requires a qualified full-campaign OpenRouter shared pool"
+        )
+    if subscription:
+        if (
+            provider.get("wire_api") != "codex-cli"
+            or reservation_mode != "subscription-quota"
+            or not isinstance(request_limit, int)
+            or isinstance(request_limit, bool)
+            or request_limit < 1
+            or not isinstance(transport_limit, int)
+            or isinstance(transport_limit, bool)
+            or transport_limit < 1
+            or token_scope != "whole-session"
+            or not full_campaign
+            or manifest.get("stage") != "representative-campaign"
+            or scheduled_attempts not in {48, 96, 144, 192, 240}
+            or any(
+                accounting.get(key) != 0
+                for key in (
+                    "max_daily_spend_usd",
+                    "max_estimated_attempt_spend_usd",
+                    "max_estimated_pilot_spend_usd",
+                )
+            )
+        ):
+            raise PilotLauncherError("subscription campaign controls are invalid")
+        return ExecutionControls(
+            model,
+            effort,
+            0.0,
+            0.0,
+            max_total_tokens,
+            "whole-session",
+            max_output_tokens,
+            timeout_seconds,
+            request_limit,
+            transport_limit,
+            0.0,
+            0.0,
+            0.0,
+        )
+    shared_pool = reservation_mode == "shared-pool"
+    if reservation_mode not in {"shared-pool", "sum-attempt-ceilings"} or (
+        shared_pool
+        and not (
+            full_campaign
+            and (
+                scheduled_attempts == 60
+                or (
+                    manifest.get("stage") == "representative-campaign"
+                    and scheduled_attempts in {48, 96, 144, 192, 240}
+                )
+                or (
+                    manifest.get("stage") == "completion"
+                    and (
+                        scheduled_attempts == 6
+                        or (
+                            manifest.get("panel_id") == "representative-v1"
+                            and 1 <= scheduled_attempts <= 240
+                        )
+                    )
+                )
+            )
+        )
+    ):
+        raise PilotLauncherError(
+            "shared campaign budgets require a qualified full-campaign executor"
+        )
+    if full_campaign and not shared_pool:
+        raise PilotLauncherError(
+            "full campaigns require observed shared-pool accounting"
+        )
+    daily_spend_value = cast("int | float", daily_spend)
+    attempt_spend_value = cast("int | float", attempt_spend)
+    pilot_spend_value = cast("int | float", pilot_spend)
+    request_limit_value = cast("int", request_limit)
+    transport_limit_value = cast("int", transport_limit)
+    if not (
+        all(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            for value in (daily_spend, attempt_spend, pilot_spend)
+        )
+        and isinstance(request_limit, int)
+        and not isinstance(request_limit, bool)
+        and request_limit >= 1
+        and isinstance(transport_limit, int)
+        and not isinstance(transport_limit, bool)
+        and transport_limit >= 1
+        and token_scope in {"whole-session", "per-continuation"}
+    ):
+        raise PilotLauncherError("campaign accounting controls are invalid")
+    token_scope_value = token_scope
+    reservation_multiplier = (
+        1
+        if token_scope_value == "whole-session"
+        else request_limit_value * transport_limit_value
+    )
+    token_spend_bound = (
+        reservation_multiplier
+        * max_total_tokens
+        * max(float(prompt_price), float(completion_price))
+        / 1_000_000
+    )
+    output_reserve = max_output_tokens * float(completion_price) / 1_000_000
+    if (
+        float(daily_spend_value) <= 0
+        or float(attempt_spend_value) <= 0
+        or float(pilot_spend_value) <= 0
+        or float(pilot_spend_value) > float(daily_spend_value)
+        or (
+            not shared_pool
+            and float(pilot_spend_value) + 1e-12
+            < float(attempt_spend_value) * scheduled_attempts
+        )
+        or (
+            not shared_pool
+            and float(attempt_spend_value) < token_spend_bound + output_reserve
+        )
+    ):
+        raise PilotLauncherError("campaign accounting controls are invalid")
+    return ExecutionControls(
+        model,
+        effort,
+        float(prompt_price),
+        float(completion_price),
+        max_total_tokens,
+        token_scope_value,
+        max_output_tokens,
+        timeout_seconds,
+        request_limit_value,
+        transport_limit_value,
+        float(daily_spend_value),
+        float(attempt_spend_value),
+        float(pilot_spend_value),
+    )
+
+
+def _attempt_budget_limits(
+    context: PilotExecutionContext,
+    controls: ExecutionControls,
+    campaign_budget_remaining: Decimal | None,
+) -> tuple[int | None, float | None, float | None]:
+    """Select bounded-pilot or observed full-campaign proxy limits.
+
+    Parameters
+    ----------
+    context : PilotExecutionContext
+        Frozen campaign mode and dependencies.
+    controls : ExecutionControls
+        Validated manifest controls.
+    campaign_budget_remaining : decimal.Decimal or None
+        Observed pool remaining before a full-campaign attempt.
+
+    Returns
+    -------
+    tuple[int | None, float | None, float | None]
+        Session-token, attempt-dollar, and campaign-dollar proxy limits.
+
+    Raises
+    ------
+    PilotLauncherError
+        If full-campaign allowance is absent or exhausted.
+    """
+
+    if context.full_campaign:
+        if (
+            cast("Mapping[str, object]", context.manifest.get("provider", {})).get(
+                "name"
+            )
+            == "codex-subscription"
+        ):
+            return None, None, None
+        if campaign_budget_remaining is None or campaign_budget_remaining <= 0:
+            raise PilotLauncherError(
+                "full campaign requires positive observed allowance"
+            )
+        return None, None, float(campaign_budget_remaining)
+    return controls.max_total_tokens, controls.max_attempt_spend, None
+
+
+def _local_proxy_failure_class(
+    observations: Sequence[Mapping[str, object]],
+) -> str | None:
+    """Classify a local proxy refusal without mistaking it for provider throttling.
+
+    Parameters
+    ----------
+    observations : collections.abc.Sequence[collections.abc.Mapping[str, object]]
+        Sanitized provider and local response observations for one attempt.
+
+    Returns
+    -------
+    str or None
+        Stable local failure class, or ``None`` without a local refusal.
+    """
+
+    reasons = [
+        str(observation.get("reason"))
+        for observation in observations
+        if observation.get("source") == "local"
+    ]
+    if not reasons:
+        return None
+    if "provider_billing_unavailable" in reasons:
+        return "provider_billing_unavailable"
+    if "campaign_spend_limit_reached" in reasons:
+        return "campaign_spend_limit_reached"
+    return {
+        "session_token_budget_exhausted": "session_token_cap_exceeded",
+        "session_token_reservation_exceeded": "session_token_cap_exceeded",
+        "provider_usage_unavailable": "provider_usage_unavailable",
+        "attempt_spend_budget_exhausted": "attempt_spend_cap_exceeded",
+        "attempt_spend_cap_reservation_exceeded": "attempt_spend_cap_exceeded",
+    }.get(reasons[-1], "local_request_cap_exceeded")
+
+
+def _normalized_proxy_failure_class(
+    failure_class: str | None,
+    observations: Sequence[Mapping[str, object]],
+) -> str | None:
+    """Replace a generic rate-limit class only when the proxy refused locally.
+
+    Parameters
+    ----------
+    failure_class : str or None
+        Terminal class derived from the agent event stream.
+    observations : collections.abc.Sequence[collections.abc.Mapping[str, object]]
+        Sanitized response observations for the attempt.
+
+    Returns
+    -------
+    str or None
+        Specific local class when available, otherwise the original class.
+    """
+
+    if failure_class != "provider_rate_limited":
+        return failure_class
+    return _local_proxy_failure_class(observations) or failure_class
+
+
+def _prepare_task_profile(destination: Path, task_id: str) -> str:
+    """Bind a task-specific coverage override to both indexing and MCP startup.
+
+    Parameters
+    ----------
+    destination : pathlib.Path
+        Workspace profile beneath the already created state directory.
+    task_id : str
+        Frozen task selecting an explicit disabled-analyzer control.
+
+    Returns
+    -------
+    str
+        SHA-256 of the exact task profile.
+    """
+    shutil.copyfile(BENCHMARK_CODIRA_PROFILE, destination)
+    if task_id == "panel-e2":
+        with destination.open("a") as handle:
+            handle.write('\n[plugins]\ndisabled_analyzers = ["text"]\n')
+    return hashlib.sha256(destination.read_bytes()).hexdigest()
+
+
+def _semantic_review_pending(checks: Sequence[str]) -> bool:
+    """Distinguish pending semantic review from an executable or factual failure.
+
+    Parameters
+    ----------
+    checks : collections.abc.Sequence[str]
+        Complete path-qualified oracle findings.
+
+    Returns
+    -------
+    bool
+        True only when review is pending and no required leaf check failed.
+    """
+    return any(check.endswith(":review_required") for check in checks) and not any(
+        check.endswith((":missing", ":contradicted"))
+        or check.endswith(":failed")
+        and not check.split(":", 1)[0].endswith(("all_of", "any_of"))
+        for check in checks
+    )
+
+
+def _record_example_replays(
+    task: Mapping[str, object],
+    operational_status: str,
+    context: PilotExecutionContext,
+    attempt_root: Path,
+    evidence: dict[str, object],
+) -> None:
+    """Retain isolated example traces for completed usage tasks.
+
+    Parameters
+    ----------
+    task : collections.abc.Mapping[str, object]
+        Frozen task requirements.
+    operational_status : str
+        Agent transport status independent of task quality.
+    context : PilotExecutionContext
+        Qualified runtime and image identity.
+    attempt_root : pathlib.Path
+        Durable attempt root containing its prepared agent workspace.
+    evidence : dict[str, object]
+        Mutable attempt measurements receiving replay metadata.
+
+    Returns
+    -------
+    None
+        Raw output remains in private durable artifacts.
+    """
+    from scripts.agent_efficiency.examples import replay_examples
+
+    agent_root = attempt_root / "agent"
+    answer_path = agent_root / str(task["result_path"])
+    if (
+        task.get("family") == "usage"
+        and operational_status == "passed"
+        and answer_path.is_file()
+    ):
+        evidence["example_replays"] = replay_examples(
+            answer_path.read_text(),
+            context.runtime,
+            context.image,
+            agent_root,
+            attempt_root / "example-trace",
+        )
+
+
+def _execute_provider_attempt(  # noqa: PLR0913 - readiness supplies an indexed workspace to the shared executor
+    context: PilotExecutionContext,
+    store: CampaignStore,
+    attempt: ScheduledAttempt,
+    prompt: str,
+    limits: tuple[int | None, float | None, float | None],
+    *,
+    workspace: Path | None = None,
+) -> tuple[
+    ContainerExecution,
+    list[dict[str, object]],
+    list[dict[str, object]],
+    dict[str, object] | None,
+    int | None,
+]:
+    """Run one frozen provider route and capture its available wire evidence.
+
+    Parameters
+    ----------
+    context : PilotExecutionContext
+        Frozen image, provider and managed authentication bindings.
+    store : CampaignStore
+        Frozen schedule and durable attempt directory.
+    attempt : ScheduledAttempt
+        Frozen task and assistance condition.
+    prompt : str
+        Exact common task and environment instructions.
+    limits : tuple
+        Proxy token, attempt and campaign ceilings, when applicable.
+    workspace : pathlib.Path or None, optional
+        Prepared readiness workspace; ordinary attempts use their agent root.
+
+    Returns
+    -------
+    tuple
+        Captured execution, response/request observations and native tunnel facts.
+    """
+    attempt_root = store.root / "attempt-work" / attempt.attempt_id
+    controls = execution_controls(
+        context.manifest,
+        scheduled_attempts=len(store.schedule),
+        full_campaign=context.full_campaign,
+    )
+    subscription = (
+        cast("Mapping[str, object]", context.manifest["provider"]).get("name")
+        == "codex-subscription"
+    )
+    state_root, agent_root = attempt_root / "state", attempt_root / "agent"
+    if workspace is not None:
+        agent_root = workspace
+    token_limit, attempt_spend_limit, campaign_spend_limit = limits
+    token = secrets.token_urlsafe(32) if not subscription else None
+    mcp_command = (
+        BENCHMARK_MCP_COMMAND if attempt.assistance_mode == "codira-mcp" else None
+    )
+    if subscription:
+        from scripts.agent_efficiency.codex_subscription import (
+            write_subscription_config,
+        )
+
+        write_subscription_config(
+            state_root, controls.model, controls.reasoning_effort, mcp_command
+        )
+    else:
+        phase0.write_isolated_codex_config(
+            state_root,
+            "/workspace",
+            "http://127.0.0.1:43123/v1",
+            phase0.CodexProviderSettings(
+                controls.model,
+                controls.reasoning_effort,
+                context.provider_context_length,
+                codex_model_base_instructions(context.runtime, context.image),
+            ),
+            mcp_command,
+        )
+    write_proxy_relay(state_root)
+    with tempfile.TemporaryDirectory(prefix="ae-", dir=PROJECT_TEMP_ROOT) as socket_dir:
+        socket_path = Path(socket_dir) / "p.sock"
+        container_temporary_root = Path(socket_dir) / "tmp"
+        container_temporary_root.mkdir()
+        server: socketserver.BaseServer
+        if subscription:
+            from scripts.agent_efficiency.codex_subscription import SubscriptionTunnel
+
+            server = SubscriptionTunnel(str(socket_path))
+        else:
+            assert token is not None
+            constraints = provider_proxy.ResponseConstraints(
+                controls.model,
+                controls.reasoning_effort,
+                controls.max_prompt_price,
+                controls.max_completion_price,
+            )
+            settings = provider_proxy.ProxySettings(
+                token,
+                context.upstream_token,
+                0,
+                controls.max_output_tokens,
+                constraints,
+                controls.max_response_requests,
+                controls.max_transport_attempts_per_response,
+                max_total_tokens=token_limit,
+                max_context_tokens=context.provider_context_length,
+                max_prompt_usd_per_million=controls.max_prompt_price,
+                max_completion_usd_per_million=controls.max_completion_price,
+                max_attempt_spend_usd=attempt_spend_limit,
+                max_campaign_spend_usd=campaign_spend_limit,
+                response_artifact_root=attempt_root / "provider-responses",
+                spend_basis=str(
+                    cast("Mapping[str, object]", context.manifest["accounting"]).get(
+                        "spend_basis", "price-ceilings"
+                    )
+                ),
+            )
+            server = provider_proxy.create_unix_server(settings, str(socket_path))
+        try:
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            execution = execute_container_attempt(
+                ContainerAttemptRequest(
+                    context.runtime,
+                    context.image,
+                    agent_root,
+                    state_root,
+                    prompt,
+                    controls.timeout_seconds,
+                    proxy_socket=socket_path,
+                    proxy_client_token=token,
+                    temporary_root=container_temporary_root,
+                    provider_transport=(
+                        "codex-subscription" if subscription else "openrouter-proxy"
+                    ),
+                    subscription_auth=context.subscription_auth,
+                )
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+        if subscription:
+            assert isinstance(server, SubscriptionTunnel)
+            tunnel_evidence = {
+                "connections": dict(server.connections),
+                "encrypted_bytes": server.bytes_relayed,
+            }
+            observations: list[dict[str, object]] = []
+            request_observations: list[dict[str, object]] = []
+        else:
+            observations = list(settings.response_observations)
+            request_observations = list(settings.request_observations)
+    return (
+        execution,
+        observations,
+        request_observations,
+        tunnel_evidence if subscription else None,
+        None if subscription else settings.limiter.count,
+    )
+
+
+def execute_pilot_attempt(
+    store: CampaignStore,
+    attempt: ScheduledAttempt,
+    context: PilotExecutionContext,
+    campaign_budget_remaining: Decimal | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Run one bounded paid attempt and retain only non-secret evidence facts.
+
+    Parameters
+    ----------
+    store : CampaignStore
+        Frozen resumable campaign state.
+    attempt : ScheduledAttempt
+        One pending paired execution.
+    context : PilotExecutionContext
+        Immutable validated execution dependencies.
+    campaign_budget_remaining : decimal.Decimal or None, optional
+        Observed shared-pool allowance before this full-campaign attempt.
+
+    Returns
+    -------
+    tuple[dict[str, object], dict[str, object]]
+        Schema-valid result and credential-free evidence metadata.
+
+    Raises
+    ------
+    PilotLauncherError
+        If a fresh attempt cannot be safely prepared or graded.
+
+    Notes
+    -----
+    The host proxy socket lives in the designated short-lived project
+    temporary directory, keeping it below the Unix-domain path limit even
+    when the durable attempt path and identifier are long. It is removed when
+    the container attempt finishes; response evidence remains under the
+    durable campaign state root.
+    """
+
+    task = context.tasks[attempt.task_id]
+    fixture_id = str(task["fixture_id"])
+    fixture = context.fixtures[fixture_id]
+    controls = execution_controls(
+        context.manifest,
+        scheduled_attempts=len(store.schedule),
+        full_campaign=context.full_campaign,
+    )
+    token_limit, attempt_spend_limit, campaign_spend_limit = _attempt_budget_limits(
+        context, controls, campaign_budget_remaining
+    )
+    attempt_root = store.root / "attempt-work" / attempt.attempt_id
+    if attempt_root.exists():
+        raise PilotLauncherError(
+            "unfinished attempt work exists; do not risk duplicate billing"
+        )
+    agent_root, protected_root = (
+        attempt_root / "agent",
+        attempt_root / "protected",
+    )
+    attempt_root.mkdir(parents=True)
+    export_started = time.perf_counter()
+    export_fixture(context.sources[fixture_id], str(fixture["revision"]), agent_root)
+    prepare_panel_fixture(agent_root, attempt.task_id)
+    export_seconds = time.perf_counter() - export_started
+    try:
+        environment = fixture_environment(agent_root, fixture_id)
+    except EnvironmentPreparationError as error:
+        raise PilotLauncherError(str(error)) from error
+    with tempfile.TemporaryDirectory(
+        prefix="ae-env-", dir=PROJECT_TEMP_ROOT
+    ) as temporary_root:
+        environment_preparation = execute_environment_preparation(
+            EnvironmentPreparationRequest(
+                context.runtime,
+                context.image,
+                agent_root,
+                controls.timeout_seconds,
+                environment,
+                Path(temporary_root),
+            )
+        )
+    environment_trace = _persist_execution_trace(
+        attempt_root,
+        "environment-preparation",
+        environment_preparation.stdout,
+        environment_preparation.stderr,
+    )
+    if environment_preparation.timed_out or environment_preparation.returncode != 0:
+        raise PilotLauncherError(
+            "fixture environment preparation failed before provider setup"
+        )
+    # CLI is available in both arms; bind its qualified profile in both as well.
+    profile_target = agent_root / ".codira" / "config.toml"
+    profile_target.parent.mkdir(exist_ok=True)
+    profile_fingerprint = _prepare_task_profile(profile_target, attempt.task_id)
+    (agent_root / ".benchmark/home").mkdir(parents=True, exist_ok=True)
+    if attempt.assistance_mode == "codira-mcp":
+        if not BENCHMARK_CODIRA_PROFILE.is_file():
+            raise PilotLauncherError("benchmark Codira profile is unavailable")
+        profile_target = agent_root / ".codira" / "config.toml"
+        profile_target.parent.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="ae-idx-", dir=PROJECT_TEMP_ROOT
+        ) as temporary_root:
+            preparation = execute_index_preparation(
+                IndexPreparationRequest(
+                    context.runtime,
+                    context.image,
+                    agent_root,
+                    controls.timeout_seconds,
+                    "/workspace/.codira/config.toml"
+                    if attempt.task_id.startswith("panel-")
+                    else BENCHMARK_CODIRA_CONFIG,
+                    Path(temporary_root),
+                )
+            )
+        index_trace = _persist_execution_trace(
+            attempt_root, "index-preparation", preparation.stdout, preparation.stderr
+        )
+        if preparation.timed_out or preparation.returncode != 0:
+            raise PilotLauncherError(
+                "codira index preparation failed before MCP startup"
+            )
+        index_admission = validate_prepared_index(agent_root)
+        index_root = agent_root / ".codira"
+        index_fingerprint = canonical_fingerprint(
+            {
+                str(path.relative_to(index_root)): hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+                for path in sorted(index_root.rglob("*"))
+                if path.is_file()
+            }
+        )
+        store.store_index_preparation(
+            attempt.attempt_id,
+            {
+                "elapsed_seconds": preparation.elapsed_seconds,
+                "fixture_revision": str(fixture["revision"]),
+                "profile_fingerprint": profile_fingerprint,
+                "index_fingerprint": index_fingerprint,
+                "returncode": preparation.returncode,
+                "timed_out": preparation.timed_out,
+                "stdout_fingerprint": hashlib.sha256(
+                    preparation.stdout.encode("utf-8")
+                ).hexdigest(),
+                "stderr_fingerprint": hashlib.sha256(
+                    preparation.stderr.encode("utf-8")
+                ).hexdigest(),
+                **index_admission,
+            },
+        )
+    result_format = str(task.get("result_format", "json"))
+    snapshot_root = attempt_root / "workspace-before"
+    if result_format == "workspace-diff":
+        from scripts.agent_efficiency.runner import snapshot_workspace
+
+        snapshot_workspace(agent_root, snapshot_root)
+    protected_asset = prepare_protected_fixture(
+        context.sources[fixture_id],
+        str(fixture["revision"]),
+        protected_root,
+        attempt.task_id,
+    )
+    subscription = (
+        cast("Mapping[str, object]", context.manifest["provider"]).get("name")
+        == "codex-subscription"
+    )
+    prompt = (
+        prompt_for_attempt(
+            str(task["prompt"]), attempt.assistance_mode, context.manifest
+        )
+        + "\n\n"
+        + environment.directive
+    )
+    execution, observations, request_observations, tunnel_evidence, response_count = (
+        _execute_provider_attempt(
+            context,
+            store,
+            attempt,
+            prompt,
+            (token_limit, attempt_spend_limit, campaign_spend_limit),
+        )
+    )
+    grading_started = time.perf_counter()
+    capture_error: str | None = None
+    if result_format == "workspace-diff":
+        try:
+            capture_workspace_patch(
+                snapshot_root, agent_root, agent_root / str(task["result_path"])
+            )
+        except ValueError as error:
+            capture_error = str(error)
+    (attempt_root / "events.jsonl").write_text(execution.stdout, encoding="utf-8")
+    (attempt_root / "events.jsonl").chmod(0o600)
+    execution_trace = _persist_execution_trace(
+        attempt_root, "container-execution", "", execution.stderr
+    )
+    result, evidence = result_from_execution(
+        store.campaign_id,
+        attempt,
+        execution,
+        max_total_tokens=controls.max_total_tokens if subscription else token_limit,
+        require_mcp=cast(
+            "Mapping[str, object]", context.manifest.get("treatment_protocol", {})
+        ).get("version")
+        != "mcp-optional-v3",
+    )
+    evidence["provider_responses"] = observations
+    if subscription:
+        evidence["subscription_tunnel"] = tunnel_evidence
+        evidence["provider_wire_evidence"] = "unavailable-from-native-codex"
+    from scripts.agent_efficiency.instrumentation import evidence_measurement
+
+    try:
+        measured_events = phase0.parse_jsonl_events(execution.stdout)
+    except (ValueError, TypeError):
+        measured_events = ()
+    evidence["stage_measurement"] = evidence_measurement(
+        measured_events,
+        cast("Sequence[str]", task.get("reference_anchors", [])),
+    )
+    evidence["provider_requests"] = request_observations
+    evidence["initial_prompt_measurement"] = {
+        "chars": len(prompt),
+        "bytes": len(prompt.encode()),
+        "sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+    }
+    evidence["environment_preparation"] = {
+        "ecosystem": environment.ecosystem,
+        "elapsed_seconds": environment_preparation.elapsed_seconds,
+        "returncode": environment_preparation.returncode,
+        "trace": environment_trace,
+    }
+    if attempt.assistance_mode == "codira-mcp":
+        evidence["index_preparation_trace"] = index_trace
+    evidence["container_execution_trace"] = execution_trace
+    result["failure_class"] = _normalized_proxy_failure_class(
+        cast("str | None", result["failure_class"]), observations
+    )
+    operational_status = "passed" if result["outcome"] == "success" else "failed"
+    operational_failure = (
+        None if operational_status == "passed" else result["failure_class"]
+    )
+    oracle_passed, oracle_fingerprint = False, None
+    oracle_checks: list[str] = []
+    task_oracle_status = "not_evaluated"
+    task_oracle_failure: str | None = None
+    if result["outcome"] == "success" and capture_error is not None:
+        result["outcome"], result["failure_class"] = (
+            "oracle_failure",
+            "workspace_capture",
+        )
+        task_oracle_status = "failed"
+        task_oracle_failure = "workspace_capture"
+        oracle_checks.append("workspace_capture:failed")
+    elif result["outcome"] == "success":
+        try:
+            definition = context.oracles[attempt.task_id]["definition"]
+            if not isinstance(definition, Mapping):
+                raise ContractError.message("oracle definition must be an object")
+            from scripts.agent_efficiency.protected_runtime import ImageOracleExecutor
+
+            outcome = evaluate_oracle(
+                definition,
+                result_root=agent_root,
+                result_path=str(task["result_path"]),
+                result_format=result_format,
+                protected_root=protected_root,
+                trace_root=attempt_root / "oracle-trace",
+                command_executor=ImageOracleExecutor(
+                    context.runtime,
+                    context.image,
+                    fixture_id,
+                    agent_root,
+                    controls.timeout_seconds,
+                ),
+            )
+            oracle_passed, oracle_fingerprint = outcome.passed, outcome.fingerprint
+            oracle_checks = list(outcome.checks)
+            task_oracle_status = "passed" if outcome.passed else "failed"
+            semantic_pending = _semantic_review_pending(oracle_checks)
+            task_oracle_status = (
+                "not_evaluated" if semantic_pending else task_oracle_status
+            )
+            task_oracle_failure = (
+                "semantic_review_required" if semantic_pending else task_oracle_failure
+            )
+            if not outcome.passed and not semantic_pending:
+                result["outcome"], result["failure_class"] = (
+                    "oracle_failure",
+                    "deterministic_oracle",
+                )
+                task_oracle_failure = "deterministic_oracle"
+        except (ContractError, KeyError, TypeError) as error:
+            result["outcome"], result["failure_class"] = (
+                "oracle_failure",
+                "oracle_contract",
+            )
+            task_oracle_status = "failed"
+            task_oracle_failure = "oracle_contract"
+            oracle_checks.append(f"oracle_contract:{type(error).__name__}")
+        oracle_manifest = attempt_root / "oracle-trace" / "manifest.json"
+        if oracle_manifest.is_file():
+            manifest_bytes = oracle_manifest.read_bytes()
+            manifest = json.loads(manifest_bytes)
+            evidence["oracle_trace"] = {
+                "path": "oracle-trace/manifest.json",
+                "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+                "command_count": len(manifest.get("commands", [])),
+            }
+    evidence["phase_timings"] = {
+        "fixture_export_seconds": export_seconds,
+        "environment_preparation_seconds": environment_preparation.elapsed_seconds,
+        "index_preparation_seconds": preparation.elapsed_seconds
+        if attempt.assistance_mode == "codira-mcp"
+        else 0.0,
+        "container_execution_seconds": execution.elapsed_seconds,
+        "grading_seconds": time.perf_counter() - grading_started,
+        "cache_policy": "fresh workspace and index per attempt; image-baked dependency caches",
+    }
+    _record_example_replays(task, operational_status, context, attempt_root, evidence)
+    result.update(
+        {
+            "operational_calibration": {
+                "status": operational_status,
+                "failure_class": operational_failure,
+            },
+            "task_oracle": {
+                "status": task_oracle_status,
+                "failure_class": task_oracle_failure,
+                "fingerprint": oracle_fingerprint,
+                "checks": oracle_checks,
+            },
+        }
+    )
+    evidence.update(
+        {
+            "oracle_passed": oracle_passed,
+            "oracle_fingerprint": oracle_fingerprint,
+            "protected_asset": protected_asset,
+            "response_request_count": response_count,
+        }
+    )
+    return result, evidence
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the explicit Phase 6 pilot parser.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    argparse.ArgumentParser
+        Parser for dry-run planning or explicit paid execution.
+    """
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--campaign-manifest", type=Path, required=True)
+    parser.add_argument("--task-id", action="append", required=True)
+    parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--state-root", type=Path)
+    parser.add_argument("--fixture-source", action="append", default=[])
+    parser.add_argument("--image")
+    parser.add_argument("--runtime", default="podman")
+    parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--readiness-receipt", type=Path)
+    parser.add_argument("--full-campaign", action="store_true")
+    parser.add_argument("--launch-plan", type=Path)
+    parser.add_argument("--subscription-codex", type=Path)
+    parser.add_argument("--subscription-auth-source", type=Path)
+    return parser
+
+
+def validate_campaign_image_reference(image: object) -> None:
+    """Admit pinned registry or local images without waiving qualification.
+
+    Parameters
+    ----------
+    image : object
+        Runtime image reference from the frozen campaign manifest.
+
+    Returns
+    -------
+    None
+        An admitted reference still requires image and readiness qualification.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the reference is mutable, malformed, or outside admitted namespaces.
+    """
+    prefixes = (
+        "ghcr.io/marco0560/codira-agent-benchmark@sha256:",
+        "localhost/",
+    )
+    if (
+        not isinstance(image, str)
+        or phase0.IMAGE_DIGEST_PATTERN.fullmatch(image) is None
+        or not image.startswith(prefixes)
+    ):
+        raise PilotLauncherError("campaign requires an admitted digest-pinned image")
+
+
+def execution_plan(
+    manifest: Mapping[str, object],
+    task_ids: Sequence[str],
+    seed: int,
+    launch_plan: Path | None,
+    *,
+    full_campaign: bool,
+) -> tuple[dict[str, object], tuple[ScheduledAttempt, ...]]:
+    """Admit the selected pilot or frozen full-campaign schedule.
+
+    Parameters
+    ----------
+    manifest : Mapping[str, object]
+        Schema-validated campaign manifest.
+    task_ids : Sequence[str]
+        Requested frozen task identities.
+    seed : int
+        Approved deterministic schedule seed.
+    launch_plan : pathlib.Path or None
+        Required factory artifact for a full campaign.
+    full_campaign : bool
+        Select the qualified sixty-attempt planning contract.
+
+    Returns
+    -------
+    tuple[dict[str, object], tuple[ScheduledAttempt, ...]]
+        Validated plan and exact schedule before credential access.
+
+    Raises
+    ------
+    PilotLauncherError
+        If the full plan is missing, malformed, or selects different tasks.
+    ValueError
+        If a frozen plan, oracle, or harness identity differs.
+    """
+
+    if not full_campaign:
+        return build_pilot_plan(manifest, task_ids, seed), build_paired_schedule(
+            task_ids, 1, seed
+        )
+    validate_campaign_image_reference(manifest.get("runtime_image"))
+    from scripts.agent_efficiency.full_campaign import validate_full_plan
+
+    if launch_plan is None:
+        raise PilotLauncherError("full campaign requires its factory launch plan")
+    plan = json.loads(launch_plan.read_text(encoding="utf-8"))
+    if not isinstance(plan, dict):
+        raise PilotLauncherError("factory launch plan must be an object")
+    if plan.get("stage") == "completion":
+        from scripts.agent_efficiency.completion_campaign import (
+            validate_completion_plan,
+        )
+
+        schedule = validate_completion_plan(manifest, plan, Path.cwd(), seed)
+        expected_tasks = len({item.task_id for item in schedule})
+    else:
+        schedule = validate_full_plan(manifest, plan, seed)
+        expected_tasks = 24 if manifest.get("stage") == "representative-campaign" else 6
+    if (
+        set(task_ids) != {item.task_id for item in schedule}
+        or len(task_ids) != expected_tasks
+    ):
+        raise PilotLauncherError("selected tasks differ from the full campaign")
+    return plan, schedule
+
+
+def _authenticated_route(
+    args: argparse.Namespace,
+    manifest: Mapping[str, object],
+    controls: ExecutionControls,
+) -> tuple[str, Mapping[str, object], int | None, Path | None]:
+    """Admit the frozen provider without mixing its credentials or accounting.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Explicit preflight or execution arguments.
+    manifest : Mapping[str, object]
+        Factory-frozen provider selection.
+    controls : ExecutionControls
+        Validated model and accounting controls.
+
+    Returns
+    -------
+    tuple
+        Proxy credential, sanitized receipt, context length and native auth binding.
+    """
+    provider = cast("Mapping[str, object]", manifest["provider"])
+    if provider.get("name") == "codex-subscription":
+        from scripts.agent_efficiency.subscription_qualification import (
+            SubscriptionRoute,
+            preflight_subscription_in_image,
+        )
+
+        if (
+            args.subscription_codex is None
+            or args.state_root is None
+            or args.image != manifest.get("runtime_image")
+        ):
+            raise PilotLauncherError(
+                "native preflight requires its frozen image, state root and --subscription-codex"
+            )
+        auth_source = args.subscription_auth_source or Path.home() / ".codex/auth.json"
+        if not auth_source.is_file():
+            raise PilotLauncherError("managed ChatGPT login file is unavailable")
+        receipt = preflight_subscription_in_image(
+            SubscriptionRoute(
+                args.runtime,
+                args.image,
+                args.subscription_codex,
+                auth_source,
+                controls.model,
+                controls.reasoning_effort,
+            ),
+            args.state_root,
+        )
+        return "", receipt, None, auth_source
+    upstream = os.environ.get(provider_proxy.UPSTREAM_TOKEN_ENV, "")
+    if not upstream:
+        raise PilotLauncherError("pilot OpenRouter credential is unavailable")
+    receipt = preflight_openrouter_route(manifest, controls, upstream)
+    public_route = receipt.get("public_route")
+    context_length = (
+        public_route.get("context_length")
+        if isinstance(public_route, Mapping)
+        else None
+    )
+    if not isinstance(context_length, int):
+        raise PilotLauncherError("authenticated route context is unavailable")
+    return upstream, receipt, context_length, None
+
+
+def main(arguments: list[str] | None = None) -> int:
+    """Print a dry-run plan or execute only the approved bounded pilot.
+
+    Parameters
+    ----------
+    arguments : list[str] or None, optional
+        Command-line arguments excluding the executable name.
+
+    Returns
+    -------
+    int
+        Zero for a completed operation and two for safe rejection.
+
+    Raises
+    ------
+    SystemExit
+        If command-line arguments violate the parser contract.
+    """
+
+    args = build_parser().parse_args(arguments)
+    try:
+        manifest = load_document(args.campaign_manifest, "campaign")
+        plan, schedule = execution_plan(
+            manifest,
+            args.task_id,
+            args.seed,
+            args.launch_plan,
+            full_campaign=args.full_campaign,
+        )
+        if args.preflight and args.execute:
+            raise PilotLauncherError("preflight and paid execution are separate stages")
+        if args.preflight:
+            controls = execution_controls(
+                manifest,
+                scheduled_attempts=len(schedule),
+                full_campaign=args.full_campaign,
+            )
+            _, receipt, _, _ = _authenticated_route(args, manifest, controls)
+            print(json.dumps(receipt, sort_keys=True))
+            return 0
+        if not args.execute:
+            print(json.dumps(plan, sort_keys=True))
+            return 0
+        if args.state_root is None or not args.image:
+            raise PilotLauncherError("paid execution requires --state-root and --image")
+        if (
+            args.readiness_receipt is None
+            or args.readiness_receipt.resolve()
+            != (args.state_root.parent / "readiness-receipt.json").resolve()
+        ):
+            raise PilotLauncherError(
+                "paid execution requires its machine-validated readiness receipt"
+            )
+        from scripts.agent_efficiency.readiness import verify_readiness
+        from scripts.launch_agent_efficiency_pilot import load_prepared_inputs
+
+        prepared = load_prepared_inputs(args.state_root.parent)
+        verify_readiness(prepared)
+        if (
+            prepared.manifest != manifest
+            or prepared.seed != args.seed
+            or prepared.runtime != args.runtime
+            or prepared.manifest.get("runtime_image") != args.image
+            or prepared.fixture_sources != parse_fixture_sources(args.fixture_source)
+            or prepared.subscription_codex != args.subscription_codex
+            or prepared.subscription_auth_source != args.subscription_auth_source
+        ):
+            raise PilotLauncherError(
+                "execution arguments differ from readiness bindings"
+            )
+        runtime_image = manifest.get("runtime_image")
+        if (
+            not isinstance(runtime_image, str)
+            or phase0.IMAGE_DIGEST_PATTERN.fullmatch(runtime_image) is None
+        ):
+            raise PilotLauncherError(
+                "paid execution requires a digest-pinned manifest runtime image"
+            )
+        if args.image != runtime_image:
+            raise PilotLauncherError("paid execution image differs from manifest")
+        runtime_profile = manifest.get("runtime_profile_fingerprint")
+        if not isinstance(runtime_profile, str):
+            raise PilotLauncherError(
+                "paid execution requires a runtime profile fingerprint"
+            )
+        if runtime_profile != runtime_profile_fingerprint():
+            raise PilotLauncherError(
+                "local Codira profile differs from manifest fingerprint"
+            )
+        controls = execution_controls(
+            manifest, scheduled_attempts=len(schedule), full_campaign=args.full_campaign
+        )
+        if args.full_campaign:
+            validate_campaign_image_reference(runtime_image)
+        validate_treatment_protocol(manifest)
+        sources = parse_fixture_sources(args.fixture_source)
+        tasks, oracles, fixtures = load_pilot_inputs(manifest, args.task_id, sources)
+        provider = cast("Mapping[str, object]", manifest["provider"])
+        subscription = provider.get("name") == "codex-subscription"
+        from scripts.agent_efficiency.runtime_qualification import qualify_image
+
+        qualify_image(args.runtime, args.image, args.state_root)
+        if subscription:
+            from scripts.agent_efficiency.subscription_qualification import (
+                qualify_subscription_image,
+            )
+
+            qualify_subscription_image(
+                args.runtime,
+                args.image,
+                args.state_root,
+                controls.model,
+                controls.reasoning_effort,
+            )
+        upstream, route_preflight, provider_context_length, auth_source = (
+            _authenticated_route(args, manifest, controls)
+        )
+        store = CampaignStore(
+            args.state_root,
+            str(manifest["campaign_id"]),
+            {
+                "manifest": manifest,
+                "image": args.image,
+                "runtime": args.runtime,
+                "seed": args.seed,
+                **({"launch_plan": plan} if args.full_campaign else {}),
+            },
+            schedule,
+        )
+        store.initialize()
+        context = PilotExecutionContext(
+            tasks,
+            oracles,
+            fixtures,
+            sources,
+            args.image,
+            args.runtime,
+            upstream,
+            manifest,
+            provider_context_length,
+            args.full_campaign,
+            auth_source,
+        )
+        if args.full_campaign:
+            if subscription:
+                from scripts.agent_efficiency.subscription_campaign import (
+                    run_subscription_campaign,
+                )
+
+                assert args.subscription_codex is not None
+                report = run_subscription_campaign(
+                    store,
+                    lambda attempt: execute_pilot_attempt(store, attempt, context),
+                    check_quota=lambda: _authenticated_route(args, manifest, controls)[
+                        1
+                    ],
+                )
+                print(json.dumps(report, sort_keys=True))
+                return 0 if report["status"] in {"complete", "checkpoint"} else 2
+            from scripts.agent_efficiency.full_campaign import run_full_campaign
+
+            report = run_full_campaign(
+                store,
+                lambda attempt, remaining: execute_pilot_attempt(
+                    store, attempt, context, remaining
+                ),
+                pool=Decimal(str(controls.max_pilot_spend)),
+                attempt_estimate=Decimal(str(controls.max_attempt_spend)),
+                prompt_price=Decimal(str(controls.max_prompt_price)),
+                completion_price=Decimal(str(controls.max_completion_price)),
+                spend_basis=str(
+                    cast("Mapping[str, object]", manifest["accounting"]).get(
+                        "spend_basis", "price-ceilings"
+                    )
+                ),
+                initial_spend=Decimal(
+                    str(
+                        cast(
+                            "Mapping[str, object]", plan.get("source_snapshot", {})
+                        ).get("parent_reported_spend_usd", "0")
+                    )
+                ),
+            )
+            print(json.dumps(report, sort_keys=True))
+            return 0 if report["status"] in {"complete", "checkpoint"} else 2
+        written = run_pending(
+            store, lambda attempt: execute_pilot_attempt(store, attempt, context)
+        )
+    except (ContractError, OSError, PilotLauncherError, ValueError) as error:
+        print(f"pilot launcher error: {error}", file=sys.stderr)
+        return 2
+    print(
+        json.dumps(
+            {
+                "campaign_id": manifest["campaign_id"],
+                "new_record_paths": [str(path) for path in written],
+                "pending_attempt_ids": [
+                    item.attempt_id for item in store.pending_attempts()
+                ],
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

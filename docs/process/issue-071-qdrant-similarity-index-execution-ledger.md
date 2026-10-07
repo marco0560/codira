@@ -23,6 +23,24 @@ owner of durable embedding vectors, vector-set identity, and revisions.
 - A material scope or decision change stops implementation for operator
   direction.
 
+### Delivery reconciliation — 2026-10-03
+
+Implementation was delivered on 2026-08-26 in squash commit
+`a67c6a8a78d4125c37728c1e5ba9f92142f83f23`
+(`feat(plugins)!: add authenticated Qdrant similarity index`), whose footer is
+`Closes: #71`. Local `main`, remote-tracking `origin/main`, and the current
+experiment branch all contain that commit. Its changes include remote lifecycle
+and typed provenance, installer/bundle/version/schema integration, documentation,
+package tests, and installed-wheel rehearsal. Its commit message records the
+successful repository gate, strict documentation build, catalog/lock checks,
+package suites, index, and audit before delivery.
+
+Phase 15 and Slices 5–7 below had retained pre-delivery statuses in the delivered
+ledger. They are reconciled to `complete` against that commit and the recorded
+Phase 9–14 evidence; this is a documentation correction, not new implementation.
+Remote-tracking ancestry is a local observation, not a fresh remote fetch or
+live GitHub issue-state check. Live-server interoperability remains unverified.
+
 ## Approved decision set
 
 | Area | Approved decision |
@@ -385,7 +403,7 @@ Status: `complete`
 
 ### Phase 15 - Atomic delivery
 
-Status: `pending`
+Status: `complete` (delivery commit `a67c6a8`; reconciled 2026-10-03)
 
 - Keep each coherent implementation slice in an atomic commit with tests,
   documentation, and ledger evidence.
@@ -696,7 +714,7 @@ Recorded evidence:
 
 ### Slice 5 - Implement remote purge/reset, daemon/MCP provenance, and schemas
 
-Status: `in_progress`
+Status: `complete` (delivery commit `a67c6a8`; Phase 9–10 evidence below)
 
 Phase 9 recorded evidence:
 
@@ -792,11 +810,20 @@ Recorded evidence:
 
 ### Slice 6 - Align installer, bundle, coordinated 2.0 metadata, and docs
 
-Status: `pending`
+Status: `complete` (delivery commit `a67c6a8`; Phases 11–13)
+
+The delivery includes the bundle dependency, installer catalog, coordinated
+2.0 metadata and lockfile, schemas, package README, and getting-started guide.
+Phase 11 and Phase 13 validation evidence is recorded under Slice 5 above.
 
 ### Slice 7 - Run focused, package, repository, and release-rehearsal gates
 
-Status: `pending`
+Status: `complete` (delivery commit `a67c6a8`; Phase 14)
+
+Phase 14 evidence under Slice 5 records six passing installed-wheel rehearsal
+tests, repository gate exit `0` with 913 passed and one expected skip, zero
+Semgrep findings, and zero Codira coverage/docstring findings. These are the
+historical delivery checks, not a new live-server qualification.
 
 ## Validation record
 

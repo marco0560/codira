@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "campaign_id": "replace-with-fresh-calibration-id",
+  "stage": "calibration",
+  "task_ids": ["symbols-001"],
+  "budgets": {
+    "max_total_tokens": 200000,
+    "max_output_tokens": 32000,
+    "timeout_seconds": 900
+  },
+  "provider": {
+    "name": "openrouter",
+    "model": "replace-with-exact-provider-model-id",
+    "reasoning_effort": "none",
+    "wire_api": "responses",
+    "max_prompt_usd_per_million": 0.15,
+    "max_completion_usd_per_million": 0.6
+  },
+  "accounting": {
+    "max_daily_spend_usd": 6,
+    "max_estimated_attempt_spend_usd": 0.15,
+    "max_estimated_pilot_spend_usd": 0.15,
+    "max_response_requests_per_attempt": 1
+  },
+  "resource_controls": {
+    "network": "none",
+    "read_only_rootfs": true,
+    "pids_limit": 512,
+    "tmpfs_size_mib": 128
+  },
+  "visibility": "public"
+}

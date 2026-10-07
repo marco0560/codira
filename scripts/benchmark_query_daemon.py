@@ -3,7 +3,7 @@
 
 The script is deliberately an operator tool, not a timing-sensitive test. It
 starts one fixed-root daemon in-process, compares repeated eligible CLI reads,
-and writes reproducible measurements under ``.artifacts/benchmarks``.
+and writes reproducible measurements under ``.artifacts/benchmarks/campaigns``.
 """
 
 from __future__ import annotations
@@ -227,7 +227,11 @@ def main(argv: list[str] | None = None) -> int:
             }
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         output = args.output or (
-            root / ".artifacts" / "benchmarks" / f"query-daemon-{timestamp}.json"
+            root
+            / ".artifacts"
+            / "benchmarks"
+            / "campaigns"
+            / f"query-daemon-{timestamp}.json"
         )
         output.parent.mkdir(parents=True, exist_ok=True)
         payload = {

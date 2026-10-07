@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "fixture_id": {
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+      "type": "string"
+    },
+    "license": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "license_path": {
+      "format": "safe-relative-path",
+      "type": "string"
+    },
+    "license_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "private_locator": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "revision": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "setup_files": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "format": "safe-relative-path",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "source_url": {
+      "format": "uri",
+      "type": "string"
+    },
+    "transport": {
+      "enum": [
+        "git-archive",
+        "directory-snapshot"
+      ]
+    },
+    "tree_sha": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "visibility": {
+      "enum": [
+        "public",
+        "private"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "fixture_id",
+    "revision",
+    "source_url",
+    "license",
+    "visibility"
+  ],
+  "type": "object"
+}

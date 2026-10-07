@@ -8,7 +8,7 @@
 4. Run `uv run python scripts/run_repo_tool.py mypy src scripts tests packages`.
 5. Run `uv run python scripts/run_repo_tool.py pytest -q`.
 6. Run `uv run python scripts/benchmark_release.py`.
-7. Review `.artifacts/benchmarks/release-hyperfine.json` for unexpected
+7. Review `.artifacts/benchmarks/release/release-hyperfine.json` for unexpected
    regressions.
 8. Run `git release-audit`.
 9. Push the releasable staging commits with `git rel`.

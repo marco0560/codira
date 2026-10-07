@@ -1,0 +1,1 @@
+{"schema_version":"1.0","oracle_id":"patch-001","task_id":"patch-001","definition":{"patch_applies_and_tests_pass":{"patch_path":".benchmark/fix.patch","command":["python","protected_sentinel_probe.py"]}},"visibility":"public"}

@@ -1,0 +1,16 @@
+{
+  "family": "patch",
+  "fixture_id": "click-public",
+  "oracle_id": "panel-p1",
+  "prompt": "Fix sentinel pickling by name while preserving every member identity for copy, deepcopy and pickle and complete Option name/default behavior. Add regression tests. Produce .benchmark/fix.patch and stop.",
+  "reference_anchors": [
+    "Sentinel",
+    "pickle"
+  ],
+  "result_format": "workspace-diff",
+  "result_path": ".benchmark/fix.patch",
+  "schema_version": "1.0",
+  "split": "development",
+  "task_id": "panel-p1",
+  "visibility": "public"
+}

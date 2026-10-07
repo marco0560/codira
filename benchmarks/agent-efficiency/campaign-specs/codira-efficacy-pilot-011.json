@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0",
+  "campaign_id": "codira-efficacy-pilot-011",
+  "stage": "pilot",
+  "task_ids": [
+    "symbols-001",
+    "patch-001",
+    "documentation-001"
+  ],
+  "seed": 20260927,
+  "budgets": {
+    "max_total_tokens": 500000,
+    "max_output_tokens": 32000,
+    "timeout_seconds": 1800
+  },
+  "provider": {
+    "name": "openrouter",
+    "model": "deepseek/deepseek-v4.1-flash",
+    "reasoning_effort": "medium",
+    "wire_api": "responses",
+    "max_prompt_usd_per_million": 0.15,
+    "max_completion_usd_per_million": 0.6
+  },
+  "accounting": {
+    "max_daily_spend_usd": 6,
+    "max_estimated_attempt_spend_usd": 0.3,
+    "max_estimated_pilot_spend_usd": 1.8,
+    "max_response_requests_per_attempt": 25,
+    "max_transport_attempts_per_response": 2,
+    "max_total_tokens_scope": "whole-session"
+  },
+  "resource_controls": {
+    "network": "none",
+    "read_only_rootfs": true,
+    "pids_limit": 512,
+    "tmpfs_size_mib": 128
+  },
+  "runtime_image": "localhost/codira-phase6-fixtures@sha256:5b8c072b4cb59d7d5c759daee76673dab1a90f01310e59ea46ae2774a3c2f44a",
+  "runtime_profile_fingerprint": "51f8c6807a5c041bfead11a9ccc98dd3ef00a8869027328fcf70b78f39ab3f3f",
+  "treatment_protocol": {
+    "version": "mcp-required-v2",
+    "agent_instruction": "Treat identifiers as case-sensitive: copy exact spellings from inspected source and verify them before the final answer. Before invoking an unfamiliar API, inspect its package export surface, documented examples, or exact signature. After an unknown attribute or function error, stop repeating the guess and inspect the source or export list before retrying. The fixture is history-free with its baseline staged, so use git diff for edits but do not expect Git history or remotes. Its locked project environment and development dependencies are already prepared offline; use its installed tools and do not sync, install dependencies, or attempt network access. For behavior changes, first run the smallest reproduction using the standard library or tools already present. For workspace-diff tasks, edit the workspace, run a focused check, inspect the diff, and stop; do not spend the bounded session on broad exploration.",
+    "codira_mcp_instruction": "Before shell search, call index_status and require usable=true, a positive indexed_file_count, ready non-partial generation, and zero failed files. Then use context_for_task or the narrowest Codira tool before broader search. Omit cursor unless continuing with an exact returned next_cursor; never send an empty cursor. If the index is unusable, stop Codira calls and report the infrastructure defect instead of treating no matches as repository evidence."
+  },
+  "visibility": "public"
+}

@@ -1,0 +1,50 @@
+{
+    "schema_version": "1.0",
+    "campaign_id": "phase6-pilot-018",
+    "fixture_fingerprints": {
+        "click-public": "613959629731c743e252d302f59bd04de848be55e85a30be65ab0d2f3876bd61",
+        "codira-public": "740aa0ecbe9dce2169e76bc560b987ef8e2f82b0910e6868290775a67a4638ab",
+        "picomatch-public": "65fa2905263005e5fc3ca4d0d9777548b339d88913a24b0a09db52d3b49325ed"
+    },
+    "task_fingerprints": {
+        "documentation-001": "407041c48a5ee14837d76c820de013a60a99b672b05a98243358ccec43b9d052",
+        "patch-001": "12456344b9e4d2cf658844392b02d94e1f1630d273476be961eb8ef7b4abb93f",
+        "symbols-001": "0a4e9d5b6ada15994ced2bcd3e66f540e8f622c2eda25a9e7c66190acc5fd01c"
+    },
+    "task_fixture_ids": {
+        "documentation-001": "picomatch-public",
+        "patch-001": "click-public",
+        "symbols-001": "codira-public"
+    },
+    "budgets": {
+        "max_total_tokens": 80000,
+        "max_output_tokens": 500,
+        "timeout_seconds": 600
+    },
+    "provider": {
+        "name": "openrouter",
+        "model": "openai/gpt-5.6-terra",
+        "reasoning_effort": "medium",
+        "wire_api": "responses",
+        "max_prompt_usd_per_million": 2,
+        "max_completion_usd_per_million": 12
+    },
+    "accounting": {
+        "max_daily_spend_usd": 10,
+        "max_estimated_attempt_spend_usd": 1,
+        "max_estimated_pilot_spend_usd": 6,
+        "max_response_requests_per_attempt": 24
+    },
+    "resource_controls": {
+        "network": "none",
+        "read_only_rootfs": true,
+        "pids_limit": 512,
+        "tmpfs_size_mib": 128
+    },
+    "runtime_image": "localhost/codira-phase6-pilot@sha256:e7ded5da0e93f4d5372963165d545b779afe717879cca938125067d82099194e",
+    "treatment_protocol": {
+        "version": "mcp-required-v1",
+        "codira_mcp_instruction": "Before completing this task, call the configured Codira MCP server at least once."
+    },
+    "visibility": "public"
+}

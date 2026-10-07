@@ -1,0 +1,17 @@
+{
+  "family": "navigation",
+  "fixture_id": "python-service-synthetic",
+  "oracle_id": "panel-n2",
+  "prompt": "Select the method that converts text to lower case among the identically named methods. Identify its owner, adapter dispatch and distractors. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "Lower",
+    "Upper",
+    "Adapter"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "development",
+  "task_id": "panel-n2",
+  "visibility": "public"
+}

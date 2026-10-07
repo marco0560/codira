@@ -1,0 +1,8 @@
+{
+  "asset_path": "panel_f1_probe.py",
+  "asset_sha256": "3550b79082ff6e4f8bc39ab18bb0fb6f07cc6dc13f700ec2f5592571186a86c0",
+  "source_commit": "44e1fb8961261d0739d8b87ba8e1009b108b217f",
+  "source_path": "benchmarks/agent-efficiency/panels/representative-v1.json",
+  "source_repository": "https://github.com/marco0560/codira",
+  "visibility": "protected"
+}

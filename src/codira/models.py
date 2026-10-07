@@ -31,7 +31,7 @@ CallableReferenceKind = Literal[
     "assignment_value",
     "return_value",
 ]
-ImportKind = Literal["import", "include_local", "include_system"]
+ImportKind = Literal["import", "include_local", "include_system", "alias", "reexport"]
 DeclarationKind = Literal[
     "type_alias",
     "constant",
@@ -178,7 +178,7 @@ class ImportArtifact:
         Local alias bound by the import, if any.
     lineno : int
         Source line where the import appears.
-    kind : {"import", "include_local", "include_system"}, optional
+    kind : {"import", "include_local", "include_system", "alias", "reexport"}, optional
         Import-like artifact classifier.
     """
 

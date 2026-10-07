@@ -1,0 +1,16 @@
+{
+  "fixture_id": "click-public",
+  "license": "BSD-3-Clause",
+  "license_path": "LICENSE.txt",
+  "license_sha256": "9a8ad106a394e853bfe21f42f4e72d592819a22805d991b5f3275029292b658d",
+  "revision": "420c8fb44eeadb537cae69d2fee3796e808558dd",
+  "schema_version": "1.0",
+  "setup_files": [
+    {"path": "pyproject.toml", "sha256": "6cca567eef4004426c3a42a94de7ef6b971992f1d7292faea3a17dd322d92717"},
+    {"path": "uv.lock", "sha256": "ccc151df44b77b6d2a3c4ed36badde2e1210bcfcddae7a4a6ff28a6afe3092cf"}
+  ],
+  "source_url": "https://github.com/pallets/click",
+  "transport": "git-archive",
+  "tree_sha": "2955d48825c98fd7dcbc60eb41cf18a952a2c0a3",
+  "visibility": "public"
+}

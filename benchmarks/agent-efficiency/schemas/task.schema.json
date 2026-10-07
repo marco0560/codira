@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "family": {
+      "enum": [
+        "navigation",
+        "diagnosis",
+        "tracing",
+        "impact",
+        "patch",
+        "feature",
+        "usage",
+        "evidence"
+      ]
+    },
+    "fixture_id": {
+      "type": "string"
+    },
+    "oracle_id": {
+      "type": "string"
+    },
+    "prompt": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "reference_anchors": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "result_format": {
+      "enum": [
+        "json",
+        "text",
+        "workspace-diff"
+      ]
+    },
+    "result_path": {
+      "format": "safe-relative-path",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "split": {
+      "enum": [
+        "development",
+        "holdout"
+      ]
+    },
+    "task_id": {
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+      "type": "string"
+    },
+    "visibility": {
+      "enum": [
+        "public",
+        "private"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "task_id",
+    "fixture_id",
+    "prompt",
+    "result_path",
+    "oracle_id",
+    "visibility"
+  ],
+  "type": "object"
+}

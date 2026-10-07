@@ -28,7 +28,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_QUERY = "schema migration logic"
-DEFAULT_OUTPUT = Path(".artifacts") / "benchmarks" / "release-hyperfine.json"
+DEFAULT_OUTPUT = (
+    Path(".artifacts") / "benchmarks" / "release" / "release-hyperfine.json"
+)
 
 
 def _path_text(path: Path) -> str:

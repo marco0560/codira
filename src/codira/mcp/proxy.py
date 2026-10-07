@@ -27,6 +27,7 @@ _APPROVED_OPERATIONS = frozenset(
         "capabilities",
         "index_status",
         "symbol",
+        "symbol_evidence",
         "symbols",
         "references",
         "callers",
@@ -272,7 +273,13 @@ class QueryDaemonMCPProxy:
         """
         resolved = dict(kwargs)
         if args:
-            key = "query" if name in {"context_for_task", "emb", "docs"} else "name"
+            key = (
+                "identity"
+                if name == "symbol_evidence"
+                else "query"
+                if name in {"context_for_task", "emb", "docs"}
+                else "name"
+            )
             if len(args) != 1 or key in resolved or not isinstance(args[0], str):
                 msg = f"Invalid positional arguments for MCP tool: {name}."
                 raise ValueError(msg)

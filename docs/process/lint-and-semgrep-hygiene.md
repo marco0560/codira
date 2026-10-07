@@ -8,6 +8,24 @@ appearing without this inventory.
 
 ## `# noqa` inventory
 
+scripts/run_agent_efficiency_phase6_review.py:2 EM101, S607, TRY003, TRY301 — the
+review-only transport uses explicit Git command vectors and public-safe failure
+messages; its credentials are supplied only by the SOPS-scoped child process.
+
+scripts/run_agent_efficiency_phase6_reviewer_evaluation.py:3 EM101, S310, S607,
+TRY003 — the bounded evaluator invokes explicit Git vectors and the fixed public
+OpenRouter catalog/key endpoints; response bodies and credentials remain outside
+tracked records.
+
+scripts/run_agent_efficiency_phase6_review.py:382 S310 — the review-only
+transport makes one explicit HTTPS request to the fixed OpenRouter endpoint;
+the supplied request is constructed locally and the SOPS-scoped credential is
+never logged.
+
+scripts/run_agent_efficiency_phase6_review.py:308 C901, PLR0913 — the bounded
+review transport keeps each request-control boundary explicit so the immutable
+model, token, timeout, and reasoning controls are independently auditable.
+
 The review removed two obsolete `E501` suppressions from `tests/test_contracts.py`.
 All remaining suppressions name the narrow rule they suppress.
 
@@ -16,11 +34,22 @@ scripts/scriptlib.py:270 PLR0913 — public process runner keeps explicit
     command, environment, and failure-boundary inputs for reusable scripts.
 scripts/run_manifest_baseline.py:131 PLR0913 — benchmark invocation inputs are
     independently selectable for reproducible comparisons.
+scripts/agent_efficiency/oracles.py:133 PLR0913 — the protected trace writer
+  keeps command metadata, complete output streams, and trace identity explicit
+  so forensic evidence remains deterministic and auditable.
+scripts/agent_efficiency/oracles.py:750 PLR0913 — oracle-node evaluation keeps
+  evaluation context and trace propagation explicit so grading remains
+  deterministic and auditable.
+scripts/agent_efficiency/oracles.py:859 PLR0913 — composite evaluation keeps
+  recursive trace propagation explicit alongside the grader inputs.
+scripts/agent_efficiency/oracles.py:1006 PLR0913 — the public oracle boundary
+  keeps result format, protected root, evaluator registry, and optional trace
+  root explicit.
 scripts/run_retrieval_quality_benchmark.py:617,913 PLR0913 — result rows and
     benchmark groups preserve explicit provenance and execution inputs.
-scripts/run_final_embedding_model_campaign.py:430,575,640,791 PLR0913 — the
+scripts/run_final_embedding_model_campaign.py:432,577,642,793 PLR0913 — the
     release-campaign artifact functions retain independently auditable inputs.
-scripts/run_final_embedding_model_campaign.py:858 C901,PLR0912 — CLI phase
+scripts/run_final_embedding_model_campaign.py:860 C901,PLR0912 — CLI phase
     dispatch is intentionally linear so every restart/checkpoint branch remains visible.
 scripts/characterize_similarity_indexes.py:306 PLR0913 — the reproducible
     corpus runner keeps independently selectable corpus and timing inputs.
@@ -105,9 +134,9 @@ fixtures/packages/codira-backend-duckdb/src/full_index_bulk_violation.py:39 N802
     trigger the Semgrep rule.
 
 Location aliases for the grouped entries above:
-scripts/run_final_embedding_model_campaign.py:575,
-scripts/run_final_embedding_model_campaign.py:640,
-scripts/run_final_embedding_model_campaign.py:791,
+scripts/run_final_embedding_model_campaign.py:577,
+scripts/run_final_embedding_model_campaign.py:642,
+scripts/run_final_embedding_model_campaign.py:793,
 scripts/run_retrieval_quality_benchmark.py:913,
 src/codira/docstring.py:1019, src/codira/docstring.py:1114,
 src/codira/index_generation.py:115,
@@ -195,3 +224,44 @@ host-target parser migration, a production `ast` import would silently violate
 the package-owned Tree-sitter boundary. Its dedicated fixture proves the rule
 fires while analyzer tests remain free to compare normalized output with the
 host parser.
+
+## Updated integration locations — 2026-10-01
+
+- `scripts/agent_efficiency/oracles.py:142` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:812` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:923` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:1070` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/cli.py:406` (E402): Compatibility imports retain their established initialization order.
+- `src/codira/cli.py:411` (E402): Compatibility imports retain their established initialization order.
+- `src/codira/cli.py:450` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/cli_queries.py:2365` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/mcp/server.py:272` (SLF001 - required SDK transport boundary): The MCP transport adapter requires the SDK private server boundary.
+- `src/codira/query/context_scoring.py:638` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/query/context_scoring.py:787` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/query/context_scoring.py:822` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+
+### Native subscription preparation
+
+- `scripts/agent_efficiency/codex_subscription.py:2`: explicit boundary errors use direct diagnostic strings; account data is sanitized before persistence.
+- `scripts/agent_efficiency/subscription_campaign.py:2`: immutable scheduler and quota admission errors follow the existing campaign exception convention.
+- `scripts/agent_efficiency/subscription_qualification.py:2`: offline admission errors identify retained traces without embedding their contents.
+- `scripts/calibrate_agent_efficiency_panel.py:2`: generator errors identify inconsistent frozen calibration cases.
+
+- `scripts/agent_efficiency/panel_patch_calibration.py:2`: curated source-edit and admission errors identify the mismatched case without logging provider or credential data.
+
+### Mechanical campaign readiness
+
+- `scripts/agent_efficiency/readiness.py:12`, `scripts/agent_efficiency/preparation.py:12`, and `scripts/agent_efficiency/native_tool_qualification.py:12` (EM101, EM102, TRY003): preparation boundary errors use concise public diagnostics, following the existing immutable campaign exception convention.
+- `scripts/agent_efficiency/native_tool_qualification.py:240` (PLR0913): offline qualification keeps the exact runtime, image, workspace, evidence, model, reasoning and exposure bindings explicit rather than obtaining them from ambient state.
+- `scripts/launch_agent_efficiency_pilot.py:990` and `scripts/launch_agent_efficiency_pilot.py:1000` (TRY301): CLI binding errors remain inside the common safe-rejection boundary and cannot reach preparation or launch side effects.
+
+
+
+- `scripts/agent_efficiency/model_tool_qualification.py:12` (EM101, EM102, TRY003): the model canary uses explicit preparation boundary diagnostics and preserves full ignored native evidence.
+
+
+
+- `scripts/agent_efficiency/preparation.py:390` (TRY301): retain a failed boundary record before propagating rejection; changed controls stop before model work.
+
+- `scripts/agent_efficiency/preparation.py:396` (TRY301): retain a failed boundary record before propagating rejection; changed controls stop before model work.
+- `scripts/run_agent_efficiency_phase6_pilot.py:1787` (PLR0913): readiness supplies an already indexed canary workspace to the same provider executor used by campaign attempts; ordinary attempts retain their original agent workspace.

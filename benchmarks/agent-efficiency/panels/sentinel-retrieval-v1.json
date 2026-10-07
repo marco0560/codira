@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "fixture_id": "click-public",
+  "metric_scope": "offline retrieval; no agent efficacy claim",
+  "queries": [
+    {
+      "id": "saved-1",
+      "split": "development",
+      "query": "Diagnose the copying and pickling failure for unset Click option defaults. Identify the responsible implementation symbol and source path, plus the regression test that covers this behavior.",
+      "relevant_names": [
+        "Sentinel",
+        "test_unset_sentinel"
+      ],
+      "expected": "relevant"
+    },
+    {
+      "id": "saved-2",
+      "split": "development",
+      "query": "Click option default sentinel UNSET unset default fails to copy or pickle; identify sentinel implementation and regression test",
+      "relevant_names": [
+        "Sentinel",
+        "test_unset_sentinel"
+      ],
+      "expected": "relevant"
+    },
+    {
+      "id": "saved-3",
+      "split": "development",
+      "query": "Diagnose the copying and pickling failure for unset Click option defaults. Identify the exact implementation symbol and source path, plus the regression test covering copy/pickle failures. Return the narrowest relevant repository context, one item per page if supported.",
+      "relevant_names": [
+        "Sentinel",
+        "test_unset_sentinel"
+      ],
+      "expected": "relevant"
+    },
+    {
+      "id": "saved-4",
+      "split": "development",
+      "query": "Click option unset default sentinel object fails copy.copy and pickle.dumps; implementation and regression tests for copying and pickling unset option defaults",
+      "relevant_names": [
+        "Sentinel",
+        "test_unset_sentinel"
+      ],
+      "expected": "relevant"
+    },
+    {
+      "id": "saved-5",
+      "split": "development",
+      "query": "Diagnose the copying and pickling failure for unset Click option defaults. Identify implementation and regression test.",
+      "relevant_names": [
+        "Sentinel",
+        "test_unset_sentinel"
+      ],
+      "expected": "relevant"
+    },
+    {
+      "id": "paraphrase-1",
+      "split": "holdout",
+      "query": "Why does serialization of an unset parameter default reconstruct the wrong enumeration value?",
+      "relevant_names": [
+        "Sentinel"
+      ],
+      "expected": "relevant"
+    },
+    {
+      "id": "negative-1",
+      "split": "holdout",
+      "query": "Find configuration options for command help",
+      "relevant_names": [],
+      "forbidden_names": [
+        "Sentinel"
+      ],
+      "expected": "negative"
+    },
+    {
+      "id": "ambiguous-1",
+      "split": "holdout",
+      "query": "Locate render methods and preserve distinct owners",
+      "relevant_names": [],
+      "expected": "ambiguity"
+    }
+  ]
+}

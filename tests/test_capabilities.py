@@ -291,29 +291,34 @@ def test_capability_contract_validates_against_schema() -> None:
     }
     caps_command = cast("Mapping[str, object]", commands["caps"])
     assert "aliases" not in caps_command
-    assert mcp == {
-        "server_command": "codira-mcp",
-        "config_command": "codira-mcp-config",
-        "contract_version": "2.0.0",
-        "transport": "stdio",
-        "read_only": True,
-        "tools": [
-            "capabilities",
-            "index_status",
-            "symbol",
-            "symbols",
-            "references",
-            "callers",
-            "callees",
-            "documentation_findings",
-            "context_for_task",
-            "impact_analysis",
-            "repository_map",
-            "arch",
-            "emb",
-            "docs",
-        ],
-    }
+    assert mcp["server_command"] == "codira-mcp"
+    assert mcp["contract_version"] == "2.0.0"
+    mcp_parameters = cast("Mapping[str, object]", mcp["parameters"])
+    context_parameters = cast(
+        "Mapping[str, object]", mcp_parameters["context_for_task"]
+    )
+    context_properties = cast("Mapping[str, object]", context_parameters["properties"])
+    profile_schema = cast("Mapping[str, object]", context_properties["search_profile"])
+    profile_options = cast("list[object]", profile_schema["anyOf"])
+    profile_values = cast("Mapping[str, object]", profile_options[0])["enum"]
+    assert profile_values == ["default"]
+    assert mcp["tools"] == [
+        "capabilities",
+        "index_status",
+        "symbol_evidence",
+        "symbol",
+        "symbols",
+        "references",
+        "callers",
+        "callees",
+        "documentation_findings",
+        "context_for_task",
+        "impact_analysis",
+        "repository_map",
+        "arch",
+        "emb",
+        "docs",
+    ]
     emb_command = cast("Mapping[str, object]", commands["emb"])
     emb_subcommands = cast("Mapping[str, object]", emb_command["subcommands"])
     emb_purge = cast("Mapping[str, object]", emb_subcommands["purge"])

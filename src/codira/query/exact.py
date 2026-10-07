@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from codira.contracts import BackendRelationQueryRequest, BackendSymbolInventoryItem
+from codira.query.symbol_resolution import alias_candidates
 from codira.registry import active_index_backend
 
 if TYPE_CHECKING:
@@ -199,7 +200,29 @@ def find_symbol(
         Matching symbol rows ordered deterministically.
     """
     backend = active_index_backend(root=root)
-    return backend.find_symbol(root, name, prefix=prefix, conn=conn)
+    rows = backend.find_symbol(root, name, prefix=prefix, conn=conn)
+    rows.extend(
+        row
+        for row in alias_candidates(root, name, prefix=prefix, conn=conn)
+        if row not in rows
+    )
+    if "." in name:
+        parts = name.split(".")
+        for split in range(1, len(parts)):
+            for candidate in backend.find_symbol(
+                root, ".".join(parts[split:]), prefix=prefix, conn=conn
+            ):
+                if candidate[1] == ".".join(parts[:split]) and candidate not in rows:
+                    rows.append(candidate)
+    if "." not in name:
+        return rows
+    for candidate in backend.find_symbol(
+        root, name.rsplit(".", 1)[-1], prefix=prefix, conn=conn
+    ):
+        logical = backend.logical_symbol_name(root, candidate, conn=conn)
+        if name in {logical, f"{candidate[1]}.{logical}"} and candidate not in rows:
+            rows.append(candidate)
+    return sorted(rows)
 
 
 def symbol_inventory(

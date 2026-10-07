@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "definition": {
+      "type": "object"
+    },
+    "oracle_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "visibility": {
+      "enum": [
+        "public",
+        "private"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "oracle_id",
+    "task_id",
+    "definition",
+    "visibility"
+  ],
+  "type": "object"
+}

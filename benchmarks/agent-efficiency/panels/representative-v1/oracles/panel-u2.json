@@ -1,0 +1,39 @@
+{
+  "definition": {
+    "quality_rubric": {
+      "criteria": [
+        {
+          "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+          "dimension": "correctness",
+          "id": "substance",
+          "requirement": "service.render(text, mode=upper) supports upper/lower and raises ValueError for unknown modes; Adapter accepts a Plugin.",
+          "semantic": true
+        },
+        {
+          "dimension": "completeness",
+          "id": "requested-coverage",
+          "requirement": "Write a runnable operator/API recipe using the actual exported signature. Demonstrate both modes and unsupported-mode failure; cite public adapter behavior. Write your answer to BENCHMARK_ANSWER.md and stop.",
+          "semantic": true
+        },
+        {
+          "dimension": "evidence",
+          "id": "grounding",
+          "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+          "semantic": true
+        },
+        {
+          "dimension": "usability",
+          "id": "usability",
+          "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+          "semantic": true
+        }
+      ],
+      "task_id": "panel-u2",
+      "version": 1
+    }
+  },
+  "oracle_id": "panel-u2",
+  "schema_version": "1.0",
+  "task_id": "panel-u2",
+  "visibility": "public"
+}

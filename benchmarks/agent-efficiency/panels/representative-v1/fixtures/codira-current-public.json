@@ -1,0 +1,22 @@
+{
+  "fixture_id": "codira-current-public",
+  "license": "MIT",
+  "license_path": "LICENSE",
+  "license_sha256": "c5dfbaa5f716f470a4c096a88726a7e12a1959c8f89ffe86640457adeb9046f0",
+  "revision": "6a3c025e119a4113323bf3eef7b3c2a376a301fe",
+  "schema_version": "1.0",
+  "setup_files": [
+    {
+      "path": "pyproject.toml",
+      "sha256": "7434bfad2b39d3511c6e01c538c908b5b2d03a5db285ba66b5e2aabb744064b4"
+    },
+    {
+      "path": "uv.lock",
+      "sha256": "566b5174adb0c3db4524ab785fcea613efd3482155934452754b191e33559f39"
+    }
+  ],
+  "source_url": "https://github.com/marco0560/codira",
+  "transport": "git-archive",
+  "tree_sha": "06a7593e5387f7fa20589a643873ef0de1d3fa9b",
+  "visibility": "public"
+}

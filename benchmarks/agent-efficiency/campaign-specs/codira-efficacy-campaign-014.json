@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "campaign_id": "codira-efficacy-campaign-014",
+  "stage": "representative-campaign",
+  "task_ids": [
+    "panel-n1",
+    "panel-n2",
+    "panel-n3",
+    "panel-d1",
+    "panel-d2",
+    "panel-d3",
+    "panel-t1",
+    "panel-t2",
+    "panel-t3",
+    "panel-i1",
+    "panel-i2",
+    "panel-i3",
+    "panel-p1",
+    "panel-p2",
+    "panel-p3",
+    "panel-f1",
+    "panel-f2",
+    "panel-f3",
+    "panel-u1",
+    "panel-u2",
+    "panel-u3",
+    "panel-e1",
+    "panel-e2",
+    "panel-e3"
+  ],
+  "seed": 261004,
+  "budgets": {
+    "max_total_tokens": 2500000,
+    "max_output_tokens": 64000,
+    "timeout_seconds": 1800
+  },
+  "provider": {
+    "name": "openrouter",
+    "model": "z-ai/glm-5.3-flash",
+    "reasoning_effort": "max",
+    "wire_api": "responses",
+    "max_prompt_usd_per_million": 0.04,
+    "max_completion_usd_per_million": 0.6
+  },
+  "accounting": {
+    "max_daily_spend_usd": 8,
+    "max_estimated_attempt_spend_usd": 1.6,
+    "max_estimated_pilot_spend_usd": 7,
+    "max_response_requests_per_attempt": 45,
+    "max_transport_attempts_per_response": 3,
+    "max_total_tokens_scope": "whole-session",
+    "budget_reservation_mode": "shared-pool"
+  },
+  "resource_controls": {
+    "network": "none",
+    "read_only_rootfs": true,
+    "pids_limit": 512,
+    "tmpfs_size_mib": 128
+  },
+  "runtime_image": "localhost/codira-glm-campaign@sha256:4353282d3fefec0e8807317053bc980a4856dbcd086d41bb37ebcbab3ff54d53",
+  "runtime_profile_fingerprint": "fa064e8d8a4d607aa67ddca2f9ab23dcc20df1494468c17bdec0b3770fe128d2",
+  "treatment_protocol": {
+    "version": "mcp-optional-v3",
+    "agent_instruction": "Treat identifiers as case-sensitive: copy exact spellings from inspected source and verify them before the final answer. Before invoking an unfamiliar API, inspect its package export surface, documented examples, or exact signature. After an unknown attribute or function error, stop repeating the guess and inspect the source or export list before retrying. The fixture is history-free with its baseline staged, so inspect edits with git diff but do not expect Git history or remotes. Its locked project environment and development dependencies are already prepared offline; use its installed tools and do not sync, install dependencies, or attempt network access. For behavior changes, first run the smallest reproduction using the standard library or tools already present. For workspace-diff tasks, edit the workspace, run a focused check, inspect the actual workspace diff, and stop once the source fix and test are present.",
+    "codira_mcp_instruction": "Codira MCP is available when useful. Inspect its capabilities and index_status before relying on retrieval. Select a narrow lookup, preserve whole evidence items, and use only exact returned cursors for the same query, profile, page size and generation. Expand symbol evidence when source is needed; state uncertainty and use source fallback when coverage is incomplete. Choose the simplest reliable way to satisfy the task."
+  },
+  "visibility": "public",
+  "repetitions": 3,
+  "panel_id": "representative-v1",
+  "runtime_source_fingerprint": "c090198e2cd98b19472bc0cc604041c050d7249873c0afd28c81a56a43c142e5"
+}

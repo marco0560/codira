@@ -1,0 +1,17 @@
+{
+  "family": "diagnosis",
+  "fixture_id": "picomatch-public",
+  "oracle_id": "panel-d2",
+  "prompt": "Explain matching with nocase and absent, empty and nonempty flags. Provide positive and negative executable cases and identify the source branch. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "flags",
+    "nocase",
+    "compileRe"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "holdout",
+  "task_id": "panel-d2",
+  "visibility": "public"
+}

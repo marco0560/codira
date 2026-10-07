@@ -1,0 +1,75 @@
+# Phase 4 local-only benchmark-runner image for issue #53.
+#
+# The trusted runner builds this from the implementation checkout, records the
+# resulting immutable digest, and never gives provider or registry credentials
+# to a measured container. It is not a publication recipe.
+FROM ghcr.io/marco0560/codira-agent-benchmark@sha256:3647440cc3b727288bde32e5d651781f4869064c15c64f553474ca25d0aa00eb
+
+LABEL org.opencontainers.image.source="https://github.com/marco0560/codira"
+LABEL org.opencontainers.image.description="Codira issue #53 Phase 4 local benchmark runner"
+
+ARG CODEX_VERSION=0.153.4
+ARG CODIRA_VERSION=2.0.2.post1.dev49
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes git jq nodejs npm ripgrep \
+    && npm install --global "@openai/codex@${CODEX_VERSION}" \
+    && python -m pip install --no-cache-dir uv \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
+
+# The runner bind-mounts operation-scoped scratch from the project .Temp policy.
+ENV TMPDIR=/temporary \
+    TMP=/temporary \
+    TEMP=/temporary \
+    UV_CACHE_DIR=/temporary/uv-cache \
+    UV_PYTHON_INSTALL_DIR=/temporary/uv-python \
+    UV_NO_MANAGED_PYTHON=1 \
+    UV_NO_SYNC=1 \
+    UV_SYSTEM_PYTHON=1
+
+# Copy only the core MCP package, never fixture worktrees, runtime state, or
+# grader material. The precise image digest records the resulting tool identity.
+COPY pyproject.toml README.md LICENSE /opt/codira/
+COPY src/codira /opt/codira/src/codira
+COPY packages/codira-backend-sqlite /opt/codira-backend-sqlite
+COPY packages/codira-vector-store-sqlite /opt/codira-vector-store-sqlite
+COPY packages/codira-embedding-onnx /opt/codira-embedding-onnx
+COPY packages/codira-analyzer-python /opt/codira-analyzer-python
+COPY packages/codira-analyzer-javascript /opt/codira-analyzer-javascript
+COPY packages/codira-analyzer-json /opt/codira-analyzer-json
+COPY packages/codira-analyzer-markdown /opt/codira-analyzer-markdown
+COPY packages/codira-analyzer-bash /opt/codira-analyzer-bash
+COPY packages/codira-analyzer-text /opt/codira-analyzer-text
+COPY benchmarks/embedding/model-candidates.json /opt/codira/embedding-model-candidates.json
+COPY scripts/download_embedding_model.py /opt/codira/scripts/download_embedding_model.py
+COPY scripts/embedding_model_manifest.py /opt/codira/scripts/embedding_model_manifest.py
+COPY scripts/scriptlib.py /opt/codira/scripts/scriptlib.py
+RUN SETUPTOOLS_SCM_PRETEND_VERSION="${CODIRA_VERSION}" \
+    python -m pip install --no-cache-dir \
+        "tree-sitter==0.25.2" \
+        /opt/codira \
+        /opt/codira-backend-sqlite \
+        /opt/codira-vector-store-sqlite \
+        /opt/codira-embedding-onnx \
+        /opt/codira-analyzer-python \
+        /opt/codira-analyzer-javascript \
+        /opt/codira-analyzer-json \
+        /opt/codira-analyzer-markdown \
+        /opt/codira-analyzer-bash \
+        /opt/codira-analyzer-text \
+    && cd /opt/codira \
+    && PYTHONPATH=/opt/codira python scripts/download_embedding_model.py \
+        --manifest /opt/codira/embedding-model-candidates.json \
+        --install-root /opt/codira \
+        --model-id bge-small-en-v1.5-onnx \
+        --anonymous \
+    && codex --version \
+    && codira-mcp --help >/dev/null \
+    && python -c "from importlib.metadata import entry_points; assert 'sqlite' in entry_points(group='codira.backends').names; assert 'sqlite' in entry_points(group='codira.vector_stores').names; assert 'onnx' in entry_points(group='codira.embedding_engines').names; assert {'python', 'javascript', 'json', 'markdown', 'bash', 'text'} <= set(entry_points(group='codira.analyzers').names)"
+
+COPY scripts/agent_efficiency/benchmark-codira.toml /opt/codira/benchmark-codira.toml
+COPY --chmod=755 scripts/agent_efficiency/codira-mcp-benchmark /opt/codira/codira-mcp-benchmark
+COPY scripts/agent_efficiency/runtime_admission.py /opt/codira/runtime_admission.py
+COPY --chmod=755 scripts/agent_efficiency/prepare-fixture-environment /opt/codira/prepare-fixture-environment
+
+WORKDIR /workspace

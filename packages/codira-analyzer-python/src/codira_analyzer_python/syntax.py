@@ -370,6 +370,8 @@ def _text(node: Node | None, source: bytes) -> str:
         Node whose source range should be decoded.
     source : bytes
         UTF-8 source bytes owning the node.
+    enum_member : bool, optional
+        Preserve case-sensitive member names for an explicitly declared enum.
 
     Returns
     -------
@@ -466,13 +468,16 @@ def _string_value(node: Node | None, source: bytes) -> str | None:
     if node is None or node.type != "string":
         return None
     raw = _text(node, source)
-    match = re.match(r"(?is)^[rubf]*('''|\"\"\"|'|\")", raw)
+    match = re.match(r"(?is)^([rubf]*)('''|\"\"\"|'|\")", raw)
     if match is None:
         return None
-    quote = match.group(1)
+    prefixes = match.group(1).lower()
+    quote = match.group(2)
     if not raw.endswith(quote):
         return None
     body = raw[match.end() : -len(quote)]
+    if "r" in prefixes:
+        return body
     return bytes(body, "utf-8").decode("unicode_escape")
 
 
@@ -915,8 +920,10 @@ def _import_rows(node: Node, source: bytes) -> list[dict[str, Any]]:
     ]
 
 
-def _declaration(node: Node, source: bytes) -> dict[str, Any] | None:
-    """Extract one top-level type alias or bounded literal constant.
+def _declaration(
+    node: Node, source: bytes, *, enum_member: bool = False
+) -> dict[str, Any] | None:
+    """Extract one top-level type alias, constant, or symbolic assignment.
 
     Parameters
     ----------
@@ -964,12 +971,15 @@ def _declaration(node: Node, source: bytes) -> dict[str, Any] | None:
         "tuple",
         "set",
         "dictionary",
+        "attribute",
+        "identifier",
+        "call",
     }
     if (
         name
         and not name.startswith("_")
         and any(char.isalpha() for char in name)
-        and name.isupper()
+        and (name.isupper() or enum_member)
         and value is not None
         and value.type in literal_types
     ):
@@ -1055,6 +1065,18 @@ def parse_python_artifacts(path: Path, root: Path, source: str) -> dict[str, Any
             declaration = _declaration(node, source_bytes)
             if declaration is not None:
                 result["declarations"].append(declaration)
+                value = node.child_by_field_name("right") or node.child_by_field_name(
+                    "value"
+                )
+                if value is not None and value.type in {"attribute", "identifier"}:
+                    result["imports"].append(
+                        {
+                            "name": f"{result['module']['name']}.{_text(value, source_bytes)}",
+                            "alias": declaration["name"],
+                            "kind": "alias",
+                            "lineno": _line(node),
+                        }
+                    )
         elif node.type in {"function_definition", "async_function_definition"}:
             entry = _function_entry(node, wrapper, source_bytes, method=False)
             if _is_overload(entry):
@@ -1076,6 +1098,23 @@ def parse_python_artifacts(path: Path, root: Path, source: str) -> dict[str, Any
             pending_methods: dict[str, list[dict[str, Any]]] = {}
             for child_outer in body.named_children if body is not None else ():
                 child = child_outer
+                if child.type == "expression_statement" and child.named_children:
+                    member = _declaration(
+                        child.named_children[0],
+                        source_bytes,
+                        enum_member=bool(
+                            re.search(
+                                r"\b(?:Enum|IntEnum|StrEnum|Flag|IntFlag)\b",
+                                _text(
+                                    node.child_by_field_name("superclasses"),
+                                    source_bytes,
+                                ),
+                            )
+                        ),
+                    )
+                    if member is not None and member["kind"] == "constant":
+                        member["name"] = f"{class_entry['name']}.{member['name']}"
+                        result["declarations"].append(member)
                 method_wrapper: Node | None = None
                 if child_outer.type == "decorated_definition":
                     method_wrapper = child_outer

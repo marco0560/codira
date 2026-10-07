@@ -1,0 +1,58 @@
+{
+  "definition": {
+    "all_of": [
+      {
+        "patch_applies_and_tests_pass": {
+          "command": [
+            "python",
+            "panel_p1_probe.py"
+          ],
+          "patch_path": ".benchmark/fix.patch"
+        }
+      },
+      {
+        "quality_rubric": {
+          "criteria": [
+            {
+              "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+              "dimension": "correctness",
+              "id": "substance",
+              "requirement": "The correct patch uses name-based enum reduction; every member and full Option retain identity, name and default.",
+              "semantic": true
+            },
+            {
+              "dimension": "completeness",
+              "id": "requested-coverage",
+              "requirement": "Fix sentinel pickling by name while preserving every member identity for copy, deepcopy and pickle and complete Option name/default behavior. Add regression tests. Produce .benchmark/fix.patch and stop.",
+              "semantic": true
+            },
+            {
+              "dimension": "evidence",
+              "id": "grounding",
+              "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+              "semantic": true
+            },
+            {
+              "dimension": "usability",
+              "id": "usability",
+              "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+              "semantic": true
+            },
+            {
+              "dimension": "causality",
+              "id": "causal-chain",
+              "requirement": "Explain or implement the causal relationship, including requested negative controls.",
+              "semantic": true
+            }
+          ],
+          "task_id": "panel-p1",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "oracle_id": "panel-p1",
+  "schema_version": "1.0",
+  "task_id": "panel-p1",
+  "visibility": "public"
+}

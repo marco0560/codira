@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0",
+  "campaign_id": "codira-efficacy-campaign-005",
+  "stage": "full-campaign",
+  "task_ids": [
+    "context-page-001",
+    "impact-001",
+    "localize-001",
+    "patch-002",
+    "architecture-001",
+    "documentation-001"
+  ],
+  "seed": 20261003,
+  "budgets": {
+    "max_total_tokens": 1000000,
+    "max_output_tokens": 32000,
+    "timeout_seconds": 1800
+  },
+  "provider": {
+    "name": "openrouter",
+    "model": "openai/gpt-6-luna",
+    "reasoning_effort": "high",
+    "wire_api": "responses",
+    "max_prompt_usd_per_million": 0.25,
+    "max_completion_usd_per_million": 0.75
+  },
+  "accounting": {
+    "max_daily_spend_usd": 10.0,
+    "max_estimated_attempt_spend_usd": 1.05,
+    "max_estimated_pilot_spend_usd": 10.0,
+    "max_response_requests_per_attempt": 30,
+    "max_transport_attempts_per_response": 2,
+    "max_total_tokens_scope": "whole-session",
+    "budget_reservation_mode": "shared-pool"
+  },
+  "resource_controls": {
+    "network": "none",
+    "read_only_rootfs": true,
+    "pids_limit": 512,
+    "tmpfs_size_mib": 128
+  },
+  "runtime_image": "ghcr.io/marco0560/codira-agent-benchmark@sha256:3d21c3c2bd82f00ccdc4a4f0b1d22bca38155ed1f00377b5e9ab6b7d9ac8b37c",
+  "runtime_profile_fingerprint": "fa488cb0c8bf6d591bd53a7140da8977e6d37e035427aa469d25578fdc47c854",
+  "treatment_protocol": {
+    "version": "mcp-required-v2",
+    "agent_instruction": "Treat identifiers as case-sensitive: copy exact spellings from inspected source and verify them before the final answer. Before invoking an unfamiliar API, inspect its package export surface, documented examples, or exact signature. After an unknown attribute or function error, stop repeating the guess and inspect the source or export list before retrying. The fixture is history-free with its baseline staged, so inspect edits with git diff but do not expect Git history or remotes. Its locked project environment and development dependencies are already prepared offline; use its installed tools and do not sync, install dependencies, or attempt network access. For behavior changes, first run the smallest reproduction using the standard library or tools already present. For workspace-diff tasks, edit the workspace, run a focused check, inspect the actual workspace diff, and stop once the source fix and test are present.",
+    "codira_mcp_instruction": "Before shell search, call index_status and require usable=true, a positive indexed_file_count, ready non-partial generation, and zero failed files. Then use context_for_task or the narrowest Codira tool before broader search. Omit cursor unless continuing with an exact returned next_cursor for the same query and index generation. For context-page-001, use context_for_task with limit=1 and follow its exact returned cursor until both the implementation and regression test are identified. Preserve each returned whole item; do not reconstruct omitted evidence or repeat the query with a guessed cursor. If the index is unusable, stop Codira calls and report the infrastructure defect instead of treating no matches as repository evidence."
+  },
+  "visibility": "public",
+  "repetitions": 5
+}

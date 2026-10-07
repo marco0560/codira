@@ -19,8 +19,8 @@ from scripts.scriptlib import PERSONAL_SECRETS_DIR, safe_slug, sops_exec_env_arg
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
-DEFAULT_REPO_MANIFEST = Path("benchmarks/retrieval-quality-repos.local.json")
-DEFAULT_OUTPUT = Path(".artifacts/retrieval-quality/dataset.jsonl")
+DEFAULT_REPO_MANIFEST = Path("benchmarks/retrieval-quality/repos.local.json")
+DEFAULT_OUTPUT = Path(".artifacts/benchmarks/retrieval-quality/dataset.jsonl")
 DEFAULT_MAX_EXAMPLES_PER_REPO = 100
 DEFAULT_MAX_CHANGED_FILES = 20
 DEFAULT_MIN_CHANGED_FILES = 1

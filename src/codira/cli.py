@@ -396,6 +396,7 @@ from codira.cli_queries import (  # noqa: E402
     _run_embedding_reset_command,
     _run_embeddings,
     _run_embeddings_command,
+    _run_evidence_command,
     _run_relation_subcommand,
     _run_symbol,
     _run_symbol_command,
@@ -548,6 +549,7 @@ def _command_handlers(  # noqa: PLR0913
         ),
         "plugins": lambda: _run_plugins_command(args, root),
         "caps": lambda: _run_capabilities_command(args, root),
+        "evidence": lambda: _run_evidence_command(args, root),
         "ctx": lambda: _run_context_command(
             args,
             root,

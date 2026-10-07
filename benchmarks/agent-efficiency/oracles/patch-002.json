@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "oracle_id": "patch-002",
+  "task_id": "patch-002",
+  "definition": {
+    "patch_applies_and_tests_pass": {
+      "patch_path": ".benchmark/fix.patch",
+      "required_changed_paths": [
+        "src/click/_utils.py",
+        "tests/test_utils/test_sentinel.py"
+      ],
+      "allowed_changed_paths": [
+        "src/click/_utils.py",
+        "tests/test_utils/test_sentinel.py"
+      ],
+      "command": [
+        "python",
+        "patch_002_probe.py"
+      ]
+    }
+  },
+  "visibility": "public"
+}

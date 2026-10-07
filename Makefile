@@ -1,6 +1,6 @@
 UV := uv
 
-MANIFEST ?= benchmarks/bk-cpp.local.json
+MANIFEST ?= benchmarks/performance/bk-cpp.local.json
 NAME ?= repo
 GUIDELINES_NAME ?= guidelines
 RUNS ?=

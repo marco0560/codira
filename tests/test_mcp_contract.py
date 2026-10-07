@@ -139,8 +139,28 @@ def test_embedding_tools_accept_named_search_profiles() -> None:
 
     for name in ("emb", "docs"):
         schema = cast("dict[str, Any]", tools[name]["request_schema"])
-        assert schema["properties"]["search_profile"] == {
-            "type": "string",
-            "minLength": 1,
-        }
-        jsonschema.validate({"query": "value", "search_profile": "high-recall"}, schema)
+        profile_schema = schema["properties"]["search_profile"]["anyOf"][0]
+        assert profile_schema["enum"] == ["default"]
+        jsonschema.validate({"query": "value", "search_profile": "default"}, schema)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({"query": "value", "search_profile": "missing"}, schema)
+
+
+def test_context_tool_schema_uses_item_pagination_and_profiles() -> None:
+    """Publish context item pagination and the configured profile enum.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test asserts context no longer exposes a character output budget.
+    """
+    tools = cast("list[dict[str, Any]]", build_contract_document()["tools"])
+    context = next(tool for tool in tools if tool["name"] == "context_for_task")
+    properties = context["request_schema"]["properties"]
+    assert set(properties) == {"query", "cursor", "limit", "search_profile", "explain"}
+    assert properties["limit"]["default"] == 10
+    assert properties["search_profile"]["anyOf"][0]["enum"] == ["default"]

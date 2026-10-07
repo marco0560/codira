@@ -300,7 +300,7 @@ def _import_kind(value: object) -> ImportKind:
 
     Returns
     -------
-    {"import", "include_local", "include_system"}
+    {"import", "include_local", "include_system", "alias", "reexport"}
         Normalized import kind.
 
     Raises
@@ -309,7 +309,7 @@ def _import_kind(value: object) -> ImportKind:
         If the parsed value is not a supported import kind.
     """
     kind = str(value)
-    if kind not in {"import", "include_local", "include_system"}:
+    if kind not in {"import", "include_local", "include_system", "alias", "reexport"}:
         msg = f"Unsupported import kind: {kind}"
         raise ValueError(msg)
     return cast("ImportKind", kind)

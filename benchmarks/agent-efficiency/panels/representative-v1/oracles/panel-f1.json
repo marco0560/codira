@@ -1,0 +1,52 @@
+{
+  "definition": {
+    "all_of": [
+      {
+        "patch_applies_and_tests_pass": {
+          "command": [
+            "python",
+            "panel_f1_probe.py"
+          ],
+          "patch_path": ".benchmark/fix.patch"
+        }
+      },
+      {
+        "quality_rubric": {
+          "criteria": [
+            {
+              "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+              "dimension": "correctness",
+              "id": "substance",
+              "requirement": "CLI validates a bounded result count and passes it to the existing core result limit; default behavior remains ten complete items.",
+              "semantic": true
+            },
+            {
+              "dimension": "completeness",
+              "id": "requested-coverage",
+              "requirement": "Add context --max-results as a bounded integer from 1 to 100, default 10. Connect it through CLI to core paging without cutting evidence items. Test valid values, errors and default compatibility. Produce .benchmark/fix.patch and stop.",
+              "semantic": true
+            },
+            {
+              "dimension": "evidence",
+              "id": "grounding",
+              "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+              "semantic": true
+            },
+            {
+              "dimension": "usability",
+              "id": "usability",
+              "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+              "semantic": true
+            }
+          ],
+          "task_id": "panel-f1",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "oracle_id": "panel-f1",
+  "schema_version": "1.0",
+  "task_id": "panel-f1",
+  "visibility": "public"
+}

@@ -1,0 +1,18 @@
+{
+  "family": "usage",
+  "fixture_id": "python-service-synthetic",
+  "oracle_id": "panel-u2",
+  "prompt": "Write a runnable operator/API recipe using the actual exported signature. Demonstrate both modes and unsupported-mode failure; cite public adapter behavior. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "render",
+    "upper",
+    "lower",
+    "ValueError"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "development",
+  "task_id": "panel-u2",
+  "visibility": "public"
+}

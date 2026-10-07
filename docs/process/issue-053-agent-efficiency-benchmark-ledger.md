@@ -1,0 +1,1447 @@
+# Issue #53 — Agent Efficiency Benchmark Execution Ledger
+
+## Authority and objective
+
+Approved by the operator in the planning conversation on 2026-09-08, including
+the amendments covering repetitions, analysis deliverables, a CLI follow-up,
+ledger-based execution, memory isolation, and separate implementation and test
+campaign branches.
+
+Implement <https://github.com/marco0560/codira/issues/53>: reproducibly compare
+ordinary agent repository work with the same work assisted by Codira MCP.
+The primary measurement is provider-reported tokens to a successful outcome,
+subject to deterministic task oracles. Positive savings are not a completion
+requirement. Accurate negative or inconclusive findings are valid outcomes.
+
+This ledger is the plan and execution record. Update it as work progresses;
+do not create a parallel plan with independently maintained status.
+
+## Approved decisions
+
+| ID | Decision |
+| --- | --- |
+| R1 | Codex CLI first, behind a runner-neutral contract and offline test adapter. |
+| T1 | MCP-only Codira assistance for the primary experiment. |
+| C1 | Six tasks total across three public repositories, covering all six issue categories. |
+| F1 | Agent proposes and verifies public repositories and immutable revisions. |
+| E1 | Full public campaign and report required before closing #53. |
+| Budget | Propose benchmark model and full-campaign limits after the pilot estimate. Pilot itself needs a bounded execution manifest before launch. |
+| I1 | Container isolation, validated before measured execution. |
+| B1 | Prepared index; indexing costs reported separately. |
+| P1 | Private-fixture contract, ignored template, and synthetic privacy tests; no actual private fixture required. |
+| W1 | One implementation agent, atomic phase commits, separate review checkpoints. |
+| Memory | No Codex memory, previous session state, or cross-repetition learning accessible to benchmark agents. |
+| Branches | Separate branches for implementing the suite and running the campaign. |
+| Registry | Publish the reviewed benchmark image to GitHub Container Registry as `ghcr.io/marco0560/codira-agent-benchmark`; use only its immutable digest at execution time. |
+| Auth | Use a runner-side OpenRouter provider proxy. The benchmark agent receives neither an OpenRouter credential nor a GitHub Packages credential. |
+
+RepoIRBench is not a runtime dependency of this suite. Retrieval-only scores
+do not replace end-to-end task success or token accounting.
+
+## Branch and evidence policy
+
+- Implementation branch: `feat/issue-053-agent-efficiency-benchmark`.
+- Campaign branch: `experiment/issue-053-agent-efficiency-benchmark`.
+- Create the campaign branch from the reviewed, validated implementation
+  commit after Phases 0–5; record that full SHA below. Do not create it from
+  an earlier incomplete implementation or select its base from a moving ref.
+- Run the pilot and full campaign from the campaign branch. Use disposable
+  fixture worktrees/containers, never either branch checkout as an agent's
+  writable benchmark fixture.
+- Freeze harness, Codira, task, fixture, runner, model, and configuration
+  identities for each experiment. The Codira fixture revision and the Codira
+  tool revision are distinct recorded identities.
+- Fix harness defects on the implementation branch, validate and commit them,
+  then carry them forward normally without rewriting campaign history. Changed
+  experimental inputs require a new experiment identity; never silently combine
+  results across revisions.
+- Public sanitized reports and ledger updates belong on the campaign branch.
+  Raw runs, indexes, private data, credentials, and generated runtime state
+  stay ignored. Preserve evidence supporting failed and interrupted attempts.
+- No automatic merge, publication, release, or issue closure is authorized by
+  approval of this plan. Report completion readiness and remaining actions.
+
+Implementation base at planning: `32603dcddd0325939fc3f3c1b36d7d90e4a038b0`.
+Validated campaign base: `ccbb7aa0ca0c7db7929b862dace84d8ca352e620` (full repository gate passed after the Pilot 025 comparison was added; the qualification closeout that follows is documentation-only).
+
+## Fixture and task register
+
+Repository visibility, GitHub license metadata, and revisions were checked
+through SOPS-scoped GitHub CLI queries during planning. Runtime builds,
+license notices at each revision, size inventories, and reference oracles must
+still pass the implementation gates. A failed fixture admission requires a
+recorded replacement proposal, not a silent substitution.
+
+| Fixture | Revision | License metadata |
+| --- | --- | --- |
+| `marco0560/codira` | `32603dcddd0325939fc3f3c1b36d7d90e4a038b0` | MIT |
+| `pallets/click` | `420c8fb44eeadb537cae69d2fee3796e808558dd` | BSD-3-Clause |
+| `micromatch/picomatch` | `570df2f8781bc92e5fece2c16d9ff990c4a8d1da` | MIT |
+
+| Task ID | Category / fixture | Task and oracle direction |
+| --- | --- | --- |
+| `symbols-001` | Symbol discovery / Codira | Locate the MCP context endpoint and underlying context builder; check canonical path, qualified name, and kind. |
+| `impact-001` | Impact analysis / Codira | Identify direct callers affected by changing the MCP adapter `_query` contract; check independently curated identities and paths. |
+| `localize-001` | Bug localization / Click | Diagnose copying/pickling failures involving unset option defaults; check responsible implementation and structured causal facts. |
+| `patch-001` | Patch preparation / Click | Repair duplication while preserving sentinel singleton identity; apply patch to a pristine checkout and run protected regression tests. |
+| `architecture-001` | Architecture investigation / Picomatch | Describe entry point, matcher, parser, scanner, and direct relationships; check structured module/edge facts. |
+| `documentation-001` | Documentation generation / Picomatch | Produce a short guide with matching, ignore, and case-handling examples; check facts, sections, and executable example behavior. |
+
+Click source fix: `f58ca3e81424a35626c8a475eb59ab95589008ce`, whose parent is
+the registered fixture revision. Verify regressions fail on the parent and
+pass on the source fix. Protect the source fix and grading expectations from
+benchmark agents. Localization and patch tasks use independent sessions; disclose
+their shared underlying bug and do not claim they are independent bug samples.
+
+## Measurement and isolation contract
+
+1. Each task requires a category-specific `.benchmark/result.json`; a missing
+   or invalid file is an oracle failure. A chat response is not a substitute.
+2. Use identical source trees, setup, fixed prompt, model/effort, ordinary tools,
+   and execution budgets within each pair. Record randomized order and seed.
+   Codira MCP availability and its tool descriptions are the intended difference.
+3. Create fresh agent state for every repetition. Disable memory and delegation;
+   exclude host memories, previous sessions, personal skills, plugins, unrelated
+   MCP servers, other runs, oracle inputs, and future solution commits.
+4. Verify effective configuration and filesystem/network isolation with
+   contamination probes before measurement. A new session or ephemeral flag
+   alone is insufficient proof. Stop if isolation cannot be demonstrated.
+5. Implementation agents may use project memories; benchmark agents may not.
+   Normalize inherited/project agent instructions identically for both variants,
+   record the exclusions, and retain identical declared task instructions.
+6. Keep Codira runtime and prepared state behind the MCP service boundary.
+   Ordinary task tools cannot read the index or invoke the installed retrieval
+   runtime directly. Codira fixture source remains visible to both variants;
+   test and document controls preventing an alternate retrieval execution path.
+7. Require MCP startup in assisted runs; initialization failure is an
+   infrastructure failure. Pin exposed tools, budgets, plugins, semantic mode,
+   and any model artifacts before the campaign. No implicit model downloads.
+8. Provision dependencies before measurement. Restrict task network access;
+   allow only the runner's required provider connection through the validated
+   execution design. Scope credentials to their intended processes, without
+   exposing them to repository commands, traces, or model-visible output.
+9. Prepare separate reproducible index state for each assisted run before its
+   timer begins; report preparation cost separately. Record that retrieval is
+   based on the initial fixture snapshot. Do not silently refresh after edits;
+   use ordinary file tools for changed content and report stale-index effects.
+10. Grading takes place outside the agent environment. Evaluate patches against
+    pristine source and protected tests. Defend against modified tests, forged
+    command results, symlink/path escapes, and oracle-data access.
+11. Preserve provider usage and provenance. Verify overlapping/cumulative field
+    semantics before summation; do not double-count cached input or reasoning.
+    Unavailable fields are `null`. Incomplete usage is ineligible for token-saving
+    comparisons, even if an artifact passes its oracle.
+12. Tool-payload tokens are separate diagnostics with tokenizer/version and
+    capture limitations. Never substitute them for total agent consumption.
+13. Report all attempts and success rates. Compute paired savings only where
+    both variants pass. Report successful-run distributions separately and
+    disclose exclusions, missing accounting, and infrastructure failures.
+14. Use five repetitions per public pair as required by #53: six tasks × two
+    variants × five repetitions = 60 executions. Five provides more observations
+    than three/four (36/48 executions), but does not establish statistical
+    significance. Show individual paired observations; label p90 as unstable
+    at this sample size. Additional repetitions need a predefined rule and budget,
+    never continuation until favorable results appear.
+15. Resume only validated completed records. Preserve unsuccessful attempts;
+    do not retry task failures until success. Record infrastructure retry policy
+    and every attempt. Replay/rescore reports without rerunning agents.
+
+## Architecture and intended artifacts
+
+- Entry point: `scripts/run_agent_efficiency_benchmark.py`.
+- Modules: `scripts/agent_efficiency/` containing contracts, manifests, fixture
+  preparation, oracles, runner adapters, containers, campaign state, usage, and
+  reporting. Use focused modules rather than a monolithic script.
+- Public assets: `benchmarks/agent-efficiency/` with schemas, fixtures, tasks,
+  oracle support, container definitions, and sanitized reports.
+- Tests: focused `tests/test_agent_efficiency_*.py` modules.
+- User methodology/runbook: `docs/agent-efficiency-benchmark.md`.
+- Runtime artifacts: ignored campaign storage, with immutable raw evidence,
+  atomic result records, fingerprints, and resumable state.
+
+Currently `.gitignore` ignores all `benchmarks/`. Introduce narrow exceptions
+for approved public assets, preserving exclusions for private manifests, raw
+traces, indexes, worktrees, and local state. Generate schema artifacts through
+their generator. Reuse appropriate repository helpers without changing the
+semantics of existing timing or retrieval-quality campaigns.
+
+Oracle DSL: `contains_symbols`, `contains_paths`, `command_passes`,
+`patch_applies_and_tests_pass`, `normalized_artifact`, `all_of`, and `any_of`.
+Specify normalization and thresholds per task. The custom-evaluator escape
+hatch requires a versioned local script, focused tests, manifest rationale,
+deterministic result contract, no LLM calls, and no access to variant identity.
+Report custom/exploratory cases distinctly. Do not claim general writing quality
+from deterministic documentation checks or require exact prose/patch equality.
+
+## Execution status vocabulary
+
+`pending` → `in_progress` → `validated` → `complete`.
+Use `blocked` only with an explicit unmet prerequisite and next action.
+Every phase completion records evidence and an atomic commit. Never fill evidence
+fields with planned or inferred test results.
+
+## Phase 0 — Runner and isolation conformance
+
+**Status:** `complete`
+**Commit:** atomic Phase 0 commit on the implementation branch.
+
+### Evidence
+
+The secret-free Phase 0 verifier and its focused tests are implemented on the
+implementation branch. On 2026-09-08, `ruff format`, `ruff check`, `mypy`, and the focused
+test module passed (22 tests). The verifier now rejects inherited credentials/state,
+unexpected MCP use in the baseline, missing cancellation evidence, and missing or
+unblocked mandatory escape probes.
+
+It also produces credential-free, network-disabled, read-only container commands and
+public/protected sentinel fixtures for deterministic containment probes. The reviewed
+Phase 0 image Containerfile pins a linux/amd64 Python 3.13 base digest, and its local
+Podman build succeeded on 2026-09-08 as `localhost/codira-agent-efficiency-phase0:review` (image ID `f8ede51cd8ff11b74d8e0c569cb10cab5cd813ae75befcaf56428363a2b23cd5`). On 2026-09-08
+the reviewed image was published to `ghcr.io/marco0560/codira-agent-benchmark:phase0-review-20260908`; its recorded immutable manifest is
+`ghcr.io/marco0560/codira-agent-benchmark@sha256:3647440cc3b727288bde32e5d651781f4869064c15c64f553474ca25d0aa00eb`.
+
+The package is currently private, so a trusted runner must authenticate before pulling
+it; the benchmark agent still receives no GitHub credential. A network-disabled,
+read-only container probe confirmed Python 3.13.15, Git 2.47.3, and no Docker socket.
+The runner-side loopback OpenRouter Responses API proxy and generated clean
+custom-provider Codex configuration are implemented and unit-tested.
+
+On 2026-09-08 the proxy was converted from an OpenAI-specific endpoint to the documented
+OpenRouter custom-provider contract: Codex sends Responses requests only to a loopback
+`/v1` endpoint with a proxy token, and the proxy forwards only the allowlisted paths
+to OpenRouter `/api/v1` using the runner-side `OPENROUTER_API_KEY`. Neither process has forwarded a
+provider request. The focused suite passed again (22 tests), together with `ruff`
+format and lint checks and `mypy`.
+
+The initial host preflight correctly failed closed because `codex`, Docker, and the
+digest-pinned image were unavailable. On 2026-09-08 the operator installed Podman 5.8.2
+and Codex CLI 0.153.4, then ran the helper with Podman. It advanced through executable
+and version validation and failed only because the deliberately nonexistent,
+digest-shaped placeholder image was not locally available.
+
+No live agent turn, JSONL probe, container isolation probe, or cancellation test has
+been run. The existing SOPS-scoped OpenRouter credential was registered as an intended
+consumer of the runner-side proxy and its presence was verified without rendering it.
+The dedicated `codira-tests-key` has a provider-enforced USD 0.25 daily limit.
+
+The approved bounded probe manifest is `benchmarks/agent-efficiency/phase0-live-probe.toml`: one conformance-only attempt using
+`openai/gpt-5.6-terra` at medium effort, a 600-second timeout, and a 12,000 maximum-output-token cap.
+It is excluded from paired savings analysis. The live-probe launcher is implemented with
+a dry-run default and an explicit paid-execution gate; it starts a loopback proxy,
+creates fresh Codex state, and removes `OPENROUTER_API_KEY` from the Codex child environment.
+
+Focused launcher, proxy, configuration, fixture, and manifest tests passed (26 tests),
+together with `ruff` and `mypy`. The fixture/MCP launcher dry run passed on the
+host using the explicit Codex and `codira-mcp` executable paths. No paid request completed.
+
+The first approved launch on 2026-09-09 was an infrastructure failure: it produced no
+JSONL because the intentionally non-Git disposable fixture lacked Codex's `--skip-git-repo-check`
+flag. The runner now supplies that flag; the failed attempt is retained at `/tmp/codira-phase0-live-events.jsonl` and
+is ineligible for comparison. One corrected infrastructure retry reached the provider
+but was rejected before generation: Codex requested its default 65,536 output-token
+allowance, which exceeded the dedicated USD 0.25 daily key limit.
+
+Its JSONL evidence is retained at `/tmp/codira-phase0-live-events-retry1.jsonl` and is ineligible for comparison. The proxy
+now caps every Responses request at the manifest's 12,000 output-token ceiling; focused
+checks passed again (28 tests). The explicitly approved second retry completed its
+required artifact and MCP work, but is ineligible under the manifest because its
+provider-reported observed total was 69,577 tokens, exceeding the 12,000-token ceiling.
+
+The launcher now enforces that admission ceiling after JSONL capture. The operator
+approved an 80,000 observed-total-token ceiling on 2026-09-09. The manifest retains the
+separate 12,000 maximum-output-token proxy cap so the provider request stays within the
+USD 0.25 daily key limit.
+
+The revised-manifest retry completed successfully on 2026-09-09: it used Codira MCP,
+wrote the required `{"status":"ok"}` artifact, and emitted complete usage evidence (69,065
+input, 56,815 cached input, 578 output, and 104 reasoning-output tokens). Its observed
+total of 69,747 is within the revised 80,000 ceiling. Evidence is retained at `/tmp/codira-phase0-live-events-retry3.jsonl`;
+it remains conformance-only and is excluded from comparative analysis.
+
+The non-billed escape probes passed for all five mandatory cases; their credential-free
+evidence is `/tmp/codira-phase0-escape-probes.json`. The first live cancellation attempt reached `turn.started` and stopped
+after the runner's SIGINT, but Codex exited gracefully with code 0 while the checker
+accepted only signal-style exits. The checker now accepts that code only when the runner
+records the signal delivery; focused checks passed again (31 tests).
+
+The approved corrected cancellation retry completed on 2026-09-09: the runner delivered
+SIGINT, Codex exited with code 1 in 0.045 seconds, and the JSONL stream contains
+`thread.started` and `turn.started` with no terminal event. The credential-free diagnostic sidecar
+is `/tmp/codira-phase0-cancel-events-retry3.jsonl.diagnostic.json`, and the event evidence is `/tmp/codira-phase0-cancel-events-retry3.jsonl`. The runner therefore records the
+cancellation as conformant.
+
+The sole unmet Phase 0 prerequisite is deciding whether the reviewed GHCR package
+remains runner-authenticated/private or is intentionally made public. On 2026-09-09, the
+operator approved retaining runner-authenticated/private visibility. Phase 0 conformance
+prerequisites are therefore complete; package pull credentials remain solely with the
+trusted runner, never with the benchmark agent.
+
+The safe bootstrap/preflight entry point is `scripts/prepare_agent_efficiency_phase0_host.sh`; it performs host-changing
+installation/image-pull actions only on explicit request and never receives direct
+API-key environment variables.
+
+### Required work
+
+- Pin Codex CLI, container runtime/image, authentication mode, and effective
+  configuration. Verify JSONL events, usage completeness, cancellation,
+  tool-output capture, and required MCP startup.
+- Establish clean configuration/state, protected credentials, restricted network,
+  hidden graders, memory isolation, and baseline tool exclusion.
+- Test contamination and deliberate escape attempts with deterministic fixtures.
+- Record limits that can actually be enforced; usage reported only at completion
+  cannot by itself implement a hard mid-run token ceiling.
+
+### Gate
+
+Runner capabilities and isolation demonstrated; unsupported capabilities
+fail closed or require a recorded decision. The operator's execution shell has
+Podman 5.8.2 and Codex CLI 0.153.4; this agent's sandbox has a separate PATH.
+The normal live probe, all five non-billed escape probes, and the corrected
+live cancellation probe provide the required execution-host evidence.
+
+## Phase 1 — Versioned contracts
+
+**Status:** `complete`
+**Commit:** atomic Phase 1 commit on the implementation branch.
+
+### Evidence
+
+Versioned Draft 2020-12
+schemas for fixtures, tasks, campaigns, usage, run results, and oracles are
+generated by `scripts/generate_agent_efficiency_schemas.py` and checked with
+`--check`. The strict loader rejects malformed JSON, incompatible versions,
+moving revisions, unsafe paths, and contradictory budgets. It records canonical
+fingerprints and rejects private material from public serialization. A
+runner-neutral protocol and deterministic offline adapter preserve attempt
+identity, provenance, failure class, and complete zero-usage accounting. On
+2026-09-09, focused ruff and mypy checks passed and
+`tests/test_agent_efficiency_phase0.py tests/test_agent_efficiency_contracts.py`
+passed (35 tests). The full repository gate completed in a detached execution
+host session on 2026-09-09: 1,018 passed, 1 skipped, and 87% total coverage.
+
+### Required work
+
+Define fixture, task, campaign, per-run result, usage, and oracle schemas plus a
+runner-neutral interface and offline adapter. Include fingerprints, provenance,
+attempt identity, failure classes, accounting completeness, and budgets.
+
+### Gate
+
+Reject malformed inputs, moving revisions, incompatible versions, unsafe
+paths, and contradictory budgets; public/private serialization tests pass.
+
+## Phase 2 — Deterministic evaluation
+
+**Status:** `complete`
+**Commit:** atomic Phase 2 commit on the implementation branch.
+
+### Evidence
+
+The staged implementation supplies all declared DSL
+primitives, result normalization, protected command and patch evaluation, and
+explicit protected custom-evaluator bindings. The focused oracle suite covers
+reference success plus missing, malformed, false-positive, tampered,
+symlink-escape, patch-target-escape, failing-test, evaluator-false,
+declaration/binding, and malformed-composition cases. On 2026-09-09 its focused
+checks passed: Ruff format and lint, mypy, and `pytest -q
+tests/test_agent_efficiency_oracles.py` (5 tests). Codira was refreshed and
+`codira audit --json` returned `no_matches`.
+
+Independent review record (Grok Build through OpenRouter, 2026-09-09): the initial
+review returned `NEEDS_FIXES` for patch traversal, shell-path bypasses, unbound custom
+evaluator identities, command validation after mutation, two missing negative cases, and
+overstatement in the methodology. The remediation validates all unified-diff, rename,
+and copy targets before `git apply`; rejects shell executable paths and inline-command
+flags; validates test commands before copy/apply; binds the protected registry callable
+to the reviewed script path and SHA-256; adds the identified negative cases; and
+corrects the runbook. A confirmation review returned `NEEDS_FIXES` for rename/copy targets,
+malformed boolean children being validated after side effects, class docstring
+templates, and additional negatives.
+
+Those findings are resolved in the staged patch and focused tests. Its suggestion to
+prohibit all interpreter commands was not accepted: protected tests necessarily invoke
+an interpreter in the protected fixture; shell and inline-code execution remain
+rejected, and the oracle definition is grader-controlled. The final independent
+confirmation on 2026-09-09 returned `VERDICT: PASS` after reviewing the complete staged patch.
+
+Its provider-reported cost was USD 0.0159166. The required final repository validation
+follows this ledger update before the atomic Phase 2 commit.
+
+### Required work
+
+Implement all DSL primitives, normalization, protected grading, and the custom
+evaluator contract. Cover correct, missing, malformed, false-positive, and
+tampered results. Include executable documentation examples and clean patch
+application with independent tests.
+
+### Gate
+
+Independently reviewed oracles; reference successes pass and meaningful
+negative/mutation cases fail. Record review findings and resolution.
+
+## Phase 3 — Corpus admission and freeze
+
+**Status:** `complete`
+**Commit:** atomic Phase 3 commit on the implementation branch.
+
+### Evidence
+
+On 2026-09-09, SOPS-scoped GitHub queries verified the
+registered MIT/BSD-3-Clause/MIT license metadata and all three immutable
+revisions. Disposable exact checkouts reproduced the Codira tree
+`e50955c20b6911ed991c3761de8b97fba19fe986`, Click tree
+`2955d48825c98fd7dcbc60eb41cf18a952a2c0a3`, and Picomatch tree
+`5a3f30720f18f01cd58bd8b9f1b71caaef9f231d`, including license and setup-file
+SHA-256 records. The Click sentinel probe failed at the registered parent
+`420c8fb44eeadb537cae69d2fee3796e808558dd` and passed at the protected source
+fix `f58ca3e81424a35626c8a475eb59ab95589008ce`. Public fixture records and all
+six task/oracle records are staged in the implementation worktree. Remaining:
+anti-leak export verification, reference-oracle execution, focused tests, and
+the final gate.
+
+Completion evidence: a clean `git archive` export of Click contained its
+admitted source while exposing neither `.git` metadata nor the protected
+source-fix SHA. On 2026-09-09, all six registered reference artifacts passed
+their Phase 2 deterministic oracles against disposable exact exports:
+`architecture-001`, `documentation-001`, `impact-001`, `localize-001`,
+`patch-001`, and `symbols-001`. The patch case used the actual protected diff
+from the registered Click source fix and an independent sentinel probe. The
+focused corpus/contract/oracle tests passed (11 tests). The final Codira audit
+returned `no_matches`. The detached full repository gate completed on
+2026-09-09 with 1,025 passed, 1 skipped, 87% total coverage, and exit code 0.
+
+### Required work
+
+Verify license notices, exact trees, setup locks/image digests, language/size
+inventory, six prompts, result contracts, and independently curated ground truth.
+Establish parent-fail/source-fix-pass evidence for Click. Prevent source-fix
+leakage through Git history, package copies, setup artifacts, or agent context.
+
+### Gate
+
+All three fixtures reproduce and all six task oracles are validated.
+Record any remaining setup dependencies before a measured run is allowed.
+
+## Phase 4 — Paired harness and persistence
+
+**Status:** `complete`
+**Commit:** atomic Phase 4 commit on the implementation branch.
+
+### Evidence
+
+The implementation branch now has deterministic paired scheduling, immutable atomic
+result records, strict resume/configuration-drift validation, provider-usage
+normalization, and a network-disabled/read-only container JSONL adapter. Focused Phase
+0/1/4 tests (43 passed, 1 skipped), Ruff, and mypy passed on 2026-09-13. A
+credential-free Podman integration test also passed against the reviewed digest-pinned
+Phase 0 image: a disposable JSONL shim verified the real container adapter's mounts,
+no-network/read-only constraints, output capture, and baseline result normalization.
+
+The shim is not evidence of real Codex/MCP startup. After operator authorization on
+2026-09-12, a local-only Phase 4 image was built from the implementation checkout as
+`localhost/codira-agent-efficiency-phase4@sha256:9f2c48be23e150c7d99807da87d9a504152acbecdf4e42a7951a84a518d5bf08`. It pins Codex CLI 0.153.4 and the local Codira core version `2.0.2.post1.dev49`; a
+credential-free network-disabled probe verified `codex --version`, the `codira-mcp` entry point,
+and a direct MCP `initialize` handshake.
+
+The build exposed and corrected Codira's missing runtime declaration for `packaging`. The
+image is local only and unpublished. No comparative paid campaign has started.
+
+On 2026-09-13, the repository gate completed cleanly with 1,037 passed, 2 skipped, 87%
+total coverage, and exit code 0. On 2026-09-13, the authorized local Phase 4 conformance
+turn used the Unix-socket relay to reach the runner-side OpenRouter proxy while the
+Codex container retained `--network=none`. It returned zero after 19.410 seconds, used the
+required Codira MCP server, emitted ten JSONL events, and reported complete usage
+(68,375 input, 56,215 cached input, 575 output, and 192 reasoning-output tokens).
+
+Codex 0.153.4 represented the requested artifact as a completed `file_change` rather than
+`command_execution`; the evidence checker now accepts that completed artifact event and
+revalidated the preserved stream as successful. The runner-side proxy now binds a
+distinct immutable handler configuration per server and exposes an owner-only Unix
+socket; the container has no provider credential or direct network route. The
+independent Grok Build review through the authorized OpenRouter route returned `VERDICT: PASS`
+on 2026-09-13 (provider-reported cost USD 0.0137676); its only note was the expected
+compatible-UID requirement for the owner-only socket.
+
+This closes the separate execution/accounting review requirement.
+
+### Required work
+
+Implement isolated container runs, Codex JSONL adapter, MCP connection, randomized
+pairing, cancellation, atomic checkpoints, resume, and usage normalization.
+Record initial index preparation separately. Test incomplete streams, missing
+usage, duplicate events, crashes between writes, retries, and configuration drift.
+
+### Gate
+
+Offline plus container integration tests demonstrate pairing, complete
+accounting where supported, memory isolation, recovery, and evidence integrity.
+Separate execution/accounting review completed.
+
+## Phase 5 — Reporting and campaign readiness
+
+**Status:** `complete`
+**Commit:** atomic Phase 5 commit on the implementation branch.
+
+### Evidence
+
+Canonical report generation is implemented with a versioned JSON document and Markdown
+derived only from that JSON. It loads only validated immutable records, emits
+per-attempt summaries with normalized usage, elapsed time, event counts, paired token
+differences, median/p90 statistics, and explicit exclusions. Synthetic path- and
+token-like failure data is redacted before public rendering.
+
+The dedicated report command reconstructs the frozen campaign identity without executing
+an agent. Focused reporting checks passed (6 tests), as did Ruff, mypy, and `codira audit` on
+2026-09-13. Grok Build's independent OpenRouter review initially identified Markdown
+omission of exclusions, unsafe assertions, missing evidence-metric validation,
+incomplete-pair coverage, incomplete task examples, and defensive top-level validation.
+
+Each finding was remediated; the fingerprinted final confirmation returned `VERDICT: PASS`
+(provider-reported cost USD 0.0156366). The full repository gate then completed with
+1,043 passed, 2 skipped, 87% total coverage, and exit code 0. The local campaign branch
+is created from this validated Phase 5 commit only; no paid campaign execution is
+authorized.
+
+### Required work
+
+Build reproducible JSON and Markdown reports with per-task success/failure,
+paired token differences, median/p90, elapsed time, tool calls, and exclusions.
+Retain traces needed to diagnose interaction friction. Exercise public redaction
+using synthetic private data. Document prepare/run/resume/evaluate/report flows.
+
+### Gate
+
+Regenerate from stored records, reject incomparable inputs, pass focused
+tests and `uv run python scripts/validate_repo.py`. Record reviewed implementation
+SHA and create the campaign branch from that commit.
+
+## Phase 6 — Bounded pilot and estimate
+
+**Status:** `complete`
+**Commit:** `2909726`; earlier steps `67c3f30` and `c3cd66a`.
+
+### Evidence and execution history
+
+Phase 6 step 1 implements
+`scripts/run_agent_efficiency_phase6_pilot.py`, a dry-run-only launcher. It
+validates a public campaign-schema manifest, requires exactly three unique task
+identities and one repetition, and emits the deterministic six-attempt schedule
+without reading credentials, creating runtime state, or executing an agent.
+`--execute` fails closed pending the separate pilot-manifest, budget, and
+execution approval. Focused launcher tests, Ruff, mypy, and `codira audit`
+passed on 2026-09-13. Independent Grok Build review returned `VERDICT: PASS`
+on 2026-09-13 (OpenRouter-reported cost: USD 0.0077846); it identified no
+required change. The full repository gate passed on 2026-09-13: 1,046 passed,
+2 skipped, 87% coverage, and zero Semgrep findings.
+
+Phase 6 step 2 adds the public, schema-validated `benchmarks/agent-efficiency/phase6-pilot.json` approval manifest. It binds
+the three selected public task identities to their three frozen fixture fingerprints;
+fixes OpenRouter `openai/gpt-5.6-terra` at medium reasoning; and records the approved USD 2 daily
+hard key limit, USD 1.80 pilot estimate, 12,000 output-token limit, 80,000
+observed-total-token admission ceiling, 600-second attempt timeout, and existing
+container controls. The campaign contract now validates task-to-fixture bindings.
+
+The provider proxy rejects model/effort substitution and injects the approved OpenRouter
+output and price ceilings. The launcher remains dry-run-only until live execution is
+separately reviewed and gated. Focused tests, Ruff, mypy, `codira audit`, and the checked in
+manifest dry run passed on 2026-09-13.
+
+Independent Grok Build review returned `VERDICT: PASS` on 2026-09-13 (OpenRouter-reported
+cost: USD 0.0118504); it identified no required change. The full repository gate passed
+on 2026-09-13: 1,050 passed, 2 skipped, 87% coverage, and zero Semgrep findings. The
+operator confirmed that the dedicated `codira-agent-efficiency-pilot` key has the required USD 2 daily cap.
+
+Phase 6 step 3 implements the explicit, resumable paid-pilot runner in `scripts/run_agent_efficiency_phase6_pilot.py`. It
+validates all frozen public task and fixture bindings before reading the dedicated pilot
+credential; requires explicit local source bindings; exports each agent-visible fixture
+at its admitted Git revision; and makes a separate detached protected checkout for
+grading. The patch task's protected Sentinel probe is a benchmark-owned,
+SHA-256-verified asset derived from Click upstream commit `f58ca3e81424a35626c8a475eb59ab95589008ce`; it is copied only
+into the grader checkout.
+
+A fresh per-attempt Unix-socket proxy now enforces the fixed Terra medium model,
+OpenRouter price caps, output cap, and one Responses request before upstream forwarding.
+The runner preserves immutable `CampaignStore` records, fails closed on unfinished attempt
+work and malformed controls, and turns protected-oracle contract failures into terminal
+`oracle_failure` records. The test-review SOPS registry now authorizes the narrowly scoped
+`scripts/run_agent_efficiency_phase6_review.py` helper.
+
+Grok Build through OpenRouter reviewed the implementation iteratively: two `NEEDS_FIXES`
+reviews identified assertion, path-safety, failure-normalization, and coverage gaps; all
+were remediated. The final confirmation returned `VERDICT: PASS` on 2026-09-14
+(provider-reported USD 0.0535486; all three review calls totalled USD 0.1240278).
+Focused checks reached 62 passed, 1 skipped; the final full repository gate passed on
+2026-09-14 with 1,058 passed, 2 skipped, 87% total coverage, and zero Semgrep findings.
+
+Pilot 001 was then launched from the immutable local state root. All six attempts became
+`infrastructure_failure` records with return code 127 and an empty JSONL transcript; every record
+reports zero Responses requests and zero usage tokens. The originally selected base
+image, `ghcr.io/marco0560/codira-agent-benchmark@sha256:3647440cc3b727288bde32e5d651781f4869064c15c64f553474ca25d0aa00eb`, does not contain `codex`, as verified offline.
+
+Thus Pilot 001 made no provider request and incurred no pilot-provider charge; it is not
+evidence about either assistance mode. Its records and original manifest remain
+unchanged. The corrective Pilot 002 has a new campaign identity and binds the verified
+Phase 4 runtime image `localhost/codira-phase6-pilot@sha256:c261d4ef446e73ccaec07ba8b592b2e80b26a7035a83d1cc5c3541718e2e1d24`.
+
+The runner now requires an exact manifest runtime image for paid execution and rejects a
+command-line image mismatch before preparing inputs or reading the credential. Pilot 002
+was pending at this checkpoint.
+
+Pilot 002 subsequently completed its six scheduled records, each with exactly one
+forwarded Responses request, but all became `infrastructure_failure` with `turn.failed` reporting the
+proxy's 429 request ceiling. The historical raw records report no completed-turn usage,
+so no provider cost or benchmark result is inferred from them. The one-request control
+is incompatible with Codex's multi-request agent loop.
+
+Under operator authorization, Pilot 003 is a new identity with the same frozen tasks,
+fixtures, model, image, USD 2 daily key cap, USD 1.80 pilot estimate, and 600-second
+timeout; it permits at most eight Responses requests of 1,500 output tokens each per
+attempt. That preserves a 12,000-token generated-output envelope while allowing bounded
+tool-loop continuations. Pilot 003 was stopped after its first baseline record: the
+agent completed with six Responses requests and complete usage evidence, but the
+baseline configuration incorrectly exposed Codira MCP.
+
+The record is non-comparable and no further Pilot 003 record was written. The runner now
+creates a no-MCP baseline configuration, covered by a regression test. Pilot 004 is a
+new identity with the same controls and frozen public inputs, bound to the corrected
+verified runtime image `localhost/codira-phase6-pilot@sha256:9dc2d751d504430174ca9d03cf85cdce42b223128b5ac744587dbf2b63480dc5`.
+
+Pilot 004 completed all six records with complete usage evidence, but every attempt
+reported that the nested Codex workspace sandbox could not create or inspect files
+inside the already-confined container. The outer Podman boundary already enforces no
+network, read-only root, dropped capabilities, no-new-privileges, and explicit writable
+mounts. The runner therefore invokes the supported Codex `danger-full-access` inner mode only
+within that outer boundary; a regression test locks the command vector.
+
+Pilot 005 is the new identity for this runner-input change, with the same verified image
+and frozen public inputs. It has not yet been executed.
+
+Pilot 005 likewise completed six immutable `infrastructure_failure` records: each exhausted its
+eight-request ceiling before a terminal turn. One baseline trace had already written the
+required result artifact before needing its ninth continuation, proving the remaining
+fault is the request bound rather than the outer sandbox. Under operator authorization,
+Pilot 006 is the replacement identity.
+
+It permits 12 Responses requests at 1,000 output tokens each, keeping the same
+12,000-token generated-output envelope while allowing the observed agent loop to
+complete. The dedicated key now has a USD 4 daily cap; the operator reported USD 2.9496
+remaining before Pilot 006. Pilot 006 was stopped after two records when its transcript
+revealed that the runner image lacked `uv`; the baseline had written the required
+artifact before its verification command failed.
+
+Those records are invalid and no benchmark cost or outcome is inferred from their
+incomplete terminal usage. Pilot 011 is a fresh identity bound to `localhost/codira-phase6-pilot@sha256:c63266df197bcccdba2020be8e38327a240ae88a85d8ebca463a946a06a09d34`. Its image
+provides `uv`, uses its preinstalled Python 3.13 without sync or managed-Python
+downloads, and was verified to run the observed `uv run python` command under the production
+no-network/read-only controls.
+
+It preserves the authorized 12-request, 1,000-output-token, USD 4 daily, and USD 1.80
+pilot ceilings. Pilot 011 was stopped after its first pair: the baseline exhausted 12
+requests without a terminal turn after its recorded verification command found `jq`
+unavailable, while the assisted attempt reached a terminal deterministic-oracle failure
+after 11 requests. The pair is invalid and is not used as a comparison.
+
+Pilot 013 is a fresh identity bound to `localhost/codira-phase6-pilot@sha256:e7ded5da0e93f4d5372963165d545b779afe717879cca938125067d82099194e`. Its image includes `git`,
+`jq`, and `ripgrep` in addition to Codira, Codira MCP, Codex, and uv. A
+disposable-fixture preflight verified every command observed in the Pilot 011
+transcripts, including the `uv run`, Git, jq, Codira CLI, and Codira MCP compound
+paths, under the production no-network and read-only controls.
+
+Pilot 013 retains the same authorized ceilings. Pilot 013 was stopped after its first
+pair when complete terminal usage showed that the USD 0.30 per-attempt estimate was too
+low: the baseline recorded 232,080 input and 1,830 output tokens, and the assisted
+attempt 210,749 input and 1,837 output tokens. At the manifest's conservative maximum
+prompt and completion rates, those two attempts can total up to USD 0.97.
+
+Both are deterministic-oracle failures, not runner failures, and their pair is retained
+as immutable evidence but not used to draw comparative conclusions. No further attempt
+is authorized until the estimate and available key budget are revised explicitly. The
+operator raised the pilot key's daily cap to USD 6.
+
+Pilot 014 is the resulting fresh identity, with the same frozen inputs and verified
+image but a USD 0.50 per-attempt estimate and USD 3.00 pilot ceiling. Pilot 014 then
+confirmed a separate fixture-contract defect: its synthetic archive export had no Git
+worktree, so a normal `git diff --check` verification failed and the assisted attempt exhausted
+its 12-request ceiling. The exporter now initializes an empty, history-free, remote-free
+Git repository after extracting the frozen tree; its contract test verifies no source
+commit is exposed while normal Git verification works.
+
+The operator raised the daily cap to USD 10. Pilot 015 is the new identity for that
+fixture change, allowing 24 requests of 500 output tokens each (the same 12,000
+output-token envelope), with conservative USD 1.00 per-attempt and USD 6.00 pilot
+ceilings. Pilot 015 showed that even 24 requests cannot compensate for the agent's
+post-artifact verification loop.
+
+With operator approval, all three pilot tasks now instruct the agent to stop immediately
+after writing the required artifact. Their fingerprints changed; the oracles and frozen
+fixtures did not. Pilot 016 is the fresh identity for that treatment change, retaining
+Pilot 015's resource and USD 10 daily controls.
+
+Pilot 016 identified that an assisted documentation execution could complete without
+invoking MCP, so its record was retained as invalid evidence. The runner now binds a
+versioned treatment instruction from each paid manifest and requires one Codira MCP call
+only for the assisted variant. Pilot 017 exposed a timeout-cleanup defect: the outer
+Podman client was cancelled but the container could survive.
+
+Each attempt now supplies a host-visible CID file and, after a timeout, force-removes
+only the validated CID. Pilot 018 is the fresh identity for those runner inputs. Its six
+immutable records all have complete usage and its deterministic report has zero
+exclusions.
+
+Every attempt nevertheless failed its deterministic oracle; the paired Codira MCP token
+increases were 64,658 (symbols), 146,978 (documentation), and 144,781 (patch). The pilot
+therefore provides no provider-token evidence for a successful outcome and does not
+support a 60-run campaign. On 2026-09-14 the operator explicitly approved closure as an
+inconclusive, non-advancing Phase 6 result.
+
+This is an explicit waiver of this phase's normal full-campaign-manifest/budget gate;
+Phase 7 remains pending and no full campaign is authorized.
+
+#### Restart checkpoint and lessons learned
+
+Restart from implementation commit `2909726`. Phase 6 is closed as
+inconclusive; Phase 7 is not authorized. Before any renewed benchmark work,
+redesign and validate the task/oracle methodology so that a successful outcome
+is measurable.
+
+1. Preserve immutable records before cleanup, then enumerate benchmark tmux
+   sessions and runtime processes. Stop only the exact stale session or
+   CID-bound container; remove stale tmux sessions and disposable `/tmp`
+   state only after its records have been retained.
+2. Before a paid run, derive the executable inventory from prior transcripts
+   and verify every direct and compound command in the hardened runtime. This
+   includes Codex, Codira, Codira MCP, uv, Git, jq, ripgrep, and the observed
+   workflow commands—not merely that the image builds.
+3. Examine every terminal record and the deterministic paired report before
+   changing limits or launching a replacement: confirm usage completeness,
+   response count, MCP evidence, oracle result, exclusions, and the concrete
+   cause of any failure. Do not raise request, token, timeout, or spend limits
+   to mask a missing program, containment defect, post-artifact loop, or
+   invalid task. Any changed task, runtime, runner, or control requires a new
+   experiment identity.
+4. Treat complete provider usage as an admission requirement for a comparative
+   pair. A timeout, incomplete usage, malformed transcript, absent MCP event,
+   or baseline MCP exposure is retained as evidence but is not a result from
+   which a token comparison or cost conclusion may be drawn.
+5. Keep each paid manifest bound to canonical task and fixture fingerprints,
+   the digest-pinned image, and the exact treatment protocol. Validate all of
+   those bindings before reading the provider credential; a raw file hash is
+   not interchangeable with the contract's canonical JSON fingerprint.
+6. Budget from observed usage, not only the nominal output cap. Reconcile the
+   remaining daily-key balance before a replacement run, keep a conservative
+   per-attempt and whole-pilot ceiling, and prevent concurrent or orphaned
+   attempts from consuming the same budget.
+7. Preserve fixture privacy without breaking ordinary agent workflows: an
+   exported fixture may be a history-free, remote-free Git worktree so that
+   `git diff --check` works, while source commits, remotes, and protected
+   oracle assets remain unavailable to the agent.
+8. A public report is useful only if it is durable and reproducible. Retain
+   immutable raw records outside Git as required, but commit or otherwise
+   preserve a public-safe report reference and its configuration fingerprint
+   rather than relying on a transient `/tmp` path for a future restart.
+
+#### Offline runtime re-admission (2026-09-19)
+
+The renewed runner image is not eligible for a paid request until it passes an
+offline, fixture-level admission. The admitted image
+`localhost/codira-phase6-onnx:20260919-r2@sha256:57e461389adc7d14a22684c4fc92558300900d3165517e64c33594c80d336c89`
+contains the repository-selected `bge-small-en-v1.5-onnx` model and tokenizer,
+downloaded and smoke-tested by `scripts/download_embedding_model.py` during
+the image build. The runner writes the same profile to the exported fixture
+before executing `codira index`; the MCP process reads that fixture-local
+profile, preventing index/MCP configuration drift.
+
+The profile fingerprint is
+`505d9aa2d761657199fa63de526dea33c1e4aacef030c2f45e3216526643f680`; it
+fixes the SQLite backend, ONNX engine, 384-dimensional model, single-item
+batches, and serial indexing. The image pins `tree-sitter==0.25.2`, the version
+in `uv.lock`. An unconstrained image installed 0.26.0 and the
+Python analyzer segfaulted (exit 139) on the frozen Click fixture; this was a
+runtime ABI failure, not a token, model, or oracle result. The corrected image
+passed offline `codira index` followed by an MCP `context_for_task` call under
+the production no-network, read-only-root, dropped-capabilities, bounded-tmpfs
+controls for all three frozen sources: Click, Picomatch, and Codira.
+
+This is a necessary runtime-admission repair only. It authorizes no provider
+request. Any next paid experiment must use a fresh identity bound to this exact
+digest and profile fingerprint, the revised task/oracle contracts, and the
+operator-approved DeepSeek model, accounting cap, and budget.
+
+#### Renewed Codira-efficacy pilot manifest (2026-09-19)
+
+The operator approved preparation, but not execution, of
+`codira-efficacy-pilot-001`. Its public manifest is
+`benchmarks/agent-efficiency/codira-efficacy-pilot-001.json`, fingerprint
+`cdaaf6c87ed4c5aca1a49ad495f2e4fe187fa1d35ae8c7ecb3df5d1d4d10bbb2`.
+It fixes the admitted image and profile, current canonical task/fixture
+fingerprints, and exact `deepseek/deepseek-v4.1-flash-20260910` routing with
+fallback disabled by the runner. It schedules three baseline/MCP pairs (six
+requests), permits one provider request per attempt, and records the USD 6.00
+daily key cap. Its conservative ceiling is USD 0.15 per attempt and USD 0.90
+for the six-request pilot, calculated from 200,000 total tokens at the
+manifest's USD 0.60/M highest admitted rate.
+
+The runner now rejects an accounting configuration whose worst-case
+manifest-token cost does not fit its per-attempt and six-attempt pilot ceiling,
+and records a completed response above `max_total_tokens` as non-comparative
+infrastructure evidence. The dedicated key's daily cap remains the hard
+provider-spend boundary. A separate live-route calibration and explicit paid
+execution authorization remain required.
+
+`codira-efficacy-pilot-001` subsequently failed Stage 1 admission before any
+completion: its date-suffixed ID was a documentation URL revision, not an ID
+present in OpenRouter's live API catalog. The public catalog reported the exact
+API ID `deepseek/deepseek-v4.1-flash`, with the same USD 0.15/M prompt and USD
+0.60/M completion ceilings and `tools`/`reasoning` capabilities. The failed
+candidate remains unchanged. `codira-efficacy-pilot-002` is the fresh manifest
+for that live route; it requires a new Stage 1 preflight record before any
+separate paid-execution approval.
+
+`codira-efficacy-pilot-002` also failed Stage 1 before an authenticated catalog
+or completion request. The public model catalog has weekday time-window
+overrides reaching USD 0.30/M prompt and USD 1.20/M completion, above the
+manifest's USD 0.15/M and USD 0.60/M ceilings. The runner rejected that drift;
+it did not rely on fallback routing or submit an agent request. A replacement
+manifest needs an explicit operator decision: retain the low ceilings and
+accept route unavailability in the higher-priced windows, or bind the observed
+maximum rates with a fresh USD 0.25 per-attempt and USD 1.50 six-request pilot
+estimate (both still below the USD 6.00 daily scoped-key cap).
+
+The operator selected the first option on 2026-09-19: retain the low ceilings
+and make the route unavailable during higher-priced windows. The Stage 1
+preflight was corrected to select the active UTC pricing window while retaining
+the provider maximum as a future-window guard. Its final full repository gate
+passed (`1105 passed, 3 skipped`). The approved non-billing preflight then
+reached the scoped-key budget check and stopped with `scoped OpenRouter key
+budget is insufficient`: the key's remaining budget was below the frozen USD
+0.90 pilot minimum. No completion request, model response, or provider-usage
+record was created. The empty stdout artifact is retained at
+`.artifacts/agent-efficiency/campaigns/codira-efficacy-pilot-002/preflight-r3.json`; the
+fresh manifest fingerprint is
+`726589024df160997475bb9f432526d4565fdae2b713788e70c290df99f70448`.
+
+The initial key-budget failure was caused by the key limit being externally set
+to USD 12.00 while the frozen manifest requires USD 6.00; it was not a provider
+completion or a response/admission result. After the operator reset the scoped
+key to its approved USD 6.00 daily cap, a repeated non-billing Stage 1 preflight
+passed. Its sanitized record is
+`.artifacts/agent-efficiency/campaigns/codira-efficacy-pilot-002/preflight-r4.json`
+(SHA-256 `fab105bfeb8120a321699f7effb71df3f555772ad5ab211149fa4b29ec48212b`).
+It proves the exact DeepSeek route is key-visible with tools and reasoning,
+the active Saturday/Sunday low-price override is USD 0.15/M prompt and USD
+0.60/M completion, and the key reports USD 6.00 limit, USD 6.00 remaining,
+daily reset, and zero daily usage. No completion request was submitted.
+
+Stage 1 success does not authorize the Stage 3 six-request pilot. The next
+paid action remains a separately frozen, explicitly approved one-request Stage
+2 calibration; a fresh calibration identity is required before it can be run.
+
+The final repository gate for this runtime repair passed on 2026-09-19 in a
+tmux session with durable evidence (`1101 passed, 3 skipped`); Codira audit
+reported no findings. The first two gate failures were retained and diagnosed:
+formatting drift, then an undocumented `noqa`, followed by three missing
+NumPy-docstring sections after audit was correctly made blocking. No finding
+was suppressed or ignored.
+
+#### Paid reviewer evaluation guardrails (2026-09-16)
+
+The first DeepSeek/Grok evaluator attempt reached the provider-request stage
+without a durable per-attempt record and then ended after the request timeout
+with no raw response. Its provider-side completion and billing status are
+therefore unknown. It is not evaluator evidence and must not be retried or
+used to support a model-selection conclusion.
+
+1. Before any paid request, atomically persist an attempt state containing the
+   immutable diff hash, exact model ID, repetition, output and timeout
+   controls, budget identity, and artifact root. Mark it complete only after a
+   verified full response and provider usage have been durably recorded.
+2. An existing `in_progress` or `failed` attempt state blocks automatic retry
+   and resume. Resolve the provider-side accounting uncertainty and obtain a
+   new experiment identity and approval before a replacement request.
+3. Run a credential-free contract and cost preflight before invoking SOPS.
+   It must verify the exact model IDs, no-fallback routing, output-limit
+   support, and worst-case published pricing using frozen prompt sizes and the
+   output cap. The 2026-09-16 preflight estimated USD 0.9633854 for 24
+   requests; that estimate is not evidence of a completed trial.
+4. Admit a review only when the returned model exactly matches the request,
+   the finish reason is `stop`, the verdict has the required format, and usage
+   is complete. Keep raw response bodies outside Git; retain only safe
+   summaries, timing, model/provider identity, usage, and response hashes in
+   reproducibility records.
+5. Supervise long provider calls with durable, monitorable state rather than
+   relying on a foreground tool timeout. If a process ends without a completed
+   state, treat the preceding request as unknown; do not issue a duplicate.
+6. Scope the OpenRouter test credential solely to the secret-registry-approved
+   helper command. A new executable command requires registry review and an
+   explicit authorization; do not broaden the SOPS command as a workaround.
+
+#### Reviewer evaluation `r2` terminal record (2026-09-16)
+
+The explicitly authorized `phase6-deepseek-v4-1-flash-r2-20260916` run passed
+its credential-free contract preflight and then verified a USD 3.00 scoped-key
+limit with USD 2.8660008 remaining against its USD 1.6071094 conservative
+estimate. It atomically persisted its first attempt state before contacting the
+provider. The first `x-ai/grok-build-0.1` request then failed the local
+response-admission boundary; no raw response, complete usage, or admitted
+review record exists. The state is terminal `failed` with zero completed
+attempts. Treat it as non-comparative evidence with unknown provider-side
+billing; do not resume or retry `r2`.
+
+#### Reviewer evaluation `r3` terminal record (2026-09-17)
+
+The explicitly authorized `phase6-deepseek-v4-1-flash-r3-20260917` run used
+the provider-metadata correction, atomically recorded its first attempt, and
+then failed closed before admitting a review, raw response, or usage record. A
+subsequent non-billing scoped-key metadata check reported the same USD 3.00
+limit, USD 3.00 remaining, and USD 0.00 daily usage as the pre-request check.
+`r3` therefore has zero observed provider usage and is not comparative
+evidence. Its terminal state blocks resume; a replacement requires a new
+identity and explicit authorization. Future terminal state stores a safe HTTP
+status for transport failures, never the provider error body.
+
+#### Reviewer evaluation `r4` diagnostic terminal record (2026-09-17)
+
+After a fresh passing repository gate, the authorized distinct
+`phase6-deepseek-v4-1-flash-r4-diagnostic-20260917` identity atomically
+recorded one attempt for the first frozen known-defect case and
+`x-ai/grok-build-0.1`. That single request terminated with safe failure
+category `HTTP 400`; no raw response, usage record, or admitted review exists.
+The permitted non-billing scoped-key metadata check afterwards still reported
+a USD 3.00 limit, USD 3.00 remaining, and USD 0.00 daily usage. `r4` therefore
+has zero observed provider usage, is terminal, and cannot be resumed. It is not
+a DeepSeek request and cannot support a replacement conclusion. No retry or
+additional diagnostic may occur without a new identity and approval.
+
+The follow-up authenticated `/models/user` check isolated the cause without a
+completion request: this scoped key makes `x-ai/grok-build-0.1` available but
+marks its reasoning as mandatory. The new evaluator had added
+`reasoning.enabled: false`, unlike the successful Phase 6 helper, so that
+incompatible request field explains `r4`'s HTTP 400. The repair omits an
+explicit reasoning setting (preserving each key-visible model default) and
+requires the authenticated catalog before every future completion. Public
+`/models` remains useful for price and aggregate capabilities, but cannot prove
+key-specific admission.
+
+#### Reviewer evaluation `r5` comparative-trial authorization (2026-09-17)
+
+The operator authorized the fresh
+`phase6-deepseek-v4-1-flash-r5-20260917` comparative trial after the reasoning
+contract repair. It must use the frozen six-case corpus, two exact models, two
+repetitions, 24-request maximum, USD 2.00 conservative ceiling, authenticated
+model admission, and a new ignored artifact root. Run a current public contract
+and cost preflight plus a fresh repository gate before SOPS. Stop at the first
+unverified or incomplete result; no retry or resume is implied.
+
+#### Reviewer evaluation `r5` terminal record (2026-09-17)
+
+The fresh preflight and repository gate passed, then the first Grok control
+request (`baseline-mcp-defect`, repeat 1) stopped with `independent review
+verdict is malformed`. It recorded zero completed attempts and therefore has no
+comparative, coverage, cost, or replacement evidence. The pre-existing helper
+did not retain a response body when its verdict parser rejected it, so this
+record cannot distinguish a prose prefix, Markdown wrapper, or another response
+layout. The response-evidence omission is logged as a runner defect, not a
+model-quality result. The repaired helper atomically persists every received
+provider body in the ignored per-attempt artifact before validation, with only
+the artifact path and SHA-256 in terminal state. A future paid request must use
+a new experiment identity and separate explicit authorization.
+
+The active successor control is
+[`phase6-paid-review-gold-standard-protocol.md`](phase6-paid-review-gold-standard-protocol.md).
+It separates offline qualification, live-route calibration, and paired
+evaluation; no stage authorizes the next one implicitly.
+
+#### Reviewer evaluation `r6` terminal record (2026-09-18)
+
+The r6 strict-schema calibration admitted both exact models, but did not
+represent the long frozen diff. The paired run completed two Grok attempts and
+then stopped on DeepSeek's first attempt: its response had `finish_reason`
+`length` and null content after consuming the output allowance in reasoning.
+The preserved artifact establishes an incomplete result, not a schema failure.
+It also showed Grok reporting completion usage above the requested cap, so the
+runner now rejects over-cap provider usage and classifies length termination
+before content parsing. Future calibration must use the representative frozen
+diff and exact paired controls. `r6` has no comparative conclusion.
+
+#### Pilot 010 terminal report (2026-09-23)
+
+The fresh `codira-efficacy-pilot-010` identity completed all six scheduled
+records with a zero runner exit. It is an operationally complete but
+scientifically inconclusive pilot: two baseline task-oracle successes have no
+matching successful Codira-MCP arm, while three attempts hit the local
+12-request continuation ceiling and the assisted symbols attempt exceeded the
+240,000 whole-session token ceiling. All assisted indexes were ready,
+non-partial, and failure-free; the runner persisted 62 exact upstream response
+bodies outside Git. The detailed evidence boundary, per-attempt results,
+causal assessment, and fresh-identity requirements are in
+[`agent-efficiency-pilot-010-inconclusive-report-2026-09-23.md`](agent-efficiency-pilot-010-inconclusive-report-2026-09-23.md).
+
+### Original pilot requirements
+
+Proposed pilot: three independent pairs (six executions), covering discovery,
+patch preparation, and documentation across all three fixtures. Pilot results
+are separate from the final campaign.
+
+Before launch, present a bounded pilot manifest for operator approval: candidate
+benchmark model/effort, auth mode, run and wall-time limits, resource controls,
+and spending/accounting limits that can actually be enforced. No blanket paid
+execution is implied by approval of this ledger.
+
+After the pilot, propose the full-campaign model, token/spend and wall-time
+limits, retry allowance, and estimate with explicit uncertainty. Fix defects
+through the implementation branch and assign a new experiment identity when
+inputs change. Do not fabricate provider usage or silently substitute a model.
+
+### Bounded-pilot qualification closeout (2026-09-29)
+
+Pilot 025 is the latest completed run. Its exact OpenRouter Responses route
+(`openai/gpt-6-luna`, high reasoning), `mcp-required-v2` treatment, 1,000,000
+whole-session token cap, 32,000 output-token cap, 30-request attempt limit,
+runtime image digest, and runtime-profile fingerprint are preserved in its
+immutable campaign manifest. Authenticated preflight and the six-attempt run
+both exited successfully; all six attempts passed operational calibration and
+their task oracle. The largest attempt used 648,626 input-plus-output tokens,
+24 requests, and 196.8 seconds, below the configured limits.
+
+This closes the bounded pilot and qualifies only that recorded route/harness
+combination. It does not establish a general model or provider qualification,
+or a stable Codira-MCP efficacy result: the pilot has one paired repetition per
+task, and `patch-002` changed since Pilot 023. The [Pilot 025 comparison](agent-efficiency-pilot-025-comparison-2026-09-29.md)
+contains the analysis and links to the campaign, execution, and protected-asset
+evidence. The canonical [campaign factory](agent-efficiency-campaign-factory.md)
+now records this qualification boundary and still requires a fresh authenticated
+route and harness check before every campaign.
+
+The implementation branch has passed the full repository gate at the validated
+campaign base above. The local campaign branch can now fast-forward to the
+reviewed implementation and this closeout. No full 60-run campaign has been
+approved or launched; Phase 7 and its separate manifest, budget, and execution
+approval remain pending.
+
+### Gate
+
+Bounded-pilot evidence reviewed and route-specific qualification documented.
+Before Phase 7, separately approve its full-campaign manifest, budget, and
+execution.
+
+## Phase 7 — Full campaign and evidence validation
+
+**Status:** `complete`
+**Commit:** completion results `44e1fb8`; final evidence closeout in this commit
+
+### Evidence
+
+Candidate controls were prepared on 2026-09-29 at the operator's request,
+using the factory's new `full-campaign` stage. The proposed specification is
+[`codira-efficacy-campaign-006.json`](../../benchmarks/agent-efficiency/campaign-specs/codira-efficacy-campaign-006.json).
+Its generated [manifest](../../.artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-006/campaign.json)
+and [launch plan](../../.artifacts/agent-efficiency/campaigns/codira-efficacy-campaign-006/launch-plan.json)
+freeze sixty attempts, thirty pairs, the three fixture identities, and task and
+oracle fingerprints. The factory's `--check` mode verifies these artifacts
+without changing them. Fixture revisions, trees, licenses, setup files, and
+protected task assets were re-admitted offline; the safe receipt is
+[`fixture-admission.json`](../../.artifacts/agent-efficiency/gates/phase7-campaign-002-20260929/fixture-admission.json).
+
+Candidate 002 superseded the unapproved candidate 001 after the operator
+rejected its $70 daily proposal. Candidate 001's specification and generated
+artifacts remain intact. The matrix, seed, model, token/request controls,
+image, tasks, and oracles are unchanged; only the spending controls and their
+reservation mode changed. No paid attempt used either candidate. Candidate 003
+supersedes 002 after
+qualification of the full executor and publication of the approved runtime to
+GHCR. Candidates 001 and 002 remain immutable offline evidence. Candidate 004
+supersedes 003 after extracting schedule planning to satisfy the full gate
+branch-count limit; candidate 003 and its prepared receipt remain intact.
+Candidate 005 supersedes 004 after fixing the final docstring audit.
+Candidate 006 supersedes 005 after correcting a key-limit admission defect
+exposed by the live preflight. Candidates 003-005 remain preserved with
+their original receipts. Frozen experiment controls are unchanged across
+003-006. The launch plan additionally freezes the host harness fingerprint and
+six-hour checkpoint. No paid completion has been requested for Phase 7.
+
+### Approved controls (2026-09-29; candidate 006 qualified for launch)
+
+| Control | Approved value and reason |
+| --- | --- |
+| Matrix | Six categories, two arms, five independent paired repetitions: 60 attempts. Seed `20261003`; the generated order is immutable. |
+| Model and provider | P025's OpenRouter Responses route: `openai/gpt-6-luna`, high reasoning. Reverify authenticated availability, reasoning, context/output limits, pricing tiers, usage, and account admission before paid use. |
+| Per-attempt limits | 1,000,000 whole-session input-plus-output tokens; 32,000 output tokens per response; 30 logical response requests; at most two transport attempts per response; 1,800-second attempt timeout. Keep the successful pilot's controls for this comparison. |
+| Price ceilings | P025's configured ceilings: $0.25/M prompt tokens and $0.75/M completion tokens. These are admission limits, not a claim about current live prices or invoices. |
+| Spending admission | $10 shared campaign pool, retaining the $1.05 per-attempt allowance. The operator reported an outer key limit above $10 and more than $10 remaining. Reserve each attempt against the persistent local pool; stop when another pair cannot be funded. The full $10 key allowance must remain available at preflight. |
+| Runtime | P025's image is published and independently pulled as `ghcr.io/marco0560/codira-agent-benchmark@sha256:3d21c3c2bd82f00ccdc4a4f0b1d22bca38155ed1f00377b5e9ab6b7d9ac8b37c`. Its configuration digest matches the pilot image. Retain the Codira profile, network isolation, read-only root, 512 PID limit, and 128 MiB tmpfs. Candidate 006 binds the registry reference. |
+| Execution and resume | Serial execution in durable tmux, with atomic completed records and a checkpoint between pairs at six hours. Explicit `--resume` preserves prior invocation logs and receipts and revalidates budget settlements. Incomplete or uncertain attempts require diagnosis; no automatic retry is permitted. |
+| Failures and retries | Record task failures and cap exhaustion without adding repetitions or changing limits. Stop for infrastructure, missing-usage, admission, or billing uncertainty; preserve the interrupted evidence. No automatic attempt retry or favorable-outcome retry is approved. |
+| Evidence | Retain complete events, provider bodies, preparation diagnostics, patch diffs, and oracle traces in ignored per-attempt storage. Public reports retain safe checks, fingerprints, usage completeness, and every scheduled outcome. |
+| Analysis | Report success and failure rates for all attempts; paired token/time/cost observations only where both arms pass with complete usage. Disclose exclusions. Five repetitions do not establish statistical significance; p90 is unstable at this sample size. |
+
+| Category | Selected task | Grading scope |
+| --- | --- | --- |
+| Symbol discovery | `context-page-001` | P025's exact method/test identifiers and paths. The treatment requires pagination; this text oracle does not independently verify the cursor sequence. Replaces the earlier `symbols-001` choice for this matrix. |
+| Impact analysis | `impact-001` | Presence of the query-boundary name and path; does not verify a complete caller set. |
+| Bug localization | `localize-001` | Presence of the Sentinel identity and source path; does not grade the full causal diagnosis. |
+| Patch preparation | `patch-002` | P025's source/test path requirements, patch application, and digest-verified protected identity probe. |
+| Architecture investigation | `architecture-001` | Presence of four required paths; does not verify the stated relationships. |
+| Documentation generation | `documentation-001` | Required headings; does not grade factual depth or execute examples. |
+
+At the operator's request, estimate spending from `(P023 + P025) × 10`.
+Recalculation from the twelve saved usage records at their configured price
+ceilings gives P023 = $0.42194525 and P025 = $0.50606675, hence
+`($0.42194525 + $0.50606675) × 10 = $9.28012`. Round to a $10 shared
+campaign pool. The operator configured extra key headroom to leave the full
+$10 available after prior daily usage. This includes an empirical margin:
+each pilot has six attempts, so the formula scales twelve observed attempts
+to 120 attempt equivalents for the sixty-attempt campaign. This is a planning
+estimate, not a provider invoice or a guarantee of completing all attempts.
+The [cost evidence](../../.artifacts/agent-efficiency/gates/phase7-campaign-002-20260929/cost-estimate.json)
+retains the exact token counts, configured rates, and source-record digests.
+Cached input and reasoning tokens are already subsets of the reported totals
+and are not added a second time.
+
+P025's 618.4 seconds of attempt time scale to about 1 hour 43 minutes for
+sixty attempts. Scaling its slowest attempt gives about 3 hours 17 minutes.
+Half the candidate task categories were not tested in P025, setup time is
+additional, and trajectories vary. The sixty attempt timeouts permit up to
+30 hours of attempt time; retain the proposed six-hour checkpoint.
+
+The existing factory and pilot executor had supported only one-request
+calibrations and six-attempt pilots. Factory generation and offline checking
+now cover the full matrix. The registered paid runner supports a separately
+validated full-campaign mode; the ordinary pilot mode still rejects shared
+accounting. Focused qualification covers all sixty outcomes, pair checkpoints,
+safe resume, immutable oracle/harness identities, concurrent execution locks,
+persistent reservations, missing usage, transport uncertainty, and settlement
+tampering. Registry publication and digest pull verification are complete.
+Candidate 005 passed the repository gate on 2026-09-29: 1,188 tests passed,
+three skipped, 86% coverage, and zero docstring findings. The operator authorized the
+sixty-attempt campaign under the $10 aggregate ceiling. Authenticated preflight
+then rejected the scoped key budget; no Phase 7 paid completion was started.
+Both failed preflights reached key admission with no paid completion. The
+operator reported more than $10 remaining under a higher outer key limit with
+a daily reset. Exact key usage and headroom remain in ignored admission
+evidence. The original preflight erroneously required the key
+limit itself to be no greater than the local $10 ceiling; this rejected
+sufficient key headroom. Candidate 006 preserves the $10 local pool, requires
+at least $10 key headroom, and admits a higher outer key limit for this
+shared-pool mode. The six-attempt pilot still enforces its previous key-limit
+rule. Offline tests cover both modes and insufficient remaining allowance.
+Candidate 006 passed the full repository gate: 1,189 tests passed, three skipped,
+86% coverage, and zero docstring findings. Authenticated `/models/user` and key
+preflight passed for the frozen route, pricing, output/context limits, and at
+least $10 available key allowance. No Phase 7 paid completion had started at
+this qualification checkpoint.
+
+### Launch preparation record
+
+The operator authorized the scoped GHCR login and image push on 2026-09-29.
+The registered OpenRouter credential consumer remains
+`scripts/run_agent_efficiency_phase6_pilot.py`; full mode does not introduce a
+new credential recipient. The prepared launch receipt is
+[`.artifacts/agent-efficiency/executions/c006/launch-receipt.json`](../../.artifacts/agent-efficiency/executions/c006/launch-receipt.json).
+It re-admits the same three fixture revisions and trees. It contains local
+source locations and remains ignored; tracked documentation contains only
+repository-relative artifact references and safe hashes.
+
+Qualification evidence:
+
+- [Candidate 005 repository gate log](../../.artifacts/validation/repo-gates/phase7-full-qualification-r3-20260929/validation.log)
+  and [exit status](../../.artifacts/validation/repo-gates/phase7-full-qualification-r3-20260929/validation.exit): `0`.
+- [Recorded controls](../../.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c005-control-checklist.json)
+  and [paid authorization](../../.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c005-paid-authorization.json).
+- [Authenticated admission error](../../.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c005-preflight.stderr):
+  `scoped OpenRouter key budget is insufficient`; exit `2`.
+- [Candidate 006 gate log](../../.artifacts/validation/repo-gates/phase7-c006-qualification-r2-20260929/validation.log)
+  and [exit status](../../.artifacts/validation/repo-gates/phase7-c006-qualification-r2-20260929/validation.exit): `0`.
+- [Candidate 006 authenticated preflight](../../.artifacts/agent-efficiency/gates/phase7-qualification-20260929/c006-preflight.json):
+  route, price, and key allowance admitted. Keep the exact key usage metadata
+  in this ignored local artifact.
+
+The $10 campaign pool persists across top-ups, daily resets, and restarts.
+After a clean admission stop or pair checkpoint, the operator may authorize
+`--resume`; the runner continues pending schedule members. A stop during an
+attempt with uncertain billing or an unfinished reservation blocks automatic
+resume and requires forensic diagnosis. Topping up alone cannot release that
+reservation or authorize retrying a failed attempt.
+
+### Required work
+
+Execute the approved 60-run matrix on the campaign branch with frozen identities
+and resumable records. Preserve failures and interrupted attempts. Generate
+public sanitized reports and validate their provenance and exclusions.
+
+Campaign 006 stopped after 55 attempts. The retrospective answer adjudication,
+prospective oracle changes, and patch token-cap investigation are recorded in
+[the dated campaign 006 report](agent-efficiency-campaign-006-adjudication-2026-09-30.md).
+Its original frozen results are preserved; the changed oracles require a new
+campaign identity before any paid rerun.
+
+On 2026-09-30 the operator selected observed spending for the $10 full-campaign
+pool and allowed the final provider response to cross that threshold. The
+full-campaign harness now persists immutable start and settlement records,
+checks the charged total before each new attempt, and passes the remaining
+pool to the proxy for a check before each subsequent completion. It no longer
+applies the pilot's worst-case token, per-attempt dollar, or pair reservations
+to full campaigns. Missing provider usage still blocks further paid work, and
+the output, request-count, retry, timeout, and route controls remain in force.
+Campaign 006's older reservation journal is not interpreted under these rules.
+The impact oracle now checks `_query` and its path without requiring the prose
+word `boundary`. A linked completion campaign could fill the six unfinished
+slots, but its new harness provenance must be reported separately from the 54
+completed task results of campaign 006. This remediation record does not
+launch a paid supplement.
+
+The operator then authorized those six slots. The factory's new `completion`
+stage selects exactly the failed patch arm and five pending arms from campaign
+006, binds all 55 parent records by exact byte digest, and rejects a partial
+selection or changed parent evidence. Candidate 007 was generated before the
+last qualification edits and remains an unused offline artifact. Candidate
+008 carried the same selected tasks and a $2 observed spend pool. Its factory,
+offline fixture admission, and authenticated preflight passed. Its launcher
+then rejected the three-task completion command before tmux or any paid request
+because that command builder expected six task identities. The prepared
+receipt and failed launch evidence remain intact. Candidate 009 repairs this
+demonstrated harness defect and adds a command-builder regression check. The
+updated completion-stage gate passed with 1,204 tests and three skips; its
+durable record is
+`.artifacts/validation/repo-gates/completion-stage-r5-20260930/validation.log`
+with exit status `0`. Candidate 009 requires fresh factory generation,
+offline admission, and authenticated preflight before paid execution.
+
+After a power failure interrupted candidate 009 before authenticated
+preflight, its generated artifacts, prepared receipt, and full gate remained
+valid; there was no attempt state or paid response. Repeated factory and
+authenticated route checks passed after restart. Candidate 009 then completed
+all six selected attempts with exit `0`, all six operational and task-oracle
+passes, complete usage, and $0.48971925 in ceiling-priced charges. The linked
+[completion report](agent-efficiency-completion-009-results-2026-09-30.md)
+records the six results, composite interpretation, total spending, and
+provenance limits. Campaign 006's original records remain unchanged.
+
+### Gate
+
+Every scheduled execution is accounted for, valid results reproducible,
+review findings resolved, repository gate passes, and evidence commits recorded.
+Phase 7 does not close the issue: Phase 8 is required.
+
+### Campaign requirement assessment — 2026-10-03
+
+Another campaign is not required merely to fill the Phase 7 schedule. Campaign
+006 retains 55 records, including its failed patch trajectory; the authorized
+Completion 009 adds six records. The documented selection accounts for all
+60 logical slots in 30 pairs, retaining the abandoned attempt separately.
+A read-only check on 2026-10-03 verified all 55 parent-record digests bound by
+Completion 009, complete usage and operational passes for all 60 selected
+records, and all 180 record/event/answer digests in the persisted forensic
+analysis. Selected frozen grades are 43 passes and 17 failures; the documented
+retrospective text adjudication must remain separate from those frozen grades.
+
+The completion report was committed as `44e1fb8`. Its final retained repository
+gate has exit `0`. The composite is not a single unchanged-harness/oracle run:
+reports must retain the parent/completion provenance and retrospective-scoring
+qualification. The pinned image served the legacy context protocol, so these
+results cannot establish efficacy of the current item/cursor implementation.
+The objective accepts accurate negative or inconclusive findings; deployment
+and scoring defects restrict conclusions rather than automatically mandate a
+new paid comparison.
+
+Phase 7 remains open for evidence closeout: verify the reported retrospective
+grading and exclusions, resolve review findings with traceable corrections or
+explicit limitations, and record final validation and evidence commits. Phase 8
+still requires independent review of both findings documents. Campaign 011's
+withdrawn semantic scores and denied MCP calls must not be used as substitute
+proof; its source-grounded rerating is separate evidence work.
+
+A fresh campaign is required only for a new claim about the corrected current
+product/runtime, a corrected treatment, or changed experimental controls. Such
+a campaign needs a fresh factory identity, complete readiness qualification,
+and separate execution authorization. It is follow-up measurement, not an
+unfilled slot in the original Phase 7 matrix. This assessment authorizes no
+provider/model call and does not mark either Phase 7 or Phase 8 complete.
+
+### Newer campaign reconciliation — 2026-10-07
+
+The 2026-10-03 assessment above is a historical checkpoint, not the latest
+execution inventory. Campaign 011's [forensic audit](agent-efficiency-campaign-011-forensic-analysis-2026-10-02.md)
+withdraws its semantic pass claims and records denied MCP calls and grader
+defects. Campaign 016's retained failure analysis under
+`.artifacts/agent-efficiency/reports/campaign-016-failure-analysis-20261004-r1/`
+records one operationally censored assisted attempt, no answer and no complete
+pair; it cannot establish comparative efficacy.
+
+Campaign 020 and Completion 027 subsequently filled a separate representative
+schedule of 24 tasks, three repetitions and two arms: **144 final slots / 72
+pairs**. Their [combined report and forensic addendum](agent-efficiency-luna-combined-campaign-results-2026-10-05.md)
+preserve the interrupted parent attempt, account for all final slots, and
+diagnose two concrete patch failures. The frozen final grades are 142
+`not_evaluated` / `semantic_review_required` and two deterministic failures,
+one per arm. The 142 terminal successes are not semantic passes.
+
+On 2026-10-07 a read-only input audit verified 145 retained record/event
+digests, 2,021 raw provider-response digests and costs, 144 protected trace
+manifests, 212 protected output digests and 25,434 frozen source-file
+comparisons. It also rechecked all 180 selected legacy record/event/answer
+digests. Six backend session-file comparisons were excluded as runtime state,
+not source. Common model controls, runtime image/profile/source, task/fixture
+fingerprints and treatment match; the continuation's billing and harness
+identity differ. A fixed provider model identifier across dates does not prove
+an unchanged provider-side implementation.
+
+Provider-reported task-execution charges are $2.032802855 including the
+interrupted parent's $0.006405485. Final-slot charges alone are $1.006187230
+baseline and $1.020210140 assisted. The earlier assisted cost of $1.026615625
+includes that interrupted attempt; recovery spending must not be silently
+included in a final-slot resource comparison.
+
+Evidence closeout now includes blinded retrospective grading of the **142
+answers** against their unchanged frozen rubrics. Private packets use opaque
+identities and omit arm, model, usage and previous grade metadata; frozen
+source copies support verification. Independent reviewers receive no mapping
+to original attempts. Answers themselves remain intact, so embedded treatment
+cues can limit blinding. All decisions require exact answer/rubric digests,
+criterion coverage, quoted support and source-grounded reasons. The two
+deterministic failures remain failures; no campaign result is rewritten.
+
+New derived evidence and reproducible preparation/audit scripts are retained
+under `.artifacts/agent-efficiency/analysis/luna-semantic-review-20261007-r1/`.
+All 142 adjudications and 14 append-only amendments are now locked; the reviewed
+composite has 65/72 baseline and 63/72 assisted passes; the two deterministic
+failures remain included in the 144-slot denominators. See the
+[semantic closeout](agent-efficiency-luna-semantic-review-2026-10-07.md).
+Phase 7 evidence closeout is complete: independent claim reviews verified the
+legacy and newer evidence, both findings documents are reconciled, and the
+repository gate passed. The completion record below supersedes earlier open
+status checkpoints.
+No new campaign or external provider call is authorized by this reconciliation.
+
+## Phase 8 — Findings and product direction
+
+**Status:** `complete`
+**Commit:** findings and evidence reconciliation in this commit
+
+### Evidence
+
+The [audience findings](issue-053-audience-findings.md) persist the complete
+Campaign 006 / Completion 009 composite measurements and all 30 paired deltas.
+The [internal product assessment](issue-053-internal-product-assessment.md)
+reviews all 60 selected outputs, investigates the five Sentinel diagnosis
+pairs, defines 24 candidate tasks, and proposes five core/MCP improvements and
+three harness/procedure improvements. Derived input digests, measurements,
+guide checks, and offline runtime inspection are retained under
+`.artifacts/analysis/c006-c009-forensic-20260930/`.
+
+The runtime inspection found that the campaign-pinned image contains the
+legacy `result.context` / character-budget MCP implementation rather than the
+current item/cursor implementation. All successful saved context calls used
+the legacy shape. The context-page task correctly investigated newer source
+in the public fixture but did not exercise the newer installed tool. The
+reports therefore correct protocol attribution while preserving all records
+and numerical results. Exact inside-image contract qualification is required
+before another campaign can measure the current changes.
+
+The analyst reviewed 50 notes/guides and ten selected patch diffs. All 73
+expected outcomes in 31 guide example blocks passed against the frozen
+Picomatch source using host Node. The full gate for this report batch passed
+with exit `0`, 1,204 tests passed, three skipped, and 86% coverage; its evidence
+is `.artifacts/validation/repo-gates/phase8-assessment-20260930/`.
+At that historical checkpoint, independent claim review remained pending.
+The 2026-10-07 completion record below supersedes that status.
+
+### Required work
+
+Deliver both documents regardless of whether results favor Codira:
+
+1. `docs/process/issue-053-audience-findings.md`: methodology, tested scenarios,
+   results, limitations, and reproducible examples. When supported by evidence,
+   include communication-ready claims for potential users, each traceable to
+   a report/table. Negative or inconclusive outcomes must remain accurately stated.
+2. `docs/process/issue-053-internal-product-assessment.md`: review successful
+   and failed traces for confusing outputs, poor tool discovery, unnecessary
+   calls, missing capabilities, stale-index friction, latency, and other rough
+   spots. Distinguish product, agent, fixture, and harness causes. Rank proposed
+   improvements by evidence, expected benefit, and verification method.
+
+The internal assessment is not automatically public: use public-safe aggregate
+evidence in tracked documentation; keep sensitive trace details in ignored
+local evidence. Publication and creation of follow-up issues are separate actions.
+
+### Gate
+
+Claims independently reviewed against raw evidence and sample limitations;
+both documents complete; follow-up recommendations and unresolved limitations
+recorded. Report #53 ready for closure only after this phase and all required
+validation are complete.
+
+### Completion record — 2026-10-07
+
+Both findings documents incorporate Campaign 020 / Completion 027 and the
+locked retrospective review of all 142 answers. Original records and the two
+deterministic failures remain unchanged. Fourteen appended rubric-scope
+amendments yield 128 semantic passes and 14 semantic failures; final all-slot
+quality is 65/72 baseline versus 63/72 assisted. The 61 pairs passing in both
+arms form a descriptive, outcome-selected resource subset. Neither quality nor
+task-weighted token uncertainty establishes a reliable assistance advantage.
+
+Three separate reviewer contexts checked grading, raw-evidence claims and
+documentation. Their final receipts are `legacy-corrections-review-1-final.json`,
+`final-amended-claim-review-2.json` and `documentation-final-review-3.json` under
+`.artifacts/agent-efficiency/analysis/luna-semantic-review-20261007-r1/`.
+The [semantic review](agent-efficiency-luna-semantic-review-2026-10-07.md)
+records imperfect blinding, amendment chronology, accounting and uncertainty.
+Product recommendations and unresolved runtime/fixture limits remain explicit;
+implementation, publication and further experiments require their own scope.
+
+The full repository gate exited `0`: 1,394 tests passed, three skipped,
+86% coverage and no blocking Semgrep findings. Its log and exit record under
+`.artifacts/validation/repo-gates/issue053-closeout-20261007-r1/` are explicitly
+retained as closeout evidence. Final report corrections after that gate received
+focused integrity, table, link and noncode checks. Both phases are complete;
+issue #53 is ready for closure. This record does not close the GitHub issue or
+authorize publication or additional provider calls.
+
+## Follow-up experiment — CLI assistance
+
+Not part of the initial 60-run matrix. Propose a separate three-variant experiment:
+ordinary tools, ordinary tools plus MCP, and ordinary tools plus Codira CLI.
+Use the same model, tasks, revisions, budgets, fresh sessions, and randomized
+order. If conditions changed, rerun all three variants together rather than
+comparing incompatible historical results.
+
+Evaluate practical improvement in success, tokens, and operational cost
+separately from statistical significance. Favorable MCP results may motivate
+the experiment; mixed results may also justify it when traces implicate interface
+friction. Define the hypothesis, repetitions, budget, and decision criteria
+before launching. Separate approval required for that campaign.
+
+## Implementation model recommendation
+
+Use GPT-5.6 Terra at medium reasoning for bounded implementation phases, with
+GPT-6 Astra for independent contract/oracle, accounting, and final-evidence
+reviews or unresolved methodological defects. This is a practical recommendation,
+not a measured project-specific optimum. The benchmark model is a separate
+experimental choice and must remain fixed within a comparison.
+
+Official sources consulted during planning:
+
+- <https://developers.openai.com/api/docs/models>
+- <https://developers.openai.com/api/docs/models/gpt-5.6-terra>
+- <https://learn.chatgpt.com/docs/non-interactive-mode>
+
+## Initial plan persistence record — historical
+
+| Entry | State / evidence |
+| --- | --- |
+| Plan approval | Operator approved decisions and amendments in conversation, 2026-09-08. |
+| Persistence | This ledger records the approved scope; implementation phases remain pending. |
+| Implementation branch | `feat/issue-053-agent-efficiency-benchmark` |
+| Campaign branch | Deferred until validated Phase 5 implementation SHA exists. |
+| Pilot permission | Pending bounded execution manifest and resource approval. |
+| Full campaign permission | Pending pilot estimate and resource approval. |
+| Independent reviews | Pending phase-specific evidence. |
+| Publication / merge / issue closure | Not performed by plan persistence. |
+
+## 2026-10-01 product/harness implementation
+
+C1–C5 and H1–H3 are implemented with offline regression coverage and a separate
+representative panel. The historical paid comparisons remain unchanged; no new
+efficacy result is claimed. See
+[implementation record](agent-product-harness-improvements-2026-10-01.md) and the
+updated campaign-factory checklist for deployment and calibration requirements.

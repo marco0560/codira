@@ -1,0 +1,150 @@
+{
+  "panel_id": "representative-v1",
+  "scope": "complete text-answer exemplars plus task-specific substantive claims; patch answers are qualified separately as actual diffs",
+  "cases": {
+    "panel-n1": {
+      "incomplete": "UNSET is a sentinel.",
+      "wrong": "UNSET and Sentinel.UNSET are separate enum members.",
+      "distinction": "alias identity",
+      "correct": "UNSET is the alias assignment to Sentinel.UNSET at src/click/_utils.py:23. Sentinel is the enum declaration at lines 7–20; its UNSET declaration at line 15 holds object(), and FLAG_NEEDS_VALUE at line 16 is a different member. UNSET and Sentinel.UNSET refer to the same enum member, not separate instances."
+    },
+    "panel-n2": {
+      "incomplete": "Lower.render lowercases text.",
+      "wrong": "Upper.render lowercases text, while Lower.render uppercases it.",
+      "distinction": "method owner",
+      "correct": "Choose service.py:45–68, Lower.render: it returns text.lower(). Upper.render at lines 25–43 returns text.upper() and is the distractor. Adapter.render at lines 71–93 delegates self.plugin.render(text) through the Plugin interface; service.render constructs the selected built-in and wraps it in Adapter. Run python -c \"from service import Adapter,Lower,Upper; assert Adapter(Lower()).render(\"MiXeD\")==\"mixed\"; assert Adapter(Upper()).render(\"MiXeD\")==\"MIXED\"\"."
+    },
+    "panel-n3": {
+      "incomplete": "The public format is re-exported from wrapper.convert.",
+      "wrong": "The public format re-export points to unrelated.format.",
+      "distinction": "re-export target",
+      "correct": "The runtime chain is index.ts:1 (convert re-exported as format) → wrapper.ts:2–5 (convert) → impl.ts:2–5 (transform). consumer.ts:1–2 imports runtime format and display calls it. type-consumer.ts:1–2 imports Options with import type and initializes defaults; it does not invoke format. unrelated.ts declares an independent format and is not the re-export target. Inspect those complete files; no external consumers are inferred from this small fixture."
+    },
+    "panel-d1": {
+      "incomplete": "Pickling fails during enum reconstruction.",
+      "wrong": "Copying and deep copying fail for the same reason as pickling.",
+      "distinction": "copy versus pickle behavior",
+      "correct": "The object-valued members in src/click/_utils.py:7–20 use default enum reduction by value. Pickle serializes the object value and reconstructs a fresh object, which does not equal the original enum value; enum reconstruction raises ValueError. Copy and deepcopy already return the original enum member. Reproduction: import copy,pickle; from click import Option; from click._utils import UNSET; o=Option([\"--name\"]); assert copy.copy(o).default is UNSET; assert copy.deepcopy(o).default is UNSET; pickle.loads(pickle.dumps(o)). The final expression raises ValueError before a fix. Name-based enum reduction addresses reconstruction without changing the working copy behavior."
+    },
+    "panel-d2": {
+      "incomplete": "nocase selects the i flag when flags are absent.",
+      "wrong": "An explicitly empty flags string suppresses the nocase fallback.",
+      "distinction": "empty flags fallback",
+      "correct": "lib/picomatch.js:244–263 compiles state and delegates regex construction; line 323 constructs RegExp with opts.flags || (opts.nocase ? \"i\" : \"\"). Absent or empty flags fall back to i when nocase is true. Nonempty flags override the fallback. Run node -e 'const p=require(\"./\"); for(const flags of [undefined,\"\",\"m\"]){const opts={nocase:true,...(flags===undefined?{}:{flags})}; console.log(p(\"foo.js\",opts)(\"FOO.JS\"),p(\"foo.js\",opts)(\"foo.js\"),p(\"foo.js\",opts)(\"bar.js\"));}'. Expected rows: true true false; true true false; false true false. Empty flags are the exception to an interpretation that explicit flags always override nocase."
+    },
+    "panel-d3": {
+      "incomplete": "The false option is overwritten.",
+      "wrong": "impl.transform overwrites enabled=false; wrapper.convert preserves false.",
+      "distinction": "faulty boundary",
+      "correct": "wrapper.ts:2–5 converts options.enabled with || true; explicit false is falsy and becomes true. The re-export index.ts:1 forwards that wrapper. impl.ts:2–5 itself returns the input when enabled === false. Run node --experimental-strip-types -e 'import {format} from \"./index.ts\"; import {transform} from \"./impl.ts\"; console.log(format(\"MiXeD\",{enabled:false}),transform(\"MiXeD\",{enabled:false}));'. Expected: MIXED MiXeD. The defect is at the wrapper boundary; nullish defaulting would preserve false."
+    },
+    "panel-t1": {
+      "incomplete": "Ignored matches call onIgnore.",
+      "wrong": "An ignored matching path fires onMatch before onIgnore.",
+      "distinction": "callback ordering",
+      "correct": "lib/picomatch.js:59–89 builds the ignore matcher with ignore and onMatch/onResult disabled for that nested matcher. The outer matcher calls onResult before deciding a miss or checking isIgnored. Run node -e 'const p=require(\"./\");let e=[];const m=p(\"*.js\",{ignore:\"skip.js\",onResult:()=>e.push(\"result\"),onIgnore:()=>e.push(\"ignore\"),onMatch:()=>e.push(\"match\")});for(const s of [\"ok.js\",\"skip.js\",\"no.txt\"]){e=[];console.log(m(s),e);}'. Expected: true [result,match]; false [result,ignore]; false [result]. Ignored matches never call the outer onMatch."
+    },
+    "panel-t2": {
+      "incomplete": "The CLI forwards search_profile to ContextRequest.",
+      "wrong": "Unknown search profiles silently select the default profile.",
+      "distinction": "invalid profile handling",
+      "correct": "The ctx argument is defined in src/codira/cli_parser.py, forwarded by cli_queries._run_context_command to ContextRequest.search_profile on the normal path and MCPAdapter.context_for_task on the JSON page path. query/context_orchestration.py and context_channels.py forward it to semantic search; registry.active_similarity_search_profile at lines 1936–1963 selects name or default from effective embeddings.similarity_profiles, while the configured similarity-index plugin selects the backend. Configuration merges built-in defaults, system, user, repo, then supported CODIRA_* environment overrides (config.py:802–833); an explicit CLI search profile chooses the query profile. A missing name raises ValueError with “Similarity search profile … is unavailable”; it does not silently default. Reproduce validation with python -c \"from pathlib import Path; from codira.registry import active_similarity_search_profile; active_similarity_search_profile(root=Path.cwd(), name=\"not-a-configured-profile\")\" in the prepared fixture environment."
+    },
+    "panel-t3": {
+      "incomplete": "config.Resolve chooses a mode.",
+      "wrong": "SERVICE_MODE overrides an explicit mode argument.",
+      "distinction": "configuration precedence",
+      "correct": "main.go parses mode=lower into the argument map and SERVICE_MODE into the environment map, calls config.Resolve (config/config.go:10–20), then store.Format (store/store.go:10–24). Resolve applies upper/10 defaults, environment, then arguments; explicit mode wins. Run SERVICE_MODE=upper go run . mode=lower; expected mixed. Run SERVICE_MODE=lower go run . mode=upper; expected MIXED. Formatting sees the resolved Config, not the raw environment."
+    },
+    "panel-i1": {
+      "incomplete": "MCPAdapter._query has direct callers.",
+      "wrong": "capabilities and index_status dispatch through MCPAdapter._query.",
+      "distinction": "bypass paths",
+      "correct": "Static direct callers of MCPAdapter._query in src/codira/mcp/adapter.py are symbol, symbols, references, documentation_findings, context_for_task, impact_analysis, repository_map, arch, emb, docs and _call_edges. callers/callees call _call_edges; they are indirect callers. MCPAdapter._query forwards to an injected executor when present; mcp/proxy.py:47–81 _ConnectionExecutor.execute passes its already supplied BackendQueryConnection to the operation. capabilities, index_status and the new symbol_evidence bypass _query (adapter.py:153–196,252 onward); symbol_evidence delegates to expand_symbol. Cover tests/test_mcp_contract.py, tests/test_mcp_server.py and query-daemon contract/service tests. This is static repository evidence: unknown external plugins, runtime monkeypatching and unobserved injected implementations are outside the completeness claim."
+    },
+    "panel-i2": {
+      "incomplete": "BackendQueryConnection.execute affects query execution.",
+      "wrong": "Changing BackendQueryConnection.execute cannot affect warm query adapters.",
+      "distinction": "warm adapter impact",
+      "correct": "BackendQueryConnection.execute is the structural SQL/cursor protocol in src/codira/contracts.py. SQLiteIndexBackend.open_connection (packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py:337) supplies sqlite3.Connection. DuckDBConnection.execute and _DuckDBCursorCompatibilityAdapter.execute in the DuckDB package preserve compatible result/cursor semantics. Query symbol resolution, task anchors, context expansion and other SQL query callers consume these connections. WarmQuerySession/QueryRuntime in src/codira/query_daemon.py retain connections across calls; mcp/proxy.py _ConnectionExecutor.execute forwards a connection to an operation, so its execute signature is an operation executor, not the SQL protocol method. Include backend package contract tests, tests/test_mcp_contract.py and tests/test_query_daemon_contract.py/test_query_daemon_services.py. Static declarations and typed callers identify first-party impact; structural third-party implementations and dynamic dispatch cannot be proven complete by an identifier search."
+    },
+    "panel-i3": {
+      "incomplete": "consumer.display calls runtime format.",
+      "wrong": "type-consumer.defaults invokes runtime format, while consumer.display only imports Options.",
+      "distinction": "runtime versus type consumers",
+      "correct": "consumer.ts:1–2 imports runtime format and display invokes it. type-consumer.ts:1–2 imports only the erased Options type and exports a defaults object; it is not a runtime caller. index.ts:1–2 re-exports convert and Options; wrapper.ts:2–5 propagates options to transform but currently converts enabled:false to true. impl.ts controls the default upper-case conversion. unrelated.ts is an independent negative control. Existing tests.ts checks format and display. Changing the exported default affects default runtime calls; explicitly supplied options and type-only consumers must be assessed separately."
+    },
+    "panel-p1": {
+      "incomplete": "Make Sentinel pickle by name.",
+      "wrong": "Patch only Sentinel.UNSET so pickle works; leave the other enum members and Option defaults untested.",
+      "distinction": "full member and Option behavior",
+      "correct": "diff --git a/src/click/_utils.py b/src/click/_utils.py\nindex 05ee2e9..d43984b 100644\n--- a/src/click/_utils.py\n+++ b/src/click/_utils.py\n@@ -12,6 +12,7 @@ class Sentinel(enum.Enum):\n         `PEP 661 - Sentinel Values <https://peps.python.org/pep-0661/>`_.\n     \"\"\"\n \n+    __reduce_ex__ = enum.pickle_by_enum_name\n     UNSET = object()\n     FLAG_NEEDS_VALUE = object()\n \ndiff --git a/tests/test_utils/test_calibration_sentinel.py b/tests/test_utils/test_calibration_sentinel.py\nnew file mode 100644\nindex 0000000..2e6a1e5\n--- /dev/null\n+++ b/tests/test_utils/test_calibration_sentinel.py\n@@ -0,0 +1,18 @@\n+import copy, pickle\n+from click._utils import Sentinel\n+\n+def test_member_identity():\n+    for member in Sentinel:\n+        assert copy.copy(member) is member\n+        assert copy.deepcopy(member) is member\n+        assert pickle.loads(pickle.dumps(member)) is member\n+\n+from click import Option\n+\n+def test_option_identity():\n+    option = Option([\"--name\"])\n+    assert option.default is Sentinel.UNSET\n+    for duplicate in (copy.copy, copy.deepcopy, lambda value: pickle.loads(pickle.dumps(value))):\n+        copied = duplicate(option)\n+        assert copied.name == \"name\"\n+        assert copied.default is Sentinel.UNSET\n"
+    },
+    "panel-p2": {
+      "incomplete": "Restore the isIgnored check.",
+      "wrong": "After invoking onIgnore, return true and also invoke onMatch for an ignored path.",
+      "distinction": "ignored match result and callback",
+      "correct": "diff --git a/lib/picomatch.js b/lib/picomatch.js\nindex 0ce4ecd..d0ebd9f 100644\n--- a/lib/picomatch.js\n+++ b/lib/picomatch.js\n@@ -75,7 +75,7 @@ const picomatch = (glob, options, returnState = false) => {\n       return returnObject ? result : false;\n     }\n \n-    if (false && isIgnored(input)) {\n+    if (isIgnored(input)) {\n       if (typeof opts.onIgnore === 'function') {\n         opts.onIgnore(result);\n       }\ndiff --git a/test/calibration-ignore.js b/test/calibration-ignore.js\nnew file mode 100644\nindex 0000000..07f88c8\n--- /dev/null\n+++ b/test/calibration-ignore.js\n@@ -0,0 +1 @@\n+const assert=require('node:assert/strict'); let events=[]; const match=require('../')('*.js',{ignore:'skip.js',onResult:()=>events.push('result'),onIgnore:()=>events.push('ignore'),onMatch:()=>events.push('match')}); assert.equal(match('skip.js'),false); assert.deepEqual(events,['result','ignore']); events=[]; assert.equal(match('ok.js'),true); assert.deepEqual(events,['result','match']); events=[]; assert.equal(match('no.txt'),false); assert.deepEqual(events,['result']);\n"
+    },
+    "panel-p3": {
+      "incomplete": "Make zero a valid limit.",
+      "wrong": "Treat every nonpositive limit as unlimited, including negative values.",
+      "distinction": "negative limit remains invalid",
+      "correct": "diff --git a/store/calibration_test.go b/store/calibration_test.go\nnew file mode 100644\nindex 0000000..63798c4\n--- /dev/null\n+++ b/store/calibration_test.go\n@@ -0,0 +1,3 @@\n+package store\n+import(\"testing\"; \"example.org/codira-benchmark-service/config\")\n+func TestZeroLimit(t *testing.T){ for _,s:=range []string{\"\",\"mixed\"}{r,e:=Format(s,config.Config{Limit:0,Mode:\"lower\"});if e!=nil||r!=s{t.Fatal(r,e)}}; if _,e:=Format(\"a\",config.Config{Limit:-1});e==nil{t.Fatal(\"negative accepted\")}; r,e:=Format(\"ABCDE\",config.Config{Limit:2,Mode:\"lower\"});if e!=nil||r!=\"ab\"{t.Fatal(r,e)} }\ndiff --git a/store/store.go b/store/store.go\nindex 3f405bb..321a766 100644\n--- a/store/store.go\n+++ b/store/store.go\n@@ -8,7 +8,7 @@ import (\n \n func Format(text string, cfg config.Config) (string, error) {\n \t// Seeded defect: zero should mean unlimited, including an empty value.\n-\tif cfg.Limit <= 0 {\n+\tif cfg.Limit < 0 {\n \t\treturn \"\", errors.New(\"limit must be positive\")\n \t}\n \tif cfg.Mode == \"lower\" {\n@@ -16,7 +16,7 @@ func Format(text string, cfg config.Config) (string, error) {\n \t} else {\n \t\ttext = strings.ToUpper(text)\n \t}\n-\tif len(text) > cfg.Limit {\n+\tif cfg.Limit > 0 && len(text) > cfg.Limit {\n \t\ttext = text[:cfg.Limit]\n \t}\n \treturn text, nil\n"
+    },
+    "panel-f1": {
+      "incomplete": "Add --max-results to context.",
+      "wrong": "Set --max-results default to 100 and truncate the rendered answer at that many characters.",
+      "distinction": "item limit and default",
+      "correct": "diff --git a/src/codira/cli_parser.py b/src/codira/cli_parser.py\nindex 47104d1..9c15e80 100644\n--- a/src/codira/cli_parser.py\n+++ b/src/codira/cli_parser.py\n@@ -824,6 +824,12 @@ def build_parser() -> argparse.ArgumentParser:\n         \"--prefix\",\n         help=\"Restrict retrieval to files under this repo-root-relative path prefix\",\n     )\n+    context_parser.add_argument(\n+        \"--max-results\",\n+        type=_item_limit,\n+        default=10,\n+        help=\"Complete items per page, 1..100 (default 10)\",\n+    )\n     context_parser.add_argument(\n         \"--cursor\", help=\"Continue a JSON page for the same query and index\"\n     )\ndiff --git a/src/codira/cli_queries.py b/src/codira/cli_queries.py\nindex 8a85cff..8f6d32d 100644\n--- a/src/codira/cli_queries.py\n+++ b/src/codira/cli_queries.py\n@@ -2242,7 +2242,7 @@ def _run_context_command(\n     int\n         Zero after printing the rendered context output.\n     \"\"\"\n-    limit = 10\n+    limit = getattr(args, \"max_results\", 10)\n     cursor = getattr(args, \"cursor\", None)\n     if cursor is not None and (not args.json or prefix is not None):\n         detail = \"context cursors require JSON output without a prefix\"\ndiff --git a/tests/test_calibration_limit.py b/tests/test_calibration_limit.py\nnew file mode 100644\nindex 0000000..5678f89\n--- /dev/null\n+++ b/tests/test_calibration_limit.py\n@@ -0,0 +1,11 @@\n+import pytest\n+from codira.cli_parser import build_parser\n+\n+def test_limit():\n+    parser=build_parser()\n+    assert parser.parse_args([\"ctx\",\"x\"]).max_results == 10\n+    for value in (1,10,100):\n+        assert parser.parse_args([\"ctx\",\"x\",\"--max-results\",str(value)]).max_results == value\n+    for value in (\"0\",\"101\",\"wrong\"):\n+        with pytest.raises(SystemExit):\n+            parser.parse_args([\"ctx\",\"x\",\"--max-results\",value])\n"
+    },
+    "panel-f2": {
+      "incomplete": "Add Adapter.capabilities().",
+      "wrong": "Require every legacy render-only plugin to implement capabilities(), otherwise raise AttributeError.",
+      "distinction": "legacy plugin fallback",
+      "correct": "diff --git a/service.py b/service.py\nindex 8c7faed..402f88d 100644\n--- a/service.py\n+++ b/service.py\n@@ -25,6 +25,10 @@ class Plugin(Protocol):\n class Upper:\n     \"\"\"Convert supplied text to upper case.\"\"\"\n \n+    def capabilities(self) -> dict[str, bool]:\n+        return {\"case_conversion\": True}\n+\n+\n     def render(self, text: str) -> str:\n         \"\"\"Return text in upper case.\n \n@@ -44,6 +48,10 @@ class Upper:\n class Lower:\n     \"\"\"Convert supplied text to lower case.\"\"\"\n \n+    def capabilities(self) -> dict[str, bool]:\n+        return {\"case_conversion\": True}\n+\n+\n     def render(self, text: str) -> str:\n         \"\"\"Return text in lower case.\n \n@@ -67,6 +75,10 @@ class Adapter:\n         \"\"\"Bind a plugin supplied by the operator.\"\"\"\n         self.plugin = plugin\n \n+    def capabilities(self) -> dict[str, bool]:\n+        discover = getattr(self.plugin, \"capabilities\", None)\n+        return {\"case_conversion\": bool(discover().get(\"case_conversion\", False))} if callable(discover) else {\"case_conversion\": False}\n+\n     def render(self, text: str) -> str:\n         \"\"\"Delegate text to the selected plugin.\n \ndiff --git a/tests/test_calibration_capabilities.py b/tests/test_calibration_capabilities.py\nnew file mode 100644\nindex 0000000..6bada18\n--- /dev/null\n+++ b/tests/test_calibration_capabilities.py\n@@ -0,0 +1,15 @@\n+from service import Adapter, Lower, Upper\n+\n+class Legacy:\n+    def render(self, text):\n+        return text\n+\n+class Extension(Legacy):\n+    def capabilities(self):\n+        return {\"case_conversion\": True}\n+\n+def test_capabilities():\n+    for plugin in (Lower(),Upper(),Extension()):\n+        assert Adapter(plugin).capabilities() == {\"case_conversion\": True}\n+    assert Adapter(Legacy()).capabilities() == {\"case_conversion\": False}\n+    assert Adapter(Legacy()).render(\"Mixed\") == \"Mixed\"\n"
+    },
+    "panel-f3": {
+      "incomplete": "Add a suffix to transform.",
+      "wrong": "Append the suffix before conversion and require it in every existing call.",
+      "distinction": "suffix ordering and compatibility",
+      "correct": "diff --git a/impl.ts b/impl.ts\nindex 8d4214c..9504c00 100644\n--- a/impl.ts\n+++ b/impl.ts\n@@ -1,5 +1,5 @@\n export type Options = { enabled?: boolean; mode?: \"upper\" | \"lower\" };\n-export function transform(text: string, options: Options = {}): string {\n-    if (options.enabled === false) return text;\n-    return options.mode === \"lower\" ? text.toLowerCase() : text.toUpperCase();\n+export function transform(text: string, options: Options = {}, suffix: string = \"\"): string {\n+    if (options.enabled === false) return text + suffix;\n+    return (options.mode === \"lower\" ? text.toLowerCase() : text.toUpperCase()) + suffix;\n }\ndiff --git a/tests.ts b/tests.ts\nindex 2d37737..cde89aa 100644\n--- a/tests.ts\n+++ b/tests.ts\n@@ -5,3 +5,8 @@ assert.equal(format(\"MiXeD\"), \"MIXED\");\n assert.equal(format(\"MiXeD\", { mode: \"lower\" }), \"mixed\");\n assert.equal(display(\"text\"), \"TEXT\");\n console.log(\"existing behavior passed\");\n+\n+import {transform} from \"./impl.ts\";\n+assert.equal(format(\"abc\", {}, \"end\"), \"ABCend\");\n+assert.equal(format(\"MiXeD\", {mode:\"lower\"}, \"END\"), \"mixedEND\");\n+assert.equal(transform(\"MiXeD\", {enabled:false}, \"end\"), \"MiXeDend\");\ndiff --git a/wrapper.ts b/wrapper.ts\nindex 4ea0606..a30015b 100644\n--- a/wrapper.ts\n+++ b/wrapper.ts\n@@ -1,5 +1,5 @@\n import { transform, type Options } from \"./impl.ts\";\n-export function convert(text: string, options: Options = {}): string {\n+export function convert(text: string, options: Options = {}, suffix: string = \"\"): string {\n     // Seeded defect: explicit false is lost at this wrapper boundary.\n-    return transform(text, { ...options, enabled: options.enabled || true });\n+    return transform(text, { ...options, enabled: options.enabled || true }, suffix);\n }\n"
+    },
+    "panel-u1": {
+      "incomplete": "picomatch returns a matcher for a pattern.",
+      "wrong": "Explicit empty flags disable nocase and make the example case-sensitive.",
+      "distinction": "flags precedence",
+      "correct": "Require the public matcher factory: const p=require(\"./\"); const m=p(\"*.js\",{ignore:\"skip.js\"}); console.log(m(\"ok.js\"),m(\"no.txt\"),m(\"skip.js\")); expected true false false. For callback order use onResult/onIgnore/onMatch handlers; ok.js gives result then match, skip.js gives result then ignore, no.txt gives result only. For flags: p(\"foo.js\",{nocase:true})(\"FOO.JS\") is true, p(\"foo.js\",{nocase:true,flags:\"\"})(\"FOO.JS\") is true, p(\"foo.js\",{nocase:true,flags:\"m\"})(\"FOO.JS\") is false. These expressions run with node -e in the repository root. Evidence: lib/picomatch.js:59–89 and regex flags at line 323; nonempty flags override fallback, empty flags do not."
+    },
+    "panel-u2": {
+      "incomplete": "service.render supports upper and lower modes.",
+      "wrong": "An unsupported mode returns the original text without an error.",
+      "distinction": "unsupported mode result",
+      "correct": "From the prepared repository root run python -c 'from service import render,Adapter,Lower; print(render(\"MiXeD\")); print(render(\"MiXeD\",mode=\"lower\")); print(Adapter(Lower()).render(\"MiXeD\")); render(\"MiXeD\",mode=\"unknown\")'. Outputs before the final exception: MIXED, mixed, mixed. The last call raises ValueError(\"unsupported mode\"). The exported signature is service.render(text: str, mode: str = \"upper\") -> str; Adapter accepts a Plugin and delegates render, not a mode string. Source: service.py, especially render and Adapter.render. Both modes and the error are public API behavior."
+    },
+    "panel-u3": {
+      "incomplete": "SERVICE_MODE sets the mode.",
+      "wrong": "Environment settings override explicit command arguments, and zero is already accepted.",
+      "distinction": "precedence and known zero defect",
+      "correct": "Run go run .; expected MIXED (upper, limit 10 defaults). Run SERVICE_MODE=lower go run .; expected mixed. Run SERVICE_MODE=lower go run . mode=upper; expected MIXED because arguments override environment. Run SERVICE_LIMIT=2 go run .; expected MI. Run go run . limit=0; the seeded store.Format returns an error, main prints “limit must be positive” and exits nonzero. This is the current defect, not desired zero-means-unlimited behavior. Evidence: main.go argument/environment maps; config/config.go Resolve; store/store.go nonpositive-limit branch. Commands are offline with the installed Go toolchain."
+    },
+    "panel-e1": {
+      "incomplete": "teleport_repository was not found.",
+      "wrong": "The index proves teleport_repository cannot exist in any external Codira plugin.",
+      "distinction": "scope of negative evidence",
+      "correct": "No teleport_repository declaration was found in the inspected committed src/ and packages/ trees or the usable repository index. Search exact symbol/name variants and inspect index_status coverage before interpreting no matches; a safe source check is rg -n \"teleport_repository\" src packages. That negative result establishes absence in the inspected revision and indexed coverage, not impossibility in every external plugin or dynamically generated object. Do not invent a function or unsupported usage example. The plugin registry is an extensibility boundary, so a global absence claim would exceed this evidence."
+    },
+    "panel-e2": {
+      "incomplete": "operator-notes.txt is missing from the index.",
+      "wrong": "The index omission proves operator-notes.txt is absent from the repository.",
+      "distinction": "index coverage versus source existence",
+      "correct": "operator-notes.txt exists in the repository even with the text analyzer disabled. Read it directly with cat operator-notes.txt after checking index_status coverage/analyzer capabilities; it describes environment/argument precedence. The missing retrieval result is an index coverage limitation. config/config.go:10–20 independently shows defaults then environment then arguments, and main.go maps SERVICE_* and explicit arguments. A source fallback is justified by the observed coverage gap; it does not imply the file is absent or that an empty search result verifies all repository content."
+    },
+    "panel-e3": {
+      "incomplete": "Reindex after changing transform.",
+      "wrong": "A cursor from before reindex remains valid for the updated generation.",
+      "distinction": "generation-bound cursor",
+      "correct": "Use codira index on the TypeScript fixture, request context through ctx --json --max-results 1 and retain the returned next_cursor for that same query and size. Edit impl.ts transform, then first request symbol evidence for the earlier identity: expansion must reject a modified source file until reindex. Run codira index again; continuing the old context cursor must now fail because its generation is old. Start a new page query and expand its returned identity: the whole definition and source digest must reflect the edit. Relevant controls are generation/query/profile/page-size binding in MCPAdapter and source-digest checking in query/evidence.py; new discovery may rank differently, so do not fabricate an offset or reuse the old identity. The offline runtime admission already executes a stale-cursor rejection and whole-source probe; this is the same required procedure on the TypeScript fixture. Actual offline TypeScript replay on the admitted image observed stale-source rejection before reindex, old-cursor rejection after reindex, and fresh: in the newly expanded transform body; the source digest changed from bb3ead3154ba9d83d0417b1c154488218882104771d328ce80f7c594efc3fdae to 42ee726ac2cd91e017110d4d603e38f0d9941d8a0f4cf9f319db52c02cf75141."
+    }
+  }
+}

@@ -2,10 +2,22 @@
 
 The adapter owns a repository root selected when the server starts. MCP tool
 requests never accept repository paths and delegate directly to core APIs.
+
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Definitions are consumed by the local MCP or qualification workflow.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -19,8 +31,13 @@ from codira.architecture import (
 from codira.capabilities import build_capability_contract
 from codira.config import load_effective_config
 from codira.index_generation import IndexGenerationStore
-from codira.indexer import audit_repo_coverage, persisted_analysis_coverage_issues
+from codira.indexer import (
+    CoverageIssue,
+    audit_repo_coverage,
+    persisted_analysis_coverage_issues,
+)
 from codira.mcp.contract import (
+    CURSOR_GUIDANCE,
     DEFAULT_OUTPUT_BUDGET,
     MAX_OUTPUT_BUDGET,
     MCP_CONTRACT_VERSION,
@@ -28,15 +45,19 @@ from codira.mcp.contract import (
 )
 from codira.prefix import normalize_prefix
 from codira.query.context import ContextRequest, context_for
+from codira.query.evidence import expand_symbol, symbol_identity
 from codira.query.exact import (
     EdgeQueryRequest,
     docstring_issues,
     find_call_edges,
     find_callable_refs,
     find_symbol,
+    logical_symbol_name,
     symbol_inventory,
 )
-from codira.registry import active_index_backend
+from codira.query.symbol_resolution import alias_evidence
+from codira.registry import active_index_backend, active_similarity_search_profile
+from codira.runtime_identity import runtime_identity
 from codira.semantic.search import (
     DocumentationCandidatesRequest,
     EmbeddingCandidatesRequest,
@@ -57,7 +78,6 @@ if TYPE_CHECKING:
         SimilarityResolvedCandidate,
     )
     from codira.index_generation import IndexGeneration
-    from codira.indexer import CoverageIssue
     from codira.types import (
         DocstringIssueRow,
         ScoredDocumentation,
@@ -141,23 +161,48 @@ class MCPAdapter:
             raise ValueError(msg)
         object.__setattr__(self, "root", root)
 
-    def capabilities(self) -> dict[str, object]:
+    def capabilities(self, *, detail: bool = False) -> dict[str, object]:
         """Return MCP and Codira capability documents from direct core APIs.
 
         Parameters
         ----------
-        None
+        detail : bool, optional
+            Include the complete analyzer and response-schema inventories.
 
         Returns
         -------
         dict[str, object]
             Contract envelope containing MCP and Codira capability documents.
         """
+        contract = build_contract_document(root=self.root)
+        core = build_capability_contract(root=self.root)
+        if not detail:
+            contract["tools"] = [
+                {key: value for key, value in tool.items() if key != "response_schema"}
+                for tool in cast("list[dict[str, object]]", contract["tools"])
+            ]
+            core = {key: core[key] for key in ("schema_version", "validation", "mcp")}
         return self._envelope(
-            {
-                "mcp": build_contract_document(),
-                "codira": build_capability_contract(root=self.root),
-            }
+            {"mcp": contract, "codira": core, "runtime": runtime_identity()}
+        )
+
+    def symbol_evidence(self, identity: str, *, limit: int = 10) -> dict[str, object]:
+        """Expand one indexed identity into verified whole source evidence.
+
+        Parameters
+        ----------
+        identity : str
+            Generation-bound symbol identity returned by discovery.
+        limit : int, optional
+            Maximum complete static relationship items.
+
+        Returns
+        -------
+        dict[str, object]
+            Source definition, range, digest and bounded relationship evidence.
+        """
+        return self._envelope(
+            expand_symbol(self.root, identity, limit=limit), output_budget=None
         )
 
     def symbol(
@@ -165,7 +210,7 @@ class MCPAdapter:
         name: str,
         *,
         cursor: str | None = None,
-        limit: int = 100,
+        limit: int = 10,
         output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Look up exact symbol names through Codira's query layer.
@@ -179,7 +224,7 @@ class MCPAdapter:
         limit : int, optional
             Maximum number of deterministic matches to return.
         output_budget : int, optional
-            Maximum serialized character count reported for the result.
+            Deprecated compatibility argument; whole items are never clipped.
 
         Returns
         -------
@@ -195,19 +240,33 @@ class MCPAdapter:
             self._query(lambda conn: find_symbol(self.root, name, conn=conn)),
             cursor,
             limit,
+            binding=f"symbol:{name}",
         )
         return self._envelope(
-            {"symbols": [self._symbol_payload(row) for row in rows]},
+            {
+                "symbols": [self._symbol_payload(row) for row in rows],
+                **(
+                    {"alias_edges": edges}
+                    if (
+                        edges := self._query(
+                            lambda conn: alias_evidence(self.root, name, conn)
+                        )
+                    )
+                    else {}
+                ),
+                **({"ambiguous": True} if int(str(page["total"])) > 1 else {}),
+            },
             page=page,
             output_budget=output_budget,
         )
 
-    def index_status(self) -> dict[str, object]:
+    def index_status(self, *, detail: bool = False) -> dict[str, object]:
         """Return persisted index metadata and current coverage diagnostics.
 
         Parameters
         ----------
-        None
+        detail : bool, optional
+            Include full metadata and individual coverage diagnostics.
 
         Returns
         -------
@@ -217,6 +276,20 @@ class MCPAdapter:
         metadata = _read_metadata_file(get_metadata_path(self.root))
         generation = IndexGenerationStore(self.root).read()
         issues = audit_repo_coverage(self.root)
+        indexed_file_count = metadata.get("indexed_file_count")
+        empty_index = indexed_file_count == "0"
+        if empty_index:
+            issues.append(
+                CoverageIssue(
+                    path=".",
+                    directory=".",
+                    suffix="",
+                    reason=(
+                        "index contains zero files; verify that repository files "
+                        "are tracked or staged"
+                    ),
+                )
+            )
         if metadata:
             issues.extend(
                 persisted_analysis_coverage_issues(
@@ -226,7 +299,8 @@ class MCPAdapter:
         return self._envelope(
             {
                 "indexed": bool(metadata),
-                "metadata": metadata,
+                "usable": bool(metadata) and not empty_index,
+                "metadata": metadata if detail else self._compact_metadata(metadata),
                 "generation": (
                     None
                     if generation is None
@@ -239,8 +313,12 @@ class MCPAdapter:
                 ),
                 "coverage": {
                     "status": "complete" if not issues else "incomplete",
-                    "issues": [self._coverage_payload(issue) for issue in issues],
+                    "issue_count": len(issues),
+                    "issues": [self._coverage_payload(issue) for issue in issues]
+                    if detail
+                    else [],
                 },
+                "runtime": runtime_identity(),
             }
         )
 
@@ -248,7 +326,7 @@ class MCPAdapter:
         self,
         *,
         cursor: str | None = None,
-        limit: int = 100,
+        limit: int = 10,
         output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """List bounded deterministic symbol inventory rows.
@@ -260,7 +338,7 @@ class MCPAdapter:
         limit : int, optional
             Maximum number of inventory entries to return.
         output_budget : int, optional
-            Maximum serialized character count reported for the result.
+            Deprecated compatibility argument; whole items are never clipped.
 
         Returns
         -------
@@ -277,6 +355,7 @@ class MCPAdapter:
             ),
             cursor,
             limit,
+            binding="symbols",
         )
         return self._envelope(
             {"symbols": [self._inventory_payload(row) for row in rows]},
@@ -290,7 +369,7 @@ class MCPAdapter:
         *,
         direction: str = "outgoing",
         cursor: str | None = None,
-        limit: int = 100,
+        limit: int = 10,
         output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Return callable references in one requested direction.
@@ -307,7 +386,7 @@ class MCPAdapter:
         limit : int, optional
             Maximum number of deterministic reference rows to return.
         output_budget : int, optional
-            Maximum serialized character count reported for the result.
+            Deprecated compatibility argument; whole items are never clipped.
 
         Returns
         -------
@@ -333,6 +412,7 @@ class MCPAdapter:
             ),
             cursor,
             limit,
+            binding=f"references:{name}:{direction}",
         )
         return self._envelope(
             {
@@ -354,7 +434,7 @@ class MCPAdapter:
         name: str,
         *,
         cursor: str | None = None,
-        limit: int = 100,
+        limit: int = 10,
         output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Return static callers for one exact logical callable name.
@@ -368,7 +448,7 @@ class MCPAdapter:
         limit : int, optional
             Maximum number of deterministic call-edge rows to return.
         output_budget : int, optional
-            Maximum serialized character count reported for the result.
+            Deprecated compatibility argument; whole items are never clipped.
 
         Returns
         -------
@@ -384,7 +464,7 @@ class MCPAdapter:
         name: str,
         *,
         cursor: str | None = None,
-        limit: int = 100,
+        limit: int = 10,
         output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Return static callees for one exact logical caller name.
@@ -398,7 +478,7 @@ class MCPAdapter:
         limit : int, optional
             Maximum number of deterministic call-edge rows to return.
         output_budget : int, optional
-            Maximum serialized character count reported for the result.
+            Deprecated compatibility argument; whole items are never clipped.
 
         Returns
         -------
@@ -417,7 +497,7 @@ class MCPAdapter:
         self,
         *,
         cursor: str | None = None,
-        limit: int = 100,
+        limit: int = 10,
         output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Return bounded documentation-audit findings from the active route.
@@ -429,7 +509,7 @@ class MCPAdapter:
         limit : int, optional
             Maximum number of deterministic findings to return.
         output_budget : int, optional
-            Maximum serialized character count reported for the result.
+            Deprecated compatibility argument; whole items are never clipped.
 
         Returns
         -------
@@ -440,6 +520,7 @@ class MCPAdapter:
             self._query(lambda conn: docstring_issues(self.root, conn=conn)),
             cursor,
             limit,
+            binding="documentation_findings",
         )
         return self._envelope(
             {"findings": [self._finding_payload(row) for row in rows]},
@@ -448,7 +529,13 @@ class MCPAdapter:
         )
 
     def context_for_task(
-        self, query: str, *, output_budget: int = DEFAULT_OUTPUT_BUDGET
+        self,
+        query: str,
+        *,
+        cursor: str | None = None,
+        limit: int = 10,
+        search_profile: str | None = None,
+        explain: bool = False,
     ) -> dict[str, object]:
         """Build deterministic repository context for one natural-language task.
 
@@ -456,21 +543,48 @@ class MCPAdapter:
         ----------
         query : str
             Task description used by Codira's context retrieval pipeline.
-        output_budget : int, optional
-            Maximum serialized character count reported for the result.
+        cursor : str | None, optional
+            Continuation cursor emitted for this exact query and index generation.
+        limit : int, optional
+            Maximum number of complete match and evidence items to return.
+        search_profile : str | None, optional
+            Configured similarity-search profile; ``None`` selects ``default``.
+
+        explain : bool, optional
+            Include detailed retrieval diagnostics when true.
 
         Returns
         -------
         dict[str, object]
             Contract envelope containing the structured direct-core context.
+
+        Raises
+        ------
+        ValueError
+            If the result limit, profile name, or continuation cursor is invalid.
+        TypeError
+            If the core context response contains malformed paging data.
         """
-        context = json.loads(
-            self._query(
-                lambda conn: context_for(
+        self._validate_limit(limit)
+        active_similarity_search_profile(root=self.root, name=search_profile)
+        offset = self._context_cursor_offset(
+            cursor, query=query, limit=limit, search_profile=search_profile
+        )
+
+        def _retrieve(
+            conn: BackendQueryConnection | None,
+        ) -> dict[str, object]:
+            context = json.loads(
+                context_for(
                     ContextRequest(
                         root=self.root,
                         query=query,
                         as_json=True,
+                        explain=explain,
+                        search_profile=search_profile,
+                        result_offset=offset,
+                        result_limit=limit,
+                        complete_context_items=True,
                         conn=conn,
                         max_source_file_bytes=(
                             load_effective_config(
@@ -480,15 +594,87 @@ class MCPAdapter:
                     )
                 )
             )
+            matches = cast("list[dict[str, object]]", context.get("top_matches", []))
+            evidence = cast("list[list[str]]", context.get("context", []))
+            items: list[dict[str, object]] = []
+            for index, match in enumerate(matches):
+                item = dict(match)
+                if item.get("type") == "method":
+                    line_number = item.get("lineno")
+                    if not isinstance(line_number, int):
+                        message = "Core context match returned an invalid line number"
+                        raise TypeError(message)
+                    row: SymbolRow = (
+                        str(item["type"]),
+                        str(item["module"]),
+                        str(item["name"]),
+                        str(item["file"]),
+                        line_number,
+                    )
+                    qualified_name = logical_symbol_name(self.root, row, conn=conn)
+                    item["qualified_name"] = qualified_name
+                    item["owner"] = qualified_name.rpartition(".")[0]
+                item["evidence"] = evidence[index] if index < len(evidence) else []
+                if item.get("type") != "documentation":
+                    item["identity"] = symbol_identity(
+                        self.root,
+                        (
+                            str(item["type"]),
+                            str(item["module"]),
+                            str(item["name"]),
+                            str(item["file"]),
+                            int(str(item["lineno"])),
+                        ),
+                    )
+                item["evidence_kind"] = "discovery_snippet"
+                item["file"] = self._trusted_relative_path(str(item["file"]))
+                items.append(item)
+            page_info = cast("dict[str, object]", context.get("page", {}))
+            return {
+                "status": context.get("status"),
+                "items": items,
+                "_total": page_info.get("total", 0),
+                **({"explain": context.get("explain")} if explain else {}),
+            }
+
+        result = self._query(_retrieve)
+        total_value = result.pop("_total", 0)
+        if not isinstance(total_value, int):
+            message = "Core context page returned an invalid total count"
+            raise TypeError(message)
+        total = total_value
+        next_offset = offset + len(cast("list[object]", result["items"]))
+        has_more = next_offset < total
+        next_cursor = (
+            self._encode_context_cursor(
+                query=query,
+                limit=limit,
+                search_profile=search_profile,
+                offset=next_offset,
+            )
+            if has_more
+            else None
         )
-        return self._envelope({"context": context}, output_budget=output_budget)
+        page: dict[str, object] = {
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+        }
+        return self._envelope(
+            result,
+            page=page,
+            truncation={"truncated": False, "reasons": []},
+            output_budget=None,
+        )
 
     def impact_analysis(
         self,
         name: str,
         *,
         cursor: str | None = None,
-        limit: int = 100,
+        limit: int = 10,
         output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Inspect structural callers and references that can affect a symbol.
@@ -502,7 +688,7 @@ class MCPAdapter:
         limit : int, optional
             Maximum number of deterministic rows per impact category.
         output_budget : int, optional
-            Maximum serialized character count reported for the result.
+            Deprecated compatibility argument; whole items are never clipped.
 
         Returns
         -------
@@ -510,58 +696,44 @@ class MCPAdapter:
             Contract envelope containing matching symbols and incoming graph
             relations that depend on them.
         """
-        symbols, page = self._page_rows(
-            self._query(lambda conn: find_symbol(self.root, name, conn=conn)),
-            cursor,
-            limit,
+        symbols = self._query(lambda conn: find_symbol(self.root, name, conn=conn))
+        calls = self._query(
+            lambda conn: find_call_edges(
+                EdgeQueryRequest(root=self.root, name=name, incoming=True, conn=conn)
+            )
         )
-        call_rows, _ = self._page_rows(
-            self._query(
-                lambda conn: find_call_edges(
-                    EdgeQueryRequest(
-                        root=self.root,
-                        name=name,
-                        incoming=True,
-                        conn=conn,
-                    )
-                )
-            ),
-            cursor,
-            limit,
+        references = self._query(
+            lambda conn: find_callable_refs(
+                EdgeQueryRequest(root=self.root, name=name, incoming=True, conn=conn)
+            )
         )
-        reference_rows, _ = self._page_rows(
-            self._query(
-                lambda conn: find_callable_refs(
-                    EdgeQueryRequest(
-                        root=self.root,
-                        name=name,
-                        incoming=True,
-                        conn=conn,
-                    )
-                )
-            ),
-            cursor,
-            limit,
+        items = [dict(self._symbol_payload(row), category="symbol") for row in symbols]
+        items.extend(
+            dict(
+                self._relation_payload(
+                    row, source_prefix="caller", target_prefix="callee"
+                ),
+                category="call",
+            )
+            for row in calls
         )
+        items.extend(
+            dict(
+                self._relation_payload(
+                    row, source_prefix="owner", target_prefix="target"
+                ),
+                category="reference",
+            )
+            for row in references
+        )
+        selected, page = self._page_rows(items, cursor, limit, binding=f"impact:{name}")
         return self._envelope(
             {
-                "symbols": [self._symbol_payload(row) for row in symbols],
-                "incoming_calls": [
-                    self._relation_payload(
-                        row,
-                        source_prefix="caller",
-                        target_prefix="callee",
-                    )
-                    for row in call_rows
-                ],
-                "incoming_references": [
-                    self._relation_payload(
-                        row,
-                        source_prefix="owner",
-                        target_prefix="target",
-                    )
-                    for row in reference_rows
-                ],
+                "items": selected,
+                "coverage": {
+                    "dynamic_complete": False,
+                    "relation_provenance": "static_analyzer",
+                },
             },
             page=page,
             output_budget=output_budget,
@@ -571,7 +743,7 @@ class MCPAdapter:
         self,
         *,
         cursor: str | None = None,
-        limit: int = 100,
+        limit: int = 10,
         output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Return a compact, provenance-rich map of indexed repository modules.
@@ -610,7 +782,9 @@ class MCPAdapter:
             rows = rows[:_REPOSITORY_MAP_INVENTORY_LIMIT]
 
         modules = self._repository_map_modules(rows)
-        selected_modules, page = self._page_rows(modules, cursor, limit)
+        selected_modules, page = self._page_rows(
+            modules, cursor, limit, binding="repository_map"
+        )
         selected, budget_truncated = self._budgeted_modules(
             selected_modules, output_budget
         )
@@ -620,7 +794,6 @@ class MCPAdapter:
             reason
             for truncated, reason in (
                 (source_truncated, "source_inventory_limit"),
-                (page["next_cursor"] is not None, "page_limit"),
                 (budget_truncated, "output_budget"),
             )
             if truncated
@@ -631,7 +804,6 @@ class MCPAdapter:
             truncation={
                 "truncated": bool(reasons),
                 "reasons": reasons,
-                "output_budget": output_budget,
                 "estimated_output_size": len(json.dumps(result, sort_keys=True)),
             },
         )
@@ -640,7 +812,7 @@ class MCPAdapter:
         self,
         *,
         cursor: str | None = None,
-        limit: int = 100,
+        limit: int = 10,
         output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Return a bounded, read-only architecture model from the index.
@@ -674,7 +846,9 @@ class MCPAdapter:
         model = self._query(
             lambda conn: build_architecture_model_from_index(self.root, conn=conn)
         )
-        modules, page = self._page_rows(list(model.modules), cursor, limit)
+        modules, page = self._page_rows(
+            list(model.modules), cursor, limit, binding="arch"
+        )
         result, budget_truncated = self._budgeted_architecture_model(
             model,
             tuple(modules),
@@ -682,10 +856,7 @@ class MCPAdapter:
         )
         reasons = [
             reason
-            for truncated, reason in (
-                (page["next_cursor"] is not None, "page_limit"),
-                (budget_truncated, "output_budget"),
-            )
+            for truncated, reason in ((budget_truncated, "output_budget"),)
             if truncated
         ]
         return self._envelope(
@@ -694,7 +865,6 @@ class MCPAdapter:
             truncation={
                 "truncated": bool(reasons),
                 "reasons": reasons,
-                "output_budget": output_budget,
                 "estimated_output_size": len(json.dumps(result, sort_keys=True)),
             },
         )
@@ -704,9 +874,9 @@ class MCPAdapter:
         query: str,
         *,
         prefix: str | None = None,
-        limit: int = 100,
+        cursor: str | None = None,
+        limit: int = 10,
         search_profile: str | None = None,
-        output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Search stored symbol embeddings without vector-store maintenance.
 
@@ -716,12 +886,12 @@ class MCPAdapter:
             Natural-language text to score against indexed symbols.
         prefix : str | None, optional
             Repository-relative path prefix restricting candidate files.
+        cursor : str or None, optional
+            Query, profile, candidate and generation-bound continuation.
         limit : int, optional
             Maximum number of ranked embedding matches to return.
         search_profile : str | None, optional
             Named similarity-index profile, or the configured default.
-        output_budget : int, optional
-            Maximum serialized character count reported for the result payload.
 
         Returns
         -------
@@ -731,7 +901,7 @@ class MCPAdapter:
         Raises
         ------
         ValueError
-            If ``limit`` or ``output_budget`` is outside contract bounds, or
+            If ``limit`` is outside contract bounds, or
             ``prefix`` escapes the trusted repository root.
 
         Notes
@@ -746,7 +916,7 @@ class MCPAdapter:
                 EmbeddingCandidatesRequest(
                     root=self.root,
                     query=query,
-                    limit=limit,
+                    limit=100,
                     min_score=0.0,
                     prefix=normalized_prefix,
                     search_profile=search_profile,
@@ -758,19 +928,27 @@ class MCPAdapter:
         resolved = getattr(matches, "resolved", ())
         if similarity is None:
             resolved = tuple(None for _ in matches)
+        rows, page = self._page_rows(
+            [
+                self._embedding_payload(match, candidate)
+                for match, candidate in zip(matches, resolved, strict=True)
+            ],
+            cursor,
+            limit,
+            binding=f"emb:{query}:{prefix}:{search_profile}",
+        )
         return self._envelope(
             {
-                "matches": [
-                    self._embedding_payload(match, resolved_candidate)
-                    for match, resolved_candidate in zip(matches, resolved, strict=True)
-                ],
+                "matches": rows,
+                "candidate_scope": "up to 100 ranked candidates",
                 "similarity": (
                     None
                     if similarity is None
                     else similarity_query_provenance_payload(similarity)
                 ),
             },
-            output_budget=output_budget,
+            page=page,
+            output_budget=None,
         )
 
     def docs(
@@ -778,9 +956,9 @@ class MCPAdapter:
         query: str,
         *,
         prefix: str | None = None,
-        limit: int = 100,
+        cursor: str | None = None,
+        limit: int = 10,
         search_profile: str | None = None,
-        output_budget: int = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Search stored documentation embeddings without mutating the index.
 
@@ -790,12 +968,12 @@ class MCPAdapter:
             Natural-language text to score against indexed documentation.
         prefix : str | None, optional
             Repository-relative path prefix restricting candidate documents.
+        cursor : str or None, optional
+            Query, profile, candidate and generation-bound continuation.
         limit : int, optional
             Maximum number of ranked documentation matches to return.
         search_profile : str | None, optional
             Named similarity-index profile, or the configured default.
-        output_budget : int, optional
-            Maximum serialized character count reported for the result payload.
 
         Returns
         -------
@@ -805,7 +983,7 @@ class MCPAdapter:
         Raises
         ------
         ValueError
-            If ``limit`` or ``output_budget`` is outside contract bounds, or
+            If ``limit`` is outside contract bounds, or
             ``prefix`` escapes the trusted repository root.
         """
         self._validate_limit(limit)
@@ -815,7 +993,7 @@ class MCPAdapter:
                 DocumentationCandidatesRequest(
                     root=self.root,
                     query=query,
-                    limit=limit,
+                    limit=100,
                     min_score=0.0,
                     prefix=normalized_prefix,
                     search_profile=search_profile,
@@ -827,19 +1005,27 @@ class MCPAdapter:
         resolved = getattr(matches, "resolved", ())
         if similarity is None:
             resolved = tuple(None for _ in matches)
+        rows, page = self._page_rows(
+            [
+                self._documentation_payload(match, candidate)
+                for match, candidate in zip(matches, resolved, strict=True)
+            ],
+            cursor,
+            limit,
+            binding=f"docs:{query}:{prefix}:{search_profile}",
+        )
         return self._envelope(
             {
-                "matches": [
-                    self._documentation_payload(match, resolved_candidate)
-                    for match, resolved_candidate in zip(matches, resolved, strict=True)
-                ],
+                "matches": rows,
+                "candidate_scope": "up to 100 ranked candidates",
                 "similarity": (
                     None
                     if similarity is None
                     else similarity_query_provenance_payload(similarity)
                 ),
             },
-            output_budget=output_budget,
+            page=page,
+            output_budget=None,
         )
 
     @staticmethod
@@ -910,15 +1096,7 @@ class MCPAdapter:
         tuple[dict[str, object], bool]
             Self-contained payload and whether any selected module was omitted.
         """
-        included: list[ArchitectureModule] = []
-        for module in modules:
-            candidate = cls._architecture_result(model, tuple([*included, module]))
-            if len(json.dumps(candidate, sort_keys=True)) > output_budget:
-                break
-            included.append(module)
-        return cls._architecture_result(model, tuple(included)), len(included) < len(
-            modules
-        )
+        return cls._architecture_result(model, modules), False
 
     def _call_edges(
         self,
@@ -958,6 +1136,7 @@ class MCPAdapter:
             ),
             cursor,
             limit,
+            binding=f"calls:{name}:{incoming}",
         )
         return self._envelope(
             {
@@ -990,7 +1169,21 @@ class MCPAdapter:
         -------
         object
             Result produced by the operation.
+
+        Raises
+        ------
+        ValueError
+            If the persisted index is absent or contains zero files.
         """
+        metadata = _read_metadata_file(get_metadata_path(self.root))
+        indexed_file_count = metadata.get("indexed_file_count")
+        if (
+            not isinstance(indexed_file_count, str)
+            or not indexed_file_count.isdecimal()
+            or int(indexed_file_count) < 1
+        ):
+            msg = "Codira index is unavailable or contains zero files"
+            raise ValueError(msg)
         if self.query_executor is None:
             return operation(None)
         return self.query_executor.execute(operation)
@@ -1001,7 +1194,7 @@ class MCPAdapter:
         *,
         page: dict[str, object] | None = None,
         truncation: dict[str, object] | None = None,
-        output_budget: int = DEFAULT_OUTPUT_BUDGET,
+        output_budget: int | None = DEFAULT_OUTPUT_BUDGET,
     ) -> dict[str, object]:
         """Wrap a direct core result in the common MCP response envelope.
 
@@ -1019,16 +1212,9 @@ class MCPAdapter:
         dict[str, object]
             Versioned response envelope with provenance and freshness metadata.
         """
-        self._validate_output_budget(output_budget)
-        estimated_output_size = len(json.dumps(result, sort_keys=True))
-        resolved_truncation = {
-            "truncated": estimated_output_size > output_budget,
-            "reasons": (
-                ["output_budget"] if estimated_output_size > output_budget else []
-            ),
-            "output_budget": output_budget,
-            "estimated_output_size": estimated_output_size,
-        }
+        if output_budget is not None:
+            self._validate_output_budget(output_budget)
+        resolved_truncation: dict[str, object] = {"truncated": False, "reasons": []}
         if truncation is not None:
             resolved_truncation.update(truncation)
         generation = self._ready_generation_record()
@@ -1050,7 +1236,9 @@ class MCPAdapter:
             "contract_version": MCP_CONTRACT_VERSION,
             "result": result,
             "provenance": provenance,
-            "freshness": _read_metadata_file(get_metadata_path(self.root)),
+            "freshness": self._compact_metadata(
+                _read_metadata_file(get_metadata_path(self.root))
+            ),
             "page": {} if page is None else page,
             "truncation": resolved_truncation,
         }
@@ -1086,7 +1274,12 @@ class MCPAdapter:
         return None if record is None or record.state != "ready" else record
 
     def _page_rows(
-        self, rows: list[_Row], cursor: str | None, limit: int
+        self,
+        rows: list[_Row],
+        cursor: str | None,
+        limit: int,
+        *,
+        binding: str = "inventory",
     ) -> tuple[list[_Row], dict[str, object]]:
         """Select one deterministic page without accepting repository paths.
 
@@ -1110,13 +1303,29 @@ class MCPAdapter:
             If the cursor or limit is invalid.
         """
         self._validate_limit(limit)
-        offset = self._cursor_offset(cursor)
+        query = (
+            binding
+            + ":"
+            + hashlib.sha256(
+                json.dumps(rows, sort_keys=True, default=str).encode()
+            ).hexdigest()
+        )
+        offset = self._context_cursor_offset(
+            cursor, query=query, limit=limit, search_profile=None
+        )
         selected = rows[offset : offset + limit]
         next_offset = offset + len(selected)
         return selected, {
+            "offset": offset,
             "limit": limit,
+            "total": len(rows),
+            "has_more": next_offset < len(rows),
             "next_cursor": (
-                f"offset:{next_offset}" if next_offset < len(rows) else None
+                self._encode_context_cursor(
+                    query=query, limit=limit, search_profile=None, offset=next_offset
+                )
+                if next_offset < len(rows)
+                else None
             ),
         }
 
@@ -1139,13 +1348,134 @@ class MCPAdapter:
         ValueError
             If the cursor is malformed.
         """
-        if cursor is None:
+        if cursor is None or cursor == "":
             return 0
         prefix, separator, value = cursor.partition(":")
         if prefix != "offset" or separator != ":" or not value.isdecimal():
             msg = "cursor must be an MCP continuation cursor"
             raise ValueError(msg)
         return int(value)
+
+    def _context_cursor_offset(
+        self,
+        cursor: str | None,
+        *,
+        query: str,
+        limit: int,
+        search_profile: str | None,
+    ) -> int:
+        """Validate and decode a cursor bound to one context search.
+
+        Parameters
+        ----------
+        cursor : str | None
+            Continuation cursor emitted by a prior context response.
+        query : str
+            Exact natural-language query for this page sequence.
+        limit : int
+            Page size for this sequence.
+        search_profile : str | None
+            Selected similarity-search profile.
+
+        Returns
+        -------
+        int
+            Offset of the next context item.
+
+        Raises
+        ------
+        ValueError
+            If the cursor is malformed or belongs to another search state.
+        """
+        if cursor is None or cursor == "":
+            return 0
+        prefix, separator, encoded = cursor.partition(":")
+        if prefix != "ctx" or not separator:
+            message = f"cursor must be a context continuation cursor. {CURSOR_GUIDANCE}"
+            raise ValueError(message)
+        try:
+            payload = json.loads(base64.urlsafe_b64decode(encoded + "=="))
+        except (ValueError, json.JSONDecodeError) as error:
+            message = f"context cursor is malformed. {CURSOR_GUIDANCE}"
+            raise ValueError(message) from error
+        expected = {
+            "root": hashlib.sha256(str(self.root).encode()).hexdigest(),
+            "query": hashlib.sha256(query.encode("utf-8")).hexdigest(),
+            "profile": search_profile or "default",
+            "serving_source": runtime_identity()["source_sha256"],
+            "configuration": hashlib.sha256(
+                json.dumps(
+                    asdict(load_effective_config(root=self.root)),
+                    sort_keys=True,
+                    default=str,
+                ).encode()
+            ).hexdigest(),
+            "limit": limit,
+            "generation": self._generation(),
+        }
+        if not isinstance(payload, dict) or any(
+            payload.get(key) != value for key, value in expected.items()
+        ):
+            message = (
+                f"context cursor does not match this query or index. {CURSOR_GUIDANCE}"
+            )
+            raise ValueError(message)
+        offset = payload.get("offset")
+        if not isinstance(offset, int) or offset < 0:
+            message = "context cursor offset is invalid"
+            raise ValueError(message)
+        return offset
+
+    def _encode_context_cursor(
+        self,
+        *,
+        query: str,
+        limit: int,
+        search_profile: str | None,
+        offset: int,
+    ) -> str:
+        """Encode a stable continuation cursor for one context page sequence.
+
+        Parameters
+        ----------
+        query : str
+            Exact natural-language query for this sequence.
+        limit : int
+            Page size for this sequence.
+        search_profile : str | None
+            Selected similarity-search profile.
+        offset : int
+            Next item offset.
+
+        Returns
+        -------
+        str
+            URL-safe opaque context cursor.
+        """
+        payload = {
+            "root": hashlib.sha256(str(self.root).encode()).hexdigest(),
+            "query": hashlib.sha256(query.encode("utf-8")).hexdigest(),
+            "profile": search_profile or "default",
+            "serving_source": runtime_identity()["source_sha256"],
+            "configuration": hashlib.sha256(
+                json.dumps(
+                    asdict(load_effective_config(root=self.root)),
+                    sort_keys=True,
+                    default=str,
+                ).encode()
+            ).hexdigest(),
+            "limit": limit,
+            "generation": self._generation(),
+            "offset": offset,
+        }
+        encoded = (
+            base64.urlsafe_b64encode(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+            )
+            .decode()
+            .rstrip("=")
+        )
+        return f"ctx:{encoded}"
 
     def _embedding_payload(
         self,
@@ -1173,6 +1503,11 @@ class MCPAdapter:
             "file": self._trusted_relative_path(file_path),
             "line": lineno,
         }
+        if symbol_type == "method":
+            row: SymbolRow = (symbol_type, module, name, file_path, lineno)
+            qualified_name = logical_symbol_name(self.root, row)
+            payload["qualified_name"] = qualified_name
+            payload["owner"] = qualified_name.rpartition(".")[0]
         if resolved is not None:
             payload["similarity"] = similarity_candidate_provenance_payload(
                 resolved.candidate
@@ -1242,12 +1577,45 @@ class MCPAdapter:
             Named, JSON-compatible structural symbol fields.
         """
         kind, module, name, file, line = row
-        return {
+        payload = {
             "module": module,
             "name": name,
             "kind": kind,
             "file": self._trusted_relative_path(file),
             "line": line,
+            "identity": symbol_identity(self.root, row),
+            "canonical_name": f"{module}.{logical_symbol_name(self.root, row)}",
+        }
+        if kind == "method" or "." in name:
+            qualified_name = logical_symbol_name(self.root, row)
+            payload["qualified_name"] = qualified_name
+            payload["owner"] = qualified_name.rpartition(".")[0]
+        return payload
+
+    @staticmethod
+    def _compact_metadata(metadata: Mapping[str, object]) -> dict[str, object]:
+        """Select small freshness fields from persisted metadata.
+
+        Parameters
+        ----------
+        metadata : collections.abc.Mapping[str, object]
+            Complete persisted index metadata.
+
+        Returns
+        -------
+        dict[str, object]
+            Stable schema, backend, commit and indexed-file count.
+        """
+        return {
+            key: metadata[key]
+            for key in (
+                "schema_version",
+                "backend_name",
+                "backend_version",
+                "commit",
+                "indexed_file_count",
+            )
+            if key in metadata
         }
 
     @staticmethod
@@ -1339,13 +1707,7 @@ class MCPAdapter:
         tuple[list[dict[str, object]], bool]
             Selected module summaries and whether the budget omitted any.
         """
-        selected: list[dict[str, object]] = []
-        for module in modules:
-            candidate = {"modules": [*selected, module]}
-            if len(json.dumps(candidate, sort_keys=True)) > output_budget:
-                return selected, True
-            selected.append(module)
-        return selected, False
+        return modules, False
 
     @staticmethod
     def _graph_metric_payload(metric: BackendGraphMetric) -> dict[str, int]:
@@ -1376,7 +1738,7 @@ class MCPAdapter:
         dict[str, object]
             JSON-compatible symbol and graph-metric fields.
         """
-        return {
+        payload: dict[str, object] = {
             "type": item.symbol_type,
             "module": item.module,
             "name": item.name,
@@ -1387,6 +1749,18 @@ class MCPAdapter:
             "references_out": self._graph_metric_payload(item.refs_out),
             "references_in": self._graph_metric_payload(item.refs_in),
         }
+        if item.symbol_type == "method":
+            row: SymbolRow = (
+                item.symbol_type,
+                item.module,
+                item.name,
+                item.file,
+                item.lineno,
+            )
+            qualified_name = logical_symbol_name(self.root, row)
+            payload["qualified_name"] = qualified_name
+            payload["owner"] = qualified_name.rpartition(".")[0]
+        return payload
 
     @staticmethod
     def _relation_payload(

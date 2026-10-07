@@ -1,0 +1,16 @@
+{
+  "family": "patch",
+  "fixture_id": "go-service-synthetic",
+  "oracle_id": "panel-p3",
+  "prompt": "Repair the seeded zero-limit defect: zero means unlimited, including empty text, while negative limits remain errors and positive truncation remains unchanged. Add Go regression tests. Produce .benchmark/fix.patch and stop.",
+  "reference_anchors": [
+    "Limit",
+    "Format"
+  ],
+  "result_format": "workspace-diff",
+  "result_path": ".benchmark/fix.patch",
+  "schema_version": "1.0",
+  "split": "holdout",
+  "task_id": "panel-p3",
+  "visibility": "public"
+}

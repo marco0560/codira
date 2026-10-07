@@ -1,0 +1,45 @@
+{
+  "definition": {
+    "quality_rubric": {
+      "criteria": [
+        {
+          "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+          "dimension": "correctness",
+          "id": "substance",
+          "requirement": "main builds environment and argument maps; config.Resolve applies defaults then environment then arguments; store.Format formats MiXeD.",
+          "semantic": true
+        },
+        {
+          "dimension": "completeness",
+          "id": "requested-coverage",
+          "requirement": "Trace SERVICE_MODE and mode=lower from startup configuration to formatting. Give the package boundaries, call order and executable output. Write your answer to BENCHMARK_ANSWER.md and stop.",
+          "semantic": true
+        },
+        {
+          "dimension": "evidence",
+          "id": "grounding",
+          "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+          "semantic": true
+        },
+        {
+          "dimension": "usability",
+          "id": "usability",
+          "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+          "semantic": true
+        },
+        {
+          "dimension": "causality",
+          "id": "causal-chain",
+          "requirement": "Explain or implement the causal relationship, including requested negative controls.",
+          "semantic": true
+        }
+      ],
+      "task_id": "panel-t3",
+      "version": 1
+    }
+  },
+  "oracle_id": "panel-t3",
+  "schema_version": "1.0",
+  "task_id": "panel-t3",
+  "visibility": "public"
+}

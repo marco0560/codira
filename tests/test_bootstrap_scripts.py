@@ -2125,6 +2125,12 @@ def test_repo_tool_runner_adds_tool_specific_cache_arguments(tmp_path: Path) -> 
         state_root=state_root,
         python="python",
     ) == ("python", "-m", "pre_commit", "run", "--all-files")
+    assert helper.build_tool_argv(
+        "codira",
+        ("audit",),
+        state_root=state_root,
+        python="python",
+    ) == ("python", "-m", "codira", "audit")
 
 
 def test_repo_tool_runner_resolves_semgrep_next_to_python(tmp_path: Path) -> None:
@@ -2264,6 +2270,13 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
         (
             "python",
             str(helper.RUN_REPO_TOOL),
+            "pytest",
+            "-q",
+            "tests/test_quality_policy.py",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
             "coverage",
             "run",
             "-m",
@@ -2286,6 +2299,13 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
             str(helper.RUN_REPO_TOOL),
             "python",
             "scripts/coverage_summary.py",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
+            "codira",
+            "audit",
+            "--json",
         ),
     )
 
@@ -2404,6 +2424,44 @@ def test_validation_helper_reports_ruff_failure(
     )
 
     assert helper.run_validation((command,)) == 2
+
+
+def test_validation_helper_fails_when_codira_audit_reports_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat a successful audit process with findings as a gate failure.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the audit subprocess with one JSON finding.
+
+    Returns
+    -------
+    None
+        The validator returns a non-zero status for audit findings.
+    """
+
+    helper = _load_validation_helper()
+    command = (
+        "python",
+        str(helper.RUN_REPO_TOOL),
+        "codira",
+        "audit",
+        "--json",
+    )
+    monkeypatch.setattr(
+        helper.subprocess,
+        "run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(
+            argv,
+            0,
+            '{"results": [{"issue": "missing docstring"}]}',
+            "",
+        ),
+    )
+
+    assert helper.run_validation((command,)) == 1
 
 
 def test_validation_helper_help_mentions_new_flags() -> None:
@@ -2532,6 +2590,8 @@ def test_validation_helper_complete_semgrep_creates_parent_and_reports_output(
     ) -> subprocess.CompletedProcess[str]:
         del cwd, check, capture_output, text
         seen_commands.append(argv)
+        if len(argv) >= 5 and argv[2:5] == ("codira", "audit", "--json"):
+            return subprocess.CompletedProcess(argv, 0, '{"results": []}', "")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(helper.subprocess, "run", fake_run)
@@ -2599,6 +2659,8 @@ def test_validation_helper_complete_semgrep_failure_reports_repo_relative_path(
         del cwd, check, capture_output, text
         if any("--output" in argument for argument in argv):
             return subprocess.CompletedProcess(argv, 1, "", "")
+        if len(argv) >= 5 and argv[2:5] == ("codira", "audit", "--json"):
+            return subprocess.CompletedProcess(argv, 0, '{"results": []}', "")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(helper.subprocess, "run", fake_run)

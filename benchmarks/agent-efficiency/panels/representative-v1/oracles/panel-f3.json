@@ -1,0 +1,52 @@
+{
+  "definition": {
+    "all_of": [
+      {
+        "patch_applies_and_tests_pass": {
+          "command": [
+            "python",
+            "panel_f3_probe.py"
+          ],
+          "patch_path": ".benchmark/fix.patch"
+        }
+      },
+      {
+        "quality_rubric": {
+          "criteria": [
+            {
+              "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+              "dimension": "correctness",
+              "id": "substance",
+              "requirement": "The suffix travels across re-export, wrapper and implementation; old two-argument and one-argument calls preserve outputs.",
+              "semantic": true
+            },
+            {
+              "dimension": "completeness",
+              "id": "requested-coverage",
+              "requirement": "Add an optional third suffix parameter to the public format API, wrapper and implementation. Append it after conversion; default empty suffix preserves existing calls and declarations. Add tests and produce .benchmark/fix.patch.",
+              "semantic": true
+            },
+            {
+              "dimension": "evidence",
+              "id": "grounding",
+              "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+              "semantic": true
+            },
+            {
+              "dimension": "usability",
+              "id": "usability",
+              "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+              "semantic": true
+            }
+          ],
+          "task_id": "panel-f3",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "oracle_id": "panel-f3",
+  "schema_version": "1.0",
+  "task_id": "panel-f3",
+  "visibility": "public"
+}

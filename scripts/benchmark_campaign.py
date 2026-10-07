@@ -5,7 +5,7 @@ Responsibilities
 ----------------
 - Read a benchmark manifest describing small, medium, and large repositories.
 - Build reproducible Hyperfine and profiler commands for each repository.
-- Store command plans and run metadata under ``.artifacts/benchmarks``.
+- Store command plans and run metadata under ``.artifacts/benchmarks/campaigns``.
 
 Design principles
 -----------------
@@ -173,7 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  python scripts/benchmark_campaign.py benchmarks.json --dry-run\n"
             "  python scripts/benchmark_campaign.py benchmarks.json --runs 10\n"
             "  python scripts/benchmark_campaign.py benchmarks.json "
-            "--artifact-root .artifacts/benchmarks"
+            "--artifact-root .artifacts/benchmarks/campaigns"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

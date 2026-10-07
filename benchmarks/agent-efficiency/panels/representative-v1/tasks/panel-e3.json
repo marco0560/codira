@@ -1,0 +1,17 @@
+{
+  "family": "evidence",
+  "fixture_id": "typescript-workspace-synthetic",
+  "oracle_id": "panel-e3",
+  "prompt": "Index the fixture, request paged context, then edit transform and reindex. Demonstrate that the old cursor is rejected and new discovery/evidence reflects the edit. Explain index generation and source freshness. Write your answer to BENCHMARK_ANSWER.md and stop.",
+  "reference_anchors": [
+    "cursor",
+    "generation",
+    "transform"
+  ],
+  "result_format": "text",
+  "result_path": "BENCHMARK_ANSWER.md",
+  "schema_version": "1.0",
+  "split": "holdout",
+  "task_id": "panel-e3",
+  "visibility": "public"
+}

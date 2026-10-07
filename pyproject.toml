@@ -9,6 +9,7 @@ requires-python = ">=3.13"
 dependencies = [
     "jsonschema>=4.0",
     "mcp>=1.23.3,<2",
+    "packaging>=24,<27",
     "platformdirs>=4.9.6",
     "pywin32>=311; sys_platform == 'win32'",
     "tomlkit>=0.15.0",
@@ -346,6 +347,9 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: exercises an explicitly configured local container runtime",
+]
 
 norecursedirs = [
     ".git",

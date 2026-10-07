@@ -1923,7 +1923,9 @@ def test_release_benchmark_helper_builds_hyperfine_plan() -> None:
     """
     helper = _load_release_benchmark_helper()
     repo_root = Path("/tmp/codira")
-    output = repo_root / ".artifacts" / "benchmarks" / "release-hyperfine.json"
+    output = (
+        repo_root / ".artifacts" / "benchmarks" / "release" / "release-hyperfine.json"
+    )
     config = helper.BenchmarkConfig(
         hyperfine="hyperfine",
         codira="/tmp/codira/.venv/bin/codira",
@@ -1949,7 +1951,7 @@ def test_release_benchmark_helper_builds_hyperfine_plan() -> None:
         "--runs",
         "7",
         "--export-json",
-        "/tmp/codira/.artifacts/benchmarks/release-hyperfine.json",
+        "/tmp/codira/.artifacts/benchmarks/release/release-hyperfine.json",
         "/tmp/codira/.venv/bin/codira index --full",
         "/tmp/codira/.venv/bin/codira ctx --json 'plugin registry'",
         "/tmp/codira/.venv/bin/codira audit --json",

@@ -19,6 +19,17 @@
     "validation"
   ],
   "properties": {
+    "runtime": {
+      "type": "object",
+      "required": ["version", "source_sha256", "packages", "analyzer_sources"],
+      "properties": {
+        "version": {"type": "string"},
+        "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "packages": {"type": "object", "additionalProperties": {"type": "string"}},
+        "analyzer_sources": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+      },
+      "additionalProperties": false
+    },
     "schema_version": { "type": "string" },
     "ontology": {
       "type": "object",
@@ -51,6 +62,7 @@
         "required": ["intent", "channels", "guarantee", "limitations"],
         "properties": {
           "intent": { "type": "string" },
+          "parameters": { "type": "object" },
           "aliases": {
             "type": "array",
             "items": { "type": "string" },
@@ -221,7 +233,8 @@
         "contract_version",
         "transport",
         "read_only",
-        "tools"
+        "tools",
+        "parameters"
       ],
       "properties": {
         "server_command": { "const": "codira-mcp" },
@@ -233,6 +246,10 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "uniqueItems": true
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": { "type": "object" }
         }
       },
       "additionalProperties": false

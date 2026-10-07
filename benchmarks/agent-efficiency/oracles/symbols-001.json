@@ -1,0 +1,1 @@
+{"schema_version":"1.0","oracle_id":"symbols-001","task_id":"symbols-001","definition":{"text_contains":["codira.mcp.adapter.MCPAdapter.context_for_task","src/codira/mcp/adapter.py"]},"visibility":"public"}

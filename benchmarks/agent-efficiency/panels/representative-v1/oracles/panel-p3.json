@@ -1,0 +1,58 @@
+{
+  "definition": {
+    "all_of": [
+      {
+        "patch_applies_and_tests_pass": {
+          "command": [
+            "python",
+            "panel_p3_probe.py"
+          ],
+          "patch_path": ".benchmark/fix.patch"
+        }
+      },
+      {
+        "quality_rubric": {
+          "criteria": [
+            {
+              "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+              "dimension": "correctness",
+              "id": "substance",
+              "requirement": "Format must reject only negative limits; zero bypasses truncation; positive truncation and case conversion remain unchanged.",
+              "semantic": true
+            },
+            {
+              "dimension": "completeness",
+              "id": "requested-coverage",
+              "requirement": "Repair the seeded zero-limit defect: zero means unlimited, including empty text, while negative limits remain errors and positive truncation remains unchanged. Add Go regression tests. Produce .benchmark/fix.patch and stop.",
+              "semantic": true
+            },
+            {
+              "dimension": "evidence",
+              "id": "grounding",
+              "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+              "semantic": true
+            },
+            {
+              "dimension": "usability",
+              "id": "usability",
+              "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+              "semantic": true
+            },
+            {
+              "dimension": "causality",
+              "id": "causal-chain",
+              "requirement": "Explain or implement the causal relationship, including requested negative controls.",
+              "semantic": true
+            }
+          ],
+          "task_id": "panel-p3",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "oracle_id": "panel-p3",
+  "schema_version": "1.0",
+  "task_id": "panel-p3",
+  "visibility": "public"
+}

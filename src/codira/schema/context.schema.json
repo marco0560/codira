@@ -2,10 +2,21 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "codira context output",
   "type": "object",
-  "required": ["schema_version", "status", "top_matches"],
+  "required": ["schema_version", "status", "page", "top_matches"],
   "properties": {
     "schema_version": { "type": "string", "enum": ["2.0"] },
     "status": { "type": "string", "enum": ["ok", "no_matches"] },
+    "page": {
+      "type": "object",
+      "required": ["offset", "limit", "total", "has_more"],
+      "properties": {
+        "offset": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1 },
+        "total": { "type": "integer", "minimum": 0 },
+        "has_more": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
     "top_matches": { "type": "array", "items": { "$ref": "#/definitions/symbol" } },
     "doc_issues": { "type": "array", "items": { "$ref": "#/definitions/doc_issue" } },
     "context": {
@@ -129,7 +140,8 @@
         "lineno": { "type": "integer" },
         "source_format": { "type": "string" },
         "provenance": { "type": "string" },
-        "confidence": { "type": "number" }
+        "ranking_score": { "type": "number" },
+        "score_kind": { "const": "heuristic_rank_not_probability" }
       },
       "additionalProperties": false
     },

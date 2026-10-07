@@ -1,0 +1,42 @@
+{
+  "fixture_id": "go-service-synthetic",
+  "license": "MIT",
+  "license_path": "LICENSE",
+  "license_sha256": "c5dfbaa5f716f470a4c096a88726a7e12a1959c8f89ffe86640457adeb9046f0",
+  "revision": "3cba3fbd69d688066e7fabe4af26b1e2dd3023ff",
+  "schema_version": "1.0",
+  "setup_files": [
+    {
+      "path": "LICENSE",
+      "sha256": "c5dfbaa5f716f470a4c096a88726a7e12a1959c8f89ffe86640457adeb9046f0"
+    },
+    {
+      "path": "config/config.go",
+      "sha256": "9d939c14beb2ec188c32a89b95f217a8bc0623ff3f0717ac7576c4b0d28b0a64"
+    },
+    {
+      "path": "go.mod",
+      "sha256": "c107273f91a44a1a28238bff9f90504192d35858bc3f08b1b3d8534d536c1c84"
+    },
+    {
+      "path": "main.go",
+      "sha256": "18b00db1ea5ed37991dc77a22138c6887d1260b4e1e6f2eb75673ed3366b4b4f"
+    },
+    {
+      "path": "operator-notes.txt",
+      "sha256": "64539ce32b94cb41ea8dea9ab76cd5eb2765d697207df79477dbb406518db1e2"
+    },
+    {
+      "path": "store/store.go",
+      "sha256": "ab5da7806c80fe8106de47a8f0737fc43c09e64065685ce2bc4d09e9253dfcb8"
+    },
+    {
+      "path": "store/store_test.go",
+      "sha256": "023ccd7e807a50b81bc47d59d62456fe59668db84c76157797f1d256d770d0c5"
+    }
+  ],
+  "source_url": "https://github.com/marco0560/codira",
+  "transport": "directory-snapshot",
+  "tree_sha": "3cba3fbd69d688066e7fabe4af26b1e2dd3023ff",
+  "visibility": "public"
+}

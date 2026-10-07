@@ -1,0 +1,52 @@
+{
+  "definition": {
+    "all_of": [
+      {
+        "patch_applies_and_tests_pass": {
+          "command": [
+            "python",
+            "panel_f2_probe.py"
+          ],
+          "patch_path": ".benchmark/fix.patch"
+        }
+      },
+      {
+        "quality_rubric": {
+          "criteria": [
+            {
+              "accepted_equivalents": "Any accurate wording supported by frozen source or protected behavior.",
+              "dimension": "correctness",
+              "id": "substance",
+              "requirement": "Adapter delegates optional capability discovery through the public plugin interface with a false fallback for legacy plugins.",
+              "semantic": true
+            },
+            {
+              "dimension": "completeness",
+              "id": "requested-coverage",
+              "requirement": "Add Adapter.capabilities() returning a case_conversion boolean. Built-in Upper/Lower advertise true through the plugin interface; legacy render-only plugins work and advertise false. Add tests and produce .benchmark/fix.patch.",
+              "semantic": true
+            },
+            {
+              "dimension": "evidence",
+              "id": "grounding",
+              "requirement": "Bind factual claims to actual source ranges or reproducible checks; distinguish static inference from verified behavior.",
+              "semantic": true
+            },
+            {
+              "dimension": "usability",
+              "id": "usability",
+              "requirement": "Give actionable, internally consistent output at the detail the task requests.",
+              "semantic": true
+            }
+          ],
+          "task_id": "panel-f2",
+          "version": 1
+        }
+      }
+    ]
+  },
+  "oracle_id": "panel-f2",
+  "schema_version": "1.0",
+  "task_id": "panel-f2",
+  "visibility": "public"
+}

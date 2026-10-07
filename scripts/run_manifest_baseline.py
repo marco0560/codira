@@ -121,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "manifest",
         nargs="?",
-        default="benchmarks/bk-cpp.local.json",
+        default="benchmarks/performance/bk-cpp.local.json",
         help="Benchmark manifest path.",
     )
     parser.add_argument("extra_args", nargs=argparse.REMAINDER)
@@ -243,7 +243,9 @@ def main(argv: list[str] | None = None) -> int:
 
     python = resolve_python()
     codira = resolve_codira()
-    artifact_root = Path(os.environ.get("ARTIFACT_ROOT", ".artifacts"))
+    artifact_root = Path(
+        os.environ.get("ARTIFACT_ROOT", ".artifacts/benchmarks/backend")
+    )
     stamp = os.environ.get("STAMP", datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"))
     runs = args.runs
     warmup = args.warmup

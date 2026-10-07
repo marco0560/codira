@@ -44,6 +44,7 @@ from codira.contracts import (
     LanguageAnalyzer,
 )
 from codira.models import AnalysisResult, ModuleArtifact
+from codira.version import package_version
 
 
 def _root_build_artifact_paths(repo_root: Path) -> set[Path]:
@@ -1814,11 +1815,23 @@ def test_core_can_discover_installed_first_party_packages_from_built_wheels(
     -------
     None
         The test asserts core plugin discovery works from installed wheel
-        artifacts without relying on the repository checkout as `cwd`.
+        artifacts without relying on the repository checkout as `cwd` or
+        changing its generated serving metadata.
     """
     repo_root = Path(__file__).resolve().parents[1]
     wheel_dir = tmp_path / "wheels"
     install_dir = tmp_path / "site-packages"
+    core_source = tmp_path / "core-source"
+    core_source.mkdir()
+    for name in ("pyproject.toml", "README.md", "LICENSE"):
+        shutil.copy2(repo_root / name, core_source / name)
+    shutil.copytree(
+        repo_root / "src" / "codira",
+        core_source / "src" / "codira",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    version_file = repo_root / "src" / "codira" / "_version.py"
+    version_before = version_file.read_bytes() if version_file.is_file() else None
     build_artifacts_before = _root_build_artifact_paths(repo_root)
 
     try:
@@ -1844,15 +1857,20 @@ def test_core_can_discover_installed_first_party_packages_from_built_wheels(
                 "--out-dir",
                 str(wheel_dir),
                 "--no-build-isolation",
-                str(repo_root),
+                str(core_source),
             ],
             cwd=repo_root,
             check=True,
             capture_output=True,
             text=True,
+            env={**os.environ, "SETUPTOOLS_SCM_PRETEND_VERSION": package_version()},
         )
     finally:
         _cleanup_root_build_artifacts(repo_root, before_paths=build_artifacts_before)
+
+    assert (
+        version_file.read_bytes() if version_file.is_file() else None
+    ) == version_before
 
     wheel_paths = sorted(str(path) for path in wheel_dir.glob("*.whl"))
     assert wheel_paths

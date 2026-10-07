@@ -1,0 +1,18 @@
+{
+  "family": "feature",
+  "fixture_id": "typescript-workspace-synthetic",
+  "oracle_id": "panel-f3",
+  "prompt": "Add an optional third suffix parameter to the public format API, wrapper and implementation. Append it after conversion; default empty suffix preserves existing calls and declarations. Add tests and produce .benchmark/fix.patch.",
+  "reference_anchors": [
+    "suffix",
+    "format",
+    "convert",
+    "transform"
+  ],
+  "result_format": "workspace-diff",
+  "result_path": ".benchmark/fix.patch",
+  "schema_version": "1.0",
+  "split": "holdout",
+  "task_id": "panel-f3",
+  "visibility": "public"
+}

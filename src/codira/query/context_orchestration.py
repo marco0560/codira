@@ -51,6 +51,7 @@ from codira.query.context_source import (
 )
 from codira.query.producers import selected_enrichment_producers
 from codira.query.signals import signal_sort_key
+from codira.query.task_anchors import source_signals
 from codira.registry import active_index_backend, with_active_plugin_instance_cache
 
 if TYPE_CHECKING:
@@ -136,6 +137,7 @@ def _initial_context_state(
             key=signal_sort_key,
         )
 
+    retrieval_signals.extend(source_signals(conn, request.query, normalized_prefix))
     ranked_merged, provenance = _rank_signals_with_provenance(
         retrieval_signals,
         intent=intent,
@@ -165,7 +167,7 @@ def _initial_context_state(
         signal_collection=signal_collection,
         retrieval_signals=retrieval_signals,
         provenance=provenance,
-        top_matches=top_matches[:10],
+        top_matches=top_matches,
         diversity=diversity,
     )
 
@@ -202,7 +204,6 @@ def _append_issue_driven_matches(
     ):
         if symbol not in state.top_matches:
             state.top_matches.append(symbol)
-    state.top_matches = state.top_matches[:10]
 
 
 def _filter_redundant_module_matches(
@@ -271,6 +272,10 @@ def _empty_context_result(
                 signal_merge=state.signal_merge,
                 diversity=state.diversity,
                 expansion=state.expansion,
+                result_offset=request.result_offset,
+                result_limit=request.result_limit,
+                result_total=0,
+                complete_context_items=request.complete_context_items,
             )
         )
     return "No relevant matches found."
@@ -455,11 +460,12 @@ def context_for(
             return _empty_context_result(request, state)
 
         _apply_graph_signal_rerank(state, conn, request.root)
-        confidence_map = _confidence_map_for_matches(
-            request.query,
-            state.top_matches,
-        )
-
+        confidence_map = {
+            symbol: float(
+                str((state.provenance or {}).get(symbol, {}).get("merge_score", 0.0))
+            )
+            for symbol in state.top_matches
+        }
         if state.plan.include_doc_issues:
             doc_issues, related_symbols = _collect_doc_issues_and_related(
                 request.root,
@@ -475,12 +481,24 @@ def context_for(
         for match in related_symbols:
             if match not in state.top_matches:
                 state.top_matches.append(match)
-        state.top_matches = state.top_matches[:10]
+
+        total_matches = len(state.top_matches)
+        if request.result_offset < 0 or request.result_limit < 1:
+            message = "Context result offset and limit must be positive."
+            raise ValueError(message)
+        page_matches = state.top_matches[
+            request.result_offset : request.result_offset + request.result_limit
+        ]
+        page_confidence_map = {
+            symbol: confidence_map[symbol]
+            for symbol in page_matches
+            if symbol in confidence_map
+        }
 
         expanded, unique_refs, state.expansion = _expand_and_collect_references(
             ExpansionCollectionRequest(
                 root=request.root,
-                top_matches=state.top_matches,
+                top_matches=page_matches,
                 conn=conn,
                 include_include_graph=state.plan.include_include_graph,
                 include_references=state.plan.include_references,
@@ -495,11 +513,11 @@ def context_for(
             ContextRenderRequest(
                 root=request.root,
                 query=request.query,
-                top_matches=state.top_matches,
+                top_matches=page_matches,
                 doc_issues=doc_issues,
                 expanded=expanded,
                 unique_refs=unique_refs,
-                confidence_map=confidence_map,
+                confidence_map=page_confidence_map,
                 as_json=request.as_json,
                 as_prompt=request.as_prompt,
                 explain=request.explain,
@@ -517,6 +535,10 @@ def context_for(
                 diversity=state.diversity if request.explain else None,
                 expansion=state.expansion if request.explain else None,
                 max_source_file_bytes=request.max_source_file_bytes,
+                result_offset=request.result_offset,
+                result_limit=request.result_limit,
+                result_total=total_matches,
+                complete_context_items=request.complete_context_items,
             )
         )
     finally:

@@ -1,0 +1,17 @@
+# Phase 0 isolation-probe image for issue #53.
+#
+# The digest is the linux/amd64 Python 3.13 slim image selected on 2026-09-08.
+# Replacing it requires a new reviewed image identity and conformance run.
+FROM docker.io/library/python@sha256:cc9dffa47c8294ba9bb795a8dfaeb7b76f2b30acade2c52a461a2999d127eb00
+
+LABEL org.opencontainers.image.source="https://github.com/marco0560/codira"
+LABEL org.opencontainers.image.description="Codira issue #53 Phase 0 isolation probe"
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes bash ca-certificates curl git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+# Deliberately omit Codex, credentials, Codira indexes, fixtures, and graders.
+# The Phase 0 runner supplies only a disposable fixture mount at runtime.
