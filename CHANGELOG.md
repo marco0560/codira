@@ -1,3 +1,9 @@
+## [2.1.0](https://github.com/marco0560/codira/compare/v2.0.2...v2.1.0) (2026-10-07)
+
+### Features
+
+* **dev:** deliver the agent efficiency benchmark suite ([26a74b6](https://github.com/marco0560/codira/commit/26a74b69cc119a19a3d9f41a4453fd814f3a0b3d)), closes [#53](https://github.com/marco0560/codira/issues/53) [#53](https://github.com/marco0560/codira/issues/53) [#53](https://github.com/marco0560/codira/issues/53)
+
 ## [2.0.2](https://github.com/marco0560/codira/compare/v2.0.1...v2.0.2) (2026-09-05)
 
 ### Bug Fixes
