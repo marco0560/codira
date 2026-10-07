@@ -348,6 +348,13 @@ Run a read-only consistency check of the installed local release tooling.
 
 ## `scripts/evaluate_agent_efficiency_retrieval.py`
 
+Agent-efficiency utilities share one disposable scratch root. Set
+`CODIRA_BENCHMARK_TEMP_ROOT` to override it; the directory is created when the
+utilities are imported. Otherwise they use the existing workstation scratch
+directory, or the platform temporary directory on other machines, including CI.
+Choose a short path for Unix-socket-based probes. Durable evidence destinations
+are configured separately and do not use this scratch root.
+
 Measure source-reference retrieval against the frozen Sentinel panel without
 model calls. Run from the repository root with the exact admitted Click fixture
 revision specified by `benchmarks/agent-efficiency/fixtures/click-public.json`:
@@ -359,7 +366,8 @@ uv run python scripts/evaluate_agent_efficiency_retrieval.py \
   --output '.artifacts/analysis/sentinel-retrieval-<fresh-identity>.json'
 ```
 
-The script exports and indexes a disposable fixture in a temporary workspace. Its durable receipt contains reference recall/precision, first-reference
+The script exports and indexes a disposable fixture under the designated scratch
+root. Its durable receipt contains reference recall/precision, first-reference
 rank, negative controls, payload bytes and provenance. The reference set is
 narrow: these metrics do not establish general relevance or paid task efficacy.
 Use a fresh output path; retain the receipt with its investigation.

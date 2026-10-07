@@ -1,4 +1,14 @@
-"""Measure frozen source-reference retrieval without paid model calls."""
+"""Measure frozen source-reference retrieval without paid model calls.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Module definitions for benchmark tooling and validation.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +27,7 @@ from codira.mcp.adapter import MCPAdapter
 from codira.registry import active_index_backend
 from scripts.agent_efficiency.contracts import canonical_fingerprint, load_document
 from scripts.agent_efficiency.corpus import export_fixture, verify_fixture
+from scripts.agent_efficiency.temporary import PROJECT_TEMP_ROOT
 
 
 def evaluate(source: Path, panel: Path) -> dict[str, object]:
@@ -41,7 +52,7 @@ def evaluate(source: Path, panel: Path) -> dict[str, object]:
     verify_fixture(fixture, source)
     observations: list[dict[str, object]] = []
     with tempfile.TemporaryDirectory(
-        prefix="ae-retrieval-", dir="/home/marco/Personalia/Progetti/.Temp"
+        prefix="ae-retrieval-", dir=PROJECT_TEMP_ROOT
     ) as temporary:
         workspace = Path(temporary) / "fixture"
         export_fixture(source, str(fixture["revision"]), workspace)

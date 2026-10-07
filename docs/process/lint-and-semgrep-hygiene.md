@@ -227,10 +227,10 @@ host parser.
 
 ## Updated integration locations — 2026-10-01
 
-- `scripts/agent_efficiency/oracles.py:142` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `scripts/agent_efficiency/oracles.py:812` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `scripts/agent_efficiency/oracles.py:923` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `scripts/agent_efficiency/oracles.py:1070` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:152` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:822` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:933` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `scripts/agent_efficiency/oracles.py:1080` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
 - `src/codira/cli.py:406` (E402): Compatibility imports retain their established initialization order.
 - `src/codira/cli.py:411` (E402): Compatibility imports retain their established initialization order.
 - `src/codira/cli.py:450` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
@@ -253,7 +253,7 @@ host parser.
 
 - `scripts/agent_efficiency/readiness.py:12`, `scripts/agent_efficiency/preparation.py:12`, and `scripts/agent_efficiency/native_tool_qualification.py:12` (EM101, EM102, TRY003): preparation boundary errors use concise public diagnostics, following the existing immutable campaign exception convention.
 - `scripts/agent_efficiency/native_tool_qualification.py:240` (PLR0913): offline qualification keeps the exact runtime, image, workspace, evidence, model, reasoning and exposure bindings explicit rather than obtaining them from ambient state.
-- `scripts/launch_agent_efficiency_pilot.py:990` and `scripts/launch_agent_efficiency_pilot.py:1000` (TRY301): CLI binding errors remain inside the common safe-rejection boundary and cannot reach preparation or launch side effects.
+- `scripts/launch_agent_efficiency_pilot.py:1000` and `scripts/launch_agent_efficiency_pilot.py:1010` (TRY301): CLI binding errors remain inside the common safe-rejection boundary and cannot reach preparation or launch side effects.
 
 
 

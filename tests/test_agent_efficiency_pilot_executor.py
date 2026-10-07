@@ -1,9 +1,20 @@
-"""Test deterministic factory-backed paired-pilot execution preparation."""
+"""Test deterministic factory-backed paired-pilot execution preparation.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Module definitions for benchmark tooling and validation.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +24,7 @@ from scripts.agent_efficiency.campaign_factory import (
     build_campaign,
     write_campaign_artifacts,
 )
+from scripts.agent_efficiency.temporary import PROJECT_TEMP_ROOT
 from scripts.launch_agent_efficiency_pilot import (
     PilotLaunchError,
     load_launch,
@@ -144,9 +156,9 @@ def test_prepare_claims_paths_and_builds_fixed_paid_command(
     assert str(execution_root / "logs" / "pilot.log") in command
     assert str(execution_root / "pilot.exit") in command
     assert "sops exec-env" in command
-    assert "TMPDIR=/home/marco/Personalia/Progetti/.Temp" in command
-    assert "TMP=/home/marco/Personalia/Progetti/.Temp" in command
-    assert "TEMP=/home/marco/Personalia/Progetti/.Temp" in command
+    assert f"TMPDIR={shlex.quote(str(PROJECT_TEMP_ROOT))}" in command
+    assert f"TMP={shlex.quote(str(PROJECT_TEMP_ROOT))}" in command
+    assert f"TEMP={shlex.quote(str(PROJECT_TEMP_ROOT))}" in command
     assert command.count("--task-id") == 3
     assert command.count("--fixture-source") == 3
 

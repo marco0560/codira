@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Build a candidate benchmark image with selected offline fixture material."""
+"""Build a candidate benchmark image with selected offline fixture material.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Module definitions for benchmark tooling and validation.
+"""
 # ruff: noqa: EM101, EM102, TRY003
 
 from __future__ import annotations
@@ -23,6 +33,7 @@ from scripts.agent_efficiency import phase0
 from scripts.agent_efficiency.contracts import canonical_fingerprint, load_document
 from scripts.agent_efficiency.corpus import export_fixture
 from scripts.agent_efficiency.panels import panel_document_path
+from scripts.agent_efficiency.temporary import PROJECT_TEMP_ROOT
 
 BENCHMARK_ROOT = Path("benchmarks/agent-efficiency")
 ENVIRONMENT_ROOT = "/opt/codira/fixture-environments"
@@ -329,7 +340,7 @@ def build_image(
     ):
         raise EnvironmentImageBuildError("candidate image build arguments are invalid")
     with tempfile.TemporaryDirectory(
-        prefix="codira-fixture-image-", dir="/home/marco/Personalia/Progetti/.Temp"
+        prefix="codira-fixture-image-", dir=PROJECT_TEMP_ROOT
     ) as temporary:
         context = Path(temporary) / "context"
         write_build_context(plan, context)

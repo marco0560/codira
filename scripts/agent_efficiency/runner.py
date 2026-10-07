@@ -1,4 +1,14 @@
-"""Run one benchmark attempt in a constrained container and retain JSONL facts."""
+"""Run one benchmark attempt in a constrained container and retain JSONL facts.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Module definitions for benchmark tooling and validation.
+"""
 # ruff: noqa: EM101, TRY003
 
 from __future__ import annotations
@@ -18,10 +28,10 @@ from typing import TYPE_CHECKING
 
 from scripts.agent_efficiency import phase0
 from scripts.agent_efficiency.contracts import CONTRACT_VERSION
+from scripts.agent_efficiency.temporary import PROJECT_TEMP_ROOT as PROJECT_TEMP_ROOT
 from scripts.agent_efficiency.usage import UsageError, normalize_completed_turn
 
 _CONTAINER_ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-PROJECT_TEMP_ROOT = Path("/home/marco/Personalia/Progetti/.Temp")
 
 if TYPE_CHECKING:
     from scripts.agent_efficiency.campaign_state import ScheduledAttempt

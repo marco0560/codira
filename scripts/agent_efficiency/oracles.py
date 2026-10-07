@@ -3,6 +3,15 @@
 The module accepts only declarative JSON-compatible specifications.  Patch
 checks operate on a pristine temporary copy and custom evaluators are explicit
 grader-side registrations, never model-visible or shell-evaluated input.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Module definitions for benchmark tooling and validation.
 """
 
 from __future__ import annotations
@@ -20,6 +29,7 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 from scripts.agent_efficiency.contracts import ContractError, canonical_fingerprint
+from scripts.agent_efficiency.temporary import PROJECT_TEMP_ROOT
 
 type CommandExecutor = Callable[
     [Sequence[str], Path], subprocess.CompletedProcess[bytes]
@@ -739,7 +749,7 @@ def _patch_check(
     if not required_paths_passed:
         return False, tuple(checks)
     with tempfile.TemporaryDirectory(
-        prefix="codira-agent-oracle-", dir="/home/marco/Personalia/Progetti/.Temp"
+        prefix="codira-agent-oracle-", dir=PROJECT_TEMP_ROOT
     ) as temporary:
         destination = Path(temporary) / "fixture"
         shutil.copytree(protected_root, destination, symlinks=False)

@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import cast
 
 from codira.runtime_identity import runtime_identity
+from scripts.agent_efficiency.temporary import PROJECT_TEMP_ROOT as PROJECT_TEMP
 
-PROJECT_TEMP = Path("/home/marco/Personalia/Progetti/.Temp")
 REQUIRED_ANALYZERS = frozenset(
     {"codira-analyzer-python", "codira-analyzer-typescript", "codira-analyzer-go"}
 )

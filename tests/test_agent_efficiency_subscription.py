@@ -1,4 +1,14 @@
-"""Qualify native subscription isolation and public-safe admission controls."""
+"""Qualify native subscription isolation and public-safe admission controls.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Module definitions for benchmark tooling and validation.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +32,7 @@ from scripts.agent_efficiency.runner import (
     ContainerAttemptRequest,
     build_container_argv,
 )
+from scripts.agent_efficiency.temporary import PROJECT_TEMP_ROOT
 
 
 @pytest.fixture
@@ -38,9 +49,7 @@ def socket_root() -> Iterator[Path]:
     pathlib.Path
         Temporary socket root within the repository's scratch policy.
     """
-    with tempfile.TemporaryDirectory(
-        prefix="ae-", dir="/home/marco/Personalia/Progetti/.Temp"
-    ) as temporary:
+    with tempfile.TemporaryDirectory(prefix="ae-", dir=PROJECT_TEMP_ROOT) as temporary:
         yield Path(temporary)
 
 

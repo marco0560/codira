@@ -1,4 +1,14 @@
-"""Replay answer examples in an isolated, credential-free offline container."""
+"""Replay answer examples in an isolated, credential-free offline container.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Module definitions for benchmark tooling and validation.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +20,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-PROJECT_TEMP = Path("/home/marco/Personalia/Progetti/.Temp")
+from scripts.agent_efficiency.temporary import PROJECT_TEMP_ROOT as PROJECT_TEMP
 
 
 def replay_examples(

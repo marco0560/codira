@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Prepare or launch a factory-generated paired pilot with durable evidence."""
+"""Prepare or launch a factory-generated paired pilot with durable evidence.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Module definitions for benchmark tooling and validation.
+"""
 # ruff: noqa: EM101, EM102, PLR0913, S607, TRY003
 
 from __future__ import annotations
@@ -21,6 +31,7 @@ from scripts.agent_efficiency.campaign_state import build_paired_schedule
 from scripts.agent_efficiency.contracts import canonical_fingerprint, load_document
 from scripts.agent_efficiency.corpus import verify_fixture
 from scripts.agent_efficiency.panels import panel_document_path
+from scripts.agent_efficiency.temporary import PROJECT_TEMP_ROOT
 from scripts.run_agent_efficiency_phase6_pilot import (
     PilotLauncherError,
     parse_fixture_sources,
@@ -40,7 +51,6 @@ CANARY_SOPS_ENVIRONMENTS = {
     ),
 }
 BENCHMARK_ROOT = Path("benchmarks/agent-efficiency")
-PROJECT_TEMP_ROOT = Path("/home/marco/Personalia/Progetti/.Temp")
 
 
 class PilotLaunchError(ValueError):
