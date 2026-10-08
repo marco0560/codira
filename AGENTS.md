@@ -64,6 +64,16 @@ reading implementation details. High-value entry points are `cli.py`,
 
 ## Validation
 
+After a coherent Python edit batch, run
+`uv run python scripts/check_workflow_quality.py` to collect inexpensive lint,
+typing, Semgrep and fresh-index docstring findings before the full gate. This
+preflight does not replace the full validation command below.
+
+For a fresh checkout or after retiring/squashing a benchmark source branch, run
+`uv run python scripts/prepare_benchmark_history.py`; use `--fetch` when the
+required frozen commits are missing. CI always fetches the manifest-pinned
+revisions because a full branch checkout omits commits on retired branches.
+
 ```bash
 uv run python scripts/validate_repo.py
 ```

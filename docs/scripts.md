@@ -1,5 +1,34 @@
 # Scripts
 
+## Workflow preflights
+
+Run `uv run python scripts/check_workflow_quality.py` after a coherent Python
+edit batch and before committing or starting the full gate. It reuses the
+validator's Ruff, formatting, typing, Semgrep and documentation checks, refreshes
+the index, and collects all failures instead of stopping after the first one.
+Exit 1 means at least one check failed or the refreshed audit was unavailable.
+Use `--dry-run` to inspect its commands. The full tmux gate remains required.
+
+Run `uv run python scripts/prepare_benchmark_history.py` before benchmark tests
+in a fresh checkout or after squash integration/branch retirement. Exit 1 lists
+missing commit IDs. Run it with `--fetch` to retrieve the exact manifest-pinned
+Codira fixture and reviewer revisions from `origin`, then verify them. That mode
+needs network access and leaves manifests, branches and working files intact.
+Exit 2 means invalid input or fetch failure. CI calls this shared helper with
+`--fetch`; local object availability alone does not establish availability in a
+fresh CI checkout.
+
+For container/MCP/oracle readiness, use the existing
+`scripts/launch_agent_efficiency_pilot.py --prepare` flow and the factory's
+generated launch plan. Its `qualify_host_context` check detects rootless runtime
+and tmux access failures before runtime work, and its readiness receipt binds
+the full gate, image, fixtures, tool dispatch and task calibration. Follow
+[the campaign factory procedure](process/agent-efficiency-campaign-factory.md)
+for its complete required arguments. Use the authorized host execution context
+for rootless Podman; a successful direct MCP server probe does not qualify
+native-client tool dispatch. Model canaries and paid launch remain separately
+authorized operations.
+
 ## `scripts/bootstrap_dev_environment.py`
 
 Synchronize the uv-managed `.venv`, install the extracted first-party analyzer
