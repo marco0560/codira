@@ -1,3 +1,13 @@
+## [2.2.0](https://github.com/marco0560/codira/compare/v2.1.0...v2.2.0) (2026-10-08)
+
+### Features
+
+* **dev:** preserve image rebuild recipes by default ([e928379](https://github.com/marco0560/codira/commit/e9283792d82a3e47834aedccf15cc4657052b27a))
+
+### Bug Fixes
+
+* **ci:** fetch frozen benchmark revisions before validation ([c697a36](https://github.com/marco0560/codira/commit/c697a36e762b7d28d9b18e3d5fc7832cc2640859))
+
 ## [2.1.0](https://github.com/marco0560/codira/compare/v2.0.2...v2.1.0) (2026-10-07)
 
 ### Features
