@@ -1,3 +1,9 @@
+## [2.2.1](https://github.com/marco0560/codira/compare/v2.2.0...v2.2.1) (2026-10-08)
+
+### Bug Fixes
+
+* **dev:** add deterministic workflow preflights ([6e0dbe1](https://github.com/marco0560/codira/commit/6e0dbe1d51895d56fc7c8c1b9c667105654f27b1))
+
 ## [2.2.0](https://github.com/marco0560/codira/compare/v2.1.0...v2.2.0) (2026-10-08)
 
 ### Features
