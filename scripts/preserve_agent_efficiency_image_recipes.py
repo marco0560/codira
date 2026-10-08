@@ -170,6 +170,17 @@ def recover_image(
     -------
     dict[str, object]
         Image identity, recovered recipe location, and missing-input diagnostics.
+
+    Raises
+    ------
+    subprocess.CalledProcessError
+        If Podman cannot read the image history.
+    OSError
+        If recovered inputs or durable recipe records cannot be written.
+    ValueError
+        If image history or recovered recipe data is invalid.
+    TypeError
+        If the recovered file manifest is not an object.
     """
     identity = str(image["Id"])
     history_result = subprocess.run(
@@ -289,6 +300,18 @@ def preserve(output: Path, repair_incomplete: bool = False) -> None:
     -------
     None
         Saves all image identities and one result per named or leaf Codira image.
+
+    Raises
+    ------
+    subprocess.CalledProcessError
+        If Podman cannot inventory images or read their history.
+    OSError
+        If inventory, checkpoint, or recipe files cannot be read or written.
+    ValueError
+        If the inventory changes, a checkpoint escapes the audit root, or a
+        retained record is invalid.
+    TypeError
+        If a recovered file manifest is not an object.
     """
     current_images = json.loads(
         subprocess.run(

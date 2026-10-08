@@ -49,6 +49,28 @@ jobs:
       - name: Run pre-commit hooks
         run: uv run pre-commit run --all-files
 
+      - name: Fetch frozen benchmark revisions
+        run: |
+          uv run python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          corpus = Path("benchmarks/agent-efficiency")
+          fixture = json.loads((corpus / "fixtures/codira-public.json").read_text())
+          reviewer = json.loads(
+              (corpus / "reviewer-evaluation/phase6-deepseek-v4-1-flash.json").read_text()
+          )
+          revisions = {fixture["revision"]}
+          revisions.update(
+              case[key] for case in reviewer["cases"] for key in ("base", "head")
+          )
+          # Full branch history omits frozen commits from retired or squashed branches.
+          subprocess.run(
+              ["git", "fetch", "--no-tags", "origin", *sorted(revisions)], check=True
+          )
+          PY
+
       - name: Run standard validation
         run: uv run python scripts/validate_repo.py
 
