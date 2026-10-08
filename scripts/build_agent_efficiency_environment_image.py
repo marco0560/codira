@@ -32,6 +32,13 @@ from codira.version import package_version
 from scripts.agent_efficiency import phase0
 from scripts.agent_efficiency.contracts import canonical_fingerprint, load_document
 from scripts.agent_efficiency.corpus import export_fixture
+from scripts.agent_efficiency.image_rebuild import (
+    capture_inventory,
+    file_sha256,
+    preserve_context,
+    record_path,
+    write_document,
+)
 from scripts.agent_efficiency.panels import panel_document_path
 from scripts.agent_efficiency.temporary import PROJECT_TEMP_ROOT
 
@@ -307,7 +314,11 @@ def write_build_context(plan: EnvironmentImagePlan, destination: Path) -> Path:
 
 
 def build_image(
-    plan: EnvironmentImagePlan, runtime: str, tag: str, output_profile: Path
+    plan: EnvironmentImagePlan,
+    runtime: str,
+    tag: str,
+    output_profile: Path,
+    rebuild_record: Path | None = None,
 ) -> str:
     """Build with network only during dependency resolution and emit a profile.
 
@@ -321,6 +332,9 @@ def build_image(
         Fresh local candidate-image tag.
     output_profile : pathlib.Path
         Absent host evidence path for the exact embedded profile.
+    rebuild_record : pathlib.Path or None, optional
+        Fresh durable reconstruction directory. Defaults to the ignored
+        image-rebuilds group with an identity derived from the fresh image tag.
 
     Returns
     -------
@@ -339,6 +353,9 @@ def build_image(
         or output_profile.exists()
     ):
         raise EnvironmentImageBuildError("candidate image build arguments are invalid")
+    retained = rebuild_record if rebuild_record is not None else record_path(tag)
+    if retained.exists():
+        raise EnvironmentImageBuildError("image reconstruction record already exists")
     with tempfile.TemporaryDirectory(
         prefix="codira-fixture-image-", dir=PROJECT_TEMP_ROOT
     ) as temporary:
@@ -346,18 +363,28 @@ def build_image(
         write_build_context(plan, context)
         profile_path = context / "fixture-environments" / "environment-profile.json"
         profile_sha = hashlib.sha256(profile_path.read_bytes()).hexdigest()
+        build_arguments = (
+            "--network=private",
+            "--pull=never",
+            "--build-arg",
+            f"BASE_IMAGE={plan.base_image}",
+            "--build-arg",
+            f"ENVIRONMENT_PROFILE_SHA256={profile_sha}",
+            "--label",
+            f"io.codira.agent-efficiency.environment-profile-sha256={profile_sha}",
+        )
+        record = preserve_context(context, retained, build_arguments)
+        record.update({"base_image": plan.base_image, "image_tag": tag})
+        version = subprocess.run(
+            (runtime, "--version"), check=True, text=True, capture_output=True
+        )
+        record["runtime_version"] = version.stdout.strip()
+        write_document(retained / "record.json", record)
         completed = subprocess.run(
             (
                 runtime,
                 "build",
-                "--network=private",
-                "--pull=never",
-                "--build-arg",
-                f"BASE_IMAGE={plan.base_image}",
-                "--build-arg",
-                f"ENVIRONMENT_PROFILE_SHA256={profile_sha}",
-                "--label",
-                f"io.codira.agent-efficiency.environment-profile-sha256={profile_sha}",
+                *build_arguments,
                 "--tag",
                 tag,
                 "--file",
@@ -373,6 +400,10 @@ def build_image(
         with output_profile.with_suffix(f".build.{stream}.txt").open("x") as handle:
             handle.write(content)
     if completed.returncode != 0:
+        record.update(
+            {"status": "build-failed", "build_exit_code": completed.returncode}
+        )
+        write_document(retained / "record.json", record)
         detail = _terminal_build_detail(completed)
         raise EnvironmentImageBuildError(f"candidate image build failed: {detail}")
     inspected = subprocess.run(
@@ -386,7 +417,25 @@ def build_image(
         inspected.returncode != 0
         or phase0.IMAGE_DIGEST_PATTERN.fullmatch(runtime_image) is None
     ):
+        record["status"] = "image-identity-unavailable"
+        write_document(retained / "record.json", record)
         raise EnvironmentImageBuildError("candidate image identity is unavailable")
+    try:
+        inventory_path = capture_inventory(runtime, runtime_image, retained)
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError) as error:
+        record.update({"status": "inventory-failed", "runtime_image": runtime_image})
+        write_document(retained / "record.json", record)
+        raise EnvironmentImageBuildError(
+            "image reconstruction inventory failed"
+        ) from error
+    files = record["files"]
+    if not isinstance(files, dict):
+        raise EnvironmentImageBuildError(
+            "image reconstruction file manifest is invalid"
+        )
+    files["inventory.json"] = file_sha256(inventory_path)
+    record.update({"status": "built", "runtime_image": runtime_image})
+    write_document(retained / "record.json", record)
     profile = dict(plan.profile)
     profile.update(
         {
@@ -394,6 +443,8 @@ def build_image(
             "image_tag": tag,
             "runtime_image": runtime_image,
             "network_policy": "build-private-only; runtime-none",
+            "rebuild_record": str(retained),
+            "rebuild_policy": "recipe-only",
         }
     )
     output_profile.parent.mkdir(parents=True, exist_ok=True)
@@ -554,6 +605,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tag", required=True)
     parser.add_argument("--output-profile", type=Path, required=True)
     parser.add_argument("--runtime", default="podman")
+    parser.add_argument("--rebuild-record", type=Path)
     return parser
 
 
@@ -576,8 +628,10 @@ def main(arguments: list[str] | None = None) -> int:
         plan = build_plan(
             args.base_image, parse_fixture_sources(args.fixture_source), args.codex_bin
         )
-        runtime_image = build_image(plan, args.runtime, args.tag, args.output_profile)
-    except (EnvironmentImageBuildError, OSError) as error:
+        runtime_image = build_image(
+            plan, args.runtime, args.tag, args.output_profile, args.rebuild_record
+        )
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
         print(f"environment image build error: {error}", file=sys.stderr)
         return 2
     print(

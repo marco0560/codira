@@ -358,6 +358,12 @@ declared Git revisions rather than trusting the current branch tips, writes an
 immutable profile with the setup hashes, and validates an offline preparation
 inside the build. It never receives provider credentials.
 
+The builder also retains recipe-only reconstruction records by default under
+`.artifacts/agent-efficiency/image-rebuilds/`, including the generated source
+context and post-build dependency inventory. Rebuilt images can differ and must
+receive fresh campaign identities. See [image rebuild retention](image-rebuild-retention.md)
+for reconstruction commands, parent-image requirements and historical-image review.
+
 ```bash
 uv run python scripts/build_agent_efficiency_environment_image.py \
   --base-image localhost/codira-phase6-onnx@sha256:<base-digest> \

@@ -4,6 +4,10 @@ The historical whole-environment retention decision below was revised by the
 operator-approved [2026-10-07 cleanup](artifact-retention-cleanup-2026-10-07.md).
 Package inventories and retained installation metadata now replace the reviewed
 `.venv` trees. The raw-evidence retention rules remain in force.
+Prepared-image cache retention was subsequently revised by the operator-selected
+[recipe-only image cleanup](image-recipe-cleanup-2026-10-08.md). The image
+availability statements below describe the 2026-09-27 cleanup, not current image
+storage; reconstruction records now replace the audited Codira images.
 
 ## Scope and method
 

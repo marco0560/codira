@@ -14,6 +14,7 @@ for the completed cache cleanup and detailed keep-versus-summarize decisions.
 | `agent-efficiency/campaigns/<campaign-id>/` | Factory-generated campaign manifests and launch plans | Preserve each generated identity. |
 | `agent-efficiency/executions/<record-id>/` | Execution logs, receipts, preflights, source-preparation records, and fixture copies; existing suffixes distinguish execution, rerun, and source records | Preserve each record identity with related campaign and attempt evidence. |
 | `agent-efficiency/environment-images/`, `gates/`, `reviewer-evaluation/` | Prepared image evidence, validation runs, and reviewer evaluations | Keep records grouped by purpose; retain log/exit pairs. |
+| `agent-efficiency/image-rebuilds/<build-identity>/` | Generated contexts, recipes, checksums, dependency inventories and generated npm locks | Preserve as ignored reconstruction inputs. Recipe-only policy permits dependency/digest drift; see [image retention](../docs/process/image-rebuild-retention.md). |
 | `benchmarks/backend/<run-id>/` | Dated backend campaigns and Hyperfine, phase, profile, and selection artifacts | Preserve each run and its detailed measurement files. |
 | `benchmarks/campaigns/<run-id>/` | Output from the generic benchmark campaign runner | Keep the run plan, result data, and logs together. |
 | `benchmarks/experiments/` | Issue 55 concurrency runs and vector-store authority investigation | Keep each named experiment together. |
@@ -36,8 +37,11 @@ above; do not rewrite immutable run contents to change historical provenance.
 - Keep logs with their exit-status file. The logs are small relative to the
   dataset and may contain the cause of a failed or unusual run.
 - The reviewed per-attempt `uv-cache` copies were removed after approval and
-  confirmation that the prepared image caches remain available. Keep those
-  image caches and all other attempt evidence. Review any different cache group
+  confirmation that the prepared image caches remained available at that time.
+  Preserve all other attempt evidence. The image-cache requirement was superseded
+  for the
+  audited images by the operator-selected [recipe-only cleanup](../docs/process/image-recipe-cleanup-2026-10-08.md):
+  retain their reconstruction records instead. Review any different cache group
   separately before proposing cleanup.
 - The operator-approved [2026-10-07 cleanup](../docs/process/artifact-retention-cleanup-2026-10-07.md)
   replaced the 171 reviewed `.venv` trees with exact package inventories,
@@ -47,6 +51,10 @@ above; do not rewrite immutable run contents to change historical provenance.
   environments or other runtime state.
 - Keep this directory ignored. Only this manifest and approved, sanitized
   summaries may be tracked; do not unignore raw runtime trees.
+- New fixture-image builds retain recipes by default under `image-rebuilds/`.
+  These support reconstruction with possible dependency drift and do not promise
+  exact historical image recovery. This policy does not itself delete existing
+  images or override their individual retention requirements.
 - Store durable campaign findings and analysis in tracked `docs/process/`
   reports. Link those reports to immutable evidence paths here; do not track raw
   responses, attempt workspaces, logs, or intermediate analysis files.
