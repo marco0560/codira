@@ -7,8 +7,10 @@ MCP member selection; reciprocal-rank merging; strict default with explicit
 partial results; attempt every member index and preserve individual outcomes;
 dedicated local feature branch with tests, documentation, and commits.
 
-Implementation branch: `feat/multi-repo-family`. This delivery does not authorize
-a push, PR, merge, release, or GitHub issue closure.
+Implementation branch: `feat/multi-repo-family`. The initial delivery authorized
+local implementation only. The operator subsequently authorized the squash
+merge onto `main`, branch deletion, publication, remote CI verification and
+issue closure.
 
 The implementation contract is [ADR-033](../adr/ADR-033-local-family-federation.md).
 The runnable workflow and recovery steps are in [the family guide](../families.md).
@@ -54,5 +56,15 @@ the same repository validation command, rules and test selection. Completed gate
 sessions and temporary gate records are cleaned only after examination and
 reporting, under the repository's validation retention policy.
 
-All implementation changes remain on `feat/multi-repo-family`. This delivery
-includes a local commit only; no external publication or issue closure occurred.
+## Integration and closeout
+
+The two feature-branch commits were squash-merged onto `main` as
+`0fff3d2b6a996afeef3dad271f59542862607cf5`. The resulting tree was verified
+identical to the feature branch, commit hooks passed, and the clean feature
+branch was deleted. The squash commit references #15 without automatically
+closing it.
+
+On 2026-10-09 the operator authorized publication through `git rel`, verification
+of remote CI, and closure of #15 after successful checks. Publication and remote
+CI outcomes will be recorded in the GitHub issue's completion note; closure must
+wait for those checks rather than infer their success from local validation.
