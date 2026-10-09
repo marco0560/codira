@@ -748,7 +748,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--workspace",
         help="registered workspace fixed for this server process",
     )
+    selector.add_argument(
+        "--family", type=Path, help="TOML family manifest fixed for this server process"
+    )
     args = parser.parse_args(argv)
+    if args.family is not None:
+        from codira.family import load_family
+        from codira.mcp.family_server import create_family_server
+
+        try:
+            family = load_family(args.family)
+        except ValueError as exc:
+            parser.error(str(exc))
+        anyio.run(_run_stdio_server, create_family_server(family))
+        return 0
     try:
         binding = resolve_startup_binding(root=args.root, workspace=args.workspace)
     except ValueError as exc:

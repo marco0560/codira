@@ -8,6 +8,14 @@ appearing without this inventory.
 
 ## `# noqa` inventory
 
+src/codira/family_runtime.py:462 PLR0913 — federation query options expose
+the independently selectable operation, member filter, pagination, direction,
+and explicit partial-results policy at the shared CLI/MCP boundary.
+
+src/codira/mcp/family_server.py:171 PLR0913 — MCP reference-tool parameters
+remain separate discoverable request-schema fields rather than an opaque request
+object, preserving declared-member filtering and strict SDK validation.
+
 scripts/run_agent_efficiency_phase6_review.py:2 EM101, S607, TRY003, TRY301 — the
 review-only transport uses explicit Git command vectors and public-safe failure
 messages; its credentials are supplied only by the SOPS-scoped child process.
@@ -79,19 +87,19 @@ src/codira/cli_index.py:148 C901,PLR0912 — index CLI failure/reporting branche
     deliberately explicit because they are the user-facing command contract.
 src/codira/cli_queries.py:2341 PLR0913 — daemon context rendering receives the complete
     explicit query/output/profile request after freshness has been established.
-src/codira/cli.py:449 PLR0913 — command dispatch receives parsed arguments and
+src/codira/cli.py:451 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
-src/codira/cli.py:368 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:369 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:377 E402 — compatibility re-export import ordering avoids
-    cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:388 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:378 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
 src/codira/cli.py:389 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:405 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:390 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:410 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:407 E402 — compatibility re-export import ordering avoids
+    cycles while retaining existing `codira.cli` imports.
+src/codira/cli.py:412 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
 src/codira/query/context_scoring.py:637, src/codira/query/context_scoring.py:779,
     and src/codira/query/context_scoring.py:814 PLR0913 — lexical channel

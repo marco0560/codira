@@ -563,11 +563,19 @@ def test_duckdb_backend_reuses_native_connection_until_cleanup(
 
     assert first is second
     assert len(fake_module.connections) == 1
-    assert fake_module.connections[0].closed is False
+    assert not bool(fake_module.connections[0].closed)
 
-    backend._close_cached_connections()
+    backend.close()
+    backend.close()
 
-    assert fake_module.connections[0].closed is True
+    assert bool(fake_module.connections[0].closed)
+    assert not bool(backend._atexit_registered)
+    reopened = backend.open_connection(tmp_path)
+    assert reopened is not first
+    assert len(fake_module.connections) == 2
+    assert bool(backend._atexit_registered)
+    backend.close()
+    assert fake_module.connections[1].closed is True
 
 
 def test_duckdb_backend_persist_runtime_inventory_round_trips_inventory(

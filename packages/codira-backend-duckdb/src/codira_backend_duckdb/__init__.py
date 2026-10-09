@@ -1690,6 +1690,28 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         atexit.register(self._close_cached_connections)
         self._atexit_registered = True
 
+    def close(self) -> None:
+        """Release cached connections at the end of an explicit owner scope.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Native handles and their process-exit callback are released.
+
+        Notes
+        -----
+        The backend may be reused after closing; opening a connection registers
+        process-exit cleanup again. Repeated close calls are harmless.
+        """
+        self._close_cached_connections()
+        if self._atexit_registered:
+            atexit.unregister(self._close_cached_connections)
+            self._atexit_registered = False
+
     def begin_index_session(self, root: Path) -> IndexWriteSession:
         """
         Open the explicit write-side lifecycle for one indexing run.

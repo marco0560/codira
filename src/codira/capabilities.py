@@ -100,6 +100,41 @@ PLUGIN_FAMILY_CONTRACTS: dict[str, dict[str, object]] = {
 }
 
 COMMAND_CONTRACTS: dict[str, dict[str, object]] = {
+    "family": {
+        "intent": "local_multi_repository_index_federation",
+        "channels": [],
+        "guarantee": "repository_qualified_deterministic_global_results",
+        "limitations": [
+            "requires an explicit versioned TOML manifest and registered workspaces",
+            "members retain independent indexes, backends, and configurations",
+            "cross-repository references require explicit validated manifest links",
+            "queries are read-only and strict unless partial results are requested",
+            "family indexing preserves per-member outcomes without a global transaction",
+        ],
+        "subcommands": {
+            "operations": {
+                "intent": "explicit_family_operations",
+                "modes": [
+                    "index",
+                    "status",
+                    "validate",
+                    "ctx",
+                    "sym",
+                    "refs",
+                    "evidence",
+                ],
+                "options": [
+                    "--json",
+                    "--member",
+                    "--limit",
+                    "--cursor",
+                    "--allow-partial",
+                    "--direction",
+                ],
+                "guarantee": "manifest_scoped_origin_and_all_member_generation_binding",
+            }
+        },
+    },
     "workspace": {
         "intent": "workspace_registration_administration",
         "channels": [],

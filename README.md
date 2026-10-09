@@ -23,6 +23,12 @@ supports exact symbol lookup, docstring auditing, deterministic local semantic
 embeddings, static call and callable-reference inspection, plugin discovery,
 and deterministic context generation for natural-language queries.
 
+For systems spanning several repositories, [local repository families](docs/families.md)
+combine context and exact symbol queries across independent indexes through
+the CLI or MCP. Results retain their repository origin, and a versioned TOML
+manifest can declare explicit cross-repository references. Each repository
+remains independently indexable and queryable with its own configuration.
+
 The checked-in first-party plugin catalog currently includes:
 
 - language analyzers for Bash, C, C++, Go, JavaScript, TypeScript, JSON,
@@ -65,6 +71,7 @@ under `docs/`.
 Start with:
 
 - `docs/getting_started.md`
+- [Local repository families](docs/families.md)
 - `docs/CONTRIBUTING.md`
 - `docs/architecture/index.md`
 - `docs/plugins/index.md`
@@ -293,6 +300,29 @@ and start the MCP server and both daemons with that workspace. Do not share an
 MCP](docs/mcp.md#parallel-repositories) and
 [Configuration](docs/configuration.md#parallel-repository-isolation) for the
 complete setup and service commands.
+
+### Query related repositories as a family
+
+Register each repository as a named workspace and declare those names in a
+versioned TOML family manifest. With the workspaces and manifest configured,
+index and query the family from any directory in the Codira host environment:
+
+```bash
+codira family index /absolute/path/to/codira-family.toml
+codira family ctx /absolute/path/to/codira-family.toml "plugin registration"
+codira family sym /absolute/path/to/codira-family.toml register_plugin
+codira-mcp --family /absolute/path/to/codira-family.toml
+```
+
+Replace the manifest path with your persistent family definition. Queries merge
+member results deterministically and preserve repository-qualified identities.
+Cross-repository references come from explicit manifest links. Unavailable or
+stale member indexes fail queries by default; `--allow-partial` reports member
+exclusions when partial results are acceptable. See [Local repository
+families](docs/families.md) for workspace registration, manifest examples,
+MCP configuration, and recovery steps.
+
+### Repository index maintenance
 
 Force a full rebuild:
 

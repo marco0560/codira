@@ -1,5 +1,9 @@
 # Local MCP quickstart
 
+For related repositories, [local families](families.md) add startup-bound
+federation through `codira-mcp --family MANIFEST`. Each member keeps its own
+index and remains independently queryable.
+
 Codira exposes local, read-only repository intelligence through a standard-input/output MCP server. The selected repository is fixed when the server starts; MCP requests never accept repository paths.
 
 The `arch` tool returns a bounded, read-only architecture-model snapshot for

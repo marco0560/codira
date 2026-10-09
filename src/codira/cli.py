@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from codira.cli_family import run_family_command
 from codira.config import (
     ConfigError,
     effective_config_cache,
@@ -624,6 +625,8 @@ def main() -> int:
     prefix = _resolve_prefix_argument(parser, root, raw_prefix)
 
     try:
+        if command == "family":
+            return run_family_command(args)
         if command not in {"help", "config", "workspace", "calibrate"}:
             ensure_user_config()
         with (

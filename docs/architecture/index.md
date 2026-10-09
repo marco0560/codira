@@ -24,3 +24,4 @@ These documents describe the current architecture produced by the accepted
 - [Storage backends](storage-backends.md)
 - [Language analyzers](language-analyzers.md)
 - [Host-target runtime boundary](host-target-runtime-boundary.md)
+- [Local repository families](../families.md)

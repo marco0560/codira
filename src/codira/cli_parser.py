@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from codira.cli_family import add_family_parser
 from codira.migration import (
     ConfigMigrationMode,
     StateMigrationMode,
@@ -252,7 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
         title="subcommands",
         metavar=(
             "{help,setup,index,cov,sym,symlist,arch,emb,docs,calls,refs,audit,ctx,plugins,"
-            "caps,config,workspace,daemon,query-daemon,calibrate}"
+            "caps,config,workspace,family,daemon,query-daemon,calibrate}"
         ),
     )
 
@@ -1001,6 +1002,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output structured JSON for machine consumption",
     )
 
+    add_family_parser(sub)
     workspace_parser = sub.add_parser(
         "workspace",
         help="Manage named workspace registrations",

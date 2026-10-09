@@ -34,6 +34,7 @@ The repository currently tracks these architecture decision records:
 - [ADR-030 — Syntax-only macro analysis](ADR-030-syntax-only-macro-analysis.md)
 - [ADR-031 — Similarity-index plugin family](ADR-031-similarity-index-plugin-family.md)
 - [ADR-032 — Authenticated Qdrant server-mode similarity index](ADR-032-authenticated-qdrant-server-similarity-index.md)
+- [ADR-033 — Local family federation](ADR-033-local-family-federation.md)
 
 `ADR-004` is the active migration record for the current architecture branch
 and should be read together with the documents under `docs/architecture/`.
