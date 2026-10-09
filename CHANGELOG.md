@@ -1,3 +1,9 @@
+## [2.4.0](https://github.com/marco0560/codira/compare/v2.3.0...v2.4.0) (2026-10-09)
+
+### Features
+
+* **query:** federate local repository families ([0fff3d2](https://github.com/marco0560/codira/commit/0fff3d2b6a996afeef3dad271f59542862607cf5)), closes [#15](https://github.com/marco0560/codira/issues/15)
+
 ## [2.3.0](https://github.com/marco0560/codira/compare/v2.2.1...v2.3.0) (2026-10-09)
 
 ### Features
