@@ -1,3 +1,9 @@
+## [2.3.0](https://github.com/marco0560/codira/compare/v2.2.1...v2.3.0) (2026-10-09)
+
+### Features
+
+* **dev:** deliver automatic embedding retrieval quality benchmark ([908dbbf](https://github.com/marco0560/codira/commit/908dbbff041ff84c8412e13c04a58f8c4699c561)), closes [#59](https://github.com/marco0560/codira/issues/59)
+
 ## [2.2.1](https://github.com/marco0560/codira/compare/v2.2.0...v2.2.1) (2026-10-08)
 
 ### Bug Fixes
