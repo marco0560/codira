@@ -26,6 +26,11 @@ benchmarks/embedding/*
 !benchmarks/retrieval-quality/
 benchmarks/retrieval-quality/*
 !benchmarks/retrieval-quality/repos.local.json
+!benchmarks/retrieval-quality/known-target-v1/
+benchmarks/retrieval-quality/known-target-v1/*
+!benchmarks/retrieval-quality/known-target-v1/cases.jsonl
+!benchmarks/retrieval-quality/known-target-v1/fixtures.json
+!benchmarks/retrieval-quality/known-target-v1/README.md
 !benchmarks/agent-efficiency/
 !benchmarks/agent-efficiency/Containerfile.phase0
 !benchmarks/agent-efficiency/Containerfile.phase4

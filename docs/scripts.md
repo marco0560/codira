@@ -66,6 +66,9 @@ temporary directories under the repository.
 
 Run the standard local validation sequence through `scripts/run_repo_tool.py`.
 This is the preferred one-command validation entry point for local changes.
+Before the final documentation audit, it builds a structural index with
+embeddings deferred, so a fresh CI checkout does not require local model files.
+Failed captured audits print their command and stdout/stderr diagnostics.
 Use `--dry-run` to print the delegated commands without executing them. Use
 `--semgrep-complete` to append a broad Semgrep registry scan and save its JSON
 report under `.artifacts/analysis/semgrep/`.
@@ -169,7 +172,23 @@ Use `--source github` to require GitHub-backed rows only, or `--source git` to
 avoid network access entirely. GitHub collection uses the operator's existing
 `gh` authentication.
 
+## `scripts/grade_retrieval_quality.py`
+
+Prepare blinded snippet pools from a completed known-target comparison, check
+an authenticated OpenRouter judge contract, grade with checkpoints, or rescore
+saved responses offline. This optional assessment uses one judge and one
+request per nonempty query pool. It reports LLM relevance separately from
+known-target metrics. See [LLM retrieval grading](benchmarks/llm-retrieval-grading.md)
+for exact preparation, SOPS preflight, execution and recovery commands.
+
 ## `scripts/run_retrieval_quality_benchmark.py`
+
+The `--known-target` mode implements the automatic source-verified benchmark
+for #59, with pinned sources, resume, rescoring, explicit cutoffs and cost
+measurements. Generate its cases with `scripts/build_known_target_dataset.py`.
+See [Automatic known-target retrieval quality](benchmarks/known-target-quality.md)
+for complete commands and interpretation limits. The historical mode below
+continues to accept commit-derived changed-file labels.
 
 Run model quality measurements against a dataset produced by
 `scripts/build_retrieval_quality_dataset.py`:

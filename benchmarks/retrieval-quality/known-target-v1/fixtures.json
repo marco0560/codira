@@ -1,0 +1,20 @@
+{
+  "schema_version": "known-target-v1",
+  "repositories": [
+    {
+      "label": "codira",
+      "commit": "6e0dbe1d51895d56fc7c8c1b9c667105654f27b1",
+      "repository": "https://github.com/marco0560/codira"
+    },
+    {
+      "label": "Fontshow",
+      "commit": "f872d7a1f5fe52e9b533ca2f0081e3418a393d26",
+      "repository": "https://github.com/marco0560/Fontshow"
+    },
+    {
+      "label": "sanikey",
+      "commit": "75f038b1cb2fba2a5d6d6dbbcd0ff8fa499f3fd9",
+      "repository": "https://github.com/marco0560/sanikey"
+    }
+  ]
+}

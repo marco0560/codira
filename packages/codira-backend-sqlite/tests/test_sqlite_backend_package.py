@@ -9,7 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from codira.contracts import BackendPersistAnalysisRequest, PendingEmbeddingRow
+from codira.contracts import (
+    BackendPersistAnalysisRequest,
+    EmbeddingEngineSpec,
+    PendingEmbeddingRow,
+    VectorSetIdentity,
+    VectorSnapshotRequest,
+)
+from codira_vector_store_sqlite import SQLiteVectorStore
 from codira.models import (
     AnalysisResult,
     DocumentationArtifact,
@@ -895,6 +902,18 @@ def test_sqlite_pending_embedding_flush_respects_work_batch_size(
             )
             for object_id in range(5)
         ]
+        store = SQLiteVectorStore()
+        store.initialize(tmp_path, {})
+        identity = VectorSetIdentity(
+            engine=EmbeddingEngineSpec(
+                engine="test-backend",
+                engine_version="1",
+                model="fixture",
+                model_version="1",
+                dimension=384,
+            ),
+            vector_store=store.spec({}),
+        )
         _flush_pending_embedding_rows(
             connection,
             tmp_path,
@@ -904,7 +923,15 @@ def test_sqlite_pending_embedding_flush_respects_work_batch_size(
                 version="1",
                 dim=384,
             ),
+            vector_store=store,
+            vector_set_identity=identity,
         )
+        snapshot = store.vector_snapshot(
+            VectorSnapshotRequest(tmp_path, identity, "documentation", {})
+        )
+        assert {row.stable_id for row in snapshot.rows} == {
+            f"doc:{i}" for i in range(5)
+        }
     finally:
         connection.close()
 

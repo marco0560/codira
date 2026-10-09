@@ -67,6 +67,8 @@ nav:
       - Decisions: process/decisions.md
       - Publishing walkthrough: process/python-package-publishing-walkthrough.md
       - Performance benchmarking: process/performance-benchmarking.md
+      - Automatic retrieval quality: benchmarks/known-target-quality.md
+      - Optional LLM retrieval grading: benchmarks/llm-retrieval-grading.md
       - Historical benchmark reports: process/benchmark-history/index.md
       - Removed historical objects: process/deleted-artifacts.md
   - ADRs:

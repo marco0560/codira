@@ -11,6 +11,7 @@ This tree contains benchmark inputs. Runtime output belongs under
 | `embedding/model-candidates.json` | Candidate model and engine definitions | Tracked input shared by embedding and retrieval-quality tools. |
 | `embedding/uv-backed-repos.local.json` | Repository set for the embedding campaign | Ignored local input; keep local dataset and paths untracked. |
 | `retrieval-quality/repos.local.json` | Repository set for retrieval-quality campaigns | Tracked input used by retrieval-quality defaults. |
+| `retrieval-quality/known-target-v1/` | Public pinned, automatically derived cases and fixture revisions | Tracked controls; regenerate through `scripts/build_known_target_dataset.py`. Private cases remain ignored. |
 | `performance/` | Backend torture, generated-size, and short-run manifests | Local-only inputs; ignored and grouped by benchmark family. |
 | `semantic-pipeline/frozen-repos.local.json` | Frozen repository set for semantic-pipeline work | Local-only input; ignored and separate from generic performance manifests. |
 

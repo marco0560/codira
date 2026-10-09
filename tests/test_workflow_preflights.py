@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from scripts import check_workflow_quality, prepare_benchmark_history
+from scripts import check_workflow_quality, prepare_benchmark_history, validate_repo
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -167,3 +167,58 @@ def test_quality_preflight_does_not_query_a_stale_index(
     assert check_workflow_quality.main([]) == 1
     summary = json.loads(capsys.readouterr().out)["quality_checks"]
     assert summary["docstring-audit"] is None
+
+
+def test_validator_exposes_failed_audit_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Keep the exact captured audit failure visible in the CI terminal.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Substituted child process.
+    capsys : pytest.CaptureFixture[str]
+        Captured output streams.
+
+    Returns
+    -------
+    None
+        The first failed audit stops validation and retains both diagnostics.
+    """
+    command = ("python", str(validate_repo.RUN_REPO_TOOL), "codira", "audit", "--json")
+    calls = []
+
+    def failed_audit(
+        argv: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        """Return the captured automatic-index failure.
+
+        Parameters
+        ----------
+        argv : tuple[str, ...]
+            Delegated command.
+        **kwargs : object
+            Child execution controls.
+
+        Returns
+        -------
+        subprocess.CompletedProcess[str]
+            Failed audit result.
+        """
+        calls.append(argv)
+        assert kwargs["capture_output"] is True
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            "ERROR: failed to build index automatically\n",
+            "Index initialization failed\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", failed_audit)
+    assert validate_repo.run_validation((command, ("python", "unused"))) == 1
+    result = capsys.readouterr()
+    assert "codira audit --json" in result.out
+    assert "failed to build index automatically" in result.out
+    assert "Index initialization failed" in result.err
+    assert calls == [command]

@@ -16,6 +16,7 @@ from codira.contracts import (
     BackendPersistAnalysisRequest,
     EmbeddingEngineSpec,
     PendingEmbeddingRow,
+    PreparedVectorRow,
     VectorSetIdentity,
 )
 from codira.models import (
@@ -42,6 +43,7 @@ from codira_backend_duckdb import duckdb_support as duckdb_support_module
 from codira_vector_store_sqlite import SQLiteVectorStore
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
     from codira_backend_duckdb.duckdb_support import _DuckDBPersistenceConnection
 
 
@@ -663,7 +665,10 @@ def test_duckdb_full_index_vector_failure_is_not_published_ready(
 
         def raise_after_structural_commit(
             self: SQLiteVectorStore,
-            request: object,
+            root: Path,
+            identity: VectorSetIdentity,
+            rows: Sequence[PreparedVectorRow],
+            config: Mapping[str, object],
         ) -> None:
             """
             Prove DuckDB committed structural rows before failing vector writes.
@@ -671,9 +676,15 @@ def test_duckdb_full_index_vector_failure_is_not_published_ready(
             Parameters
             ----------
             self : codira_vector_store_sqlite.SQLiteVectorStore
-                Active vector-store instance receiving the bulk write.
-            request : object
-                Bulk vector-store request that is intentionally rejected.
+                Active vector-store instance receiving the incremental write.
+            root : pathlib.Path
+                Repository selecting vector storage.
+            identity : codira.contracts.VectorSetIdentity
+                Active vector-set identity.
+            rows : collections.abc.Sequence[codira.contracts.PreparedVectorRow]
+                Materialized rows intentionally rejected.
+            config : collections.abc.Mapping[str, object]
+                Selected store configuration.
 
             Returns
             -------
@@ -684,7 +695,7 @@ def test_duckdb_full_index_vector_failure_is_not_published_ready(
             RuntimeError
                 Always, after observing the committed DuckDB files table.
             """
-            del self, request
+            del self, root, identity, rows, config
             raw = duckdb.connect(str(_duckdb_db_path(source_root)))
             try:
                 row = raw.execute("SELECT COUNT(*) FROM files").fetchone()
@@ -697,7 +708,7 @@ def test_duckdb_full_index_vector_failure_is_not_published_ready(
 
         monkeypatch.setattr(
             SQLiteVectorStore,
-            "store_vectors_for_full_index",
+            "store_vectors",
             raise_after_structural_commit,
         )
         failed_report = index_repo(source_root, full=True)

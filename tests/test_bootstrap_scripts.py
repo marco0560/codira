@@ -2304,6 +2304,13 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
             "python",
             str(helper.RUN_REPO_TOOL),
             "codira",
+            "index",
+            "--defer-embeddings",
+        ),
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
+            "codira",
             "audit",
             "--json",
         ),

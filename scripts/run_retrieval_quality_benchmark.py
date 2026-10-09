@@ -1073,7 +1073,14 @@ def main(argv: list[str] | None = None) -> int:
         Propagated when artifacts cannot be written.
     """
 
-    args = build_parser().parse_args(argv)
+    effective_argv = sys.argv[1:] if argv is None else argv
+    if "--known-target" in effective_argv:
+        from scripts.run_known_target_quality import main as known_target_main
+
+        return known_target_main(
+            [arg for arg in effective_argv if arg != "--known-target"]
+        )
+    args = build_parser().parse_args(effective_argv)
     if args.rescore_results is not None:
         summary_path, report_path = write_summary_artifacts(args.rescore_results)
         print(f"Results: {args.rescore_results}")

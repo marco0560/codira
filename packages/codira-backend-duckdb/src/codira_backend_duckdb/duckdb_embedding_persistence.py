@@ -9,12 +9,9 @@ from typing import TYPE_CHECKING, TypeVar
 from codira.contracts import (
     BackendError,
     PendingEmbeddingRow,
-    PreparedVectorIdentityRow,
     PreparedVectorRow,
     StoredEmbeddingRow,
     VectorStore,
-    VectorStoreBulkWriter,
-    VectorStoreFullIndexRequest,
     VectorSetIdentity,
 )
 from codira.semantic.embeddings import EmbeddingBackendSpec, embeddings_enabled
@@ -437,9 +434,7 @@ def _store_vector_store_materialized_rows(
     vector_store_config: Mapping[str, object],
     root: Path | None,
     prepared_rows: list[PreparedVectorRow],
-    identity_rows: list[PreparedVectorIdentityRow] | None = None,
     encoded_vectors: dict[str, bytes],
-    backend_connection: object | None = None,
     profiler: DuckDBProfileRecorder | None = None,
 ) -> None:
     """
@@ -457,13 +452,8 @@ def _store_vector_store_materialized_rows(
         Repository root whose vector store should be updated.
     prepared_rows : list[codira.contracts.PreparedVectorRow]
         Materialized vector rows to persist.
-    identity_rows : list[codira.contracts.PreparedVectorIdentityRow] | None, optional
-        Complete desired materialized vector identities for full-index
-        preservation.
     encoded_vectors : dict[str, bytes]
         Newly encoded vectors keyed by content hash.
-    backend_connection : object | None, optional
-        Backend-owned connection that compatible vector stores may reuse.
     profiler : codira_backend_duckdb.profiling.DuckDBProfileRecorder | None, optional
         Optional recorder for separated vector-store spans.
 
@@ -478,48 +468,34 @@ def _store_vector_store_materialized_rows(
         DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
     )
     with active_profiler.span("vector_store.store_vectors", rows=len(prepared_rows)):
-        if isinstance(vector_store, VectorStoreBulkWriter):
-            vector_store.store_vectors_for_full_index(
-                VectorStoreFullIndexRequest(
-                    root=root,
-                    identity=vector_set_identity,
-                    rows=prepared_rows,
-                    cached_vectors=encoded_vectors,
-                    config=vector_store_config,
-                    identity_rows=() if identity_rows is None else identity_rows,
-                    backend_connection=backend_connection,
-                    preserve_existing=True,
+        # Each call may contain only one indexing work segment.
+        if encoded_vectors:
+            with active_profiler.span(
+                "vector_store.store_cached_vectors",
+                rows=len(encoded_vectors),
+                payload_bytes=_cached_vector_payload_bytes(encoded_vectors),
+            ):
+                vector_store.store_cached_vectors(
+                    root,
+                    vector_set_identity,
+                    encoded_vectors,
+                    vector_store_config,
                 )
-            )
-        else:
-            if encoded_vectors:
-                with active_profiler.span(
-                    "vector_store.store_cached_vectors",
-                    rows=len(encoded_vectors),
-                    payload_bytes=_cached_vector_payload_bytes(encoded_vectors),
-                ):
-                    vector_store.store_cached_vectors(
-                        root,
-                        vector_set_identity,
-                        encoded_vectors,
-                        vector_store_config,
-                    )
-            vector_store.store_vectors(
+        vector_store.store_vectors(
+            root,
+            vector_set_identity,
+            prepared_rows,
+            vector_store_config,
+        )
+        with active_profiler.span(
+            "vector_store.delete_pending_vectors", rows=len(prepared_rows)
+        ):
+            vector_store.delete_pending_vectors(
                 root,
                 vector_set_identity,
                 prepared_rows,
                 vector_store_config,
             )
-            with active_profiler.span(
-                "vector_store.delete_pending_vectors",
-                rows=len(prepared_rows),
-            ):
-                vector_store.delete_pending_vectors(
-                    root,
-                    vector_set_identity,
-                    prepared_rows,
-                    vector_store_config,
-                )
 
 
 def _delete_pending_embedding_rows(

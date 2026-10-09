@@ -31,7 +31,6 @@ from codira.contracts import (
     EmbeddingIndexingMetrics,
     EmbeddingIndexingPolicy,
     PendingEmbeddingRow,
-    PreparedVectorIdentityRow,
     PreparedVectorRow,
     StoredEmbeddingRow,
     filter_embedding_rows_for_policy,
@@ -927,7 +926,6 @@ def _flush_prepared_embedding_rows(
     vector_values_rows: list[list[float] | None] = []
     row_ordinals: list[int] = []
     materialized_rows: list[PreparedVectorRow] = []
-    identity_rows: list[PreparedVectorIdentityRow] = []
     for row_ordinal, (row, content_hash, stored_vector) in enumerate(deduplicated_rows):
         resolved_blob = stored_vector
         if resolved_blob is None:
@@ -947,14 +945,6 @@ def _flush_prepared_embedding_rows(
                 row=row,
                 content_hash=content_hash,
                 vector=resolved_blob,
-            )
-        )
-        identity_rows.append(
-            PreparedVectorIdentityRow(
-                object_type=row.object_type,
-                stable_id=row.stable_id,
-                content_hash=content_hash,
-                vector=resolved_blob if stored_vector is None else None,
             )
         )
 
@@ -1073,7 +1063,6 @@ def _flush_prepared_embedding_rows(
         vector_store_config={} if vector_store_config is None else vector_store_config,
         root=root,
         prepared_rows=materialized_rows,
-        identity_rows=identity_rows,
         encoded_vectors={
             content_hash: vector_blob
             for content_hash, (
@@ -1081,7 +1070,6 @@ def _flush_prepared_embedding_rows(
                 _vector_values,
             ) in encoded_vectors.items()
         },
-        backend_connection=backend_connection,
         profiler=active_profiler,
     )
 

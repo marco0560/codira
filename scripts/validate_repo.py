@@ -137,6 +137,7 @@ VALIDATION_STEPS: tuple[ValidationStep, ...] = (
         "python",
         ("scripts/coverage_summary.py",),
     ),
+    ValidationStep("index-refresh", "codira", ("index", "--defer-embeddings")),
     ValidationStep(
         "docstring-audit",
         "codira",
@@ -363,6 +364,26 @@ def audit_has_findings(output: str) -> bool:
     return not isinstance(findings, list) or bool(findings)
 
 
+def print_captured_diagnostics(completed: subprocess.CompletedProcess[str]) -> None:
+    """Expose captured child output on its original terminal streams.
+
+    Parameters
+    ----------
+    completed : subprocess.CompletedProcess[str]
+        Failed audit or coverage command with captured output.
+
+    Returns
+    -------
+    None
+    """
+    for content, stream in (
+        (completed.stdout, sys.stdout),
+        (completed.stderr, sys.stderr),
+    ):
+        if content:
+            print(content, file=stream, end="" if content.endswith("\n") else "\n")
+
+
 def run_validation(
     commands: tuple[tuple[str, ...], ...] | None = None,
 ) -> int:
@@ -379,7 +400,7 @@ def run_validation(
     -------
     int
         Zero when all validation steps pass, otherwise the first non-zero child
-        exit status.
+        exit status. Captured audit diagnostics are printed when validation fails.
     """
 
     selected_commands = (
@@ -427,6 +448,7 @@ def run_validation(
             and audit_has_findings(completed.stdout)
         ):
             print("Codira audit reported findings or malformed JSON output.")
+            print_captured_diagnostics(completed)
             return 1
 
         if complete_report_path is not None:
@@ -437,6 +459,11 @@ def run_validation(
             print(f"Saved Semgrep report: {report_label}")
 
         if completed.returncode != 0:
+            print(
+                f"Validation command failed (exit {completed.returncode}): {shlex.join(command[2:])}"
+            )
+            if capture_output:
+                print_captured_diagnostics(completed)
             return completed.returncode
 
     return 0

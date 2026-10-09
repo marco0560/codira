@@ -28,6 +28,10 @@ from codira.contracts import (
     BackendResolveEmbeddingScoresRequest,
     BackendRuntimeInventoryRequest,
     PendingEmbeddingRow,
+    EmbeddingEngineSpec,
+    PreparedVectorRow,
+    VectorSetIdentity,
+    VectorSnapshotRequest,
     SimilarityCandidate,
 )
 from codira.models import (
@@ -40,6 +44,8 @@ from codira.models import (
 )
 from codira_backend_duckdb.schema import DDL, SCHEMA_VERSION
 from codira.semantic.embeddings import EmbeddingBackendSpec
+from codira.semantic.embeddings import serialize_vector
+from codira_vector_store_sqlite import SQLiteVectorStore
 from codira_backend_duckdb import (
     DuckDBConnection,
     DuckDBIndexBackend,
@@ -1752,6 +1758,62 @@ def test_duckdb_pending_embedding_flush_respects_work_batch_size(
     assert calls == [["text 0", "text 1"], ["text 2", "text 3"], ["text 4"]]
     assert pending_rows == []
     assert stored_rows == [(0, "hash-0"), (1, "hash-1"), (2, "hash-2"), (4, "hash-4")]
+
+
+def test_duckdb_partial_vector_batches_preserve_previous_bindings(
+    tmp_path: Path,
+) -> None:
+    """Keep earlier searchable rows when persisting a later work segment.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated real SQLite vector-store state.
+
+    Returns
+    -------
+    None
+        Synthetic vectors exercise the DuckDB persistence boundary.
+    """
+    from codira_backend_duckdb.duckdb_embedding_persistence import (
+        _store_vector_store_materialized_rows,
+    )
+
+    store = SQLiteVectorStore()
+    store.initialize(tmp_path, {})
+    identity = VectorSetIdentity(
+        engine=EmbeddingEngineSpec(
+            engine="fixture",
+            engine_version="1",
+            model="fixture",
+            model_version="1",
+            dimension=3,
+        ),
+        vector_store=store.spec({}),
+    )
+    for number, vector in enumerate(([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), 1):
+        row = PreparedVectorRow(
+            row=PendingEmbeddingRow(
+                object_type="symbol",
+                object_id=number,
+                stable_id=f"symbol:{number}",
+                text=f"fixture {number}",
+            ),
+            content_hash=f"hash-{number}",
+            vector=serialize_vector(vector),
+        )
+        _store_vector_store_materialized_rows(
+            vector_store=store,
+            vector_set_identity=identity,
+            vector_store_config={},
+            root=tmp_path,
+            prepared_rows=[row],
+            encoded_vectors={},
+        )
+    snapshot = store.vector_snapshot(
+        VectorSnapshotRequest(tmp_path, identity, "symbol", {})
+    )
+    assert {row.stable_id for row in snapshot.rows} == {"symbol:1", "symbol:2"}
 
 
 def test_duckdb_embedding_queue_helpers_use_registered_batches(
