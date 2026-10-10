@@ -68,3 +68,10 @@ On 2026-10-09 the operator authorized publication through `git rel`, verificatio
 of remote CI, and closure of #15 after successful checks. Publication and remote
 CI outcomes will be recorded in the GitHub issue's completion note; closure must
 wait for those checks rather than infer their success from local validation.
+
+The first publication succeeded and created release 2.4.0. CI and Docs failed
+during environment setup: uv selected CPython 3.15 despite the workflows' Python
+3.13 setup, and locked ONNX Runtime/pywin32 distributions lacked matching wheels.
+Both workflows now set `UV_PYTHON = "3.13"` for every uv command, preserving the
+intended interpreter without changing dependencies or weakening validation.
+Remote checks must be repeated after this focused workflow repair.
