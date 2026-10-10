@@ -177,6 +177,29 @@ def classify_sample(
     }
 
 
+def has_analysis_failures(indexed: dict[str, Any]) -> bool:
+    """Identify failed source attempts independently of coverage gaps.
+
+    Parameters
+    ----------
+    indexed : dict
+        Structural stage result with retained coverage and failure diagnostics.
+
+    Returns
+    -------
+    bool
+        Whether explicit indexing would retry a recorded source failure.
+    """
+    coverage = indexed.get("index_coverage", {})
+    return bool(
+        coverage.get("partial")
+        or coverage.get("failed_file_count")
+        or coverage.get("failed_paths")
+        or indexed.get("analysis_failures")
+        or indexed.get("failed_files")
+    )
+
+
 def classify_index(payload: dict[str, Any], exit_code: int) -> dict[str, Any] | None:
     """Separate queryable analysis failure from unusable structural state.
 
@@ -546,10 +569,27 @@ class Campaign:
         None
             The durable exclusion remains visible in the summary.
         """
-        result = {"key": prefix + "/queries", "status": "excluded", "reason": reason}
-        write(self.root / "stages" / result["key"] / "result.json", result)
+        self.exclude_stage(prefix + "/queries", reason)
+
+    def exclude_stage(self, key: str, reason: str) -> None:
+        """Record a withheld stage without labelling it as a query group.
+
+        Parameters
+        ----------
+        key : str
+            Exact stage identifier.
+        reason : str
+            Prerequisite preventing execution.
+
+        Returns
+        -------
+        None
+            The summary and terminal output identify the withheld stage.
+        """
+        result = {"key": key, "status": "excluded", "reason": reason}
+        write(self.root / "stages" / key / "result.json", result)
         self.results.append(result)
-        print(result["key"], "excluded:", reason, flush=True)
+        print(key, "excluded:", reason, flush=True)
 
     def cli(
         self, key: str, workspace: str, argv: list[str], *, repeats: int = 1
@@ -717,8 +757,8 @@ class Campaign:
             "index_coverage", self.member_coverage[name]
         )
         repetitions = repo["repetitions"]
-        if indexed["status"] in PARTIAL_STATUSES:
-            self.exclude_queries(
+        if has_analysis_failures(indexed):
+            self.exclude_stage(
                 prefix + "/index-incremental",
                 "unchanged deterministic failures are not automatically retried",
             )
@@ -853,7 +893,7 @@ class Campaign:
     def measure_concurrency(
         self, prefix: str, name: str, profile: dict[str, Any], indexed: dict[str, Any]
     ) -> dict[str, Any]:
-        """Measure optional schedulers after complete structural indexing.
+        """Measure optional schedulers when selected sources have no failures.
 
         Parameters
         ----------
@@ -872,7 +912,9 @@ class Campaign:
             Latest structural outcome; partial failures are never retried.
         """
         if (
-            indexed["status"] in SUCCESS_STATUSES
+            indexed["status"] in QUERYABLE_STATUSES
+            and indexed.get("usable", True)
+            and not has_analysis_failures(indexed)
             and self.spec["extended"]
             and profile["id"] == self.spec["profiles"][0]["id"]
         ):
@@ -891,7 +933,11 @@ class Campaign:
                     ],
                 )
                 indexed = result
-                if result["status"] not in SUCCESS_STATUSES:
+                if (
+                    result["status"] not in QUERYABLE_STATUSES
+                    or not result.get("usable", True)
+                    or has_analysis_failures(result)
+                ):
                     return result
 
         return indexed

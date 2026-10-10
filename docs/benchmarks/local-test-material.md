@@ -19,6 +19,8 @@ queries continue. An embeddings-only pass does not retry structural failures.
 
 Partial sources are not automatically excluded or repeatedly retried. Incremental
 and scheduler index probes are withheld after deterministic analysis failure.
+Coverage gaps from unsupported files or parser recovery remain partial-coverage
+measurements, but do not suppress these index probes when no source attempt failed.
 Stress family reads request partial coverage explicitly; strict family validation
 and reindex probes are withheld when a member is partial. Foreground daemon
 reconciliation reuses unchanged failure snapshots. Graphviz render timeouts apply

@@ -322,13 +322,15 @@ def test_interrupted_checkpoint_retries_without_failed_flag(
 
 @pytest.mark.parametrize("extended", [False, True])
 @pytest.mark.parametrize("embedding_ready", [False, True])
+@pytest.mark.parametrize("failed_source", [False, True])
 def test_queryable_partial_keeps_structural_queries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     extended: bool,
     embedding_ready: bool,
+    failed_source: bool,
 ) -> None:
-    """Run supported reads in both suites independently of embedding failure.
+    """Separate source failures from coverage gaps in both suite paths.
 
     Parameters
     ----------
@@ -340,6 +342,8 @@ def test_queryable_partial_keeps_structural_queries(
         Analyzer-style or stress execution path.
     embedding_ready : bool
         Actual embedding population prerequisite.
+    failed_source : bool
+        Failed source attempt rather than unsupported-file coverage gaps.
 
     Returns
     -------
@@ -360,9 +364,10 @@ def test_queryable_partial_keeps_structural_queries(
     invoked: list[list[str]] = []
     coverage = {
         "usable": True,
-        "partial": True,
+        "partial": failed_source,
         "complete": False,
-        "failed_paths": ["broken.py"],
+        "failed_file_count": int(failed_source),
+        "failed_paths": ["broken.py"] if failed_source else [],
     }
     output = tmp_path / "stdout.json"
     output.write_text(
@@ -400,7 +405,8 @@ def test_queryable_partial_keeps_structural_queries(
         invoked.append(argv)
         status = (
             "partial"
-            if key.endswith("index-full")
+            if key.rsplit("/", 1)[-1]
+            in {"index-full", "index-incremental", "index-process", "index-thread"}
             else "failed"
             if key.endswith("index-embeddings") and not embedding_ready
             else "passed"
@@ -433,9 +439,18 @@ def test_queryable_partial_keeps_structural_queries(
     assert any("--embeddings-only" in argv for argv in invoked)
     assert any(argv[1] == "docs" for argv in invoked) == embedding_ready
     assert any(argv[1] == "ctx" for argv in invoked) == embedding_ready
+    assert sum(
+        argv[1] == "index" and "--embeddings-only" not in argv for argv in invoked
+    ) == (1 if failed_source else 4 if extended else 2)
     assert (
-        sum(argv[1] == "index" and "--embeddings-only" not in argv for argv in invoked)
-        == 1
+        any(
+            r["key"].endswith("/index-incremental") and r["status"] == "excluded"
+            for r in campaign.results
+        )
+        == failed_source
+    )
+    assert not any(
+        r["key"].endswith("/index-incremental/queries") for r in campaign.results
     )
     reads = [r for r in campaign.results if r["key"].endswith(("/cov", "/refs"))]
     assert all(
