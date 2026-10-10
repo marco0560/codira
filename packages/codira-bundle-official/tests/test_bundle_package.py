@@ -22,7 +22,7 @@ def test_bundle_package_declares_expected_first_party_dependencies() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.2"
+    assert project["project"]["version"] == "2.0.3"
     assert project["project"]["dependencies"] == [
         "codira[semantic]==2.0.0",
         "einops>=0.8,<1.0",
@@ -32,7 +32,7 @@ def test_bundle_package_declares_expected_first_party_dependencies() -> None:
         "codira-analyzer-cpp==2.0.0",
         "codira-analyzer-rust==2.0.1",
         "codira-analyzer-javascript==2.0.0",
-        "codira-analyzer-typescript==2.0.0",
+        "codira-analyzer-typescript==2.0.1",
         "codira-analyzer-go==2.0.1",
         "codira-analyzer-bash==2.0.0",
         "codira-analyzer-markdown==2.0.0",

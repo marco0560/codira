@@ -1,4 +1,14 @@
-"""Syntax-only TypeScript and TSX analyzer for Codira."""
+"""Syntax-only TypeScript and TSX analyzer for Codira.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the TypeScript analyzer and its factory.
+"""
 
 from __future__ import annotations
 
@@ -340,10 +350,19 @@ def _function(
     overload_suffix = (
         "" if overload_discriminator is None else f":overload:{overload_discriminator}"
     )
+    member_suffix = ""
+    if class_name is not None:
+        modifiers = {child.type for child in node.children if not child.is_named}
+        if "static" in modifiers:
+            member_suffix += ":static"
+        if "get" in modifiers:
+            member_suffix += ":get"
+        elif "set" in modifiers:
+            member_suffix += ":set"
     return FunctionArtifact(
         name=function_name,
         stable_id=(
-            f"typescript:{kind}:{owner}{owner_suffix}:{function_name}{overload_suffix}"
+            f"typescript:{kind}:{owner}{owner_suffix}:{function_name}{member_suffix}{overload_suffix}"
         ),
         lineno=node.start_point.row + 1,
         end_lineno=body.end_point.row + 1
@@ -391,7 +410,7 @@ class TypeScriptAnalyzer:
     """
 
     name = "typescript"
-    version = "1"
+    version = "2"
     discovery_globs: tuple[str, ...] = ("*.ts", "*.tsx", "*.mts", "*.cts")
     default_coverage_roots: tuple[str, ...] = (
         "src",

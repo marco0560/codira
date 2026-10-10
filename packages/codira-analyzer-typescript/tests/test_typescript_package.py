@@ -26,7 +26,7 @@ def test_typescript_package_declares_expected_entry_point() -> None:
         )
     )
 
-    assert project["project"]["version"] == "2.0.0"
+    assert project["project"]["version"] == "2.0.1"
     assert "tree-sitter-typescript>=0.23.2" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "typescript": "codira_analyzer_typescript:build_analyzer"
@@ -253,3 +253,78 @@ def test_typescript_factory_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, TypeScriptAnalyzer)
     assert analyzer.discovery_globs == ("*.ts", "*.tsx", "*.mts", "*.cts")
+
+
+def test_typescript_accessor_and_static_member_identities(tmp_path: Path) -> None:
+    """Keep accessors, static members, overloads, and their docs distinct.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        Identities, attached TSDoc, call sites, and ordinary names are asserted.
+    """
+    from codira.indexer import _duplicate_analysis_stable_ids
+
+    source = tmp_path / "members.ts"
+    source.write_text(
+        "namespace Tools { export class Box {\n"
+        "/** Read value. */\nget value() { return read(); }\n"
+        "/** Write value. */\nset value(x: number) { write(x); }\n"
+        "/** Read static. */\nstatic get value() { return readStatic(); }\n"
+        "/** Write static. */\nstatic set value(x: number) { writeStatic(x); }\n"
+        "/** Run instance. */\nrun() { instanceRun(); }\n"
+        "/** Run static. */\nstatic run() { staticRun(); }\n"
+        "static parse(x: string): string;\n"
+        "parse(x: number): number;\n"
+        "static parse(x: string) { return x; }\n"
+        "parse(x: number) { return x; }\n"
+        "get() {} set() {} static() {}\n"
+        "}}\n",
+        encoding="utf-8",
+    )
+    analyzer = TypeScriptAnalyzer()
+    result = analyzer.analyze_file(source, tmp_path)
+    assert result.index_symbols
+    assert not _duplicate_analysis_stable_ids(result)
+    methods = result.classes[0].methods
+    prefix = "typescript:method:members.ts:Tools:Box:"
+    assert [item.stable_id.removeprefix(prefix) for item in methods] == [
+        "value:get",
+        "value:set",
+        "value:static:get",
+        "value:static:set",
+        "run",
+        "run:static",
+        "parse:static:overload:14",
+        "parse:overload:15",
+        "parse:static",
+        "parse",
+        "get",
+        "set",
+        "static",
+    ]
+    assert [item.calls[0].target for item in methods[:6]] == [
+        "read",
+        "write",
+        "readStatic",
+        "writeStatic",
+        "instanceRun",
+        "staticRun",
+    ]
+    assert [item.docstring for item in methods[:6]] == [
+        "Read value.",
+        "Write value.",
+        "Read static.",
+        "Write static.",
+        "Run instance.",
+        "Run static.",
+    ]
+    assert {item.owner_stable_id for item in result.documentation} == {
+        item.stable_id for item in methods[:6]
+    }
+    assert result == analyzer.analyze_file(source, tmp_path)

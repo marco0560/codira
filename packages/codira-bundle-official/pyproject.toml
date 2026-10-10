@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-bundle-official"
-version = "2.0.2"
+version = "2.0.3"
 description = "Curated first-party plugin bundle for codira"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -17,7 +17,7 @@ dependencies = [
     "codira-analyzer-cpp==2.0.0",
     "codira-analyzer-rust==2.0.1",
     "codira-analyzer-javascript==2.0.0",
-    "codira-analyzer-typescript==2.0.0",
+    "codira-analyzer-typescript==2.0.1",
     "codira-analyzer-go==2.0.1",
     "codira-analyzer-bash==2.0.0",
     "codira-analyzer-markdown==2.0.0",
