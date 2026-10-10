@@ -1,3 +1,9 @@
+## [2.4.1](https://github.com/marco0560/codira/compare/v2.4.0...v2.4.1) (2026-10-10)
+
+### Bug Fixes
+
+* **ci:** bind uv workflows to Python 3.13 ([a879e0d](https://github.com/marco0560/codira/commit/a879e0df824141232c5058909f9fa0f1a9758d40)), closes [#15](https://github.com/marco0560/codira/issues/15)
+
 ## [2.4.0](https://github.com/marco0560/codira/compare/v2.3.0...v2.4.0) (2026-10-09)
 
 ### Features
