@@ -2,6 +2,15 @@
 
 The analyzer extracts deterministic source facts without evaluating build tags,
 resolving modules, or invoking the Go compiler.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the Go analyzer and its factory.
 """
 
 from __future__ import annotations
@@ -245,14 +254,19 @@ def _function(
         Normalized callable, or ``None`` if unnamed.
     """
     name = _normalized(node.child_by_field_name("name"), source)
-    if not name:
+    if not name or name == "_":
         return None
+    declaration_suffix = (
+        f":declaration:{node.start_point.row + 1}:{node.start_point.column}"
+        if name == "init" and receiver is None
+        else ""
+    )
     body = node.child_by_field_name("body")
     signature_end = body.start_byte if body is not None else node.end_byte
     calls, refs = _relations(body, source)
     return FunctionArtifact(
         name=name,
-        stable_id=f"go:{'method' if receiver else 'function'}:{owner}{':' + receiver if receiver else ''}:{name}",
+        stable_id=f"go:{'method' if receiver else 'function'}:{owner}{':' + receiver if receiver else ''}:{name}{declaration_suffix}",
         lineno=node.start_point.row + 1,
         end_lineno=body.end_point.row + 1 if body is not None else None,
         signature=_SPACE.sub(
@@ -387,7 +401,7 @@ class GoAnalyzer:
     """
 
     name = "go"
-    version = "1"
+    version = "2"
     discovery_globs: tuple[str, ...] = ("*.go",)
     default_coverage_roots: tuple[str, ...] = (
         "cmd",
@@ -581,8 +595,12 @@ class GoAnalyzer:
                         continue
                     for name_node in spec.children_by_field_name("name"):
                         name = _normalized(name_node, source)
-                        if name and (
-                            node.type == "const_declaration" or self._emit_variables
+                        if (
+                            name
+                            and name != "_"
+                            and (
+                                node.type == "const_declaration" or self._emit_variables
+                            )
                         ):
                             kind = (
                                 "constant"
@@ -606,6 +624,7 @@ class GoAnalyzer:
                     type_node = spec.child_by_field_name("type")
                     if (
                         name
+                        and name != "_"
                         and type_node is not None
                         and type_node.type in {"struct_type", "interface_type"}
                     ):

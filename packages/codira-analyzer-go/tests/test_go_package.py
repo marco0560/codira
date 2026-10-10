@@ -25,7 +25,7 @@ def test_go_package_declares_expected_entry_point() -> None:
             encoding="utf-8"
         )
     )
-    assert project["project"]["version"] == "2.0.0"
+    assert project["project"]["version"] == "2.0.1"
     assert "tree-sitter-go>=0.23.4" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "go": "codira_analyzer_go:build_analyzer"
@@ -121,3 +121,48 @@ def test_go_analyzer_attaches_only_adjacent_go_doc_comments(tmp_path: Path) -> N
         "go_doc_comment",
         "go_doc_comment",
     ]
+
+
+def test_go_blank_bindings_and_initializers_have_valid_identities(
+    tmp_path: Path,
+) -> None:
+    """Preserve named bindings and every initializer without duplicate identities.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        Identity, documentation, and relation preservation are asserted.
+    """
+    source = tmp_path / "init.go"
+    source.write_text(
+        "package sample\n"
+        "const _ = 1\nconst _ = 2\n"
+        "var value, _ = pair()\nvar _ = verify()\n"
+        "type _ struct{}\ntype _ interface{}\n"
+        "// First initialization.\nfunc init() { first() }\n"
+        "// Second initialization.\nfunc init() { second() }\n"
+        "func Build() {}\nfunc _() {}\n",
+        encoding="utf-8",
+    )
+    analyzer = GoAnalyzer()
+    result = analyzer.analyze_file(source, tmp_path)
+    assert result.index_symbols
+    assert [item.name for item in result.declarations] == ["value"]
+    assert [item.name for item in result.functions] == ["init", "init", "Build"]
+    initializers = result.functions[:2]
+    assert len({item.stable_id for item in result.functions}) == 3
+    assert result.functions[-1].stable_id == "go:function:init.go:Build"
+    assert [item.calls[0].target for item in initializers] == ["first", "second"]
+    assert [item.docstring for item in initializers] == [
+        "First initialization.",
+        "Second initialization.",
+    ]
+    assert {item.owner_stable_id for item in result.documentation} == {
+        item.stable_id for item in initializers
+    }
+    assert result == analyzer.analyze_file(source, tmp_path)
