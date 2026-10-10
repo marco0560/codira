@@ -1,3 +1,13 @@
+## [2.4.2](https://github.com/marco0560/codira/compare/v2.4.1...v2.4.2) (2026-10-10)
+
+### Bug Fixes
+
+* **analyzer:** distinguish Go initialization declarations ([7c4e7cf](https://github.com/marco0560/codira/commit/7c4e7cf5ced54e851bd98097fded7a9c59fdfd88))
+* **analyzer:** distinguish TypeScript accessor and static members ([b0f9273](https://github.com/marco0560/codira/commit/b0f9273dd83e3058962f4f92e0dd882a21fdfa78))
+* **analyzer:** preserve distinct Rust source declarations ([fc80fb3](https://github.com/marco0560/codira/commit/fc80fb3d3a18f7d68522502225d52c206a6a38e7))
+* **indexer:** keep usable partial indexes queryable ([d191fda](https://github.com/marco0560/codira/commit/d191fda2bb9d16ca52ade6f512e7682de774a72a))
+* **process:** benchmark usable partial indexes transparently ([c8a0ee3](https://github.com/marco0560/codira/commit/c8a0ee3fd5a0e68c777f2e4cf1cc7ebf992c529a))
+
 ## [2.4.1](https://github.com/marco0560/codira/compare/v2.4.0...v2.4.1) (2026-10-10)
 
 ### Bug Fixes
