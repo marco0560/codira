@@ -3,11 +3,21 @@
 The plugin performs deterministic syntax-only extraction.  It intentionally
 does not expand macros, invoke Cargo, or infer compiler and borrow-checker
 semantics.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the Rust analyzer and its factory.
 """
 
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import replace
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -328,6 +338,13 @@ def _function(
         " ", source[node.start_byte : signature_end].decode("utf-8", "replace")
     ).strip()
     stable_owner = f":{owner_name}" if owner_name is not None else ""
+    lexical_owners: list[str] = []
+    ancestor = node.parent
+    while ancestor is not None:
+        if ancestor.type == "function_item":
+            lexical_owners.append(_identifier(ancestor, source) or "anonymous")
+        ancestor = ancestor.parent
+    stable_owner += "".join(f":{name}" for name in reversed(lexical_owners))
     return FunctionArtifact(
         name=name,
         stable_id=f"rust:function:{owner}{stable_owner}:{name}",
@@ -336,7 +353,7 @@ def _function(
         signature=signature,
         docstring=None,
         has_docstring=0,
-        is_method=int(owner_name is not None),
+        is_method=int(owner_name is not None and not lexical_owners),
         is_public=int(_normalized(node, source).startswith("pub ")),
         parameters=parameters,
         returns_value=int("->" in signature),
@@ -599,6 +616,92 @@ def _with_rustdoc(analysis: AnalysisResult, source: bytes) -> AnalysisResult:
     )
 
 
+def _distinct_declarations(analysis: AnalysisResult) -> AnalysisResult:
+    """Disambiguate repeated source declarations before documentation attachment.
+
+    Parameters
+    ----------
+    analysis : codira.models.AnalysisResult
+        Parsed source artifacts, including every conditional variant.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Unique identities with enum ownership preserved.
+
+    Notes
+    -----
+    Only repeated identities gain a declaration line and occurrence suffix.
+    Separate impl blocks remain separate containers. No cfg variant is selected
+    or discarded; moving a repeated declaration can change its identity.
+    """
+    items: tuple[DeclarationArtifact | FunctionArtifact | ClassArtifact, ...] = (
+        *analysis.declarations,
+        *analysis.functions,
+        *analysis.classes,
+        *(method for cls in analysis.classes for method in cls.methods),
+    )
+    counts = Counter(item.stable_id for item in items)
+    occurrences: Counter[str] = Counter()
+
+    def identity(stable_id: str, lineno: int) -> str:
+        """Return the identity for one source occurrence.
+
+        Parameters
+        ----------
+        stable_id : str
+            Logical identity before disambiguation.
+        lineno : int
+            Declaration start line.
+
+        Returns
+        -------
+        str
+            Original identity or deterministic source occurrence identity.
+        """
+        if counts[stable_id] == 1:
+            return stable_id
+        occurrences[stable_id] += 1
+        return f"{stable_id}:declaration:{lineno}:{occurrences[stable_id]}"
+
+    declarations: list[DeclarationArtifact] = []
+    for item in analysis.declarations:
+        stable_id = identity(item.stable_id, item.lineno)
+        declarations.append(
+            replace(
+                item,
+                stable_id=stable_id,
+                enum_members=tuple(
+                    replace(
+                        member,
+                        parent_stable_id=stable_id,
+                        stable_id=member.stable_id.replace(item.stable_id, stable_id),
+                    )
+                    for member in item.enum_members
+                ),
+            )
+        )
+    return replace(
+        analysis,
+        declarations=tuple(declarations),
+        functions=tuple(
+            replace(item, stable_id=identity(item.stable_id, item.lineno))
+            for item in analysis.functions
+        ),
+        classes=tuple(
+            replace(
+                cls,
+                stable_id=identity(cls.stable_id, cls.lineno),
+                methods=tuple(
+                    replace(item, stable_id=identity(item.stable_id, item.lineno))
+                    for item in cls.methods
+                ),
+            )
+            for cls in analysis.classes
+        ),
+    )
+
+
 class RustAnalyzer:
     """Analyze Rust syntax into Codira's stable language-neutral artifacts.
 
@@ -613,7 +716,7 @@ class RustAnalyzer:
     """
 
     name = "rust"
-    version = "2"
+    version = "3"
     discovery_globs: tuple[str, ...] = ("*.rs",)
     default_coverage_roots: tuple[str, ...] = ("src", "tests", "benches", "examples")
 
@@ -793,6 +896,7 @@ class RustAnalyzer:
             elif (
                 node.type in {"struct_item", "enum_item", "const_item", "mod_item"}
                 and name
+                and name != "_"
             ):
                 declaration_kind = cast(
                     "DeclarationKind",
@@ -876,7 +980,7 @@ class RustAnalyzer:
             )
         return _with_rustdoc(
             replace(
-                result,
+                _distinct_declarations(result),
                 index_symbols=not root_node.has_error,
                 status=tree_sitter_recovery_status(
                     language="rust", has_error=root_node.has_error

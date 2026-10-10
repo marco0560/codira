@@ -23,7 +23,7 @@ def test_rust_package_declares_expected_entry_point() -> None:
     project_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(project_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.0"
+    assert project["project"]["version"] == "2.0.1"
     assert "tree-sitter-rust>=0.24.0" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "rust": "codira_analyzer_rust:build_analyzer"
@@ -46,6 +46,7 @@ def test_rust_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, RustAnalyzer)
     assert analyzer.name == "rust"
+    assert analyzer.version == "3"
     assert analyzer.discovery_globs == ("*.rs",)
 
 
@@ -218,3 +219,78 @@ def test_rust_analyzer_emits_crate_and_item_rustdoc(tmp_path: Path) -> None:
     )
     assert result.functions[0].docstring == "Runs the demo."
     assert result.functions[0].has_docstring == 1
+
+
+def test_rust_repeated_declarations_retain_all_source_variants(tmp_path: Path) -> None:
+    """Retain conditional definitions, impl blocks, and scoped nested functions.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        Uniqueness, enum ownership, documentation, and calls are asserted.
+    """
+    from codira.indexer import _duplicate_analysis_stable_ids
+
+    source = tmp_path / "lib.rs"
+    source.write_text(
+        "const _: () = (); const _: () = ();\n"
+        "#[cfg(unix)] mod imp;\n#[cfg(not(unix))] mod imp;\n"
+        "#[cfg(unix)] macro_rules! debug { () => {} }\n"
+        "#[cfg(not(unix))] macro_rules! debug { () => {} }\n"
+        "#[cfg(unix)] enum Mode { A }\n"
+        "#[cfg(not(unix))] enum Mode { B }\n"
+        "/// First variant.\n#[cfg(unix)] fn run() { first(); }\n"
+        "/// Second variant.\n#[cfg(not(unix))] fn run() { second(); }\n"
+        "struct Box;\n"
+        "/// First block.\nimpl Box {\n"
+        "/// First method.\nfn one() { fn imp() { first(); } }\n}\n"
+        "/// Second block.\nimpl Box {\n"
+        "/// Second method.\nfn two() { fn imp() { second(); } }\n"
+        "#[cfg(unix)] fn variant() {} #[cfg(not(unix))] fn variant() {}\n}\n",
+        encoding="utf-8",
+    )
+    analyzer = RustAnalyzer()
+    result = analyzer.analyze_file(source, tmp_path)
+    assert result.index_symbols
+    assert not _duplicate_analysis_stable_ids(result)
+    assert len(result.functions) == 2
+    assert [item.docstring for item in result.functions] == [
+        "First variant.",
+        "Second variant.",
+    ]
+    assert [item.calls[0].target for item in result.functions] == ["first", "second"]
+    assert len(result.classes) == 2
+    assert [item.docstring for item in result.classes] == [
+        "First block.",
+        "Second block.",
+    ]
+    assert [[method.name for method in cls.methods] for cls in result.classes] == [
+        ["one", "imp"],
+        ["two", "imp", "variant", "variant"],
+    ]
+    nested = [m for c in result.classes for m in c.methods if m.name == "imp"]
+    assert all(not item.is_method for item in nested)
+    assert ":one:imp" in nested[0].stable_id
+    assert ":two:imp" in nested[1].stable_id
+    assert [item.calls[0].target for item in nested] == ["first", "second"]
+    assert [(item.kind, item.name) for item in result.declarations] == [
+        ("namespace", "imp"),
+        ("namespace", "imp"),
+        ("macro", "debug"),
+        ("macro", "debug"),
+        ("enum", "Mode"),
+        ("enum", "Mode"),
+        ("struct", "Box"),
+    ]
+    enums = [item for item in result.declarations if item.kind == "enum"]
+    assert [item.enum_members[0].name for item in enums] == ["A", "B"]
+    assert len({item.enum_members[0].stable_id for item in enums}) == 2
+    assert all(
+        item.enum_members[0].parent_stable_id == item.stable_id for item in enums
+    )
+    assert result == analyzer.analyze_file(source, tmp_path)
