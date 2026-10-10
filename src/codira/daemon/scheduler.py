@@ -27,7 +27,7 @@ from pathlib import Path
 
 from codira.daemon.models import DaemonState, DaemonStatus
 from codira.git import read_head_commit
-from codira.indexer import index_repo
+from codira.indexer import IndexReport, index_repo
 
 Reconciler = Callable[[Path], object]
 HeadReader = Callable[[Path], str | None]
@@ -48,6 +48,22 @@ def _utc_now() -> datetime:
         Current UTC timestamp for daemon status reporting.
     """
     return datetime.now(UTC)
+
+
+def _reconcile_automatically(root: Path) -> IndexReport:
+    """Refresh changed inputs while preserving unchanged failure snapshots.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository selected by the automatic daemon.
+
+    Returns
+    -------
+    IndexReport
+        Current successful analysis and retained source failures.
+    """
+    return index_repo(root, retry_failed_files=False)
 
 
 class DaemonScheduler:
@@ -82,7 +98,7 @@ class DaemonScheduler:
         self,
         root: Path,
         *,
-        reconcile: Reconciler = index_repo,
+        reconcile: Reconciler = _reconcile_automatically,
         read_head: HeadReader = read_head_commit,
         clock: Clock = _utc_now,
         status_observer: StatusObserver | None = None,

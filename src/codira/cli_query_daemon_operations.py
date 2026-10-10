@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 
 from codira.cli_render import _run_capabilities
 from codira.cli_requests import EmbeddingCommandRequest
+from codira.index_coverage import index_response_scope
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -94,13 +95,17 @@ def build_query_daemon_cli_operations(
             raise TypeError(msg)
         return value
 
-    def capture(operation: Callable[[], int]) -> dict[str, object]:
+    def capture(
+        operation: Callable[[], int], *, index_dependent: bool = True
+    ) -> dict[str, object]:
         """Capture one existing CLI renderer without changing its output.
 
         Parameters
         ----------
         operation : collections.abc.Callable[[], int]
             Read-only CLI implementation to execute in the warm worker.
+        index_dependent : bool, optional
+            Whether the renderer reads the structural index.
 
         Returns
         -------
@@ -108,7 +113,10 @@ def build_query_daemon_cli_operations(
             Captured stdout and original exit code.
         """
         output = io.StringIO()
-        with contextlib.redirect_stdout(output):
+        with (
+            contextlib.redirect_stdout(output),
+            index_response_scope(trusted_root if index_dependent else None, warn=False),
+        ):
             exit_code = operation()
         return {"stdout": output.getvalue(), "exit_code": exit_code}
 
@@ -197,7 +205,8 @@ def build_query_daemon_cli_operations(
         return capture(
             lambda: _run_plugins(
                 root=trusted_root, as_json=optional_bool(arguments, "as_json")
-            )
+            ),
+            index_dependent=False,
         )
 
     def capabilities_handler(
@@ -222,7 +231,8 @@ def build_query_daemon_cli_operations(
                 root=trusted_root,
                 as_json=optional_bool(arguments, "as_json"),
                 strict=optional_bool(arguments, "strict"),
-            )
+            ),
+            index_dependent=False,
         )
 
     return {

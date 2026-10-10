@@ -128,6 +128,8 @@ def _index_family(
                 result["index"] = json.loads(output.getvalue())
                 if status == 0:
                     result["freshness"] = member_state(member)
+                if cast("dict[str, object]", result["index"])["failures"]:
+                    status = 2
                 result["exit_status"] = status
                 failed = failed or status != 0
         except (BackendError, OSError, RuntimeError, ValueError) as error:

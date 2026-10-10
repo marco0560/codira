@@ -267,6 +267,7 @@ def _response_schema() -> dict[str, object]:
                     "trusted_root": {"const": "."},
                     "execution_mode": {"enum": ["warm", "direct", "fallback"]},
                     "generation": {"type": ["integer", "null"]},
+                    "index_coverage": {"type": "object"},
                     "partial_index_warning": {
                         "type": "object",
                         "required": ["failed_file_count", "message"],

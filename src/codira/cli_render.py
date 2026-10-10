@@ -7,6 +7,7 @@ import shutil
 from typing import TYPE_CHECKING, cast
 
 from codira.capabilities import build_capability_contract
+from codira.index_coverage import response_coverage
 from codira.query_daemon_cli import emit_execution_mode
 from codira.version import package_version
 
@@ -81,6 +82,9 @@ def _emit_json(payload: dict[str, object]) -> None:
     None
         The formatted JSON is printed to standard output.
     """
+    coverage = response_coverage()
+    if coverage is not None:
+        payload = {**payload, "index_coverage": coverage}
     print(json.dumps(payload, indent=2))
 
 

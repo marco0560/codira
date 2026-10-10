@@ -2454,5 +2454,5 @@ def _run_evidence_command(args: argparse.Namespace, root: Path) -> int:
     from codira.query.evidence import expand_symbol
 
     _ensure_index(root)
-    print(json.dumps(expand_symbol(root, args.identity, limit=args.limit)))
+    _emit_json(expand_symbol(root, args.identity, limit=args.limit))
     return 0

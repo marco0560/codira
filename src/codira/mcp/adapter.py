@@ -30,6 +30,7 @@ from codira.architecture import (
 )
 from codira.capabilities import build_capability_contract
 from codira.config import load_effective_config
+from codira.index_coverage import PARTIAL_INDEX_MESSAGE, index_coverage
 from codira.index_generation import IndexGenerationStore
 from codira.indexer import (
     CoverageIssue,
@@ -299,7 +300,7 @@ class MCPAdapter:
         return self._envelope(
             {
                 "indexed": bool(metadata),
-                "usable": bool(metadata) and not empty_index,
+                "usable": index_coverage(self.root)["usable"],
                 "metadata": metadata if detail else self._compact_metadata(metadata),
                 "generation": (
                     None
@@ -312,7 +313,9 @@ class MCPAdapter:
                     }
                 ),
                 "coverage": {
-                    "status": "complete" if not issues else "incomplete",
+                    "status": "complete"
+                    if not issues and index_coverage(self.root)["complete"]
+                    else "incomplete",
                     "issue_count": len(issues),
                     "issues": [self._coverage_payload(issue) for issue in issues]
                     if detail
@@ -1175,15 +1178,12 @@ class MCPAdapter:
         ValueError
             If the persisted index is absent or contains zero files.
         """
-        metadata = _read_metadata_file(get_metadata_path(self.root))
-        indexed_file_count = metadata.get("indexed_file_count")
-        if (
-            not isinstance(indexed_file_count, str)
-            or not indexed_file_count.isdecimal()
-            or int(indexed_file_count) < 1
-        ):
-            msg = "Codira index is unavailable or contains zero files"
-            raise ValueError(msg)
+        store = IndexGenerationStore(self.root)
+        if (store.path.exists() and store.read() is None) or not index_coverage(
+            self.root
+        )["usable"]:
+            message = "Codira index is unavailable, corrupt, or contains zero files"
+            raise ValueError(message)
         if self.query_executor is None:
             return operation(None)
         return self.query_executor.execute(operation)
@@ -1224,11 +1224,12 @@ class MCPAdapter:
             "trusted_root": ".",
             "execution_mode": "direct",
             "generation": None if generation is None else generation.generation,
+            "index_coverage": index_coverage(self.root),
         }
         if generation is not None and generation.partial:
             provenance["partial_index_warning"] = {
                 "failed_file_count": generation.failed_file_count,
-                "message": "The ready index omitted one or more failed source files.",
+                "message": PARTIAL_INDEX_MESSAGE,
             }
         if self.startup_provenance is not None:
             provenance.update(self.startup_provenance)

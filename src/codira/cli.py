@@ -35,6 +35,7 @@ from codira.config import (
 from codira.contracts import (
     BackendError,
 )
+from codira.index_coverage import index_response_scope
 from codira.path_resolution import (
     ResolvedRuntimePaths,
     resolve_runtime_paths,
@@ -102,6 +103,7 @@ _REPO_PATH_COMMANDS = frozenset(
         "refs",
         "audit",
         "ctx",
+        "evidence",
         "config",
         "daemon",
         "query-daemon",
@@ -645,7 +647,26 @@ def main() -> int:
             )
             handler = handlers.get(command)
             if handler is not None:
-                return handler()
+                with index_response_scope(
+                    root
+                    if command
+                    in {
+                        "index",
+                        "cov",
+                        "sym",
+                        "symlist",
+                        "arch",
+                        "emb",
+                        "docs",
+                        "calls",
+                        "refs",
+                        "audit",
+                        "ctx",
+                        "evidence",
+                    }
+                    else None
+                ):
+                    return handler()
     except EmbeddingBackendError as exc:
         print(f"[codira] {exc}", file=sys.stderr)
         return 2

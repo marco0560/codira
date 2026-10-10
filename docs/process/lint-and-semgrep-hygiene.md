@@ -8,7 +8,7 @@ appearing without this inventory.
 
 ## `# noqa` inventory
 
-src/codira/family_runtime.py:462 PLR0913 — federation query options expose
+src/codira/family_runtime.py:470 PLR0913 — federation query options expose
 the independently selectable operation, member filter, pagination, direction,
 and explicit partial-results policy at the shared CLI/MCP boundary.
 
@@ -63,7 +63,7 @@ scripts/characterize_similarity_indexes.py:306 PLR0913 — the reproducible
     corpus runner keeps independently selectable corpus and timing inputs.
 scripts/generate_github_snapshot.py:118 S607 — the fixed `gh` executable is
     intentionally invoked by argument vector; there is no shell interpolation.
-src/codira/indexer.py:1242 PLR0913 — bulk indexing keeps backend, transaction,
+src/codira/indexer.py:1249 PLR0913 — bulk indexing keeps backend, transaction,
     artifact, coverage, and embedding ownership explicit at the orchestration seam.
 src/codira/contracts.py:3271 PLR0913 — the plugin protocol signature is a
     public compatibility contract and cannot be bundled without breaking providers.
@@ -83,23 +83,23 @@ src/codira/query_daemon_lifecycle.py:580 PLR0913 — service lifecycle inputs ar
     explicit to preserve platform-independent restart behavior.
 src/codira/query_daemon_ipc.py:894 PLR0913 — IPC server construction exposes its
     authentication, runtime, and connection-boundary dependencies.
-src/codira/cli_index.py:148 C901,PLR0912 — index CLI failure/reporting branches are
+src/codira/cli_index.py:150 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
 src/codira/cli_queries.py:2341 PLR0913 — daemon context rendering receives the complete
     explicit query/output/profile request after freshness has been established.
-src/codira/cli.py:451 PLR0913 — command dispatch receives parsed arguments and
+src/codira/cli.py:453 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
-src/codira/cli.py:369 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:371 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:378 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:380 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:389 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:391 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:390 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:392 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:407 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:409 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:412 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:414 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
 src/codira/query/context_scoring.py:637, src/codira/query/context_scoring.py:779,
     and src/codira/query/context_scoring.py:814 PLR0913 — lexical channel
@@ -147,7 +147,7 @@ scripts/run_final_embedding_model_campaign.py:642,
 scripts/run_final_embedding_model_campaign.py:793,
 scripts/run_retrieval_quality_benchmark.py:913,
 src/codira/docstring.py:1019, src/codira/docstring.py:1114,
-src/codira/index_generation.py:115,
+src/codira/index_generation.py:160,
 src/codira/query_daemon.py:366, src/codira/query_daemon_lifecycle.py:738, and
 src/codira/query_daemon_ipc.py:1364 retain the same category-specific reasons
 as their immediately preceding grouped entries.

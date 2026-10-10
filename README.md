@@ -29,6 +29,8 @@ the CLI or MCP. Results retain their repository origin, and a versioned TOML
 manifest can declare explicit cross-repository references. Each repository
 remains independently indexable and queryable with its own configuration.
 
+Partial source analysis remains queryable when at least one file is indexed. CLI and MCP responses disclose incomplete coverage; unchanged failed files do not cause query-time reindex loops. See [partial-index recovery](docs/partial-indexes.md) for limits and explicit retries.
+
 The checked-in first-party plugin catalog currently includes:
 
 - language analyzers for Bash, C, C++, Go, JavaScript, TypeScript, JSON,

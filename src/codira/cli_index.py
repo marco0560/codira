@@ -24,6 +24,8 @@ from codira.contracts import (
     BackendError,
 )
 from codira.git import read_head_commit
+from codira.index_coverage import analysis_fingerprint, index_coverage
+from codira.index_generation import IndexGenerationStore
 from codira.indexer import (
     CoverageIssue,
     IndexFailure,
@@ -359,9 +361,13 @@ def _run_index(request: IndexCommandRequest) -> int:  # noqa: C901, PLR0912
                 )
             )
         )
-        return 2 if require_full_coverage and report.coverage_issues else 0
+        return (
+            2
+            if require_full_coverage and (report.coverage_issues or report.failed)
+            else 0
+        )
     _render_index_report(root, report)
-    if require_full_coverage and report.coverage_issues:
+    if require_full_coverage and (report.coverage_issues or report.failed):
         return 2
     if explain:
         for decision in report.decisions:
@@ -761,6 +767,17 @@ def _run_coverage(root: Path, *, as_json: bool = False) -> int:
         issues.extend(
             persisted_analysis_coverage_issues(root, active_index_backend(root=root))
         )
+    generation = IndexGenerationStore(root).read()
+    if generation is not None:
+        issues.extend(
+            CoverageIssue(
+                path=str(root / failure["path"]),
+                directory=str((root / failure["path"]).parent),
+                suffix=Path(failure["path"]).suffix,
+                reason="analysis failed: " + failure["reason"],
+            )
+            for failure in generation.failed_files or []
+        )
     coverage_config = load_effective_config(root=root).coverage
     configured_roots = coverage_config.roots
     if configured_roots == ("-",):
@@ -1054,6 +1071,14 @@ def _dirty_indexable_paths_require_rebuild(
     """
     hash_loader = cast("_IndexedFileHashLoader", backend)
     indexed_hashes = hash_loader.load_existing_file_hashes(root, conn=conn)
+    generation = IndexGenerationStore(root).read()
+    if generation is not None:
+        indexed_hashes.update(
+            {
+                str(root / failure["path"]): failure["sha256"]
+                for failure in generation.failed_files or []
+            }
+        )
     for relative in dirty_paths:
         path = root / relative
         persisted_hash = indexed_hashes.get(str(path))
@@ -1139,7 +1164,9 @@ def _inspect_index_metadata_freshness(
     current_files = len(
         list(iter_project_files(root, analyzers=active_language_analyzers(root=root)))
     )
-    if indexed_files != current_files:
+    generation = IndexGenerationStore(root).read()
+    failed_count = 0 if generation is None else len(generation.failed_files or [])
+    if indexed_files + failed_count != current_files:
         return (
             True,
             IndexRebuildRequest(
@@ -1149,6 +1176,55 @@ def _inspect_index_metadata_freshness(
             ),
         )
     return (True, None)
+
+
+def _inspect_generation_freshness(root: Path) -> IndexRebuildRequest | None:
+    """Validate publication and detect changed failure inputs.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository owning the failure ledger.
+
+    Returns
+    -------
+    IndexRebuildRequest | None
+        Refresh request when retained failures need another attempt.
+
+    Raises
+    ------
+    ValueError
+        If an existing publication is corrupt or unusable.
+    """
+    store = IndexGenerationStore(root)
+    generation = store.read()
+    if store.path.exists() and generation is None:
+        message = "Index generation record is corrupt; run codira index explicitly"
+        raise ValueError(message)
+    if generation is not None:
+        if generation.state != "ready" or not index_coverage(root)["usable"]:
+            message = "Index is unavailable or contains zero files; run codira index explicitly"
+            raise ValueError(message)
+        if generation.partial:
+            failed_files = generation.failed_files or []
+            changed = generation.analysis_fingerprint != analysis_fingerprint(root)
+            for failure in failed_files:
+                try:
+                    changed = (
+                        changed
+                        or str(file_metadata(root / failure["path"])["hash"])
+                        != failure["sha256"]
+                    )
+                except FileNotFoundError:
+                    changed = True
+            if changed:
+                return IndexRebuildRequest(
+                    message="[codira] Failed source or analysis configuration changed — refreshing...",
+                    reset_db=False,
+                    stderr=True,
+                )
+
+    return None
 
 
 def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
@@ -1183,6 +1259,10 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
             reset_db=False,
             stderr=False,
         )
+
+    generation_request = _inspect_generation_freshness(root)
+    if generation_request is not None:
+        return generation_request
 
     current_commit = _get_head_commit(root)
     indexed_commit = metadata.get("commit")
@@ -1304,7 +1384,10 @@ def _run_locked_index_refresh(
     else:
         print(request.message)
     active_index_backend(root=root).initialize(root)
-    index_repo(root)
+    index_repo(root, retry_failed_files=False)
+    if not index_coverage(root)["usable"]:
+        message = "Index is unavailable or contains zero files"
+        raise ValueError(message)
     print("[codira] Index ready", file=sys.stderr)
 
 

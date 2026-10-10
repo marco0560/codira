@@ -14,6 +14,7 @@ from codira.cli import (
     _run_plugins,
     build_query_daemon_cli_operations,
 )
+from codira.index_coverage import index_response_scope
 from codira.indexer import index_repo
 from codira.query_daemon import QueryDaemonIdentity, QueryRuntime, WarmQuerySession
 from codira.query_daemon_cli import route_cli_read
@@ -137,7 +138,10 @@ def test_cli_reads_route_warmly_with_direct_output_parity(tmp_path: Path) -> Non
             ),
         }
         for operation, (arguments, direct) in calls.items():
-            expected_exit, expected_stdout = _captured(direct)
+            with index_response_scope(
+                tmp_path if operation in {"cli.ctx", "cli.emb"} else None, warn=False
+            ):
+                expected_exit, expected_stdout = _captured(direct)
             routed = route_cli_read(tmp_path, operation, arguments, enabled=True)
             assert routed.mode == "warm", operation
             assert routed.exit_code == expected_exit, operation

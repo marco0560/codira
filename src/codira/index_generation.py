@@ -35,6 +35,18 @@ class IndexGeneration:
         Whether one or more source files failed during this generation.
     failed_file_count : int
         Number of source files that failed during this generation.
+    attempted_file_count : int | None
+        Number of selected successful and failed files.
+    failed_files : list[dict[str, str]] | None
+        Attempted hashes and original per-file failure details.
+    analysis_fingerprint : str | None
+        Digest binding retained failures to their analysis configuration.
+    coverage_complete : bool
+        Whether analysis and configured coverage have no known gaps.
+    Returns
+    -------
+    None
+        Immutable publication metadata.
     """
 
     schema_version: int
@@ -49,6 +61,10 @@ class IndexGeneration:
     indexed_file_count: int | None = None
     partial: bool = False
     failed_file_count: int = 0
+    attempted_file_count: int | None = None
+    failed_files: list[dict[str, str]] | None = None
+    analysis_fingerprint: str | None = None
+    coverage_complete: bool = True
 
 
 class IndexGenerationStore:
@@ -88,9 +104,38 @@ class IndexGenerationStore:
         """
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-            return IndexGeneration(**payload)
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            record = IndexGeneration(**payload)
+            if record.state not in {
+                "ready",
+                "updating",
+                "failed",
+            } or record.schema_version not in {1, 2}:
+                return None
+            if record.schema_version == 2 and record.state == "ready":
+                failures = record.failed_files or []
+                if record.failed_file_count != len(failures) or record.partial != bool(
+                    failures
+                ):
+                    return None
+                for failure in failures:
+                    if not all(
+                        isinstance(failure.get(key), str)
+                        for key in (
+                            "path",
+                            "sha256",
+                            "analyzer_name",
+                            "error_type",
+                            "reason",
+                        )
+                    ):
+                        return None
+                    path = failure["path"]
+                    if path.startswith("/") or ".." in path.split("/"):
+                        return None
+        except (OSError, AttributeError, TypeError, ValueError, json.JSONDecodeError):
             return None
+        else:
+            return record
 
     def write(self, record: IndexGeneration) -> None:
         """Atomically replace the record with one complete JSON document.
@@ -124,6 +169,10 @@ def transition_record(  # noqa: PLR0913
     indexed_file_count: int | None = None,
     partial: bool = False,
     failed_file_count: int = 0,
+    attempted_file_count: int | None = None,
+    failed_files: list[dict[str, str]] | None = None,
+    analysis_fingerprint: str | None = None,
+    coverage_complete: bool = True,
 ) -> IndexGeneration:
     """Build a timestamped generation transition record.
 
@@ -150,13 +199,22 @@ def transition_record(  # noqa: PLR0913
     failed_file_count : int, optional
         Number of source files that failed during this generation.
 
+    attempted_file_count : int | None, optional
+        Successful and failed selected files attempted during publication.
+    failed_files : list[dict[str, str]] | None, optional
+        Relative paths, attempted content hashes, and original failure details.
+    analysis_fingerprint : str | None, optional
+        Effective configuration and analyzer identity digest.
+    coverage_complete : bool, optional
+        Whether the selected scope has no analysis or coverage gaps.
+
     Returns
     -------
     IndexGeneration
         Complete immutable transition record.
     """
     return IndexGeneration(
-        schema_version=1,
+        schema_version=2,
         generation=generation,
         state=state,
         last_successful_generation=last_successful_generation,
@@ -168,4 +226,8 @@ def transition_record(  # noqa: PLR0913
         indexed_file_count=indexed_file_count,
         partial=partial,
         failed_file_count=failed_file_count,
+        attempted_file_count=attempted_file_count,
+        failed_files=failed_files,
+        analysis_fingerprint=analysis_fingerprint,
+        coverage_complete=coverage_complete,
     )

@@ -32,6 +32,7 @@ from codira.family import (
     FamilyError,
 )
 from codira.git import read_head_commit
+from codira.index_coverage import analysis_fingerprint, index_coverage
 from codira.index_generation import IndexGenerationStore
 from codira.mcp.adapter import MCPAdapter
 from codira.registry import (
@@ -176,7 +177,7 @@ def member_state(member: BoundFamilyMember) -> dict[str, object]:
     Raises
     ------
     FamilyError
-        If the index is unavailable, partial, stale, or being modified.
+        If the index is unavailable, stale, or being modified.
     """
     workspace = member.workspace
     if workspace is None:
@@ -184,13 +185,10 @@ def member_state(member: BoundFamilyMember) -> dict[str, object]:
         raise FamilyError(message)
     root = workspace.repository_root
     record = IndexGenerationStore(root).read()
-    if (
-        record is None
-        or record.state != "ready"
-        or record.partial
-        or not record.indexed_file_count
-    ):
-        message = "Member index is unavailable, updating, failed, empty, or partial; run family index"
+    if record is None or record.state != "ready" or not record.indexed_file_count:
+        message = (
+            "Member index is unavailable, updating, failed, or empty; run family index"
+        )
         raise FamilyError(message)
     backend = active_index_backend(root=root)
     analyzers = active_language_analyzers(root=root)
@@ -213,7 +211,16 @@ def member_state(member: BoundFamilyMember) -> dict[str, object]:
             "Member index is stale: repository revision or plugin inventory changed"
         )
         raise FamilyError(message)
+    if record.partial and record.analysis_fingerprint != analysis_fingerprint(root):
+        message = "Member failure configuration changed; run family index"
+        raise FamilyError(message)
     hashes = backend.load_existing_file_hashes(root)
+    hashes.update(
+        {
+            str(root / failure["path"]): failure["sha256"]
+            for failure in record.failed_files or []
+        }
+    )
     current = {
         str(path): str(file_metadata(path)["hash"])
         for path in iter_project_files(root, analyzers=analyzers)
@@ -223,6 +230,7 @@ def member_state(member: BoundFamilyMember) -> dict[str, object]:
         raise FamilyError(message)
     return {
         "generation": record.generation,
+        "index_coverage": index_coverage(root),
         "workspace_descriptor_sha256": member.descriptor_sha256,
         "routing_sha256": _digest(
             [str(root), str(workspace.state_root), str(workspace.config_file)]
@@ -533,6 +541,18 @@ class FamilyRuntime:
                     items.extend(self._collect(member, operation, query))
                 except (BackendError, OSError, RuntimeError, ValueError) as error:
                     selected_errors.append({"repository": name, "reason": str(error)})
+        partial_members = [
+            name
+            for name, state in states.items()
+            if (not repositories or name in repositories)
+            and cast("dict[str, object]", state).get("index_coverage", {})
+            and cast(
+                "dict[str, object]", cast("dict[str, object]", state)["index_coverage"]
+            )["partial"]
+        ]
+        if partial_members and not allow_partial:
+            message = "Family query has partial source coverage; pass allow_partial explicitly"
+            raise FamilyError(message)
         if selected_errors and not allow_partial:
             message = "Family query incomplete: " + "; ".join(
                 f"{item['repository']}: {item['reason']}" for item in selected_errors
@@ -649,6 +669,7 @@ class FamilyRuntime:
             "family": self.family.name,
             "repository": member.member.workspace,
             "family_descriptor_sha256": self.family.descriptor_sha256,
+            "index_coverage": state["index_coverage"],
         }
         return response
 
@@ -680,7 +701,16 @@ class FamilyRuntime:
         return {
             "contract_version": "1.0.0",
             "result": {
-                "status": "partial" if errors else "ok",
+                "status": "partial"
+                if errors
+                or any(
+                    cast(
+                        "dict[str, object]",
+                        cast("dict[str, object]", state).get("index_coverage", {}),
+                    ).get("partial")
+                    for state in states.values()
+                )
+                else "ok",
                 "items": items,
                 "excluded": errors,
             },

@@ -14,6 +14,7 @@ import pytest
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
+from codira.index_coverage import PARTIAL_INDEX_MESSAGE, index_coverage
 from codira.indexer import index_repo
 from codira.mcp.adapter import MCPAdapter
 from codira.mcp.contract import MCP_CONTRACT_VERSION
@@ -166,7 +167,7 @@ def test_mcp_surfaces_partial_ready_generation_warning(tmp_path: Path) -> None:
     assert provenance["generation"] == 1
     assert provenance["partial_index_warning"] == {
         "failed_file_count": 1,
-        "message": "The ready index omitted one or more failed source files.",
+        "message": PARTIAL_INDEX_MESSAGE,
     }
 
 
@@ -329,6 +330,7 @@ def test_adapter_returns_direct_core_symbol_result(tmp_path: Path) -> None:
         "trusted_root": ".",
         "execution_mode": "direct",
         "generation": 1,
+        "index_coverage": index_coverage(tmp_path),
     }
     assert result["result"] == {
         "symbols": [
@@ -792,6 +794,7 @@ def test_server_symbol_tool_invokes_the_direct_adapter(tmp_path: Path) -> None:
         "trusted_root": ".",
         "execution_mode": "direct",
         "generation": 1,
+        "index_coverage": index_coverage(tmp_path),
     }
     freshness = cast("dict[str, str]", structured["freshness"])
     assert freshness["schema_version"] == "25"

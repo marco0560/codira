@@ -22,7 +22,7 @@ import os
 import warnings
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from fnmatch import fnmatch
 from functools import partial
 from multiprocessing import get_context
@@ -53,6 +53,7 @@ from codira.contracts import (
     VectorStore,
 )
 from codira.git import read_head_commit
+from codira.index_coverage import analysis_fingerprint
 from codira.index_generation import IndexGenerationStore, transition_record
 from codira.models import (
     AnalysisResult,
@@ -283,6 +284,8 @@ class IndexReport:
         Whether the completed index result is safe to publish to readers.
     analysis_concurrency : IndexConcurrencyReport
         Requested and effective analysis scheduling details.
+    file_hashes : dict[str, str]
+        Attempted scanner hashes, including files whose analysis failed.
     """
 
     indexed: int
@@ -305,6 +308,7 @@ class IndexReport:
         effective_strategy="off",
         workers=1,
     )
+    file_hashes: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -449,6 +453,8 @@ class FinalizeIndexReportRequest:
         Whether persisted embedding data is complete for the indexed content.
     publication_ready : bool
         Whether the completed index result is safe to publish to readers.
+    file_hashes : dict[str, str]
+        Attempted scanner hashes, including files whose analysis failed.
     """
 
     plan: IndexPlan
@@ -468,6 +474,7 @@ class FinalizeIndexReportRequest:
         effective_strategy="off",
         workers=1,
     )
+    file_hashes: dict[str, str] = field(default_factory=dict)
 
 
 def _is_binary_coverage_candidate(path: Path) -> bool:
@@ -1252,7 +1259,7 @@ def _persist_full_index_bulk(  # noqa: PLR0913
     vector_store_config: dict[str, object],
     coverage_complete: bool,
     analyzers: list[LanguageAnalyzer],
-) -> tuple[int, int, int, int, list[ParsedFile], list[IndexFailure]]:
+) -> tuple[int, int, int, int, list[ParsedFile], list[IndexFailure], bool]:
     """
     Persist a full index through an optional backend-native bulk contract.
 
@@ -1283,8 +1290,8 @@ def _persist_full_index_bulk(  # noqa: PLR0913
 
     Returns
     -------
-    tuple[int, int, int, int, list[ParsedFile], list[IndexFailure]]
-        ``(recomputed, reused, skipped, pending, persisted_files, failures)`` for
+    tuple[int, int, int, int, list[ParsedFile], list[IndexFailure], bool]
+        ``(recomputed, reused, skipped, pending, persisted_files, failures, publication_ready)`` for
         analyzed files.
     """
     persisted_files: list[ParsedFile] = []
@@ -1330,7 +1337,7 @@ def _persist_full_index_bulk(  # noqa: PLR0913
                 vector_store=vector_store,
                 vector_set_identity=vector_set_identity,
                 vector_store_config=vector_store_config,
-                coverage_complete=coverage_complete,
+                coverage_complete=coverage_complete and not failures,
                 analyzers=analyzers,
             )
         )
@@ -1344,7 +1351,7 @@ def _persist_full_index_bulk(  # noqa: PLR0913
             )
             for path, file_metadata_snapshot, _analysis in persisted_files
         )
-        return (0, 0, 0, 0, [], failures)
+        return (0, 0, 0, 0, [], failures, False)
 
     return (
         result.embeddings_recomputed,
@@ -1353,6 +1360,7 @@ def _persist_full_index_bulk(  # noqa: PLR0913
         result.embeddings_pending,
         persisted_files,
         failures,
+        True,
     )
 
 
@@ -1690,6 +1698,7 @@ def _finalize_index_report(request: FinalizeIndexReportRequest) -> IndexReport:
         embedding_complete=request.embedding_complete,
         publication_ready=request.publication_ready,
         analysis_concurrency=request.analysis_concurrency,
+        file_hashes=request.file_hashes,
     )
 
 
@@ -1701,6 +1710,7 @@ def index_repo(
     full: bool = False,
     embedding_index_mode: str | None = None,
     analysis_concurrency: IndexConcurrencyConfig | None = None,
+    retry_failed_files: bool = True,
 ) -> IndexReport:
     """
     Incrementally scan repository files and update the backend-neutral index.
@@ -1718,6 +1728,10 @@ def index_repo(
     analysis_concurrency : codira.config.IndexConcurrencyConfig | None, optional
         Scheduler override supplied by the CLI. ``None`` uses effective
         configuration.
+
+    retry_failed_files : bool, optional
+        Retry retained failures explicitly. Automatic freshness refreshes set
+        this to false and retry only changed source or analysis inputs.
 
     Returns
     -------
@@ -1746,6 +1760,10 @@ def index_repo(
                 generation=generation,
                 state="updating",
                 last_successful_generation=last_successful,
+                failed_files=None if previous is None else previous.failed_files,
+                analysis_fingerprint=None
+                if previous is None
+                else previous.analysis_fingerprint,
             )
         )
         report = _index_repo_unlocked(
@@ -1753,6 +1771,7 @@ def index_repo(
             full=full,
             embedding_index_mode=embedding_index_mode,
             analysis_concurrency=analysis_concurrency,
+            retry_failed_files=retry_failed_files,
         )
         if (
             report.publication_ready
@@ -1787,9 +1806,14 @@ def index_repo(
         if commit:
             metadata["commit"] = commit
         _write_metadata_file(get_metadata_path(root), metadata)
+        current_fingerprint = analysis_fingerprint(root)
         if (
             previous is not None
             and previous.state == "ready"
+            and not previous.partial
+            and previous.backend_name == str(backend.name)
+            and previous.backend_version == str(backend.version)
+            and previous.analysis_fingerprint == current_fingerprint
             and report.indexed == 0
             and report.deleted == 0
             and report.failed == 0
@@ -1811,6 +1835,19 @@ def index_repo(
                 indexed_file_count=report.indexed + report.reused,
                 partial=report.failed > 0,
                 failed_file_count=report.failed,
+                attempted_file_count=report.indexed + report.reused + report.failed,
+                failed_files=[
+                    {
+                        "path": Path(failure.path).relative_to(root).as_posix(),
+                        "sha256": report.file_hashes.get(failure.path, ""),
+                        "analyzer_name": failure.analyzer_name,
+                        "error_type": failure.error_type,
+                        "reason": failure.reason,
+                    }
+                    for failure in report.failures
+                ],
+                analysis_fingerprint=current_fingerprint,
+                coverage_complete=not report.coverage_issues and report.failed == 0,
             )
         )
         return report
@@ -1822,6 +1859,7 @@ def _index_repo_unlocked(
     full: bool = False,
     embedding_index_mode: str | None = None,
     analysis_concurrency: IndexConcurrencyConfig | None = None,
+    retry_failed_files: bool = True,
 ) -> IndexReport:
     """
     Incrementally update the index while the caller owns its mutation lock.
@@ -1837,6 +1875,10 @@ def _index_repo_unlocked(
         Embedding population mode override supplied by the public coordinator.
     analysis_concurrency : codira.config.IndexConcurrencyConfig | None, optional
         Scheduler override supplied by the public coordinator.
+
+    retry_failed_files : bool, optional
+        Retry retained failures explicitly. Automatic freshness refreshes set
+        this to false and retry only changed source or analysis inputs.
 
     Returns
     -------
@@ -1865,6 +1907,9 @@ def _index_repo_unlocked(
     coverage_issues = _audit_canonical_directory_coverage(root, analyzers=analyzers)
     current_state = _collect_project_scan_state(root, analyzers=analyzers)
     coverage_issues.extend(current_state.coverage_issues)
+    scan_hashes = {
+        path: str(meta["hash"]) for path, meta in current_state.metadata_by_path.items()
+    }
     planning_conn = index_backend.open_connection(root)
     try:
         existing_state = _load_existing_index_state(
@@ -1908,6 +1953,32 @@ def _index_repo_unlocked(
         )
     finally:
         index_backend.close_connection(planning_conn)
+    cached_failures: list[IndexFailure] = []
+    if not full and not retry_failed_files:
+        previous = IndexGenerationStore(root).read()
+        if (
+            previous is not None
+            and previous.analysis_fingerprint == analysis_fingerprint(root)
+        ):
+            for failure in previous.failed_files or []:
+                path = str(root / failure["path"])
+                if (
+                    path in plan.indexed_paths
+                    and scan_hashes.get(path) == failure["sha256"]
+                ):
+                    cached_failures.append(
+                        IndexFailure(
+                            path=path,
+                            analyzer_name=failure["analyzer_name"],
+                            error_type=failure["error_type"],
+                            reason=failure["reason"],
+                        )
+                    )
+            cached_paths = {f.path for f in cached_failures}
+            plan = replace(
+                plan,
+                indexed_paths=[p for p in plan.indexed_paths if p not in cached_paths],
+            )
     resolved_analysis_concurrency = _resolve_index_concurrency(
         concurrency_config,
         analyzers,
@@ -1923,8 +1994,9 @@ def _index_repo_unlocked(
         return _finalize_index_report(
             FinalizeIndexReportRequest(
                 plan=plan,
+                file_hashes=scan_hashes,
                 parsed_files=[],
-                failures=[],
+                failures=cached_failures,
                 warnings=[],
                 coverage_issues=coverage_issues,
                 embeddings_recomputed=0,
@@ -1941,6 +2013,7 @@ def _index_repo_unlocked(
         analyzers,
         resolved_analysis_concurrency,
     )
+    failures.extend(cached_failures)
     coverage_issues.extend(_analysis_status_coverage_issues(parsed_files))
     if full and isinstance(index_backend, FullIndexBulkBackend):
         (
@@ -1950,6 +2023,7 @@ def _index_repo_unlocked(
             changed_file_embeddings_pending,
             persisted_files,
             persistence_failures,
+            publication_ready,
         ) = _persist_full_index_bulk(
             root=root,
             backend=index_backend,
@@ -1960,7 +2034,7 @@ def _index_repo_unlocked(
             vector_store=vector_store_context.store,
             vector_set_identity=vector_store_context.identity,
             vector_store_config=vector_store_context.config,
-            coverage_complete=not coverage_issues,
+            coverage_complete=not coverage_issues and not failures,
             analyzers=analyzers,
         )
         failures.extend(persistence_failures)
@@ -1968,6 +2042,7 @@ def _index_repo_unlocked(
         return _finalize_index_report(
             FinalizeIndexReportRequest(
                 plan=plan,
+                file_hashes=scan_hashes,
                 parsed_files=persisted_files,
                 failures=failures,
                 warnings=collected_warnings,
@@ -1978,7 +2053,7 @@ def _index_repo_unlocked(
                 embeddings_pending=changed_file_embeddings_pending,
                 embedding_index_mode=effective_embedding_index_mode,
                 embedding_complete=changed_file_embeddings_pending == 0,
-                publication_ready=not persistence_failures,
+                publication_ready=publication_ready,
                 analysis_concurrency=resolved_analysis_concurrency,
             )
         )
@@ -2037,7 +2112,7 @@ def _index_repo_unlocked(
                 root=root,
                 backend_name=str(index_backend.name),
                 backend_version=str(index_backend.version),
-                coverage_complete=not coverage_issues,
+                coverage_complete=not coverage_issues and not failures,
                 analyzers=analyzers,
             )
         )
@@ -2046,6 +2121,7 @@ def _index_repo_unlocked(
         return _finalize_index_report(
             FinalizeIndexReportRequest(
                 plan=plan,
+                file_hashes=scan_hashes,
                 parsed_files=persisted_files,
                 failures=failures,
                 warnings=collected_warnings,

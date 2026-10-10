@@ -632,3 +632,30 @@ def test_family_is_discoverable_in_cli_capabilities() -> None:
         "evidence",
     }
     assert "family" in build_parser().format_help()
+
+
+def test_family_queries_usable_partial_member(
+    family_setup: tuple[Path, WorkspaceRegistry, FamilyDefinition],
+) -> None:
+    """Include valid evidence from a partial member only with explicit consent.
+
+    Parameters
+    ----------
+    family_setup : tuple
+        Independent indexed workspace fixture.
+
+    Returns
+    -------
+    None
+        Strict rejection and explicitly labeled partial retrieval are checked.
+    """
+    family = family_setup[2]
+    with member_scope(family.members[0]) as adapter:
+        (adapter.root / "broken.py").write_text("print 'legacy'\n")
+        assert index_repo(adapter.root).failed == 1
+    runtime = FamilyRuntime(family)
+    with pytest.raises(FamilyError, match="partial source coverage"):
+        runtime.query("symbol", "helper")
+    response = runtime.query("symbol", "helper", allow_partial=True)
+    assert len(_items(response)) == 2
+    assert cast("dict[str, object]", response["result"])["status"] == "partial"
