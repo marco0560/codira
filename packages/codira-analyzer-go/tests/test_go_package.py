@@ -25,7 +25,7 @@ def test_go_package_declares_expected_entry_point() -> None:
             encoding="utf-8"
         )
     )
-    assert project["project"]["version"] == "2.0.1"
+    assert project["project"]["version"] == "2.0.2"
     assert "tree-sitter-go>=0.23.4" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "go": "codira_analyzer_go:build_analyzer"
@@ -166,3 +166,42 @@ def test_go_blank_bindings_and_initializers_have_valid_identities(
         item.stable_id for item in initializers
     }
     assert result == analyzer.analyze_file(source, tmp_path)
+
+
+def test_grouped_names_and_callback_declarations(tmp_path: Path) -> None:
+    """Keep punctuation and callback-local bindings out of package declarations.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable valid Go fixture.
+
+    Returns
+    -------
+    None
+        Named package bindings remain unique and retain their actual kinds.
+    """
+    source = tmp_path / "callbacks.go"
+    source.write_text(
+        "package callbacks\n"
+        'const (\n statusSuccess, statusError = "success", "error"\n'
+        ' rtVector, rtMatrix, rScalar = "vector", "matrix", "scalar"\n)\n'
+        "var (\n first, second = 1, 2\n"
+        " one = func() { var rows, r int; const n = 1; _ = rows; _ = r; _ = n }\n"
+        " two = func() { var rows, r int; const n = 2; _ = rows; _ = r; _ = n }\n)\n"
+    )
+    result = GoAnalyzer().analyze_file(source, tmp_path)
+    assert [(item.kind, item.name) for item in result.declarations] == [
+        ("constant", "statusSuccess"),
+        ("constant", "statusError"),
+        ("constant", "rtVector"),
+        ("constant", "rtMatrix"),
+        ("constant", "rScalar"),
+        ("variable", "first"),
+        ("variable", "second"),
+        ("variable", "one"),
+        ("variable", "two"),
+    ]
+    ids = [item.stable_id for item in result.declarations]
+    assert len(ids) == len(set(ids))
+    assert result.status is None

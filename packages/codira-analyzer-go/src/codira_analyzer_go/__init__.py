@@ -97,6 +97,28 @@ def _normalized(node: Node | None, source: bytes) -> str:
     return _SPACE.sub(" ", _text(node, source)).strip()
 
 
+def _declaration_specs(node: Node) -> Iterable[Node]:
+    """Yield package declaration specs without entering initializer bodies.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Package-level variable or constant declaration.
+
+    Returns
+    -------
+    iterable of tree_sitter.Node
+        Direct specs, including specs grouped by a variable-spec list.
+    """
+    for child in node.named_children:
+        if child.type in {"const_spec", "var_spec"}:
+            yield child
+        elif child.type == "var_spec_list":
+            yield from (
+                spec for spec in child.named_children if spec.type == "var_spec"
+            )
+
+
 def _descendants(node: Node) -> Iterable[Node]:
     """Yield named descendants in source order.
 
@@ -401,7 +423,7 @@ class GoAnalyzer:
     """
 
     name = "go"
-    version = "2"
+    version = "3"
     discovery_globs: tuple[str, ...] = ("*.go",)
     default_coverage_roots: tuple[str, ...] = (
         "cmd",
@@ -590,10 +612,12 @@ class GoAnalyzer:
                             )
                         )
             elif node.type in {"const_declaration", "var_declaration"}:
-                for spec in _descendants(node):
-                    if spec.type not in {"const_spec", "var_spec"}:
-                        continue
-                    for name_node in spec.children_by_field_name("name"):
+                for spec in _declaration_specs(node):
+                    for name_node in (
+                        child
+                        for child in spec.children_by_field_name("name")
+                        if child.type == "identifier"
+                    ):
                         name = _normalized(name_node, source)
                         if (
                             name
