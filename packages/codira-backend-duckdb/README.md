@@ -54,6 +54,9 @@ Operator model:
 * core `codira` remains backend-neutral; this package owns DuckDB bootstrap and
   storage behavior
 * DuckDB physical schema DDL is package-local in `codira_backend_duckdb.schema`
+* call and callable-reference CSV staging explicitly uses the Excel dialect
+  (comma delimiter, double-quote quoting and doubled quote escaping); DuckDB
+  dialect guessing is disabled so late quoted or multiline fields remain valid
 * full-index rebuilds use a DuckDB-native bulk path that recreates index tables,
   skips fresh-output cache reads, and writes embeddings without stale-row
   deletes or SQL window deduplication

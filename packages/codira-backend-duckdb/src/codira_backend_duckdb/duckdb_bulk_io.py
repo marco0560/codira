@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 def _temporary_csv_path_for_rows(rows: Sequence[Sequence[object]]) -> Path:
     """
-    Write rows to a temporary CSV file for DuckDB bulk import.
+    Write Excel-dialect CSV rows for explicitly configured DuckDB bulk import.
 
     Parameters
     ----------
@@ -35,7 +35,7 @@ def _temporary_csv_path_for_rows(rows: Sequence[Sequence[object]]) -> Path:
         delete=False,
     ) as handle:
         csv_path = Path(handle.name)
-        csv.writer(handle).writerows(rows)
+        csv.writer(handle, dialect="excel").writerows(rows)
     return csv_path
 
 

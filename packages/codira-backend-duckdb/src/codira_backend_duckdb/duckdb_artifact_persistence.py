@@ -1880,7 +1880,11 @@ def _flush_call_record_rows(
                 SELECT *
                 FROM read_csv(
                     ?,
+                    auto_detect=false,
                     header=false,
+                    delim=',',
+                    quote='"',
+                    escape='"',
                     nullstr='__CODIRA_NULL_SENTINEL__',
                     columns={
                         'file_id': 'INTEGER',
@@ -1956,7 +1960,11 @@ def _flush_callable_ref_record_rows(
                 SELECT *
                 FROM read_csv(
                     ?,
+                    auto_detect=false,
                     header=false,
+                    delim=',',
+                    quote='"',
+                    escape='"',
                     nullstr='__CODIRA_NULL_SENTINEL__',
                     columns={
                         'file_id': 'INTEGER',
