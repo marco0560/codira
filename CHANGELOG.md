@@ -1,3 +1,17 @@
+## [2.4.4](https://github.com/marco0560/codira/compare/v2.4.3...v2.4.4) (2026-10-11)
+
+### Bug Fixes
+
+* **analyzer:** normalize deep Python syntax and finalize failures ([2f6a3e3](https://github.com/marco0560/codira/commit/2f6a3e3fde383f7a62e136dfc3d3dded97748da8))
+* **analyzer:** preserve Go package declaration scope and names ([3c14745](https://github.com/marco0560/codira/commit/3c147458c4f9efc81ff4911315f14aa38b4cb5d4))
+* **process:** isolate benchmark registries by backend profile ([b0a3433](https://github.com/marco0560/codira/commit/b0a34333affa5f7c33f7652ca6c290766f7a557b))
+* **process:** retain command errors and independent RSS evidence ([f2c4033](https://github.com/marco0560/codira/commit/f2c403334f21478e49c93c22649cf9f38a1d4d28))
+
+### Performance Improvements
+
+* **backend:** batch architecture reads and bound SVG layout ([8063b48](https://github.com/marco0560/codira/commit/8063b48b28d1bb62648cdd8389ad2e26928e1e3b))
+* **query:** batch source-anchor enclosing range resolution ([3efb109](https://github.com/marco0560/codira/commit/3efb109b6d34b941ce77dcf2058e81cb4ce495c7))
+
 ## [2.4.3](https://github.com/marco0560/codira/compare/v2.4.2...v2.4.3) (2026-10-11)
 
 ### Bug Fixes
