@@ -533,6 +533,223 @@ def items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return list(value.get("items", value.get("symbols", value.get("results", []))))
 
 
+def planned_stage_keys(spec: dict[str, Any]) -> set[str]:
+    """Enumerate potential measurements without executing the local corpus.
+
+    Parameters
+    ----------
+    spec : dict
+        Parsed analyzer-style or stress manifest.
+
+    Returns
+    -------
+    set of str
+        Stage identities, including conditional tests pruned during execution.
+        Repeated samples belong to one stage.
+    """
+    keys = {"capabilities", "plugins"}
+    profiles = spec.get("profiles", [])
+    for profile in profiles:
+        for repo in spec.get("repositories", []):
+            prefix = f"{profile['id']}/{repo['label']}"
+            stages = {
+                "workspace",
+                "config",
+                "index-full",
+                "index-incremental",
+                "symlist",
+                "cov",
+                "audit",
+                "ctx",
+                "ctx-prompt",
+                "ctx-explain",
+                "arch",
+                "sym",
+                "calls",
+                "calls-tree",
+                "refs",
+                "refs-incoming",
+            }
+            if profile.get("embeddings"):
+                stages.update(
+                    {"index-embeddings", "emb", "docs", "emb-rebuild", "emb-purge"}
+                )
+            if spec.get("extended"):
+                stages.update(
+                    {
+                        "config-dump",
+                        "config-explain",
+                        "workspace-show",
+                        "workspace-validate",
+                        "mcp",
+                        "mcp/cli-evidence",
+                    }
+                )
+                if profile["id"] == profiles[0]["id"]:
+                    stages.update({"index-process", "index-thread"})
+            keys.update(f"{prefix}/{stage}" for stage in stages)
+    if spec.get("extended"):
+        keys.update(
+            f"family/{stage}"
+            for stage in (
+                "index",
+                "status",
+                "validate",
+                "ctx",
+                "sym",
+                "refs",
+                "mcp",
+                "mcp/cli-evidence",
+            )
+        )
+        daemon_repository = spec.get("daemon_repository")
+        if daemon_repository is not None:
+            keys.update(
+                f"daemons/{daemon_repository}/{stage}"
+                for stage in (
+                    "workspace",
+                    "index",
+                    "warm-query",
+                    "foreground",
+                    "restore-index",
+                    "purge-owned-vectors",
+                    "reset-owned-semantic-state",
+                )
+            )
+        keys.update({"calibration", "installer"})
+    return keys
+
+
+def retains_checkpoint(status: str, retry_failed: bool) -> bool:
+    """Decide whether an existing stage needs another attempt.
+
+    Parameters
+    ----------
+    status : str
+        Retained outcome.
+    retry_failed : bool
+        Explicit operator request to retry failed stages.
+
+    Returns
+    -------
+    bool
+        Whether execution reuses the checkpoint, including usable partial results.
+    """
+    return status in QUERYABLE_STATUSES or (
+        not retry_failed and status != "interrupted"
+    )
+
+
+class StageProgress:
+    """Track measurements pending in this invocation, excluding checkpoints.
+
+    Parameters
+    ----------
+    keys : set of str
+        Potential stage identities selected by the manifest.
+    root : pathlib.Path
+        Durable campaign root containing any resume checkpoints.
+    retry_failed : bool
+        Whether failed stages are eligible for another attempt.
+
+    Returns
+    -------
+    None
+        Counters are terminal-only and do not modify measurement receipts.
+    """
+
+    def __init__(self, keys: set[str], root: Path, retry_failed: bool) -> None:
+        """Remove retained checkpoints from the initial pending inventory.
+
+        Parameters
+        ----------
+        keys : set of str
+            Potential measurement identities.
+        root : pathlib.Path
+            Campaign evidence root.
+        retry_failed : bool
+            Explicit retry control.
+
+        Returns
+        -------
+        None
+            Numbering starts at one for newly measured stages on every launch.
+        """
+        self.pending = keys.copy()
+        self.completed = 0
+        for key in keys:
+            record = root / "stages" / key / "result.json"
+            if record.exists() and retains_checkpoint(
+                json.loads(record.read_text())["status"], retry_failed
+            ):
+                self.omit(key)
+
+    def omit(self, prefix: str) -> None:
+        """Remove tests omitted by a prerequisite or finished orchestration.
+
+        Parameters
+        ----------
+        prefix : str
+            Exact stage or slash-delimited group identity.
+
+        Returns
+        -------
+        None
+            Unrelated groups and already measured tests are unaffected.
+        """
+        self.pending.difference_update(
+            key
+            for key in tuple(self.pending)
+            if key == prefix or key.startswith(prefix + "/")
+        )
+
+    def report(self, key: str, status: str, *, measured: bool = True) -> None:
+        """Prefix a terminal outcome with its ordinal and remaining stage count.
+
+        Parameters
+        ----------
+        key : str
+            Test name printed after the progress prefix.
+        status : str
+            Existing outcome text or exclusion reason.
+        measured : bool, optional
+            Whether a test was attempted rather than excluded.
+
+        Returns
+        -------
+        None
+            Remaining tests exclude this outcome and retained checkpoints.
+        """
+        self.pending.discard(key)
+        if measured:
+            self.completed += 1
+        ordinal = str(self.completed) if measured else "skip"
+        print(f"[{ordinal}; {len(self.pending)} remaining]", key, status, flush=True)
+
+    def omit_unavailable(
+        self, prefix: str, stages: tuple[str, ...], *, available: bool
+    ) -> None:
+        """Drop conditional tests whose discovery prerequisite is unavailable.
+
+        Parameters
+        ----------
+        prefix : str
+            Repository/profile identity.
+        stages : tuple of str
+            Stage suffixes sharing the prerequisite.
+        available : bool
+            Whether the prerequisite permits these measurements.
+
+        Returns
+        -------
+        None
+            Only unavailable tests are removed from the pending inventory.
+        """
+        if not available:
+            for stage in stages:
+                self.omit(prefix + "/" + stage)
+
+
 class Campaign:
     """Own one immutable run and its isolated state.
 
@@ -546,6 +763,11 @@ class Campaign:
         Whether failed stages may be attempted again.
     architecture_timeout_seconds : float, optional
         Rendering limit per invocation, or zero for unlimited rendering.
+
+    Returns
+    -------
+    None
+        Owns stage checkpoints, isolated execution and terminal progress.
     """
 
     def __init__(
@@ -577,6 +799,9 @@ class Campaign:
         self.spec = json.loads(manifest.read_text())
         self.root = root.resolve()
         self.retry_failed = retry_failed
+        self.progress = StageProgress(
+            planned_stage_keys(self.spec), self.root, retry_failed
+        )
         self.architecture_timeout_seconds = architecture_timeout_seconds
         self.env = dict(os.environ)
         for name in tuple(self.env):
@@ -650,9 +875,7 @@ class Campaign:
         record = destination / "result.json"
         if record.exists():
             old: dict[str, Any] = json.loads(record.read_text())
-            if old["status"] in QUERYABLE_STATUSES or (
-                not self.retry_failed and old["status"] != "interrupted"
-            ):
+            if retains_checkpoint(old["status"], self.retry_failed):
                 self.results.append(old)
                 return old
         attempts = (
@@ -742,7 +965,7 @@ class Campaign:
                 )
             if samples[-1]["status"] not in QUERYABLE_STATUSES:
                 break
-        result = {
+        result: dict[str, Any] = {
             "key": key,
             "argv": argv,
             "samples": samples,
@@ -774,7 +997,7 @@ class Campaign:
             write(attempts / "result.json", result)
         write(record, result)
         self.results.append(result)
-        print(key, result["status"], flush=True)
+        self.progress.report(key, result["status"])
         if interrupted:
             raise KeyboardInterrupt
         return result
@@ -794,6 +1017,7 @@ class Campaign:
         None
             The durable exclusion remains visible in the summary.
         """
+        self.progress.omit(prefix)
         self.exclude_stage(prefix + "/queries", reason)
 
     def exclude_stage(self, key: str, reason: str) -> None:
@@ -814,7 +1038,8 @@ class Campaign:
         result = {"key": key, "status": "excluded", "reason": reason}
         write(self.root / "stages" / key / "result.json", result)
         self.results.append(result)
-        print(key, "excluded:", reason, flush=True)
+        self.progress.omit(key)
+        self.progress.report(key, "excluded: " + reason, measured=False)
 
     def cli(
         self, key: str, workspace: str, argv: list[str], *, repeats: int = 1
@@ -1049,6 +1274,11 @@ class Campaign:
             (s for s in symbols if s.get("type") in ("function", "method")),
             symbols[0] if symbols else None,
         )
+        self.progress.omit_unavailable(
+            prefix,
+            ("sym", "calls", "calls-tree", "refs", "refs-incoming"),
+            available=symbol is not None,
+        )
         query = symbol["name"].replace("_", " ") if symbol else repo["query"]
         for operation in (
             ["cov", "--json"],
@@ -1138,6 +1368,8 @@ class Campaign:
             Required but unready embedding stages are visibly excluded.
         """
         if self.requires_embeddings[name] and not self.embedding_ready[name]:
+            for stage in ("emb", "docs", "emb-rebuild", "emb-purge"):
+                self.progress.omit(prefix + "/" + stage)
             self.exclude_queries(
                 prefix + "/semantic", "embedding population did not complete"
             )
@@ -1190,7 +1422,11 @@ class Campaign:
                     or not result.get("usable", True)
                     or has_analysis_failures(result)
                 ):
+                    self.progress.omit(prefix + "/index-thread")
                     return result
+        else:
+            self.progress.omit(prefix + "/index-process")
+            self.progress.omit(prefix + "/index-thread")
 
         return indexed
 
@@ -1217,9 +1453,8 @@ class Campaign:
         record = self.root / "stages" / key / "result.json"
         if record.exists():
             previous: dict[str, Any] = json.loads(record.read_text())
-            if previous["status"] in QUERYABLE_STATUSES or (
-                not self.retry_failed and previous["status"] != "interrupted"
-            ):
+            if retains_checkpoint(previous["status"], self.retry_failed):
+                self.progress.omit(key + "/cli-evidence")
                 self.results.append(previous)
                 return previous
         destination = record.parent
@@ -1399,7 +1634,8 @@ class Campaign:
         write(attempts / "result.json", result)
         write(record, result)
         self.results.append(result)
-        print(key, result["status"], flush=True)
+        self.progress.omit(key + "/cli-evidence")
+        self.progress.report(key, result["status"])
         return result
 
     def daemons(self, member: dict[str, Any]) -> None:
@@ -1464,9 +1700,7 @@ class Campaign:
         result_path = self.root / "stages" / key / "foreground" / "result.json"
         if result_path.exists():
             previous = json.loads(result_path.read_text())
-            if previous["status"] in QUERYABLE_STATUSES or (
-                not self.retry_failed and previous["status"] != "interrupted"
-            ):
+            if retains_checkpoint(previous["status"], self.retry_failed):
                 self.results.append(previous)
                 if previous["status"] in QUERYABLE_STATUSES:
                     self.finish_daemon(key, name)
@@ -1540,6 +1774,7 @@ class Campaign:
                 source.write_bytes(original)
         write(result_path, result)
         self.results.append(result)
+        self.progress.report(result["key"], result["status"])
         self.finish_daemon(key, name)
 
     def finish_daemon(self, key: str, name: str) -> None:
@@ -2167,6 +2402,8 @@ def main() -> int:
                 }
                 campaign.results.append(result)
                 write(root / "stages" / result["key"] / "result.json", result)
+            finally:
+                campaign.progress.omit(profile["id"] + "/" + repo["label"])
             write(
                 root / "summary.json", {"results": campaign.results, "complete": False}
             )
@@ -2195,6 +2432,8 @@ def main() -> int:
                 }
                 campaign.results.append(result)
                 write(root / "stages" / result["key"] / "result.json", result)
+            finally:
+                campaign.progress.omit(key)
             write(
                 root / "summary.json", {"results": campaign.results, "complete": False}
             )

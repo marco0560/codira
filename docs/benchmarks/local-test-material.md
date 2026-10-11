@@ -8,6 +8,15 @@ own `uv` environment. Corpus revisions, local model assets and Graphviz must
 already be available; execution is offline. Prepared configurations preserve
 original model paths and documentation routes.
 
+Stage outcomes are prefixed with the current test number and planned tests still
+to run, for example `[17; 342 remaining] sqlite-structural/python-django/arch passed`.
+One test means one stage measurement, including all its repeated samples; a stress
+MCP probe groups its tool calls into one stage. Numbers restart at one for each
+launch and resume counts exclude retained checkpoints. The remaining count excludes
+the displayed test and shrinks as missing prerequisites or symbol discoveries
+remove conditional tests. Exclusions use `[skip; N remaining]` and do not advance
+the test number. Both local suites use this same progress output.
+
 A failed source does not discard successful structural indexing. A usable
 partial index supports structural symbol, reference, graph and audit reads.
 Their receipts carry `index_coverage`, `comparison_group=partial_coverage`, and

@@ -17,6 +17,198 @@ import pytest
 from scripts import run_test_material_benchmarks as RUNNER
 
 
+def test_stage_progress_numbers_measurements_and_prunes_exclusions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Show exact remaining planned measurements without numbering skips.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty campaign root.
+    capsys : pytest.CaptureFixture[str]
+        Captured terminal output.
+
+    Returns
+    -------
+    None
+        Numbered outcomes reach zero and similarly named groups stay separate.
+    """
+    progress = RUNNER.StageProgress(
+        {"a/index", "a/query", "ab/index", "plugins"}, tmp_path, False
+    )
+    progress.report("a/index", "failed")
+    progress.omit("a")
+    progress.report("a/queries", "excluded: unusable index", measured=False)
+    progress.report("ab/index", "partial")
+    progress.report("plugins", "passed")
+    assert capsys.readouterr().out.splitlines() == [
+        "[1; 3 remaining] a/index failed",
+        "[skip; 2 remaining] a/queries excluded: unusable index",
+        "[2; 1 remaining] ab/index partial",
+        "[3; 0 remaining] plugins passed",
+    ]
+
+
+@pytest.mark.parametrize("retry_failed", [False, True])
+def test_stage_progress_resume_matches_checkpoint_policy(
+    tmp_path: Path, retry_failed: bool
+) -> None:
+    """Count only stages that execution will actually retry on unchanged resume.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Retained stage evidence.
+    retry_failed : bool
+        Explicit operator retry option.
+
+    Returns
+    -------
+    None
+        Partial success stays retained and interrupted tests remain pending.
+    """
+    for status in (
+        "passed",
+        "empty",
+        "partial",
+        "partial_empty",
+        "failed",
+        "interrupted",
+        "excluded",
+    ):
+        record = tmp_path / "stages" / status / "result.json"
+        RUNNER.write(record, {"status": status})
+    progress = RUNNER.StageProgress(
+        {
+            "passed",
+            "empty",
+            "partial",
+            "partial_empty",
+            "failed",
+            "interrupted",
+            "excluded",
+            "new",
+        },
+        tmp_path,
+        retry_failed,
+    )
+    expected = {"interrupted", "new"}
+    if retry_failed:
+        expected.update({"failed", "excluded"})
+    assert progress.pending == expected
+    assert progress.completed == 0
+
+
+def test_resume_retained_mcp_omits_nested_evidence(tmp_path: Path) -> None:
+    """Exclude child evidence when its retained MCP parent will not run.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Parent checkpoint with an interrupted evidence child.
+
+    Returns
+    -------
+    None
+        Explicit retry does not count a child bypassed by checkpoint reuse.
+    """
+    root = tmp_path / "run"
+    RUNNER.write(root / "stages/member/mcp/result.json", {"status": "partial"})
+    RUNNER.write(
+        root / "stages/member/mcp/cli-evidence/result.json", {"status": "interrupted"}
+    )
+    progress = RUNNER.StageProgress(
+        {"member/mcp", "member/mcp/cli-evidence"}, root, True
+    )
+    assert progress.pending == set()
+
+
+@pytest.mark.parametrize("extended", [False, True])
+def test_progress_inventory_matches_repository_execution_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extended: bool
+) -> None:
+    """Keep progress planning aligned with both profiles and stress schedulers.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated fake manifest and symbol payload.
+    monkeypatch : pytest.MonkeyPatch
+        Replaces all measured invocations with deterministic outcomes.
+    extended : bool
+        Select analyzer-style or stress execution paths.
+
+    Returns
+    -------
+    None
+        Actual successful repository stage keys match the planned inventory.
+    """
+    profiles = [
+        {"id": "sqlite", "embeddings": False},
+        {"id": "duckdb", "embeddings": True},
+    ]
+    repo = {
+        "label": "fixture",
+        "path": str(tmp_path),
+        "configs": {"sqlite": "config.toml", "duckdb": "config.toml"},
+        "repetitions": 3,
+        "query": "answer",
+    }
+    spec = {
+        "temporary_root": str(tmp_path),
+        "profiles": profiles,
+        "repositories": [repo],
+        "extended": extended,
+        "daemon_repository": "fixture",
+    }
+    manifest = tmp_path / "manifest.json"
+    RUNNER.write(manifest, spec)
+    output = tmp_path / "symbols.json"
+    RUNNER.write(output, {"symbols": [{"type": "function", "name": "answer"}]})
+    campaign = RUNNER.Campaign(manifest, tmp_path / "run", False)
+    actual: set[str] = set()
+
+    def simulate(key: str, argv: list[str], *, repeats: int = 1) -> dict[str, Any]:
+        """Collect stage identities without launching benchmark commands.
+
+        Parameters
+        ----------
+        key : str
+            Measured stage identity.
+        argv : list of str
+            Unexecuted argument vector.
+        repeats : int, optional
+            Requested samples within one stage.
+
+        Returns
+        -------
+        dict
+            Complete structural and embedding prerequisites plus symbol output.
+        """
+        actual.add(key)
+        return {
+            "key": key,
+            "status": "passed",
+            "usable": True,
+            "embedding_complete": True,
+            "stdout": str(output),
+        }
+
+    monkeypatch.setattr(campaign, "command", simulate)
+    planned = RUNNER.planned_stage_keys(spec)
+    for profile in profiles:
+        assert campaign.repository(repo, profile) is not None
+        prefix = str(profile["id"]) + "/fixture/"
+        expected = {key for key in planned if key.startswith(prefix)}
+        if extended:
+            expected.difference_update({prefix + "mcp", prefix + "mcp/cli-evidence"})
+        assert {key for key in actual if key.startswith(prefix)} == expected
+    assert ("family/mcp/cli-evidence" in planned) == extended
+    assert ("daemons/fixture/foreground" in planned) == extended
+    assert ("installer" in planned) == extended
+
+
 @pytest.mark.parametrize(
     ("argv", "stdout", "stderr", "code", "status"),
     [
@@ -88,7 +280,7 @@ def test_outcomes(
 
 
 def test_empty_checkpoint_resumes_without_process(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Reuse an empty-result checkpoint and retain every measured invocation.
 
@@ -98,6 +290,8 @@ def test_empty_checkpoint_resumes_without_process(
         Disposable test workspace.
     monkeypatch : pytest.MonkeyPatch
         Replaces process execution with retained-output simulation.
+    capsys : pytest.CaptureFixture[str]
+        Captured progress output.
 
     Returns
     -------
@@ -107,6 +301,7 @@ def test_empty_checkpoint_resumes_without_process(
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"temporary_root": str(tmp_path)}))
     campaign = RUNNER.Campaign(manifest, tmp_path / "run", False)
+    campaign.progress = RUNNER.StageProgress({"refs"}, campaign.root, False)
     invocations = []
 
     def simulate(
@@ -148,6 +343,7 @@ def test_empty_checkpoint_resumes_without_process(
     assert len(invocations) == 3
     assert len(first["samples"]) == 3
     assert all(Path(sample["stdout"]).is_file() for sample in first["samples"])
+    assert capsys.readouterr().out == "[1; 0 remaining] refs empty\n"
 
 
 @pytest.mark.parametrize("extended", [False, True])
