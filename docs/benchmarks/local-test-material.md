@@ -142,7 +142,10 @@ Architecture inventory, imports, calls and callable references require four bulk
 reads from one connection and omit unused per-symbol graph metrics. Backends
 without the extension use the established relation APIs through one shared
 connection. Cycle detection is iterative, including graphs deeper than Python's
-recursion limit. The logical schema and backend schema revisions are unchanged.
+recursion limit. Import destinations are resolved by looking up successively
+shorter dotted prefixes in the indexed module set, preserving the longest match
+without scanning every module for each import. The logical schema and backend
+schema revisions are unchanged.
 
 `codira arch --no-svg` writes the mandatory DOT, Markdown, dependencies, hotspots,
 violations and manifest without layout. By default optional SVG rendering has a

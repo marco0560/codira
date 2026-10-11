@@ -770,13 +770,16 @@ def _resolve_import_destination(
     -------
     str | None
         Longest matching indexed module, or ``None`` when unavailable.
+        Only dotted prefixes of the import are looked up; the module inventory
+        is never scanned.
     """
-    matches = [
-        module
-        for module in module_names
-        if import_name == module or import_name.startswith(f"{module}.")
-    ]
-    return max(matches, key=len) if matches else None
+    candidate = import_name
+    while True:
+        if candidate in module_names:
+            return candidate
+        candidate, separator, _ = candidate.rpartition(".")
+        if not separator:
+            return None
 
 
 def build_architecture_model_from_index(

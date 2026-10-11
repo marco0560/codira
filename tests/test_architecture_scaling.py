@@ -32,9 +32,68 @@ from codira.indexer import index_repo
 from codira.registry import active_index_backend
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
     from codira.contracts import BackendQueryConnection, BackendQueryCursor
+
+
+class LookupOnlyModules(set[str]):
+    """Reject full inventory scans during import destination resolution."""
+
+    def __iter__(self) -> Iterator[str]:
+        """Reject enumeration of the module inventory.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        Iterator[str]
+            No iterator is returned.
+
+        Raises
+        ------
+        AssertionError
+            The resolver attempted to scan the inventory.
+        """
+        message = "Import resolution must not scan all modules"
+        raise AssertionError(message)
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("pkg.child", "pkg.child"),
+        ("pkg.child.symbol", "pkg.child"),
+        ("pkg.other.symbol", "pkg"),
+        ("pkg.", "pkg"),
+        ("pkgish.child", None),
+        ("external.child", None),
+        (".relative", ""),
+        ("", ""),
+    ],
+)
+def test_import_resolution_uses_longest_prefix_without_scanning(
+    name: str, expected: str | None
+) -> None:
+    """Preserve dotted-prefix semantics without enumerating a large inventory.
+
+    Parameters
+    ----------
+    name : str
+        Analyzer import identity to resolve.
+    expected : str or None
+        Longest valid module prefix, including boundary cases.
+
+    Returns
+    -------
+    None
+        Ten thousand unrelated modules do not introduce a full scan.
+    """
+    modules = LookupOnlyModules({"", "pkg", "pkg.child"})
+    modules.update(f"unrelated.module_{number}" for number in range(10_000))
+    assert ARCH._resolve_import_destination(name, modules) == expected
 
 
 class CountingConnection:
