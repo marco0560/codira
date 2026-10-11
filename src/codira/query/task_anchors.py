@@ -88,27 +88,41 @@ def source_candidates(
     Returns
     -------
     dict[codira.types.SymbolRow, int]
-        Candidate rows with independent anchor counts, capped deterministically.
+        Candidate rows with independent anchor counts, capped deterministically
+        after applying the path restriction. Matching lines are materialized
+        before batched enclosing-range resolution.
     """
     result: dict[SymbolRow, int] = {}
     for term in terms:
         rows = conn.execute(
-            """SELECT s.type, s.module_name, s.name, f.path, s.lineno
-               FROM symbol_index s JOIN files f ON f.id = s.file_id
-               JOIN reference_scan_lines r ON r.file_id = f.id
-               WHERE LOWER(r.line_text) LIKE LOWER(?) AND r.lineno >= s.lineno
-               AND r.lineno <= COALESCE(
-                   (SELECT MAX(c.end_lineno) FROM classes c JOIN modules m ON c.module_id=m.id
-                    WHERE m.file_id=f.id AND c.lineno=s.lineno AND s.type='class'),
-                   (SELECT MAX(fn.end_lineno) FROM functions fn JOIN modules m ON fn.module_id=m.id
-                    WHERE m.file_id=f.id AND fn.lineno=s.lineno), s.lineno)
+            """WITH hits AS MATERIALIZED (
+                   SELECT r.file_id, r.lineno FROM reference_scan_lines r
+                   JOIN files f ON f.id = r.file_id
+                   WHERE LOWER(r.line_text) LIKE LOWER(?)
+                   AND (? IS NULL OR SUBSTR(f.path, 1, LENGTH(?)) = ?)
+               ), class_ranges AS (
+                   SELECT m.file_id, c.lineno, MAX(c.end_lineno) AS end_lineno
+                   FROM classes c JOIN modules m ON c.module_id = m.id
+                   GROUP BY m.file_id, c.lineno
+               ), function_ranges AS (
+                   SELECT m.file_id, fn.lineno, MAX(fn.end_lineno) AS end_lineno
+                   FROM functions fn JOIN modules m ON fn.module_id = m.id
+                   GROUP BY m.file_id, fn.lineno
+               )
+               SELECT s.type, s.module_name, s.name, f.path, s.lineno
+               FROM hits r JOIN symbol_index s ON s.file_id = r.file_id
+               JOIN files f ON f.id = s.file_id
+               LEFT JOIN class_ranges c ON c.file_id = s.file_id
+                   AND c.lineno = s.lineno AND s.type = 'class'
+               LEFT JOIN function_ranges fn ON fn.file_id = s.file_id
+                   AND fn.lineno = s.lineno
+               WHERE r.lineno >= s.lineno
+               AND r.lineno <= COALESCE(c.end_lineno, fn.end_lineno, s.lineno)
                ORDER BY f.path, s.lineno LIMIT 128""",
-            (f"%{term}%",),
+            (f"%{term}%", prefix, prefix, prefix),
         ).fetchall()
         seen: set[SymbolRow] = set()
         for kind, module, name, path, line in rows:
-            if prefix is not None and not str(path).startswith(prefix):
-                continue
             row = (str(kind), str(module), str(name), str(path), int(str(line)))
             if row not in seen:
                 result[row] = result.get(row, 0) + 1

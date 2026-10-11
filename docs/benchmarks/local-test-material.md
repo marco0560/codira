@@ -124,3 +124,13 @@ Unexpected fatal errors and operator interruptions finalize the generation as
 last successful generation number remains recorded for diagnosis. Correct the
 cause and explicitly run `codira index` to recover; an interrupted generation
 is not evidence of usable results.
+
+### Source-anchor context queries
+
+Source-anchor matching materializes matching persisted lines first and resolves
+class/function enclosing ranges in batches. Literal path restrictions apply
+before the deterministic 128-row cap; unrelated files cannot consume that cap.
+The logical query is shared by SQLite and DuckDB and preserves independent anchor
+counts and nested enclosing symbols. Its SQL diagnostic timing is distinct from
+end-to-end context latency; a new operator-run campaign is still required to
+measure the complete context pipeline after this change.
