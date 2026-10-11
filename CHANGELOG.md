@@ -1,3 +1,9 @@
+## [2.4.5](https://github.com/marco0560/codira/compare/v2.4.4...v2.4.5) (2026-10-11)
+
+### Bug Fixes
+
+* **ci:** restore reliable NumPy documentation audits ([0484fd1](https://github.com/marco0560/codira/commit/0484fd14c1cf0d83dd17f46e1f023b3349af5eea))
+
 ## [2.4.4](https://github.com/marco0560/codira/compare/v2.4.3...v2.4.4) (2026-10-11)
 
 ### Bug Fixes
