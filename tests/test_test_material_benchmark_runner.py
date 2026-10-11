@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.metadata
 import json
+import platform
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -799,3 +802,185 @@ def test_registration_failure_gates_configuration(
         "sqlite/fixture/queries",
     ]
     assert all(result["status"] == "excluded" for result in campaign.results)
+
+
+@pytest.mark.parametrize("command", ["config", "index", "ctx"])
+def test_error_classification_preserves_root_cause(command: str) -> None:
+    """Keep command failures distinct from malformed successful output.
+
+    Parameters
+    ----------
+    command : str
+        Configuration, indexing or read operation.
+
+    Returns
+    -------
+    None
+        Exit status and underlying CLI diagnosis remain independently visible.
+    """
+    argv = ["codira", command, "--json"]
+    stderr = "[codira] WorkspaceError: Workspace is not registered: missing\n"
+    missing_output = RUNNER.classify_sample(argv, "", stderr, 2)
+    assert missing_output["reason"] == "process exited unsuccessfully"
+    assert missing_output["exit_code"] == 2
+    assert missing_output["output_error"] == "malformed JSON output"
+    assert "WorkspaceError" in missing_output["stderr_diagnostic"]
+    error = {
+        "type": "WorkspaceError",
+        "message": "Workspace is not registered: missing",
+    }
+    structured = RUNNER.classify_sample(
+        argv, json.dumps({"status": "error", "error": error}), stderr, 2
+    )
+    assert structured["error"] == error
+    assert structured["reason"] == "command reported an error"
+    assert "missing index summary" not in structured["reason"]
+    malformed_success = RUNNER.classify_sample(argv, "broken", "", 0)
+    assert malformed_success["reason"] == "malformed JSON output"
+
+
+@pytest.mark.skipif(
+    not hasattr(__import__("os"), "wait4"), reason="per-command wait4 unavailable"
+)
+def test_peak_rss_is_per_command_without_time_binary(tmp_path: Path) -> None:
+    """Measure independent subprocess peaks without accumulated child history.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable command receipts.
+
+    Returns
+    -------
+    None
+        A later small command does not inherit an earlier large command's peak.
+    """
+    import sys
+
+    assert RUNNER.measurement_capabilities()["collector"] == "wait4"
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"temporary_root": str(tmp_path)}))
+    # Keep the fixture's pre-exec baseline independent of pytest's loaded plugins.
+    script = """
+import json, pathlib, sys
+from scripts import run_test_material_benchmarks as runner
+manifest = pathlib.Path(sys.argv[1])
+campaign = runner.Campaign(manifest, manifest.parent / 'run', False)
+results = [campaign.command('memory/' + str(size), [sys.executable, '-c',
+    'payload = bytearray(' + str(size) + ' * 1024 * 1024); print(len(payload))'])
+    for size in (80, 1)]
+print(json.dumps(results))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(manifest)],
+        cwd=Path(RUNNER.__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    results = json.loads(completed.stdout.splitlines()[-1])
+    large, small = [result["samples"][0]["peak_rss_kib"] for result in results]
+    assert isinstance(large, int) and isinstance(small, int)
+    assert large > small + 50 * 1024
+    for result in results:
+        sample = result["samples"][0]
+        assert sample["memory_measurement"]["available"] is True
+        assert sample["memory_measurement"]["collector"] == "wait4"
+        assert sample["memory_measurement"]["unit"] == "KiB"
+        assert sample["exit_code"] == 0
+        assert not Path(sample["stderr"]).read_text()
+
+
+def test_wait4_preserves_status_and_normalizes_darwin_units(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retain the child status and convert Darwin bytes to reported KiB.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Supplies deterministic child resource usage and platform identity.
+
+    Returns
+    -------
+    None
+        Exact-child accounting avoids process-wide cumulative usage.
+    """
+    import os
+
+    process = Mock(pid=42)
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    wait = Mock(return_value=(42, 3 << 8, SimpleNamespace(ru_maxrss=1025)))
+    monkeypatch.setattr(os, "wait4", wait)
+    assert RUNNER.wait_for_resources(process, 0) == 2
+    assert process.returncode == 3
+    wait.assert_called_once_with(42, os.WNOHANG)
+    process.wait.assert_not_called()
+
+
+def test_version_provenance_rejects_disagreement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject inconsistent generated and installed versions before a campaign.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Supplies package/build metadata without changing installed files.
+
+    Returns
+    -------
+    None
+        A mismatch requires environment synchronization, not invented identity.
+    """
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "2.4.3")
+    monkeypatch.setattr(
+        importlib,
+        "import_module",
+        lambda _name: SimpleNamespace(version="2.4.2"),
+    )
+    with pytest.raises(ValueError, match="uv sync --offline"):
+        RUNNER.version_provenance()
+    monkeypatch.setattr(
+        importlib,
+        "import_module",
+        lambda _name: SimpleNamespace(version="2.4.3"),
+    )
+    assert RUNNER.version_provenance()["consistent"] is True
+
+
+def test_unavailable_rss_is_not_a_successful_memory_measurement() -> None:
+    """Separate command completion from resource measurement availability.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Null RSS remains unavailable, with the reason retained in the summary.
+    """
+    results = [
+        {
+            "key": "query",
+            "status": "passed",
+            "samples": [
+                {
+                    "peak_rss_kib": None,
+                    "memory_measurement": {
+                        "available": False,
+                        "reason": "collector unavailable",
+                    },
+                },
+                {"peak_rss_kib": 123, "memory_measurement": {"available": True}},
+            ],
+        }
+    ]
+    summary = RUNNER.memory_summary(results)
+    assert summary["sample_count"] == 2
+    assert summary["available_sample_count"] == 1
+    assert summary["unavailable_samples"] == [
+        {"key": "query", "sample": 0, "reason": "collector unavailable"}
+    ]

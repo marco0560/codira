@@ -85,21 +85,21 @@ src/codira/query_daemon_ipc.py:894 PLR0913 — IPC server construction exposes i
     authentication, runtime, and connection-boundary dependencies.
 src/codira/cli_index.py:150 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
-src/codira/cli_queries.py:2341 PLR0913 — daemon context rendering receives the complete
+src/codira/cli_queries.py:2395 PLR0913 — daemon context rendering receives the complete
     explicit query/output/profile request after freshness has been established.
-src/codira/cli.py:453 PLR0913 — command dispatch receives parsed arguments and
+src/codira/cli.py:463 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
-src/codira/cli.py:371 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:381 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:380 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:390 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:391 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:401 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:392 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:402 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:409 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:419 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
-src/codira/cli.py:414 E402 — compatibility re-export import ordering avoids
+src/codira/cli.py:424 E402 — compatibility re-export import ordering avoids
     cycles while retaining existing `codira.cli` imports.
 src/codira/query/context_scoring.py:637, src/codira/query/context_scoring.py:779,
     and src/codira/query/context_scoring.py:814 PLR0913 — lexical channel
@@ -239,10 +239,10 @@ host parser.
 - `scripts/agent_efficiency/oracles.py:822` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
 - `scripts/agent_efficiency/oracles.py:933` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
 - `scripts/agent_efficiency/oracles.py:1080` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `src/codira/cli.py:406` (E402): Compatibility imports retain their established initialization order.
-- `src/codira/cli.py:411` (E402): Compatibility imports retain their established initialization order.
-- `src/codira/cli.py:450` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `src/codira/cli_queries.py:2365` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/cli.py:419` (E402): Compatibility imports retain their established initialization order.
+- `src/codira/cli.py:424` (E402): Compatibility imports retain their established initialization order.
+- `src/codira/cli.py:463` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/cli_queries.py:2395` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
 - `src/codira/mcp/server.py:272` (SLF001 - required SDK transport boundary): The MCP transport adapter requires the SDK private server boundary.
 - `src/codira/query/context_scoring.py:638` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
 - `src/codira/query/context_scoring.py:787` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.

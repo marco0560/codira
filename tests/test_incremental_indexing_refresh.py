@@ -13,6 +13,15 @@ Tests stay deterministic by using explicit metadata hooks, temporary roots, and 
 Architectural role
 ------------------
 This module belongs to the **indexing verification layer** that guards incremental-run guarantees for codira.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Verifies source and analyzer changes independently of literal revisions.
 """
 
 from __future__ import annotations
@@ -1171,7 +1180,7 @@ def test_index_repo_reindexes_unchanged_files_when_analyzer_changes(
         and decision.reason == "analyzer plugin or version changed"
         for decision in report.decisions
     )
-    assert owners == [("python", "12")]
+    assert owners == [("python", _PythonAnalyzerV12.version)]
 
 
 __all__ = [

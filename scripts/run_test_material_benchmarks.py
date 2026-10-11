@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import contextlib
 import hashlib
+import importlib
 import importlib.metadata
 import json
 import logging
@@ -65,6 +66,143 @@ READ_COMMANDS = frozenset(
 )
 
 
+def command_failure(
+    reason: str, exit_code: int, stderr: str, error: object = None
+) -> dict[str, Any]:
+    """Preserve the underlying diagnosis alongside command/output failures.
+
+    Parameters
+    ----------
+    reason : str
+        Operational or output-contract failure.
+    exit_code : int
+        Actual child status.
+    stderr : str
+        Original retained diagnostics.
+    error : object, optional
+        Structured CLI error detail when supplied.
+
+    Returns
+    -------
+    dict
+        Failed measurement with a compact diagnosis and original exit status.
+    """
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    diagnoses = [
+        line
+        for line in lines
+        if line.startswith("[codira]") or re.match(r"\w+(?:Error|Exception):", line)
+    ]
+    return {
+        "status": "failed",
+        "reason": reason,
+        "timing_valid": False,
+        "exit_code": exit_code,
+        "error": error,
+        "stderr_diagnostic": (
+            diagnoses[-1] if diagnoses else lines[-1] if lines else ""
+        )[:1024],
+    }
+
+
+def measurement_capabilities() -> dict[str, str]:
+    """Declare per-command RSS collection availability and its interpretation.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    dict of str to str
+        Collector, unit and scope binding measurement comparisons to controls.
+    """
+    collector = (
+        "wait4"
+        if callable(getattr(os, "wait4", None))
+        and platform.system() in {"Linux", "Darwin"}
+        else "gnu-time"
+        if platform.system() == "Linux" and Path("/usr/bin/time").exists()
+        else "unavailable"
+    )
+    return {
+        "collector": collector,
+        "unit": "KiB",
+        "scope": "maximum lifetime process RSS, including pre-exec startup and waited descendants; not simultaneous process-tree RSS",
+        "wall_clock": "time.perf_counter",
+    }
+
+
+def wait_for_resources(process: subprocess.Popen[str], timeout: float) -> int | None:
+    """Wait for one exact child and collect its independent resource usage.
+
+    Parameters
+    ----------
+    process : subprocess.Popen
+        Owned command whose status has not been reaped by another waiter.
+    timeout : float
+        Deadline in seconds; zero permits an unbounded wait.
+
+    Returns
+    -------
+    int or None
+        Per-command peak RSS in KiB, or unavailable resource accounting.
+
+    Raises
+    ------
+    subprocess.TimeoutExpired
+        If the command remains live after its deadline.
+    """
+    pid = getattr(process, "pid", None)
+    if measurement_capabilities()["collector"] != "wait4" or not isinstance(pid, int):
+        process.wait(timeout=timeout or None)
+        return None
+    deadline = time.monotonic() + timeout if timeout else None
+    while True:
+        waited_pid, status, usage = os.wait4(pid, os.WNOHANG)
+        if waited_pid:
+            process.returncode = os.waitstatus_to_exitcode(status)
+            rss = int(usage.ru_maxrss)
+            return (rss + 1023) // 1024 if platform.system() == "Darwin" else rss
+        if deadline is not None and time.monotonic() >= deadline:
+            raise subprocess.TimeoutExpired(process.args, timeout)
+        time.sleep(0.01)
+
+
+def version_provenance() -> dict[str, object]:
+    """Retain installed and generated versions and reject known disagreements.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    dict of str to object
+        Distribution/build versions with explicit consistency state.
+
+    Raises
+    ------
+    ValueError
+        If generated and installed versions disagree before a new campaign.
+    """
+    installed = importlib.metadata.version("codira")
+    try:
+        generated = getattr(importlib.import_module("codira._version"), "version", None)
+    except ModuleNotFoundError as error:
+        if error.name != "codira._version":
+            raise
+        generated = None
+    if isinstance(generated, str) and generated != installed:
+        message = "Installed and generated Codira versions differ; run uv sync --offline before creating a campaign."
+        raise ValueError(message)
+    return {
+        "distribution": installed,
+        "generated": generated,
+        "consistent": generated == installed if generated is not None else None,
+    }
+
+
 def classify_sample(
     argv: list[str], stdout: str, stderr: str, exit_code: int
 ) -> dict[str, Any]:
@@ -92,27 +230,33 @@ def classify_sample(
         try:
             payload = json.loads(stdout)
             if not isinstance(payload, dict):
-                return {
-                    "status": "failed",
-                    "reason": "invalid JSON envelope",
-                    "timing_valid": False,
-                }
+                failure = command_failure(
+                    "process exited unsuccessfully"
+                    if exit_code
+                    else "invalid JSON envelope",
+                    exit_code,
+                    stderr,
+                )
+                failure["output_error"] = "invalid JSON envelope"
+                return failure
         except ValueError:
-            return {
-                "status": "failed",
-                "reason": "malformed JSON output",
-                "timing_valid": False,
-            }
+            failure = command_failure(
+                "process exited unsuccessfully"
+                if exit_code
+                else "malformed JSON output",
+                exit_code,
+                stderr,
+            )
+            failure["output_error"] = "malformed JSON output"
+            return failure
+    if payload.get("status") in {"error", "failed", "invalid"}:
+        return command_failure(
+            "command reported an error", exit_code, stderr, payload.get("error")
+        )
     if operation == "index":
         outcome = classify_index(payload, exit_code)
         if outcome is not None:
             return outcome
-    if payload.get("status") in {"error", "failed", "invalid"}:
-        return {
-            "status": "failed",
-            "reason": "command reported an error",
-            "timing_valid": False,
-        }
     empty = operation in READ_COMMANDS and (
         payload.get("status") == "no_matches"
         or (
@@ -123,11 +267,8 @@ def classify_sample(
         )
     )
     if exit_code not in ({0, 1} if empty else {0}):
-        return {
-            "status": "failed",
-            "reason": "process exited unsuccessfully",
-            "timing_valid": False,
-        }
+        return command_failure("process exited unsuccessfully", exit_code, stderr)
+
     if operation in READ_COMMANDS and re.search(
         r"\[codira\] (?:Index (?:stale|missing|outdated|schema changed|not found)|Failed source or analysis configuration changed)",
         stderr,
@@ -249,6 +390,42 @@ def classify_index(payload: dict[str, Any], exit_code: int) -> dict[str, Any] | 
             "timing_valid": False,
         }
     return None
+
+
+def memory_summary(results: list[dict[str, Any]]) -> dict[str, object]:
+    """Expose unavailable RSS samples separately from command success.
+
+    Parameters
+    ----------
+    results : list of dict
+        Retained stage receipts, including partial and failed measurements.
+
+    Returns
+    -------
+    dict of str to object
+        Availability counts and reasons; missing RSS is never a zero value.
+    """
+    samples = [
+        (result["key"], number, sample)
+        for result in results
+        for number, sample in enumerate(result.get("samples", []))
+    ]
+    unavailable = [
+        {
+            "key": key,
+            "sample": number,
+            "reason": sample.get("memory_measurement", {}).get("reason")
+            or "resource metadata absent",
+        }
+        for key, number, sample in samples
+        if sample.get("peak_rss_kib") is None
+    ]
+    return {
+        "capabilities": measurement_capabilities(),
+        "sample_count": len(samples),
+        "available_sample_count": len(samples) - len(unavailable),
+        "unavailable_samples": unavailable,
+    }
 
 
 def aggregate_status(samples: list[dict[str, Any]]) -> str:
@@ -485,7 +662,7 @@ class Campaign:
             ):
                 measured = (
                     ["/usr/bin/time", "-v", *argv]
-                    if Path("/usr/bin/time").exists()
+                    if measurement_capabilities()["collector"] == "gnu-time"
                     else argv
                 )
                 process = subprocess.Popen(
@@ -502,23 +679,41 @@ class Campaign:
                     if len(argv) > 1 and argv[1] == "arch"
                     else 0
                 )
+                peak_rss = None
                 try:
-                    process.wait(timeout=limit or None)
+                    peak_rss = wait_for_resources(process, limit)
                 except subprocess.TimeoutExpired:
                     timed_out = True
                     terminate_group(process)
                 except KeyboardInterrupt:
                     interrupted = True
                     terminate_group(process)
-            memory = re.search(
-                r"Maximum resident set size \(kbytes\):\s*(\d+)",
-                (attempts / f"{number}.stderr").read_text(),
+            memory = (
+                re.search(
+                    r"Maximum resident set size \(kbytes\):\s*(\d+)",
+                    (attempts / f"{number}.stderr").read_text(),
+                )
+                if measurement_capabilities()["collector"] == "gnu-time"
+                else None
             )
             samples.append(
                 {
                     "seconds": time.perf_counter() - start,
                     "exit_code": process.returncode,
-                    "peak_rss_kib": int(memory.group(1)) if memory else None,
+                    "peak_rss_kib": peak_rss
+                    if peak_rss is not None
+                    else int(memory.group(1))
+                    if memory
+                    else None,
+                    "memory_measurement": {
+                        **measurement_capabilities(),
+                        "available": peak_rss is not None or memory is not None,
+                        "reason": None
+                        if peak_rss is not None or memory is not None
+                        else "resource usage unavailable after interruption"
+                        if timed_out or interrupted
+                        else "resource collector unavailable for child",
+                    },
                     "stdout": str(attempts / f"{number}.stdout"),
                     "stderr": str(attempts / f"{number}.stderr"),
                     **classify_sample(
@@ -534,7 +729,7 @@ class Campaign:
                     status="interrupted" if interrupted else "timeout",
                     reason="operator interrupted stage"
                     if interrupted
-                    else "architecture rendering exceeded limit",
+                    else "architecture command exceeded limit",
                     timing_valid=False,
                     timeout_seconds=limit,
                 )
@@ -1903,6 +2098,8 @@ def main() -> int:
         "manifest_sha256": digest(args.manifest),
         "launcher_sha256": digest(Path(__file__)),
         "runtime": runtime_identity(),
+        "version_provenance": version_provenance(),
+        "measurement_capabilities": measurement_capabilities(),
         "architecture_timeout_seconds": args.architecture_timeout_seconds,
         "configs": {
             p: digest(args.manifest.parent / p)
@@ -2054,6 +2251,7 @@ def main() -> int:
                 r["status"] in PARTIAL_STATUSES or r["status"] == "excluded"
                 for r in campaign.results
             ),
+            "memory_measurement": memory_summary(campaign.results),
             "limitations": spec["limitations"],
         },
     )

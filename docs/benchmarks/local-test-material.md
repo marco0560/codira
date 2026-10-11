@@ -157,3 +157,30 @@ not a failed structural report. The campaign's whole-command safety timeout stil
 bounds extraction and report construction. A whole-command timeout remains
 censored measurement data. These changes do not qualify r5 or establish complete
 coverage. Use a new operator-run identity after merging the fixes.
+
+### Command errors, memory measurements and version provenance
+
+Workspace resolution uses the same CLI error boundary as command execution.
+Requests for JSON receive `status=error` with an error type and original message;
+stderr retains a controlled diagnosis. Nonzero commands with missing/malformed
+JSON remain command failures with their exit status and stderr diagnosis; the
+output-contract error is recorded separately. The original stdout/stderr and
+attempt history remain intact. Malformed output from an otherwise successful
+process is still an output-contract failure.
+
+On Linux and macOS the runner collects per-command peak RSS using exact-child
+`wait4` resource accounting without requiring `/usr/bin/time`. macOS byte counts
+are normalized to KiB. Linux resource accounting includes pre-exec startup memory
+and the maximum of waited descendants; this is not simultaneous process-tree
+memory. Compare matching collector, units, startup environment and coverage
+cohorts. It does not use the launcher's accumulated child high-water mark. Linux
+GNU time remains a fallback; otherwise RSS is explicitly unavailable. Timed-out
+or interrupted resource collection remains unavailable, with a reason. Every
+command sample records collector, scope, units and availability; exclude missing
+RSS values from memory comparisons rather than interpreting them as zero.
+
+The immutable identity includes measurement capabilities and both installed and
+build-generated Codira versions. A known version disagreement rejects campaign
+admission; run `uv sync --offline` in the selected checkout and choose a fresh
+identity. Preserved source/configuration digests still determine identity and
+resume compatibility; a version label alone does not establish runtime parity.

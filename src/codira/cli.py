@@ -13,11 +13,21 @@ CLI code keeps argument parsing deterministic, surfaces helpful errors, and dele
 Architectural role
 ------------------
 This module belongs to the **CLI layer** that wraps storage, indexing, and query primitives for end users.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Dispatches commands and emits controlled resolution and runtime failures.
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 import re
 import shutil
 import sys
@@ -582,6 +592,39 @@ def _command_handlers(  # noqa: PLR0913
     }
 
 
+def _render_command_error(args: argparse.Namespace, error: Exception) -> int:
+    """Emit controlled text and optional structured command failure diagnostics.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed command arguments, including optional JSON output selection.
+    error : Exception
+        Resolution or dispatch failure caught by the CLI error boundary.
+
+    Returns
+    -------
+    int
+        Command failure exit status after emitting the original diagnosis.
+    """
+    if getattr(args, "json", False):
+        print(
+            json.dumps(
+                {
+                    "status": "error",
+                    "error": {"type": type(error).__name__, "message": str(error)},
+                }
+            )
+        )
+    detail = (
+        str(error)
+        if isinstance(error, EmbeddingBackendError)
+        else f"{type(error).__name__}: {error}"
+    )
+    print(f"[codira] {detail}", file=sys.stderr)
+    return 2
+
+
 def main() -> int:
     """
     Dispatch the codira command-line interface.
@@ -612,21 +655,21 @@ def main() -> int:
     if args.version:
         return _run_version()
     command = args.command or "help"
-    storage_context: contextlib.AbstractContextManager[None]
-    resolved_paths: ResolvedRuntimePaths | None = None
-    if command in _REPO_PATH_COMMANDS:
-        resolved_paths = resolve_runtime_paths(parser, args)
-        root = resolved_paths.target_root
-        storage_context = override_storage_root(root, resolved_paths.output_root)
-        repo_config_file = resolved_paths.repo_config_file
-    else:
-        root = Path.cwd()
-        storage_context = contextlib.nullcontext()
-        repo_config_file = None
-    raw_prefix = getattr(args, "prefix", None)
-    prefix = _resolve_prefix_argument(parser, root, raw_prefix)
-
     try:
+        storage_context: contextlib.AbstractContextManager[None]
+        resolved_paths: ResolvedRuntimePaths | None = None
+        if command in _REPO_PATH_COMMANDS:
+            resolved_paths = resolve_runtime_paths(parser, args)
+            root = resolved_paths.target_root
+            storage_context = override_storage_root(root, resolved_paths.output_root)
+            repo_config_file = resolved_paths.repo_config_file
+        else:
+            root = Path.cwd()
+            storage_context = contextlib.nullcontext()
+            repo_config_file = None
+        raw_prefix = getattr(args, "prefix", None)
+        prefix = _resolve_prefix_argument(parser, root, raw_prefix)
+
         if command == "family":
             return run_family_command(args)
         if command not in {"help", "config", "workspace", "calibrate"}:
@@ -668,14 +711,9 @@ def main() -> int:
                 ):
                     return handler()
     except EmbeddingBackendError as exc:
-        print(f"[codira] {exc}", file=sys.stderr)
-        return 2
+        return _render_command_error(args, exc)
     except (BackendError, ConfigError, OSError, RuntimeError, ValueError) as exc:
-        print(
-            f"[codira] {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
-        return 2
+        return _render_command_error(args, exc)
 
     parser.print_help()
     return 0

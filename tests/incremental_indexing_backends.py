@@ -2,6 +2,15 @@
 
 The stubs model version changes and record backend lifecycle calls while
 delegating the actual SQLite behavior to first-party implementations.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Supplies independent analyzer and backend revision fixtures.
 """
 
 from __future__ import annotations
@@ -22,15 +31,20 @@ if TYPE_CHECKING:
 
 class _PythonAnalyzerV12:
     """
-    Python analyzer stub with a bumped version for staleness tests.
+    Python analyzer stub whose version always differs from the real analyzer.
 
     Parameters
     ----------
     None
+
+    Returns
+    -------
+    None
+        The legacy fixture name exposes a derived, always-different revision.
     """
 
     name = "python"
-    version = "12"
+    version = f"{PythonAnalyzer.version}-test-next"
     discovery_globs: tuple[str, ...] = ("*.py",)
 
     def supports_path(self, path: Path) -> bool:
