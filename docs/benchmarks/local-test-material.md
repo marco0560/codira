@@ -100,3 +100,17 @@ partial classifications even with `--retry-failed`; unchanged deterministic sour
 failures are not retried by that flag. Failed command stages can be explicitly
 retried with `--resume --retry-failed`, retaining prior attempts. Exclusion changes
 always require another prepared plan and run identity.
+
+### Backend profile registries
+
+The local runner gives each backend profile its own workspace registry under
+`<run>/registry/<profile-id>`. This permits the same canonical corpus root to be
+measured with SQLite and DuckDB while preserving root uniqueness within each
+registry. CLI and MCP stages use their profile registry; family and daemon stages
+use the primary profile registry. Failed workspace registration retains its
+original attempt and excludes dependent configuration and queries.
+
+This applies to both analyzer-style and stress manifests, which share the runner.
+Existing runs retain their original registry layout and failure evidence. After
+this runner change, create a new run ID rather than resuming an old run with
+changed code.

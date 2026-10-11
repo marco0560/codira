@@ -422,6 +422,29 @@ class Campaign:
         self.embedding_ready: dict[str, bool] = {}
         self.requires_embeddings: dict[str, bool] = {}
 
+    def environment_for_stage(self, key: str) -> dict[str, str]:
+        """Select the profile registry used by a CLI, MCP or daemon stage.
+
+        Parameters
+        ----------
+        key : str
+            Stage identity whose first component may name a configured profile.
+
+        Returns
+        -------
+        dict of str to str
+            Independent environment with a profile-specific registry. Shared
+            family and daemon stages use the primary profile's registry.
+        """
+        environment = self.env.copy()
+        profiles = self.spec.get("profiles", [])
+        if profiles:
+            profile_ids = {profile["id"] for profile in profiles}
+            candidate = key.split("/", 1)[0]
+            profile_id = candidate if candidate in profile_ids else profiles[0]["id"]
+            environment["XDG_CONFIG_HOME"] = str(self.root / "registry" / profile_id)
+        return environment
+
     def command(self, key: str, argv: list[str], *, repeats: int = 1) -> dict[str, Any]:
         """Run a stage, preserving failures, timings and output per attempt.
 
@@ -467,7 +490,7 @@ class Campaign:
                 )
                 process = subprocess.Popen(
                     measured,
-                    env=self.env,
+                    env=self.environment_for_stage(key),
                     stdout=out,
                     stderr=err,
                     text=True,
@@ -670,6 +693,52 @@ class Campaign:
                 write(Path(history[-1]), result)
         return result
 
+    def prepare_workspace(
+        self, prefix: str, name: str, repository: str, state: Path, config: Path
+    ) -> bool:
+        """Register a workspace before validating its dependent configuration.
+
+        Parameters
+        ----------
+        prefix, name : str
+            Stage prefix and profile-specific workspace name.
+        repository : str
+            Canonical corpus root.
+        state, config : pathlib.Path
+            Isolated index state and explicit configuration file.
+
+        Returns
+        -------
+        bool
+            Whether both prerequisites passed; failure evidence is retained.
+        """
+        registered = self.command(
+            prefix + "/workspace",
+            [
+                self.codira,
+                "workspace",
+                "add",
+                name,
+                "--path",
+                repository,
+                "--state-root",
+                str(state),
+                "--config-file",
+                str(config),
+            ],
+        )
+        if registered["status"] != "passed":
+            self.exclude_stage(prefix + "/config", "workspace registration failed")
+            self.exclude_queries(prefix, "workspace registration failed")
+            return False
+        configured = self.cli(
+            prefix + "/config", name, ["config", "validate", "--json"]
+        )
+        if configured["status"] != "passed":
+            self.exclude_queries(prefix, "configuration failed")
+            return False
+        return True
+
     def repository(
         self, repo: dict[str, Any], profile: dict[str, Any]
     ) -> dict[str, Any] | None:
@@ -691,26 +760,7 @@ class Campaign:
         prefix = f"{profile['id']}/{repo['label']}"
         config = self.manifest.parent / repo["configs"][profile["id"]]
         state = self.root / "indexes" / name
-        registered = self.command(
-            prefix + "/workspace",
-            [
-                self.codira,
-                "workspace",
-                "add",
-                name,
-                "--path",
-                repo["path"],
-                "--state-root",
-                str(state),
-                "--config-file",
-                str(config),
-            ],
-        )
-        configured = self.cli(
-            prefix + "/config", name, ["config", "validate", "--json"]
-        )
-        if registered["status"] != "passed" or configured["status"] != "passed":
-            self.exclude_queries(prefix, "workspace or configuration failed")
+        if not self.prepare_workspace(prefix, name, repo["path"], state, config):
             return None
         if self.spec["extended"]:
             self.cli(prefix + "/config-dump", name, ["config", "dump", "--json"])
@@ -978,7 +1028,7 @@ class Campaign:
         server = StdioServerParameters(
             command=str(Path(sys.executable).with_name("codira-mcp")),
             args=args,
-            env=self.env,
+            env=self.environment_for_stage(key),
         )
         responses: list[dict[str, Any]] = []
         result: dict[str, Any]
@@ -1229,7 +1279,7 @@ class Campaign:
         with (self.root / "daemon-foreground.log").open("w") as log:
             process = subprocess.Popen(
                 [self.codira, "daemon", "--workspace", name, "run"],
-                env=self.env,
+                env=self.environment_for_stage(key),
                 stdout=log,
                 stderr=log,
             )

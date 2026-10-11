@@ -700,3 +700,102 @@ def test_baseline_preparation_and_resume_identity_guard(
         RUNNER.main()
     launch.assert_not_called()
     assert json.loads((run / "identity.json").read_text())["partial"] is True
+
+
+def test_profile_registries_accept_same_repository(tmp_path: Path) -> None:
+    """Register a real repository independently for two benchmark profiles.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable corpus, state directories and registries.
+
+    Returns
+    -------
+    None
+        Real CLI registrations and workspace reads succeed for both profiles.
+    """
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "temporary_root": str(tmp_path),
+                "profiles": [{"id": "sqlite"}, {"id": "duckdb"}],
+            }
+        )
+    )
+    campaign = RUNNER.Campaign(manifest, tmp_path / "run", False)
+    for profile in ("sqlite", "duckdb"):
+        result = campaign.command(
+            profile + "/fixture/workspace",
+            [
+                campaign.codira,
+                "workspace",
+                "add",
+                profile + "-fixture",
+                "--path",
+                str(repository),
+                "--state-root",
+                str(tmp_path / profile),
+            ],
+        )
+        assert result["status"] == "passed", Path(result["stderr"]).read_text()
+        shown = campaign.command(
+            profile + "/fixture/show",
+            [
+                campaign.codira,
+                "workspace",
+                "show",
+                profile + "-fixture",
+                "--json",
+            ],
+        )
+        assert shown["status"] == "passed", Path(shown["stderr"]).read_text()
+    assert campaign.environment_for_stage(
+        "family/mcp"
+    ) == campaign.environment_for_stage("sqlite/fixture/mcp")
+    assert campaign.environment_for_stage(
+        "daemons/fixture"
+    ) == campaign.environment_for_stage("sqlite/fixture/workspace")
+    assert (
+        campaign.environment_for_stage("duckdb/fixture/mcp")["XDG_CONFIG_HOME"]
+        != campaign.environment_for_stage("sqlite/fixture/mcp")["XDG_CONFIG_HOME"]
+    )
+
+
+def test_registration_failure_gates_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retain failed registration without launching dependent configuration.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable manifest and stage receipts.
+    monkeypatch : pytest.MonkeyPatch
+        Substitutes one unsuccessful prerequisite command.
+
+    Returns
+    -------
+    None
+        Configuration and queries are explicitly excluded without execution.
+    """
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"temporary_root": str(tmp_path)}))
+    campaign = RUNNER.Campaign(manifest, tmp_path / "run", False)
+    command = Mock(return_value={"status": "failed"})
+    monkeypatch.setattr(campaign, "command", command)
+    repo = {
+        "label": "fixture",
+        "path": str(tmp_path),
+        "configs": {"sqlite": "config.toml"},
+    }
+    assert campaign.repository(repo, {"id": "sqlite"}) is None
+    assert command.call_count == 1
+    assert [result["key"] for result in campaign.results] == [
+        "sqlite/fixture/config",
+        "sqlite/fixture/queries",
+    ]
+    assert all(result["status"] == "excluded" for result in campaign.results)
