@@ -1,3 +1,15 @@
+## [2.4.6](https://github.com/marco0560/codira/compare/v2.4.5...v2.4.6) (2026-10-11)
+
+### Bug Fixes
+
+* **backend:** specify DuckDB bulk CSV dialect ([4a17117](https://github.com/marco0560/codira/commit/4a17117a8a91f2d48a013a27864db49630be339f))
+* **cli:** allow one minute for architecture SVG layout ([e57cb48](https://github.com/marco0560/codira/commit/e57cb48e18164e77e48c7b23cf62db0757fa041f))
+* **dev:** show remaining benchmark stage counts ([e385ef3](https://github.com/marco0560/codira/commit/e385ef392030b053f21061849c4afa3538a81e73))
+
+### Performance Improvements
+
+* **query:** resolve architecture imports by prefix lookup ([340d069](https://github.com/marco0560/codira/commit/340d0692900b5ef02c9d8f3bc4fe2525249bb57d))
+
 ## [2.4.5](https://github.com/marco0560/codira/compare/v2.4.4...v2.4.5) (2026-10-11)
 
 ### Bug Fixes
