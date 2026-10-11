@@ -1,3 +1,9 @@
+## [2.4.3](https://github.com/marco0560/codira/compare/v2.4.2...v2.4.3) (2026-10-11)
+
+### Bug Fixes
+
+* **process:** separate coverage gaps from failed source retries ([c3f9598](https://github.com/marco0560/codira/commit/c3f959853f59b2cc167209c13625034d5dd66da9))
+
 ## [2.4.2](https://github.com/marco0560/codira/compare/v2.4.1...v2.4.2) (2026-10-10)
 
 ### Bug Fixes
