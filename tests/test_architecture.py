@@ -1,12 +1,21 @@
-"""Tests for analyzer-independent architecture model extraction."""
+"""Tests for analyzer-independent architecture model extraction.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the runtime interfaces described above.
+"""
 
 from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -23,9 +32,15 @@ from codira.architecture import (
     build_architecture_model_from_index,
     validate_architecture_policy,
 )
-from codira.architecture_report import write_architecture_artifacts
+from codira.architecture_report import (
+    ArchitectureRenderOptions,
+    write_architecture_artifacts,
+)
 from codira.cli import main
 from codira.indexer import index_repo
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _module(
@@ -375,9 +390,11 @@ def test_architecture_artifacts_replay_and_record_missing_graphviz(
     )
 
 
+@pytest.mark.parametrize("timeout", [30, 0])
 def test_architecture_artifacts_record_successful_optional_svg(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    timeout: float,
 ) -> None:
     """Record SVG in the manifest when the optional renderer succeeds.
 
@@ -387,6 +404,8 @@ def test_architecture_artifacts_record_successful_optional_svg(
         Temporary artifact output root.
     monkeypatch : pytest.MonkeyPatch
         Fixture used to replace the external Graphviz process.
+    timeout : float
+        Default bound or explicitly unbounded rendering.
 
     Returns
     -------
@@ -398,28 +417,21 @@ def test_architecture_artifacts_record_successful_optional_svg(
         model, ArchitecturePolicy(layers=(), forbidden_dependencies=())
     )
 
-    def _render_svg(arguments: list[str], **_kwargs: object) -> object:
-        """Write a minimal SVG through the mocked Graphviz command.
+    executable = tmp_path / "dummy-dot"
+    executable.write_text(
+        "#!" + sys.executable + "\n"
+        "import pathlib, sys\n"
+        "pathlib.Path(sys.argv[3]).write_text('<svg />')\n"
+    )
+    executable.chmod(0o755)
+    monkeypatch.setattr(shutil, "which", lambda _name: str(executable))
 
-        Parameters
-        ----------
-        arguments : list[str]
-            Graphviz argument vector.
-        _kwargs : object
-            Ignored subprocess keyword arguments.
-
-        Returns
-        -------
-        object
-            Result object carrying a successful return code.
-        """
-        Path(arguments[3]).write_text("<svg />", encoding="utf-8")
-        return type("Completed", (), {"returncode": 0})()
-
-    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/dot")
-    monkeypatch.setattr(subprocess, "run", _render_svg)
-
-    result = write_architecture_artifacts(model, analysis, tmp_path)
+    result = write_architecture_artifacts(
+        model,
+        analysis,
+        tmp_path,
+        options=ArchitectureRenderOptions(svg_timeout_seconds=timeout),
+    )
 
     assert result.svg_path == tmp_path / "architecture.svg"
     assert json.loads(result.manifest_path.read_text(encoding="utf-8"))["svg"] == {
@@ -481,6 +493,14 @@ def test_architecture_report_cli_writes_requested_output_and_policy_diagnostics(
 
     assert main() == 0
     assert "Wrote architecture report" in capsys.readouterr().out
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert set(manifest["timings"]) == {
+        "extraction_seconds",
+        "policy_seconds",
+        "artifacts_seconds",
+        "svg_seconds",
+    }
+    assert manifest["render_options"] == {"svg": True, "svg_timeout_seconds": 30}
     violations = json.loads((output / "violations.json").read_text(encoding="utf-8"))
     assert violations[0]["rule_id"] == "no-api-core"
 

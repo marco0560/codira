@@ -134,3 +134,26 @@ The logical query is shared by SQLite and DuckDB and preserves independent ancho
 counts and nested enclosing symbols. Its SQL diagnostic timing is distinct from
 end-to-end context latency; a new operator-run campaign is still required to
 measure the complete context pipeline after this change.
+
+### Architecture extraction and SVG layout
+
+SQLite and DuckDB implement the optional `BulkArchitectureBackend` contract.
+Architecture inventory, imports, calls and callable references require four bulk
+reads from one connection and omit unused per-symbol graph metrics. Backends
+without the extension use the established relation APIs through one shared
+connection. Cycle detection is iterative, including graphs deeper than Python's
+recursion limit. The logical schema and backend schema revisions are unchanged.
+
+`codira arch --no-svg` writes the mandatory DOT, Markdown, dependencies, hotspots,
+violations and manifest without layout. By default optional SVG rendering has a
+30-second timeout; `--svg-timeout-seconds SECONDS` changes it, and `0` explicitly
+permits unbounded layout. Timeout terminates the owned renderer process group,
+removes its incomplete SVG, and retains a warning and the mandatory report. A
+missing renderer or failed layout also leaves mandatory artifacts usable.
+
+The manifest records extraction, policy, artifact-writing and SVG durations
+separately. Compare extraction and layout separately; an optional SVG warning is
+not a failed structural report. The campaign's whole-command safety timeout still
+bounds extraction and report construction. A whole-command timeout remains
+censored measurement data. These changes do not qualify r5 or establish complete
+coverage. Use a new operator-run identity after merging the fixes.

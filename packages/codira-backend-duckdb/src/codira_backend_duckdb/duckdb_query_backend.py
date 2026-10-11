@@ -16,6 +16,15 @@ Architectural role
 ------------------
 This module belongs to the **DuckDB backend plugin layer** and provides the
 production query/maintenance helper surface used by the DuckDB backend.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the runtime interfaces described above.
 """
 
 from __future__ import annotations
@@ -24,6 +33,7 @@ import json
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
+from codira.contracts_architecture import BackendArchitectureSnapshot
 from codira.contracts import (
     BackendDocumentationCandidatesRequest,
     BackendEmbeddingCandidatesRequest,
@@ -70,6 +80,7 @@ from .duckdb_support import (
 from .duckdb_graph_rebuild import _rebuild_graph_indexes
 
 if TYPE_CHECKING:
+    from codira.contracts import BackendQueryConnection
     from pathlib import Path
 
     from codira.types import (
@@ -102,6 +113,14 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
     This helper keeps the query and maintenance semantics package-owned while
     the production DuckDB backend owns connection bootstrap and persistence
     behavior separately.
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Instances provide package-owned persistence and query operations.
     """
 
     name = "duckdb-query-backend"
@@ -264,6 +283,95 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
         finally:
             if owns_connection:
                 conn.close()
+
+    def architecture_snapshot(
+        self, root: Path, *, conn: BackendQueryConnection
+    ) -> BackendArchitectureSnapshot:
+        """Read architecture inventory and relations in four bulk queries.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Indexed repository root.
+        conn : BackendQueryConnection
+            Caller-owned connection shared by every read.
+
+        Returns
+        -------
+        BackendArchitectureSnapshot
+            Ordered inventory and resolved relations without unused metrics.
+        """
+        symbols = conn.execute(
+            """WITH ranked AS (
+                SELECT s.type, s.module_name, s.name, f.path, s.lineno,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY s.module_name, s.name
+                        ORDER BY s.type, f.path, s.lineno
+                    ) AS ordinal
+                FROM symbol_index s JOIN files f ON f.id = s.file_id
+            ) SELECT type, module_name, name, path, lineno FROM ranked
+              WHERE ordinal = 1
+              ORDER BY module_name, name, type, path, lineno LIMIT 1000000"""
+        ).fetchall()
+        imports = conn.execute(
+            """SELECT m.name, i.name, i.kind, i.lineno
+            FROM imports i JOIN modules m ON m.id = i.module_id
+            ORDER BY m.name, i.name, i.kind, i.lineno"""
+        ).fetchall()
+        calls = conn.execute(
+            """SELECT ce.caller_module, ce.caller_name, ce.callee_module,
+                ce.callee_name, ce.external_target_kind,
+                ce.external_target_name, ce.resolved
+            FROM call_edges ce JOIN files f ON f.id = ce.caller_file_id
+            ORDER BY ce.caller_module, ce.caller_name,
+                COALESCE(ce.callee_module, ''), COALESCE(ce.callee_name, ''),
+                COALESCE(ce.external_target_kind, ''),
+                COALESCE(ce.external_target_name, ''), ce.resolved"""
+        ).fetchall()
+        references = conn.execute(
+            """SELECT cr.owner_module, cr.owner_name, cr.target_module,
+                cr.target_name, cr.external_target_kind,
+                cr.external_target_name, cr.resolved
+            FROM callable_refs cr JOIN files f ON f.id = cr.owner_file_id
+            ORDER BY cr.owner_module, cr.owner_name,
+                COALESCE(cr.target_module, ''), COALESCE(cr.target_name, ''),
+                COALESCE(cr.external_target_kind, ''),
+                COALESCE(cr.external_target_name, ''), cr.resolved"""
+        ).fetchall()
+        return BackendArchitectureSnapshot(
+            symbols=tuple(
+                (str(kind), str(module), str(name), str(path), int(str(line)))
+                for kind, module, name, path, line in symbols
+            ),
+            imports=tuple(
+                (str(module), str(name), str(kind), int(str(line)))
+                for module, name, kind, line in imports
+            ),
+            calls=tuple(
+                (
+                    str(module),
+                    str(name),
+                    None if target_module is None else str(target_module),
+                    None if target_name is None else str(target_name),
+                    None if target_kind is None else str(target_kind),
+                    None if external is None else str(external),
+                    int(str(resolved)),
+                )
+                for module, name, target_module, target_name, target_kind, external, resolved in calls
+            ),
+            references=tuple(
+                (
+                    str(module),
+                    str(name),
+                    None if target_module is None else str(target_module),
+                    None if target_name is None else str(target_name),
+                    None if target_kind is None else str(target_kind),
+                    None if external is None else str(external),
+                    int(str(resolved)),
+                )
+                for module, name, target_module, target_name, target_kind, external, resolved in references
+            ),
+        )
 
     def symbol_inventory(
         self,

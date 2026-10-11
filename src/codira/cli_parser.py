@@ -1,4 +1,14 @@
-"""Argument-parser construction and focused CLI help rendering."""
+"""Argument-parser construction and focused CLI help rendering.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the runtime interfaces described above.
+"""
 
 from __future__ import annotations
 
@@ -450,6 +460,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="RULE:SOURCE_LAYER:DESTINATION_LAYER:SEVERITY",
         help="Forbidden directed layer dependency; repeat to define additional rules",
+    )
+    architecture_parser.add_argument(
+        "--no-svg",
+        action="store_true",
+        help="Write mandatory architecture artifacts without optional SVG layout",
+    )
+    architecture_parser.add_argument(
+        "--svg-timeout-seconds",
+        type=float,
+        default=30,
+        help="Optional SVG layout limit (default: 30 seconds; zero: unbounded)",
     )
     _add_repo_path_arguments(architecture_parser)
 

@@ -1,10 +1,21 @@
-"""Read-oriented query commands and deterministic CLI renderers."""
+"""Read-oriented query commands and deterministic CLI renderers.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the runtime interfaces described above.
+"""
 
 from __future__ import annotations
 
 import json
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -15,7 +26,10 @@ from codira.architecture import (
     analyze_architecture_policy,
     build_architecture_model_from_index,
 )
-from codira.architecture_report import write_architecture_artifacts
+from codira.architecture_report import (
+    ArchitectureRenderOptions,
+    write_architecture_artifacts,
+)
 from codira.cli_index import _ensure_index, _relative_report_path
 from codira.cli_query_daemon_operations import (
     build_query_daemon_cli_operations as _build_query_daemon_cli_operations,
@@ -1591,15 +1605,31 @@ def _run_architecture_report_command(args: argparse.Namespace, root: Path) -> in
         Zero after all mandatory report artifacts are written.
     """
     _ensure_index(root)
+    start = time.perf_counter()
     model = build_architecture_model_from_index(root)
+    extraction_seconds = time.perf_counter() - start
+    start = time.perf_counter()
     policy = _architecture_policy_from_arguments(args)
     analysis = analyze_architecture_policy(model, policy)
+    policy_seconds = time.perf_counter() - start
     output = (
         Path(args.output)
         if args.output is not None
         else root / ".codira" / "architecture-report"
     )
-    result = write_architecture_artifacts(model, analysis, output)
+    result = write_architecture_artifacts(
+        model,
+        analysis,
+        output,
+        options=ArchitectureRenderOptions(
+            render_svg=not getattr(args, "no_svg", False),
+            svg_timeout_seconds=getattr(args, "svg_timeout_seconds", 30),
+            phase_timings={
+                "extraction_seconds": extraction_seconds,
+                "policy_seconds": policy_seconds,
+            },
+        ),
+    )
     print(f"Wrote architecture report: {result.output_dir}")
     if result.warning is not None:
         print(f"[codira] {result.warning}", file=sys.stderr)

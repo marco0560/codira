@@ -3,13 +3,27 @@
 This module owns artifact serialization only. It receives the analyzer-neutral
 architecture model and policy analysis rather than inspecting analyzers,
 databases, or source files directly.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the runtime interfaces described above.
 """
 
 from __future__ import annotations
 
 import json
+import math
+import os
 import shutil
+import signal
 import subprocess
+import time
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
@@ -17,6 +31,30 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from codira.architecture import ArchitectureModel, ArchitecturePolicyAnalysis
+
+
+@dataclass(frozen=True)
+class ArchitectureRenderOptions:
+    """Control optional rendering and retain measured phase durations.
+
+    Parameters
+    ----------
+    render_svg : bool, optional
+        Whether to run optional Graphviz layout.
+    svg_timeout_seconds : float, optional
+        Finite nonnegative limit; zero explicitly disables the bound.
+    phase_timings : dict of str to float or None, optional
+        Caller-measured extraction and policy durations.
+
+    Returns
+    -------
+    None
+        Immutable rendering controls used by the CLI and library callers.
+    """
+
+    render_svg: bool = True
+    svg_timeout_seconds: float = 30
+    phase_timings: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -189,8 +227,31 @@ def _render_markdown(
     return "\n".join(lines) + "\n"
 
 
-def _render_svg(dot_path: Path, svg_path: Path) -> tuple[Path | None, str | None]:
-    """Render optional SVG through Graphviz without making it a dependency.
+def _terminate_svg_renderer(process: subprocess.Popen[str]) -> None:
+    """Terminate and reap only the renderer's owned process group.
+
+    Parameters
+    ----------
+    process : subprocess.Popen
+        Renderer started in its own session.
+
+    Returns
+    -------
+    None
+        The process and its inherited output pipes have been reaped.
+    """
+    if os.name == "posix":
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+    else:
+        process.kill()
+    process.communicate()
+
+
+def _render_svg(
+    dot_path: Path, svg_path: Path, *, timeout_seconds: float = 30
+) -> tuple[Path | None, str | None]:
+    """Render optional SVG with a bound on the owned Graphviz process group.
 
     Parameters
     ----------
@@ -198,26 +259,42 @@ def _render_svg(dot_path: Path, svg_path: Path) -> tuple[Path | None, str | None
         Existing DOT input artifact.
     svg_path : pathlib.Path
         Requested SVG output location.
+    timeout_seconds : float, optional
+        Rendering limit; zero explicitly permits unbounded rendering.
 
     Returns
     -------
     tuple[pathlib.Path | None, str | None]
-        SVG path on success, otherwise one stable warning.
+        SVG path on success, otherwise a warning after renderer cleanup.
     """
     executable = shutil.which("dot")
     if executable is None:
         return None, "Graphviz SVG not rendered: dot executable unavailable."
     try:
-        completed = subprocess.run(
+        with subprocess.Popen(
             [executable, "-Tsvg", "-o", str(svg_path), str(dot_path)],
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-        )
+            start_new_session=True,
+        ) as process:
+            try:
+                process.communicate(timeout=timeout_seconds or None)
+            except subprocess.TimeoutExpired:
+                _terminate_svg_renderer(process)
+                svg_path.unlink(missing_ok=True)
+                return (
+                    None,
+                    f"Graphviz SVG not rendered: exceeded {timeout_seconds:g} seconds.",
+                )
+            except BaseException:
+                _terminate_svg_renderer(process)
+                raise
+            if process.returncode != 0:
+                svg_path.unlink(missing_ok=True)
+                return None, "Graphviz SVG not rendered: dot exited unsuccessfully."
     except FileNotFoundError:
         return None, "Graphviz SVG not rendered: dot executable unavailable."
-    if completed.returncode != 0:
-        return None, "Graphviz SVG not rendered: dot exited unsuccessfully."
     return svg_path, None
 
 
@@ -225,6 +302,8 @@ def write_architecture_artifacts(
     model: ArchitectureModel,
     analysis: ArchitecturePolicyAnalysis,
     output_dir: Path,
+    *,
+    options: ArchitectureRenderOptions | None = None,
 ) -> ArchitectureArtifactResult:
     """Write the complete deterministic architecture artifact set.
 
@@ -236,12 +315,21 @@ def write_architecture_artifacts(
         Derived policy metrics and diagnostics.
     output_dir : pathlib.Path
         Destination directory for report artifacts.
+    options : ArchitectureRenderOptions or None, optional
+        Optional SVG controls and extraction/policy phase measurements.
 
     Returns
     -------
     ArchitectureArtifactResult
         Mandatory paths plus optional SVG status.
     """
+    options = options or ArchitectureRenderOptions()
+    render_svg, svg_timeout_seconds = options.render_svg, options.svg_timeout_seconds
+    if not math.isfinite(svg_timeout_seconds) or svg_timeout_seconds < 0:
+        message = "SVG timeout must be finite and nonnegative."
+        raise ValueError(message)
+    start = time.perf_counter()
+    timings = dict(options.phase_timings or {})
     output_dir.mkdir(parents=True, exist_ok=True)
     dot_path = output_dir / "architecture.dot"
     markdown_path = output_dir / "architecture.md"
@@ -259,7 +347,15 @@ def write_architecture_artifacts(
     violations_path.write_bytes(
         _json_bytes([asdict(violation) for violation in analysis.violations])
     )
-    rendered_svg_path, warning = _render_svg(dot_path, svg_path)
+    timings["artifacts_seconds"] = time.perf_counter() - start
+    start = time.perf_counter()
+    svg_path.unlink(missing_ok=True)
+    rendered_svg_path, warning = (
+        _render_svg(dot_path, svg_path, timeout_seconds=svg_timeout_seconds)
+        if render_svg
+        else (None, "Graphviz SVG not rendered: disabled by operator.")
+    )
+    timings["svg_seconds"] = time.perf_counter() - start
     manifest_path.write_bytes(
         _json_bytes(
             {
@@ -271,6 +367,11 @@ def write_architecture_artifacts(
                     violations_path.name,
                     *([svg_path.name] if rendered_svg_path is not None else []),
                 ],
+                "timings": timings,
+                "render_options": {
+                    "svg": render_svg,
+                    "svg_timeout_seconds": svg_timeout_seconds,
+                },
                 "svg": {
                     "available": rendered_svg_path is not None,
                     "warning": warning,

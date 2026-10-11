@@ -3,19 +3,35 @@
 The model deliberately receives analyzer-normalized facts and resolved relation
 rows instead of querying a particular backend.  Renderers and CLI adapters can
 therefore share it without coupling to analyzer-specific extraction paths.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the runtime interfaces described above.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
-from codira.contracts import BackendRelationQueryRequest, BackendSymbolInventoryItem
+from codira.contracts import BackendRelationQueryRequest
+from codira.contracts_architecture import (
+    BackendArchitectureSnapshot,
+    BulkArchitectureBackend,
+)
 from codira.registry import active_index_backend
 
 if TYPE_CHECKING:
-    from codira.contracts import BackendQueryConnection
+    from collections.abc import Iterator
+
+    from codira.contracts import BackendQueryConnection, IndexBackend
+    from codira.types import SymbolRow
 
 ArchitectureEdgeKind = Literal["import", "call", "reference"]
 
@@ -593,49 +609,45 @@ def _cycles(
     on_stack: set[str] = set()
     components: list[ArchitectureCycle] = []
 
-    def visit(module: str) -> None:
-        """Visit one module using Tarjan's deterministic SCC traversal.
-
-        Parameters
-        ----------
-        module : str
-            Module currently being visited.
-
-        Returns
-        -------
-        None
-            Completed cycle components are appended to the enclosing collector.
-        """
-        nonlocal index
-        indices[module] = index
-        lowlinks[module] = index
+    for root in sorted(adjacency):
+        if root in indices:
+            continue
+        indices[root] = lowlinks[root] = index
         index += 1
-        stack.append(module)
-        on_stack.add(module)
-
-        for destination in sorted(adjacency[module]):
-            if destination not in indices:
-                visit(destination)
-                lowlinks[module] = min(lowlinks[module], lowlinks[destination])
-            elif destination in on_stack:
-                lowlinks[module] = min(lowlinks[module], indices[destination])
-
-        if lowlinks[module] != indices[module]:
-            return
-        members: list[str] = []
-        while True:
-            member = stack.pop()
-            on_stack.remove(member)
-            members.append(member)
-            if member == module:
-                break
-        ordered_members = tuple(sorted(members))
-        if len(ordered_members) > 1 or module in adjacency[module]:
-            components.append(ArchitectureCycle(members=ordered_members))
-
-    for module in sorted(adjacency):
-        if module not in indices:
-            visit(module)
+        stack.append(root)
+        on_stack.add(root)
+        frames: list[tuple[str, Iterator[str]]] = [
+            (root, iter(sorted(adjacency[root])))
+        ]
+        while frames:
+            module, destinations = frames[-1]
+            destination = next(destinations, None)
+            if destination is not None:
+                if destination not in indices:
+                    indices[destination] = lowlinks[destination] = index
+                    index += 1
+                    stack.append(destination)
+                    on_stack.add(destination)
+                    frames.append((destination, iter(sorted(adjacency[destination]))))
+                elif destination in on_stack:
+                    lowlinks[module] = min(lowlinks[module], indices[destination])
+                continue
+            frames.pop()
+            if frames:
+                parent = frames[-1][0]
+                lowlinks[parent] = min(lowlinks[parent], lowlinks[module])
+            if lowlinks[module] != indices[module]:
+                continue
+            members: list[str] = []
+            while True:
+                member = stack.pop()
+                on_stack.remove(member)
+                members.append(member)
+                if member == module:
+                    break
+            ordered_members = tuple(sorted(members))
+            if len(ordered_members) > 1 or module in adjacency[module]:
+                components.append(ArchitectureCycle(members=ordered_members))
     return tuple(sorted(components))
 
 
@@ -793,117 +805,146 @@ def build_architecture_model_from_index(
     parse source files or assume database-specific schemas.
     """
     backend = active_index_backend(root=root)
-    inventory = backend.symbol_inventory(
-        root,
-        include_tests=True,
-        limit=1_000_000,
-        conn=conn,
-    )
-    rows_by_module: dict[str, list[BackendSymbolInventoryItem]] = {}
-    for item in inventory:
-        rows_by_module.setdefault(item.module, []).append(item)
-
-    modules: list[ArchitectureModule] = []
-    module_paths: dict[str, str] = {}
-    for module_name, items in sorted(rows_by_module.items()):
-        representative = min(
-            items, key=lambda item: (item.file, item.lineno, item.name)
+    owns_connection = conn is None
+    if conn is None:
+        conn = cast("BackendQueryConnection", backend.open_connection(root))
+    try:
+        snapshot = (
+            backend.architecture_snapshot(root, conn=conn)
+            if isinstance(backend, BulkArchitectureBackend)
+            else _legacy_architecture_snapshot(backend, root, conn)
         )
-        path = _repository_relative_path(root, representative.file)
+        return _architecture_model_from_snapshot(root, snapshot)
+    finally:
+        if owns_connection:
+            backend.close_connection(conn)
+
+
+def _legacy_architecture_snapshot(
+    backend: IndexBackend, root: Path, conn: BackendQueryConnection
+) -> BackendArchitectureSnapshot:
+    """Preserve architecture support for backends without the bulk extension.
+
+    Parameters
+    ----------
+    backend : IndexBackend
+        Backend implementing the established inventory and relation contracts.
+    root : pathlib.Path
+        Indexed repository root.
+    conn : BackendQueryConnection
+        Shared caller-owned read connection.
+
+    Returns
+    -------
+    BackendArchitectureSnapshot
+        The same logical inventory and resolved outgoing graph facts.
+    """
+    inventory = backend.symbol_inventory(
+        root, include_tests=True, limit=1_000_000, conn=conn
+    )
+    symbols = tuple(
+        (item.symbol_type, item.module, item.name, item.file, item.lineno)
+        for item in inventory
+    )
+    imports = tuple(
+        (module, name, kind, line)
+        for module in sorted({item.module for item in inventory})
+        for name, kind, line in backend.module_imports(root, module, conn=conn)
+    )
+    calls, references = [], []
+    for item in inventory:
+        if item.symbol_type == "module":
+            continue
+        request = BackendRelationQueryRequest(
+            root=root, name=item.name, module=item.module, incoming=False, conn=conn
+        )
+        calls.extend(backend.find_call_edges(request))
+        references.extend(backend.find_callable_refs(request))
+    return BackendArchitectureSnapshot(
+        symbols, imports, tuple(calls), tuple(references)
+    )
+
+
+def _architecture_model_from_snapshot(
+    root: Path, snapshot: BackendArchitectureSnapshot
+) -> ArchitectureModel:
+    """Aggregate backend-provided bulk facts without additional queries.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository root used for relative evidence paths.
+    snapshot : BackendArchitectureSnapshot
+        Ordered inventory, imports and resolved graph facts.
+
+    Returns
+    -------
+    ArchitectureModel
+        Deterministic module graph with the established evidence semantics.
+    """
+    rows_by_module: dict[str, list[SymbolRow]] = {}
+    for row in snapshot.symbols:
+        rows_by_module.setdefault(row[1], []).append(row)
+    modules, module_paths = [], {}
+    owners = {}
+    for module_name, items in sorted(rows_by_module.items()):
+        representative = min(items, key=lambda item: (item[3], item[4], item[2]))
+        path = _repository_relative_path(root, representative[3])
         module_paths[module_name] = path
         facts = tuple(
             sorted(
-                ArchitectureAnalyzerFact(
-                    kind=item.symbol_type,
-                    name=item.name,
-                    signature="",
-                )
+                ArchitectureAnalyzerFact(kind=item[0], name=item[2], signature="")
                 for item in items
-                if item.symbol_type != "module"
+                if item[0] != "module"
             )
         )
         modules.append(
             ArchitectureModule(
-                name=module_name,
-                path=path,
-                analyzer_name="indexed",
-                facts=facts,
+                name=module_name, path=path, analyzer_name="indexed", facts=facts
             )
         )
-
-    relations: list[ArchitectureRelation] = []
+        owners.update(
+            {(item[1], item[2]): item[4] for item in items if item[0] != "module"}
+        )
+    relations = []
     module_names = set(rows_by_module)
-    for module_name, items in sorted(rows_by_module.items()):
-        for import_name, _import_kind, lineno in backend.module_imports(
-            root, module_name, conn=conn
-        ):
+    for module, name, _kind, line in snapshot.imports:
+        if module not in module_paths:
+            continue
+        relations.append(
+            ArchitectureRelation(
+                source_module=module,
+                destination_module=_resolve_import_destination(name, module_names),
+                kind="import",
+                evidence=ArchitectureSymbolEvidence(
+                    module=module, name=name, path=module_paths[module], lineno=line
+                ),
+            )
+        )
+    for kind, rows in (("call", snapshot.calls), ("reference", snapshot.references)):
+        for (
+            source,
+            name,
+            destination,
+            _target,
+            _target_kind,
+            _external,
+            _resolved,
+        ) in rows:
+            relation_line = owners.get((source, name))
+            if relation_line is None:
+                continue
             relations.append(
                 ArchitectureRelation(
-                    source_module=module_name,
-                    destination_module=_resolve_import_destination(
-                        import_name, module_names
-                    ),
-                    kind="import",
+                    source_module=source,
+                    destination_module=destination,
+                    kind=cast("ArchitectureEdgeKind", kind),
                     evidence=ArchitectureSymbolEvidence(
-                        module=module_name,
-                        name=import_name,
-                        path=module_paths[module_name],
-                        lineno=lineno,
+                        module=source,
+                        name=name,
+                        path=module_paths[source],
+                        lineno=relation_line,
                     ),
                 )
             )
-        for item in items:
-            if item.symbol_type == "module":
-                continue
-            request = BackendRelationQueryRequest(
-                root=root,
-                name=item.name,
-                module=module_name,
-                incoming=False,
-                conn=conn,
-            )
-            for (
-                source,
-                name,
-                destination,
-                _target,
-                _kind,
-                _external,
-                _resolved,
-            ) in backend.find_call_edges(request):
-                relations.append(
-                    ArchitectureRelation(
-                        source_module=source,
-                        destination_module=destination,
-                        kind="call",
-                        evidence=ArchitectureSymbolEvidence(
-                            module=source,
-                            name=name,
-                            path=module_paths[source],
-                            lineno=item.lineno,
-                        ),
-                    )
-                )
-            for (
-                source,
-                name,
-                destination,
-                _target,
-                _kind,
-                _external,
-                _resolved,
-            ) in backend.find_callable_refs(request):
-                relations.append(
-                    ArchitectureRelation(
-                        source_module=source,
-                        destination_module=destination,
-                        kind="reference",
-                        evidence=ArchitectureSymbolEvidence(
-                            module=source,
-                            name=name,
-                            path=module_paths[source],
-                            lineno=item.lineno,
-                        ),
-                    )
-                )
     return build_architecture_model(tuple(modules), tuple(relations))
