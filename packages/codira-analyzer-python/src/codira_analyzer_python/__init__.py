@@ -970,7 +970,7 @@ class PythonAnalyzer:
     """
 
     name = "python"
-    version = "11"
+    version = "12"
     discovery_globs: tuple[str, ...] = ("*.py",)
     default_coverage_roots: tuple[str, ...] = ("src", "tests", "scripts")
 

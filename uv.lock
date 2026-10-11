@@ -623,7 +623,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-python"
-version = "2.0.0"
+version = "2.0.1"
 source = { editable = "packages/codira-analyzer-python" }
 dependencies = [
     { name = "codira" },

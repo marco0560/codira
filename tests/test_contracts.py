@@ -2765,7 +2765,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
     assert optional_dependencies["bundle-official"] == [
         "sentence-transformers>=5.4,<6.0",
         "einops>=0.8,<1.0",
-        "codira-analyzer-python==2.0.0",
+        "codira-analyzer-python==2.0.1",
         "codira-analyzer-json==2.0.0",
         "codira-analyzer-c==2.0.0",
         "codira-analyzer-cpp==2.0.0",

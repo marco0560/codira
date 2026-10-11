@@ -36,7 +36,7 @@ dev = [
     "wheel",
     "twine>=6.2,<7.0",
     "codira-installer==2.0.0",
-    "codira-analyzer-python==2.0.0",
+    "codira-analyzer-python==2.0.1",
     "codira-analyzer-json==2.0.0",
     "codira-analyzer-c==2.0.0",
     "codira-analyzer-cpp==2.0.0",
@@ -77,7 +77,7 @@ semantic = [
 bundle-official = [
     "sentence-transformers>=5.4,<6.0",
     "einops>=0.8,<1.0",
-    "codira-analyzer-python==2.0.0",
+    "codira-analyzer-python==2.0.1",
     "codira-analyzer-json==2.0.0",
     "codira-analyzer-c==2.0.0",
     "codira-analyzer-cpp==2.0.0",

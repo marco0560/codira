@@ -795,7 +795,7 @@ def _analyze_index_task(
         with warnings.catch_warnings(record=True) as warning_records:
             warnings.simplefilter("always")
             analysis = analyzer.analyze_file(path_obj, root)
-    except (SyntaxError, UnicodeDecodeError, ValueError) as exc:
+    except (SyntaxError, UnicodeDecodeError, ValueError, RecursionError) as exc:
         return _AnalysisTaskResult(
             ordinal=task.ordinal,
             parsed_file=None,
@@ -1766,91 +1766,106 @@ def index_repo(
                 else previous.analysis_fingerprint,
             )
         )
-        report = _index_repo_unlocked(
-            root,
-            full=full,
-            embedding_index_mode=embedding_index_mode,
-            analysis_concurrency=analysis_concurrency,
-            retry_failed_files=retry_failed_files,
-        )
-        if (
-            report.publication_ready
-            and report.embedding_complete
-            and (report.indexed > 0 or report.deleted > 0)
-        ):
-            rebuild_active_similarity_index(root)
-        if not report.publication_ready:
+        try:
+            report = _index_repo_unlocked(
+                root,
+                full=full,
+                embedding_index_mode=embedding_index_mode,
+                analysis_concurrency=analysis_concurrency,
+                retry_failed_files=retry_failed_files,
+            )
+            if (
+                report.publication_ready
+                and report.embedding_complete
+                and (report.indexed > 0 or report.deleted > 0)
+            ):
+                rebuild_active_similarity_index(root)
+            if not report.publication_ready:
+                store.write(
+                    transition_record(
+                        generation=generation,
+                        state="failed",
+                        last_successful_generation=last_successful,
+                    )
+                )
+                return report
+            backend = active_index_backend(root=root)
+            analyzers = _active_language_analyzers(root=root)
+            metadata = _read_metadata_file(get_metadata_path(root))
+            metadata.update(
+                {
+                    "schema_version": str(backend.version),
+                    "backend_name": str(backend.name),
+                    "backend_version": str(backend.version),
+                    "analyzer_inventory": json.dumps(
+                        _current_analyzer_inventory_rows(analyzers)
+                    ),
+                    "indexed_file_count": str(report.indexed + report.reused),
+                }
+            )
+            commit = read_head_commit(root)
+            if commit:
+                metadata["commit"] = commit
+            _write_metadata_file(get_metadata_path(root), metadata)
+            current_fingerprint = analysis_fingerprint(root)
+            if (
+                previous is not None
+                and previous.state == "ready"
+                and not previous.partial
+                and previous.backend_name == str(backend.name)
+                and previous.backend_version == str(backend.version)
+                and previous.analysis_fingerprint == current_fingerprint
+                and report.indexed == 0
+                and report.deleted == 0
+                and report.failed == 0
+            ):
+                store.write(previous)
+                return report
+            store.write(
+                transition_record(
+                    generation=generation,
+                    state="ready",
+                    last_successful_generation=generation,
+                    git_commit=read_head_commit(root),
+                    backend_name=str(backend.name),
+                    backend_version=str(backend.version),
+                    analyzer_inventory=[
+                        {"name": str(analyzer.name), "version": str(analyzer.version)}
+                        for analyzer in analyzers
+                    ],
+                    indexed_file_count=report.indexed + report.reused,
+                    partial=report.failed > 0,
+                    failed_file_count=report.failed,
+                    attempted_file_count=report.indexed + report.reused + report.failed,
+                    failed_files=[
+                        {
+                            "path": Path(failure.path).relative_to(root).as_posix(),
+                            "sha256": report.file_hashes.get(failure.path, ""),
+                            "analyzer_name": failure.analyzer_name,
+                            "error_type": failure.error_type,
+                            "reason": failure.reason,
+                        }
+                        for failure in report.failures
+                    ],
+                    analysis_fingerprint=current_fingerprint,
+                    coverage_complete=not report.coverage_issues and report.failed == 0,
+                )
+            )
+        except BaseException:
             store.write(
                 transition_record(
                     generation=generation,
                     state="failed",
                     last_successful_generation=last_successful,
+                    failed_files=None if previous is None else previous.failed_files,
+                    analysis_fingerprint=None
+                    if previous is None
+                    else previous.analysis_fingerprint,
                 )
             )
+            raise
+        else:
             return report
-        backend = active_index_backend(root=root)
-        analyzers = _active_language_analyzers(root=root)
-        metadata = _read_metadata_file(get_metadata_path(root))
-        metadata.update(
-            {
-                "schema_version": str(backend.version),
-                "backend_name": str(backend.name),
-                "backend_version": str(backend.version),
-                "analyzer_inventory": json.dumps(
-                    _current_analyzer_inventory_rows(analyzers)
-                ),
-                "indexed_file_count": str(report.indexed + report.reused),
-            }
-        )
-        commit = read_head_commit(root)
-        if commit:
-            metadata["commit"] = commit
-        _write_metadata_file(get_metadata_path(root), metadata)
-        current_fingerprint = analysis_fingerprint(root)
-        if (
-            previous is not None
-            and previous.state == "ready"
-            and not previous.partial
-            and previous.backend_name == str(backend.name)
-            and previous.backend_version == str(backend.version)
-            and previous.analysis_fingerprint == current_fingerprint
-            and report.indexed == 0
-            and report.deleted == 0
-            and report.failed == 0
-        ):
-            store.write(previous)
-            return report
-        store.write(
-            transition_record(
-                generation=generation,
-                state="ready",
-                last_successful_generation=generation,
-                git_commit=read_head_commit(root),
-                backend_name=str(backend.name),
-                backend_version=str(backend.version),
-                analyzer_inventory=[
-                    {"name": str(analyzer.name), "version": str(analyzer.version)}
-                    for analyzer in analyzers
-                ],
-                indexed_file_count=report.indexed + report.reused,
-                partial=report.failed > 0,
-                failed_file_count=report.failed,
-                attempted_file_count=report.indexed + report.reused + report.failed,
-                failed_files=[
-                    {
-                        "path": Path(failure.path).relative_to(root).as_posix(),
-                        "sha256": report.file_hashes.get(failure.path, ""),
-                        "analyzer_name": failure.analyzer_name,
-                        "error_type": failure.error_type,
-                        "reason": failure.reason,
-                    }
-                    for failure in report.failures
-                ],
-                analysis_fingerprint=current_fingerprint,
-                coverage_complete=not report.coverage_issues and report.failed == 0,
-            )
-        )
-        return report
 
 
 def _index_repo_unlocked(

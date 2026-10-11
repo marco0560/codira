@@ -224,18 +224,27 @@ def _normalized_node(node: Node) -> SyntaxNode:
     SyntaxNode
         Node with Codira-owned kind, byte spans, and named descendants.
     """
-    start = node.start_point
-    end = node.end_point
-    return SyntaxNode(
-        kind=_NODE_KINDS.get(node.type, SyntaxKind.OTHER),
-        start_byte=node.start_byte,
-        end_byte=node.end_byte,
-        start_line=start.row + 1,
-        start_column=start.column,
-        end_line=end.row + 1,
-        end_column=end.column,
-        children=tuple(_normalized_node(child) for child in node.named_children),
-    )
+    normalized: dict[int, SyntaxNode] = {}
+    pending = [(node, False)]
+    while pending:
+        current, visited = pending.pop()
+        children = current.named_children
+        if not visited:
+            pending.append((current, True))
+            pending.extend((child, False) for child in reversed(children))
+            continue
+        start, end = current.start_point, current.end_point
+        normalized[current.id] = SyntaxNode(
+            kind=_NODE_KINDS.get(current.type, SyntaxKind.OTHER),
+            start_byte=current.start_byte,
+            end_byte=current.end_byte,
+            start_line=start.row + 1,
+            start_column=start.column,
+            end_line=end.row + 1,
+            end_column=end.column,
+            children=tuple(normalized.pop(child.id) for child in children),
+        )
+    return normalized[node.id]
 
 
 def _diagnostics(node: Node) -> tuple[SyntaxDiagnostic, ...]:

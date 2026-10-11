@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock
 
@@ -31,7 +32,7 @@ from codira.registry import active_index_backend
 from codira.storage import get_metadata_path
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from codira.models import AnalysisResult
 
 
 @pytest.mark.parametrize("backend", ["sqlite", "duckdb"])
@@ -282,3 +283,128 @@ def test_artifact_validation_failure_keeps_full_index_usable(
     inventory = backend.load_runtime_inventory(tmp_path)
     assert inventory is not None and not inventory[2]
     assert MCPAdapter(tmp_path).symbol("answer")["result"]
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "duckdb"])
+def test_deep_valid_python_indexes(tmp_path: Path, backend: str) -> None:
+    """Index an assignment deeper than the recursive normalization limit.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source and state root.
+    backend : str
+        Structural backend receiving real Python analysis artifacts.
+
+    Returns
+    -------
+    None
+        Both deep source and an ordinary callable are published successfully.
+    """
+    (tmp_path / ".codira").mkdir()
+    (tmp_path / ".codira/config.toml").write_text(
+        f'[embeddings]\nenabled = false\n[backend]\nname = "{backend}"\n'
+    )
+    (tmp_path / "deep.py").write_text(
+        " = ".join(f"a{i}" for i in range(801)) + " = None\n"
+    )
+    (tmp_path / "good.py").write_text("def answer():\n    return 42\n")
+    report = index_repo(tmp_path)
+    assert report.indexed == 2 and report.failed == 0
+    generation = IndexGenerationStore(tmp_path).read()
+    assert generation is not None and generation.state == "ready"
+    assert MCPAdapter(tmp_path).symbol("answer")["result"]
+
+
+def test_source_recursion_failure_retains_other_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retain a path-specific traversal failure without aborting publication.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated valid sources and structural configuration.
+    monkeypatch : pytest.MonkeyPatch
+        Injects a traversal failure into one real analyzer invocation.
+
+    Returns
+    -------
+    None
+        The successful file remains queryable and the failed path is retained.
+    """
+    from codira_analyzer_python import PythonAnalyzer
+
+    (tmp_path / ".codira").mkdir()
+    (tmp_path / ".codira/config.toml").write_text("[embeddings]\nenabled = false\n")
+    (tmp_path / "bad.py").write_text("x = 1\n")
+    (tmp_path / "good.py").write_text("def answer():\n    return 42\n")
+    original = PythonAnalyzer.analyze_file
+
+    def analyze(self: PythonAnalyzer, path: Path, root: Path) -> AnalysisResult:
+        """Inject the source failure while retaining real analysis elsewhere.
+
+        Parameters
+        ----------
+        self : PythonAnalyzer
+            Active analyzer instance.
+        path, root : pathlib.Path
+            Selected source and repository root.
+
+        Returns
+        -------
+        codira.models.AnalysisResult
+            Original analysis for the unaffected source.
+        """
+        if path.name == "bad.py":
+            message = "source traversal limit"
+            raise RecursionError(message)
+        return original(self, path, root)
+
+    monkeypatch.setattr(PythonAnalyzer, "analyze_file", analyze)
+    report = index_repo(tmp_path)
+    assert report.indexed == report.failed == 1
+    assert report.failures[0].error_type == "RecursionError"
+    assert Path(report.failures[0].path).name == "bad.py"
+    assert index_coverage(tmp_path)["usable"] is True
+    assert MCPAdapter(tmp_path).symbol("answer")["result"]
+
+
+@pytest.mark.parametrize(
+    "failure_point", ["_index_repo_unlocked", "_write_metadata_file"]
+)
+def test_fatal_indexing_finalizes_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
+) -> None:
+    """Finalize unexpected analysis or publication failures and keep history.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Source and index root with a previously successful generation.
+    monkeypatch : pytest.MonkeyPatch
+        Injects a fatal error outside recoverable per-file analysis.
+    failure_point : str
+        Analysis or publication operation that fails.
+
+    Returns
+    -------
+    None
+        The error propagates and the generation is failed rather than updating.
+    """
+    (tmp_path / ".codira").mkdir()
+    (tmp_path / ".codira/config.toml").write_text("[embeddings]\nenabled = false\n")
+    (tmp_path / "good.py").write_text("def answer():\n    return 42\n")
+    index_repo(tmp_path)
+    previous = IndexGenerationStore(tmp_path).read()
+    assert previous is not None
+    monkeypatch.setattr(
+        indexer_module, failure_point, Mock(side_effect=RuntimeError("fatal backend"))
+    )
+    with pytest.raises(RuntimeError, match="fatal backend"):
+        index_repo(tmp_path)
+    failed = IndexGenerationStore(tmp_path).read()
+    assert failed is not None and failed.state == "failed"
+    assert failed.generation == previous.generation + 1
+    assert failed.last_successful_generation == previous.last_successful_generation
+    assert index_coverage(tmp_path)["usable"] is False

@@ -49,3 +49,7 @@ Package-local verification:
 ```bash
 pytest -q packages/codira-analyzer-python/tests
 ```
+
+Tree normalization uses iterative postorder traversal, so valid deep syntax such
+as chained assignments does not depend on Python's interpreter recursion limit.
+Runtime analyzer revision 12 invalidates cached analysis from earlier revisions.

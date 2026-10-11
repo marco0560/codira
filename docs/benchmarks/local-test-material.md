@@ -114,3 +114,13 @@ This applies to both analyzer-style and stress manifests, which share the runner
 Existing runs retain their original registry layout and failure evidence. After
 this runner change, create a new run ID rather than resuming an old run with
 changed code.
+
+### Traversal failures and interrupted publication
+
+Source-specific `RecursionError` failures are retained alongside syntax and
+encoding failures, including their paths, while successful files remain usable.
+Unexpected fatal errors and operator interruptions finalize the generation as
+`failed`; readers must not treat it as a completed or partial publication. The
+last successful generation number remains recorded for diagnosis. Correct the
+cause and explicitly run `codira index` to recover; an interrupted generation
+is not evidence of usable results.
