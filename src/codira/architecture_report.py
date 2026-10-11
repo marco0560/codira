@@ -53,7 +53,7 @@ class ArchitectureRenderOptions:
     """
 
     render_svg: bool = True
-    svg_timeout_seconds: float = 30
+    svg_timeout_seconds: float = 60
     phase_timings: dict[str, float] | None = None
 
 

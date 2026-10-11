@@ -469,8 +469,8 @@ def build_parser() -> argparse.ArgumentParser:
     architecture_parser.add_argument(
         "--svg-timeout-seconds",
         type=float,
-        default=30,
-        help="Optional SVG layout limit (default: 30 seconds; zero: unbounded)",
+        default=60,
+        help="Optional SVG layout limit (default: 60 seconds; zero: unbounded)",
     )
     _add_repo_path_arguments(architecture_parser)
 

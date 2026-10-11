@@ -1143,8 +1143,8 @@ reading the actual source files before editing.
 Developers can run `codira arch` to write indexed module dependencies, cycle and
 hotspot findings, policy violations, Markdown and DOT reports. SQLite and DuckDB
 extract architecture facts in bulk through one shared read session. Optional
-Graphviz SVG layout has a 30-second limit; a timeout warns while preserving the
+Graphviz SVG layout has a 60-second limit; a timeout warns while preserving the
 mandatory report and manifest. Use `codira arch --no-svg` to omit layout, or
-`codira arch --svg-timeout-seconds 60` to choose another bound (`0` is unbounded).
+`codira arch --svg-timeout-seconds 120` to choose another bound (`0` is unbounded).
 The manifest records extraction, policy, artifact-writing and SVG phase timings.
 Reports retain the index's coverage limitations.

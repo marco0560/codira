@@ -1623,7 +1623,7 @@ def _run_architecture_report_command(args: argparse.Namespace, root: Path) -> in
         output,
         options=ArchitectureRenderOptions(
             render_svg=not getattr(args, "no_svg", False),
-            svg_timeout_seconds=getattr(args, "svg_timeout_seconds", 30),
+            svg_timeout_seconds=getattr(args, "svg_timeout_seconds", 60),
             phase_timings={
                 "extraction_seconds": extraction_seconds,
                 "policy_seconds": policy_seconds,
