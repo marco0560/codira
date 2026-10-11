@@ -2776,7 +2776,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "codira-analyzer-bash==2.0.0",
         "codira-analyzer-markdown==2.0.0",
         "codira-analyzer-text==2.0.0",
-        "codira-documentation-audit-numpy==2.0.0",
+        "codira-documentation-audit-numpy==2.0.1",
         "codira-documentation-audit-google==2.0.0",
         "codira-documentation-audit-doxygen==2.0.0",
         "codira-documentation-audit-rustdoc==2.0.0",

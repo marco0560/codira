@@ -17,12 +17,21 @@ Architectural role
 ------------------
 This module belongs to the **developer tooling layer** and composes the
 repository-owned tool runner.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -137,7 +146,9 @@ VALIDATION_STEPS: tuple[ValidationStep, ...] = (
         "python",
         ("scripts/coverage_summary.py",),
     ),
-    ValidationStep("index-refresh", "codira", ("index", "--defer-embeddings")),
+    ValidationStep(
+        "index-refresh", "codira", ("index", "--full", "--defer-embeddings")
+    ),
     ValidationStep(
         "docstring-audit",
         "codira",
@@ -384,6 +395,34 @@ def print_captured_diagnostics(completed: subprocess.CompletedProcess[str]) -> N
             print(content, file=stream, end="" if content.endswith("\n") else "\n")
 
 
+def validation_routing_error() -> str | None:
+    """Reject environment overrides that redirect repository audit inputs.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    str or None
+        Diagnostic naming active routing overrides, or no error. Environment
+        values are not disclosed or changed.
+    """
+    overrides = tuple(
+        key
+        for key in ("CODIRA_CONFIG_FILE", "CODIRA_TARGET_DIR", "CODIRA_OUTPUT_DIR")
+        if os.environ.get(key)
+    )
+    if not overrides:
+        return None
+    return (
+        "Repository validation requires its tracked Codira configuration and "
+        "repository-local index; unset " + ", ".join(overrides) + ". "
+        "Index refresh uses --full --defer-embeddings, so no replacement "
+        "embedding configuration is needed."
+    )
+
+
 def run_validation(
     commands: tuple[tuple[str, ...], ...] | None = None,
 ) -> int:
@@ -402,6 +441,11 @@ def run_validation(
         Zero when all validation steps pass, otherwise the first non-zero child
         exit status. Captured audit diagnostics are printed when validation fails.
     """
+
+    routing_error = validation_routing_error()
+    if routing_error is not None:
+        print(routing_error, file=sys.stderr)
+        return 1
 
     selected_commands = (
         commands if commands is not None else build_validation_commands()

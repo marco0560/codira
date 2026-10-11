@@ -175,6 +175,11 @@ def test_semgrep_rule_files_are_valid_yaml(tmp_path: Path) -> None:
     None
         The test asserts every Semgrep rule file is accepted by a Semgrep scan
         against an empty target directory.
+
+    Notes
+    -----
+    The explicit project root confines ignore-file and repository discovery to
+    the disposable target, avoiding unrelated ancestor filesystems.
     """
 
     scan_root = tmp_path / "scan-root"
@@ -190,6 +195,8 @@ def test_semgrep_rule_files_are_valid_yaml(tmp_path: Path) -> None:
                 str(path),
                 "--metrics=off",
                 "--disable-version-check",
+                "--project-root",
+                str(scan_root),
                 str(scan_root),
             ),
             cwd=REPO_ROOT,

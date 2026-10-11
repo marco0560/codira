@@ -638,6 +638,13 @@ class Campaign:
         -------
         dict
             Stage result, including every process exit status.
+
+        Raises
+        ------
+        KeyboardInterrupt
+            If interrupted, after the attempt evidence has been retained.
+        OSError
+            If the process cannot be started or its evidence cannot be written.
         """
         destination = self.root / "stages" / key
         record = destination / "result.json"

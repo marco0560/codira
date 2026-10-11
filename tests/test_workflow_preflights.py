@@ -222,3 +222,66 @@ def test_validator_exposes_failed_audit_diagnostics(
     assert "failed to build index automatically" in result.out
     assert "Index initialization failed" in result.err
     assert calls == [command]
+
+
+@pytest.mark.parametrize(
+    "key", ["CODIRA_CONFIG_FILE", "CODIRA_TARGET_DIR", "CODIRA_OUTPUT_DIR"]
+)
+def test_validation_rejects_redirected_audit_inputs(
+    key: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Reject routing overrides before any validation child can run.
+
+    Parameters
+    ----------
+    key : str
+        Routing environment variable under test.
+    monkeypatch : pytest.MonkeyPatch
+        Isolated environment and child execution replacements.
+    capsys : pytest.CaptureFixture[str]
+        Captured diagnostics.
+
+    Returns
+    -------
+    None
+        Both entry points fail without executing or exposing override values.
+    """
+    monkeypatch.setenv(key, "private-override-location")
+    calls: list[object] = []
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: calls.append(args))
+    assert validate_repo.run_validation((("unused",),)) == 1
+    assert check_workflow_quality.main([]) == 1
+    assert calls == []
+    diagnostics = capsys.readouterr().err
+    assert key in diagnostics
+    assert "--full --defer-embeddings" in diagnostics
+    assert "private-override-location" not in diagnostics
+
+
+def test_quality_and_full_gate_refresh_all_audit_facts(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Use full structural refresh without requiring an embedding model.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Isolated empty routing overrides.
+    capsys : pytest.CaptureFixture[str]
+        Captured dry-run command vectors.
+
+    Returns
+    -------
+    None
+        Both gates retain repository audit routing and refresh every file.
+    """
+    for key in ("CODIRA_CONFIG_FILE", "CODIRA_TARGET_DIR", "CODIRA_OUTPUT_DIR"):
+        monkeypatch.setenv(key, "")
+    assert validate_repo.validation_routing_error() is None
+    assert check_workflow_quality.main(["--dry-run"]) == 0
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert records[0]["command"][-3:] == ["index", "--full", "--defer-embeddings"]
+    refresh = next(
+        step for step in validate_repo.VALIDATION_STEPS if step.name == "index-refresh"
+    )
+    assert refresh.args == ("index", "--full", "--defer-embeddings")

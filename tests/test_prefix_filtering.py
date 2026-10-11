@@ -1064,7 +1064,7 @@ def test_embeddings_and_audit_cli_json_emit_shared_envelope(
     assert undocumented_pkg["file"] == str(tmp_path / "pkg" / "b.py")
     assert undocumented_pkg["lineno"] == 11
     assert undocumented_pkg["end_lineno"] == 12
-    assert undocumented_pkg["audit_plugin"] == {"name": "numpy", "version": "1"}
+    assert undocumented_pkg["audit_plugin"] == {"name": "numpy", "version": "2"}
     assert undocumented_pkg["audit_convention"] == {
         "name": "numpy",
         "version": "1",

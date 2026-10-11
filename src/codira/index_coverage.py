@@ -151,10 +151,10 @@ def index_response_scope(root: Path | None, *, warn: bool = True) -> Iterator[No
     warn : bool, optional
         Emit the diagnostic to stderr on scope exit.
 
-    Returns
-    -------
-    collections.abc.Iterator[None]
-        Context preserving independent request-local roots.
+    Yields
+    ------
+    None
+        Control while independent request-local roots are bound.
     """
     token = _RESPONSE_ROOT.set(root)
     try:

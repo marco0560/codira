@@ -13,6 +13,14 @@ Validation helpers focus on deterministic parsing of cleaned docstrings and avoi
 Architectural role
 ------------------
 This module belongs to the **docstring infrastructure layer** that enforces NumPy-style rules across analyzer outputs.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
 """
 
 from __future__ import annotations
@@ -48,7 +56,10 @@ OPTIONAL_SECTIONS = [
 ]
 KNOWN_SECTIONS = REQUIRED_SECTIONS + OPTIONAL_SECTIONS
 SECTION_HEADING_RE = re.compile(r"^[A-Z][A-Za-z ]+$")
-PARAMETER_LINE_RE = re.compile(r"^([*]{0,2}[A-Za-z_][A-Za-z0-9_]*)\s*:")
+PARAMETER_LINE_RE = re.compile(
+    r"^([*]{0,2}[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\s*,\s*[*]{0,2}[A-Za-z_][A-Za-z0-9_]*)*)\s*:"
+)
 GOOGLE_ARGS_RE = re.compile(r"^\s*(Args|Arguments):\s*$")
 GOOGLE_RETURNS_RE = re.compile(r"^\s*Returns:\s*$")
 GOOGLE_RAISES_RE = re.compile(r"^\s*Raises:\s*$")
@@ -266,7 +277,7 @@ def _parameter_section_names(doc: str) -> set[str]:
         match = PARAMETER_LINE_RE.match(line.strip())
         if match is None:
             continue
-        names.add(match.group(1).lstrip("*"))
+        names.update(name.strip().lstrip("*") for name in match.group(1).split(","))
 
     return names
 
@@ -500,7 +511,7 @@ class NumpyDocumentationAuditPlugin:
     """
 
     name = "numpy"
-    version = "1"
+    version = "2"
     languages = ("python",)
     conventions = ("numpy",)
 

@@ -322,6 +322,13 @@ def write_architecture_artifacts(
     -------
     ArchitectureArtifactResult
         Mandatory paths plus optional SVG status.
+
+    Raises
+    ------
+    ValueError
+        If the SVG timeout is negative or nonfinite.
+    OSError
+        If mandatory artifacts cannot be written.
     """
     options = options or ArchitectureRenderOptions()
     render_svg, svg_timeout_seconds = options.render_svg, options.svg_timeout_seconds

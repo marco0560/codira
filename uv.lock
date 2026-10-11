@@ -815,7 +815,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-documentation-audit-numpy"
-version = "2.0.0"
+version = "2.0.1"
 source = { editable = "packages/codira-documentation-audit-numpy" }
 dependencies = [
     { name = "codira" },

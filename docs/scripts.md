@@ -66,8 +66,22 @@ temporary directories under the repository.
 
 Run the standard local validation sequence through `scripts/run_repo_tool.py`.
 This is the preferred one-command validation entry point for local changes.
-Before the final documentation audit, it builds a structural index with
-embeddings deferred, so a fresh CI checkout does not require local model files.
+Both validation entry points perform a full structural index refresh with
+`--full --defer-embeddings` before auditing. This recomputes audit facts without
+requiring local embedding models. They reject nonempty `CODIRA_CONFIG_FILE`,
+`CODIRA_TARGET_DIR`, or `CODIRA_OUTPUT_DIR` overrides: a replacement config can
+silently omit the repository documentation routes, and a redirected index can
+audit another checkout. From the repository root, recover with:
+
+```bash
+unset CODIRA_CONFIG_FILE CODIRA_TARGET_DIR CODIRA_OUTPUT_DIR
+uv run python scripts/check_workflow_quality.py
+uv run python scripts/validate_repo.py
+```
+
+An empty audit result is meaningful only after the configured audit route has
+run against a successfully refreshed index. Ordinary Codira CLI commands retain
+their routing override support; this restriction applies to repository gates.
 Failed captured audits print their command and stdout/stderr diagnostics.
 Use `--dry-run` to print the delegated commands without executing them. Use
 `--semgrep-complete` to append a broad Semgrep registry scan and save its JSON

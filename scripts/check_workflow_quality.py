@@ -27,6 +27,7 @@ from scripts.validate_repo import (
     VALIDATION_STEPS,
     build_validation_commands,
     run_validation,
+    validation_routing_error,
 )
 
 QUALITY_STEPS = frozenset(
@@ -51,8 +52,22 @@ def main(arguments: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true")
     options = parser.parse_args(arguments)
+    routing_error = validation_routing_error()
+    if not options.dry_run and routing_error is not None:
+        print(routing_error, file=sys.stderr)
+        return 1
     checks: list[tuple[str, tuple[str, ...]]] = [
-        ("index-refresh", (sys.executable, str(RUN_REPO_TOOL), "codira", "index"))
+        (
+            "index-refresh",
+            (
+                sys.executable,
+                str(RUN_REPO_TOOL),
+                "codira",
+                "index",
+                "--full",
+                "--defer-embeddings",
+            ),
+        )
     ]
     checks.extend(
         (step.name, command)

@@ -12,6 +12,14 @@ Tests focus on deterministic docstring validation behavior without nondeterminis
 Architectural role
 ------------------
 This module belongs to the **docstring verification layer** that keeps docstring hygiene consistent for analyzers.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
 """
 
 from __future__ import annotations
@@ -970,3 +978,88 @@ def test_validate_docstring_allows_summary_only_module_docstrings() -> None:
     issues = validate_docstring(_validation_request("Module summary.", is_public=1))
 
     assert issues == []
+
+
+@pytest.mark.parametrize(
+    ("header", "parameters"),
+    [
+        ("stdout, stderr : str", ["stdout", "stderr"]),
+        ("prefix , name: str", ["prefix", "name"]),
+        ("state, config : pathlib.Path", ["state", "config"]),
+        ("*args, **kwargs : object", ["args", "kwargs"]),
+        ("value : int", ["value"]),
+    ],
+)
+def test_numpy_grouped_parameters(header: str, parameters: list[str]) -> None:
+    """Accept every parameter name in a valid NumPy grouped header.
+
+    Parameters
+    ----------
+    header : str
+        Single or grouped parameter declaration.
+    parameters : list[str]
+        Logical callable names documented by the declaration.
+
+    Returns
+    -------
+    None
+        Valid declarations produce no missing-parameter diagnostics.
+    """
+    doc = f"""Describe the callable.
+
+    Parameters
+    ----------
+    {header}
+        Shared description.
+
+    Returns
+    -------
+    None
+        No result.
+    """
+    assert (
+        validate_docstring(
+            _validation_request(
+                doc, is_public=1, parameters=parameters, require_callable_sections=True
+            )
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "header", ["value, : int", "value, 2wrong : int", "value other : int"]
+)
+def test_numpy_malformed_groups_do_not_document_parameters(header: str) -> None:
+    """Keep malformed group headers from hiding missing documentation.
+
+    Parameters
+    ----------
+    header : str
+        Invalid parameter declaration.
+
+    Returns
+    -------
+    None
+        The valid callable name remains undocumented.
+    """
+    doc = f"""Describe the callable.
+
+    Parameters
+    ----------
+    {header}
+        Shared description.
+
+    Returns
+    -------
+    None
+        No result.
+    """
+    assert (
+        "missing_parameter",
+        "Parameter not documented: value",
+    ) in validate_docstring(
+        _validation_request(
+            doc, is_public=1, parameters=["value"], require_callable_sections=True
+        )
+    )
