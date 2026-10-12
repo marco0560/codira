@@ -33,7 +33,7 @@ import subprocess
 import sys
 import time
 import tomllib
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -704,7 +704,7 @@ class StageProgress:
         )
 
     def report(self, key: str, status: str, *, measured: bool = True) -> None:
-        """Prefix a terminal outcome with its ordinal and remaining stage count.
+        """Prefix an outcome with its ordinal, pending count and local timestamp.
 
         Parameters
         ----------
@@ -719,12 +719,16 @@ class StageProgress:
         -------
         None
             Remaining tests exclude this outcome and retained checkpoints.
+            The timestamp records this outcome in local time with its UTC offset.
         """
         self.pending.discard(key)
         if measured:
             self.completed += 1
         ordinal = str(self.completed) if measured else "skip"
-        print(f"[{ordinal}; {len(self.pending)} remaining]", key, status, flush=True)
+        timestamp = (
+            datetime.now(UTC).astimezone().isoformat(sep=" ", timespec="seconds")
+        )
+        print(f"[{ordinal}; {len(self.pending)}; {timestamp}]", key, status, flush=True)
 
     def omit_unavailable(
         self, prefix: str, stages: tuple[str, ...], *, available: bool

@@ -1,4 +1,14 @@
-"""Offline regressions for local runner outcome classification and checkpoints."""
+"""Offline regressions for local runner outcome classification and checkpoints.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Tests validate retained outcomes and terminal progress without campaigns.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +17,7 @@ import importlib.metadata
 import json
 import platform
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, TextIO
@@ -18,9 +29,9 @@ from scripts import run_test_material_benchmarks as RUNNER
 
 
 def test_stage_progress_numbers_measurements_and_prunes_exclusions(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Show exact remaining planned measurements without numbering skips.
+    """Show pending counts and current timestamps without numbering skips.
 
     Parameters
     ----------
@@ -28,12 +39,23 @@ def test_stage_progress_numbers_measurements_and_prunes_exclusions(
         Empty campaign root.
     capsys : pytest.CaptureFixture[str]
         Captured terminal output.
+    monkeypatch : pytest.MonkeyPatch
+        Supplies a clock that advances for each outcome.
 
     Returns
     -------
     None
         Numbered outcomes reach zero and similarly named groups stay separate.
     """
+    instants = [
+        datetime(2026, 10, 12, 12, 30, second, tzinfo=UTC) for second in range(4)
+    ]
+    clock = Mock(now=Mock(side_effect=instants))
+    monkeypatch.setattr(RUNNER, "datetime", clock)
+    timestamps = [
+        instant.astimezone().isoformat(sep=" ", timespec="seconds")
+        for instant in instants
+    ]
     progress = RUNNER.StageProgress(
         {"a/index", "a/query", "ab/index", "plugins"}, tmp_path, False
     )
@@ -43,10 +65,10 @@ def test_stage_progress_numbers_measurements_and_prunes_exclusions(
     progress.report("ab/index", "partial")
     progress.report("plugins", "passed")
     assert capsys.readouterr().out.splitlines() == [
-        "[1; 3 remaining] a/index failed",
-        "[skip; 2 remaining] a/queries excluded: unusable index",
-        "[2; 1 remaining] ab/index partial",
-        "[3; 0 remaining] plugins passed",
+        f"[1; 3; {timestamps[0]}] a/index failed",
+        f"[skip; 2; {timestamps[1]}] a/queries excluded: unusable index",
+        f"[2; 1; {timestamps[2]}] ab/index partial",
+        f"[3; 0; {timestamps[3]}] plugins passed",
     ]
 
 
@@ -334,6 +356,9 @@ def test_empty_checkpoint_resumes_without_process(
         stdout.write('{"status":"no_matches","results":[]}\n')
         return SimpleNamespace(returncode=1, wait=Mock(return_value=1))
 
+    instant = datetime(2026, 10, 12, 12, 30, tzinfo=UTC)
+    monkeypatch.setattr(RUNNER, "datetime", Mock(now=Mock(return_value=instant)))
+    timestamp = instant.astimezone().isoformat(sep=" ", timespec="seconds")
     monkeypatch.setattr(subprocess, "Popen", simulate)
     argv = ["codira", "refs", "name", "--json"]
     first = campaign.command("refs", argv, repeats=3)
@@ -343,7 +368,7 @@ def test_empty_checkpoint_resumes_without_process(
     assert len(invocations) == 3
     assert len(first["samples"]) == 3
     assert all(Path(sample["stdout"]).is_file() for sample in first["samples"])
-    assert capsys.readouterr().out == "[1; 0 remaining] refs empty\n"
+    assert capsys.readouterr().out == f"[1; 0; {timestamp}] refs empty\n"
 
 
 @pytest.mark.parametrize("extended", [False, True])
