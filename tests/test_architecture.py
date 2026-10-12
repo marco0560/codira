@@ -500,7 +500,7 @@ def test_architecture_report_cli_writes_requested_output_and_policy_diagnostics(
         "artifacts_seconds",
         "svg_seconds",
     }
-    assert manifest["render_options"] == {"svg": True, "svg_timeout_seconds": 60}
+    assert manifest["render_options"] == {"svg": True, "svg_timeout_seconds": 180}
     violations = json.loads((output / "violations.json").read_text(encoding="utf-8"))
     assert violations[0]["rule_id"] == "no-api-core"
 

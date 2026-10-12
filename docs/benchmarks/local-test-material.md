@@ -158,7 +158,7 @@ schema revisions are unchanged.
 
 `codira arch --no-svg` writes the mandatory DOT, Markdown, dependencies, hotspots,
 violations and manifest without layout. By default optional SVG rendering has a
-60-second timeout; `--svg-timeout-seconds SECONDS` changes it, and `0` explicitly
+180-second timeout; `--svg-timeout-seconds SECONDS` changes it, and `0` explicitly
 permits unbounded layout. Timeout terminates the owned renderer process group,
 removes its incomplete SVG, and retains a warning and the mandatory report. A
 missing renderer or failed layout also leaves mandatory artifacts usable.

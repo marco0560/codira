@@ -53,7 +53,7 @@ class ArchitectureRenderOptions:
     """
 
     render_svg: bool = True
-    svg_timeout_seconds: float = 60
+    svg_timeout_seconds: float = 180
     phase_timings: dict[str, float] | None = None
 
 
@@ -249,7 +249,7 @@ def _terminate_svg_renderer(process: subprocess.Popen[str]) -> None:
 
 
 def _render_svg(
-    dot_path: Path, svg_path: Path, *, timeout_seconds: float = 30
+    dot_path: Path, svg_path: Path, *, timeout_seconds: float = 180
 ) -> tuple[Path | None, str | None]:
     """Render optional SVG with a bound on the owned Graphviz process group.
 
