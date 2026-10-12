@@ -13,6 +13,15 @@ Contracts stay explicit, minimal, and runtime-checkable so custom analyzers or b
 Architectural role
 ------------------
 This module belongs to the **contract definition layer** that governs pluggable language analysis and storage backends.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the interfaces described above.
 """
 # ruff: noqa: EM101, TRY003
 
@@ -1957,7 +1966,7 @@ class BackendSymbolInventoryItem:
     module : str
         Module that owns the symbol identity.
     name : str
-        Symbol name inside ``module``.
+        Logical graph name inside ``module``; methods include their owner.
     file : str
         Defining file path.
     lineno : int
@@ -1970,6 +1979,11 @@ class BackendSymbolInventoryItem:
         Outgoing callable-reference counts.
     refs_in : BackendGraphMetric
         Incoming callable-reference counts.
+
+    Returns
+    -------
+    None
+        Instances expose canonical inventory names and graph metrics.
     """
 
     symbol_type: str

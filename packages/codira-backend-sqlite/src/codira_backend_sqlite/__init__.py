@@ -636,14 +636,21 @@ class SQLiteIndexBackend:
             # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
-                SELECT s.type, s.module_name, s.name, f.path, s.lineno
+                SELECT s.type, s.module_name,
+                       CASE WHEN c.name IS NOT NULL THEN c.name || '.' || s.name
+                            ELSE s.name END AS logical_name,
+                       f.path, s.lineno
                 FROM symbol_index s
-                JOIN files f
-                  ON s.file_id = f.id
+                JOIN files f ON s.file_id = f.id
+                LEFT JOIN modules owner ON owner.file_id = s.file_id
+                LEFT JOIN functions fn
+                  ON s.type = 'method' AND fn.module_id = owner.id
+                 AND fn.name = s.name AND fn.lineno = s.lineno
+                LEFT JOIN classes c ON c.id = fn.class_id
                 WHERE 1 = 1
                 {prefix_sql}
                 {test_sql}
-                ORDER BY s.module_name, s.name, s.type, f.path, s.lineno
+                ORDER BY s.module_name, logical_name, s.type, f.path, s.lineno
                 """,
                 tuple(prefix_params),
             ).fetchall()
@@ -1513,7 +1520,7 @@ class SQLiteIndexBackend:
         str
             Logical symbol identity used by call edges and callable references.
         """
-        symbol_type, module_name, name, _file_path, lineno = symbol
+        symbol_type, module_name, name, file_path, lineno = symbol
         if symbol_type != "method":
             return module_name if symbol_type == "module" else name
 
@@ -1530,11 +1537,13 @@ class SQLiteIndexBackend:
                   ON f.class_id = c.id
                 JOIN modules m
                   ON f.module_id = m.id
+                JOIN files source ON source.id = m.file_id
                 WHERE m.name = ? AND f.name = ? AND f.lineno = ?
+                  AND source.path = ?
                 ORDER BY c.name
                 LIMIT 1
                 """,
-                (module_name, name, lineno),
+                (module_name, name, lineno, file_path),
             ).fetchone()
             if row is None:
                 return name

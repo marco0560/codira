@@ -426,23 +426,29 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
             # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
-                WITH ranked_symbols AS (
-                    SELECT
-                        s.type,
-                        s.module_name,
-                        s.name,
-                        f.path,
-                        s.lineno,
-                        row_number() OVER (
-                            PARTITION BY s.module_name, s.name
-                            ORDER BY s.module_name, s.name, s.type, f.path, s.lineno
-                        ) AS symbol_rank
+                WITH logical_symbols AS (
+                    SELECT s.type, s.module_name,
+                           CASE WHEN c.name IS NOT NULL THEN c.name || '.' || s.name
+                                ELSE s.name END AS name,
+                           f.path, s.lineno
                     FROM symbol_index s
-                    JOIN files f
-                      ON s.file_id = f.id
+                    JOIN files f ON s.file_id = f.id
+                    LEFT JOIN modules owner ON owner.file_id = s.file_id
+                    LEFT JOIN functions fn
+                      ON s.type = 'method' AND fn.module_id = owner.id
+                     AND fn.name = s.name AND fn.lineno = s.lineno
+                    LEFT JOIN classes c ON c.id = fn.class_id
                     WHERE 1 = 1
                     {prefix_sql}
                     {test_sql}
+                ),
+                ranked_symbols AS (
+                    SELECT type, module_name, name, path, lineno,
+                           row_number() OVER (
+                               PARTITION BY module_name, name
+                               ORDER BY module_name, name, type, path, lineno
+                           ) AS symbol_rank
+                    FROM logical_symbols
                 ),
                 limited_symbols AS (
                     SELECT type, module_name, name, path, lineno
@@ -1401,7 +1407,7 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
         str
             Logical symbol identity used by call edges and callable references.
         """
-        symbol_type, module_name, name, _file_path, lineno = symbol
+        symbol_type, module_name, name, file_path, lineno = symbol
         if symbol_type != "method":
             return module_name if symbol_type == "module" else name
 
@@ -1418,11 +1424,13 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                   ON f.class_id = c.id
                 JOIN modules m
                   ON f.module_id = m.id
+                JOIN files source ON source.id = m.file_id
                 WHERE m.name = ? AND f.name = ? AND f.lineno = ?
+                  AND source.path = ?
                 ORDER BY c.name
                 LIMIT 1
                 """,
-                (module_name, name, lineno),
+                (module_name, name, lineno, file_path),
             ).fetchone()
             if row is None:
                 return name

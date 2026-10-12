@@ -13,11 +13,20 @@ Helpers delegate to the active backend while keeping filtering and ordering dete
 Architectural role
 ------------------
 This module belongs to the **exact query layer** used by CLI and context building when retrieving precise symbols and relations.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the interfaces described above.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from codira.contracts import BackendRelationQueryRequest, BackendSymbolInventoryItem
@@ -359,11 +368,57 @@ def find_symbol_enum_members(
     return backend.find_symbol_enum_members(root, symbol, conn=conn)
 
 
+def _find_relation_rows(
+    request: EdgeQueryRequest, *, callable_refs: bool
+) -> list[CallEdgeRow]:
+    """Resolve method aliases after an exact graph name has no matches.
+
+    Parameters
+    ----------
+    request : EdgeQueryRequest
+        Name, direction, module and source-prefix filters to preserve.
+    callable_refs : bool
+        Whether to read callable references instead of static call edges.
+
+    Returns
+    -------
+    list[CallEdgeRow]
+        Exact rows, or deduplicated method rows with canonical owner names.
+        Existing exact-name matches take precedence over short-name aliases.
+    """
+    backend = active_index_backend(root=request.root)
+    owns_connection = request.conn is None
+    conn = backend.open_connection(request.root) if owns_connection else request.conn
+    fetch = backend.find_callable_refs if callable_refs else backend.find_call_edges
+    try:
+        rows = fetch(replace(request, conn=conn))
+        if rows:
+            return rows
+        identities: set[tuple[str, str]] = set()
+        for symbol in find_symbol(
+            request.root, request.name, prefix=request.prefix, conn=conn
+        ):
+            if request.module is not None and symbol[1] != request.module:
+                continue
+            name = backend.logical_symbol_name(request.root, symbol, conn=conn)
+            identity = (symbol[1], name)
+            if name == request.name or identity in identities:
+                continue
+            identities.add(identity)
+            for row in fetch(replace(request, name=name, module=symbol[1], conn=conn)):
+                if row not in rows:
+                    rows.append(row)
+        return rows
+    finally:
+        if owns_connection:
+            backend.close_connection(conn)
+
+
 def find_call_edges(
     request: EdgeQueryRequest,
 ) -> list[CallEdgeRow]:
     """
-    Find exact call edges for a caller or callee logical name.
+    Find call edges by exact name or an unmatched method alias.
 
     Parameters
     ----------
@@ -375,8 +430,7 @@ def find_call_edges(
     list[CallEdgeRow]
         Matching call-edge rows ordered deterministically.
     """
-    backend = active_index_backend(root=request.root)
-    return backend.find_call_edges(request)
+    return _find_relation_rows(request, callable_refs=False)
 
 
 def build_call_tree(
@@ -581,7 +635,7 @@ def find_callable_refs(
     request: EdgeQueryRequest,
 ) -> list[CallableRefRow]:
     """
-    Find exact callable-object references for an owner or referenced target.
+    Find callable references by exact name or an unmatched method alias.
 
     Parameters
     ----------
@@ -593,8 +647,7 @@ def find_callable_refs(
     list[CallableRefRow]
         Matching callable-reference rows ordered deterministically.
     """
-    backend = active_index_backend(root=request.root)
-    return backend.find_callable_refs(request)
+    return _find_relation_rows(request, callable_refs=True)
 
 
 def build_ref_tree(

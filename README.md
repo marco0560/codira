@@ -512,6 +512,12 @@ Expected result semantics:
 
 ### 2. `symlist`
 
+Method inventory names include their declaring owner, for example `Demo.run`
+or `(s *RouteParams).Add`, matching call/reference graph identities. Methods
+with the same short name remain distinct. Use the inventory name in `calls`
+and `refs`; short names fall back to method aliases when no exact graph rows
+exist. Exact graph names take precedence, and module/path filters still apply.
+
 Use `symlist` when you want an indexed symbol inventory with static call and
 callable-reference connectivity counts.
 
