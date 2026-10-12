@@ -13,6 +13,14 @@ Indexing maintains determinism by locking the repository, reusing analyzers/back
 Architectural role
 ------------------
 This module belongs to the **indexing layer** and glues together analyzers, storage, docstring validation, and embedding persistence.
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the orchestration or plugin interfaces described above.
 """
 
 from __future__ import annotations
@@ -47,6 +55,7 @@ from codira.contracts import (
     EmbeddingIndexingPolicy,
     FullIndexBulkBackend,
     IndexBackend,
+    PathRankedAnalyzer,
     PendingEmbeddingRow,
     StoredEmbeddingRow,
     VectorSetIdentity,
@@ -686,7 +695,8 @@ def _active_language_analyzers(*, root: Path | None = None) -> list[LanguageAnal
     Returns
     -------
     list[codira.contracts.LanguageAnalyzer]
-        Analyzer instances consulted in deterministic order.
+        Analyzer instances consulted in deterministic order. Optional path
+        priorities resolve overlapping claims without changing equal-priority order.
     """
     return active_language_analyzers(root=root)
 
@@ -736,7 +746,8 @@ def _select_language_analyzer(
     path : pathlib.Path
         Repository file that must be analyzed.
     analyzers : list[codira.contracts.LanguageAnalyzer]
-        Analyzer instances consulted in deterministic order.
+        Analyzer instances consulted in deterministic order. Optional path
+        priorities resolve overlapping claims without changing equal-priority order.
     root : pathlib.Path | None, optional
         Repository root used by optional analyzer path filters. When omitted,
         ``path.parent`` is used for compatibility with direct unit tests that
@@ -753,9 +764,21 @@ def _select_language_analyzer(
         If no registered analyzer accepts the path.
     """
     effective_root = path.parent if root is None else root
+    selected: LanguageAnalyzer | None = None
+    priority: int | None = None
     for analyzer in analyzers:
-        if analyzer_accepts_path(analyzer, path, effective_root):
-            return analyzer
+        if not analyzer_accepts_path(analyzer, path, effective_root):
+            continue
+        candidate_priority = (
+            analyzer.path_priority(path, effective_root)
+            if isinstance(analyzer, PathRankedAnalyzer)
+            else 0
+        )
+        if priority is None or candidate_priority > priority:
+            selected = analyzer
+            priority = candidate_priority
+    if selected is not None:
+        return selected
 
     msg = f"No language analyzer registered for path: {path.as_posix()}"
     hint = missing_language_analyzer_hint(path)

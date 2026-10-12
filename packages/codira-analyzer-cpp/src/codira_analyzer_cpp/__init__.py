@@ -17,6 +17,14 @@ Architectural role
 ------------------
 This module belongs to the **language analyzer layer** and implements the
 first-party C++ analysis path for the Phase 2 multi-language expansion.
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the orchestration or plugin interfaces described above.
 """
 
 from __future__ import annotations
@@ -35,6 +43,7 @@ from tree_sitter import Node
 
 from .cpp_syntax import (
     _class_stable_id,
+    _conditional_children,
     _cpp_external_target_kind,
     _decode_source_text,
     _declaration_stable_id,
@@ -84,7 +93,7 @@ from codira.plugin_config import (
     plugin_configuration_fingerprint,
 )
 
-_CPP_SUFFIXES = {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".ipp"}
+_CPP_SUFFIXES = {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".ipp", ".h"}
 __all__ = ["CppAnalyzer", "_disambiguate_callable_stable_ids", "build_analyzer"]
 _TYPE_LIKE_NAMES = {
     "auto",
@@ -1341,7 +1350,7 @@ def _collect_known_class_names(
         Qualified class names declared in the subtree.
     """
     known: set[str] = set()
-    for child in children:
+    for child in _conditional_children(children):
         if child.type == "template_declaration":
             inner = _template_inner_node(child)
             if inner is not None:
@@ -1726,11 +1735,12 @@ class _CppAnalysisBuilder:
             return
 
         current_public = any(child.type == "struct" for child in node.children)
-        attached_comments = _attached_comment_map(field_list.children, self.source)
+        children = tuple(_conditional_children(field_list.children))
+        attached_comments = _attached_comment_map(children, self.source)
         self.doxygen_by_lineno.update(
-            _attached_doxygen_comment_map(field_list.children, self.source)
+            _attached_doxygen_comment_map(children, self.source)
         )
-        for child in field_list.children:
+        for child in children:
             if child.type == "access_specifier":
                 current_public = _node_text(child, self.source) in {
                     "public",
@@ -1925,6 +1935,7 @@ class _CppAnalysisBuilder:
         None
             Matching artifacts are stored in place.
         """
+        children = tuple(_conditional_children(children))
         attached_comments = _attached_comment_map(children, self.source)
         self.doxygen_by_lineno.update(
             _attached_doxygen_comment_map(children, self.source)
@@ -2020,6 +2031,51 @@ class _CppAnalysisBuilder:
         )
 
 
+_CPP_HEADER_NODES = frozenset(
+    {
+        "namespace_definition",
+        "template_declaration",
+        "class_specifier",
+        "qualified_identifier",
+        "using_declaration",
+        "alias_declaration",
+        "reference_declarator",
+        "rvalue_reference_declarator",
+    }
+)
+
+
+def _is_cpp_header(path: Path) -> bool:
+    """Recognize C++ headers using neighbouring units and parsed syntax.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Ambiguous .h file to inspect; comment and string contents are not hints.
+
+    Returns
+    -------
+    bool
+        True for a C++-only same-stem neighbour or a C++ syntax node. Shared
+        C/C++ neighbours and syntax without such evidence retain the C default.
+    """
+    if not path.is_file():
+        return False
+    cpp_neighbour = any(
+        path.with_suffix(suffix).is_file() for suffix in (".cpp", ".cc", ".cxx")
+    )
+    if cpp_neighbour and not path.with_suffix(".c").is_file():
+        return True
+    pending = [_new_parser().parse(path.read_bytes()).root_node]
+    while pending:
+        node = pending.pop()
+        if node.type in _CPP_HEADER_NODES:
+            return True
+        if node.type not in {"comment", "string_literal", "raw_string_literal"}:
+            pending.extend(node.named_children)
+    return False
+
+
 class CppAnalyzer:
     """
     Concrete C++ analyzer for repository indexing.
@@ -2028,6 +2084,11 @@ class CppAnalyzer:
     ----------
     None
 
+    Returns
+    -------
+    None
+        Creates a configured C++ analyzer.
+
     Notes
     -----
     This analyzer is backed by `tree-sitter-cpp` and targets deterministic
@@ -2035,7 +2096,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "5"
+    version = "6"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -2044,11 +2105,24 @@ class CppAnalyzer:
         "*.hh",
         "*.hxx",
         "*.ipp",
+        "*.h",
     )
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
     def __init__(self) -> None:
+        """Initialize default analyzer and header-routing options.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Automatic header detection is enabled by default.
+        """
         self._path_filters = AnalyzerPathFilters()
+        self._header_language = "auto"
         self._use_leading_comments = True
         self._emit_doxygen_documentation = True
         self._include_system_includes = True
@@ -2077,6 +2151,12 @@ class CppAnalyzer:
                 "include_system_includes": boolean_property(True),
                 "emit_namespaces": boolean_property(True),
                 "emit_macros": boolean_property(True),
+                "header_language": {
+                    "type": "string",
+                    "enum": ["auto", "c", "cpp"],
+                    "default": "auto",
+                    "description": "Language selection for ambiguous .h headers.",
+                },
             }
         )
 
@@ -2093,9 +2173,17 @@ class CppAnalyzer:
         -------
         None
             Analyzer options are stored on this instance.
+
+        Raises
+        ------
+        ValueError
+            If header_language is not auto, c or cpp.
         """
 
         self._path_filters = analyzer_path_filters_from_config(config)
+        self._header_language = str(config.get("header_language", "auto"))
+        if self._header_language not in {"auto", "c", "cpp"}:
+            raise ValueError("header_language must be auto, c or cpp")
         self._use_leading_comments = bool(config.get("use_leading_comments", True))
         self._emit_doxygen_documentation = bool(
             config.get("emit_doxygen_documentation", True)
@@ -2204,10 +2292,33 @@ class CppAnalyzer:
         Returns
         -------
         bool
-            ``True`` when the path is allowed by include/exclude filters.
+            ``True`` when filters allow the path and header routing claims it.
         """
 
-        return analyzer_path_allowed(path=path, root=root, filters=self._path_filters)
+        if not analyzer_path_allowed(path=path, root=root, filters=self._path_filters):
+            return False
+        if path.suffix != ".h":
+            return True
+        if self._header_language != "auto":
+            return self._header_language == "cpp"
+        return _is_cpp_header(path)
+
+    def path_priority(self, path: Path, root: Path) -> int:
+        """Prefer this plugin for accepted C++ headers over generic C claims.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Already accepted source path.
+        root : pathlib.Path
+            Repository root supplied by the indexing contract.
+
+        Returns
+        -------
+        int
+            C++ headers have priority one; other paths retain default precedence.
+        """
+        return 1 if path.suffix == ".h" else 0
 
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
         """

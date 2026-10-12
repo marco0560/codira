@@ -208,3 +208,18 @@ is findings-worktree `.artifacts/validation/benchmark-r7-fixes-20261011/validati
 failed gate logs are retained for provenance. The examined successful gate's
 temporary log, status file and completed session are cleaned up under the
 repository validation policy.
+
+## Implementation follow-up
+
+The coverage repair adds optional analyzer path ranking; C++ header inference
+and explicit `header_language` controls remain in the plugin. C headers without
+C++ evidence retain their previous routing. Real LLVM validation exposed a
+second cause: C++ declaration traversal skipped entire header guards. Conditional
+wrappers are now traversed without flattening namespace, class or function
+scopes; imports, methods and documentation survive guards. Both preprocessor
+branches remain static source evidence rather than evaluated build results.
+
+The existing method-identity repair is retained and its SQLite/DuckDB regressions
+are rerun with the header tests. DuckDB measurements use a frozen `4272334`
+backend source archive and separate worker processes; graph writes use owned
+copies of the retained LLVM index. They do not rewrite the r7 campaign.

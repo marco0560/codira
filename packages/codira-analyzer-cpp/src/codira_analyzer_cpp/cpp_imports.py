@@ -9,6 +9,14 @@ Architectural role
 ------------------
 This module owns include syntax translation and has no analyzer lifecycle or
 configuration responsibilities.
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines deterministic include extraction.
 """
 
 from __future__ import annotations
@@ -17,7 +25,7 @@ from tree_sitter import Node
 
 from codira.models import ImportArtifact, ImportKind
 
-from .cpp_syntax import _node_text
+from .cpp_syntax import _conditional_children, _node_text
 
 
 def _extract_imports(root: Node, source: bytes) -> tuple[ImportArtifact, ...]:
@@ -37,7 +45,7 @@ def _extract_imports(root: Node, source: bytes) -> tuple[ImportArtifact, ...]:
         Deterministic include rows ordered by source position.
     """
     imports: list[ImportArtifact] = []
-    for child in root.children:
+    for child in _conditional_children(root.children):
         if child.type != "preproc_include":
             continue
         include_target = None

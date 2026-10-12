@@ -1154,3 +1154,7 @@ mandatory report and manifest. Use `codira arch --no-svg` to omit layout, or
 `codira arch --svg-timeout-seconds 120` to choose another bound (`0` is unbounded).
 The manifest records extraction, policy, artifact-writing and SVG phase timings.
 Reports retain the index's coverage limitations.
+
+C++ `.h` headers are selected using parsed language evidence and neighbouring
+translation units. Ambiguous headers keep C routing; explicit language and path
+controls are documented in [configuration](docs/configuration.md#cc-h-routing).

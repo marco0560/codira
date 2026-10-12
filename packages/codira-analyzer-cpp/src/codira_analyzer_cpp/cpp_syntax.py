@@ -9,11 +9,19 @@ Architectural role
 ------------------
 This module contains syntax primitives shared by higher-level C++ tree
 traversal and artifact extraction routines.
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines package-local syntax helpers.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 from tree_sitter import Language, Node, Parser
@@ -401,3 +409,30 @@ def _comment_to_doxygen_text(text: str) -> str | None:
 
 
 __all__ = ("_new_parser",)
+
+
+def _conditional_children(children: Sequence[Node]) -> Iterator[Node]:
+    """Expose declarations inside preprocessor branches without changing scope.
+
+    Parameters
+    ----------
+    children : collections.abc.Sequence[tree_sitter.Node]
+        Nodes in one lexical scope.
+
+    Returns
+    -------
+    collections.abc.Iterator[tree_sitter.Node]
+        Source-ordered children with conditional wrappers expanded. Namespace,
+        class and function bodies remain intact. Both branches are static input;
+        this traversal does not evaluate compilation flags.
+    """
+    for child in children:
+        if child.type in {
+            "preproc_if",
+            "preproc_ifdef",
+            "preproc_elif",
+            "preproc_else",
+        }:
+            yield from _conditional_children(child.named_children)
+        else:
+            yield child

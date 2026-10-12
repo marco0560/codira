@@ -606,7 +606,7 @@ First-party analyzer options:
 | `[plugins.analyzer-python]` | `emit_module_documentation`, `emit_imports`, `emit_constants`, `emit_type_aliases` |
 | `[plugins.analyzer-json]` | `enabled_families = ["schema", "package", "release"]`, `emit_dependencies`, `emit_scripts`, `emit_schema_properties` |
 | `[plugins.analyzer-c]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_macros` |
-| `[plugins.analyzer-cpp]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_namespaces`, `emit_macros` |
+| `[plugins.analyzer-cpp]` | `use_leading_comments`, `emit_doxygen_documentation`, `include_system_includes`, `emit_namespaces`, `emit_macros`, `header_language` (`auto`, `c`, `cpp`) |
 | `[plugins.analyzer-rust]` | `include_paths`, `exclude_paths`, `emit_macros` |
 | `[plugins.analyzer-javascript]` | `include_paths`, `exclude_paths`, `emit_variables`, `emit_jsdoc_documentation` |
 | `[plugins.analyzer-typescript]` | `include_paths`, `exclude_paths`, `emit_variables`, `emit_tsdoc_documentation` |
@@ -678,3 +678,21 @@ Vector stores own durable snapshots only. Candidate breadth belongs to named
 `embeddings.similarity_profiles`, so legacy
 `plugins.vector-store-*.candidate_limit` settings are invalid. Keep vector
 store tables limited to store-specific options such as `enabled`.
+
+### C/C++ `.h` routing
+
+The C++ plugin automatically claims `.h` files with C++ syntax evidence or a
+same-stem C++ translation unit and no C counterpart. Ambiguous headers remain
+with C. Parsed comments and string literals are not language hints.
+
+```toml
+[plugins.analyzer-cpp]
+header_language = "cpp"
+include_paths = ["include/cpp/**", "src/**/*.cpp"]
+```
+
+This explicit override claims `.h` files allowed by these filters. Use `"c"`
+to disable C++ claims for `.h`, or the default `"auto"` for inference. Filters
+also apply to non-`.h` C++ files, so include the source directories you need.
+Changed source or configuration is handled by normal index freshness and
+incremental analyzer selection. Compilation database flags are not inferred.

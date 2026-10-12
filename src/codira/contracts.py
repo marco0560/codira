@@ -2127,6 +2127,38 @@ class PathFilteredAnalyzer(Protocol):
         ...
 
 
+@runtime_checkable
+class PathRankedAnalyzer(Protocol):
+    """Optional deterministic precedence for overlapping analyzer claims.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Implementations keep language-specific routing inside their plugin.
+    """
+
+    def path_priority(self, path: Path, root: Path) -> int:
+        """Rank an already accepted path without changing its eligibility.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Accepted repository file.
+        root : pathlib.Path
+            Repository root used by explicit routing controls.
+
+        Returns
+        -------
+        int
+            Larger values take precedence; equal values retain registration order.
+        """
+        ...
+
+
 RetrievalCapabilityName = Literal[
     "symbol_lookup",
     "semantic_text",
