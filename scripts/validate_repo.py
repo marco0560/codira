@@ -98,6 +98,7 @@ def first_party_package_typecheck_paths(
 
 
 VALIDATION_STEPS: tuple[ValidationStep, ...] = (
+    ValidationStep("docs-build", "python", ("scripts/check_docs.py",)),
     ValidationStep("ruff", "ruff", ("check", ".")),
     ValidationStep("ruff-format", "ruff", ("format", "--check", ".")),
     ValidationStep("mypy", "mypy", (".",)),

@@ -454,3 +454,11 @@ conformance work completed. Offline manifest, command, fixture and executable
 checks remain in `tests/test_agent_efficiency_phase0.py`. New paid work follows
 the campaign factory and current preparation procedure; historical commands
 and evidence can be recovered through [the cleanup register](process/deleted-artifacts.md).
+
+## `scripts/check_docs.py`
+
+Run `uv run python scripts/check_docs.py` from the checkout root. This builds the
+site using `mkdocs.yml` and strict warning handling, with generated HTML placed
+in a temporary directory and removed automatically. The quality preflight,
+full validation gate and `git rel` all invoke this check. Local artifact paths
+belong in code spans; source-file links should use immutable GitHub URLs.

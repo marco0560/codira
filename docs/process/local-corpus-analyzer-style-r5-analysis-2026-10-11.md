@@ -15,11 +15,11 @@ Focused parser and read-only SQL diagnostics are separate from campaign timings.
 ## Evidence and identity
 
 Primary evidence directory:
-[analyzer-style-20261010-r5](../../.artifacts/benchmarks/test-material/analyzer-style/analyzer-style-20261010-r5/).
+`.artifacts/benchmarks/test-material/analyzer-style/analyzer-style-20261010-r5/` (local, ignored evidence).
 Read its `identity.json`, `manifest.json`, `summary.json`, numbered stage attempt
 receipts, original stdout/stderr, final index generations, and architecture artifacts
 together. Derived evidence is retained separately under
-[analyzer-style-r5-20261011](../../.artifacts/analysis/analyzer-style-r5-20261011/).
+`.artifacts/analysis/analyzer-style-r5-20261011/` (local, ignored evidence).
 
 - Recorded core commit: `c3f959853f59b2cc167209c13625034d5dd66da9`.
 - Recorded Codira distribution: `2.4.1.post1.dev5`; Go/Rust/TypeScript analyzers
@@ -102,14 +102,14 @@ is already registered by its SQLite workspace. `Campaign.__init__` sets one
 `XDG_CONFIG_HOME=<run>/registry` for both profiles. `Campaign.repository` then tries
 to register the same corpus root under a second profile-specific workspace name.
 Different state directories do not satisfy the registry's root uniqueness rule.
-[`WorkspaceRegistry.add` and `_reject_root_conflict`](../../src/codira/workspace_registry.py)
+[`WorkspaceRegistry.add` and `_reject_root_conflict`](https://github.com/marco0560/codira/blob/f2936cab8456ff27f5c2dae248bbabd15b69f2c0/src/codira/workspace_registry.py)
 explicitly reject that second canonical root.
 
 Each rejected registration was followed by `config --workspace ... validate` anyway.
 Those 36 config failures say “Workspace is not registered”. They are consequences
 of the first failure, not 36 independent invalid configurations. The runner's
 “malformed JSON output” classification obscures the actual stderr cause.
-Furthermore, [`cli.main`](../../src/codira/cli.py) resolves the workspace before
+Furthermore, [`cli.main`](https://github.com/marco0560/codira/blob/f2936cab8456ff27f5c2dae248bbabd15b69f2c0/src/codira/cli.py) resolves the workspace before
 entering its dispatch exception handler, so that resolution failure emits a raw
 traceback instead of a consistent command error envelope.
 
@@ -135,7 +135,7 @@ A focused reproduction on the pinned source
 `Lib/test/test_traceback.py` identifies the cause. Its assignment at line 4993
 links `a0` through `a800` to `None`. The Tree-sitter tree has depth 808 and reports
 no grammar error. The package-owned
-[`syntax._normalized_node`](../../packages/codira-analyzer-python/src/codira_analyzer_python/syntax.py)
+[`syntax._normalized_node`](https://github.com/marco0560/codira/blob/f2936cab8456ff27f5c2dae248bbabd15b69f2c0/packages/codira-analyzer-python/src/codira_analyzer_python/syntax.py)
 recursively constructs each child tuple using a generator. Those nested Python
 frames exceed the default stack limit. Direct analysis of this one file reproduces
 `RecursionError` at that function; the complete traceback is retained in
@@ -146,7 +146,7 @@ or a database uniqueness violation. A separate iterative depth check on C header
 found very deep preprocessor trees, but a focused C analyzer probe succeeded;
 those observations do not explain the campaign's fatal exception.
 
-[`indexer._analyze_index_task`](../../src/codira/indexer.py) normalizes `SyntaxError`,
+[`indexer._analyze_index_task`](https://github.com/marco0560/codira/blob/f2936cab8456ff27f5c2dae248bbabd15b69f2c0/src/codira/indexer.py) normalizes `SyntaxError`,
 `UnicodeDecodeError`, and `ValueError`, but not `RecursionError`. It therefore escapes
 the worker and aborts the indexing call. `index_repo` wrote an `updating` marker
 before invoking the unlocked operation but has no enclosing failure transition
@@ -177,7 +177,7 @@ Four valid Go files failed the pre-persistence duplicate-ID check:
 
 Direct `GoAnalyzer.analyze_file` calls reproduce seven duplicated ID keys across
 these four files. In
-[`GoAnalyzer.analyze_file`](../../packages/codira-analyzer-go/src/codira_analyzer_go/__init__.py),
+[`GoAnalyzer.analyze_file`](https://github.com/marco0560/codira/blob/f2936cab8456ff27f5c2dae248bbabd15b69f2c0/packages/codira-analyzer-go/src/codira_analyzer_go/__init__.py),
 `children_by_field_name("name")` is consumed without filtering punctuation nodes.
 The recursive `_descendants` walk of a top-level variable initializer also enters
 function literal bodies, then assigns their nested declarations the outer
@@ -232,7 +232,7 @@ symbol inventory, so it is not a representative application task selected by a
 human or a retrieval-quality dataset.
 
 A confirmed expensive query is in
-[`task_anchors.source_candidates`](../../src/codira/query/task_anchors.py), called
+[`task_anchors.source_candidates`](https://github.com/marco0560/codira/blob/f2936cab8456ff27f5c2dae248bbabd15b69f2c0/src/codira/query/task_anchors.py), called
 unconditionally by context orchestration when the query supplies source anchors.
 The retained VictoriaMetrics index has 242,059 symbol rows, 2,032,292 persisted
 source lines, 91,718 functions, and 15,892 classes. `EXPLAIN QUERY PLAN` for the exact
@@ -269,7 +269,7 @@ itself distinguish extraction from SVG layout.
 The run retained `architecture.dot`, `architecture.md`, `dependencies.json`,
 `hotspots.json`, and `violations.json`, but no SVG or final manifest. The graph has
 3,041 modules and 8,075 dependencies. The artifact ordering in
-[`write_architecture_artifacts`](../../src/codira/architecture_report.py) writes those
+[`write_architecture_artifacts`](https://github.com/marco0560/codira/blob/f2936cab8456ff27f5c2dae248bbabd15b69f2c0/src/codira/architecture_report.py) writes those
 mandatory files before calling `_render_svg`, then writes the manifest afterward.
 This localizes the interruption to the SVG interval; the existing `_render_svg`
 subprocess has no product-level timeout. Graphviz layout complexity is the likely
@@ -283,10 +283,10 @@ Neither command created architecture artifacts. The indexes contain 97,730 and
 447,744 symbol rows, respectively. Inspection and bounded read-only probes expose
 work performed before writing a report:
 
-1. [`SqliteBackend.symbol_inventory`](../../packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py)
+1. [`SqliteBackend.symbol_inventory`](https://github.com/marco0560/codira/blob/f2936cab8456ff27f5c2dae248bbabd15b69f2c0/packages/codira-backend-sqlite/src/codira_backend_sqlite/__init__.py)
    computes four relation-count queries per retained inventory symbol, even though
    architecture extraction does not use those inventory metric fields.
-2. [`build_architecture_model_from_index`](../../src/codira/architecture.py) then
+2. [`build_architecture_model_from_index`](https://github.com/marco0560/codira/blob/f2936cab8456ff27f5c2dae248bbabd15b69f2c0/src/codira/architecture.py) then
    issues imports per module and two additional relation lookups per non-module
    inventory item. In the actual CLI call no shared connection is supplied, so
    those relation methods open and close their own connections repeatedly.

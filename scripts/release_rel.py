@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Run the guarded release push path."""
+"""Run the guarded release push path.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Local documentation failures stop the release before remote operations.
+"""
 
 from __future__ import annotations
 
@@ -48,9 +58,18 @@ def main() -> int:
     if check.returncode:
         return check.returncode
 
+    print("[0] Checking published documentation before remote operations...")
+    status = run([python, "-m", "scripts.check_docs"]).returncode
+    if status:
+        return status
+
     steps = (
         ("[1] Sync with remote...", ["git", "fetch"]),
         ("[1] Sync with remote...", ["git", "pull", "--ff-only"]),
+        (
+            "[2] Checking documentation after pulling...",
+            [python, "-m", "scripts.check_docs"],
+        ),
         ("[2] Running release audit...", [python, "-m", "scripts.release_audit"]),
     )
     for label, command in steps:

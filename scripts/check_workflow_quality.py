@@ -31,7 +31,15 @@ from scripts.validate_repo import (
 )
 
 QUALITY_STEPS = frozenset(
-    {"ruff", "ruff-format", "mypy", "mypy-packages", "semgrep", "docstring-audit"}
+    {
+        "docs-build",
+        "ruff",
+        "ruff-format",
+        "mypy",
+        "mypy-packages",
+        "semgrep",
+        "docstring-audit",
+    }
 )
 
 

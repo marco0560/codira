@@ -20,6 +20,15 @@ Architectural role
 ------------------
 This script belongs to the **tooling layer** ensuring consistent Git behavior
 for contributors.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines the repository-local configuration installer.
 """
 
 from __future__ import annotations
@@ -137,7 +146,7 @@ def git_alias_entries() -> list[tuple[str, str]]:
         ),
         ("alias.release-audit", "!uv run python -m scripts.release_audit"),
         ("alias.release-check", "!uv run python -m scripts.release_system_selfcheck"),
-        ("alias.rel", "!uv run python -m scripts.release_rel"),
+        ("alias.rel", "!uv run --extra docs python -m scripts.release_rel"),
         (
             "alias.safe-push",
             (
