@@ -33,7 +33,7 @@ import subprocess
 import sys
 import time
 import tomllib
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -322,6 +322,19 @@ def classify_sample(
             )
             failure["output_error"] = "malformed JSON output"
             return failure
+    # These counts describe the current command's reported coverage scope.
+    issues = (
+        payload.get("results")
+        if operation == "cov"
+        else payload.get("coverage_issues")
+        if operation == "index" and "--embeddings-only" not in argv
+        else None
+    )
+    if isinstance(issues, list) and isinstance(payload.get("index_coverage"), dict):
+        payload["index_coverage"] = {
+            **payload["index_coverage"],
+            "issue_count": len(issues),
+        }
     if payload.get("status") in {"error", "failed", "invalid"}:
         return command_failure(
             "command reported an error", exit_code, stderr, payload.get("error")
@@ -714,6 +727,60 @@ def retains_checkpoint(status: str, retry_failed: bool) -> bool:
     )
 
 
+def outcome_description(status: str, result: Mapping[str, object] | None = None) -> str:
+    """Explain terminal outcomes without changing stored machine statuses.
+
+    Parameters
+    ----------
+    status : str
+        Operational classification or explicit exclusion text.
+    result : collections.abc.Mapping[str, object] | None, optional
+        Retained coverage, failure and optional-artifact evidence.
+
+    Returns
+    -------
+    str
+        Compact description distinguishing coverage gaps, empty data and errors.
+    """
+    if result is None:
+        return status
+    details: list[str] = []
+    coverage = result.get("index_coverage")
+    if not isinstance(coverage, dict):
+        coverage = {}
+    if status in PARTIAL_STATUSES:
+        if status == "partial_empty":
+            details.append("no matches")
+        failed = coverage.get("failed_file_count", result.get("failed_files"))
+        if failed is not None:
+            details.append(f"failed files={failed}")
+        gaps = result.get("coverage_issue_count", coverage.get("issue_count"))
+        if gaps is not None:
+            details.append(f"coverage issues={gaps}")
+        if coverage.get("complete") is False:
+            details.append("coverage incomplete")
+        elif not coverage.get("partial"):
+            details.append("analysis limited")
+    elif status == "empty":
+        details.append("no matches")
+    elif status == "unusable":
+        details.append("index unavailable for dependent queries")
+    elif status in {"failed", "timeout", "invalid_measurement", "excluded"}:
+        reason = (
+            result.get("stderr_diagnostic")
+            or result.get("reason")
+            or result.get("error")
+        )
+        if reason:
+            details.append(" ".join(str(reason).split())[:160])
+    optional = result.get("optional_artifacts")
+    if isinstance(optional, dict):
+        svg = optional.get("svg")
+        if isinstance(svg, dict) and svg.get("available") is False:
+            details.append(str(svg.get("warning", "optional SVG unavailable")))
+    return status + (" (" + "; ".join(details) + ")" if details else "")
+
+
 class StageProgress:
     """Track measurements pending in this invocation, excluding checkpoints.
 
@@ -777,8 +844,15 @@ class StageProgress:
             if key == prefix or key.startswith(prefix + "/")
         )
 
-    def report(self, key: str, status: str, *, measured: bool = True) -> None:
-        """Prefix a terminal outcome with its ordinal and remaining stage count.
+    def report(
+        self,
+        key: str,
+        status: str,
+        *,
+        measured: bool = True,
+        result: Mapping[str, object] | None = None,
+    ) -> None:
+        """Prefix an outcome with its ordinal, pending count and local timestamp.
 
         Parameters
         ----------
@@ -788,17 +862,28 @@ class StageProgress:
             Existing outcome text or exclusion reason.
         measured : bool, optional
             Whether a test was attempted rather than excluded.
+        result : collections.abc.Mapping[str, object] | None, optional
+            Retained evidence used to explain coverage and operational outcomes.
 
         Returns
         -------
         None
             Remaining tests exclude this outcome and retained checkpoints.
+            The timestamp records this outcome in local time with its UTC offset.
         """
         self.pending.discard(key)
         if measured:
             self.completed += 1
         ordinal = str(self.completed) if measured else "skip"
-        print(f"[{ordinal}; {len(self.pending)} remaining]", key, status, flush=True)
+        timestamp = (
+            datetime.now(UTC).astimezone().isoformat(sep=" ", timespec="seconds")
+        )
+        print(
+            f"[{ordinal}; {len(self.pending)}; {timestamp}]",
+            key,
+            outcome_description(status, result),
+            flush=True,
+        )
 
     def omit_unavailable(
         self, prefix: str, stages: tuple[str, ...], *, available: bool
@@ -1070,8 +1155,14 @@ class Campaign:
             )
             write(attempts / "result.json", result)
         write(record, result)
+        if len(argv) > 1 and argv[1] != "index" and "--workspace" in argv:
+            position = argv.index("--workspace") + 1
+            if position < len(argv):
+                self.apply_coverage(
+                    result, self.member_coverage.get(argv[position], {})
+                )
         self.results.append(result)
-        self.progress.report(key, result["status"])
+        self.progress.report(key, result["status"], result=result)
         if interrupted:
             raise KeyboardInterrupt
         return result
@@ -1702,7 +1793,7 @@ class Campaign:
         write(record, result)
         self.results.append(result)
         self.progress.omit(key + "/cli-evidence")
-        self.progress.report(key, result["status"])
+        self.progress.report(key, result["status"], result=result)
         return result
 
     def daemons(self, member: dict[str, Any]) -> None:
@@ -1855,7 +1946,7 @@ class Campaign:
                 source.write_bytes(original)
         write(result_path, result)
         self.results.append(result)
-        self.progress.report(result["key"], result["status"])
+        self.progress.report(result["key"], result["status"], result=result)
         self.finish_daemon(key, name)
 
     def finish_daemon(self, key: str, name: str) -> None:

@@ -8,7 +8,7 @@ remain unchanged. Six new commits correspond to the six approved corrections.
 | Correction | Scope | State |
 | --- | --- | --- |
 | 1 | Shared CLI/MCP/daemon/family coverage classification | Implemented; focused tests and quality preflight pass |
-| 2 | Clear terminal outcomes and timestamped progress | Pending |
+| 2 | Clear terminal outcomes and timestamped progress | Implemented; 69 focused tests and quality preflight pass |
 | 3 | Explicit renderer and outer architecture timeout controls | Pending |
 | 4 | Actual FAISS SIMD provenance and retained, quieter diagnostics | Pending |
 | 5 | Embedding phase attribution and interruption recovery | Pending |
@@ -40,3 +40,16 @@ indexing and docstring checks; initial typing failure evidence is retained.
 Integration onto main and operator-run measurement campaigns follow completion
 of the current stress run. Existing malformed fixtures remain evidence; the
 runner does not add exclusions or retry deterministic failures automatically.
+
+
+## Terminal reporting
+
+Timestamp behavior from `eee8bef` is incorporated into this correction without
+altering the original branch. Stage ordinals and pending counts still exclude
+retained resume checkpoints. Machine statuses remain unchanged; terminal text
+explains partial coverage, known failed-file/coverage-issue counts, no matches,
+real command failures and optional SVG warnings. Unknown counts are not invented.
+An embedding-only response's empty issue list does not erase structural gaps.
+Plain-text workspace reads receive coverage annotation before printing, so the
+terminal and persisted receipts agree. The shared implementation covers both
+local suites; successful protocol requests do not imply semantic completeness.
