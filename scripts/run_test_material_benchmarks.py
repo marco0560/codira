@@ -42,7 +42,7 @@ import tomlkit
 from codira.runtime_identity import runtime_identity
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
 LOGGER = logging.getLogger(__name__)
 
@@ -203,6 +203,79 @@ def version_provenance() -> dict[str, object]:
     }
 
 
+def coverage_is_partial(coverage: Mapping[str, object]) -> bool:
+    """Recognize incomplete usable coverage in CLI or generation metadata.
+
+    Parameters
+    ----------
+    coverage : collections.abc.Mapping[str, object]
+        Coverage envelope or ready generation record. ``partial`` counts failed
+        selected files; ``complete`` also accounts for unsupported/recovered input.
+
+    Returns
+    -------
+    bool
+        Whether known coverage gaps prevent complete-index comparisons.
+    """
+    if coverage.get("usable") is False:
+        return False
+    complete = coverage.get("complete", coverage.get("coverage_complete"))
+    return bool(coverage.get("partial") or complete is False)
+
+
+def classify_mcp_outcome(
+    responses: list[dict[str, Any]], coverage: dict[str, Any]
+) -> dict[str, Any]:
+    """Classify protocol success separately from source coverage and usability.
+
+    Parameters
+    ----------
+    responses : list of dict
+        Retained MCP tool results and explicit prerequisite exclusions.
+    coverage : dict
+        Last reported generation coverage; all response coverage is also checked.
+
+    Returns
+    -------
+    dict
+        Operational status, comparison cohort and timing eligibility. Tool errors
+        retain precedence over incomplete coverage.
+    """
+    payloads = [response.get("response") or {} for response in responses]
+    envelopes = [
+        coverage,
+        *(
+            payload.get("provenance", {}).get("index_coverage", {})
+            for payload in payloads
+        ),
+    ]
+    partial = any(coverage_is_partial(item) for item in envelopes) or any(
+        payload.get("result", {}).get("status") == "partial" for payload in payloads
+    )
+    unusable = any(item.get("usable") is False for item in envelopes)
+    status = (
+        "failed"
+        if any(response.get("is_error") for response in responses)
+        else "unusable"
+        if unusable
+        else "partial"
+        if partial
+        else "passed"
+    )
+    return {
+        "status": status,
+        "usable": not unusable,
+        "index_coverage": coverage,
+        "comparison_group": "unusable_index"
+        if unusable
+        else "partial_coverage"
+        if partial
+        else "complete_index",
+        "timing_valid": status == "passed",
+        "partial_timing_valid": status == "partial",
+    }
+
+
 def classify_sample(
     argv: list[str], stdout: str, stderr: str, exit_code: int
 ) -> dict[str, Any]:
@@ -281,9 +354,17 @@ def classify_sample(
     coverage = payload.get(
         "index_coverage", payload.get("provenance", {}).get("index_coverage", {})
     )
+    if coverage.get("usable") is False:
+        return {
+            "status": "unusable",
+            "usable": False,
+            "timing_valid": False,
+            "partial_timing_valid": False,
+            "comparison_group": "unusable_index",
+            "index_coverage": coverage,
+        }
     partial = bool(
-        (coverage.get("usable") and coverage.get("complete") is False)
-        or coverage.get("partial")
+        coverage_is_partial(coverage)
         or "[codira] Partial index:" in stderr
         or payload.get("result", {}).get("status") == "partial"
     )
@@ -298,13 +379,6 @@ def classify_sample(
             "embedding_complete": payload.get("summary", {}).get(
                 "embedding_complete", False
             ),
-        }
-    if operation == "index" and coverage and not coverage.get("usable"):
-        return {
-            "status": "unusable",
-            "usable": False,
-            "timing_valid": False,
-            "index_coverage": coverage,
         }
     return {
         "status": "empty" if empty else "passed",
@@ -1090,29 +1164,38 @@ class Campaign:
         dict
             Same operational outcome with explicit measurement cohort.
         """
-        partial = bool(
-            coverage.get("partial")
-            or coverage.get("usable")
-            and coverage.get("complete") is False
-        )
-        if partial:
+        partial = coverage_is_partial(coverage)
+        unusable = coverage.get("usable") is False or result.get("usable") is False
+        if partial or unusable:
+            group = "unusable_index" if unusable else "partial_coverage"
             result["index_coverage"] = coverage
-            result["comparison_group"] = "partial_coverage"
-            if result["status"] in SUCCESS_STATUSES:
+            result["comparison_group"] = group
+            result["usable"] = not unusable
+            if result["status"] in QUERYABLE_STATUSES:
                 result["status"] = (
-                    "partial_empty" if result["status"] == "empty" else "partial"
+                    "unusable"
+                    if unusable
+                    else "partial_empty"
+                    if result["status"] in {"empty", "partial_empty"}
+                    else "partial"
                 )
             result["timing_valid"] = False
+            result["partial_timing_valid"] = result["status"] in PARTIAL_STATUSES
             for sample in result.get("samples", []):
-                if sample["status"] in SUCCESS_STATUSES:
+                if sample["status"] in QUERYABLE_STATUSES:
                     sample["status"] = (
-                        "partial_empty" if sample["status"] == "empty" else "partial"
+                        "unusable"
+                        if unusable
+                        else "partial_empty"
+                        if sample["status"] in {"empty", "partial_empty"}
+                        else "partial"
                     )
                 sample.update(
                     index_coverage=coverage,
+                    usable=not unusable,
                     timing_valid=False,
                     partial_timing_valid=sample["status"] in PARTIAL_STATUSES,
-                    comparison_group="partial_coverage",
+                    comparison_group=group,
                 )
             write(self.root / "stages" / result["key"] / "result.json", result)
             history = result.get("attempt_history", [])
@@ -1582,23 +1665,7 @@ class Campaign:
                     )
             result = {
                 "key": key,
-                "status": "failed"
-                if any(x.get("is_error") for x in responses)
-                else "partial"
-                if coverage.get("partial")
-                or any(
-                    x.get("response", {}).get("result", {}).get("status") == "partial"
-                    for x in responses
-                )
-                else "passed",
-                "index_coverage": coverage,
-                "comparison_group": "partial_coverage"
-                if coverage.get("partial")
-                or any(
-                    x.get("response", {}).get("result", {}).get("status") == "partial"
-                    for x in responses
-                )
-                else "complete_index",
+                **classify_mcp_outcome(responses, coverage),
                 "seconds": time.perf_counter() - start,
                 "transport": "real_stdio",
                 "responses": responses,
@@ -1751,10 +1818,24 @@ class Campaign:
                     state = json.loads(generation_path.read_text())
                     if state["generation"] > before and state["state"] == "ready":
                         result.update(
-                            status="partial" if state["partial"] else "passed",
+                            status="partial"
+                            if coverage_is_partial(state)
+                            else "passed",
                             comparison_group="partial_coverage"
-                            if state["partial"]
+                            if coverage_is_partial(state)
                             else "complete_index",
+                            index_coverage={
+                                "usable": True,
+                                "partial": state.get("partial", False),
+                                "complete": state.get("coverage_complete", True),
+                                "failed_file_count": state.get("failed_file_count", 0),
+                                "attempted_file_count": state.get(
+                                    "attempted_file_count"
+                                ),
+                                "indexed_file_count": state.get("indexed_file_count"),
+                            },
+                            timing_valid=not coverage_is_partial(state),
+                            partial_timing_valid=coverage_is_partial(state),
                             before=before,
                             after=state["generation"],
                             seconds=time.perf_counter() - start,

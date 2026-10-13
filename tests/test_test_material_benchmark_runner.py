@@ -1,4 +1,14 @@
-"""Offline regressions for local runner outcome classification and checkpoints."""
+"""Offline regressions for local runner outcome classification and checkpoints.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Tests validate retained outcomes and terminal progress without campaigns.
+"""
 
 from __future__ import annotations
 
@@ -658,8 +668,9 @@ def test_queryable_partial_keeps_structural_queries(
     )
 
 
+@pytest.mark.parametrize("failed_source", [False, True])
 def test_partial_checkpoint_resume_keeps_coverage(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_source: bool
 ) -> None:
     """Retain partial samples and resume them even with failed-stage retry enabled.
 
@@ -669,6 +680,8 @@ def test_partial_checkpoint_resume_keeps_coverage(
         Disposable fake checkpoint directory.
     monkeypatch : pytest.MonkeyPatch
         Simulates a successful read process.
+    failed_source : bool
+        Failed selected file or failure-free broader coverage gap.
 
     Returns
     -------
@@ -706,7 +719,7 @@ def test_partial_checkpoint_resume_keeps_coverage(
                     "status": "ok",
                     "index_coverage": {
                         "usable": True,
-                        "partial": True,
+                        "partial": failed_source,
                         "complete": False,
                     },
                 }
