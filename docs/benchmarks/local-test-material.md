@@ -39,8 +39,14 @@ Coverage gaps from unsupported files or parser recovery remain partial-coverage
 measurements, but do not suppress these index probes when no source attempt failed.
 Stress family reads request partial coverage explicitly; strict family validation
 and reindex probes are withheld when a member is partial. Foreground daemon
-reconciliation reuses unchanged failure snapshots. Graphviz render timeouts apply
-to both suites and terminate only the launcher's owned process groups.
+reconciliation reuses unchanged failure snapshots. Both suites pass an explicit
+`--svg-timeout-seconds` (default 180) to Codira. The independent runner
+`--architecture-timeout-seconds` (default 300) bounds the whole architecture
+command. Zero disables the corresponding limit only; an outer deadline may
+interrupt rendering sooner. Both values appear in plan/provenance and participate
+in resume identity. Outer timeouts terminate only the launcher's owned process
+groups. Per-sample renderer manifests retain optional SVG omissions and phase
+timings separately from successful mandatory reports.
 
 `summary.json` separates complete-index and partial-coverage cohorts. Partial
 stages do not appear as command failures. `execution_complete` means the launcher

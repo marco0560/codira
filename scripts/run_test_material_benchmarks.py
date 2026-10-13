@@ -921,7 +921,9 @@ class Campaign:
     retry_failed : bool
         Whether failed stages may be attempted again.
     architecture_timeout_seconds : float, optional
-        Rendering limit per invocation, or zero for unlimited rendering.
+        Outer architecture-command deadline, or zero for no outer limit.
+    svg_timeout_seconds : float, optional
+        Graphviz layout deadline passed explicitly to Codira; zero is unbounded.
 
     Returns
     -------
@@ -935,6 +937,7 @@ class Campaign:
         root: Path,
         retry_failed: bool,
         architecture_timeout_seconds: float = 300,
+        svg_timeout_seconds: float = 180,
     ) -> None:
         """Configure isolated state and per-render limits for one local run.
 
@@ -947,7 +950,9 @@ class Campaign:
         retry_failed : bool
             Whether unsuccessful completed stages may be retried.
         architecture_timeout_seconds : float, optional
-            Per-render limit, or zero to disable the limit.
+            Outer architecture-command deadline, or zero to disable it.
+        svg_timeout_seconds : float, optional
+            Graphviz layout deadline; zero disables only the inner limit.
 
         Returns
         -------
@@ -961,7 +966,10 @@ class Campaign:
         self.progress = StageProgress(
             planned_stage_keys(self.spec), self.root, retry_failed
         )
+        validate_timeout(architecture_timeout_seconds)
+        validate_timeout(svg_timeout_seconds, name="SVG timeout")
         self.architecture_timeout_seconds = architecture_timeout_seconds
+        self.svg_timeout_seconds = svg_timeout_seconds
         self.env = dict(os.environ)
         for name in tuple(self.env):
             if not name.startswith("CODIRA_"):
@@ -1113,6 +1121,14 @@ class Campaign:
                     ),
                 }
             )
+            if not timed_out and not interrupted and process.returncode == 0:
+                artifacts = architecture_artifacts(argv)
+                if artifacts:
+                    write(attempts / f"{number}.architecture-manifest.json", artifacts)
+                    samples[-1].update(
+                        optional_artifacts={"svg": artifacts.get("svg", {})},
+                        architecture_artifacts=artifacts,
+                    )
             if timed_out or interrupted:
                 samples[-1].update(
                     status="interrupted" if interrupted else "timeout",
@@ -1149,6 +1165,8 @@ class Campaign:
                         "index_coverage",
                         "embedding_complete",
                         "comparison_group",
+                        "optional_artifacts",
+                        "architecture_artifacts",
                     )
                     if key in samples[-1]
                 }
@@ -1227,6 +1245,8 @@ class Campaign:
         dict
             Persisted process result.
         """
+        if argv[0] == "arch" and "--svg-timeout-seconds" not in argv:
+            argv = [*argv, "--svg-timeout-seconds", str(self.svg_timeout_seconds)]
         result = self.command(
             key,
             [self.codira, argv[0], "--workspace", workspace, *argv[1:]],
@@ -2189,13 +2209,42 @@ def execute_extension(operation: Callable[[], object]) -> None:
     operation()
 
 
-def validate_timeout(value: float) -> None:
+def architecture_artifacts(argv: list[str]) -> dict[str, Any]:
+    """Read the renderer's reported outcome rather than infer SVG success.
+
+    Parameters
+    ----------
+    argv : list of str
+        Completed architecture invocation with an explicit output directory.
+
+    Returns
+    -------
+    dict
+        Mandatory-artifact and optional-SVG manifest, or no evidence when absent.
+    """
+    if len(argv) < 2 or argv[1] != "arch" or "--output" not in argv:
+        return {}
+    position = argv.index("--output") + 1
+    if position >= len(argv):
+        return {}
+    manifest = Path(argv[position]) / "manifest.json"
+    if not manifest.exists():
+        return {}
+    payload = json.loads(manifest.read_text())
+    if not isinstance(payload, dict):
+        reject("architecture manifest must be an object")
+    return payload
+
+
+def validate_timeout(value: float, *, name: str = "architecture timeout") -> None:
     """Reject invalid architecture rendering limits.
 
     Parameters
     ----------
     value : float
-        Seconds per invocation, or zero for unlimited rendering.
+        Seconds per invocation, or zero for an unbounded limit.
+    name : str, optional
+        Diagnostic label distinguishing inner rendering and outer command limits.
 
     Returns
     -------
@@ -2203,7 +2252,7 @@ def validate_timeout(value: float) -> None:
         Invalid limits raise a diagnostic exception.
     """
     if value < 0 or not value < float("inf"):
-        reject("architecture timeout must be finite and nonnegative")
+        reject(f"{name} must be finite and nonnegative")
 
 
 def snapshot_failure_evidence(
@@ -2471,7 +2520,13 @@ def main() -> int:
         "--architecture-timeout-seconds",
         type=float,
         default=300,
-        help="Architecture rendering limit per invocation; default 300 seconds, 0 disables",
+        help="Outer architecture-command deadline; default 300 seconds, 0 disables",
+    )
+    parser.add_argument(
+        "--svg-timeout-seconds",
+        type=float,
+        default=180,
+        help="Inner Graphviz layout deadline; default 180 seconds, 0 disables",
     )
     args = parser.parse_args()
     prepared = prepare_operator_recovery(args)
@@ -2494,6 +2549,7 @@ def main() -> int:
         )
         return 0
     validate_timeout(args.architecture_timeout_seconds)
+    validate_timeout(args.svg_timeout_seconds, name="SVG timeout")
     spec = json.loads(args.manifest.read_text())
     validate_plan(args.manifest, spec)
     plan = {
@@ -2503,6 +2559,8 @@ def main() -> int:
         "scope": spec["capabilities"],
         "size_gaps": spec["coverage_gaps"],
         "execute": args.run,
+        "architecture_timeout_seconds": args.architecture_timeout_seconds,
+        "svg_timeout_seconds": args.svg_timeout_seconds,
     }
     print(json.dumps(plan, indent=2), flush=True)
     if not args.run:
@@ -2515,6 +2573,7 @@ def main() -> int:
         "version_provenance": version_provenance(),
         "measurement_capabilities": measurement_capabilities(),
         "architecture_timeout_seconds": args.architecture_timeout_seconds,
+        "svg_timeout_seconds": args.svg_timeout_seconds,
         "configs": {
             p: digest(args.manifest.parent / p)
             for r in spec["repositories"]
@@ -2546,7 +2605,11 @@ def main() -> int:
     write(root / "manifest.json", spec)
     verify_revisions(spec)
     campaign = Campaign(
-        args.manifest, root, args.retry_failed, args.architecture_timeout_seconds
+        args.manifest,
+        root,
+        args.retry_failed,
+        args.architecture_timeout_seconds,
+        args.svg_timeout_seconds,
     )
     campaign.command("capabilities", [campaign.codira, "caps", "--json"])
     campaign.command("plugins", [campaign.codira, "plugins", "--json"])

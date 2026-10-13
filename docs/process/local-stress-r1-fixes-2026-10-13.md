@@ -9,7 +9,7 @@ remain unchanged. Six new commits correspond to the six approved corrections.
 | --- | --- | --- |
 | 1 | Shared CLI/MCP/daemon/family coverage classification | Implemented; focused tests and quality preflight pass |
 | 2 | Clear terminal outcomes and timestamped progress | Implemented; 69 focused tests and quality preflight pass |
-| 3 | Explicit renderer and outer architecture timeout controls | Pending |
+| 3 | Explicit renderer and outer architecture timeout controls | Implemented; 75 focused tests and quality preflight pass |
 | 4 | Actual FAISS SIMD provenance and retained, quieter diagnostics | Pending |
 | 5 | Embedding phase attribution and interruption recovery | Pending |
 | 6 | Integration, package/catalog/documentation alignment and full validation | Pending |
@@ -53,3 +53,20 @@ An embedding-only response's empty issue list does not erase structural gaps.
 Plain-text workspace reads receive coverage annotation before printing, so the
 terminal and persisted receipts agree. The shared implementation covers both
 local suites; successful protocol requests do not imply semantic completeness.
+
+
+## Architecture budgets
+
+The runner previously imposed a 300-second outer deadline while silently using
+Codira's 60-second SVG default. Both suites now pass an explicit inner Graphviz
+limit, defaulting to the findings branch's 180 seconds. The outer default remains
+300 seconds and includes extraction, report writing and rendering. Independent
+zero values disable only their respective limit; shorter outer limits remain
+valid operator controls and can interrupt rendering earlier. Both controls are
+printed in the dry plan and stored in immutable identity, so changing either
+requires a new run identity. Explicit per-command renderer arguments are retained.
+
+Each successful repeated command preserves its renderer manifest beside raw
+stdout/stderr. Mandatory reports and optional SVG availability/timings are separate
+receipt fields; an optional timeout is shown prominently without being promoted
+to a command failure. Outer timeouts still terminate only the owned process group.
