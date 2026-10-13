@@ -64,8 +64,8 @@ LLVM contributes 29,205 parser issues. Only 11,422 of those paths contain a
 negative test fixtures. Even that path classification does not determine intent.
 
 All **13,262 LLVM `.h` files with recovery warnings** were persisted with
-`analyzer_name=c`, and all have **zero indexed symbols**. The C analyzer accepts
-`.h`; the C++ analyzer currently does not. Both analyzers set
+`analyzer_name=c`, and all have **zero indexed symbols**. In r7, the C analyzer accepted
+`.h` while the C++ analyzer did not. Both analyzers set
 `index_symbols=not root_node.has_error`, so a recovered parse is not a guarantee
 that symbols remain available.
 
@@ -85,8 +85,8 @@ units or build metadata for ambiguous `.h` files. Preserve genuine C headers.
 Test mixed C/C++ repositories, header-only projects, ambiguity, and compatibility
 with analyzer discovery/freshness. Do not simply assign every `.h` file to C++.
 Validate symbol and documentation recovery with known declarations, rather than
-counting a successful parse alone. This routing change is a proposal, not an
-implemented change in this follow-up.
+counting a successful parse alone. The original r7 campaign predates this repair; the implementation and recovered
+witnesses are described below.
 
 Unsupported files include YAML, generic JSON, SQL and build formats. Coverage
 also scans configured/default roots rather than every repository path. CLDR's
@@ -209,7 +209,7 @@ failed gate logs are retained for provenance. The examined successful gate's
 temporary log, status file and completed session are cleaned up under the
 repository validation policy.
 
-## Implementation follow-up
+## Implementation follow-up (2026-10-13)
 
 The coverage repair adds optional analyzer path ranking; C++ header inference
 and explicit `header_language` controls remain in the plugin. C headers without
@@ -223,3 +223,134 @@ The existing method-identity repair is retained and its SQLite/DuckDB regression
 are rerun with the header tests. DuckDB measurements use a frozen `4272334`
 backend source archive and separate worker processes; graph writes use owned
 copies of the retained LLVM index. They do not rewrite the r7 campaign.
+
+### Rejected streaming prototype
+
+Transaction-local physical-rowid paging with 16,384-row pages retained identical
+LLVM graph signatures, but its first comparison took 36.62 seconds versus
+27.78 seconds for the original rebuild (+31.8%). Peak worker RSS decreased from
+2,530,832 to 2,037,128 KiB (-19.5%). The slower paging implementation is removed;
+a memory benefit alone does not satisfy the requested no-degradation condition.
+Native connection Arrow readers also stop after another execute on that same
+connection, so interleaving such a reader with stage inserts is not safe.
+A transaction-local native snapshot with bounded independent Arrow reads was
+also tested below.
+
+The independent uncompressed Parquet spool also preserved both LLVM graph
+signatures, but took 38.03 seconds (+36.9%) and peaked at 2,115,500 KiB (-16.4%).
+It is removed too. The original graph rebuild is restored; no slower streaming
+implementation is retained. Its rejected source and test are preserved with the
+measurement receipts. Batching adds native deduplication, repeated Arrow import
+and/or snapshot costs that must be eliminated before this approach is viable.
+
+
+### Retained inventory optimization and resource controls
+
+Three alternating pairs on the frozen LLVM index returned identical 100-row
+inventories, including every incoming/outgoing counter. The baseline median was
+54.86 seconds; the candidate median was 0.346 seconds (about 159 times faster).
+The first pilot was 56.02 versus 0.417 seconds. This baseline is the **post-r7**
+backend source `4272334`, including the canonical method-identity repair; it is
+not the original r7 backend 2.0.2. The repair had introduced an expensive
+conditional join between all symbols and method owners. The optimization joins
+owners only for method rows, and restricts graph aggregation to the selected
+canonical identities. Counts still include relations to symbols outside the
+returned limit or path prefix. SQLite/DuckDB regressions check limits and prefixes
+against the full inventory as well as independently asserted known counters.
+
+Optional `[plugins.backend-duckdb]` `memory_limit` and `threads` controls apply
+to initialization and cached read/write connections. Omission retains engine
+defaults; changing them closes this backend's cached handles. Native DuckDB
+validates size units, and failed opening does not cache a broken connection.
+These controls do not cap Python/Arrow/process RSS and are not a speedup claim.
+Backend distribution 2.0.4 and official bundle 2.0.11 carry aligned dependency
+pins. Installer 2.0.1 carries the regenerated catalog for both new header and
+resource options. Physical schema 25 remains unchanged after the rejected layout experiment.
+
+### Rejected secondary-index layout
+
+Removing the ten non-unique graph indexes, while retaining both identity
+uniqueness constraints, reduced the three-pair rebuild median from 27.09 to
+23.92 seconds (11.7%). Peak RSS remained approximately 2.4 GiB. Full
+`EXCEPT ALL` comparisons in both directions found zero different rows in either
+graph table, beyond the matching count/hash signatures. An extra single-column
+caller-name index did not change the inspected scan plan.
+
+However, repeated incoming-call queries increased from 43.55 to 45.01 ms for a
+ten-target group (+3.35%). Outgoing calls improved in that repeat, and unresolved
+aggregation improved in the initial comparison. With the requested
+no-degradation rule, the complete layout change was conservatively reverted;
+the original secondary indexes and schema are retained. Concurrent operator
+stress work prevents definitive attribution of these small query differences,
+but the evidence does not justify claiming every query improved. The faster
+rebuild alone was insufficient for acceptance.
+
+### Interpretation and reproduction
+
+Measurements and exact package-source snapshots are retained in the findings
+worktree `.artifacts/benchmarks/backend/duckdb-r7-optimizations-20261012-r1/`.
+`measurement-summary.json` records repeated pairs and evidence digests;
+`index-layout-equivalence-and-queries.json` records complete graph equivalence;
+`index-layout-point-queries-repeat.json` retains query timings and plans.
+Rejected streaming source/tests and database copies remain in the same folder.
+All graph writes used owned copies; the original r7 campaign remains unchanged.
+Operator stress embeddings continued concurrently, and some focused checks
+overlapped samples. These are paired component observations, not an idle-host
+performance qualification. RSS covers each worker's lifetime through the timed
+operation; the graph replay excludes parsing, full indexing and CLI startup.
+No improvement to the original 810.75-second / 14.06-GiB full-index result is
+established, and no entire benchmark campaign was launched.
+
+From the findings worktree, an operator can repeat one native inventory sample
+with a **new output name** (existing evidence is never overwritten):
+
+```bash
+uv run --offline --no-sync python \
+.artifacts/benchmarks/backend/duckdb-r7-optimizations-20261012-r1/worker.py \
+--variant candidate --operation inventory --limit 100 \
+--source /home/marco/Personalia/Progetti/Software/Python/codira/.artifacts/benchmarks/test-material/analyzer-style/analyzer-style-20261010-r7/indexes/duckdb-structural-cpp-llvm-project/.codira/index.duckdb \
+--repository-root /home/marco/Personalia/Progetti/_Third-Party/Test_material_codira/cpp/llvm-project \
+--output .artifacts/benchmarks/backend/duckdb-r7-optimizations-20261012-r1/operator-inventory-new-01.json
+```
+
+Use `--variant baseline` with another new output name for the frozen baseline;
+`--operation graph` rebuilds a new owned database copy and retains it beside its
+receipt. A failed attempt's outputs remain evidence: choose a new name rather
+than deleting or replacing them. Wait until the operator stress run finishes
+before a controlled performance comparison. Resources, host load, output limit,
+prefix and code snapshots must accompany interpretation.
+
+Final real-header evidence is retained under
+`.artifacts/analysis/header-routing-20261012/`: direct analysis recovers three
+classes and five methods from AddressMap, and 17 classes, five free functions
+and 98 documentation artifacts from DebugData. The original routing-only and
+nested-discovery attempts are retained. `llvm-persisted-witnesses-isolated.json`
+uses independent disposable source roots and proves the two files produce 176
+inventory entries in total on each structural backend, with zero failures. This repairs
+known positive witnesses; it does not prove all 13,262 warned headers are C++ or
+resolve macro-dependent syntax and unsupported-file coverage.
+
+
+### Completion validation
+
+Coverage repair: `af5c5f3`; existing graph identity repair: `210eadc`; retained
+DuckDB optimization, budgets, installer catalog and aligned distribution pins:
+`dd7bc43`. All are on `fix/benchmark-findings`; no merge or push was performed.
+
+Focused validation passed 83 backend/graph/header/bundle tests and 36
+installer/resource/contract tests. The final quality preflight passed fresh
+indexing, Ruff, formatting, root and package typing, 21 Semgrep rules, and the
+documentation audit. Frozen benchmark history reported no missing revisions.
+The first completion gate found generated installer catalog drift (1,625 tests
+passed, one failed, three skipped); it was regenerated through
+`scripts/generate_installer_catalog.py`, with installer 2.0.1 and its root pin
+aligned. The corrected required full gate passed: **1,626 passed, three skipped,
+86% coverage, exit zero**. Its fresh index covered 760 tracked files with zero
+analysis failures and zero coverage issues.
+
+The durable completion receipt is
+`.artifacts/validation/duckdb-r7-optimizations-20261013/validation-receipt.json`;
+preflight attempts and the failed gate log are retained. The examined successful
+gate's temporary session, log, status and launcher are cleaned under the
+repository policy after their result and digest are recorded. The primary
+checkout, original campaigns and operator benchmark processes were preserved.
