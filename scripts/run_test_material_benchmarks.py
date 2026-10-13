@@ -203,6 +203,32 @@ def version_provenance() -> dict[str, object]:
     }
 
 
+def native_acceleration_identity() -> dict[str, object]:
+    """Capture optional FAISS acceleration from the native library itself.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    dict[str, object]
+        Actual SIMD configuration, or an explicit missing optional dependency.
+
+    Raises
+    ------
+    ModuleNotFoundError
+        An unrelated dependency of the optional plugin cannot be imported.
+    """
+    try:
+        module = importlib.import_module("codira_similarity_index_faiss")
+    except ModuleNotFoundError as error:
+        if error.name not in {"codira_similarity_index_faiss", "faiss"}:
+            raise
+        return {"faiss": {"available": False, "reason": str(error)}}
+    return {"faiss": module.runtime_diagnostics()}
+
+
 def coverage_is_partial(coverage: Mapping[str, object]) -> bool:
     """Recognize incomplete usable coverage in CLI or generation metadata.
 
@@ -274,6 +300,23 @@ def classify_mcp_outcome(
         "timing_valid": status == "passed",
         "partial_timing_valid": status == "partial",
     }
+
+
+def mcp_error_details(responses: list[dict[str, Any]]) -> dict[str, str]:
+    """Name actual tool errors without interpreting routine diagnostic prose.
+
+    Parameters
+    ----------
+    responses : list of dict
+        Retained tool responses carrying their protocol error flags.
+
+    Returns
+    -------
+    dict[str, str]
+        Failure reason when tool errors exist, otherwise an empty mapping.
+    """
+    names = [str(item["tool"]) for item in responses if item.get("is_error")]
+    return {"reason": "MCP tool errors: " + ", ".join(names)} if names else {}
 
 
 def classify_sample(
@@ -1669,111 +1712,117 @@ class Campaign:
         semantic_ready = self.embedding_ready.get(workspace or "", False)
         start = time.perf_counter()
         try:
-            async with (
-                stdio_client(server) as (read, output),
-                ClientSession(
-                    read, output, read_timeout_seconds=timedelta(seconds=3600)
-                ) as session,
-            ):
-                await session.initialize()
-                available = {tool.name for tool in (await session.list_tools()).tools}
-                names = [
-                    "capabilities",
-                    "index_status",
-                    "symbols",
-                    "context_for_task",
-                    "symbol",
-                    "symbol_evidence",
-                    "references",
-                    "callers",
-                    "callees",
-                    "impact_analysis",
-                    "repository_map",
-                    "arch",
-                    "emb",
-                    "docs",
-                ]
-                for tool in names:
-                    if tool not in available:
-                        continue
-                    if (
-                        tool in {"emb", "docs"}
-                        or tool == "context_for_task"
-                        and self.requires_embeddings.get(workspace or "", False)
-                    ) and not semantic_ready:
+            with (attempts / "mcp.stderr").open("w") as errlog:
+                async with (
+                    stdio_client(server, errlog=errlog) as (read, output),
+                    ClientSession(
+                        read, output, read_timeout_seconds=timedelta(seconds=3600)
+                    ) as session,
+                ):
+                    await session.initialize()
+                    available = {
+                        tool.name for tool in (await session.list_tools()).tools
+                    }
+                    names = [
+                        "capabilities",
+                        "index_status",
+                        "symbols",
+                        "context_for_task",
+                        "symbol",
+                        "symbol_evidence",
+                        "references",
+                        "callers",
+                        "callees",
+                        "impact_analysis",
+                        "repository_map",
+                        "arch",
+                        "emb",
+                        "docs",
+                    ]
+                    for tool in names:
+                        if tool not in available:
+                            continue
+                        if (
+                            tool in {"emb", "docs"}
+                            or tool == "context_for_task"
+                            and self.requires_embeddings.get(workspace or "", False)
+                        ) and not semantic_ready:
+                            responses.append(
+                                {
+                                    "tool": tool,
+                                    "excluded": "embedding prerequisites unavailable",
+                                }
+                            )
+                            continue
+                        arguments = tool_arguments(tool, query, symbol)
+                        if (
+                            arguments is not None
+                            and "--family" in args
+                            and tool in {"context_for_task", "symbol", "references"}
+                        ):
+                            arguments["allow_partial"] = True
+                        if arguments is None:
+                            responses.append(
+                                {
+                                    "tool": tool,
+                                    "excluded": "no discovered symbol identity",
+                                }
+                            )
+                            continue
+                        tool_result = await session.call_tool(tool, arguments)
+                        payload = tool_result.structuredContent
+                        if payload is None:
+                            payload = json.loads(
+                                next(
+                                    block.text
+                                    for block in tool_result.content
+                                    if block.type == "text"
+                                )
+                            )
+                        coverage = payload.get("provenance", {}).get(
+                            "index_coverage", coverage
+                        )
                         responses.append(
                             {
                                 "tool": tool,
-                                "excluded": "embedding prerequisites unavailable",
+                                "arguments": arguments,
+                                "is_error": tool_result.isError,
+                                "response": payload,
                             }
                         )
-                        continue
-                    arguments = tool_arguments(tool, query, symbol)
-                    if (
-                        arguments is not None
-                        and "--family" in args
-                        and tool in {"context_for_task", "symbol", "references"}
-                    ):
-                        arguments["allow_partial"] = True
-                    if arguments is None:
-                        responses.append(
-                            {"tool": tool, "excluded": "no discovered symbol identity"}
-                        )
-                        continue
-                    tool_result = await session.call_tool(tool, arguments)
-                    payload = tool_result.structuredContent
-                    if payload is None:
-                        payload = json.loads(
-                            next(
-                                block.text
-                                for block in tool_result.content
-                                if block.type == "text"
+                        if tool in ("symbols", "context_for_task") and symbol is None:
+                            symbol = next(
+                                (x for x in items(payload) if x.get("identity")), None
                             )
-                        )
-                    coverage = payload.get("provenance", {}).get(
-                        "index_coverage", coverage
-                    )
-                    responses.append(
-                        {
-                            "tool": tool,
-                            "arguments": arguments,
-                            "is_error": tool_result.isError,
-                            "response": payload,
-                        }
-                    )
-                    if tool in ("symbols", "context_for_task") and symbol is None:
-                        symbol = next(
-                            (x for x in items(payload) if x.get("identity")), None
-                        )
-                    cursor = payload.get("page", {}).get("next_cursor")
-                    if cursor and tool in ("symbols", "context_for_task"):
-                        next_page = await session.call_tool(
-                            tool, {**arguments, "cursor": cursor}
+                        cursor = payload.get("page", {}).get("next_cursor")
+                        if cursor and tool in ("symbols", "context_for_task"):
+                            next_page = await session.call_tool(
+                                tool, {**arguments, "cursor": cursor}
+                            )
+                            responses.append(
+                                {
+                                    "tool": tool + "/continuation",
+                                    "is_error": next_page.isError,
+                                    "response": next_page.structuredContent,
+                                }
+                            )
+                    if "--family" in args and symbol:
+                        linked = await session.call_tool(
+                            "references",
+                            {
+                                "name": symbol["name"],
+                                "direction": "outgoing",
+                                "limit": 10,
+                                "allow_partial": True,
+                            },
                         )
                         responses.append(
                             {
-                                "tool": tool + "/continuation",
-                                "is_error": next_page.isError,
-                                "response": next_page.structuredContent,
+                                "tool": "references/explicit-links",
+                                "is_error": linked.isError,
+                                "response": linked.structuredContent,
                             }
                         )
-                if "--family" in args and symbol:
-                    linked = await session.call_tool(
-                        "references",
-                        {
-                            "name": symbol["name"],
-                            "direction": "outgoing",
-                            "limit": 10,
-                            "allow_partial": True,
-                        },
-                    )
-                    responses.append(
-                        {
-                            "tool": "references/explicit-links",
-                            "is_error": linked.isError,
-                            "response": linked.structuredContent,
-                        }
-                    )
             result = {
                 "key": key,
                 **classify_mcp_outcome(responses, coverage),
@@ -1806,6 +1855,8 @@ class Campaign:
                 "error": str(error),
                 "responses": responses,
             }
+        result["stderr"] = str(attempts / "mcp.stderr")
+        result.update(mcp_error_details(responses))
         result["attempt_history"] = [
             str(path / "result.json") for path in sorted(destination.glob("attempt-*"))
         ]
@@ -2572,6 +2623,7 @@ def main() -> int:
         "runtime": runtime_identity(),
         "version_provenance": version_provenance(),
         "measurement_capabilities": measurement_capabilities(),
+        "native_acceleration": native_acceleration_identity(),
         "architecture_timeout_seconds": args.architecture_timeout_seconds,
         "svg_timeout_seconds": args.svg_timeout_seconds,
         "configs": {

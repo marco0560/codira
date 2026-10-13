@@ -60,7 +60,7 @@ dev = [
     "codira-embedding-onnx==2.0.0",
     "codira-vector-store-sqlite==2.0.0",
     "codira-vector-store-duckdb==2.0.0",
-    "codira-similarity-index-faiss==2.0.0",
+    "codira-similarity-index-faiss==2.0.1",
     "codira-similarity-index-qdrant==2.0.0",
 ]
 

@@ -10,7 +10,7 @@ remain unchanged. Six new commits correspond to the six approved corrections.
 | 1 | Shared CLI/MCP/daemon/family coverage classification | Implemented; focused tests and quality preflight pass |
 | 2 | Clear terminal outcomes and timestamped progress | Implemented; 69 focused tests and quality preflight pass |
 | 3 | Explicit renderer and outer architecture timeout controls | Implemented; 75 focused tests and quality preflight pass |
-| 4 | Actual FAISS SIMD provenance and retained, quieter diagnostics | Pending |
+| 4 | Actual FAISS SIMD provenance and retained, quieter diagnostics | Implemented; 91 focused tests and quality preflight pass |
 | 5 | Embedding phase attribution and interruption recovery | Pending |
 | 6 | Integration, package/catalog/documentation alignment and full validation | Pending |
 
@@ -70,3 +70,21 @@ Each successful repeated command preserves its renderer manifest beside raw
 stdout/stderr. Mandatory reports and optional SVG availability/timings are separate
 receipt fields; an optional timeout is shown prominently without being promoted
 to a command failure. Outer timeouts still terminate only the owned process group.
+
+
+## Native acceleration and MCP diagnostics
+
+FAISS diagnostics record its version, binding module, compile options and, when
+available, dynamic dispatch and active SIMD level. A generic binding name does
+not imply generic execution: the inspected FAISS 1.15.0 wheel reports dynamic
+dispatch and active AVX2 despite lacking a separate AVX2 Python module. Reading
+these diagnostics never changes dispatch. Older wheels report unknown optional
+fields rather than guessing. The plugin distribution advances to 2.0.1 and the
+FAISS optional official bundle pin follows it in bundle 2.0.12.
+
+Both benchmark suites retain MCP server stderr in each attempt's `mcp.stderr`,
+referenced by its result receipt. Routine SDK/FAISS INFO messages no longer
+interleave progress output. Actual tool errors still classify the attempt as
+failed and name the affected tools; responses and attempt history remain intact.
+The transport tests simulate the SDK boundary; native diagnostic tests inspect
+the installed library. Neither is a corpus campaign or retrieval-quality claim.

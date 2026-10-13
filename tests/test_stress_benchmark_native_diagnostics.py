@@ -1,0 +1,135 @@
+"""Retain native acceleration and MCP logs without misclassifying INFO.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Transport tests simulate the SDK; they do not launch corpus processes.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from contextlib import asynccontextmanager
+from pathlib import Path
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, TextIO
+from unittest.mock import AsyncMock
+
+import mcp
+import mcp.client.stdio
+import pytest
+
+from scripts import run_test_material_benchmarks as runner
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+
+@pytest.mark.parametrize("tool_error", [False, True])
+def test_mcp_stderr_is_retained_and_tool_errors_remain_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tool_error: bool,
+) -> None:
+    """Capture routine SDK logs while preserving explicit tool-error evidence.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Owned fixture manifest and receipts.
+    monkeypatch : pytest.MonkeyPatch
+        Replaces SDK transport and session with deterministic test boundaries.
+    capsys : pytest.CaptureFixture[str]
+        Captures terminal output.
+    tool_error : bool
+        Actual simulated MCP error flag rather than a log substring.
+
+    Returns
+    -------
+    None
+        Raw logs survive and successful fallback prose is not a command failure.
+    """
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"temporary_root": str(tmp_path)}))
+    campaign = runner.Campaign(manifest, tmp_path / "run", False)
+    campaign.member_coverage["fixture"] = {
+        "usable": True,
+        "partial": False,
+        "complete": False,
+    }
+
+    @asynccontextmanager
+    async def transport(
+        server: object, *, errlog: TextIO
+    ) -> AsyncIterator[tuple[None, None]]:
+        """Retain fake routine stderr without launching an SDK child.
+
+        Parameters
+        ----------
+        server : object
+            Unused launch descriptor.
+        errlog : typing.TextIO
+            Runner-owned raw stderr file.
+
+        Returns
+        -------
+        collections.abc.AsyncIterator[tuple[None, None]]
+            Simulated read/write streams.
+        """
+        errlog.write(
+            "INFO Loading faiss; optional module unavailable; successfully loaded faiss\n"
+        )
+        yield None, None
+
+    @asynccontextmanager
+    async def session(
+        *args: object, **kwargs: object
+    ) -> AsyncIterator[SimpleNamespace]:
+        """Supply a minimal deterministic tool session.
+
+        Parameters
+        ----------
+        *args : object
+            Unused stream descriptors.
+        **kwargs : object
+            Unused timeout options.
+
+        Returns
+        -------
+        collections.abc.AsyncIterator[types.SimpleNamespace]
+            Minimal simulated initialized SDK session.
+        """
+        yield SimpleNamespace(
+            initialize=AsyncMock(),
+            list_tools=AsyncMock(
+                return_value=SimpleNamespace(
+                    tools=[SimpleNamespace(name="capabilities")]
+                )
+            ),
+            call_tool=AsyncMock(
+                return_value=SimpleNamespace(
+                    isError=tool_error,
+                    structuredContent={"result": {"error": "simulated"}},
+                )
+            ),
+        )
+
+    monkeypatch.setattr(mcp.client.stdio, "stdio_client", transport)
+    monkeypatch.setattr(mcp, "ClientSession", session)
+    result = asyncio.run(
+        campaign.mcp("primary/fixture/mcp", ["--workspace", "fixture"], "query")
+    )
+    assert result["status"] == ("failed" if tool_error else "partial")
+    assert "successfully loaded faiss" in Path(result["stderr"]).read_text()
+    assert "Loading faiss" not in capsys.readouterr().err
+    if tool_error:
+        assert result["reason"] == "MCP tool errors: capabilities"
+        assert result["responses"][0]["is_error"]
+    else:
+        assert result["comparison_group"] == "partial_coverage"

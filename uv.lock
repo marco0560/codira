@@ -932,7 +932,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-similarity-index-faiss"
-version = "2.0.0"
+version = "2.0.1"
 source = { editable = "packages/codira-similarity-index-faiss" }
 dependencies = [
     { name = "codira" },

@@ -2,6 +2,14 @@
 
 The plugin owns only rebuildable FAISS artifacts. Durable vector rows remain in
 the selected vector-store plugin and are always supplied as immutable snapshots.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
 """
 
 from __future__ import annotations
@@ -44,13 +52,40 @@ __all__ = [
     "PACKAGE_VERSION",
     "FaissSimilarityIndex",
     "build_similarity_index",
+    "runtime_diagnostics",
 ]
 
-PACKAGE_VERSION = "2.0.0"
+PACKAGE_VERSION = "2.0.1"
 FORMAT_VERSION = "1"
 _METRIC = "inner_product_cosine"
 _DEFAULT_HNSW_M = 32
 _DEFAULT_HNSW_EF_CONSTRUCTION = 200
+
+
+def runtime_diagnostics() -> dict[str, object]:
+    """Report actual native SIMD configuration without changing dispatch.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    dict[str, object]
+        Native version, binding module, compile options and active SIMD facts.
+        Missing legacy diagnostic APIs are reported as unknown, not unoptimized.
+    """
+    simd = getattr(faiss, "SIMDConfig", None)
+    dynamic = getattr(simd, "has_dynamic_dispatch", None)
+    level = getattr(simd, "get_level_name", None)
+    return {
+        "available": True,
+        "version": str(faiss.__version__),
+        "binding_module": faiss.IndexFlatIP.__module__,
+        "compile_options": str(faiss.get_compile_options()).strip(),
+        "dynamic_dispatch": bool(dynamic()) if callable(dynamic) else None,
+        "active_simd": str(level()) if callable(level) else None,
+    }
 
 
 @dataclass(frozen=True)

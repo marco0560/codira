@@ -19,3 +19,11 @@ profile applies at query time. `ef_search` is HNSW graph exploration breadth,
 not score fuzziness; `candidate_limit` applies before structural filtering and
 the profile's result limits apply after filtering. If a persisted format is
 incompatible, use `codira emb reset` and reindex instead of migrating artifacts.
+
+
+`runtime_diagnostics()` reports the installed native version, binding module,
+compile options and available SIMD dispatch facts without selecting a CPU
+feature. Missing legacy diagnostic APIs yield unknown fields. A missing optional
+`swigfaiss_avx2` module does not establish unoptimized execution: some wheels use
+dynamic dispatch through the generic binding. SIMD accelerates FAISS distance
+search; it does not accelerate ONNX embedding inference.

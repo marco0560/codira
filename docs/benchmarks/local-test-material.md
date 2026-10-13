@@ -209,3 +209,13 @@ build-generated Codira versions. A known version disagreement rejects campaign
 admission; run `uv sync --offline` in the selected checkout and choose a fresh
 identity. Preserved source/configuration digests still determine identity and
 resume compatibility; a version label alone does not establish runtime parity.
+
+
+### Native acceleration and retained MCP diagnostics
+
+Campaign identity records actual FAISS native compile and SIMD dispatch facts.
+Unknown optional diagnostic fields remain unknown; a Python binding's module
+name is insufficient to determine acceleration. Each MCP attempt retains server
+stderr in `mcp.stderr`, linked from its result receipt. Routine INFO messages are
+kept out of terminal progress, while actual tool errors remain failed results
+and retain structured responses. Inspect the linked stderr for diagnosis.
