@@ -76,6 +76,7 @@ from .duckdb_query_backend import (
     _BackendCompatibleConnectionAdapter,
     DuckDBQueryBackend,
 )
+from codira.semantic.pending_profile import PendingEmbeddingProfile
 from codira.semantic.embeddings import (
     EmbeddingBackendSpec,
     embedding_work_batch_size,
@@ -2071,7 +2072,7 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         conn: _BackendCompatibleConnectionAdapter | None = None,
     ) -> tuple[int, int]:
         """
-        Compute pending embeddings without reparsing source files.
+        Compute pending embeddings with bounded, resumable owned transactions.
 
         Parameters
         ----------
@@ -2086,30 +2087,55 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         vector_store_config : collections.abc.Mapping[str, object] | None, optional
             Vector-store-specific configuration table.
         conn : _BackendCompatibleConnectionAdapter | None, optional
-            Existing DuckDB connection to reuse.
+            Existing DuckDB connection to reuse without committing it.
 
         Returns
         -------
         tuple[int, int]
             ``(recomputed, reused)`` counts for processed pending rows.
+
+        Raises
+        ------
+        BaseException
+            Processing or checkpointing fails, including operator interruption.
+            The active owned batch is rolled back; borrowed transactions remain
+            under caller control and completed owned batches remain durable.
         """
         owns_connection = conn is None
         if conn is None:
             conn = self.open_connection(root)
+        recomputed = reused = 0
         try:
-            result = _process_pending_embedding_rows(
-                cast("_DuckDBPersistenceConnection", conn),
-                root,
-                backend=embedding_backend,
-                vector_store=vector_store,
-                vector_set_identity=vector_set_identity,
-                vector_store_config={}
-                if vector_store_config is None
-                else vector_store_config,
-            )
-            if owns_connection:
-                conn.commit()
-            return result
+            batch_size = embedding_work_batch_size(root=root)
+            profile = PendingEmbeddingProfile("duckdb")
+            with profile.span("population.total"):
+                while True:
+                    if owns_connection:
+                        conn.execute("BEGIN TRANSACTION")
+                    try:
+                        result = _process_pending_embedding_rows(
+                            cast("_DuckDBPersistenceConnection", conn),
+                            root,
+                            backend=embedding_backend,
+                            batch_size=batch_size,
+                            pending_profile=profile,
+                            vector_store=vector_store,
+                            vector_set_identity=vector_set_identity,
+                            vector_store_config={}
+                            if vector_store_config is None
+                            else vector_store_config,
+                        )
+                        if owns_connection:
+                            with profile.span("checkpoint.commit", rows=sum(result)):
+                                conn.commit()
+                    except BaseException:
+                        if owns_connection:
+                            conn.execute("ROLLBACK")
+                        raise
+                    recomputed += result[0]
+                    reused += result[1]
+                    if result == (0, 0):
+                        return recomputed, reused
         finally:
             if owns_connection:
                 conn.close()

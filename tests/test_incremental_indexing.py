@@ -2212,6 +2212,22 @@ def test_index_cli_defers_and_processes_pending_embeddings(
     assert vector_binding_count == (2,)
     assert vector_payload_count == (2,)
 
+    # Recovery must publish derived artifacts even after a preceding attempt
+    # persisted all pending vectors and was interrupted before publication.
+    from unittest.mock import Mock
+
+    from codira import cli_index
+    from codira.similarity_lifecycle import rebuild_active_similarity_index
+
+    rebuild = Mock(wraps=rebuild_active_similarity_index)
+    monkeypatch.setattr(cli_index, "rebuild_active_similarity_index", rebuild)
+    assert main() == 0
+    resumed = json.loads(capsys.readouterr().out)
+    assert resumed["summary"]["embeddings_recomputed"] == 0
+    assert resumed["summary"]["embeddings_reused"] == 0
+    assert resumed["summary"]["embedding_complete"] is True
+    rebuild.assert_called_once_with(tmp_path)
+
 
 def test_index_repo_stores_immediate_vectors_in_vector_store(tmp_path: Path) -> None:
     """

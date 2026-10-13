@@ -49,7 +49,9 @@ from codira.contracts import (
 )
 from codira.prefix import normalize_prefix, prefix_clause
 from codira.plugin_config import analyzer_inventory_discovery_json, plugin_json_schema
+from codira.semantic.pending_profile import PendingEmbeddingProfile
 from codira.semantic.embeddings import (
+    embedding_work_batch_size,
     EmbeddingBackendSpec,
     get_embedding_backend,
 )
@@ -2278,7 +2280,7 @@ class SQLiteIndexBackend:
         conn: sqlite3.Connection | None = None,
     ) -> tuple[int, int]:
         """
-        Compute pending embeddings without reparsing source files.
+        Compute pending embeddings with bounded, resumable owned transactions.
 
         Parameters
         ----------
@@ -2293,30 +2295,53 @@ class SQLiteIndexBackend:
         vector_store_config : collections.abc.Mapping[str, object] | None, optional
             Vector-store-specific configuration table.
         conn : sqlite3.Connection | None, optional
-            Existing SQLite connection to reuse.
+            Existing SQLite connection to reuse without committing it.
 
         Returns
         -------
         tuple[int, int]
             ``(recomputed, reused)`` counts for processed pending rows.
+
+        Raises
+        ------
+        BaseException
+            Processing or checkpointing fails, including operator interruption.
+            The active owned batch is rolled back; borrowed transactions remain
+            under caller control and completed owned batches remain durable.
         """
         owns_connection = conn is None
         if conn is None:
             conn = self.open_connection(root)
+        recomputed = reused = 0
         try:
-            result = _process_pending_embedding_rows(
-                conn,
-                root,
-                backend=embedding_backend,
-                vector_store=vector_store,
-                vector_set_identity=vector_set_identity,
-                vector_store_config={}
-                if vector_store_config is None
-                else vector_store_config,
-            )
-            if owns_connection:
-                conn.commit()
-            return result
+            batch_size = embedding_work_batch_size(root=root)
+            profile = PendingEmbeddingProfile("sqlite")
+            with profile.span("population.total"):
+                while True:
+                    try:
+                        result = _process_pending_embedding_rows(
+                            conn,
+                            root,
+                            backend=embedding_backend,
+                            batch_size=batch_size,
+                            pending_profile=profile,
+                            vector_store=vector_store,
+                            vector_set_identity=vector_set_identity,
+                            vector_store_config={}
+                            if vector_store_config is None
+                            else vector_store_config,
+                        )
+                        if owns_connection:
+                            with profile.span("checkpoint.commit", rows=sum(result)):
+                                conn.commit()
+                    except BaseException:
+                        if owns_connection:
+                            conn.rollback()
+                        raise
+                    recomputed += result[0]
+                    reused += result[1]
+                    if result == (0, 0):
+                        return recomputed, reused
         finally:
             if owns_connection:
                 conn.close()

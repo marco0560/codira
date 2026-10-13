@@ -21,6 +21,7 @@ package-local helper implementation used by the first-party SQLite backend.
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
 from codira.contracts import (
@@ -31,6 +32,7 @@ from codira.contracts import (
     StoredEmbeddingRow,
     filter_embedding_rows_for_policy,
 )
+from codira.semantic.pending_profile import PendingEmbeddingProfile
 from codira.plugin_config import analyzer_inventory_discovery_json
 from codira.semantic.embeddings import (
     embed_texts as embed_texts,
@@ -439,6 +441,7 @@ def _flush_prepared_embedding_rows(
     *,
     prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]],
     backend: EmbeddingBackendSpec,
+    pending_profile: PendingEmbeddingProfile | None = None,
     vector_store: VectorStore | None = None,
     vector_set_identity: VectorSetIdentity | None = None,
     vector_store_config: Mapping[str, object] | None = None,
@@ -456,6 +459,8 @@ def _flush_prepared_embedding_rows(
         Prepared embedding rows as ``(row, content_hash, stored_vector)``.
     backend : EmbeddingBackendSpec
         Active embedding backend metadata.
+    pending_profile : codira.semantic.pending_profile.PendingEmbeddingProfile | None, optional
+        Opt-in shared phase journal for pending population.
     vector_store : codira.contracts.VectorStore | None, optional
         Active separated vector-store plugin used for materialized vectors.
     vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
@@ -489,81 +494,101 @@ def _flush_prepared_embedding_rows(
     }
     if texts_to_encode:
         ordered_content_hashes = list(dict.fromkeys(texts_to_encode))
-        encoded_rows = embed_texts(
-            [texts_to_encode[content_hash] for content_hash in ordered_content_hashes],
-            root=root,
-        )
-        for content_hash, vector in zip(
-            ordered_content_hashes,
-            encoded_rows,
-            strict=True,
+        with (
+            pending_profile.span("inference", rows=len(texts_to_encode))
+            if pending_profile
+            else nullcontext()
         ):
-            encoded_vectors[content_hash] = serialize_vector(vector)
-    insert_rows: list[tuple[str, int, str, str, str, int, bytes]] = []
-    materialized_rows: list[PreparedVectorRow] = []
-    for row, content_hash, stored_vector in deduplicated_rows:
-        resolved_blob = stored_vector
-        if resolved_blob is None:
-            resolved_blob = encoded_vectors[content_hash]
+            encoded_rows = embed_texts(
+                [
+                    texts_to_encode[content_hash]
+                    for content_hash in ordered_content_hashes
+                ],
+                root=root,
+            )
+        with (
+            pending_profile.span("serialization", rows=len(encoded_rows))
+            if pending_profile
+            else nullcontext()
+        ):
+            for content_hash, vector in zip(
+                ordered_content_hashes,
+                encoded_rows,
+                strict=True,
+            ):
+                encoded_vectors[content_hash] = serialize_vector(vector)
+    with (
+        pending_profile.span("persistence", rows=len(prepared_rows))
+        if pending_profile
+        else nullcontext()
+    ):
+        insert_rows: list[tuple[str, int, str, str, str, int, bytes]] = []
+        materialized_rows: list[PreparedVectorRow] = []
+        for row, content_hash, stored_vector in deduplicated_rows:
+            resolved_blob = stored_vector
+            if resolved_blob is None:
+                resolved_blob = encoded_vectors[content_hash]
 
-        materialized_rows.append(
-            PreparedVectorRow(
-                row=row,
-                content_hash=content_hash,
-                vector=resolved_blob,
+            materialized_rows.append(
+                PreparedVectorRow(
+                    row=row,
+                    content_hash=content_hash,
+                    vector=resolved_blob,
+                )
             )
+            insert_rows.append(
+                (
+                    row.object_type,
+                    row.object_id,
+                    backend.name,
+                    backend.version,
+                    content_hash,
+                    backend.dim,
+                    b"",
+                )
+            )
+        conn.executemany(
+            """
+            DELETE FROM embeddings
+            WHERE object_type = ?
+              AND object_id = ?
+              AND backend = ?
+              AND version = ?
+            """,
+            [
+                (
+                    object_type,
+                    object_id,
+                    backend_name,
+                    backend_version,
+                )
+                for (
+                    object_type,
+                    object_id,
+                    backend_name,
+                    backend_version,
+                    _content_hash,
+                    _dim,
+                    _vector,
+                ) in insert_rows
+            ],
         )
-        insert_rows.append(
-            (
-                row.object_type,
-                row.object_id,
-                backend.name,
-                backend.version,
-                content_hash,
-                backend.dim,
-                b"",
-            )
+        conn.executemany(
+            "INSERT INTO embeddings"
+            "(object_type, object_id, backend, version, content_hash, dim, vector) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            insert_rows,
         )
-    conn.executemany(
-        """
-        DELETE FROM embeddings
-        WHERE object_type = ?
-          AND object_id = ?
-          AND backend = ?
-          AND version = ?
-        """,
-        [
-            (
-                object_type,
-                object_id,
-                backend_name,
-                backend_version,
-            )
-            for (
-                object_type,
-                object_id,
-                backend_name,
-                backend_version,
-                _content_hash,
-                _dim,
-                _vector,
-            ) in insert_rows
-        ],
-    )
-    conn.executemany(
-        "INSERT INTO embeddings"
-        "(object_type, object_id, backend, version, content_hash, dim, vector) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        insert_rows,
-    )
-    _store_vector_store_materialized_rows(
-        vector_store=vector_store,
-        vector_set_identity=vector_set_identity,
-        vector_store_config={} if vector_store_config is None else vector_store_config,
-        root=root,
-        prepared_rows=materialized_rows,
-        encoded_vectors=encoded_vectors,
-    )
+        _store_vector_store_materialized_rows(
+            vector_store=vector_store,
+            vector_set_identity=vector_set_identity,
+            vector_store_config={}
+            if vector_store_config is None
+            else vector_store_config,
+            root=root,
+            prepared_rows=materialized_rows,
+            encoded_vectors=encoded_vectors,
+        )
 
 
 def _flush_pending_embedding_rows(
@@ -627,12 +652,14 @@ def _process_pending_embedding_rows(
     root: Path,
     *,
     backend: EmbeddingBackendSpec,
+    pending_profile: PendingEmbeddingProfile | None = None,
+    batch_size: int,
     vector_store: VectorStore | None = None,
     vector_set_identity: VectorSetIdentity | None = None,
     vector_store_config: Mapping[str, object] | None = None,
 ) -> tuple[int, int]:
     """
-    Compute all pending embeddings for one backend and version.
+    Compute one bounded batch of pending embeddings for one backend and version.
 
     Parameters
     ----------
@@ -642,6 +669,10 @@ def _process_pending_embedding_rows(
         Repository root used for embedding configuration and vector-store paths.
     backend : EmbeddingBackendSpec
         Active embedding backend metadata.
+    batch_size : int
+        Maximum selected rows; the caller owns transaction checkpoints.
+    pending_profile : codira.semantic.pending_profile.PendingEmbeddingProfile | None, optional
+        Opt-in shared phase journal for pending population.
     vector_store : codira.contracts.VectorStore | None, optional
         Active separated vector-store plugin used for materialized vectors.
     vector_set_identity : codira.contracts.VectorSetIdentity | None, optional
@@ -655,17 +686,19 @@ def _process_pending_embedding_rows(
         ``(recomputed, reused)`` embedding counts for processed rows.
     """
 
-    rows = conn.execute(
-        """
-        SELECT object_type, object_id, stable_id, content_hash, text
-        FROM pending_embeddings
-        WHERE backend = ?
-          AND version = ?
-          AND dim = ?
-        ORDER BY object_type, object_id, stable_id
-        """,
-        (backend.name, backend.version, backend.dim),
-    ).fetchall()
+    with pending_profile.span("queue.select") if pending_profile else nullcontext():
+        rows = conn.execute(
+            """
+            SELECT object_type, object_id, stable_id, content_hash, text
+            FROM pending_embeddings
+            WHERE backend = ?
+              AND version = ?
+              AND dim = ?
+            ORDER BY object_type, object_id, stable_id
+            LIMIT ?
+            """,
+            (backend.name, backend.version, backend.dim, batch_size),
+        ).fetchall()
     if not rows:
         return (0, 0)
 
@@ -683,16 +716,17 @@ def _process_pending_embedding_rows(
         for object_type, object_id, stable_id, content_hash, text in rows
     ]
     content_hashes = [content_hash for _row, content_hash, _vector in pending_rows]
-    cached_vectors = (
-        {}
-        if vector_store is None or vector_set_identity is None
-        else vector_store.load_cached_vectors(
-            root,
-            vector_set_identity,
-            content_hashes,
-            {} if vector_store_config is None else vector_store_config,
+    with pending_profile.span("cache.lookup") if pending_profile else nullcontext():
+        cached_vectors = (
+            {}
+            if vector_store is None or vector_set_identity is None
+            else vector_store.load_cached_vectors(
+                root,
+                vector_set_identity,
+                content_hashes,
+                {} if vector_store_config is None else vector_store_config,
+            )
         )
-    )
     prepared_rows: list[tuple[PendingEmbeddingRow, str, bytes | None]] = []
     recomputed = 0
     reused = 0
@@ -709,6 +743,7 @@ def _process_pending_embedding_rows(
         root,
         prepared_rows=prepared_rows,
         backend=backend,
+        pending_profile=pending_profile,
         vector_store=vector_store,
         vector_set_identity=vector_set_identity,
         vector_store_config={} if vector_store_config is None else vector_store_config,

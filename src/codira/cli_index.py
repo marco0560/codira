@@ -274,8 +274,10 @@ def _run_index(request: IndexCommandRequest) -> int:  # noqa: C901, PLR0912
                 vector_store_context.identity,
                 vector_store_context.config,
             )
-            if recomputed:
-                rebuild_active_similarity_index(root)
+            # An earlier attempt may have persisted all vectors before interruption
+            # during derived artifact publication. Explicit population repairs it
+            # even when this resumed queue is empty or entirely cache-backed.
+            rebuild_active_similarity_index(root)
         report = IndexReport(
             indexed=0,
             reused=0,

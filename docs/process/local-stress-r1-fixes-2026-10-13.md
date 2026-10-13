@@ -11,7 +11,7 @@ remain unchanged. Six new commits correspond to the six approved corrections.
 | 2 | Clear terminal outcomes and timestamped progress | Implemented; 69 focused tests and quality preflight pass |
 | 3 | Explicit renderer and outer architecture timeout controls | Implemented; 75 focused tests and quality preflight pass |
 | 4 | Actual FAISS SIMD provenance and retained, quieter diagnostics | Implemented; 91 focused tests and quality preflight pass |
-| 5 | Embedding phase attribution and interruption recovery | Pending |
+| 5 | Embedding phase attribution and interruption recovery | Implemented; 96 focused tests and final quality preflight pass |
 | 6 | Integration, package/catalog/documentation alignment and full validation | Pending |
 
 ## Coverage classification
@@ -88,3 +88,26 @@ interleave progress output. Actual tool errors still classify the attempt as
 failed and name the affected tools; responses and attempt history remain intact.
 The transport tests simulate the SDK boundary; native diagnostic tests inspect
 the installed library. Neither is a corpus campaign or retrieval-quality claim.
+
+
+## Embedding population and interruption recovery
+
+Both backends previously fetched the entire pending queue, performed inference
+for all selected texts, and committed structural pending removals only at the end.
+They now select bounded segments using the existing embedding work-size control
+and commit completed segments only for owned connections. Failed active segments
+roll back; borrowed transactions remain caller-owned. Explicit embeddings-only
+recovery also rebuilds similarity artifacts for an empty queue, closing the gap
+between vector persistence and interrupted publication. No schema or vector
+format changes are needed. SQLite advances to 2.0.3, DuckDB to 2.0.5 and their
+official bundle pins follow in 2.0.13.
+
+Opt-in shared profiling separates queue selection, cache lookup, inference,
+serialization, persistence and commits, retaining interrupted phase evidence,
+throughput and correctly scoped lifetime RSS. Native database regressions use
+simulated inference; they verify both owned checkpoint recovery and borrowed
+rollback, plus explicit empty-queue publication and unavailable profiling.
+The [population recovery guide](../benchmarks/pending-embedding-recovery.md)
+documents commands, units, transaction limits and measurement scope. Original
+campaign timings do not isolate the slow phase; no whole-campaign improvement
+is claimed from the focused persistence probe.
