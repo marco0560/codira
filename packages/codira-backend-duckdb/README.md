@@ -41,11 +41,19 @@ Optional profiling for backend-performance investigations:
 ```toml
 [plugins.backend-duckdb]
 profiling_enabled = true
+memory_limit = "4 GiB"
+threads = 4
 ```
 
 Enabled index runs emit `.codira/duckdb-profile.json` with aggregate timings for
 DuckDB SQL, flush, embedding, vector-store, and transaction spans. Keep this
-disabled during normal use.
+disabled during normal use. Resource options are optional: omission preserves
+DuckDB defaults. They apply to initialization and cached query/write connections;
+changing them closes this backend's cached handles before reopening. DuckDB
+settings apply to the database instance, including other connections to it in
+this process. `memory_limit` limits buffer-manager allocations, not Python,
+Arrow, result objects or total process RSS. A smaller budget can spill to disk
+or fail an operation; it is an operator control rather than a speedup claim.
 
 Operator model:
 
@@ -54,6 +62,8 @@ Operator model:
 * core `codira` remains backend-neutral; this package owns DuckDB bootstrap and
   storage behavior
 * DuckDB physical schema DDL is package-local in `codira_backend_duckdb.schema`
+* limited symbol inventory aggregates graph counters only for selected canonical
+  identities, retaining complete incoming/outgoing counts for each returned row
 * call and callable-reference CSV staging explicitly uses the Excel dialect
   (comma delimiter, double-quote quoting and doubled quote escaping); DuckDB
   dialect guessing is disabled so late quoted or multiline fields remain valid

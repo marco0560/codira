@@ -96,7 +96,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.3"
+    assert project["project"]["version"] == "2.0.4"
     assert project["project"]["dependencies"] == [
         "codira>=2.0.0,<3.0.0",
         "duckdb>=1.4,<2.0",
@@ -146,7 +146,12 @@ def test_duckdb_backend_exposes_configuration_schema() -> None:
     assert isinstance(properties, dict)
 
     assert schema["additionalProperties"] is False
-    assert sorted(properties) == ["enabled", "profiling_enabled"]
+    assert sorted(properties) == [
+        "enabled",
+        "memory_limit",
+        "profiling_enabled",
+        "threads",
+    ]
     assert properties["profiling_enabled"] == {
         "type": "boolean",
         "default": False,

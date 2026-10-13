@@ -185,3 +185,36 @@ def test_cli_and_mcp_use_the_same_method_identities(
         "dict[str, object]", adapter.references("run", direction="incoming")["result"]
     )
     assert len(cast("list[object]", references["references"])) == 1
+
+
+@pytest.mark.parametrize("prefix", [None, "sample.py", "a.go", "missing"])
+@pytest.mark.parametrize("limit", [1, 3, 100])
+def test_limited_inventory_keeps_complete_graph_counters(
+    method_repository: Path, prefix: str | None, limit: int
+) -> None:
+    """Count all relations even when the related symbols are outside the limit.
+
+    Parameters
+    ----------
+    method_repository : pathlib.Path
+        Indexed fixture containing distinct methods and cross-symbol edges.
+    prefix : str | None
+        Optional source-path restriction.
+    limit : int
+        Number of inventory rows requested.
+
+    Returns
+    -------
+    None
+        Limited rows preserve the full inventory's incoming/outgoing counters.
+    """
+    complete = symbol_inventory(method_repository, include_tests=True)
+    expected = [
+        row
+        for row in complete
+        if prefix is None or row.file.startswith(str(method_repository / prefix))
+    ]
+    actual = symbol_inventory(
+        method_repository, prefix=prefix, limit=limit, include_tests=True
+    )
+    assert actual == expected[:limit]

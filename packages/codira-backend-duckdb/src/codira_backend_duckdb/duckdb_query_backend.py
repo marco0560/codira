@@ -426,21 +426,30 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
             # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             rows = conn.execute(
                 f"""
-                WITH logical_symbols AS (
-                    SELECT s.type, s.module_name,
-                           CASE WHEN c.name IS NOT NULL THEN c.name || '.' || s.name
-                                ELSE s.name END AS name,
-                           f.path, s.lineno
+                WITH eligible_symbols AS (
+                    SELECT s.type, s.module_name, s.name, s.file_id, s.lineno, f.path
                     FROM symbol_index s
                     JOIN files f ON s.file_id = f.id
-                    LEFT JOIN modules owner ON owner.file_id = s.file_id
-                    LEFT JOIN functions fn
-                      ON s.type = 'method' AND fn.module_id = owner.id
-                     AND fn.name = s.name AND fn.lineno = s.lineno
-                    LEFT JOIN classes c ON c.id = fn.class_id
                     WHERE 1 = 1
                     {prefix_sql}
                     {test_sql}
+                ),
+                logical_symbols AS (
+                    SELECT type, module_name, name, path, lineno
+                    FROM eligible_symbols
+                    WHERE type != 'method'
+                    UNION ALL
+                    SELECT s.type, s.module_name,
+                           CASE WHEN c.name IS NOT NULL THEN c.name || '.' || s.name
+                                ELSE s.name END AS name,
+                           s.path, s.lineno
+                    FROM eligible_symbols s
+                    LEFT JOIN modules owner ON owner.file_id = s.file_id
+                    LEFT JOIN functions fn
+                      ON fn.module_id = owner.id
+                     AND fn.name = s.name AND fn.lineno = s.lineno
+                    LEFT JOIN classes c ON c.id = fn.class_id
+                    WHERE s.type = 'method'
                 ),
                 ranked_symbols AS (
                     SELECT type, module_name, name, path, lineno,
@@ -465,6 +474,9 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                         COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
                             AS unresolved
                     FROM call_edges
+                    WHERE (caller_module, caller_name) IN (
+                        SELECT module_name, name FROM limited_symbols
+                    )
                     GROUP BY caller_module, caller_name
                 ),
                 call_in AS (
@@ -475,6 +487,9 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                         COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
                             AS unresolved
                     FROM call_edges
+                    WHERE (callee_module, callee_name) IN (
+                        SELECT module_name, name FROM limited_symbols
+                    )
                     GROUP BY callee_module, callee_name
                 ),
                 refs_out AS (
@@ -485,6 +500,9 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                         COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
                             AS unresolved
                     FROM callable_refs
+                    WHERE (owner_module, owner_name) IN (
+                        SELECT module_name, name FROM limited_symbols
+                    )
                     GROUP BY owner_module, owner_name
                 ),
                 refs_in AS (
@@ -495,6 +513,9 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                         COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)
                             AS unresolved
                     FROM callable_refs
+                    WHERE (target_module, target_name) IN (
+                        SELECT module_name, name FROM limited_symbols
+                    )
                     GROUP BY target_module, target_name
                 )
                 SELECT

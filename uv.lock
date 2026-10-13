@@ -705,7 +705,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-duckdb"
-version = "2.0.3"
+version = "2.0.4"
 source = { editable = "packages/codira-backend-duckdb" }
 dependencies = [
     { name = "codira" },
@@ -914,7 +914,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-installer"
-version = "2.0.0"
+version = "2.0.1"
 source = { editable = "packages/codira-installer" }
 dependencies = [
     { name = "textual" },

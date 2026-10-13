@@ -211,6 +211,16 @@
             },
             "type": "array"
           },
+          "header_language": {
+            "default": "auto",
+            "description": "Language selection for ambiguous .h headers.",
+            "enum": [
+              "auto",
+              "c",
+              "cpp"
+            ],
+            "type": "string"
+          },
           "include_paths": {
             "default": [],
             "items": {
@@ -692,10 +702,20 @@
             "description": "Whether this plugin participates in runtime discovery.",
             "type": "boolean"
           },
+          "memory_limit": {
+            "description": "DuckDB buffer-manager budget, for example 4 GiB.",
+            "minLength": 1,
+            "type": "string"
+          },
           "profiling_enabled": {
             "default": false,
             "description": "Emit `.codira/duckdb-profile.json` with aggregate DuckDB write-path timings during index runs.",
             "type": "boolean"
+          },
+          "threads": {
+            "description": "DuckDB worker threads per database instance.",
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "type": "object"

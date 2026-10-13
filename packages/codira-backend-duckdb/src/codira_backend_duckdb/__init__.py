@@ -15,6 +15,14 @@ Architectural role
 ------------------
 This module belongs to the **first-party backend plugin layer** and provides
 the production DuckDB backend introduced by issue `#10`.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
 """
 
 from __future__ import annotations
@@ -1349,7 +1357,12 @@ def _duckdb_module() -> _DuckDBModule:
     return cast("_DuckDBModule", module)
 
 
-def _configure_duckdb_connection(raw: _DuckDBRawConnection) -> _DuckDBRawConnection:
+def _configure_duckdb_connection(
+    raw: _DuckDBRawConnection,
+    *,
+    memory_limit: str | None = None,
+    threads: int | None = None,
+) -> _DuckDBRawConnection:
     """
     Apply Codira-owned DuckDB connection settings.
 
@@ -1357,13 +1370,25 @@ def _configure_duckdb_connection(raw: _DuckDBRawConnection) -> _DuckDBRawConnect
     ----------
     raw : _DuckDBRawConnection
         Newly opened raw DuckDB connection.
+    memory_limit : str | None, optional
+        Explicit buffer-manager budget; omission preserves the engine default.
+    threads : int | None, optional
+        Explicit database worker count; omission preserves the engine default.
 
     Returns
     -------
     _DuckDBRawConnection
         The configured DuckDB connection.
     """
-    raw.execute("SET python_enable_replacements = false")
+    try:
+        raw.execute("SET python_enable_replacements = false")
+        if memory_limit is not None:
+            raw.execute("SET memory_limit = ?", [memory_limit])
+        if threads is not None:
+            raw.execute("SET threads = ?", [threads])
+    except BaseException:
+        raw.close()
+        raise
     return raw
 
 
@@ -1572,6 +1597,14 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
 
     The backend mirrors SQLite query semantics while owning a DuckDB-specific
     storage file, schema bootstrap, and error translation layer.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
     """
 
     name = "duckdb"
@@ -1591,6 +1624,8 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
             Profiling starts disabled unless plugin configuration enables it.
         """
         self._profiling_enabled = False
+        self._memory_limit: str | None = None
+        self._threads: int | None = None
         self._connection_cache: dict[Path, DuckDBConnection] = {}
         self._atexit_registered = False
 
@@ -1626,6 +1661,16 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
 
         return plugin_json_schema(
             {
+                "memory_limit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "DuckDB buffer-manager budget, for example 4 GiB.",
+                },
+                "threads": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "DuckDB worker threads per database instance.",
+                },
                 "profiling_enabled": {
                     "type": "boolean",
                     "default": False,
@@ -1633,7 +1678,7 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
                         "Emit `.codira/duckdb-profile.json` with aggregate "
                         "DuckDB write-path timings during index runs."
                     ),
-                }
+                },
             }
         )
 
@@ -1649,9 +1694,29 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         Returns
         -------
         None
-            DuckDB currently has no backend-specific settings.
+            Settings apply to subsequently opened connections. Resource changes
+            close this backend's cached connections.
+
+        Raises
+        ------
+        ValueError
+            A supplied resource option has an invalid type or empty value.
         """
 
+        memory_limit = config.get("memory_limit")
+        threads = config.get("threads")
+        if memory_limit is not None and (
+            not isinstance(memory_limit, str) or not memory_limit.strip()
+        ):
+            raise ValueError("DuckDB memory_limit must be a nonempty string")
+        if threads is not None and (
+            not isinstance(threads, int) or isinstance(threads, bool) or threads < 1
+        ):
+            raise ValueError("DuckDB threads must be a positive integer")
+        if (memory_limit, threads) != (self._memory_limit, self._threads):
+            self._close_cached_connections()
+        self._memory_limit = memory_limit
+        self._threads = threads
         self._profiling_enabled = bool(config.get("profiling_enabled", False))
 
     def _close_cached_connections(self) -> None:
@@ -1944,7 +2009,11 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         if db_path.exists() and metadata.get("schema_version") != str(SCHEMA_VERSION):
             db_path.unlink()
         module = _duckdb_module()
-        raw = _configure_duckdb_connection(module.connect(str(db_path)))
+        raw = _configure_duckdb_connection(
+            module.connect(str(db_path)),
+            memory_limit=self._memory_limit,
+            threads=self._threads,
+        )
         try:
             schema_statements = _duckdb_schema_ddl()
             for statement in schema_statements:
@@ -1979,7 +2048,11 @@ class DuckDBIndexBackend(DuckDBQueryBackend):
         if cached is not None and not cached.is_closed:
             return cast("_BackendCompatibleConnectionAdapter", cached)
         self._register_cached_connection_cleanup()
-        raw = _configure_duckdb_connection(_duckdb_module().connect(str(db_path)))
+        raw = _configure_duckdb_connection(
+            _duckdb_module().connect(str(db_path)),
+            memory_limit=self._memory_limit,
+            threads=self._threads,
+        )
         connection = DuckDBConnection(
             raw,
             defer_close=True,

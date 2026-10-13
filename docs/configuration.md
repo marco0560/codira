@@ -642,6 +642,9 @@ enabled = true
 [plugins.backend-duckdb]
 enabled = true
 profiling_enabled = false
+# Optional native resource controls; omission keeps DuckDB defaults.
+memory_limit = "4 GiB"
+threads = 4
 ```
 
 Disabling the configured active backend is invalid. Disable an inactive backend
@@ -650,7 +653,12 @@ only, or change `[backend].name` first.
 When `plugins.backend-duckdb.profiling_enabled = true`, DuckDB index runs emit
 `.codira/duckdb-profile.json` with aggregate write-path timings. Leave it
 disabled for normal usage; enable it only when investigating backend
-performance.
+performance. Optional `memory_limit` (a nonempty DuckDB size string) and `threads`
+(a positive integer) apply to initialization and cached read/write connections.
+Changing resource settings closes the backend's cached handles before reopening.
+These settings affect the native database instance; `memory_limit` covers the
+buffer manager, not Python/Arrow objects or total process RSS. A lower limit may
+spill to disk or fail a query. Neither option promises a performance improvement.
 
 First-party embedding tables are also schema-validated:
 
