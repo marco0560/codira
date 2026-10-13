@@ -58,6 +58,11 @@ def test_mcp_stderr_is_retained_and_tool_errors_remain_failures(
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"temporary_root": str(tmp_path)}))
     campaign = runner.Campaign(manifest, tmp_path / "run", False)
+    campaign.progress = runner.StageProgress(
+        {"primary/fixture/mcp", "primary/fixture/mcp/cli-evidence"},
+        campaign.root,
+        False,
+    )
     campaign.member_coverage["fixture"] = {
         "usable": True,
         "partial": False,
@@ -127,7 +132,23 @@ def test_mcp_stderr_is_retained_and_tool_errors_remain_failures(
     )
     assert result["status"] == ("failed" if tool_error else "partial")
     assert "successfully loaded faiss" in Path(result["stderr"]).read_text()
-    assert "Loading faiss" not in capsys.readouterr().err
+    terminal = capsys.readouterr()
+    assert "Loading faiss" not in terminal.err
+    lines = terminal.out.splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("[skip; 1; ")
+    assert "primary/fixture/mcp/cli-evidence excluded:" in lines[0]
+    assert ("MCP probe failed" if tool_error else "no MCP symbol identity") in lines[0]
+    assert lines[1].startswith("[1; 0; ")
+    assert campaign.progress.completed == 1
+    assert not (
+        campaign.root / "stages/primary/fixture/mcp/cli-evidence/result.json"
+    ).exists()
+    resumed = asyncio.run(
+        campaign.mcp("primary/fixture/mcp", ["--workspace", "fixture"], "query")
+    )
+    assert resumed == result
+    assert capsys.readouterr().out == ""
     if tool_error:
         assert result["reason"] == "MCP tool errors: capabilities"
         assert result["responses"][0]["is_error"]

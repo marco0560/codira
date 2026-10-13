@@ -3,7 +3,8 @@
 The dedicated `fix/stress-benchmark-findings` branch starts at `46a1134`, the
 validated findings branch. Its own environment and structural index are isolated
 from the running `local-stress-20261010-r1` campaign. Main and campaign evidence
-remain unchanged. Six new commits correspond to the six approved corrections.
+remain unchanged. Six new commits correspond to the six approved corrections. A separately
+authorized seventh commit fixes silent conditional progress omissions.
 
 | Correction | Scope | State |
 | --- | --- | --- |
@@ -13,6 +14,7 @@ remain unchanged. Six new commits correspond to the six approved corrections.
 | 4 | Actual FAISS SIMD provenance and retained, quieter diagnostics | Implemented; 91 focused tests and quality preflight pass |
 | 5 | Embedding phase attribution and interruption recovery | Implemented; 96 focused tests and final quality preflight pass |
 | 6 | Integration, package/catalog/documentation alignment and full validation | Implemented; full gate passes: 1673 tests, 3 skips, 86% coverage |
+| 7 | Explicit conditional skips without ordinal or resume fabrication | Implemented; 80 focused tests, quality preflight and full gate pass |
 
 ## Coverage classification
 
@@ -127,5 +129,24 @@ Corrections 1–5 have their focused tests and quality preflights. Correction 6
 passed the combined full repository gate in a named tmux session before
 delivery: 1673 tests passed, 3 skipped, 86% coverage, including the seventh progress omission
 correction. That source patch is tested in the combined working tree and will
-be committed after correction 6, preserving one commit per approved problem.
+be recorded after correction 6, preserving one commit per approved problem.
 Main, the original running checkout and campaign artifacts remain unchanged.
+
+
+## Conditional progress omissions
+
+`StageProgress.omit` previously removed conditional stages silently. MCP probes
+without a discovered identity could remove `mcp/cli-evidence`, making the pending
+count jump with no corresponding terminal outcome. Newly omitted exact stages
+and grouped children now each print one timestamped `skip` with their reason.
+They decrement pending once and never advance measured-test ordinals. Repeated
+omissions and retained resume checkpoints remain silent. No child measurement
+receipt is fabricated for an omitted evidence probe.
+
+Missing identities and embedding/concurrency prerequisites are exclusions; an
+actual MCP failure remains a failed measured probe and its dependent evidence
+is explicitly excluded. Both suites use this shared behavior, including final
+orchestration cleanup. Focused tests cover missing MCP identity, true tool errors,
+group counts, repeated omissions and retained partial checkpoint resume.
+The seventh commit follows the original six. Original campaign artifacts remain
+unchanged.

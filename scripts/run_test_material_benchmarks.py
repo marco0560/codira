@@ -866,26 +866,39 @@ class StageProgress:
             if record.exists() and retains_checkpoint(
                 json.loads(record.read_text())["status"], retry_failed
             ):
-                self.omit(key)
+                self.omit(key, retained=True)
 
-    def omit(self, prefix: str) -> None:
-        """Remove tests omitted by a prerequisite or finished orchestration.
+    def omit(
+        self,
+        prefix: str,
+        reason: str = "conditional prerequisite unavailable",
+        *,
+        retained: bool = False,
+    ) -> None:
+        """Explain newly omitted tests or silently prune retained checkpoints.
 
         Parameters
         ----------
         prefix : str
             Exact stage or slash-delimited group identity.
+        reason : str, optional
+            Prerequisite preventing these conditional measurements.
+        retained : bool, optional
+            Existing checkpoint reuse, which produces no new skip outcome.
 
         Returns
         -------
         None
-            Unrelated groups and already measured tests are unaffected.
+            Each newly omitted test decrements pending once without an ordinal.
         """
-        self.pending.difference_update(
-            key
-            for key in tuple(self.pending)
-            if key == prefix or key.startswith(prefix + "/")
+        keys = sorted(
+            key for key in self.pending if key == prefix or key.startswith(prefix + "/")
         )
+        if retained:
+            self.pending.difference_update(keys)
+        else:
+            for key in keys:
+                self.report(key, "excluded: " + reason, measured=False)
 
     def report(
         self,
@@ -914,6 +927,8 @@ class StageProgress:
             Remaining tests exclude this outcome and retained checkpoints.
             The timestamp records this outcome in local time with its UTC offset.
         """
+        if not measured and key not in self.pending:
+            return
         self.pending.discard(key)
         if measured:
             self.completed += 1
@@ -949,7 +964,7 @@ class StageProgress:
         """
         if not available:
             for stage in stages:
-                self.omit(prefix + "/" + stage)
+                self.omit(prefix + "/" + stage, "no symbol identity discovered")
 
 
 class Campaign:
@@ -1243,7 +1258,7 @@ class Campaign:
         None
             The durable exclusion remains visible in the summary.
         """
-        self.progress.omit(prefix)
+        self.progress.omit(prefix, reason)
         self.exclude_stage(prefix + "/queries", reason)
 
     def exclude_stage(self, key: str, reason: str) -> None:
@@ -1264,8 +1279,7 @@ class Campaign:
         result = {"key": key, "status": "excluded", "reason": reason}
         write(self.root / "stages" / key / "result.json", result)
         self.results.append(result)
-        self.progress.omit(key)
-        self.progress.report(key, "excluded: " + reason, measured=False)
+        self.progress.omit(key, reason)
 
     def cli(
         self, key: str, workspace: str, argv: list[str], *, repeats: int = 1
@@ -1606,7 +1620,9 @@ class Campaign:
         """
         if self.requires_embeddings[name] and not self.embedding_ready[name]:
             for stage in ("emb", "docs", "emb-rebuild", "emb-purge"):
-                self.progress.omit(prefix + "/" + stage)
+                self.progress.omit(
+                    prefix + "/" + stage, "embedding population did not complete"
+                )
             self.exclude_queries(
                 prefix + "/semantic", "embedding population did not complete"
             )
@@ -1659,11 +1675,20 @@ class Campaign:
                     or not result.get("usable", True)
                     or has_analysis_failures(result)
                 ):
-                    self.progress.omit(prefix + "/index-thread")
+                    self.progress.omit(
+                        prefix + "/index-thread",
+                        "preceding concurrency index was unusable or had analysis failures",
+                    )
                     return result
         else:
-            self.progress.omit(prefix + "/index-process")
-            self.progress.omit(prefix + "/index-thread")
+            self.progress.omit(
+                prefix + "/index-process",
+                "concurrency indexing prerequisites unavailable",
+            )
+            self.progress.omit(
+                prefix + "/index-thread",
+                "concurrency indexing prerequisites unavailable",
+            )
 
         return indexed
 
@@ -1691,7 +1716,7 @@ class Campaign:
         if record.exists():
             previous: dict[str, Any] = json.loads(record.read_text())
             if retains_checkpoint(previous["status"], self.retry_failed):
-                self.progress.omit(key + "/cli-evidence")
+                self.progress.omit(key + "/cli-evidence", retained=True)
                 self.results.append(previous)
                 return previous
         destination = record.parent
@@ -1863,7 +1888,12 @@ class Campaign:
         write(attempts / "result.json", result)
         write(record, result)
         self.results.append(result)
-        self.progress.omit(key + "/cli-evidence")
+        self.progress.omit(
+            key + "/cli-evidence",
+            "MCP probe failed before CLI evidence could run"
+            if result["status"] == "failed"
+            else "no MCP symbol identity discovered",
+        )
         self.progress.report(key, result["status"], result=result)
         return result
 
@@ -2690,7 +2720,10 @@ def main() -> int:
                 campaign.results.append(result)
                 write(root / "stages" / result["key"] / "result.json", result)
             finally:
-                campaign.progress.omit(profile["id"] + "/" + repo["label"])
+                campaign.progress.omit(
+                    profile["id"] + "/" + repo["label"],
+                    "repository orchestration ended before this conditional stage",
+                )
             write(
                 root / "summary.json", {"results": campaign.results, "complete": False}
             )
@@ -2720,7 +2753,9 @@ def main() -> int:
                 campaign.results.append(result)
                 write(root / "stages" / result["key"] / "result.json", result)
             finally:
-                campaign.progress.omit(key)
+                campaign.progress.omit(
+                    key, "extension prerequisites unavailable or orchestration failed"
+                )
             write(
                 root / "summary.json", {"results": campaign.results, "complete": False}
             )

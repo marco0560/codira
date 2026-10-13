@@ -260,3 +260,15 @@ selected profiles and independent rendering controls. A changed runner/runtime
 cannot resume the original identity. Resume the new run only with its identical
 command plus `--resume`; do not copy stage checkpoints from another run. Optional
 SVG omissions, structural coverage gaps and command failures remain separate.
+
+
+### Conditional skips and resume counters
+
+Every newly omitted conditional test prints `[skip; pending; timestamp]` and its
+prerequisite reason, including MCP CLI evidence when no symbol identity was
+discovered. Group exclusions print each pending child once; skips do not advance
+the measured-test ordinal. Repeated exclusions do not print or decrement again.
+Retained resume checkpoints are removed silently from the invocation's initial
+inventory; they are not new skipped tests or new measurements. Missing
+prerequisites remain distinct from failed commands. Timestamp formatting and
+these rules are shared by the analyzer-style and stress runners.

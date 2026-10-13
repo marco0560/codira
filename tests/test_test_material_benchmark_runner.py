@@ -60,13 +60,13 @@ def test_stage_progress_numbers_measurements_and_prunes_exclusions(
         {"a/index", "a/query", "ab/index", "plugins"}, tmp_path, False
     )
     progress.report("a/index", "failed")
-    progress.omit("a")
+    progress.omit("a", "unusable index")
     progress.report("a/queries", "excluded: unusable index", measured=False)
     progress.report("ab/index", "partial")
     progress.report("plugins", "passed")
     assert capsys.readouterr().out.splitlines() == [
         f"[1; 3; {timestamps[0]}] a/index failed",
-        f"[skip; 2; {timestamps[1]}] a/queries excluded: unusable index",
+        f"[skip; 2; {timestamps[1]}] a/query excluded: unusable index",
         f"[2; 1; {timestamps[2]}] ab/index partial",
         f"[3; 0; {timestamps[3]}] plugins passed",
     ]
