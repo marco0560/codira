@@ -219,3 +219,44 @@ name is insufficient to determine acceleration. Each MCP attempt retains server
 stderr in `mcp.stderr`, linked from its result receipt. Routine INFO messages are
 kept out of terminal progress, while actual tool errors remain failed results
 and retain structured responses. Inspect the linked stderr for diagnosis.
+
+
+## Integrated stress corrections and embedding diagnostics
+
+The dedicated findings checkout incorporates validated symbol inventory/graph
+aliases, C/C++ header routing, bounded SVG rendering and DuckDB inventory query
+repairs. Distribution pins currently align SQLite 2.0.3, DuckDB 2.0.5, C++ 2.0.1,
+FAISS similarity index 2.0.1 and official bundle 2.0.13. Installer catalog checks
+verify generated header/backend options. These changes do not amend existing
+campaign results or prove repository-wide coverage. Performance claims in the
+[earlier findings report](../process/local-corpus-analyzer-style-r7-followup-2026-10-12.md)
+retain their original source and workload limitations.
+
+Deferred population now checkpoints bounded owned batches, preserves caller
+transaction control and repairs derived artifacts on explicit empty-queue retry.
+The [embedding recovery guide](pending-embedding-recovery.md) gives profiling
+commands, units and transaction limitations. Set `CODIRA_EMBEDDING_PROFILE_DIR`
+to a fresh durable evidence directory when launching an operator-run suite to
+retain native phase journals. Each invocation chooses a unique filename;
+ordinary runs leave profiling disabled. Retain these journals with campaign
+attempt evidence and interpret them alongside structural coverage cohorts.
+
+For recovery of the first stress run, use the corrected checkout after the
+original run has finished or been operator-paused. These commands prepare a
+new identity and preserve the original evidence; they are operator-run:
+
+```bash
+SOURCE_CHECKOUT=/home/marco/Personalia/Progetti/Software/Python/codira
+ORIGINAL_RUN="$SOURCE_CHECKOUT/.artifacts/benchmarks/test-material/local-stress/local-stress-20261010-r1"
+STRESS_PLAN_DIR="$PWD/.artifacts/benchmarks/test-material/recovery-stress-r2"
+uv sync --offline --extra docs
+uv run --offline --no-sync python scripts/run_test_material_benchmarks.py "$SOURCE_CHECKOUT/benchmarks/performance/test-material-20261010/local-stress.local.json" --prepare-recovery "$ORIGINAL_RUN" --recovery-dir "$STRESS_PLAN_DIR"
+uv run --offline --no-sync python scripts/run_test_material_benchmarks.py "$STRESS_PLAN_DIR/manifest.json"
+CODIRA_EMBEDDING_PROFILE_DIR="$STRESS_PLAN_DIR/embedding-profiles" uv run --offline --no-sync python scripts/run_test_material_benchmarks.py "$STRESS_PLAN_DIR/manifest.json" --run --run-id local-stress-fixed-r2 --svg-timeout-seconds 180 --architecture-timeout-seconds 300
+```
+
+Expected preparation output names the new manifest; the dry plan lists the
+selected profiles and independent rendering controls. A changed runner/runtime
+cannot resume the original identity. Resume the new run only with its identical
+command plus `--resume`; do not copy stage checkpoints from another run. Optional
+SVG omissions, structural coverage gaps and command failures remain separate.

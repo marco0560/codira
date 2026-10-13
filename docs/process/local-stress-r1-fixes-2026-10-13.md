@@ -12,7 +12,7 @@ remain unchanged. Six new commits correspond to the six approved corrections.
 | 3 | Explicit renderer and outer architecture timeout controls | Implemented; 75 focused tests and quality preflight pass |
 | 4 | Actual FAISS SIMD provenance and retained, quieter diagnostics | Implemented; 91 focused tests and quality preflight pass |
 | 5 | Embedding phase attribution and interruption recovery | Implemented; 96 focused tests and final quality preflight pass |
-| 6 | Integration, package/catalog/documentation alignment and full validation | Pending |
+| 6 | Integration, package/catalog/documentation alignment and full validation | Implemented; full gate passes: 1673 tests, 3 skips, 86% coverage |
 
 ## Coverage classification
 
@@ -111,3 +111,21 @@ The [population recovery guide](../benchmarks/pending-embedding-recovery.md)
 documents commands, units, transaction limits and measurement scope. Original
 campaign timings do not isolate the slow phase; no whole-campaign improvement
 is claimed from the focused persistence probe.
+
+
+## Integration and final validation
+
+The worktree inherits the validated findings at `46a1134`, including canonical
+method inventories/graph aliases, C++ header routing and measured DuckDB inventory
+query repair. Timestamp changes are incorporated by correction 2. The final
+package pins and generated installer catalog are aligned; README developer
+possibilities link the benchmark and embedding recovery procedures. Rejected
+DuckDB performance candidates remain reverted. Prior native measurements do not
+qualify the original campaign or these new runtime/runner controls.
+
+Corrections 1–5 have their focused tests and quality preflights. Correction 6
+passed the combined full repository gate in a named tmux session before
+delivery: 1673 tests passed, 3 skipped, 86% coverage, including the seventh progress omission
+correction. That source patch is tested in the combined working tree and will
+be committed after correction 6, preserving one commit per approved problem.
+Main, the original running checkout and campaign artifacts remain unchanged.

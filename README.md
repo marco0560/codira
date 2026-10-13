@@ -65,6 +65,12 @@ That usually means:
 - more deterministic handoffs between human intent and agent action
 - a clearer audit trail for why a file or symbol was considered relevant
 
+Developer performance workflows include operator-run analyzer-style and local
+stress suites, resumable measurements, explicit exclusion recovery, separate
+partial-coverage comparisons, configurable rendering budgets and retained MCP
+and native acceleration diagnostics. See the [local benchmark guide](docs/benchmarks/local-test-material.md)
+and [stress correction ledger](docs/process/local-stress-r1-fixes-2026-10-13.md).
+
 ## Repository Documentation
 
 The repository-local operational and contributor documentation is organized
@@ -347,7 +353,11 @@ codira index --embeddings-only
 
 The first command queues eligible embedding rows. The second computes queued
 rows without reparsing source files. Repository config can make deferred mode
-the default with `embeddings.indexing.mode = "deferred"`.
+the default with `embeddings.indexing.mode = "deferred"`. Completed owned work segments now remain durable across interruption, and
+explicit population repairs derived similarity artifacts even when its resumed
+queue is empty. Developers can opt into phase timings and memory diagnostics;
+see the [embedding recovery guide](docs/benchmarks/pending-embedding-recovery.md).
+
 
 Inspect canonical-directory analyzer coverage without building the index:
 
