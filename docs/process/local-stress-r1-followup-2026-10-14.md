@@ -96,7 +96,7 @@ counts and original failure-output digests. No campaign files or processes chang
 | Point | State | Evidence |
 | --- | --- | --- |
 | 1: offline model resolution | Implemented; 28 focused tests and quality preflight pass | Native offline BGE snapshot load and one fixed-text encoding: 384 dimensions, norm approximately 1 |
-| 2: runner model admission | Pending | Required before repository workloads |
+| 2: runner model admission | Implemented; 53 focused tests and quality preflight pass | Native ST and ONNX admission checks both ready at 384 dimensions |
 | 3: profiling propagation | Pending | Stage/attempt ownership and child-environment regressions required |
 
 Point 1 adds `plugins.embedding-sentence-transformers.model_path`, reuses an

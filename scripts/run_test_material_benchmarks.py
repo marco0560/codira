@@ -2573,6 +2573,177 @@ def resolve_run_root(spec: dict[str, Any], run_id: str | None, resume: bool) -> 
     return root
 
 
+def valid_model_readiness(result: object, settings: dict[str, Any]) -> bool:
+    """Require actual asset provenance and matching engine/model dimensions.
+
+    Parameters
+    ----------
+    result : object
+        Untrusted child JSON receipt.
+    settings : dict
+        Selected embedding settings grouped for this probe.
+
+    Returns
+    -------
+    bool
+        Ready output satisfies the admission contract rather than only an enum.
+    """
+    if not isinstance(result, dict) or result.get("status") != "ready":
+        return False
+    expected = settings["embeddings"]
+    assets = result.get("assets")
+    dimension = result.get("dimension")
+    return (
+        result.get("engine") == expected.get("engine", "sentence-transformers")
+        and isinstance(dimension, int)
+        and not isinstance(dimension, bool)
+        and dimension > 0
+        and ("dimension" not in expected or dimension == expected["dimension"])
+        and isinstance(result.get("logical_model"), str)
+        and ("model" not in expected or result["logical_model"] == expected["model"])
+        and isinstance(assets, list)
+        and bool(assets)
+        and all(
+            isinstance(asset, dict)
+            and isinstance(asset.get("path"), str)
+            and Path(asset["path"]).is_absolute()
+            and isinstance(asset.get("sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", asset["sha256"]) is not None
+            for asset in assets
+        )
+    )
+
+
+def embedding_admission(
+    campaign: Campaign, timeout_seconds: float
+) -> list[dict[str, Any]]:
+    """Verify distinct model configurations before any repository stage starts.
+
+    Parameters
+    ----------
+    campaign : Campaign
+        Owns child environment and durable admission attempt evidence.
+    timeout_seconds : float
+        Per-probe safety budget; zero disables the limit.
+
+    Returns
+    -------
+    list of dict
+        Stable actual model provenance for immutable identity and resume checks.
+
+    Raises
+    ------
+    ValueError
+        A required engine is unavailable or its probe fails its output contract.
+    """
+    checks: dict[str, tuple[Path, Path]] = {}
+    for profile in campaign.spec["profiles"]:
+        if not profile.get("embeddings"):
+            continue
+        for repo in campaign.spec["repositories"]:
+            config_path = campaign.manifest.parent / repo["configs"][profile["id"]]
+            config = tomllib.loads(config_path.read_text())
+            embeddings = config.get("embeddings", {}).copy()
+            for name in ("vector_store", "similarity_index", "indexing"):
+                embeddings.pop(name, None)
+            engine = embeddings.get("engine", "sentence-transformers")
+            key = json.dumps(
+                {
+                    "embeddings": embeddings,
+                    "plugin": config.get("plugins", {}).get("embedding-" + engine, {}),
+                },
+                sort_keys=True,
+            )
+            checks.setdefault(key, (config_path, Path(repo["path"])))
+    results = []
+    helper = Path(__file__).with_name("benchmark_embedding_readiness.py")
+    for key, (config_path, root) in checks.items():
+        destination = (
+            campaign.root / "admission" / hashlib.sha256(key.encode()).hexdigest()
+        )
+        attempt = (
+            destination / f"attempt-{len(list(destination.glob('attempt-*'))) + 1}"
+        )
+        attempt.mkdir(parents=True)
+        argv = [sys.executable, str(helper), str(config_path), "--root", str(root)]
+        with (
+            (attempt / "stdout").open("w") as output,
+            (attempt / "stderr").open("w") as errors,
+        ):
+            process = subprocess.Popen(
+                argv,
+                env=campaign.environment_for_stage("admission"),
+                text=True,
+                stdout=output,
+                stderr=errors,
+                start_new_session=True,
+            )
+            try:
+                exit_code = process.wait(timeout=timeout_seconds or None)
+            except BaseException:
+                terminate_group(process)
+                write(
+                    attempt / "result.json",
+                    {
+                        "status": "unavailable",
+                        "reason": "readiness probe interrupted or timed out",
+                    },
+                )
+                raise
+        try:
+            result = json.loads((attempt / "stdout").read_text())
+        except (ValueError, OSError) as error:
+            result = {"status": "unavailable", "reason": str(error)}
+        valid = exit_code == 0 and valid_model_readiness(result, json.loads(key))
+        write(
+            attempt / "result.json",
+            {
+                "status": "ready" if valid else "unavailable",
+                "exit_code": exit_code,
+                "response": result,
+                "config": str(config_path),
+            },
+        )
+        if not valid:
+            reject(
+                f"Embedding prerequisites unavailable; inspect {attempt}. No repository measurements started."
+            )
+        results.append({"settings": json.loads(key), "readiness": result})
+    return results
+
+
+def guard_resume_identity(
+    receipt: Path, identity: dict[str, Any], *, before_admission: bool = False
+) -> None:
+    """Reject changed controls before probing or measuring an existing campaign.
+
+    Parameters
+    ----------
+    receipt : pathlib.Path
+        Original immutable identity receipt.
+    identity : dict
+        Current selected controls and, after admission, actual model assets.
+    before_admission : bool, optional
+        Compare static controls before any readiness child can start.
+
+    Returns
+    -------
+    None
+        Compatible identity is retained without rewriting failure evidence.
+
+    Raises
+    ------
+    ValueError
+        Changed runtime, controls or model contents require a new run identity.
+    """
+    if receipt.exists():
+        old = json.loads(receipt.read_text())
+        if before_admission:
+            old.pop("model_assets", None)
+        if old != identity:
+            reject("resume identity differs; retain this run and choose a new run-id")
+
+
 def main() -> int:
     """Validate a plan or execute it only with explicit --run.
 
@@ -2609,6 +2780,12 @@ def main() -> int:
         default=180,
         help="Inner Graphviz layout deadline; default 180 seconds, 0 disables",
     )
+    parser.add_argument(
+        "--model-readiness-timeout-seconds",
+        type=float,
+        default=300,
+        help="Per-model offline admission budget; 0 disables",
+    )
     args = parser.parse_args()
     prepared = prepare_operator_recovery(args)
     if prepared is not None:
@@ -2629,6 +2806,9 @@ def main() -> int:
             )
         )
         return 0
+    validate_timeout(
+        args.model_readiness_timeout_seconds, name="model readiness timeout"
+    )
     validate_timeout(args.architecture_timeout_seconds)
     validate_timeout(args.svg_timeout_seconds, name="SVG timeout")
     spec = json.loads(args.manifest.read_text())
@@ -2640,6 +2820,7 @@ def main() -> int:
         "scope": spec["capabilities"],
         "size_gaps": spec["coverage_gaps"],
         "execute": args.run,
+        "model_readiness_timeout_seconds": args.model_readiness_timeout_seconds,
         "architecture_timeout_seconds": args.architecture_timeout_seconds,
         "svg_timeout_seconds": args.svg_timeout_seconds,
     }
@@ -2654,6 +2835,10 @@ def main() -> int:
         "version_provenance": version_provenance(),
         "measurement_capabilities": measurement_capabilities(),
         "native_acceleration": native_acceleration_identity(),
+        "model_readiness_timeout_seconds": args.model_readiness_timeout_seconds,
+        "readiness_helper_sha256": digest(
+            Path(__file__).with_name("benchmark_embedding_readiness.py")
+        ),
         "architecture_timeout_seconds": args.architecture_timeout_seconds,
         "svg_timeout_seconds": args.svg_timeout_seconds,
         "configs": {
@@ -2681,11 +2866,14 @@ def main() -> int:
         },
     }
     receipt = root / "identity.json"
-    if receipt.exists() and json.loads(receipt.read_text()) != identity:
-        reject("resume identity differs; retain this run and choose a new run-id")
-    write(receipt, identity)
-    write(root / "manifest.json", spec)
-    verify_revisions(spec)
+    guard_resume_identity(receipt, identity, before_admission=True)
+    admission_identity = root / "admission-identity.json"
+    if admission_identity.exists() and not receipt.exists():
+        reject(
+            "previous admission did not complete; retain its evidence and choose a new run-id"
+        )
+    guard_resume_identity(admission_identity, identity)
+    write(admission_identity, identity)
     campaign = Campaign(
         args.manifest,
         root,
@@ -2693,6 +2881,13 @@ def main() -> int:
         args.architecture_timeout_seconds,
         args.svg_timeout_seconds,
     )
+    verify_revisions(spec)
+    identity["model_assets"] = embedding_admission(
+        campaign, args.model_readiness_timeout_seconds
+    )
+    guard_resume_identity(receipt, identity)
+    write(receipt, identity)
+    write(root / "manifest.json", spec)
     campaign.command("capabilities", [campaign.codira, "caps", "--json"])
     campaign.command("plugins", [campaign.codira, "plugins", "--json"])
     all_members = []

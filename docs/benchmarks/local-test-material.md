@@ -272,3 +272,35 @@ Retained resume checkpoints are removed silently from the invocation's initial
 inventory; they are not new skipped tests or new measurements. Missing
 prerequisites remain distinct from failed commands. Timestamp formatting and
 these rules are shared by the analyzer-style and stress runners.
+
+
+## Offline model admission
+
+Before any repository measurements, selected embedding configurations must pass
+a native offline model-load/one-encoding readiness check. Equivalent model
+settings across repositories/backends are checked once; vector-store and
+similarity settings do not turn these into independent model loads. Admission
+receipts, stdout and stderr live under `<run>/admission/<settings-hash>/attempt-N/`.
+These checks are prerequisites, not benchmark stages, and do not advance test
+ordinals or enter timing comparisons. An unavailable required model blocks the
+campaign before indexing, rather than producing the same repository failure
+repeatedly. Analyzer-style structural profiles require no embedding probes.
+
+Each model receipt records logical identity, dimensions, local snapshot revision
+where available, resolved artifact paths and actual content hashes. Asset hashes
+are verified again after a finite, dimension-correct encoding. The selected
+artifacts become immutable campaign identity; changed bytes require a new run.
+The helper's digest, model settings and readiness deadline are also recorded.
+Use `--model-readiness-timeout-seconds 300` for the default per-probe budget; zero
+disables it. A timeout or interruption stops only the owned probe process group
+and retains admission evidence. Failed/incomplete admission identities must be
+retained and replaced with a new run-id after operator recovery.
+
+For Sentence Transformers, a working ONNX export alone is insufficient. Select
+an immutable existing Torch snapshot with
+`[plugins.embedding-sentence-transformers].model_path` and pin
+`[embeddings].version` to its revision. Keep the logical `[embeddings].model` ID.
+Codira may reuse a legacy Hugging Face cache when no model-root override was
+selected; explicit roots retain precedence. The offline runner never downloads
+a missing model. Model provisioning and subsequent campaign execution remain
+separate operator actions; a native readiness result is not a semantic grade.
