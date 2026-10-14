@@ -26,6 +26,7 @@ import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import import_module
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
 from codira.config import (
@@ -41,7 +42,6 @@ from codira.registry import active_embedding_engine
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from pathlib import Path
 
     class _EmbeddingVector(Protocol):
         def tolist(self) -> list[float]: ...
@@ -250,20 +250,20 @@ def _wrap_load_error(
 
 def _configure_embedding_environment(*, offline: bool) -> None:
     """
-    Configure process-local environment variables for model loading.
+    Configure logging defaults without rewriting operator offline flags.
 
     Parameters
     ----------
     offline : bool
-        Whether model loading should require local artifacts only.
+        Per-load policy applied by the factory through local_files_only.
 
     Returns
     -------
     None
         Environment variables are updated in place for the current process.
     """
-    os.environ["HF_HUB_OFFLINE"] = "1" if offline else "0"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1" if offline else "0"
+    # local_files_only controls each load; preserve operator offline policy.
+    del offline
     os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
@@ -464,6 +464,74 @@ def _configure_transformers_logging_once() -> None:
     cast("_TransformersLogging", logging_module).set_verbosity_error()
 
 
+def _strict_embedding_offline() -> bool:
+    """Detect an explicit offline policy before permitting any provisioning.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    bool
+        Either supported Hugging Face offline environment flag is enabled.
+    """
+    return any(
+        os.environ.get(name, "").upper() in {"1", "TRUE", "YES", "ON"}
+        for name in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+    )
+
+
+def _sentence_transformer_location(root: Path | None = None) -> tuple[str, Path]:
+    """Resolve explicit artifacts or reuse legacy cache without mutating it.
+
+    Parameters
+    ----------
+    root : pathlib.Path | None, optional
+        Repository selecting model identity and plugin configuration.
+
+    Returns
+    -------
+    tuple[str, pathlib.Path]
+        Factory model source and selected provider cache directory. Explicit
+        model-root overrides prevent implicit legacy-cache fallback.
+
+    Raises
+    ------
+    ValueError
+        Explicit model_path is not an existing absolute directory.
+    """
+    config = load_effective_config(root=_effective_root(root))
+    plugin = (config.plugins.configs or {}).get("embedding-sentence-transformers", {})
+    cache = _shared_model_store(root).sentence_transformers_cache()
+    explicit = plugin.get("model_path")
+    if explicit is not None:
+        if (
+            not isinstance(explicit, str)
+            or not Path(explicit).is_absolute()
+            or not Path(explicit).is_dir()
+        ):
+            message = "plugins.embedding-sentence-transformers.model_path must be an existing absolute model directory."
+            raise ValueError(message)
+        return str(Path(explicit).resolve()), cache
+    model = get_embedding_backend(root=_effective_root(root)).name
+    repository = "models--" + model.replace("/", "--")
+    if (
+        not config.embeddings.model_root
+        and not os.environ.get("CODIRA_MODEL_ROOT")
+        and not (cache / repository).exists()
+    ):
+        default = (
+            Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+            / "huggingface"
+        )
+        hf_home = Path(os.environ.get("HF_HOME", str(default)))
+        legacy = Path(os.environ.get("HF_HUB_CACHE", str(hf_home / "hub")))
+        if (legacy / repository).is_dir():
+            cache = legacy
+    return model, cache
+
+
 def _load_sentence_transformer(
     sentence_transformer: object,
     *,
@@ -490,15 +558,16 @@ def _load_sentence_transformer(
     """
     _configure_embedding_environment(offline=offline)
     factory = cast("_SentenceTransformerFactory", sentence_transformer)
+    source, cache = _sentence_transformer_location(root)
     with (
         contextlib.redirect_stdout(io.StringIO()),
         contextlib.redirect_stderr(io.StringIO()),
     ):
         return factory(
-            get_embedding_backend(root=_effective_root(root)).name,
+            source,
             device=_configured_embedding_device(root=_effective_root(root)),
-            cache_folder=str(_shared_model_store(root).sentence_transformers_cache()),
-            local_files_only=offline,
+            cache_folder=str(cache),
+            local_files_only=offline or _strict_embedding_offline(),
             trust_remote_code=_configured_trust_remote_code(root),
         )
 
@@ -577,7 +646,16 @@ def _load_model(root: Path | None = None) -> _EmbeddingModel:
             offline=True,
             root=root,
         )
-    except OSError:
+    except OSError as exc:
+        if _strict_embedding_offline():
+            source, cache = _sentence_transformer_location(root)
+            message = (
+                f"Offline embedding model unavailable: {source}; selected cache: {cache}. "
+                "Automatic provisioning is disabled by offline policy. Select a pinned "
+                "local plugins.embedding-sentence-transformers.model_path or explicitly "
+                f"provision the intended shared model store outside the campaign. Details: {exc}"
+            )
+            raise EmbeddingBackendError(message) from exc
         provision_embedding_model(root=root)
         try:
             model = _load_sentence_transformer(

@@ -735,6 +735,11 @@
             "description": "Whether this plugin participates in runtime discovery.",
             "type": "boolean"
           },
+          "model_path": {
+            "description": "Existing absolute local model snapshot; logical embeddings.model and embeddings.version retain identity.",
+            "minLength": 1,
+            "type": "string"
+          },
           "trust_remote_code": {
             "default": false,
             "description": "Allow SentenceTransformers to execute model-defined code.",

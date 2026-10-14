@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 __all__ = ["SentenceTransformersEmbeddingEngine", "build_engine"]
 
-PACKAGE_VERSION = "1.0.2"
+PACKAGE_VERSION = "1.0.3"
 
 
 class SentenceTransformersEmbeddingEngine:
@@ -71,11 +71,16 @@ class SentenceTransformersEmbeddingEngine:
         """
         return plugin_json_schema(
             {
+                "model_path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Existing absolute local model snapshot; logical embeddings.model and embeddings.version retain identity.",
+                },
                 "trust_remote_code": {
                     "type": "boolean",
                     "default": False,
                     "description": "Allow SentenceTransformers to execute model-defined code.",
-                }
+                },
             }
         )
 
