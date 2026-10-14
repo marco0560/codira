@@ -358,6 +358,13 @@ explicit population repairs derived similarity artifacts even when its resumed
 queue is empty. Developers can opt into phase timings and memory diagnostics;
 see the [embedding recovery guide](docs/benchmarks/pending-embedding-recovery.md).
 
+Offline model admission now checks the actual engine artifacts before
+benchmark workloads, and explicit profiling directories reach owned children
+with stage/attempt/sample journal links. See the
+[local benchmark guide](docs/benchmarks/local-test-material.md) for recovery,
+identity controls and readiness limitations.
+
+
 
 Inspect canonical-directory analyzer coverage without building the index:
 

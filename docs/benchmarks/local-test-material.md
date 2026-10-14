@@ -304,3 +304,30 @@ Codira may reuse a legacy Hugging Face cache when no model-root override was
 selected; explicit roots retain precedence. The offline runner never downloads
 a missing model. Model provisioning and subsequent campaign execution remain
 separate operator actions; a native readiness result is not a semantic grade.
+
+
+## Explicit profiling and shared-model controls
+
+The runner preserves only validated absolute `CODIRA_MODEL_ROOT` and
+`CODIRA_EMBEDDING_PROFILE_DIR` locations from inherited Codira controls. It still
+clears unrelated `CODIRA_CONFIG_FILE`, workspace and other overrides so the
+manifest remains authoritative. A blank/relative location or existing file is
+rejected before child execution. Explicit model roots retain the model-store
+resolution contract; otherwise controlled legacy cache reuse is available.
+
+An enabled profiling root receives
+`campaigns/<run-path-digest>/stages/<profile>/<repository>/<stage>/attempt-N/sample-M/`
+journals for CLI measurements. MCP uses its stage/attempt directory; long-lived service launches
+receive a session directory. Each population invocation still generates a unique
+JSONL filename. Samples and result receipts include
+`embedding_profile_journals` entries with paths and SHA-256 digests. Interrupted
+output remains linked; repeated samples and retried attempts never share the
+same journal directory. Retained resume results keep original links without
+creating journals. An empty list means no journal was emitted, not zero duration
+or zero memory. The backend profiling guide defines supported phases and units.
+
+The normalized locations become identity controls. Enable them before the first
+operator-run command and retain identical controls when resuming; changing them
+requires a fresh identity. The existing environment-prefixed launch commands in
+this guide now propagate profiling to owned children. Admission receipts stay
+separate from performance measurements and original failures remain untouched.

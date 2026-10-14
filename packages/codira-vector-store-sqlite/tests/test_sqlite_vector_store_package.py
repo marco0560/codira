@@ -419,7 +419,7 @@ def test_sqlite_vector_snapshot_keeps_revision_and_rows_in_one_transaction(
     Parameters
     ----------
     monkeypatch : pytest.MonkeyPatch
-        Fixture used to synchronize the reader at its revision query.
+        Fixture used to synchronize the reader after its revision read.
     tmp_path : pathlib.Path
         Temporary repository root owning the SQLite vector store.
 
@@ -444,12 +444,36 @@ def test_sqlite_vector_snapshot_keeps_revision_and_rows_in_one_transaction(
     original_connect = sqlite_vector_store_module._connect
 
     def synchronized_connect(path: Path) -> sqlite3.Connection:
-        """Add a synchronization barrier to the snapshot revision query."""
+        """Add a barrier after the snapshot revision has been read.
+
+        Parameters
+        ----------
+        path : Path
+            SQLite vector-store database.
+
+        Returns
+        -------
+        sqlite3.Connection
+            Connection releasing the writer before the row query.
+        """
         connection = original_connect(path)
 
         def trace(statement: str) -> None:
-            """Release the writer after the reader's snapshot begins."""
-            if statement.startswith("SELECT revision FROM vector_sets"):
+            """Release the writer once the revision read holds a snapshot.
+
+            Parameters
+            ----------
+            statement : str
+                SQL about to execute on this connection.
+
+            Returns
+            -------
+            None
+                Synchronize the competing writer at the row query.
+            """
+            # Trace callbacks run before execution. The row query follows the
+            # completed revision read, which establishes the deferred snapshot.
+            if statement.lstrip().startswith("SELECT bindings.object_type"):
                 reader_at_revision.set()
                 assert writer_started.wait(timeout=5)
 

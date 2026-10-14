@@ -97,7 +97,7 @@ counts and original failure-output digests. No campaign files or processes chang
 | --- | --- | --- |
 | 1: offline model resolution | Implemented; 28 focused tests and quality preflight pass | Native offline BGE snapshot load and one fixed-text encoding: 384 dimensions, norm approximately 1 |
 | 2: runner model admission | Implemented; 53 focused tests and quality preflight pass | Native ST and ONNX admission checks both ready at 384 dimensions |
-| 3: profiling propagation | Pending | Stage/attempt ownership and child-environment regressions required |
+| 3: profiling propagation | Implemented; 69 focused tests and final quality/full gates pass | Real synthetic child propagation, separate samples/attempts, interrupted evidence and retained resume |
 
 Point 1 adds `plugins.embedding-sentence-transformers.model_path`, reuses an
 existing legacy cache only without an explicit model root, and respects strict
@@ -108,3 +108,25 @@ immutable snapshot revision. ST distribution 2.0.1/implementation 1.0.3, bundle
 Ignored validation evidence is under
 `.artifacts/validation/stress-followup-20261014/`. This native check is model
 readiness, not a campaign comparison or retrieval-quality grade.
+
+
+Point 3 validates and forwards only explicit `CODIRA_MODEL_ROOT` and
+`CODIRA_EMBEDDING_PROFILE_DIR` controls, retaining isolation for other inherited
+Codira configuration/workspace overrides. The normalized controls participate
+in immutable identity. Each CLI measurement owns a stage/attempt/sample
+profiling directory; MCP attempts own their own stage/attempt directory. Result
+receipts link actual JSONL journal paths and content hashes, including interrupted
+output. Missing journals carry no invented timing values. Both suites share this
+behavior, and retained checkpoints do not create new journals or measurements.
+The combined quality preflight passes all seven checks. The final repository
+gate exits 0: 1,693 passed, 3 skipped, 86% coverage; fresh indexing reports
+zero failed files and zero coverage issues. Native ST and ONNX readiness checks
+both exit 0. No benchmark campaign was launched or modified.
+
+The first full gate passed 1,692 tests but exposed a race in the existing SQLite
+vector snapshot test: its trace barrier released the writer before SQLite read
+the revision and acquired its deferred snapshot. The barrier now releases the
+writer at the row query, after the revision read; the original consistency
+assertions remain intact. This is a test synchronization correction, with no
+vector-store production change. Campaign-path namespaces also prevent profiling
+journal collisions when multiple runs share the explicit profiling root.

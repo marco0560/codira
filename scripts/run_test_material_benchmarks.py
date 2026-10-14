@@ -229,6 +229,36 @@ def native_acceleration_identity() -> dict[str, object]:
     return {"faiss": module.runtime_diagnostics()}
 
 
+def controlled_runtime_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    """Preserve explicit asset/profiling locations while isolating other controls.
+
+    Parameters
+    ----------
+    environment : collections.abc.Mapping[str, str]
+        Operator environment; unrelated CODIRA overrides are not forwarded.
+
+    Returns
+    -------
+    dict[str, str]
+        Normalized absolute model-root and profiling-directory controls only.
+
+    Raises
+    ------
+    ValueError
+        A supplied location is blank, relative or an existing non-directory.
+    """
+    controls = {}
+    for name in ("CODIRA_MODEL_ROOT", "CODIRA_EMBEDDING_PROFILE_DIR"):
+        if name not in environment:
+            continue
+        value = environment[name].strip()
+        path = Path(value)
+        if not value or not path.is_absolute() or (path.exists() and not path.is_dir()):
+            reject(name + " must select a non-empty absolute directory")
+        controls[name] = str(path.resolve())
+    return controls
+
+
 def coverage_is_partial(coverage: Mapping[str, object]) -> bool:
     """Recognize incomplete usable coverage in CLI or generation metadata.
 
@@ -1028,6 +1058,7 @@ class Campaign:
         validate_timeout(svg_timeout_seconds, name="SVG timeout")
         self.architecture_timeout_seconds = architecture_timeout_seconds
         self.svg_timeout_seconds = svg_timeout_seconds
+        self.runtime_controls = controlled_runtime_environment(os.environ)
         self.env = dict(os.environ)
         for name in tuple(self.env):
             if not name.startswith("CODIRA_"):
@@ -1043,19 +1074,27 @@ class Campaign:
             PIP_NO_INDEX="1",
             LC_ALL="C",
         )
+        if "CODIRA_MODEL_ROOT" in self.runtime_controls:
+            self.env["CODIRA_MODEL_ROOT"] = self.runtime_controls["CODIRA_MODEL_ROOT"]
         self.codira = str(Path(sys.executable).with_name("codira"))
         self.results: list[dict[str, Any]] = []
         self.member_coverage: dict[str, dict[str, Any]] = {}
         self.embedding_ready: dict[str, bool] = {}
         self.requires_embeddings: dict[str, bool] = {}
 
-    def environment_for_stage(self, key: str) -> dict[str, str]:
+    def environment_for_stage(
+        self, key: str, *, attempt: str = "session", sample: int | None = None
+    ) -> dict[str, str]:
         """Select the profile registry used by a CLI, MCP or daemon stage.
 
         Parameters
         ----------
         key : str
             Stage identity whose first component may name a configured profile.
+        attempt : str, optional
+            Owned attempt name; session is used for long-lived child services.
+        sample : int | None, optional
+            Repeated command sample owning its individual journals.
 
         Returns
         -------
@@ -1070,7 +1109,67 @@ class Campaign:
             candidate = key.split("/", 1)[0]
             profile_id = candidate if candidate in profile_ids else profiles[0]["id"]
             environment["XDG_CONFIG_HOME"] = str(self.root / "registry" / profile_id)
+        directory = self.profile_directory(key, attempt=attempt, sample=sample)
+        if directory is not None:
+            environment["CODIRA_EMBEDDING_PROFILE_DIR"] = str(directory)
         return environment
+
+    def profile_directory(
+        self, key: str, *, attempt: str, sample: int | None = None
+    ) -> Path | None:
+        """Assign stage/attempt/sample journal ownership under the explicit root.
+
+        Parameters
+        ----------
+        key : str
+            Exact stage identity.
+        attempt : str
+            Attempt or session directory name.
+        sample : int | None, optional
+            Repeated measurement sample number.
+
+        Returns
+        -------
+        pathlib.Path | None
+            Isolated journal directory, or disabled profiling.
+
+        Raises
+        ------
+        ValueError
+            A stage or attempt would escape its profiling root.
+        """
+        base = self.runtime_controls.get("CODIRA_EMBEDDING_PROFILE_DIR")
+        if base is None:
+            return None
+        if (
+            Path(key).is_absolute()
+            or ".." in Path(key).parts
+            or Path(attempt).name != attempt
+        ):
+            reject("profiling stage and attempt must remain under the selected root")
+        campaign_id = hashlib.sha256(str(self.root).encode()).hexdigest()[:16]
+        directory = Path(base) / "campaigns" / campaign_id / "stages" / key / attempt
+        return directory if sample is None else directory / f"sample-{sample}"
+
+    def profile_journals(self, directory: Path | None) -> list[dict[str, str]]:
+        """Link raw journals, including interrupted output, without grading them.
+
+        Parameters
+        ----------
+        directory : pathlib.Path | None
+            Owned journal directory or disabled profiling.
+
+        Returns
+        -------
+        list of dict
+            Existing journal paths and digests; unavailable journals are not zero.
+        """
+        if directory is None:
+            return []
+        return [
+            {"path": str(path), "sha256": digest(path)}
+            for path in sorted(directory.glob("*.jsonl"))
+        ]
 
     def command(self, key: str, argv: list[str], *, repeats: int = 1) -> dict[str, Any]:
         """Run a stage, preserving failures, timings and output per attempt.
@@ -1122,7 +1221,9 @@ class Campaign:
                 )
                 process = subprocess.Popen(
                     measured,
-                    env=self.environment_for_stage(key),
+                    env=self.environment_for_stage(
+                        key, attempt=attempts.name, sample=number
+                    ),
                     stdout=out,
                     stderr=err,
                     text=True,
@@ -1179,6 +1280,9 @@ class Campaign:
                     ),
                 }
             )
+            samples[-1]["embedding_profile_journals"] = self.profile_journals(
+                self.profile_directory(key, attempt=attempts.name, sample=number)
+            )
             if not timed_out and not interrupted and process.returncode == 0:
                 artifacts = architecture_artifacts(argv)
                 if artifacts:
@@ -1225,6 +1329,7 @@ class Campaign:
                         "comparison_group",
                         "optional_artifacts",
                         "architecture_artifacts",
+                        "embedding_profile_journals",
                     )
                     if key in samples[-1]
                 }
@@ -1727,7 +1832,7 @@ class Campaign:
         server = StdioServerParameters(
             command=str(Path(sys.executable).with_name("codira-mcp")),
             args=args,
-            env=self.environment_for_stage(key),
+            env=self.environment_for_stage(key, attempt=attempts.name),
         )
         responses: list[dict[str, Any]] = []
         result: dict[str, Any]
@@ -1880,6 +1985,9 @@ class Campaign:
                 "error": str(error),
                 "responses": responses,
             }
+        result["embedding_profile_journals"] = self.profile_journals(
+            self.profile_directory(key, attempt=attempts.name)
+        )
         result["stderr"] = str(attempts / "mcp.stderr")
         result.update(mcp_error_details(responses))
         result["attempt_history"] = [
@@ -2835,6 +2943,7 @@ def main() -> int:
         "version_provenance": version_provenance(),
         "measurement_capabilities": measurement_capabilities(),
         "native_acceleration": native_acceleration_identity(),
+        "runtime_controls": controlled_runtime_environment(os.environ),
         "model_readiness_timeout_seconds": args.model_readiness_timeout_seconds,
         "readiness_helper_sha256": digest(
             Path(__file__).with_name("benchmark_embedding_readiness.py")
