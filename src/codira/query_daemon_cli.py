@@ -1,4 +1,13 @@
-"""Route eligible read-only CLI commands through a repository-local daemon."""
+"""Route eligible read-only CLI commands through a repository-local daemon.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+"""
 
 from __future__ import annotations
 
@@ -6,7 +15,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from codira.query_daemon import QueryDaemonIdentity
-from codira.query_daemon_ipc import QueryDaemonIpcClient, QueryDaemonIpcError
+from codira.query_daemon_ipc import (
+    DEFAULT_TIMEOUT_SECONDS,
+    QueryDaemonIpcClient,
+    QueryDaemonIpcError,
+)
 from codira.storage import get_storage_root
 
 if TYPE_CHECKING:
@@ -45,6 +58,7 @@ def route_cli_read(
     arguments: Mapping[str, object],
     *,
     enabled: bool,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> CliRouteResult:
     """Attempt one enabled fixed-root CLI read through the warm daemon.
 
@@ -58,6 +72,8 @@ def route_cli_read(
         Path-free CLI option values.
     enabled : bool
         Whether effective query-daemon routing is enabled.
+    timeout_seconds : float, optional
+        Explicit connection and request budget; normal CLI routing keeps five seconds.
 
     Returns
     -------
@@ -67,7 +83,7 @@ def route_cli_read(
     if not enabled:
         return CliRouteResult(mode="direct")
     identity = QueryDaemonIdentity.from_paths(root, get_storage_root(root))
-    client = QueryDaemonIpcClient(identity)
+    client = QueryDaemonIpcClient(identity, timeout_seconds=timeout_seconds)
     try:
         response = client.request(operation, arguments)
         result = cast("dict[str, object]", response["result"])

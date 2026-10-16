@@ -331,3 +331,27 @@ operator-run command and retain identical controls when resuming; changing them
 requires a fresh identity. The existing environment-prefixed launch commands in
 this guide now propagate profiling to owned children. Admission receipts stay
 separate from performance measurements and original failures remain untouched.
+
+## Family and daemon probe budgets
+
+Family aggregation ranks each member once per operation and renders all complete
+candidate pages from that scoped read. Public page sizes, evidence, member ranks,
+and freshness-bound family continuations remain unchanged; results are not cached
+across requests. Match-and-snippet MCP responses skip auxiliary reference and
+module expansion fields they do not return; CLI output and MCP explain retain
+them. MCP transport failures retain the active tool, elapsed time,
+server stderr, and the complete nested exception in the attempt directory.
+
+The standalone query-daemon benchmark accepts `--request-timeout-seconds` (finite,
+positive; default 300). It applies the same explicit budget to its local server
+and warm clients and records it in its output. The stress manifest may override
+this through `daemon_query_timeout_seconds`; its command receipt retains the
+selected value. This benchmark budget does not change the normal CLI's
+five-second opportunistic routing budget. Socket timeouts and disconnects become
+controlled unavailable results so normal CLI routing can fall back.
+
+The foreground daemon establishes its native watcher before publishing initial
+reconciliation success. Source edits during startup remain queued. A foreground
+probe that never observes a newer ready generation retains the timeout or process
+exit reason, observed generation/state, elapsed time, and exit code; witness bytes
+are restored on either outcome. Changed controls require a new run identity.

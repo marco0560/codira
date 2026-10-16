@@ -14,6 +14,14 @@ remains deterministic and does not depend on host filesystem notifications.
 Architectural role
 ------------------
 This module belongs to the daemon runtime verification layer.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
 """
 
 from __future__ import annotations
@@ -310,3 +318,93 @@ def test_is_git_ignored_checks_repository_ignore_rules(
     assert is_git_ignored(tmp_path, tmp_path / "generated" / "result.py")
     assert commands[0][1:5] == ["check-ignore", "--quiet", "--no-index", "--"]
     assert commands[0][-1] == "generated/result.py"
+
+
+def test_native_watcher_queues_edits_during_initial_reconciliation(
+    tmp_path: Path,
+) -> None:
+    """Capture an edit made before initial readiness using real OS notifications.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable watched repository.
+
+    Returns
+    -------
+    None
+        Initial reconciliation's edit triggers a second pass without a HEAD change.
+    """
+    from threading import Timer
+
+    from watchfiles import watch
+
+    source = tmp_path / "sample.py"
+    source.write_text("value = 1\n")
+    stop = Event()
+    calls: list[Path] = []
+
+    def reconcile(root: Path) -> None:
+        """Edit during the first pass and finish after the watcher delivers it.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Scheduled repository.
+
+        Returns
+        -------
+        None
+            The second pass stops the bounded native probe.
+        """
+        calls.append(root)
+        if len(calls) == 1:
+            source.write_text("value = 2\n")
+        else:
+            stop.set()
+
+    def bounded_watch(
+        *paths: Path, **kwargs: object
+    ) -> Iterator[set[tuple[Change, str]]]:
+        """Use the native watcher with a short idle interval.
+
+        Parameters
+        ----------
+        *paths : pathlib.Path
+            Watched directories.
+        **kwargs : object
+            Standard runtime watch controls.
+
+        Returns
+        -------
+        collections.abc.Iterator[set[tuple[watchfiles.Change, str]]]
+            Native events and idle yields.
+        """
+        del kwargs
+        yield from watch(
+            *paths,
+            rust_timeout=20,
+            debounce=20,
+            step=5,
+            yield_on_timeout=True,
+            stop_event=stop,
+        )
+
+    scheduler = DaemonScheduler(
+        tmp_path, reconcile=reconcile, read_head=lambda root: "head"
+    )
+    deadline = Timer(3, stop.set)
+    deadline.start()
+    try:
+        run_foreground_daemon(
+            tmp_path,
+            DaemonConfig(enabled=True),
+            scheduler=scheduler,
+            watch_changes=bounded_watch,
+            is_ignored=lambda root, path: False,
+            stop_event=stop,
+        )
+    finally:
+        stop.set()
+        deadline.cancel()
+    assert len(calls) == 2

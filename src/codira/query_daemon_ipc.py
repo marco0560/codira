@@ -16,6 +16,14 @@ Architectural role
 ------------------
 This module is the local IPC boundary between a repository-fixed warm runtime
 and later MCP or CLI proxies.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
 """
 
 from __future__ import annotations
@@ -1438,6 +1446,10 @@ class QueryDaemonIpcClient:
             self._send_handshake(channel)
             response = channel.receive()
             self._validate_handshake_response(response)
+        except (OSError, EOFError) as error:
+            msg = "IPC connection ended or timed out while receiving a response."
+            raise QueryDaemonUnavailableError(msg) from error
+        else:
             return response
         finally:
             channel.close()
@@ -1503,6 +1515,10 @@ class QueryDaemonIpcClient:
             ):
                 msg = "IPC server returned an invalid response."
                 raise QueryDaemonProtocolError(msg)
+        except (OSError, EOFError) as error:
+            msg = "IPC connection ended or timed out while receiving a response."
+            raise QueryDaemonUnavailableError(msg) from error
+        else:
             return response
         finally:
             channel.close()

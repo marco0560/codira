@@ -8,7 +8,7 @@ appearing without this inventory.
 
 ## `# noqa` inventory
 
-src/codira/family_runtime.py:470 PLR0913 — federation query options expose
+src/codira/family_runtime.py:468 PLR0913 — federation query options expose
 the independently selectable operation, member filter, pagination, direction,
 and explicit partial-results policy at the shared CLI/MCP boundary.
 
@@ -75,13 +75,13 @@ src/codira/daemon/service_spec.py:110 PLR0913 — one factory records the full,
     immutable workspace service identity needed by all platform adapters.
 src/codira/daemon/launchd.py:159 PLR0913 — injected platform/process seams keep
     launchd rendering deterministic and testable.
-src/codira/daemon/runtime.py:123 PLR0913 — foreground daemon dependencies are
+src/codira/daemon/runtime.py:133 PLR0913 — foreground daemon dependencies are
     explicit runtime controls rather than hidden globals.
 src/codira/migration.py:153 PLR0913 — migration preview reports every resolved
     workspace input without mutating registration state.
 src/codira/query_daemon_lifecycle.py:580 PLR0913 — service lifecycle inputs are
     explicit to preserve platform-independent restart behavior.
-src/codira/query_daemon_ipc.py:894 PLR0913 — IPC server construction exposes its
+src/codira/query_daemon_ipc.py:902 PLR0913 — IPC server construction exposes its
     authentication, runtime, and connection-boundary dependencies.
 src/codira/cli_index.py:150 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
@@ -117,7 +117,7 @@ src/codira/query_daemon.py:349,366 BLE001 — worker initialization and operatio
     failures must cross the future boundary as their original exception.
 src/codira/query_daemon_lifecycle.py:721,738 BLE001 — a long-lived service must
     report any unexpected refresh or foreground failure as degraded state.
-src/codira/query_daemon_ipc.py:1274,1364 BLE001 — the IPC boundary converts any
+src/codira/query_daemon_ipc.py:1282,1372 BLE001 — the IPC boundary converts any
     unexpected implementation failure into a stable protocol/unavailable result.
 packages/codira-vector-store-sqlite/tests/test_sqlite_vector_store_package.py:489
     BLE001 — the concurrent-writer regression records every thread failure for
@@ -149,7 +149,7 @@ scripts/run_retrieval_quality_benchmark.py:913,
 src/codira/docstring.py:1019, src/codira/docstring.py:1114,
 src/codira/index_generation.py:160,
 src/codira/query_daemon.py:366, src/codira/query_daemon_lifecycle.py:738, and
-src/codira/query_daemon_ipc.py:1364 retain the same category-specific reasons
+src/codira/query_daemon_ipc.py:1372 retain the same category-specific reasons
 as their immediately preceding grouped entries.
 ```
 

@@ -4,6 +4,14 @@
 The script is deliberately an operator tool, not a timing-sensitive test. It
 starts one fixed-root daemon in-process, compares repeated eligible CLI reads,
 and writes reproducible measurements under ``.artifacts/benchmarks/campaigns``.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
 """
 
 from __future__ import annotations
@@ -12,6 +20,7 @@ import argparse
 import contextlib
 import io
 import json
+import math
 import resource
 import sys
 from datetime import UTC, datetime
@@ -33,9 +42,9 @@ from codira.query_daemon_cli import route_cli_read
 from codira.query_daemon_ipc import QueryDaemonIpcPaths, QueryDaemonIpcServer
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmark_timing import benchmark_metadata  # type: ignore[import-not-found]
+from scripts.benchmark_timing import benchmark_metadata
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -64,6 +73,31 @@ def _positive_int(value: str) -> int:
         msg = "runs must be positive"
         raise argparse.ArgumentTypeError(msg)
     return parsed
+
+
+def _positive_seconds(value: str) -> float:
+    """Parse a finite positive request budget.
+
+    Parameters
+    ----------
+    value : str
+        Command-line duration in seconds.
+
+    Returns
+    -------
+    float
+        Positive finite request timeout.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If the duration is nonpositive or nonfinite.
+    """
+    seconds = float(value)
+    if not math.isfinite(seconds) or seconds <= 0:
+        message = "request timeout must be finite and positive"
+        raise argparse.ArgumentTypeError(message)
+    return seconds
 
 
 def _measure(operation: Callable[[], int], runs: int) -> dict[str, float]:
@@ -108,6 +142,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--runs", type=_positive_int, default=5)
     parser.add_argument("--query", default="query daemon")
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--request-timeout-seconds", type=_positive_seconds, default=300.0
+    )
     return parser
 
 
@@ -141,7 +178,10 @@ def main(argv: list[str] | None = None) -> int:
         msg = "a ready index generation is required; run codira index first"
         raise RuntimeError(msg)
     server = QueryDaemonIpcServer(
-        identity, runtime, build_query_daemon_cli_operations(root)
+        identity,
+        runtime,
+        build_query_daemon_cli_operations(root),
+        timeout_seconds=args.request_timeout_seconds,
     )
     server.start()
     try:
@@ -186,7 +226,11 @@ def main(argv: list[str] | None = None) -> int:
         results: dict[str, object] = {}
         for name, direct in direct_operations.items():
             warm = route_cli_read(
-                root, f"cli.{name}", warm_arguments[name], enabled=True
+                root,
+                f"cli.{name}",
+                warm_arguments[name],
+                enabled=True,
+                timeout_seconds=args.request_timeout_seconds,
             )
             if warm.mode != "warm":
                 msg = f"warm {name} benchmark failed: {warm.failure or warm.mode}"
@@ -215,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"cli.{name}",
                     warm_arguments[name],
                     enabled=True,
+                    timeout_seconds=args.request_timeout_seconds,
                 )
                 if routed.mode != "warm" or routed.exit_code is None:
                     msg = f"warm {name} benchmark failed during measurement"
@@ -240,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
             "root": str(root),
             "runs": args.runs,
             "query": args.query,
+            "request_timeout_seconds": args.request_timeout_seconds,
             "generation": runtime.generation,
             "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
             "metadata": benchmark_metadata(root),

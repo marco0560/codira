@@ -35,7 +35,9 @@ from codira.registry import active_index_backend
 from codira.workspace_registry import WorkspaceRegistry
 
 if TYPE_CHECKING:
+    from codira.contracts import BackendQueryConnection
     from codira.mcp.server import ContractMCP
+    from codira.query.context_models import ContextExecutionState, ContextRequest
 
 
 @pytest.fixture
@@ -659,3 +661,100 @@ def test_family_queries_usable_partial_member(
     response = runtime.query("symbol", "helper", allow_partial=True)
     assert len(_items(response)) == 2
     assert cast("dict[str, object]", response["result"])["status"] == "partial"
+
+
+def test_family_collects_all_context_pages_with_one_ranking_pass_per_member(
+    family_setup: tuple[Path, WorkspaceRegistry, FamilyDefinition],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep complete family evidence while eliminating repeated member ranking.
+
+    Parameters
+    ----------
+    family_setup : tuple
+        Mixed SQLite and DuckDB family.
+    monkeypatch : pytest.MonkeyPatch
+        Counts real core ranking passes without replacing retrieval.
+
+    Returns
+    -------
+    None
+        More than one hundred candidates survive and each member is ranked once.
+    """
+    from codira.query import context_orchestration
+
+    family = family_setup[2]
+    for member in family.members:
+        assert member.workspace is not None
+        config_path = member.workspace.config_file
+        assert config_path is not None
+        config_path.write_text(
+            config_path.read_text()
+            + '\n[plugins]\ndocumentation_audit_routes = [{language = "python", convention = "numpy", plugin = "numpy"}]\n'
+        )
+        with member_scope(member) as adapter:
+            for i in range(120):
+                (adapter.root / f"many_{i}.py").write_text(
+                    'def helper(value):\n    """Return a value.\n\n    Parameters\n    ----------\n    value : int\n        Input.\n    """\n    return value\n'
+                )
+            assert index_repo(adapter.root).failed == 0
+    original = context_orchestration._initial_context_state
+    roots: list[Path] = []
+
+    def counted(
+        request: ContextRequest, conn: BackendQueryConnection
+    ) -> ContextExecutionState:
+        """Count each real initial ranking call.
+
+        Parameters
+        ----------
+        request : codira.query.context.ContextRequest
+            Core request forwarded without changes.
+        conn : codira.contracts.BackendQueryConnection
+            Active backend connection.
+
+        Returns
+        -------
+        codira.query.context_models.ContextExecutionState
+            Original ranking state.
+        """
+        roots.append(request.root)
+        return original(request, conn)
+
+    monkeypatch.setattr(context_orchestration, "_initial_context_state", counted)
+    runtime = FamilyRuntime(family)
+    collected = runtime._collect(family.members[0], "context", "helper section")
+    assert len(collected) > 100
+    assert family.members[0].workspace is not None
+    assert roots == [family.members[0].workspace.repository_root]
+    assert all(item["evidence"] and item["identity"] for item in collected)
+    assert [item["member_rank"] for item in collected] == list(
+        range(1, len(collected) + 1)
+    )
+    with member_scope(family.members[0]) as adapter:
+        expected: list[dict[str, object]] = []
+        cursor = None
+        while True:
+            page = adapter.context_for_task(
+                "helper section", cursor=cast("str | None", cursor), limit=100
+            )
+            result = cast("dict[str, object]", page["result"])
+            expected.extend(cast("list[dict[str, object]]", result["items"]))
+            cursor = cast("dict[str, object]", page["page"])["next_cursor"]
+            if cursor is None:
+                break
+        assert collected == [
+            {
+                **runtime._qualify(family.members[0], item),
+                "member_rank": i + 1,
+                "member_ranking_score": item.get("ranking_score"),
+                "ranking_score": 1.0 / (61 + i),
+                "score_kind": "family_reciprocal_rank",
+            }
+            for i, item in enumerate(expected)
+        ]
+    roots.clear()
+    response = runtime.query("context", "helper section", limit=100)
+    assert len(roots) == 2
+    assert cast("dict[str, int]", response["page"])["total"] > 200
+    assert len(_items(response)) == 100

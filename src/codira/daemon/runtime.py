@@ -16,11 +16,21 @@ Architectural role
 ------------------
 This module belongs to the daemon runtime layer and adapts ``watchfiles`` to
 the core scheduler without exposing watcher details to service adapters.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack
+from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -162,7 +172,8 @@ def run_foreground_daemon(  # noqa: PLR0913
     -----
     Every timeout yield observes Git ``HEAD``. This covers branch checkouts
     whose source changes are hash-identical or otherwise absent from watcher
-    notifications.
+    notifications. The watcher is primed before initial reconciliation so
+    edits made during indexing or immediately after readiness are queued.
     """
     active_store = status_store or DaemonStatusStore(root)
     active_scheduler = scheduler or DaemonScheduler(
@@ -170,22 +181,27 @@ def run_foreground_daemon(  # noqa: PLR0913
         status_observer=active_store.record,
     )
     active_scheduler.start()
-    try:
-        active_scheduler.reconcile_pending()
-        for changes in watch_changes(
+    with ExitStack() as cleanup:
+        cleanup.callback(active_scheduler.stop)
+        changes_iterator = watch_changes(
             root.resolve(),
             watch_filter=build_watch_filter(root, config),
             debounce=config.debounce_ms,
             rust_timeout=_HEAD_POLL_TIMEOUT_MS,
             yield_on_timeout=True,
             stop_event=stop_event,
-        ):
+        )
+        close = getattr(changes_iterator, "close", None)
+        if callable(close):
+            cleanup.callback(close)
+        # Iterating starts the native watcher before publishing initial success.
+        first_changes = next(changes_iterator, set())
+        active_scheduler.reconcile_pending()
+        for changes in chain((first_changes,), changes_iterator):
             if changes and any(
                 not is_ignored(root, Path(path)) for _change, path in changes
             ):
                 active_scheduler.request_reconciliation()
             active_scheduler.observe_head()
             active_scheduler.reconcile_pending()
-    finally:
-        active_scheduler.stop()
     return active_scheduler.status

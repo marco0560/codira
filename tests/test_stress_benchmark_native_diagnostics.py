@@ -30,12 +30,12 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
-@pytest.mark.parametrize("tool_error", [False, True])
+@pytest.mark.parametrize("tool_error", [False, True, "timeout"])
 def test_mcp_stderr_is_retained_and_tool_errors_remain_failures(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    tool_error: bool,
+    tool_error: bool | str,
 ) -> None:
     """Capture routine SDK logs while preserving explicit tool-error evidence.
 
@@ -47,7 +47,7 @@ def test_mcp_stderr_is_retained_and_tool_errors_remain_failures(
         Replaces SDK transport and session with deterministic test boundaries.
     capsys : pytest.CaptureFixture[str]
         Captures terminal output.
-    tool_error : bool
+    tool_error : bool or str
         Actual simulated MCP error flag rather than a log substring.
 
     Returns
@@ -118,10 +118,15 @@ def test_mcp_stderr_is_retained_and_tool_errors_remain_failures(
                 )
             ),
             call_tool=AsyncMock(
+                side_effect=ExceptionGroup(
+                    "transport", [TimeoutError("request deadline")]
+                )
+                if tool_error == "timeout"
+                else None,
                 return_value=SimpleNamespace(
                     isError=tool_error,
                     structuredContent={"result": {"error": "simulated"}},
-                )
+                ),
             ),
         )
 
@@ -131,6 +136,11 @@ def test_mcp_stderr_is_retained_and_tool_errors_remain_failures(
         campaign.mcp("primary/fixture/mcp", ["--workspace", "fixture"], "query")
     )
     assert result["status"] == ("failed" if tool_error else "partial")
+    if tool_error == "timeout":
+        assert result["failed_tool"] == "capabilities"
+        assert "TimeoutError: request deadline" in Path(result["exception"]).read_text()
+        assert result["seconds"] >= 0
+
     assert "successfully loaded faiss" in Path(result["stderr"]).read_text()
     terminal = capsys.readouterr()
     assert "Loading faiss" not in terminal.err
@@ -149,8 +159,8 @@ def test_mcp_stderr_is_retained_and_tool_errors_remain_failures(
     )
     assert resumed == result
     assert capsys.readouterr().out == ""
-    if tool_error:
+    if tool_error is True:
         assert result["reason"] == "MCP tool errors: capabilities"
         assert result["responses"][0]["is_error"]
-    else:
+    elif tool_error is False:
         assert result["comparison_group"] == "partial_coverage"

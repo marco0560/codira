@@ -33,6 +33,7 @@ import subprocess
 import sys
 import time
 import tomllib
+import traceback
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
@@ -1836,6 +1837,7 @@ class Campaign:
         )
         responses: list[dict[str, Any]] = []
         result: dict[str, Any]
+        active_tool: str | None = None
         symbol = None
         workspace = args[1] if "--workspace" in args else None
         coverage = self.member_coverage.get(workspace or "", {})
@@ -1899,6 +1901,7 @@ class Campaign:
                                 }
                             )
                             continue
+                        active_tool = tool
                         tool_result = await session.call_tool(tool, arguments)
                         payload = tool_result.structuredContent
                         if payload is None:
@@ -1926,6 +1929,7 @@ class Campaign:
                             )
                         cursor = payload.get("page", {}).get("next_cursor")
                         if cursor and tool in ("symbols", "context_for_task"):
+                            active_tool = tool + "/continuation"
                             next_page = await session.call_tool(
                                 tool, {**arguments, "cursor": cursor}
                             )
@@ -1937,6 +1941,7 @@ class Campaign:
                                 }
                             )
                     if "--family" in args and symbol:
+                        active_tool = "references/explicit-links"
                         linked = await session.call_tool(
                             "references",
                             {
@@ -1979,10 +1984,16 @@ class Campaign:
                     )
         except Exception as error:
             LOGGER.exception("Benchmark stage failed; retaining checkpoint")
+            exception_path = attempts / "mcp.exception.txt"
+            exception_path.write_text("".join(traceback.format_exception(error)))
             result = {
                 "key": key,
                 "status": "failed",
                 "error": str(error),
+                "exception_type": type(error).__name__,
+                "exception": str(exception_path),
+                "failed_tool": active_tool,
+                "seconds": time.perf_counter() - start,
                 "responses": responses,
             }
         result["embedding_profile_journals"] = self.profile_journals(
@@ -2054,6 +2065,8 @@ class Campaign:
                 ),
                 "--root",
                 str(clone),
+                "--request-timeout-seconds",
+                str(self.spec.get("daemon_query_timeout_seconds", 300)),
                 "--runs",
                 str(repo["repetitions"]),
                 "--query",
@@ -2142,6 +2155,18 @@ class Campaign:
                         )
                         break
                     time.sleep(1)
+                else:
+                    result.update(
+                        error="source-change reconciliation did not publish a newer ready generation",
+                        reason="process exited"
+                        if process.poll() is not None
+                        else "reconciliation timeout",
+                        before=before,
+                        observed_generation=state.get("generation"),
+                        observed_state=state.get("state"),
+                        process_exit_code=process.poll(),
+                        seconds=time.perf_counter() - start,
+                    )
             except Exception as error:
                 LOGGER.exception("Benchmark stage failed; retaining checkpoint")
                 result["error"] = str(error)

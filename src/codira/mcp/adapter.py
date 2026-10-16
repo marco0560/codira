@@ -46,6 +46,7 @@ from codira.mcp.contract import (
 )
 from codira.prefix import normalize_prefix
 from codira.query.context import ContextRequest, context_for
+from codira.query.context_orchestration import context_page_reader
 from codira.query.evidence import expand_symbol, symbol_identity
 from codira.query.exact import (
     EdgeQueryRequest,
@@ -588,6 +589,7 @@ class MCPAdapter:
                         result_offset=offset,
                         result_limit=limit,
                         complete_context_items=True,
+                        include_expansion=explain,
                         conn=conn,
                         max_source_file_bytes=(
                             load_effective_config(
@@ -597,41 +599,7 @@ class MCPAdapter:
                     )
                 )
             )
-            matches = cast("list[dict[str, object]]", context.get("top_matches", []))
-            evidence = cast("list[list[str]]", context.get("context", []))
-            items: list[dict[str, object]] = []
-            for index, match in enumerate(matches):
-                item = dict(match)
-                if item.get("type") == "method":
-                    line_number = item.get("lineno")
-                    if not isinstance(line_number, int):
-                        message = "Core context match returned an invalid line number"
-                        raise TypeError(message)
-                    row: SymbolRow = (
-                        str(item["type"]),
-                        str(item["module"]),
-                        str(item["name"]),
-                        str(item["file"]),
-                        line_number,
-                    )
-                    qualified_name = logical_symbol_name(self.root, row, conn=conn)
-                    item["qualified_name"] = qualified_name
-                    item["owner"] = qualified_name.rpartition(".")[0]
-                item["evidence"] = evidence[index] if index < len(evidence) else []
-                if item.get("type") != "documentation":
-                    item["identity"] = symbol_identity(
-                        self.root,
-                        (
-                            str(item["type"]),
-                            str(item["module"]),
-                            str(item["name"]),
-                            str(item["file"]),
-                            int(str(item["lineno"])),
-                        ),
-                    )
-                item["evidence_kind"] = "discovery_snippet"
-                item["file"] = self._trusted_relative_path(str(item["file"]))
-                items.append(item)
+            items = self._context_items(context, conn)
             page_info = cast("dict[str, object]", context.get("page", {}))
             return {
                 "status": context.get("status"),
@@ -671,6 +639,119 @@ class MCPAdapter:
             truncation={"truncated": False, "reasons": []},
             output_budget=None,
         )
+
+    def context_items(self, query: str) -> list[dict[str, object]]:
+        """Collect complete ranked context once for an in-process consumer.
+
+        Parameters
+        ----------
+        query : str
+            Fixed task text, scoped to this adapter's trusted root.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            All items in the same order as the public paginated context tool.
+
+        Notes
+        -----
+        Family aggregation uses this read-only core boundary to avoid reranking
+        every member page. State is discarded after this operation; wire tools
+        retain their existing limits and cursor contracts.
+        """
+
+        def collect(conn: BackendQueryConnection | None) -> list[dict[str, object]]:
+            """Render all member pages within one scoped ranking pass.
+
+            Parameters
+            ----------
+            conn : codira.contracts.BackendQueryConnection | None
+                Connection supplied by the adapter query executor.
+
+            Returns
+            -------
+            list[dict[str, object]]
+                Complete ordered context candidates with source evidence.
+            """
+            request = ContextRequest(
+                root=self.root,
+                query=query,
+                as_json=True,
+                complete_context_items=True,
+                include_expansion=False,
+                conn=conn,
+                max_source_file_bytes=load_effective_config(
+                    root=self.root
+                ).embeddings.indexing.max_source_file_bytes,
+            )
+            items: list[dict[str, object]] = []
+            with context_page_reader(request) as read_page:
+                while True:
+                    context = json.loads(read_page(len(items), 100))
+                    page_items = self._context_items(context, conn)
+                    items.extend(page_items)
+                    total = context.get("page", {}).get("total", 0)
+                    if len(items) >= total:
+                        return items
+                    if not page_items:
+                        message = "Core context returned an empty nonterminal page"
+                        raise ValueError(message)
+
+        return self._query(collect)
+
+    def _context_items(
+        self, context: dict[str, object], conn: BackendQueryConnection | None
+    ) -> list[dict[str, object]]:
+        """Attach trusted identities and complete evidence to core matches.
+
+        Parameters
+        ----------
+        context : dict[str, object]
+            Structured core context page.
+        conn : codira.contracts.BackendQueryConnection | None
+            Shared query connection for logical method identity.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Whole discovery items with stable identities and source evidence.
+        """
+        matches = cast("list[dict[str, object]]", context.get("top_matches", []))
+        evidence = cast("list[list[str]]", context.get("context", []))
+        items: list[dict[str, object]] = []
+        for index, match in enumerate(matches):
+            item = dict(match)
+            if item.get("type") == "method":
+                line_number = item.get("lineno")
+                if not isinstance(line_number, int):
+                    message = "Core context match returned an invalid line number"
+                    raise TypeError(message)
+                row: SymbolRow = (
+                    str(item["type"]),
+                    str(item["module"]),
+                    str(item["name"]),
+                    str(item["file"]),
+                    line_number,
+                )
+                qualified_name = logical_symbol_name(self.root, row, conn=conn)
+                item["qualified_name"] = qualified_name
+                item["owner"] = qualified_name.rpartition(".")[0]
+            item["evidence"] = evidence[index] if index < len(evidence) else []
+            if item.get("type") != "documentation":
+                item["identity"] = symbol_identity(
+                    self.root,
+                    (
+                        str(item["type"]),
+                        str(item["module"]),
+                        str(item["name"]),
+                        str(item["file"]),
+                        int(str(item["lineno"])),
+                    ),
+                )
+            item["evidence_kind"] = "discovery_snippet"
+            item["file"] = self._trusted_relative_path(str(item["file"]))
+            items.append(item)
+        return items
 
     def impact_analysis(
         self,

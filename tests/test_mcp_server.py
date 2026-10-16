@@ -1,4 +1,13 @@
-"""Tests for the initial local read-only MCP server adapter."""
+"""Tests for the initial local read-only MCP server adapter.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+"""
 
 from __future__ import annotations
 
@@ -8,7 +17,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from mcp.client.session import ClientSession
@@ -26,6 +35,13 @@ from codira.query_daemon_ipc import QueryDaemonIpcServer
 from codira.registry import active_index_backend
 from codira.storage import override_storage_root
 from codira.workspace_registry import WorkspaceRegistry
+
+if TYPE_CHECKING:
+    from codira.query.context_models import (
+        ExpansionCollectionRequest,
+        ExpansionDiagnostics,
+    )
+    from codira.types import ReferenceRow, SymbolRow
 
 
 async def _subprocess_tool_names(root: Path) -> set[str]:
@@ -927,3 +943,70 @@ def test_server_embedding_tools_forward_search_profile(
         "docs": "default",
         "context": ("ctx:opaque", 3, "default"),
     }
+
+
+def test_context_items_skip_unused_auxiliary_output_with_full_evidence_parity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Avoid reference scans discarded by MCP while retaining direct-core items.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Indexed source fixture.
+    monkeypatch : pytest.MonkeyPatch
+        Counts real expansion calls without changing their results.
+
+    Returns
+    -------
+    None
+        Whole match/evidence items agree with full direct output and explain
+        requests retain their auxiliary diagnostics.
+    """
+    from codira.query import context_orchestration
+    from codira.query.context import ContextRequest, context_for
+    from codira.query.context_expansion import _expand_and_collect_references
+
+    _indexed_repository(tmp_path)
+    original = _expand_and_collect_references
+    calls: list[ExpansionCollectionRequest] = []
+
+    def counted(
+        request: ExpansionCollectionRequest,
+    ) -> tuple[list[SymbolRow], list[ReferenceRow], ExpansionDiagnostics]:
+        """Record a real auxiliary expansion invocation.
+
+        Parameters
+        ----------
+        request : codira.query.context_models.ExpansionCollectionRequest
+            Unchanged core expansion request.
+
+        Returns
+        -------
+        tuple[list[codira.types.SymbolRow], list[codira.types.ReferenceRow], codira.query.context_models.ExpansionDiagnostics]
+            Original expansion and reference diagnostics.
+        """
+        calls.append(request)
+        return original(request)
+
+    monkeypatch.setattr(
+        context_orchestration, "_expand_and_collect_references", counted
+    )
+    adapter = MCPAdapter(tmp_path)
+    direct = json.loads(
+        context_for(
+            ContextRequest(
+                root=tmp_path, query="helper", as_json=True, result_limit=100
+            )
+        )
+    )
+    assert len(calls) == 1
+    expected = adapter._context_items(direct, None)
+    result = cast(
+        "dict[str, object]", adapter.context_for_task("helper", limit=100)["result"]
+    )
+    assert result["items"] == expected
+    assert adapter.context_items("helper") == expected
+    assert len(calls) == 1
+    adapter.context_for_task("helper", explain=True)
+    assert len(calls) == 2

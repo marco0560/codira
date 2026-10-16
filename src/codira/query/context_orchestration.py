@@ -1,10 +1,22 @@
-"""Focused context-query responsibility module."""
+"""Prepare query rankings and render complete pages within one read scope.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Core context retrieval and operation-scoped page readers.
+"""
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 
-from codira.config import with_effective_config_cache
+from codira.config import effective_config_cache, with_effective_config_cache
 from codira.prefix import normalize_prefix
 from codira.query.classifier import build_retrieval_plan, classify_query
 from codira.query.context_channels import (
@@ -52,13 +64,18 @@ from codira.query.context_source import (
 from codira.query.producers import selected_enrichment_producers
 from codira.query.signals import signal_sort_key
 from codira.query.task_anchors import source_signals
-from codira.registry import active_index_backend, with_active_plugin_instance_cache
+from codira.registry import (
+    active_index_backend,
+    active_plugin_instance_cache,
+    with_active_plugin_instance_cache,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
     from codira.contracts import BackendQueryConnection
-    from codira.types import ChannelName, SymbolRow
+    from codira.types import ChannelName, ReferenceRow, SymbolRow
 
 
 def _initial_context_state(
@@ -446,101 +463,158 @@ def context_for(
     codira.contracts.BackendError
         If the active backend cannot open or query the repository index.
     """
+    with context_page_reader(request) as read_page:
+        return read_page(request.result_offset, request.result_limit)
+
+
+@contextmanager
+def context_page_reader(
+    request: ContextRequest,
+) -> Iterator[Callable[[int, int], str]]:
+    """Rank once and render complete pages within one scoped read connection.
+
+    Parameters
+    ----------
+    request : ContextRequest
+        Fixed query, configuration, evidence controls, and optional connection.
+
+    Yields
+    ------
+    collections.abc.Callable[[int, int], str]
+        Reader taking an offset and page size, valid inside the context manager.
+
+    Notes
+    -----
+    The reader is valid only inside the context manager. It retains query state
+    for this operation only; no results are cached across requests or generations.
+    """
     conn = request.conn or cast(
         "BackendQueryConnection",
         active_index_backend(root=request.root).open_connection(request.root),
     )
     owns_connection = request.conn is None
     try:
-        state = _initial_context_state(request, conn)
-        _append_issue_driven_matches(request, state, conn)
-        state.top_matches = _filter_redundant_module_matches(state.top_matches)
+        with effective_config_cache(), active_plugin_instance_cache():
+            state = _initial_context_state(request, conn)
+            _append_issue_driven_matches(request, state, conn)
+            state.top_matches = _filter_redundant_module_matches(state.top_matches)
 
-        if not state.top_matches:
-            return _empty_context_result(request, state)
+            if not state.top_matches:
+                yield lambda offset, limit: _empty_context_result(
+                    replace(request, result_offset=offset, result_limit=limit), state
+                )
+                return
 
-        _apply_graph_signal_rerank(state, conn, request.root)
-        confidence_map = {
-            symbol: float(
-                str((state.provenance or {}).get(symbol, {}).get("merge_score", 0.0))
-            )
-            for symbol in state.top_matches
-        }
-        if state.plan.include_doc_issues:
-            doc_issues, related_symbols = _collect_doc_issues_and_related(
-                request.root,
-                request.query,
-                state.top_matches,
-                conn,
-                prefix=state.normalized_prefix,
-            )
-        else:
-            doc_issues, related_symbols = [], []
+            _apply_graph_signal_rerank(state, conn, request.root)
+            confidence_map = {
+                symbol: float(
+                    str(
+                        (state.provenance or {}).get(symbol, {}).get("merge_score", 0.0)
+                    )
+                )
+                for symbol in state.top_matches
+            }
+            if state.plan.include_doc_issues:
+                doc_issues, related_symbols = _collect_doc_issues_and_related(
+                    request.root,
+                    request.query,
+                    state.top_matches,
+                    conn,
+                    prefix=state.normalized_prefix,
+                )
+            else:
+                doc_issues, related_symbols = [], []
 
-        doc_issues = doc_issues[:MAX_ISSUES]
-        for match in related_symbols:
-            if match not in state.top_matches:
-                state.top_matches.append(match)
+            doc_issues = doc_issues[:MAX_ISSUES]
+            for match in related_symbols:
+                if match not in state.top_matches:
+                    state.top_matches.append(match)
 
-        total_matches = len(state.top_matches)
-        if request.result_offset < 0 or request.result_limit < 1:
-            message = "Context result offset and limit must be positive."
-            raise ValueError(message)
-        page_matches = state.top_matches[
-            request.result_offset : request.result_offset + request.result_limit
-        ]
-        page_confidence_map = {
-            symbol: confidence_map[symbol]
-            for symbol in page_matches
-            if symbol in confidence_map
-        }
+            def read_page(offset: int, limit: int) -> str:
+                """Render one page without repeating candidate retrieval or ranking.
 
-        expanded, unique_refs, state.expansion = _expand_and_collect_references(
-            ExpansionCollectionRequest(
-                root=request.root,
-                top_matches=page_matches,
-                conn=conn,
-                include_include_graph=state.plan.include_include_graph,
-                include_references=state.plan.include_references,
-                prefix=state.normalized_prefix,
-            )
-        )
+                Parameters
+                ----------
+                offset : int
+                    Zero-based candidate position.
+                limit : int
+                    Maximum complete items to render.
 
-        if request.explain:
-            _finalize_signal_diagnostics(state)
+                Returns
+                -------
+                str
+                    Structured context in the request's output format.
+                """
+                page_request = replace(
+                    request, result_offset=offset, result_limit=limit
+                )
+                total_matches = len(state.top_matches)
+                if page_request.result_offset < 0 or page_request.result_limit < 1:
+                    message = "Context result offset and limit must be positive."
+                    raise ValueError(message)
+                page_matches = state.top_matches[
+                    page_request.result_offset : page_request.result_offset
+                    + page_request.result_limit
+                ]
+                page_confidence_map = {
+                    symbol: confidence_map[symbol]
+                    for symbol in page_matches
+                    if symbol in confidence_map
+                }
 
-        return _render_context(
-            ContextRenderRequest(
-                root=request.root,
-                query=request.query,
-                top_matches=page_matches,
-                doc_issues=doc_issues,
-                expanded=expanded,
-                unique_refs=unique_refs,
-                confidence_map=page_confidence_map,
-                as_json=request.as_json,
-                as_prompt=request.as_prompt,
-                explain=request.explain,
-                intent=state.intent,
-                plan=state.plan,
-                enabled_channels=state.enabled,
-                channel_priority=state.priority,
-                ordered_channels=state.ordered_channels,
-                producers=state.producer_diagnostics,
-                signal_collection=state.signal_collection,
-                signal_preview=state.signal_preview,
-                signal_merge=state.signal_merge,
-                bundles=state.bundles if request.explain else None,
-                provenance=state.provenance if request.explain else None,
-                diversity=state.diversity if request.explain else None,
-                expansion=state.expansion if request.explain else None,
-                max_source_file_bytes=request.max_source_file_bytes,
-                result_offset=request.result_offset,
-                result_limit=request.result_limit,
-                result_total=total_matches,
-                complete_context_items=request.complete_context_items,
-            )
-        )
+                expanded: list[SymbolRow] = []
+                unique_refs: list[ReferenceRow] = []
+                if request.include_expansion:
+                    expanded, unique_refs, state.expansion = (
+                        _expand_and_collect_references(
+                            ExpansionCollectionRequest(
+                                root=request.root,
+                                top_matches=page_matches,
+                                conn=conn,
+                                include_include_graph=state.plan.include_include_graph,
+                                include_references=state.plan.include_references,
+                                prefix=state.normalized_prefix,
+                            )
+                        )
+                    )
+
+                if request.explain:
+                    _finalize_signal_diagnostics(state)
+
+                return _render_context(
+                    ContextRenderRequest(
+                        root=request.root,
+                        query=request.query,
+                        top_matches=page_matches,
+                        doc_issues=doc_issues,
+                        expanded=expanded,
+                        unique_refs=unique_refs,
+                        confidence_map=page_confidence_map,
+                        as_json=request.as_json,
+                        as_prompt=request.as_prompt,
+                        explain=request.explain,
+                        intent=state.intent,
+                        plan=state.plan,
+                        enabled_channels=state.enabled,
+                        channel_priority=state.priority,
+                        ordered_channels=state.ordered_channels,
+                        producers=state.producer_diagnostics,
+                        signal_collection=state.signal_collection,
+                        signal_preview=state.signal_preview,
+                        signal_merge=state.signal_merge,
+                        bundles=state.bundles if request.explain else None,
+                        provenance=state.provenance if request.explain else None,
+                        diversity=state.diversity if request.explain else None,
+                        expansion=state.expansion if request.explain else None,
+                        max_source_file_bytes=request.max_source_file_bytes,
+                        result_offset=page_request.result_offset,
+                        result_limit=page_request.result_limit,
+                        result_total=total_matches,
+                        complete_context_items=request.complete_context_items,
+                    )
+                )
+
+            yield read_page
     finally:
         if owns_connection:
             conn.close()

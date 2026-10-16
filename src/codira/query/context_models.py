@@ -1,4 +1,13 @@
-"""Focused context-query responsibility module."""
+"""Focused context-query responsibility module.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+"""
 
 from __future__ import annotations
 
@@ -667,6 +676,9 @@ class ContextRequest:
         and closes a direct backend connection.
     max_source_file_bytes : int, optional
         Command-scoped source-ingestion byte ceiling used for context rereads.
+    include_expansion : bool, optional
+        Collect auxiliary module and reference output. In-process item consumers
+        may disable this when they return only ranked matches and source snippets.
     """
 
     root: Path
@@ -681,6 +693,7 @@ class ContextRequest:
     complete_context_items: bool = True
     conn: BackendQueryConnection | None = None
     max_source_file_bytes: int = DEFAULT_EMBEDDING_INDEX_MAX_SOURCE_FILE_BYTES
+    include_expansion: bool = True
 
 
 @dataclass(frozen=True)

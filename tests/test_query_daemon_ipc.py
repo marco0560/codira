@@ -1,4 +1,13 @@
-"""Contract tests for authenticated repository-local warm-query IPC."""
+"""Contract tests for authenticated repository-local warm-query IPC.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+"""
 
 from __future__ import annotations
 
@@ -772,3 +781,111 @@ def test_windows_named_pipe_server_and_client_handshake(tmp_path: Path) -> None:
         "arguments": {"windows": True},
         "connection_owned": True,
     }
+
+
+def test_native_receive_timeout_is_a_typed_unavailable_error(tmp_path: Path) -> None:
+    """Normalize a real stalled socket response at the transport boundary.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Private server endpoint directory.
+
+    Returns
+    -------
+    None
+        A timed-out request raises the domain error consumed by CLI fallback.
+    """
+    started, release = Event(), Event()
+
+    def blocked(
+        arguments: dict[str, object], connection: BackendQueryConnection
+    ) -> dict[str, object]:
+        """Wait for explicit release after the client's observation budget.
+
+        Parameters
+        ----------
+        arguments : dict[str, object]
+            Unused request values.
+        connection : codira.contracts.BackendQueryConnection
+            Test runtime connection.
+
+        Returns
+        -------
+        dict[str, object]
+            Minimal response after release.
+        """
+        del arguments, connection
+        started.set()
+        release.wait(2)
+        return {}
+
+    identity = QueryDaemonIdentity.from_paths(tmp_path, tmp_path)
+    _publish_ready_generation(identity)
+    server = QueryDaemonIpcServer(identity, _FakeRuntime(), {"blocked": blocked})
+    server.start()
+    try:
+        client = QueryDaemonIpcClient(identity, timeout_seconds=0.05)
+        with pytest.raises(QueryDaemonUnavailableError, match="timed out"):
+            client.request("blocked")
+        assert started.is_set()
+    finally:
+        release.set()
+        server.close()
+
+
+def test_cli_request_budget_can_qualify_a_slow_warm_response(tmp_path: Path) -> None:
+    """Allow an explicit benchmark budget while retaining bounded CLI fallback.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Private IPC endpoint.
+
+    Returns
+    -------
+    None
+        The same native operation falls back under a short budget and succeeds
+        with a larger explicit budget, without changing normal CLI defaults.
+    """
+    from codira.query_daemon_cli import route_cli_read
+
+    def slow(
+        arguments: dict[str, object], connection: BackendQueryConnection
+    ) -> dict[str, object]:
+        """Return a CLI result after a bounded simulated query delay.
+
+        Parameters
+        ----------
+        arguments : dict[str, object]
+            Unused request arguments.
+        connection : codira.contracts.BackendQueryConnection
+            Runtime-owned test connection.
+
+        Returns
+        -------
+        dict[str, object]
+            Successful CLI stdout and exit status.
+        """
+        del arguments, connection
+        time.sleep(0.1)
+        return {"stdout": "qualified response", "exit_code": 0}
+
+    identity = QueryDaemonIdentity.from_paths(tmp_path, tmp_path)
+    _publish_ready_generation(identity)
+    server = QueryDaemonIpcServer(
+        identity, _FakeRuntime(), {"slow": slow}, timeout_seconds=1
+    )
+    server.start()
+    try:
+        short = route_cli_read(tmp_path, "slow", {}, enabled=True, timeout_seconds=0.02)
+        assert short.mode == "fallback"
+        assert short.failure == "QueryDaemonUnavailableError"
+        qualified = route_cli_read(
+            tmp_path, "slow", {}, enabled=True, timeout_seconds=1
+        )
+        assert qualified.mode == "warm"
+        assert qualified.stdout == "qualified response"
+        assert qualified.exit_code == 0
+    finally:
+        server.close()

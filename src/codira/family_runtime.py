@@ -360,24 +360,22 @@ class FamilyRuntime:
         items: list[dict[str, object]] = []
         cursor: str | None = None
         with member_scope(member) as adapter:
-            while True:
-                response = (
-                    adapter.context_for_task(query, cursor=cursor, limit=100)
-                    if operation == "context"
-                    else adapter.symbol(query, cursor=cursor, limit=100)
-                )
-                result = cast("dict[str, object]", response["result"])
-                for item in cast(
-                    "list[dict[str, object]]",
-                    result["items" if operation == "context" else "symbols"],
-                ):
+            if operation == "context":
+                for item in adapter.context_items(query):
                     qualified = self._qualify(member, item)
-                    if operation == "context":
-                        qualified["member_rank"] = len(items) + 1
-                        qualified["member_ranking_score"] = item.get("ranking_score")
-                        qualified["ranking_score"] = 1.0 / (60 + len(items) + 1)
-                        qualified["score_kind"] = "family_reciprocal_rank"
+                    qualified["member_rank"] = len(items) + 1
+                    qualified["member_ranking_score"] = item.get("ranking_score")
+                    qualified["ranking_score"] = 1.0 / (60 + len(items) + 1)
+                    qualified["score_kind"] = "family_reciprocal_rank"
                     items.append(qualified)
+                return items
+            while True:
+                response = adapter.symbol(query, cursor=cursor, limit=100)
+                result = cast("dict[str, object]", response["result"])
+                items.extend(
+                    self._qualify(member, item)
+                    for item in cast("list[dict[str, object]]", result["symbols"])
+                )
                 page = cast("dict[str, object]", response["page"])
                 cursor = cast("str | None", page.get("next_cursor"))
                 if cursor is None:
