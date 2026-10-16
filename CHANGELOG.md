@@ -1,3 +1,28 @@
+## [2.4.7](https://github.com/marco0560/codira/compare/v2.4.6...v2.4.7) (2026-10-16)
+
+### Bug Fixes
+
+* **analyzer:** route and traverse guarded C++ headers ([af5c5f3](https://github.com/marco0560/codira/commit/af5c5f37ab446037e20ee166d14d484dc5b30688))
+* **ci:** gate git rel on publishable documentation ([41c39ef](https://github.com/marco0560/codira/commit/41c39efc4ac8c64776403a023bac6beb797a61d5))
+* **cli:** allow three minutes for architecture SVG layout ([d6c1d11](https://github.com/marco0560/codira/commit/d6c1d1184b89314e11f5b40dd5ab431c3d0994a7))
+* **dev:** admit actual offline model assets before benchmark workloads ([a542c86](https://github.com/marco0560/codira/commit/a542c86717046da6160f26c347505859612ab538))
+* **dev:** align stress coverage cohorts across CLI and MCP ([8c9ba73](https://github.com/marco0560/codira/commit/8c9ba73e12972b545fa738e91176bbe75c815bb7))
+* **dev:** explain every newly omitted conditional benchmark stage ([0853f4f](https://github.com/marco0560/codira/commit/0853f4f0e33bfa3e0d94f5cd351f4bcd70c36620))
+* **dev:** explain partial benchmark outcomes with timestamps ([8e54c8b](https://github.com/marco0560/codira/commit/8e54c8b97454d75861c2c86719dcdbabdf7fcd84))
+* **dev:** integrate stress corrections and align validation contracts ([3c1a45c](https://github.com/marco0560/codira/commit/3c1a45c3f50d127211196aa95e0a6408f722dfe4))
+* **dev:** preserve isolated benchmark profiling controls and evidence ([9de487f](https://github.com/marco0560/codira/commit/9de487fd37a059884aedf61f97d4521e26b01c09))
+* **dev:** propagate SVG budgets and retain render outcomes ([0185392](https://github.com/marco0560/codira/commit/018539263245706b978381628eb1eccf71ba1850))
+* **dev:** record native SIMD and retain MCP diagnostics ([804aa6e](https://github.com/marco0560/codira/commit/804aa6e09600648e64ae0427754ee5980f717e15))
+* **dev:** resolve final stress benchmark failures ([d887c2e](https://github.com/marco0560/codira/commit/d887c2e57d7f8d63fd6c4a6dbba14df0edce562c))
+* **dev:** timestamp benchmark progress outcomes ([eee8bef](https://github.com/marco0560/codira/commit/eee8bef626c70363b0964a2ed89defe6a1bca755))
+* **embeddings:** checkpoint pending batches and repair recovery ([495dc44](https://github.com/marco0560/codira/commit/495dc4433403803ac8ff47ca022c3bab45cd7094))
+* **embeddings:** resolve cached models and preserve offline policy ([9ef0809](https://github.com/marco0560/codira/commit/9ef0809d6a9189440c936a556ea6ae6d4bc1d8da))
+* **query:** preserve canonical method graph identities ([210eadc](https://github.com/marco0560/codira/commit/210eadc3e6b544ebc98a1153ba2b20ea8075377c))
+
+### Performance Improvements
+
+* **backend:** bound DuckDB inventory aggregation and expose budgets ([dd7bc43](https://github.com/marco0560/codira/commit/dd7bc437f1bafb34df7f6e186162452361b5d8cf))
+
 ## [2.4.6](https://github.com/marco0560/codira/compare/v2.4.5...v2.4.6) (2026-10-11)
 
 ### Bug Fixes
