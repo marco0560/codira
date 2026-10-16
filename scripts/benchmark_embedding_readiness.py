@@ -23,7 +23,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from codira.config import load_effective_config
+from codira.config import load_effective_config, override_repo_config_path
 from codira.semantic.embeddings import (
     _sentence_transformer_location,
     embed_texts,
@@ -191,7 +191,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     try:
-        result = check_readiness(args.root.resolve())
+        with override_repo_config_path(args.config.resolve()):
+            result = check_readiness(args.root.resolve())
     except Exception as error:
         logging.getLogger(__name__).exception("Embedding prerequisite unavailable")
         print(
