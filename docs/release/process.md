@@ -44,7 +44,9 @@ Use:
 git rel
 ```
 
-That guarded path runs the release audit, previews semantic-release with the
+That guarded path first builds the published documentation in strict mode,
+before any fetch, pull or push. It repeats that check after pulling so incoming
+changes cannot bypass it, then runs the release audit and previews semantic-release with the
 scoped GitHub environment, and then pushes with the expected temporary bypass
 variables.
 
@@ -72,3 +74,21 @@ The current release workflow:
 Manual release-tag creation is not part of the normal workflow.
 
 Use manual tag creation only for repair operations or exceptional recovery.
+
+## Documentation gate
+
+Run `uv run python scripts/check_docs.py` from the checkout root to reproduce the
+Docs workflow's strict build locally. The quality preflight and full repository
+gate include this check. Generated HTML is removed automatically; build failures
+and warnings remain visible and stop `git rel` before publication.
+
+Documentation-relative links must stay inside `docs/`, not merely inside the
+Git checkout. Cite source files using immutable GitHub commit URLs. Describe
+ignored `.artifacts/` measurements as plain code-formatted local paths: they are
+operator evidence, not files published by the documentation site. Missing files,
+unrecognized local links and absolute filesystem links remain fatal warnings.
+
+The installed `git rel` alias requests the `docs` dependency extra automatically.
+After updating a checkout, refresh its aliases with
+`uv run python scripts/install_repo_git_config.py`. Existing aliases still call
+the guarded release entry point, but may require a prior `uv sync --extra docs`.

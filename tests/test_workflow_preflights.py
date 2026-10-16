@@ -132,7 +132,7 @@ def test_quality_preflight_collects_later_failures(
     None
         Both early and late failures survive in a nonzero summary.
     """
-    outcomes = iter((0, 1, 0, 0, 0, 0, 1))
+    outcomes = iter((0, 0, 1, 0, 0, 0, 0, 1))
     monkeypatch.setattr(
         check_workflow_quality, "run_validation", lambda _commands: next(outcomes)
     )
@@ -140,7 +140,7 @@ def test_quality_preflight_collects_later_failures(
     summary = json.loads(capsys.readouterr().out)["quality_checks"]
     assert summary["ruff"] == 1
     assert summary["docstring-audit"] == 1
-    assert len(summary) == 7
+    assert len(summary) == 8
 
 
 def test_quality_preflight_does_not_query_a_stale_index(
@@ -160,7 +160,7 @@ def test_quality_preflight_does_not_query_a_stale_index(
     None
         Stale-index results cannot be reported as a passing audit.
     """
-    outcomes = iter((1, 0, 0, 0, 0, 0))
+    outcomes = iter((1, 0, 0, 0, 0, 0, 0))
     monkeypatch.setattr(
         check_workflow_quality, "run_validation", lambda _commands: next(outcomes)
     )

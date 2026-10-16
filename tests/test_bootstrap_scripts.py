@@ -1976,6 +1976,7 @@ def test_repo_git_config_installer_matches_versioned_alias_contract() -> None:
     assert entries["init.defaultBranch"] == "main"
     assert entries["alias.lg"] == "log --oneline --graph --decorate --show-notes -40"
     assert entries["alias.check"] == "!uv run python scripts/validate_repo.py"
+    assert entries["alias.rel"] == "!uv run --extra docs python -m scripts.release_rel"
     assert "source .venv/bin/activate" not in entries["alias.check"]
     assert entries["alias.fix"] == (
         "!uv run python scripts/run_repo_tool.py ruff check . --fix "
@@ -2217,6 +2218,12 @@ def test_validation_helper_routes_standard_checks_through_tool_runner() -> None:
     helper = _load_validation_helper()
 
     assert helper.build_validation_commands(python="python") == (
+        (
+            "python",
+            str(helper.RUN_REPO_TOOL),
+            "python",
+            "scripts/check_docs.py",
+        ),
         (
             "python",
             str(helper.RUN_REPO_TOOL),

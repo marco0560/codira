@@ -12,8 +12,8 @@ No benchmark campaign was rerun, resumed, edited, or automatically excluded.
 
 ## Evidence and controls
 
-- Immutable run: [r6](../../.artifacts/benchmarks/test-material/analyzer-style/analyzer-style-20261010-r6/).
-- Derived analysis: [r6 investigation](../../.artifacts/analysis/analyzer-style-r6-20261011/).
+- Immutable run: `.artifacts/benchmarks/test-material/analyzer-style/analyzer-style-20261010-r6/` (local, ignored evidence).
+- Derived analysis: `.artifacts/analysis/analyzer-style-r6-20261011/` (local, ignored evidence).
 - Historical comparison: [r5 report](local-corpus-analyzer-style-r5-analysis-2026-10-11.md)
   and its original stage receipts.
 - Recorded commit `5b2cdc320d32e91ea6f7c41e6a68eee6b83e310e`, Codira `2.4.4`;

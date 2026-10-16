@@ -77,3 +77,8 @@ nav:
   - ADRs:
       - Index: adr/index.md
       - "... | flat | glob=adr/ADR-*.md"
+
+validation:
+  links:
+    unrecognized_links: warn
+    absolute_links: warn
