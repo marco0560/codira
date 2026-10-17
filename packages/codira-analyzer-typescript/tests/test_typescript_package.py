@@ -8,6 +8,119 @@ from pathlib import Path
 from codira_analyzer_typescript import TypeScriptAnalyzer, build_analyzer
 
 
+def test_generic_tagged_templates_preserve_artifacts(tmp_path: Path) -> None:
+    """Index generic tagged templates without inventing a non-null assertion.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        Declarations, call targets, original signatures and positions survive.
+    """
+    text = (
+        "interface Props { name: string; }\n"
+        "export const Styled = styled.div<{ name: string }>`name ${renderName()}`;\n"
+        "export function Build() {\n"
+        '  const label = "é"; return tag<Props>`hello ${helper(label)}`;\n'
+        "}\n"
+        "export const BuildObject = (value = unused()) =>\n"
+        "  styled.div<{ name: string }>`hello ${helper(value)}`;\n"
+        "export const BuildSimple = () => tag<Props>`hello`;\n"
+    )
+    for suffix in (".ts", ".tsx"):
+        source = tmp_path / f"templates{suffix}"
+        source.write_text(text, encoding="utf-8")
+        result = TypeScriptAnalyzer().analyze_file(source, tmp_path)
+        assert result.index_symbols
+        assert result.status is None
+        assert [item.name for item in result.declarations] == ["Props", "Styled"]
+        assert result.declarations[1].signature == (
+            "Styled = styled.div<{ name: string }>`name ${renderName()}`"
+        )
+        function = result.functions[0]
+        assert function.name == "Build"
+        assert [(call.kind, call.target) for call in function.calls] == [
+            ("name", "tag"),
+            ("name", "helper"),
+        ]
+        assert function.calls[0].lineno == 4
+        assert function.calls[0].col_offset == text.splitlines()[3].encode().index(
+            b"tag<Props>"
+        )
+        object_function = result.functions[1]
+        assert object_function.name == "BuildObject"
+        assert [
+            (call.kind, call.target, call.base) for call in object_function.calls
+        ] == [
+            ("attribute", "div", "styled"),
+            ("name", "helper", ""),
+        ]
+        assert object_function.calls[0].lineno == 7
+        assert object_function.calls[0].col_offset == 2
+        assert object_function.end_lineno == 7
+        assert object_function.returns_value == 1
+        simple_function = result.functions[2]
+        assert simple_function.name == "BuildSimple"
+        assert [call.target for call in simple_function.calls] == ["tag"]
+        assert source.read_text(encoding="utf-8") == text
+
+
+def test_generic_tagged_templates_keep_other_syntax_errors(tmp_path: Path) -> None:
+    """Retain diagnostics for malformed types, templates and unrelated syntax.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        Only the exact tagged-template grammar false positive can be resolved.
+    """
+    for index, text in enumerate(
+        (
+            "const good = tag<Props>`ok`; const broken = ;\n",
+            "const broken = tag<{ value: }>`bad`;\n",
+            "const broken = tag<Props>`unterminated\n",
+        )
+    ):
+        source = tmp_path / f"broken{index}.tsx"
+        source.write_text(text, encoding="utf-8")
+        result = TypeScriptAnalyzer().analyze_file(source, tmp_path)
+        assert not result.index_symbols
+        assert result.status is not None
+        assert result.status.diagnostics
+
+
+def test_typescript_comparisons_do_not_become_template_calls(tmp_path: Path) -> None:
+    """Keep genuine comparisons distinct from generic tagged templates.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        Parenthesized comparisons and non-type operands produce no tag calls.
+    """
+    source = tmp_path / "comparisons.ts"
+    source.write_text(
+        "function Compare() { return (a < b) > `literal`; }\n"
+        "function Add() { return a < b + 1 > `literal`; }\n",
+        encoding="utf-8",
+    )
+    result = TypeScriptAnalyzer().analyze_file(source, tmp_path)
+    assert result.index_symbols
+    assert all(not function.calls for function in result.functions)
+
+
 def test_typescript_package_declares_expected_entry_point() -> None:
     """Keep package metadata aligned with autonomous plugin discovery.
 
@@ -26,7 +139,7 @@ def test_typescript_package_declares_expected_entry_point() -> None:
         )
     )
 
-    assert project["project"]["version"] == "2.0.1"
+    assert project["project"]["version"] == "2.0.2"
     assert "tree-sitter-typescript>=0.23.2" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "typescript": "codira_analyzer_typescript:build_analyzer"

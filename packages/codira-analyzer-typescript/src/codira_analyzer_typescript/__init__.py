@@ -13,6 +13,7 @@ None
 from __future__ import annotations
 
 import re
+from itertools import chain
 from dataclasses import replace
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -71,6 +72,69 @@ def _parser(path: Path) -> Parser:
         TypeScript parser, or the TSX parser for ``.tsx`` files.
     """
     return Parser(_TSX if path.suffix.lower() == ".tsx" else _TYPESCRIPT)
+
+
+def _is_generic_tag_grammar_gap(node: Node) -> bool:
+    """Recognize the grammar's spurious assertion on a generic template tag.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Candidate missing syntax node.
+
+    Returns
+    -------
+    bool
+        Whether this is precisely a missing bang between a clean generic
+        instantiation and its tagged template argument.
+    """
+    if not node.is_missing or node.type != "!":
+        return False
+    parent = node.parent
+    if parent is None or parent.type != "non_null_expression":
+        return False
+    children = parent.named_children
+    if len(children) != 1:
+        return False
+    instantiation = children[0]
+    call = parent.parent
+    if call is None or call.type != "call_expression":
+        return False
+    argument = call.child_by_field_name("arguments")
+    return (
+        instantiation.type == "instantiation_expression"
+        and not instantiation.has_error
+        and call.child_by_field_name("function") == parent
+        and argument is not None
+        and argument.type == "template_string"
+        and instantiation.end_byte <= node.start_byte <= argument.start_byte
+    )
+
+
+def _has_syntax_errors(root: Node) -> bool:
+    """Retain every parse error except the proven generic-tag grammar gap.
+
+    Parameters
+    ----------
+    root : tree_sitter.Node
+        Parsed TypeScript or TSX source root.
+
+    Returns
+    -------
+    bool
+        Whether any unresolved error or missing node remains. The original
+        syntax tree and its source spans are preserved for extraction.
+    """
+    if not root.has_error:
+        return False
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.is_error or (node.is_missing and not _is_generic_tag_grammar_gap(node)):
+            return True
+        if node.has_error:
+            pending.extend(node.children)
+    return False
 
 
 def _text(node: Node | None, source: bytes) -> str:
@@ -182,6 +246,11 @@ def _call_target(
     tuple[str, str, str]
         Relation kind, terminal target, and optional receiver.
     """
+    while node.type in {"non_null_expression", "instantiation_expression"}:
+        children = node.named_children
+        if not children:
+            break
+        node = children[0]
     if node.type == "identifier":
         return "name", _normalized(node, source), ""
     if node.type == "member_expression":
@@ -193,6 +262,77 @@ def _call_target(
                 _normalized(node.child_by_field_name("object"), source),
             )
     return "unresolved", _normalized(node, source), ""
+
+
+def _generic_binary_tag(node: Node, source: bytes) -> Node | None:
+    """Recover a generic template tag parsed as two comparison expressions.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Candidate expression in a callable body.
+    source : bytes
+        Original source buffer.
+
+    Returns
+    -------
+    tree_sitter.Node | None
+        Original callee when both angle tokens delimit valid TypeScript type
+        arguments before a template literal, otherwise ``None``.
+    """
+    if node.type != "binary_expression":
+        return None
+    greater = node.child_by_field_name("operator")
+    left = node.child_by_field_name("left")
+    right = node.child_by_field_name("right")
+    if (
+        greater is None
+        or greater.type != ">"
+        or left is None
+        or left.type != "binary_expression"
+        or right is None
+        or right.type != "template_string"
+    ):
+        return None
+    less = left.child_by_field_name("operator")
+    if less is None or less.type != "<":
+        return None
+    arguments = source[less.end_byte : greater.start_byte]
+    probe = Parser(_TYPESCRIPT).parse(b"type _Arguments = [" + arguments + b"];\n")
+    if probe.root_node.has_error:
+        return None
+    return left.child_by_field_name("left")
+
+
+def _tagged_arrow(node: Node, source: bytes) -> Node | None:
+    """Find an arrow whose tagged body was grouped outside the arrow node.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Candidate tagged-template initializer.
+    source : bytes
+        Original source buffer.
+
+    Returns
+    -------
+    tree_sitter.Node | None
+        Misgrouped arrow node, otherwise ``None``. Parenthesized arrow tags
+        remain ordinary invocations of an arrow rather than arrow initializers.
+    """
+    if node.type == "call_expression":
+        argument = node.child_by_field_name("arguments")
+        if argument is None or argument.type != "template_string":
+            return None
+        target = node.child_by_field_name("function")
+    else:
+        target = _generic_binary_tag(node, source)
+    while target is not None and target.type in {
+        "non_null_expression",
+        "instantiation_expression",
+    }:
+        target = next(iter(target.named_children), None)
+    return target if target is not None and target.type == "arrow_function" else None
 
 
 def _calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
@@ -213,12 +353,29 @@ def _calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
     if body is None:
         return ()
     records: list[CallSite] = []
-    for item in _descendants(body):
-        if item.type != "call_expression":
-            continue
-        function = item.child_by_field_name("function")
+    grouped = _tagged_arrow(body, source)
+    inner = grouped.child_by_field_name("body") if grouped is not None else None
+    template = body.child_by_field_name(
+        "arguments" if body.type == "call_expression" else "right"
+    )
+    nodes = (
+        chain((body, inner), _descendants(inner), _descendants(template))
+        if inner is not None and template is not None
+        else chain((body,), _descendants(body))
+    )
+    for item in nodes:
+        function = (
+            item.child_by_field_name("function")
+            if item.type == "call_expression"
+            else _generic_binary_tag(item, source)
+        )
         if function is None:
             continue
+        arrow = _tagged_arrow(item, source)
+        if arrow is not None:
+            function = arrow.child_by_field_name("body")
+            if function is None:
+                continue
         kind, target, base = _call_target(function, source)
         records.append(
             CallSite(
@@ -309,6 +466,7 @@ def _function(
     class_name: str | None = None,
     namespace: str | None = None,
     overload_discriminator: str | None = None,
+    body_override: Node | None = None,
 ) -> FunctionArtifact | None:
     """Build a normalized TypeScript function or method.
 
@@ -328,6 +486,9 @@ def _function(
         Owning namespace for callable stable identities.
     overload_discriminator : str | None, optional
         Deterministic suffix used only for declaration-only overload forms.
+    body_override : tree_sitter.Node | None, optional
+        Complete tagged-template body when the grammar grouped its type
+        arguments and template outside an arrow's original body node.
 
     Returns
     -------
@@ -342,6 +503,8 @@ def _function(
     signature = _SPACE.sub(
         " ", source[node.start_byte : signature_end].decode("utf-8", "replace")
     ).strip()
+    if body_override is not None:
+        body = body_override
     kind = "method" if class_name else "function"
     namespace_suffix = f":{namespace}" if namespace else ""
     owner_suffix = (
@@ -375,7 +538,8 @@ def _function(
         is_public=int(not function_name.startswith("_")),
         parameters=_parameters(node.child_by_field_name("parameters"), source),
         returns_value=int(
-            any(item.type == "return_statement" for item in _descendants(body))
+            (node.type == "arrow_function" and body.type != "statement_block")
+            or any(item.type == "return_statement" for item in _descendants(body))
             if body is not None
             else 0
         ),
@@ -410,7 +574,7 @@ class TypeScriptAnalyzer:
     """
 
     name = "typescript"
-    version = "2"
+    version = "3"
     discovery_globs: tuple[str, ...] = ("*.ts", "*.tsx", "*.mts", "*.cts")
     default_coverage_roots: tuple[str, ...] = (
         "src",
@@ -850,16 +1014,20 @@ class TypeScriptAnalyzer:
                         item.child_by_field_name("name"), source
                     )
                     value = item.child_by_field_name("value")
-                    if value is not None and value.type in {
-                        "arrow_function",
-                        "function_expression",
-                    }:
+                    grouped_arrow = (
+                        _tagged_arrow(value, source) if value is not None else None
+                    )
+                    if value is not None and (
+                        value.type in {"arrow_function", "function_expression"}
+                        or grouped_arrow is not None
+                    ):
                         function = _function(
-                            value,
+                            grouped_arrow if grouped_arrow is not None else value,
                             source,
                             owner=owner,
                             name=variable_name,
                             namespace=namespace,
+                            body_override=value if grouped_arrow is not None else None,
                         )
                         if function is not None:
                             functions.append(
@@ -887,6 +1055,7 @@ class TypeScriptAnalyzer:
                         )
 
         root_node = _parser(path).parse(source).root_node
+        has_syntax_errors = _has_syntax_errors(root_node)
         for child in root_node.named_children:
             visit(child)
         for match in re.finditer(
@@ -927,9 +1096,9 @@ class TypeScriptAnalyzer:
             declarations=tuple(declarations),
             imports=tuple(imports),
             documentation=tuple(documentation),
-            index_symbols=not root_node.has_error,
+            index_symbols=not has_syntax_errors,
             status=tree_sitter_recovery_status(
-                language="typescript", has_error=root_node.has_error
+                language="typescript", has_error=has_syntax_errors
             ),
         )
 
