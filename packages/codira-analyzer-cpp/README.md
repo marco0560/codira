@@ -40,10 +40,25 @@ Existing `include_paths` and `exclude_paths` apply before this decision, so an
 explicit override can be limited to the intended header directories. The C++
 plugin's optional path priority wins over an eligible generic C claim; equal
 priorities preserve registration order. The core does not parse C++ to route it.
-Build-system compilation flags and macro expansion are not inferred. Remaining
-parser recovery warnings still mean that indexed symbols may be incomplete.
+Build-system compilation flags and included-header macro definitions are not
+inferred. Remaining parser recovery warnings still mean that indexed symbols
+may be incomplete.
 
 Header guards and nested conditional blocks are traversed for declarations,
 class methods, documentation and includes. Both branches are retained as static
 source evidence; compilation conditions are not evaluated. Function-local scopes
 are not flattened into module declarations.
+
+## Local annotation macros
+
+When an initial parse has errors, the analyzer can recover object macros defined
+in that file whose replacements are empty or consist of GNU, Microsoft or C++
+attributes. Annotation aliases are resolved from the same file. All definitions
+of a name must be compatible; function macros and names appearing in `#undef`
+are excluded. Uses must follow their definition and the required alias definitions.
+
+Recovery blanks eligible uses without moving byte coordinates. Definitions,
+preprocessor conditions, comments and literals stay intact, and extraction reads
+the original source for signatures and call positions. The recovered tree is used
+only when it is wholly clean; unrelated syntax errors retain the original tree.
+This does not evaluate compilation conditions or perform semantic validation.

@@ -1,0 +1,227 @@
+"""Verify annotation recovery and preservation of unresolved C++ syntax.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    Defines behavioral tests for the package-local projection.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from codira_analyzer_cpp import CppAnalyzer
+from codira_analyzer_cpp.cpp_preprocessing import _parse_cpp_source
+from codira_analyzer_cpp.cpp_syntax import _new_parser
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        b"#define API\n",
+        b'#define API __attribute__((visibility("default")))\n',
+        b"#define API __declspec(dllexport)\n",
+        b"#define API [[nodiscard]]\n",
+        b"#define ATTR [[nodiscard]]\n#define API ATTR\n",
+        b"#define API ATTR\n#define ATTR [[nodiscard]]\n",
+        b"#if SHARED\n#define API __declspec(dllexport)\n#else\n#define API\n#endif\n",
+        b'#define API \\\n  __attribute__((visibility("default")))\n',
+        b"#define API /* export marker */\n",
+    ],
+)
+def test_local_annotation_definitions_recover_function(definition: bytes) -> None:
+    """Recover declarations only from recognized local macro replacements.
+
+    Parameters
+    ----------
+    definition : bytes
+        Source-local object definition and any annotation aliases.
+
+    Returns
+    -------
+    None
+        A clean tree retains the original function and body coordinates.
+    """
+    source = definition + b"API int run(int x) { return callee(x); }\n"
+    assert _new_parser().parse(source).root_node.has_error
+    root = _parse_cpp_source(source)
+    assert not root.has_error
+    function = root.named_children[-1]
+    assert function.type == "function_definition"
+    assert function.end_byte == len(source) - 1
+    body = function.child_by_field_name("body")
+    assert body is not None
+    assert source[body.start_byte : body.end_byte] == b"{ return callee(x); }"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        b"API int run() {}\n",
+        b'#include "api.h"\nAPI int run() {}\n',
+        b"API int run() {}\n#define API\n",
+        b"#define API ATTR\nAPI int run() {}\n#define ATTR [[nodiscard]]\n",
+        b"#define API [[nodiscard]]\n#undef API\nAPI int run() {}\n",
+        b"#define API [[nodiscard]]\n# undef API\nAPI int run() {}\n",
+        b"#if SHARED\n#define API [[nodiscard]]\n#else\n#define API Widget\n#endif\nAPI int run() {}\n",
+        b"#if SHARED\n#define API [[nodiscard]]\n#else\n#define API(x) x\n#endif\nAPI int run() {}\n",
+        b"#define API UNKNOWN\nAPI int run() {}\n",
+        b"#define API OTHER\n#define OTHER API\nAPI int run() {}\n",
+        b"#define API int\nAPI int run() {}\n",
+        b"#define API static\nAPI int run() {}\n",
+        b"#define API [[nodiscard]]\nAPI int run( { return; }\n",
+        b"#define API [[nodiscard]]\nAPI int run() { return ; + }\n",
+        b"#define API [[nodiscard]]\nAPI int run() {}\nint broken(\n",
+        b"// #define API [[nodiscard]]\nAPI int run() {}\n",
+        b'const char* text = "#define API [[nodiscard]]";\nAPI int run() {}\n',
+    ],
+)
+def test_unproven_macros_and_unrelated_errors_remain_visible(source: bytes) -> None:
+    """Keep the original diagnostic tree when recovery lacks sufficient proof.
+
+    Parameters
+    ----------
+    source : bytes
+        Unresolved, conflicting or malformed C++ source.
+
+    Returns
+    -------
+    None
+        Recovery retains exactly the original tree and source bytes.
+    """
+    original = _new_parser().parse(source).root_node
+    assert original.has_error
+    recovered = _parse_cpp_source(source)
+    assert recovered.has_error
+    assert str(recovered) == str(original)
+    assert recovered.text == source
+
+
+def test_projection_preserves_directives_literals_and_artifacts(tmp_path: Path) -> None:
+    """Extract source signatures and calls after coordinate-preserving recovery.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source directory.
+
+    Returns
+    -------
+    None
+        Methods, macros, literals and call positions retain original source data.
+    """
+    source = (
+        b"#define API __declspec(dllexport)\n"
+        b"#ifdef API\n"
+        b"// API is an annotation; preserve this comment.\n"
+        b"class API Widget { public:\n"
+        b'    API int run(int x) { const char* text = "API"; return callee(x); }\n'
+        b"};\n"
+        b"#endif\n"
+    )
+    path = tmp_path / "widget.cpp"
+    path.write_bytes(source)
+    root = _parse_cpp_source(source)
+    assert not root.has_error
+    assert root.text is not None
+    assert b"#ifdef API" in root.text
+    assert b"#define API __declspec(dllexport)" in root.text
+    assert b'"API"' in root.text
+    assert b"// API is an annotation; preserve this comment." in root.text
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert result.index_symbols
+    assert len(result.classes) == 1
+    assert result.classes[0].name == "Widget"
+    method = result.classes[0].methods[0]
+    assert method.name == "run"
+    assert "API int run(int x)" in method.signature
+    assert method.lineno == 5
+    assert len(method.calls) == 1
+    assert method.calls[0].target == "callee"
+    assert method.calls[0].lineno == 5
+    assert method.calls[0].col_offset == source.splitlines()[4].index(b"callee")
+    assert any(item.name == "API" for item in result.declarations)
+    assert path.read_bytes() == source
+
+
+def test_multiline_annotations_keep_original_start_and_utf8_calls(
+    tmp_path: Path,
+) -> None:
+    """Retain the annotation line and UTF-8 byte offsets in recovered artifacts.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source directory.
+
+    Returns
+    -------
+    None
+        Original signature, documentation and call coordinates remain intact.
+    """
+    source = (
+        "#define API [[nodiscard]]\n"
+        "int callee(int);\n"
+        "// Read a value.\n"
+        "API\n"
+        'int run(int x) { const char* label = "café"; return callee(x); }\n'
+    ).encode()
+    path = tmp_path / "multiline.cpp"
+    path.write_bytes(source)
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert result.index_symbols
+    function = next(item for item in result.functions if item.name == "run")
+    assert function.lineno == 4
+    assert function.signature == "API int run(int x)"
+    assert function.docstring == "Read a value."
+    assert len(function.calls) == 1
+    assert function.calls[0].target == "callee"
+    assert function.calls[0].lineno == 5
+    assert function.calls[0].col_offset == source.splitlines()[4].index(b"callee")
+
+
+def test_recovered_anonymous_functions_and_operators_are_not_omitted(
+    tmp_path: Path,
+) -> None:
+    """Extract anonymous-namespace helpers and free or member operator names.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source directory.
+
+    Returns
+    -------
+    None
+        Callables retain separate identities across anonymous and named scopes.
+    """
+    path = tmp_path / "operators.cpp"
+    path.write_text(
+        '#define API __attribute__((visibility("default")))\n'
+        "namespace demo {\n"
+        "API int helper() { return 1; }\n"
+        "namespace { API int helper() { return 2; } }\n"
+        "namespace { API int second() { return 3; } }\n"
+        "class Widget { public: API int operator()() { return 4; } };\n"
+        "bool operator==(const Widget&, const Widget&) { return true; }\n"
+        "bool operator!=(const Widget&, const Widget&) { return false; }\n"
+        "}\n"
+    )
+    result = CppAnalyzer().analyze_file(path, tmp_path)
+    assert result.index_symbols
+    functions = {item.name: item for item in result.functions}
+    assert set(functions) == {
+        "demo::helper",
+        "demo::(anonymous namespace)::helper",
+        "demo::(anonymous namespace)::second",
+        "demo::operator==",
+        "demo::operator!=",
+    }
+    assert len({item.stable_id for item in functions.values()}) == 5
+    assert [method.name for method in result.classes[0].methods] == ["operator()"]

@@ -51,7 +51,6 @@ from .cpp_syntax import (
     _function_stable_id,
     _module_name_for_path,
     _module_stable_id,
-    _new_parser,
     _node_text,
     _normalize_signature,
     _qualified_name,
@@ -68,6 +67,7 @@ from .cpp_comments import (
 
 from .cpp_documentation import _documentation_artifacts
 from .cpp_imports import _extract_imports
+from .cpp_preprocessing import _original_declaration_start, _parse_cpp_source
 
 from codira.contracts import (
     AnalyzerCapabilityDeclaration,
@@ -291,12 +291,13 @@ def _namespace_parts(node: Node, source: bytes) -> tuple[str, ...]:
     Returns
     -------
     tuple[str, ...]
-        Namespace path components in declaration order.
+        Namespace path components in declaration order. An unnamed namespace
+        uses an explicit component to avoid collisions with its enclosing scope.
     """
     for child in node.named_children:
         if child.type in {"namespace_identifier", "nested_namespace_specifier"}:
             return _split_qualified_name(_node_text(child, source))
-    return ()
+    return ("(anonymous namespace)",)
 
 
 def _find_parameter_list(node: Node | None) -> Node | None:
@@ -501,6 +502,7 @@ def _function_declarator_name(node: Node, source: bytes) -> str | None:
         "field_identifier",
         "qualified_identifier",
         "destructor_name",
+        "operator_name",
     }:
         direct_name = _node_text(direct_declarator, source)
         error_name = _error_identifier_name(node, source)
@@ -547,6 +549,7 @@ def _unwrap_declarator_name(node: Node, source: bytes) -> str | None:
         "namespace_identifier",
         "qualified_identifier",
         "destructor_name",
+        "operator_name",
     }:
         return _node_text(node, source)
 
@@ -1292,9 +1295,8 @@ def _build_function_artifact(
     parameters = _extract_parameter_names(parameter_list, source)
     body = node.child_by_field_name("body")
     signature_end = body.start_byte if body is not None else signature_node.end_byte
-    signature = _decode_source_text(
-        source[signature_node.start_byte : signature_end]
-    ).strip()
+    signature_start = _original_declaration_start(signature_node, source)
+    signature = _decode_source_text(source[signature_start:signature_end]).strip()
 
     artifact = FunctionArtifact(
         name=method_name if class_name is not None else resolved_name,
@@ -1303,7 +1305,11 @@ def _build_function_artifact(
             method_name if class_name is not None else resolved_name,
             class_name=class_name,
         ),
-        lineno=signature_node.start_point.row + 1,
+        lineno=(
+            signature_node.start_point.row
+            + 1
+            - source.count(b"\n", signature_start, signature_node.start_byte)
+        ),
         end_lineno=body.end_point.row + 1 if body is not None else None,
         signature=_normalize_signature(signature),
         docstring=docstring,
@@ -2066,7 +2072,7 @@ def _is_cpp_header(path: Path) -> bool:
     )
     if cpp_neighbour and not path.with_suffix(".c").is_file():
         return True
-    pending = [_new_parser().parse(path.read_bytes()).root_node]
+    pending = [_parse_cpp_source(path.read_bytes())]
     while pending:
         node = pending.pop()
         if node.type in _CPP_HEADER_NODES:
@@ -2096,7 +2102,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "6"
+    version = "7"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -2337,7 +2343,7 @@ class CppAnalyzer:
             Normalized analysis result for the file.
         """
         source = path.read_bytes()
-        root_node = _new_parser().parse(source).root_node
+        root_node = _parse_cpp_source(source)
         module_comment = (
             _leading_module_comment(root_node, source)
             if self._use_leading_comments
