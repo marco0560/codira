@@ -137,6 +137,65 @@ def _descendants(node: Node) -> Iterable[Node]:
         yield from _descendants(child)
 
 
+def _parse_source(source: bytes) -> Node:
+    """Parse Go while accommodating expression arguments to new in Go 1.26.
+
+    Parameters
+    ----------
+    source : bytes
+        Original UTF-8 source buffer.
+
+    Returns
+    -------
+    tree_sitter.Node
+        Original root, or a clean root with equivalent new-call structure.
+
+    Notes
+    -----
+    The grammar reserves new for type arguments. Only erroneous calls whose
+    function is the identifier new receive a same-width parser-only alias.
+    Error fragments containing new followed by an opening parenthesis receive
+    the same treatment, covering composite literal arguments.
+    Clean type allocations, comments, literals, and source coordinates remain
+    intact. All artifact text is read from the original buffer. A candidate
+    with remaining syntax errors is discarded to preserve partial coverage.
+    """
+    parser = Parser(_LANGUAGE)
+    original = parser.parse(source).root_node
+    if not original.has_error:
+        return original
+    candidate = bytearray(source)
+    changed = False
+    pending = [original]
+    while pending:
+        node = pending.pop()
+        if not node.has_error:
+            continue
+        pending.extend(node.named_children)
+        targets: list[Node] = []
+        if node.type == "call_expression":
+            if (target := node.child_by_field_name("function")) is not None:
+                targets.append(target)
+        elif node.is_error:
+            children = [child for child in node.children if child.type != "comment"]
+            targets.extend(
+                child
+                for child, following in zip(children, children[1:], strict=False)
+                if following.type == "("
+            )
+        for target in targets:
+            if (
+                target.type == "identifier"
+                and source[target.start_byte : target.end_byte] == b"new"
+            ):
+                candidate[target.start_byte : target.end_byte] = b"n_w"
+                changed = True
+    if not changed:
+        return original
+    recovered = parser.parse(bytes(candidate)).root_node
+    return original if recovered.has_error else recovered
+
+
 def _parameters(node: Node | None, source: bytes) -> tuple[str, ...]:
     """Extract Go parameter bindings.
 
@@ -423,7 +482,7 @@ class GoAnalyzer:
     """
 
     name = "go"
-    version = "3"
+    version = "4"
     discovery_globs: tuple[str, ...] = ("*.go",)
     default_coverage_roots: tuple[str, ...] = (
         "cmd",
@@ -590,7 +649,7 @@ class GoAnalyzer:
         classes: dict[str, list[FunctionArtifact]] = {}
         imports: list[ImportArtifact] = []
         package = path.parent.name
-        root_node = Parser(_LANGUAGE).parse(source).root_node
+        root_node = _parse_source(source)
         for node in root_node.named_children:
             if node.type == "package_clause":
                 package = _normalized(next(iter(node.named_children), None), source)
