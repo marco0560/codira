@@ -44,6 +44,10 @@ from codira.plugin_config import (
     boolean_property,
     plugin_configuration_fingerprint,
 )
+from codira_analyzer_typescript.syntax_compat import (
+    has_argument_holes,
+    project_known_syntax,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -229,6 +233,32 @@ def _parameters(node: Node | None, source: bytes) -> tuple[str, ...]:
     return tuple(names)
 
 
+def _unwrapped_call_target(node: Node) -> Node:
+    """Remove transparent or misgrouped wrappers from a call target.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Callee expression.
+
+    Returns
+    -------
+    tree_sitter.Node
+        Underlying expression with its actual source position. Parenthesized
+        awaited functions retain their explicit grouping.
+    """
+    while node.type in {
+        "non_null_expression",
+        "instantiation_expression",
+        "await_expression",
+    }:
+        children = node.named_children
+        if not children:
+            break
+        node = children[0]
+    return node
+
+
 def _call_target(
     node: Node, source: bytes
 ) -> tuple[Literal["name", "attribute", "unresolved"], str, str]:
@@ -246,11 +276,7 @@ def _call_target(
     tuple[str, str, str]
         Relation kind, terminal target, and optional receiver.
     """
-    while node.type in {"non_null_expression", "instantiation_expression"}:
-        children = node.named_children
-        if not children:
-            break
-        node = children[0]
+    node = _unwrapped_call_target(node)
     if node.type == "identifier":
         return "name", _normalized(node, source), ""
     if node.type == "member_expression":
@@ -335,6 +361,68 @@ def _tagged_arrow(node: Node, source: bytes) -> Node | None:
     return target if target is not None and target.type == "arrow_function" else None
 
 
+def _projected_decorator_callee(node: Node, source: bytes) -> Node | None:
+    """Restore an IIFE callee represented by a parser-only decorator wrapper.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Candidate call expression.
+    source : bytes
+        Original source buffer.
+
+    Returns
+    -------
+    tree_sitter.Node | None
+        Original parenthesized function range, otherwise ``None``. A genuine
+        underscore-named call is never treated as a projection.
+    """
+    if node.type != "call_expression" or node.parent is None:
+        return None
+    function = node.child_by_field_name("function")
+    arguments = node.child_by_field_name("arguments")
+    if (
+        node.parent.type == "decorator"
+        and function is not None
+        and function.type == "identifier"
+        and _text(function, source) == "("
+        and arguments is not None
+        and arguments.type == "arguments"
+        and re.match(rb"\s*\(\s*\)\s*\)", source[arguments.end_byte :]) is not None
+    ):
+        return arguments
+    return None
+
+
+def _call_nodes(body: Node) -> Iterable[Node]:
+    """Yield runtime expression nodes without entering erased type syntax.
+
+    Parameters
+    ----------
+    body : tree_sitter.Node
+        Callable body or expression subtree.
+
+    Returns
+    -------
+    collections.abc.Iterable[tree_sitter.Node]
+        Source-ordered nodes excluding type annotations and type-only queries.
+    """
+    pending = [body]
+    while pending:
+        node = pending.pop()
+        if node.type in {
+            "type_arguments",
+            "type_parameters",
+            "type_annotation",
+            "type_query",
+            "type_alias_declaration",
+            "interface_declaration",
+        }:
+            continue
+        yield node
+        pending.extend(reversed(node.named_children))
+
+
 def _calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
     """Extract calls owned directly by a TypeScript callable.
 
@@ -359,9 +447,9 @@ def _calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
         "arguments" if body.type == "call_expression" else "right"
     )
     nodes = (
-        chain((body, inner), _descendants(inner), _descendants(template))
+        chain((body,), _call_nodes(inner), _call_nodes(template))
         if inner is not None and template is not None
-        else chain((body,), _descendants(body))
+        else _call_nodes(body)
     )
     for item in nodes:
         function = (
@@ -371,11 +459,14 @@ def _calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
         )
         if function is None:
             continue
+        if (decorator_callee := _projected_decorator_callee(item, source)) is not None:
+            function = decorator_callee
         arrow = _tagged_arrow(item, source)
         if arrow is not None:
             function = arrow.child_by_field_name("body")
             if function is None:
                 continue
+        function = _unwrapped_call_target(function)
         kind, target, base = _call_target(function, source)
         records.append(
             CallSite(
@@ -574,7 +665,7 @@ class TypeScriptAnalyzer:
     """
 
     name = "typescript"
-    version = "3"
+    version = "4"
     discovery_globs: tuple[str, ...] = ("*.ts", "*.tsx", "*.mts", "*.cts")
     default_coverage_roots: tuple[str, ...] = (
         "src",
@@ -1055,6 +1146,14 @@ class TypeScriptAnalyzer:
                         )
 
         root_node = _parser(path).parse(source).root_node
+        if _has_syntax_errors(root_node):
+            projected_source = project_known_syntax(root_node, source, _parser(path))
+            if projected_source != source:
+                candidate = _parser(path).parse(projected_source).root_node
+                if not _has_syntax_errors(candidate) and not has_argument_holes(
+                    candidate
+                ):
+                    root_node = candidate
         has_syntax_errors = _has_syntax_errors(root_node)
         for child in root_node.named_children:
             visit(child)
