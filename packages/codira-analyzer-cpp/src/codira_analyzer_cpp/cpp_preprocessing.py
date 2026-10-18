@@ -250,6 +250,53 @@ def _collect_annotation_definitions(
                 definitions.unsafe.add(match[1])
 
 
+def _hash_lines(source: bytes, root: Node) -> tuple[tuple[int, int], ...]:
+    """Protect logical lines containing real preprocessing hash tokens.
+
+    Parameters
+    ----------
+    source : bytes
+        Source before annotation replacement.
+    root : tree_sitter.Node
+        Tree supplying literal and comment spans.
+
+    Returns
+    -------
+    tuple[tuple[int, int], ...]
+        Logical line ranges where deleting an identifier could invent a directive.
+        Escaped newlines join physical lines; hashes in literals/comments do not.
+    """
+    opaque = [
+        (node.start_byte, node.end_byte)
+        for node in _nodes(root)
+        if node.type
+        in {"comment", "string_literal", "raw_string_literal", "char_literal"}
+    ]
+    protected: set[tuple[int, int]] = set()
+    for match in re.finditer(rb"#", source):
+        offset = match.start()
+        if any(start <= offset < end for start, end in opaque):
+            continue
+        start = source.rfind(b"\n", 0, offset) + 1
+        while start:
+            tail = start - 2
+            if tail >= 0 and source[tail] == 13:
+                tail -= 1
+            if tail < 0 or source[tail] != 92:
+                break
+            start = source.rfind(b"\n", 0, tail) + 1
+        end = source.find(b"\n", offset)
+        while end >= 0:
+            tail = end - 1
+            if tail >= 0 and source[tail] == 13:
+                tail -= 1
+            if tail < 0 or source[tail] != 92:
+                break
+            end = source.find(b"\n", end + 1)
+        protected.add((start, len(source) if end < 0 else end))
+    return tuple(sorted(protected))
+
+
 def _parse_cpp_source(
     source: bytes, *, included_sources: tuple[tuple[bytes, int], ...] = ()
 ) -> Node:
@@ -276,6 +323,7 @@ def _parse_cpp_source(
     annotations = _annotation_definitions(source, original, parser, included_sources)
     if not annotations:
         return original
+    protected = _hash_lines(source, original)
     projected = bytearray(source)
     pending = [original]
     while pending:
@@ -285,7 +333,11 @@ def _parse_cpp_source(
         if node.type in _IDENTIFIER_NODES:
             token = source[node.start_byte : node.end_byte]
             after_definition = annotations.get(token)
-            if after_definition is not None and node.start_byte >= after_definition:
+            if (
+                after_definition is not None
+                and node.start_byte >= after_definition
+                and not any(start <= node.start_byte < end for start, end in protected)
+            ):
                 projected[node.start_byte : node.end_byte] = b" " * len(token)
         condition = (
             node.child_by_field_name("condition")

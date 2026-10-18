@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 from tree_sitter import Language, Node, Parser
 from tree_sitter_c import language
 
+from .c_conditionals import CParseView, c_parse_views
 from .c_preprocessing import _original_declaration_start, _parse_c_source
 
 from codira.contracts import (
@@ -1826,6 +1827,118 @@ def _extract_imports(root: Node, source: bytes) -> tuple[ImportArtifact, ...]:
     return tuple(imports)
 
 
+def _merge_c_views(analyses: list[AnalysisResult], owner_id: str) -> AnalysisResult:
+    """Merge written alternatives without duplicating shared source artifacts.
+
+    Parameters
+    ----------
+    analyses : list[codira.models.AnalysisResult]
+        Fully clean views of one source file in deterministic covering order.
+    owner_id : str
+        Original source-owned identity prefix.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Source-ordered artifacts with unique variant identities and remapped docs.
+    """
+    functions: dict[tuple[str, int, int | None, str], FunctionArtifact] = {}
+    declarations: dict[tuple[str, str, int, str], DeclarationArtifact] = {}
+    for analysis in analyses:
+        for function in analysis.functions:
+            key = (
+                function.name,
+                function.lineno,
+                function.end_lineno,
+                function.signature,
+            )
+            previous = functions.get(key)
+            if previous is not None:
+                function = replace(
+                    function,
+                    calls=tuple(
+                        sorted(
+                            set(previous.calls) | set(function.calls),
+                            key=lambda c: (
+                                c.lineno,
+                                c.col_offset,
+                                c.kind,
+                                c.base,
+                                c.target,
+                            ),
+                        )
+                    ),
+                    returns_value=max(previous.returns_value, function.returns_value),
+                )
+            functions[key] = replace(
+                function, stable_id=_function_stable_id(owner_id, function.name)
+            )
+        for declaration in analysis.declarations:
+            key_decl = (
+                declaration.kind,
+                declaration.name,
+                declaration.lineno,
+                declaration.signature,
+            )
+            declarations[key_decl] = replace(
+                declaration,
+                stable_id=_declaration_stable_id(
+                    owner_id, declaration.kind, declaration.name
+                ),
+            )
+    final_functions = _disambiguate_function_stable_ids(
+        tuple(sorted(functions.values(), key=lambda f: (f.lineno, f.name, f.signature)))
+    )
+    final_declarations = _disambiguate_type_aliases(
+        tuple(sorted(declarations.values(), key=lambda d: (d.lineno, d.name, d.kind)))
+    )
+    function_ids = {
+        (f.name, f.lineno, f.end_lineno, f.signature): f.stable_id
+        for f in final_functions
+    }
+    declaration_ids = {
+        (d.kind, d.name, d.lineno, d.signature): d.stable_id for d in final_declarations
+    }
+    documents: dict[str, DocumentationArtifact] = {}
+    imports: dict[tuple[int, str, str, str | None], ImportArtifact] = {}
+    for analysis in analyses:
+        owners = {
+            f.stable_id: function_ids[(f.name, f.lineno, f.end_lineno, f.signature)]
+            for f in analysis.functions
+        }
+        owners.update(
+            {
+                d.stable_id: declaration_ids[(d.kind, d.name, d.lineno, d.signature)]
+                for d in analysis.declarations
+            }
+        )
+        for document in analysis.documentation:
+            if (
+                document.owner_stable_id is not None
+                and document.owner_stable_id in owners
+            ):
+                owner = owners[document.owner_stable_id]
+                document = replace(
+                    document,
+                    owner_stable_id=owner,
+                    stable_id=f"doc:{document.kind}:{owner}:doxygen",
+                )
+            documents[document.stable_id] = document
+        for item in analysis.imports:
+            imports[(item.lineno, item.name, item.kind, item.alias)] = item
+    return replace(
+        analyses[0],
+        functions=final_functions,
+        declarations=final_declarations,
+        imports=tuple(
+            sorted(imports.values(), key=lambda item: (item.lineno, item.name))
+        ),
+        documentation=tuple(
+            sorted(documents.values(), key=lambda item: (item.lineno, item.stable_id))
+        ),
+    )
+
+
 class CAnalyzer:
     """
     Concrete C analyzer for repository indexing.
@@ -1841,7 +1954,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "11"
+    version = "12"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -2018,13 +2131,47 @@ class CAnalyzer:
             Normalized analysis result for the file.
         """
         source = path.read_bytes()
-        root_node = _parse_c_source(source, _new_parser())
+        parser = _new_parser()
+        base = _parse_c_source(source, parser)
+        analyses: list[AnalysisResult] = []
+        for view in c_parse_views(source, parser, base=base):
+            if view.root.has_error:
+                return self._analyze_view(path, root, CParseView(source, base), base)
+            analyses.append(self._analyze_view(path, root, view, base))
+        return (
+            analyses[0]
+            if len(analyses) == 1
+            else _merge_c_views(analyses, _symbol_owner_id(path, root))
+        )
+
+    def _analyze_view(
+        self, path: Path, root: Path, view: CParseView, module_root: Node
+    ) -> AnalysisResult:
+        """Build normalized artifacts for one validated source view.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Original source path.
+        root : pathlib.Path
+            Repository boundary for identities.
+        view : CParseView
+            Coordinate-preserving signature source and parsed tree.
+        module_root : tree_sitter.Node
+            Original base tree for stable module documentation provenance.
+
+        Returns
+        -------
+        codira.models.AnalysisResult
+            Source-owned artifacts for this view only.
+        """
+        source, root_node = view.source, view.root
         module_comment = (
-            _leading_module_comment(root_node, source)
+            _leading_module_comment(module_root, source)
             if self._use_leading_comments
             else None
         )
-        module_doxygen = _leading_module_doxygen(root_node, source)
+        module_doxygen = _leading_module_doxygen(module_root, source)
         module_name = _module_name_for_path(path, root)
         owner_id = _symbol_owner_id(path, root)
         module = ModuleArtifact(

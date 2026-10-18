@@ -255,3 +255,39 @@ def test_recovered_c_api_indexes_through_real_backend(
     assert backend.find_symbol(tmp_path, "not_a_function") == []
     reused = index_repo(tmp_path)
     assert reused.failed == 0 and reused.indexed == 0 and reused.reused == 1
+
+
+@pytest.mark.parametrize("continuation", [b"", b"\\\n", b"\\\r\n"])
+def test_empty_macro_cannot_create_a_preprocessor_directive(
+    continuation: bytes,
+) -> None:
+    """Keep hash-prefixed invalid source from becoming an invented include.
+
+    Parameters
+    ----------
+    continuation : bytes
+        Optional physical-line splice before the hash token.
+
+    Returns
+    -------
+    None
+        Source-only macro replacement cannot change preprocessing directive status.
+    """
+    source = b"#define DROP\nDROP " + continuation + b"# include <stddef.h>\n"
+    assert _parse_c_source(source, _new_parser()).has_error
+
+
+def test_literal_hash_does_not_block_a_real_annotation() -> None:
+    """Distinguish character/string hashes from preprocessing tokens.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        A real annotation remains recoverable beside a literal hash.
+    """
+    source = b"#define API __declspec(dllexport)\nAPI int run(void) { return '#'; }\n"
+    assert not _parse_c_source(source, _new_parser()).has_error

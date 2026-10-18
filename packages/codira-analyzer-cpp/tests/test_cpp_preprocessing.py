@@ -225,3 +225,23 @@ def test_recovered_anonymous_functions_and_operators_are_not_omitted(
     }
     assert len({item.stable_id for item in functions.values()}) == 5
     assert [method.name for method in result.classes[0].methods] == ["operator()"]
+
+
+@pytest.mark.parametrize("continuation", [b"", b"\\\n", b"\\\r\n"])
+def test_empty_macro_cannot_create_a_preprocessor_directive(
+    continuation: bytes,
+) -> None:
+    """Retain invalid directives even when an empty macro precedes the hash.
+
+    Parameters
+    ----------
+    continuation : bytes
+        Optional physical-line splice.
+
+    Returns
+    -------
+    None
+        Annotation projection cannot manufacture a preprocessing directive.
+    """
+    source = b"#define DROP\nDROP " + continuation + b"# include <stddef.h>\n"
+    assert _parse_cpp_source(source).has_error
