@@ -13,6 +13,15 @@ The analyzer confines tree-sitter interaction to this module so language-specifi
 Architectural role
 ------------------
 This module belongs to the **language analyzer layer** and implements the C-family analysis path for ADR-004.
+
+Parameters
+----------
+None
+
+Returns
+-------
+None
+    C-owned parsing and normalized source artifacts.
 """
 
 from __future__ import annotations
@@ -22,13 +31,15 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterator, Mapping
     from pathlib import Path
 
     from codira.contracts import LanguageAnalyzer
 
 from tree_sitter import Language, Node, Parser
 from tree_sitter_c import language
+
+from .c_preprocessing import _original_declaration_start, _parse_c_source
 
 from codira.contracts import (
     AnalyzerCapabilityDeclaration,
@@ -447,7 +458,7 @@ def _attached_doxygen_comment_map(
     pending_comment: tuple[str, int, int | None] | None = None
     pending_end_row: int | None = None
 
-    for child in root.children:
+    for child in _top_level_nodes(root):
         if child.type == "comment":
             text = _comment_to_doxygen_text(_node_text(child, source))
             pending_comment = (
@@ -460,7 +471,8 @@ def _attached_doxygen_comment_map(
 
         if pending_comment is not None and pending_end_row is not None:
             if child.start_point.row - pending_end_row <= 2:
-                attached[child.start_point.row + 1] = pending_comment
+                start = _original_declaration_start(child, source)
+                attached[source.count(b"\n", 0, start) + 1] = pending_comment
             pending_comment = None
             pending_end_row = None
 
@@ -487,7 +499,7 @@ def _attached_comment_map(root: Node, source: bytes) -> dict[int, str]:
     pending_comment: str | None = None
     pending_end_row: int | None = None
 
-    for child in root.children:
+    for child in _top_level_nodes(root):
         if child.type == "comment":
             pending_comment = _comment_to_summary(_node_text(child, source))
             pending_end_row = child.end_point.row
@@ -956,6 +968,66 @@ def _returns_value(body: Node | None) -> int:
     return 0
 
 
+def _top_level_nodes(root: Node) -> Iterator[Node]:
+    """Visit lexical file-scope nodes through conditional directive wrappers.
+
+    Parameters
+    ----------
+    root : tree_sitter.Node
+        Translation unit whose function/type bodies remain opaque.
+
+    Returns
+    -------
+    collections.abc.Iterator[tree_sitter.Node]
+        Source-ordered nodes from all written conditional alternatives.
+    """
+    pending = list(reversed(root.children))
+    while pending:
+        node = pending.pop()
+        yield node
+        if node.type in {
+            "preproc_if",
+            "preproc_ifdef",
+            "preproc_else",
+            "preproc_elif",
+            "preproc_elifdef",
+        }:
+            condition = node.child_by_field_name("condition")
+            name = node.child_by_field_name("name")
+            pending.extend(
+                child
+                for child in reversed(node.named_children)
+                if child != condition and child != name
+            )
+
+
+def _function_declaration(node: Node) -> Node | None:
+    """Follow a declared name's binding to distinguish functions from variables.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        File-scope declaration with an optional function declarator.
+
+    Returns
+    -------
+    tree_sitter.Node | None
+        Bound function declarator, excluding pointer and array variables.
+    """
+    current = node.child_by_field_name("declarator")
+    function: Node | None = None
+    while current is not None:
+        if current.type == "function_declarator":
+            function = current
+        elif current.type in {"pointer_declarator", "array_declarator"}:
+            function = None
+        nested = current.child_by_field_name("declarator")
+        if nested is None and current.type == "parenthesized_declarator":
+            nested = next(iter(current.named_children), None)
+        current = nested
+    return function
+
+
 def _extract_functions(
     root: Node,
     source: bytes,
@@ -964,7 +1036,7 @@ def _extract_functions(
     owner_id: str,
 ) -> tuple[FunctionArtifact, ...]:
     """
-    Extract top-level C function definitions from one translation unit.
+    Extract C function definitions and otherwise unrepresented prototypes.
 
     Parameters
     ----------
@@ -984,13 +1056,16 @@ def _extract_functions(
     """
     functions: list[FunctionArtifact] = []
 
-    for child in root.children:
-        if child.type != "function_definition":
+    for child in _top_level_nodes(root):
+        if child.type not in {"function_definition", "declaration"}:
             continue
         if not _is_supported_function_definition(child):
             continue
-
-        declarator = child.child_by_field_name("declarator")
+        declarator = (
+            _function_declaration(child)
+            if child.type == "declaration"
+            else child.child_by_field_name("declarator")
+        )
         body = child.child_by_field_name("body")
         if declarator is None:
             continue
@@ -1002,9 +1077,8 @@ def _extract_functions(
         parameter_list = _find_parameter_list(declarator)
         parameters = _extract_parameter_names(parameter_list, source)
         signature_end = body.start_byte if body is not None else declarator.end_byte
-        signature = _decode_source_text(
-            source[child.start_byte : signature_end]
-        ).strip()
+        signature_start = _original_declaration_start(child, source)
+        signature = _decode_source_text(source[signature_start:signature_end]).strip()
         is_public = int(
             not any(
                 sub.type == "storage_class_specifier"
@@ -1017,7 +1091,9 @@ def _extract_functions(
             FunctionArtifact(
                 name=name,
                 stable_id=_function_stable_id(owner_id, name),
-                lineno=child.start_point.row + 1,
+                lineno=child.start_point.row
+                + 1
+                - source.count(b"\n", signature_start, child.start_byte),
                 end_lineno=body.end_point.row + 1 if body is not None else None,
                 signature=" ".join(signature.split()),
                 docstring=None,
@@ -1035,7 +1111,14 @@ def _extract_functions(
             )
         )
 
-    return _disambiguate_function_stable_ids(tuple(functions))
+    defined = {fn.name for fn in functions if fn.end_lineno is not None}
+    return _disambiguate_function_stable_ids(
+        tuple(
+            fn
+            for fn in functions
+            if fn.end_lineno is not None or fn.name not in defined
+        )
+    )
 
 
 def _disambiguate_function_stable_ids(
@@ -1093,12 +1176,14 @@ def _declaration_name(node: Node, source: bytes) -> str | None:
         Declaration name when one is present.
     """
     if node.type == "type_definition":
-        named_children = list(node.named_children)
-        if not named_children:
-            return None
-        alias_node = named_children[-1]
-        if alias_node.type in {"type_identifier", "identifier", "primitive_type"}:
-            return _node_text(alias_node, source)
+        alias_node = node.child_by_field_name("declarator")
+        while alias_node is not None:
+            if alias_node.type in {"type_identifier", "identifier", "primitive_type"}:
+                return _node_text(alias_node, source)
+            nested = alias_node.child_by_field_name("declarator")
+            if nested is None and alias_node.type == "parenthesized_declarator":
+                nested = next(iter(alias_node.named_children), None)
+            alias_node = nested
         return None
 
     if node.type in {"preproc_def", "preproc_function_def"}:
@@ -1242,13 +1327,13 @@ def _declaration_artifact(
     name = _declaration_name(node, source)
     if name is None:
         return None
-
+    start = _original_declaration_start(node, source)
     return DeclarationArtifact(
         name=name,
         stable_id=_declaration_stable_id(owner_id, kind, name),
         kind=kind,
-        lineno=node.start_point.row + 1,
-        signature=" ".join(_node_text(node, source).split()),
+        lineno=source.count(b"\n", 0, start) + 1,
+        signature=" ".join(_decode_source_text(source[start : node.end_byte]).split()),
         docstring=docstring,
         enum_members=(
             _extract_enum_members(
@@ -1348,7 +1433,7 @@ def _record_declaration(
     Parameters
     ----------
     declarations_by_stable_id : dict[str, codira.models.DeclarationArtifact]
-        Accumulator keyed by stable ID.
+        Accumulator preserving typedef alternatives and other symbol identities.
     declaration : codira.models.DeclarationArtifact | None
         Declaration artifact to record.
 
@@ -1358,7 +1443,40 @@ def _record_declaration(
         The declaration map is updated in place when a declaration exists.
     """
     if declaration is not None:
-        declarations_by_stable_id[declaration.stable_id] = declaration
+        key = declaration.stable_id
+        if declaration.kind == "typedef":
+            digest = hashlib.sha256(declaration.signature.encode()).hexdigest()[:12]
+            key = f"{key}:{digest}:{declaration.lineno}"
+        declarations_by_stable_id[key] = declaration
+
+
+def _disambiguate_type_aliases(
+    declarations: tuple[DeclarationArtifact, ...],
+) -> tuple[DeclarationArtifact, ...]:
+    """Give distinct written typedef alternatives unique normalized identities.
+
+    Parameters
+    ----------
+    declarations : tuple[codira.models.DeclarationArtifact, ...]
+        Source-ordered declarations, including conditional typedef variants.
+
+    Returns
+    -------
+    tuple[codira.models.DeclarationArtifact, ...]
+        Original single identities and signature/line identities for duplicates.
+    """
+    counts: dict[str, int] = {}
+    for item in declarations:
+        counts[item.stable_id] = counts.get(item.stable_id, 0) + 1
+    return tuple(
+        replace(
+            item,
+            stable_id=f"{item.stable_id}:{hashlib.sha256(item.signature.encode()).hexdigest()[:12]}:{item.lineno}",
+        )
+        if counts[item.stable_id] > 1
+        else item
+        for item in declarations
+    )
 
 
 def _record_nested_type_declarations(
@@ -1381,7 +1499,7 @@ def _record_nested_type_declarations(
     attached_comments : dict[int, str]
         Comment blocks keyed by source byte offset.
     declarations_by_stable_id : dict[str, codira.models.DeclarationArtifact]
-        Accumulator keyed by stable ID.
+        Accumulator preserving typedef alternatives and other symbol identities.
     owner_id : str
         File-scoped owner identity preserving the source suffix.
 
@@ -1440,7 +1558,7 @@ def _extract_declarations(
     declarations_by_stable_id: dict[str, DeclarationArtifact] = {}
     attached_comments = _attached_comment_map(root, source)
 
-    for child in root.children:
+    for child in _top_level_nodes(root):
         if child.type in {"preproc_def", "preproc_function_def"}:
             declaration = _declaration_artifact(
                 child,
@@ -1513,10 +1631,12 @@ def _extract_declarations(
             )
             _record_declaration(declarations_by_stable_id, declaration)
 
-    return tuple(
-        sorted(
-            declarations_by_stable_id.values(),
-            key=lambda artifact: artifact.lineno,
+    return _disambiguate_type_aliases(
+        tuple(
+            sorted(
+                declarations_by_stable_id.values(),
+                key=lambda artifact: artifact.lineno,
+            )
         )
     )
 
@@ -1678,7 +1798,7 @@ def _extract_imports(root: Node, source: bytes) -> tuple[ImportArtifact, ...]:
     """
     imports: list[ImportArtifact] = []
 
-    for child in root.children:
+    for child in _top_level_nodes(root):
         if child.type != "preproc_include":
             continue
         include_target = None
@@ -1721,7 +1841,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "10"
+    version = "11"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -1898,7 +2018,7 @@ class CAnalyzer:
             Normalized analysis result for the file.
         """
         source = path.read_bytes()
-        root_node = _new_parser().parse(source).root_node
+        root_node = _parse_c_source(source, _new_parser())
         module_comment = (
             _leading_module_comment(root_node, source)
             if self._use_leading_comments

@@ -1314,7 +1314,9 @@ def test_c_declarations_persist_as_exact_symbols(tmp_path: Path) -> None:
     assert backend.find_symbol(tmp_path, "CALL") == [
         ("macro", "native.types", "CALL", str(source), 14),
     ]
-    assert backend.find_symbol(tmp_path, "fn") == []
+    assert backend.find_symbol(tmp_path, "fn") == [
+        ("function", "native.types", "fn", str(source), 12),
+    ]
     assert backend.find_symbol(tmp_path, "fp") == []
     assert backend.find_symbol(tmp_path, "Color") == [
         ("enum", "native.types", "Color", str(source), 16),

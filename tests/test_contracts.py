@@ -2767,7 +2767,7 @@ def test_root_optional_dependencies_support_monorepo_bundle_install() -> None:
         "einops>=0.8,<1.0",
         "codira-analyzer-python==2.0.1",
         "codira-analyzer-json==2.0.0",
-        "codira-analyzer-c==2.0.0",
+        "codira-analyzer-c==2.0.1",
         "codira-analyzer-cpp==2.0.5",
         "codira-analyzer-rust==2.0.1",
         "codira-analyzer-javascript==2.0.0",
