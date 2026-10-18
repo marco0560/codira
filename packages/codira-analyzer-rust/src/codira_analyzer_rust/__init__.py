@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Literal, cast
 from tree_sitter import Language, Node, Parser
 from tree_sitter_rust import language
 
+from codira_analyzer_rust.rust_syntax import rust_parse_root
+
 from codira.contracts import (
     AnalyzerCapabilityDeclaration,
     AnalyzerConcurrencyDeclaration,
@@ -716,7 +718,7 @@ class RustAnalyzer:
     """
 
     name = "rust"
-    version = "3"
+    version = "4"
     discovery_globs: tuple[str, ...] = ("*.rs",)
     default_coverage_roots: tuple[str, ...] = ("src", "tests", "benches", "examples")
 
@@ -884,7 +886,7 @@ class RustAnalyzer:
         functions: list[FunctionArtifact] = []
         imports: list[ImportArtifact] = []
 
-        root_node = _parser().parse(source).root_node
+        root_node = rust_parse_root(_parser(), source)
         for node in root_node.named_children:
             name = _identifier(node, source)
             if node.type == "use_declaration":
