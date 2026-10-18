@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 
 from tree_sitter import Node, Parser
 
@@ -45,6 +46,30 @@ _IDENTIFIER_NODES = frozenset(
         "statement_identifier",
     }
 )
+
+
+@dataclass
+class _AnnotationDefinitions:
+    """Accumulate replacements, availability and invalidating directives.
+
+    Parameters
+    ----------
+    replacements : dict[bytes, list[bytes]], optional
+        All observed object replacement alternatives by macro name.
+    first_offsets : dict[bytes, int], optional
+        Earliest source definition or reaching include boundary.
+    unsafe : set[bytes], optional
+        Names with function-like definitions or undef directives.
+
+    Returns
+    -------
+    None
+        Mutable collection state local to one parser call.
+    """
+
+    replacements: dict[bytes, list[bytes]] = field(default_factory=dict)
+    first_offsets: dict[bytes, int] = field(default_factory=dict)
+    unsafe: set[bytes] = field(default_factory=set)
 
 
 def _nodes(root: Node) -> Iterator[Node]:
@@ -106,9 +131,12 @@ def _is_annotation(value: bytes, parser: Parser) -> bool:
 
 
 def _annotation_definitions(
-    source: bytes, root: Node, parser: Parser
+    source: bytes,
+    root: Node,
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...] = (),
 ) -> dict[bytes, int]:
-    """Resolve only source-local object macros with compatible replacements.
+    """Resolve source-backed object macros with compatible replacements.
 
     Parameters
     ----------
@@ -118,6 +146,9 @@ def _annotation_definitions(
         Unmodified parse tree.
     parser : tree_sitter.Parser
         Parser used to validate replacement syntax.
+    included_sources : tuple[tuple[bytes, int], ...], optional
+        Captured header bytes and earliest source include-end offsets. Their
+        definitions cannot license annotation uses preceding the include.
 
     Returns
     -------
@@ -125,27 +156,16 @@ def _annotation_definitions(
         Eligible macro names and the earliest safe use offset. Function macros,
         undefined names and conflicting replacements are excluded file-wide.
     """
-    definitions: dict[bytes, list[bytes]] = {}
-    first_offsets: dict[bytes, int] = {}
-    unsafe: set[bytes] = set()
-    for node in _nodes(root):
-        if node.type in {"preproc_def", "preproc_function_def"}:
-            name_node = node.child_by_field_name("name")
-            if name_node is None:
-                continue
-            token = source[name_node.start_byte : name_node.end_byte]
-            if node.type == "preproc_function_def":
-                unsafe.add(token)
-                continue
-            value = node.child_by_field_name("value")
-            replacement = source[value.start_byte : value.end_byte] if value else b""
-            replacement = re.sub(rb"\\\r?\n", b" ", replacement)
-            definitions.setdefault(token, []).append(replacement)
-            first_offsets.setdefault(token, node.end_byte)
-        elif node.type == "preproc_call":
-            match = _UNDEF.match(source[node.start_byte : node.end_byte])
-            if match is not None:
-                unsafe.add(match[1])
+    state = _AnnotationDefinitions()
+    definitions = state.replacements
+    first_offsets = state.first_offsets
+    unsafe = state.unsafe
+    inputs = [(source, root, None)] + [
+        (content, parser.parse(content).root_node, boundary)
+        for content, boundary in included_sources
+    ]
+    for content, tree, boundary in inputs:
+        _collect_annotation_definitions(content, tree, boundary, state)
     accepted: dict[bytes, int] = {}
     changed = True
     while changed:
@@ -182,13 +202,66 @@ def _annotation_definitions(
     return accepted
 
 
-def _parse_cpp_source(source: bytes) -> Node:
-    """Parse C++ with a coordinate-preserving local annotation recovery.
+def _collect_annotation_definitions(
+    source: bytes,
+    root: Node,
+    boundary: int | None,
+    definitions: _AnnotationDefinitions,
+) -> None:
+    """Collect alternatives and invalidating directives from one source input.
+
+    Parameters
+    ----------
+    source : bytes
+        Captured source or header bytes.
+    root : tree_sitter.Node
+        Unmodified parse tree for these bytes.
+    boundary : int | None
+        Source include-end offset for a header, or None for the source itself.
+    definitions : _AnnotationDefinitions
+        Mutable alternatives, earliest offsets and unsafe names accumulated
+        across all source inputs.
+
+    Returns
+    -------
+    None
+        Updates the supplied collections without expanding declarations.
+    """
+    for node in _nodes(root):
+        if node.type in {"preproc_def", "preproc_function_def"}:
+            name_node = node.child_by_field_name("name")
+            if name_node is None:
+                continue
+            token = source[name_node.start_byte : name_node.end_byte]
+            if node.type == "preproc_function_def":
+                definitions.unsafe.add(token)
+                continue
+            value = node.child_by_field_name("value")
+            replacement = source[value.start_byte : value.end_byte] if value else b""
+            replacement = re.sub(rb"\\\r?\n", b" ", replacement)
+            definitions.replacements.setdefault(token, []).append(replacement)
+            offset = node.end_byte if boundary is None else boundary
+            definitions.first_offsets[token] = min(
+                definitions.first_offsets.get(token, offset), offset
+            )
+        elif node.type == "preproc_call":
+            match = _UNDEF.match(source[node.start_byte : node.end_byte])
+            if match is not None:
+                definitions.unsafe.add(match[1])
+
+
+def _parse_cpp_source(
+    source: bytes, *, included_sources: tuple[tuple[bytes, int], ...] = ()
+) -> Node:
+    """Parse C++ with a coordinate-preserving source-backed annotation recovery.
 
     Parameters
     ----------
     source : bytes
         Original C++ file bytes, also used later for artifact extraction.
+    included_sources : tuple[tuple[bytes, int], ...], optional
+        Captured header bytes and earliest source include-end offsets. Callers
+        must bind these external analysis inputs to incremental reuse identity.
 
     Returns
     -------
@@ -200,7 +273,7 @@ def _parse_cpp_source(source: bytes) -> Node:
     original = parser.parse(source).root_node
     if not original.has_error:
         return original
-    annotations = _annotation_definitions(source, original, parser)
+    annotations = _annotation_definitions(source, original, parser, included_sources)
     if not annotations:
         return original
     projected = bytearray(source)
