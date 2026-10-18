@@ -65,6 +65,16 @@ The distribution advances to C++ 2.0.4 and official bundle 2.0.20, with root pin
 and the lockfile aligned. Logical analyzer version 8 stays unchanged because the
 public analyzer does not yet consume external header inputs.
 
+A subsequent source-bound preservation replay completes all 19,026 frozen C++
+paths with zero analyzer exceptions and zero differences from the preceding
+full structure replay. Original/recovered error flags, indexing eligibility and
+artifact counts match for every path. The 88 previously recovered paths also
+match class names and explicit callable names, signatures, lines and call-site
+records. The other paths are not fully artifact-graded by this comparison.
+Malformed and future-syntax fixtures retain their prior partial outcomes. This
+supports preservation of the default public path; it does not enable or qualify
+header-dependent indexing.
+
 ## Remaining work
 
 The indexer currently compares raw source hashes and analyzer identity for
@@ -91,6 +101,11 @@ Durable evidence is worktree-relative under
   evidence.
 - `cpp-include-context-validation-receipt-r1.json` records examined validation
   results once the gate completes.
+- `replay_cpp_include_default_r1.py` and
+  `cpp-include-default-full-replay-r1/` retain source bindings, resumable outcome
+  segments and the examined preservation summary. Unfinished segments are
+  retained rather than overwritten; completed paths can be skipped under the
+  same bound inputs.
 
 The main checkout, original benchmark and pinned third-party corpus remain
 unchanged. The wider parser goal remains open.
