@@ -441,7 +441,8 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                     WHERE type != 'method'
                     UNION ALL
                     SELECT s.type, s.module_name,
-                           CASE WHEN c.name IS NOT NULL THEN c.name || '.' || s.name
+                           CASE WHEN COALESCE(fn.owner_name, c.name) IS NOT NULL
+                            THEN COALESCE(fn.owner_name, c.name) || '.' || s.name
                                 ELSE s.name END AS name,
                            s.path, s.lineno
                     FROM eligible_symbols s
@@ -934,7 +935,7 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                     COALESCE(fn_mod.name, cls_mod.name, mod.name, '') AS module_name,
                     CASE
                         WHEN di.function_id IS NOT NULL AND fn.is_method = 1
-                            THEN cls.name || '.' || fn.name
+                            THEN COALESCE(fn.owner_name, cls.name) || '.' || fn.name
                         WHEN di.function_id IS NOT NULL THEN fn.name
                         WHEN di.class_id IS NOT NULL THEN cls.name
                         ELSE COALESCE(mod.name, '')
@@ -1363,7 +1364,7 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                         fp.path,
                         s.lineno
                     FROM functions fn
-                    JOIN classes c
+                    LEFT JOIN classes c
                       ON fn.class_id = c.id
                     JOIN modules m
                       ON fn.module_id = m.id
@@ -1374,7 +1375,7 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                      AND s.lineno = fn.lineno
                     JOIN files fp
                       ON s.file_id = fp.id
-                    WHERE m.name = ? AND c.name = ? AND fn.name = ?
+                    WHERE m.name = ? AND COALESCE(fn.owner_name, c.name) = ? AND fn.name = ?
                     {prefix_sql}
                     ORDER BY fp.path, s.lineno, s.name
                     """,
@@ -1440,9 +1441,9 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
         try:
             row = conn.execute(
                 """
-                SELECT c.name
+                SELECT COALESCE(f.owner_name, c.name)
                 FROM functions f
-                JOIN classes c
+                LEFT JOIN classes c
                   ON f.class_id = c.id
                 JOIN modules m
                   ON f.module_id = m.id
@@ -1454,7 +1455,7 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
                 """,
                 (module_name, name, lineno, file_path),
             ).fetchone()
-            if row is None:
+            if row is None or row[0] is None:
                 return name
             return f"{str(row[0])}.{name}"
         finally:

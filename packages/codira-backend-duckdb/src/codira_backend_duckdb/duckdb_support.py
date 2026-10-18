@@ -119,6 +119,8 @@ FunctionRow = tuple[
     int,
     int,
     int,
+    str | None,
+    str | None,
 ]
 SymbolIndexRow = tuple[int, str, str, str, str, int, int]
 DocumentationArtifactRow = tuple[
@@ -485,6 +487,8 @@ def _flush_structural_function_rows(
             "has_docstring": pa.array([row[8] for row in rows], type=pa.int64()),
             "is_method": pa.array([row[9] for row in rows], type=pa.int64()),
             "is_public": pa.array([row[10] for row in rows], type=pa.int64()),
+            "owner_name": pa.array([row[11] for row in rows], type=pa.string()),
+            "owner_stable_id": pa.array([row[12] for row in rows], type=pa.string()),
         }
     )
     _flush_registered_arrow_table(
@@ -503,7 +507,9 @@ def _flush_structural_function_rows(
                 docstring,
                 has_docstring,
                 is_method,
-                is_public
+                is_public,
+                owner_name,
+                owner_stable_id
             )
             SELECT
                 id,
@@ -516,7 +522,9 @@ def _flush_structural_function_rows(
                 docstring,
                 has_docstring,
                 is_method,
-                is_public
+                is_public,
+                owner_name,
+                owner_stable_id
             FROM __codira_pending_function_rows
             """,
     )

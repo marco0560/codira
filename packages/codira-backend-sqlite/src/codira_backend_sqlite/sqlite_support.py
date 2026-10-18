@@ -1079,6 +1079,12 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
         return
 
     file_id = int(file_row[0])
+    conn.execute(
+        "UPDATE functions SET class_id = NULL WHERE owner_stable_id IS NOT NULL "
+        "AND class_id IN (SELECT c.id FROM classes c JOIN modules m "
+        "ON m.id = c.module_id WHERE m.file_id = ?)",
+        (file_id,),
+    )
 
     module_ids = [
         int(row[0])

@@ -17,6 +17,7 @@ This module belongs to the **contract verification layer** and enforces the ADR-
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import sqlite3
 import sys
@@ -1980,7 +1981,7 @@ def test_collect_indexed_file_analyses_routes_paths_to_analyzers(
         {
             str(module): {
                 "path": str(module),
-                "hash": "abc123",
+                "hash": hashlib.sha256(module.read_bytes()).hexdigest(),
                 "mtime": 1.0,
                 "size": module.stat().st_size,
             }
@@ -1995,7 +1996,7 @@ def test_collect_indexed_file_analyses_routes_paths_to_analyzers(
     assert path == module
     assert snapshot == FileMetadataSnapshot(
         path=module,
-        sha256="abc123",
+        sha256=hashlib.sha256(module.read_bytes()).hexdigest(),
         mtime=1.0,
         size=module.stat().st_size,
         analyzer_name="fake-python",

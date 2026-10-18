@@ -18,4 +18,4 @@ define backend table DDL.
 
 from __future__ import annotations
 
-LOGICAL_SCHEMA_VERSION = 22
+LOGICAL_SCHEMA_VERSION = 23

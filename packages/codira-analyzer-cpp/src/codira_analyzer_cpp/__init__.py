@@ -30,6 +30,7 @@ None
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
@@ -68,8 +69,14 @@ from .cpp_comments import (
 
 from .cpp_documentation import _documentation_artifacts
 from .cpp_imports import _extract_imports
+from .cpp_include_context import (
+    IncludeContext,
+    include_identity_matches,
+    read_include_context,
+)
 from .cpp_preprocessing import _original_declaration_start, _parse_cpp_source
 
+from codira.analysis_inputs import validate_analysis_input_fingerprint
 from codira.contracts import (
     AnalyzerCapabilityDeclaration,
     AnalyzerConcurrencyDeclaration,
@@ -2365,6 +2372,254 @@ def _is_cpp_header(path: Path) -> bool:
     return False
 
 
+@dataclass
+class _ExternalOwner:
+    """Collect source-proven class declarations without emitting their symbols.
+
+    Parameters
+    ----------
+    stable_ids : set[str]
+        Candidate declaration identities from contained headers.
+    visibility : dict[str, set[int]]
+        Observed access flags for each explicitly declared method name.
+
+    Returns
+    -------
+    None
+        Header evidence for external owner references only.
+    """
+
+    stable_ids: set[str] = field(default_factory=set)
+    visibility: dict[str, set[int]] = field(default_factory=dict)
+
+
+def _external_method_owners(
+    context: IncludeContext, root: Path, source_result: AnalysisResult
+) -> dict[str, _ExternalOwner]:
+    """Find unambiguous class-owner evidence in clean captured header trees.
+
+    Parameters
+    ----------
+    context : IncludeContext
+        Exact source and header snapshot already used for syntax recovery.
+    root : pathlib.Path
+        Repository boundary used to derive declaration identities.
+    source_result : AnalysisResult
+        Source-local artifacts whose namespace and alias evidence takes priority.
+
+    Returns
+    -------
+    dict[str, _ExternalOwner]
+        Qualified class names and declaration/access evidence. Header artifacts
+        are not copied into the source result.
+    """
+    owners: dict[str, _ExternalOwner] = {}
+    alternatives = {
+        declaration.name
+        for declaration in source_result.declarations
+        if declaration.kind in {"namespace", "type_alias"}
+    }
+    for header in context.headers:
+        tree = _parse_cpp_source(header.source)
+        if tree.has_error:
+            continue
+        header_result = _CppAnalysisBuilder(
+            source=header.source,
+            root=tree,
+            owner_id=_symbol_owner_id(header.path, root),
+            known_class_names=_collect_known_class_names(tree.children, header.source),
+        ).build(
+            source_path=header.path,
+            module_name=_module_name_for_path(header.path, root),
+            module_stable_id=_module_stable_id(header.path, root),
+            module_docstring=None,
+        )
+        alternatives.update(
+            declaration.name
+            for declaration in header_result.declarations
+            if declaration.kind in {"namespace", "type_alias"}
+        )
+        for cls in header_result.classes:
+            owner = owners.setdefault(cls.name, _ExternalOwner())
+            owner.stable_ids.add(cls.stable_id)
+            for method in cls.methods:
+                owner.visibility.setdefault(method.name, set()).add(method.is_public)
+    conflicting_names = {
+        _qualified_name(_split_qualified_name(name)[:end])
+        for name in alternatives
+        for end in range(1, len(_split_qualified_name(name)) + 1)
+    }
+    return {
+        name: owner for name, owner in owners.items() if name not in conflicting_names
+    }
+
+
+def _external_member_calls(
+    function: FunctionArtifact,
+    owner_name: str,
+    owner: _ExternalOwner,
+    source: bytes,
+    source_tree: Node,
+) -> tuple[CallSite, ...]:
+    """Qualify proven member calls while retaining ambiguous lexical bindings.
+
+    Parameters
+    ----------
+    function : FunctionArtifact
+        Source-owned method definition and original call sites.
+    owner_name : str
+        Header-declared qualified class name.
+    owner : _ExternalOwner
+        Captured method declarations for that class.
+    source : bytes
+        Original source bytes for lexical names.
+    source_tree : tree_sitter.Node
+        Recovered source tree with original byte and line positions.
+
+    Returns
+    -------
+    tuple[CallSite, ...]
+        Explicit class-member records where unqualified lookup is proven.
+        Local declarations, parameters and nested scopes prevent inference.
+    """
+    bodies = [
+        node.child_by_field_name("body")
+        for node in _named_descendants(source_tree)
+        if node.type == "function_definition"
+        and node.end_point.row + 1 == function.end_lineno
+        and node.start_point.row + 1 >= function.lineno
+    ]
+    if len(bodies) != 1 or bodies[0] is None or len(owner.stable_ids) != 1:
+        return function.calls
+    nodes = _named_descendants(bodies[0])
+    nested_scopes = [
+        node
+        for node in nodes
+        if node.type in {"lambda_expression", "class_specifier", "struct_specifier"}
+    ]
+    if any(
+        node.type == "call_expression"
+        and (callee := node.child_by_field_name("function")) is not None
+        and callee.type == "primitive_type"
+        for node in nodes
+    ):
+        # The grammar can parse a local function-pointer declaration as nested
+        # primitive-type calls. Its lexical bindings are then not proven.
+        return function.calls
+    shadowed = set(function.parameters)
+    for node in nodes:
+        if node.type in {"using_declaration", "type_definition"}:
+            shadowed.update(
+                _node_text(child, source)
+                for child in _named_descendants(node)
+                if child.type in {"identifier", "type_identifier"}
+            )
+        for index, declarator in enumerate(node.children):
+            if node.field_name_for_child(index) != "declarator":
+                continue
+            name = _parameter_name_node(declarator)
+            if name is not None:
+                shadowed.add(_node_text(name, source))
+            else:
+                shadowed.update(
+                    _node_text(child, source)
+                    for binding in (declarator, *_named_descendants(declarator))
+                    if binding.type == "structured_binding_declarator"
+                    for child in binding.named_children
+                    if child.type == "identifier"
+                )
+    source_lines = source.splitlines()
+    return tuple(
+        replace(call, kind="attribute", base=owner_name)
+        if call.target in owner.visibility
+        and not any(
+            (scope.start_point.row, scope.start_point.column)
+            <= (call.lineno - 1, call.col_offset)
+            < (scope.end_point.row, scope.end_point.column)
+            for scope in nested_scopes
+        )
+        and (
+            (
+                call.kind == "name"
+                and not call.base
+                and call.target not in shadowed
+                and not source_lines[call.lineno - 1][call.col_offset :]
+                .lstrip()
+                .startswith(b"::")
+                and not source_lines[call.lineno - 1][: call.col_offset]
+                .rstrip()
+                .endswith(b"::")
+            )
+            or (call.kind == "attribute" and call.base == "this")
+        )
+        else call
+        for call in function.calls
+    )
+
+
+def _attach_external_method_owners(
+    result: AnalysisResult,
+    context: IncludeContext,
+    root: Path,
+    owner_id: str,
+    source_tree: Node,
+) -> AnalysisResult:
+    """Attach proven owners to qualified definitions without fake class rows.
+
+    Parameters
+    ----------
+    result : AnalysisResult
+        Source-local normalized output.
+    context : IncludeContext
+        Captured include inputs.
+    root : pathlib.Path
+        Repository root for declaration identities.
+    owner_id : str
+        Source-owned identity prefix for callable definitions.
+    source_tree : tree_sitter.Node
+        Recovered tree used to check lexical call bindings.
+
+    Returns
+    -------
+    AnalysisResult
+        Methods retain source spans and refer to the original header declaration.
+    """
+    if not any("::" in function.name for function in result.functions):
+        return result
+    owners = _external_method_owners(context, root, result)
+    functions: list[FunctionArtifact] = []
+    for function in result.functions:
+        parts = _split_qualified_name(function.name)
+        owner_name = _qualified_name(parts[:-1])
+        owner = owners.get(owner_name)
+        if owner is None:
+            functions.append(function)
+            continue
+        name = parts[-1]
+        visibility = owner.visibility.get(name, set())
+        functions.append(
+            replace(
+                function,
+                name=name,
+                stable_id=_function_stable_id(owner_id, name, class_name=owner_name),
+                is_method=1,
+                is_public=next(iter(visibility))
+                if len(visibility) == 1
+                else function.is_public,
+                owner_name=owner_name,
+                owner_stable_id=next(iter(owner.stable_ids))
+                if len(owner.stable_ids) == 1
+                else None,
+                calls=_external_member_calls(
+                    function, owner_name, owner, context.source, source_tree
+                ),
+            )
+        )
+    return replace(
+        result, functions=_disambiguate_callable_stable_ids(tuple(functions))
+    )
+
+
 class CppAnalyzer:
     """
     Concrete C++ analyzer for repository indexing.
@@ -2385,7 +2640,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "8"
+    version = "9"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -2609,6 +2864,59 @@ class CppAnalyzer:
         """
         return 1 if path.suffix == ".h" else 0
 
+    def analysis_input_fingerprint(self, path: Path, root: Path) -> str:
+        """Identify literal include inputs using the same snapshot as analysis.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Translation unit considered for incremental reuse.
+        root : pathlib.Path
+            Repository boundary for contained include resolution.
+
+        Returns
+        -------
+        str
+            Dependency identity including header bytes and negative lookups.
+        """
+        payload = json.loads(read_include_context(path, root).identity)
+        payload["configuration_fingerprint"] = self.configuration_fingerprint
+        return validate_analysis_input_fingerprint(
+            json.dumps(
+                payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")
+            )
+        )
+
+    def analysis_input_fingerprint_matches(
+        self, path: Path, root: Path, expected: str
+    ) -> bool:
+        """Check captured input content and resolutions without reparsing C++.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Translation unit being checked.
+        root : pathlib.Path
+            Repository boundary.
+        expected : str
+            Captured versioned include-input manifest.
+
+        Returns
+        -------
+        bool
+            Whether source/header bytes and resolution outcomes remain current.
+        """
+        try:
+            payload = json.loads(expected)
+        except ValueError:
+            return False
+        return (
+            isinstance(payload, dict)
+            and payload.get("configuration_fingerprint")
+            == self.configuration_fingerprint
+            and include_identity_matches(path, root, expected)
+        )
+
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
         """
         Analyze one C++ source file into normalized artifacts.
@@ -2625,8 +2933,14 @@ class CppAnalyzer:
         codira.models.AnalysisResult
             Normalized analysis result for the file.
         """
-        source = path.read_bytes()
-        root_node = _parse_cpp_source(source)
+        context = read_include_context(path, root)
+        source = context.source
+        root_node = _parse_cpp_source(
+            source,
+            included_sources=tuple(
+                (header.source, header.available_after) for header in context.headers
+            ),
+        )
         module_comment = (
             _leading_module_comment(root_node, source)
             if self._use_leading_comments
@@ -2648,6 +2962,9 @@ class CppAnalyzer:
             module_name=module_name,
             module_stable_id=module_stable_id,
             module_docstring=module_comment,
+        )
+        result = _attach_external_method_owners(
+            result, context, root, owner_id, root_node
         )
         if not self._use_leading_comments:
             result = replace(

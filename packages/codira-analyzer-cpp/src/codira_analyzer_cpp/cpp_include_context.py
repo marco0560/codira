@@ -59,6 +59,8 @@ class IncludeContext:
         Digest of exact dependency bytes, resolution outcomes and search paths.
     unresolved : tuple[tuple[str, str, str], ...]
         Including relative path, literal or macro text, and resolution status.
+    identity : str, optional
+        Versioned input manifest permitting validation without parsing C++ again.
 
     Returns
     -------
@@ -70,6 +72,7 @@ class IncludeContext:
     headers: tuple[IncludedSource, ...]
     fingerprint: str
     unresolved: tuple[tuple[str, str, str], ...]
+    identity: str = ""
 
 
 def _includes(source: bytes) -> list[tuple[str, bool | None, int]]:
@@ -121,6 +124,48 @@ def _includes(source: bytes) -> list[tuple[str, bool | None, int]]:
     return result
 
 
+def _resolve_include_path(
+    spelling: str,
+    quoted: bool | None,
+    including: Path,
+    root: Path,
+    search: tuple[Path, ...],
+) -> tuple[Path | None, str]:
+    """Resolve one literal include inside the repository using explicit roots.
+
+    Parameters
+    ----------
+    spelling : str
+        Include path or unexpanded macro text.
+    quoted : bool | None
+        Quoted, system or macro include mode.
+    including : pathlib.Path
+        Canonical path of the including source.
+    root : pathlib.Path
+        Canonical repository boundary.
+    search : tuple[pathlib.Path, ...]
+        Explicit ordered search roots.
+
+    Returns
+    -------
+    tuple[pathlib.Path | None, str]
+        Contained selected path or a deterministic unresolved status.
+    """
+    if quoted is None:
+        return None, "macro"
+    candidates = ((including.parent,) if quoted else ()) + search
+    for directory in candidates:
+        try:
+            candidate = (directory / spelling).resolve()
+            if not candidate.is_relative_to(root):
+                return None, "outside_root"
+            if candidate.is_file():
+                return candidate, "resolved"
+        except OSError as exc:
+            return None, f"resolution_error:{exc.errno}"
+    return None, "missing" if quoted or search else "external"
+
+
 def read_include_context(
     path: Path, root: Path, *, include_paths: tuple[Path, ...] = ()
 ) -> IncludeContext:
@@ -160,6 +205,7 @@ def read_include_context(
     source = path.read_bytes()
     snapshots: dict[Path, IncludedSource] = {}
     observations: list[tuple[str, str, str, str]] = []
+    lookups: list[tuple[str, str, bool | None, str, str]] = []
     unresolved: list[tuple[str, str, str]] = []
     pending: list[tuple[int, str, Path, bytes]] = [(0, path.as_posix(), path, source)]
     visited = {path}
@@ -172,25 +218,18 @@ def read_include_context(
             continue
         for spelling, quoted, end in _includes(content):
             owner = including.relative_to(root).as_posix()
-            if quoted is None:
-                observations.append((owner, spelling, "macro", ""))
-                unresolved.append((owner, spelling, "macro"))
-                continue
-            candidates = ((including.parent,) if quoted else ()) + search
-            resolved: Path | None = None
-            status = "missing" if quoted or search else "external"
-            for directory in candidates:
-                try:
-                    candidate = (directory / spelling).resolve()
-                    if not candidate.is_relative_to(root):
-                        status = "outside_root"
-                        break
-                    if candidate.is_file():
-                        resolved = candidate
-                        break
-                except OSError as exc:
-                    status = f"resolution_error:{exc.errno}"
-                    break
+            resolved, status = _resolve_include_path(
+                spelling, quoted, including, root, search
+            )
+            lookups.append(
+                (
+                    owner,
+                    spelling,
+                    quoted,
+                    status,
+                    "" if resolved is None else resolved.relative_to(root).as_posix(),
+                )
+            )
             if resolved is None:
                 observations.append((owner, spelling, status, ""))
                 unresolved.append((owner, spelling, status))
@@ -211,6 +250,7 @@ def read_include_context(
             except OSError as exc:
                 status = f"read_error:{exc.errno}"
                 observations.append((owner, spelling, status, target))
+                lookups.append((owner, spelling, quoted, status, target))
                 unresolved.append((owner, spelling, status))
                 continue
             visited.add(resolved)
@@ -236,4 +276,113 @@ def read_include_context(
     fingerprint = hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=True).encode()
     ).hexdigest()
-    return IncludeContext(source, headers, fingerprint, tuple(unresolved))
+    identity_payload = {
+        **payload,
+        "source_sha256": hashlib.sha256(source).hexdigest(),
+        "lookups": lookups,
+    }
+    checksum = hashlib.sha256(
+        json.dumps(
+            identity_payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    identity = json.dumps(
+        {**identity_payload, "manifest_sha256": checksum},
+        sort_keys=True,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    return IncludeContext(source, headers, fingerprint, tuple(unresolved), identity)
+
+
+def _contained_path(root: Path, relative: str) -> Path:
+    """Validate a manifest path before reading any referenced source bytes.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Canonical repository boundary.
+    relative : str
+        Manifest path relative to that boundary.
+
+    Returns
+    -------
+    pathlib.Path
+        Canonical contained path.
+
+    Raises
+    ------
+    ValueError
+        If the manifest references a path outside the repository.
+    """
+    path = (root / relative).resolve()
+    if not path.is_relative_to(root):
+        raise ValueError("C++ input manifest escapes the repository")
+    return path
+
+
+def include_identity_matches(path: Path, root: Path, identity: str) -> bool:
+    """Check captured hashes and lookup outcomes without parsing source syntax.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Translation unit being checked.
+    root : pathlib.Path
+        Repository resolution boundary.
+    identity : str
+        Previously captured canonical input manifest.
+
+    Returns
+    -------
+    bool
+        Whether source/header bytes and every include resolution still match.
+        Malformed, unavailable or escaping manifests require fresh analysis.
+    """
+    try:
+        payload = json.loads(identity)
+        if not isinstance(payload, dict) or payload.get("format") != 1:
+            return False
+        checksum = payload.pop("manifest_sha256", None)
+        payload.pop("configuration_fingerprint", None)
+        if (
+            hashlib.sha256(
+                json.dumps(
+                    payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+            != checksum
+        ):
+            return False
+        root = root.resolve()
+        source_path = _contained_path(root, payload["source_path"])
+        if source_path != path and source_path != path.resolve():
+            return False
+        if (
+            hashlib.sha256(source_path.read_bytes()).hexdigest()
+            != payload["source_sha256"]
+        ):
+            return False
+        search = tuple(_contained_path(root, item) for item in payload["search"])
+        input_paths = {payload["source_path"]: source_path}
+        for relative, digest, _ in payload["headers"]:
+            header_path = _contained_path(root, relative)
+            if hashlib.sha256(header_path.read_bytes()).hexdigest() != digest:
+                return False
+            input_paths[relative] = header_path
+        for owner, spelling, quoted, status, target in payload["lookups"]:
+            if quoted is not None and not isinstance(quoted, bool):
+                return False
+            if "error:" in status:
+                return False
+            selected, observed = _resolve_include_path(
+                spelling, quoted, input_paths[owner], root, search
+            )
+            selected_name = (
+                "" if selected is None else selected.relative_to(root).as_posix()
+            )
+            if (observed, selected_name) != (status, target):
+                return False
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+    return True

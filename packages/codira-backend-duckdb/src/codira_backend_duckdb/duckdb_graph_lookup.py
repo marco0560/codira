@@ -25,7 +25,7 @@ def _load_module_functions(conn: _DuckDBPersistenceConnection) -> dict[str, set[
     """
     rows = conn.execute("""
         SELECT m.name, f.name FROM functions f JOIN modules m ON f.module_id = m.id
-        WHERE f.class_id IS NULL ORDER BY m.name, f.name
+        WHERE f.class_id IS NULL AND f.is_method = 0 ORDER BY m.name, f.name
         """).fetchall()
     result: dict[str, set[str]] = {}
     for module_name, function_name in rows:
@@ -49,8 +49,9 @@ def _load_class_methods(
         Method names keyed by ``(module_name, class_name)``.
     """
     rows = conn.execute("""
-        SELECT m.name, c.name, f.name FROM functions f JOIN classes c ON f.class_id = c.id
-        JOIN modules m ON f.module_id = m.id ORDER BY m.name, c.name, f.name
+        SELECT m.name, COALESCE(f.owner_name, c.name), f.name FROM functions f LEFT JOIN classes c ON f.class_id = c.id
+        JOIN modules m ON f.module_id = m.id WHERE f.is_method = 1 AND COALESCE(f.owner_name, c.name) IS NOT NULL
+        ORDER BY m.name, COALESCE(f.owner_name, c.name), f.name
         """).fetchall()
     result: dict[tuple[str, str], set[str]] = {}
     for module_name, class_name, method_name in rows:

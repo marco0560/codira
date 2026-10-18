@@ -10,6 +10,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from codira.analysis_inputs import analysis_inputs_changed
 from codira.cli_render import _emit_json, _query_payload
 from codira.cli_requests import (
     IndexCommandRequest,
@@ -1229,6 +1230,34 @@ def _inspect_generation_freshness(root: Path) -> IndexRebuildRequest | None:
     return None
 
 
+def _external_input_rebuild_request(root: Path) -> IndexRebuildRequest | None:
+    """Request incremental refresh when compatible persisted inputs changed.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Repository whose schema and backend inventory are already validated.
+
+    Returns
+    -------
+    IndexRebuildRequest | None
+        Refresh request for changed external inputs, otherwise None.
+    """
+    generation = IndexGenerationStore(root).read()
+    if analysis_inputs_changed(
+        root,
+        active_index_backend(root=root),
+        active_language_analyzers(root=root),
+        () if generation is None else generation.failed_files or (),
+    ):
+        return IndexRebuildRequest(
+            message="[codira] External analysis inputs changed — refreshing...",
+            reset_db=False,
+            stderr=True,
+        )
+    return None
+
+
 def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
     """
     Inspect the local index and report whether a rebuild is required.
@@ -1309,7 +1338,7 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
         metadata,
     )
     if metadata_decided:
-        return metadata_request
+        return metadata_request or _external_input_rebuild_request(root)
 
     conn = backend.open_connection(root)
     try:
@@ -1357,7 +1386,7 @@ def _inspect_index_rebuild_request(root: Path) -> IndexRebuildRequest | None:
                 reset_db=True,
                 stderr=True,
             )
-        return None
+        return _external_input_rebuild_request(root)
     finally:
         backend.close_connection(conn)
 

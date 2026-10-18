@@ -340,6 +340,15 @@ class FunctionArtifact:
         Ordered callable-object reference records owned by the function.
     overloads : tuple[codira.models.OverloadArtifact, ...], optional
         Ordered overload declarations attached to the canonical callable.
+    owner_name : str | None, optional
+        Explicit class owner for a method whose declaration lives in another file.
+    owner_stable_id : str | None, optional
+        Proven declaration identity of that owner when uniquely known.
+
+    Returns
+    -------
+    None
+        Immutable callable data without copying an external class declaration.
     """
 
     name: str
@@ -360,6 +369,8 @@ class FunctionArtifact:
     calls: tuple[CallSite, ...]
     callable_refs: tuple[CallableReference, ...]
     overloads: tuple[OverloadArtifact, ...] = ()
+    owner_name: str | None = None
+    owner_stable_id: str | None = None
 
     def logical_name(self, *, class_name: str | None = None) -> str:
         """
@@ -368,13 +379,16 @@ class FunctionArtifact:
         Parameters
         ----------
         class_name : str | None, optional
-            Owning class name for method artifacts.
+            Owning class name for method artifacts; defaults to an explicit
+            external owner reference when present.
 
         Returns
         -------
         str
             Unqualified function name or ``Class.method`` for methods.
         """
+        if class_name is None:
+            class_name = self.owner_name
         if class_name is None:
             return self.name
         return f"{class_name}.{self.name}"

@@ -2095,6 +2095,43 @@ class AnalysisInputFingerprintProvider(Protocol):
 
 
 @runtime_checkable
+class AnalysisInputReuseValidator(Protocol):
+    """Offer an optional cheaper check of a previously captured input identity.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Optional analyzer contract for source-backed reuse validation.
+    """
+
+    def analysis_input_fingerprint_matches(
+        self, path: Path, root: Path, expected: str
+    ) -> bool:
+        """Verify that a captured identity still licenses reuse.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Source path being checked.
+        root : pathlib.Path
+            Repository resolution context.
+        expected : str
+            Exact identity captured by analysis_input_fingerprint.
+
+        Returns
+        -------
+        bool
+            True only if the external inputs remain equivalent. Implementations
+            must validate content and relevant negative resolution lookups.
+        """
+        ...
+
+
+@runtime_checkable
 class AnalysisInputStateBackend(Protocol):
     """Declare backend persistence of per-file external analysis identity.
 

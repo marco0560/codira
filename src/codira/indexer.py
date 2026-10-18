@@ -37,6 +37,10 @@ from multiprocessing import get_context
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from codira.analysis_inputs import (
+    analysis_input_fingerprint,
+    analysis_input_fingerprint_matches,
+)
 from codira.config import (
     DEFAULT_EMBEDDING_INDEX_MODE,
     IndexConcurrencyConfig,
@@ -44,6 +48,8 @@ from codira.config import (
     with_effective_config_cache,
 )
 from codira.contracts import (
+    AnalysisInputFingerprintProvider,
+    AnalysisInputStateBackend,
     BackendError,
     BackendPersistAnalysisRequest,
     BackendPersistFullIndexFile,
@@ -295,6 +301,13 @@ class IndexReport:
         Requested and effective analysis scheduling details.
     file_hashes : dict[str, str]
         Attempted scanner hashes, including files whose analysis failed.
+    file_analysis_inputs : dict[str, str]
+        Observed external input identities, including failed source paths.
+
+    Returns
+    -------
+    None
+        Immutable indexing report data.
     """
 
     indexed: int
@@ -318,6 +331,7 @@ class IndexReport:
         workers=1,
     )
     file_hashes: dict[str, str] = field(default_factory=dict)
+    file_analysis_inputs: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -358,12 +372,20 @@ class ExistingIndexState:
         Deterministically ordered indexed file paths.
     embedding_backend_matches : bool
         Whether persisted embeddings match the active embedding backend.
+    file_analysis_inputs : dict[str, str], optional
+        Persisted external analysis input identities keyed by source path.
+
+    Returns
+    -------
+    None
+        Immutable reuse-planning state.
     """
 
     file_hashes: dict[str, str]
     file_ownership: dict[str, tuple[str, str]]
     paths: list[str]
     embedding_backend_matches: bool
+    file_analysis_inputs: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -464,6 +486,13 @@ class FinalizeIndexReportRequest:
         Whether the completed index result is safe to publish to readers.
     file_hashes : dict[str, str]
         Attempted scanner hashes, including files whose analysis failed.
+    file_analysis_inputs : dict[str, str]
+        Observed external input identities, including failed source paths.
+
+    Returns
+    -------
+    None
+        Immutable indexing report data.
     """
 
     plan: IndexPlan
@@ -484,6 +513,7 @@ class FinalizeIndexReportRequest:
         workers=1,
     )
     file_hashes: dict[str, str] = field(default_factory=dict)
+    file_analysis_inputs: dict[str, str] = field(default_factory=dict)
 
 
 def _is_binary_coverage_candidate(path: Path) -> bool:
@@ -656,6 +686,7 @@ def _snapshot_from_metadata(meta: dict[str, object]) -> FileMetadataSnapshot:
 def _snapshot_with_analyzer(
     snapshot: FileMetadataSnapshot,
     analyzer: LanguageAnalyzer,
+    input_fingerprint: str = "",
 ) -> FileMetadataSnapshot:
     """
     Attach analyzer ownership metadata to a file snapshot.
@@ -666,6 +697,8 @@ def _snapshot_with_analyzer(
         Base file metadata snapshot.
     analyzer : codira.contracts.LanguageAnalyzer
         Analyzer responsible for the file.
+    input_fingerprint : str, optional
+        External input identity observed during scanning.
 
     Returns
     -------
@@ -679,6 +712,7 @@ def _snapshot_with_analyzer(
         size=snapshot.size,
         analyzer_name=str(analyzer.name),
         analyzer_version=str(analyzer.version),
+        analysis_input_fingerprint=input_fingerprint,
     )
 
 
@@ -787,6 +821,42 @@ def _select_language_analyzer(
     raise ValueError(msg)
 
 
+def _verify_analysis_task_inputs(
+    task: _AnalysisTask, root: Path, analyzer: LanguageAnalyzer
+) -> None:
+    """Reject source or external inputs changing around worker analysis.
+
+    Parameters
+    ----------
+    task : _AnalysisTask
+        Source and external identities observed during planning.
+    root : pathlib.Path
+        Repository analysis context.
+    analyzer : codira.contracts.LanguageAnalyzer
+        Configured source owner in this worker.
+
+    Returns
+    -------
+    None
+        Returns only while the observed identities remain current.
+
+    Raises
+    ------
+    ValueError
+        If source bytes or external inputs changed after the scan.
+    OSError
+        If source or required input identity cannot be read.
+    """
+    path = Path(task.path)
+    if str(file_metadata(path)["hash"]) != str(
+        task.metadata["hash"]
+    ) or analysis_input_fingerprint(analyzer, path, root) != str(
+        task.metadata.get("analysis_input_fingerprint", "")
+    ):
+        message = "Source or external analysis inputs changed during indexing"
+        raise ValueError(message)
+
+
 def _analyze_index_task(
     task: _AnalysisTask,
     root: Path,
@@ -813,12 +883,23 @@ def _analyze_index_task(
     path_obj = Path(task.path)
     metadata_snapshot = _snapshot_from_metadata(task.metadata)
     analyzer = _select_language_analyzer(path_obj, analyzers, root=root)
-    metadata_snapshot = _snapshot_with_analyzer(metadata_snapshot, analyzer)
+    observed_inputs = str(task.metadata.get("analysis_input_fingerprint", ""))
+    metadata_snapshot = _snapshot_with_analyzer(
+        metadata_snapshot, analyzer, observed_inputs
+    )
     try:
+        _verify_analysis_task_inputs(task, root, analyzer)
         with warnings.catch_warnings(record=True) as warning_records:
             warnings.simplefilter("always")
             analysis = analyzer.analyze_file(path_obj, root)
-    except (SyntaxError, UnicodeDecodeError, ValueError, RecursionError) as exc:
+            _verify_analysis_task_inputs(task, root, analyzer)
+    except (
+        OSError,
+        SyntaxError,
+        UnicodeDecodeError,
+        ValueError,
+        RecursionError,
+    ) as exc:
         return _AnalysisTaskResult(
             ordinal=task.ordinal,
             parsed_file=None,
@@ -1415,6 +1496,7 @@ def _collect_project_scan_state(
     root: Path,
     *,
     analyzers: list[LanguageAnalyzer],
+    existing_state: ExistingIndexState | None = None,
 ) -> ProjectScanState:
     """
     Collect the current tracked file state used by index planning.
@@ -1425,6 +1507,8 @@ def _collect_project_scan_state(
         Repository root being indexed.
     analyzers : list[codira.contracts.LanguageAnalyzer]
         Active analyzers available for file routing.
+    existing_state : ExistingIndexState | None, optional
+        Persisted identities used for content-validated incremental reuse.
 
     Returns
     -------
@@ -1465,6 +1549,28 @@ def _collect_project_scan_state(
             analyzers,
             root=root,
         )
+        analyzer = analyzers_by_path[path_str]
+        previous_inputs = (
+            None
+            if existing_state is None
+            else existing_state.file_analysis_inputs.get(path_str)
+        )
+        if (
+            existing_state is not None
+            and previous_inputs is not None
+            and existing_state.file_hashes.get(path_str)
+            == metadata_by_path[path_str]["hash"]
+            and existing_state.file_ownership.get(path_str)
+            == (str(analyzer.name), str(analyzer.version))
+            and analysis_input_fingerprint_matches(
+                analyzer, path, root, previous_inputs
+            )
+        ):
+            metadata_by_path[path_str]["analysis_input_fingerprint"] = previous_inputs
+        else:
+            metadata_by_path[path_str]["analysis_input_fingerprint"] = (
+                analysis_input_fingerprint(analyzer, path, root)
+            )
 
     return ProjectScanState(
         analyzers_by_path=analyzers_by_path,
@@ -1507,6 +1613,11 @@ def _load_existing_index_state(
     return ExistingIndexState(
         file_hashes=file_hashes,
         file_ownership=backend.load_existing_file_ownership(root, conn=conn),
+        file_analysis_inputs=(
+            backend.load_existing_file_analysis_inputs(root, conn=conn)
+            if isinstance(backend, AnalysisInputStateBackend)
+            else {}
+        ),
         paths=sorted(file_hashes),
         embedding_backend_matches=backend.current_embedding_state_matches(
             root,
@@ -1575,6 +1686,15 @@ def _plan_index_run(
                         "indexed",
                         "analyzer plugin or version changed",
                     )
+                )
+            elif existing_state.file_analysis_inputs.get(path, "") != str(
+                current_state.metadata_by_path[path].get(
+                    "analysis_input_fingerprint", ""
+                )
+            ):
+                indexed_paths.append(path)
+                decisions.append(
+                    IndexDecision(path, "indexed", "external analysis inputs changed")
                 )
             elif not existing_state.embedding_backend_matches:
                 indexed_paths.append(path)
@@ -1722,6 +1842,7 @@ def _finalize_index_report(request: FinalizeIndexReportRequest) -> IndexReport:
         publication_ready=request.publication_ready,
         analysis_concurrency=request.analysis_concurrency,
         file_hashes=request.file_hashes,
+        file_analysis_inputs=request.file_analysis_inputs,
     )
 
 
@@ -1864,6 +1985,9 @@ def index_repo(
                         {
                             "path": Path(failure.path).relative_to(root).as_posix(),
                             "sha256": report.file_hashes.get(failure.path, ""),
+                            "analysis_input_fingerprint": report.file_analysis_inputs.get(
+                                failure.path, ""
+                            ),
                             "analyzer_name": failure.analyzer_name,
                             "error_type": failure.error_type,
                             "reason": failure.reason,
@@ -1943,11 +2067,6 @@ def _index_repo_unlocked(
         effective_config.index if analysis_concurrency is None else analysis_concurrency
     )
     coverage_issues = _audit_canonical_directory_coverage(root, analyzers=analyzers)
-    current_state = _collect_project_scan_state(root, analyzers=analyzers)
-    coverage_issues.extend(current_state.coverage_issues)
-    scan_hashes = {
-        path: str(meta["hash"]) for path, meta in current_state.metadata_by_path.items()
-    }
     planning_conn = index_backend.open_connection(root)
     try:
         existing_state = _load_existing_index_state(
@@ -1956,6 +2075,18 @@ def _index_repo_unlocked(
             embedding_backend=backend,
             conn=planning_conn,
         )
+        current_state = _collect_project_scan_state(
+            root, analyzers=analyzers, existing_state=existing_state
+        )
+        coverage_issues.extend(current_state.coverage_issues)
+        scan_inputs = {
+            path: str(meta.get("analysis_input_fingerprint", ""))
+            for path, meta in current_state.metadata_by_path.items()
+        }
+        scan_hashes = {
+            path: str(meta["hash"])
+            for path, meta in current_state.metadata_by_path.items()
+        }
         plan = _plan_index_run(
             full=full,
             current_state=current_state,
@@ -1991,6 +2122,14 @@ def _index_repo_unlocked(
         )
     finally:
         index_backend.close_connection(planning_conn)
+    if not isinstance(index_backend, AnalysisInputStateBackend) and any(
+        isinstance(analyzer, AnalysisInputFingerprintProvider)
+        for analyzer in current_state.analyzers_by_path.values()
+    ):
+        message = (
+            f"Backend {index_backend.name} cannot persist external analysis inputs"
+        )
+        raise ValueError(message)
     cached_failures: list[IndexFailure] = []
     if not full and not retry_failed_files:
         previous = IndexGenerationStore(root).read()
@@ -2003,6 +2142,8 @@ def _index_repo_unlocked(
                 if (
                     path in plan.indexed_paths
                     and scan_hashes.get(path) == failure["sha256"]
+                    and scan_inputs.get(path, "")
+                    == failure.get("analysis_input_fingerprint", "")
                 ):
                     cached_failures.append(
                         IndexFailure(
@@ -2033,6 +2174,7 @@ def _index_repo_unlocked(
             FinalizeIndexReportRequest(
                 plan=plan,
                 file_hashes=scan_hashes,
+                file_analysis_inputs=scan_inputs,
                 parsed_files=[],
                 failures=cached_failures,
                 warnings=[],
@@ -2081,6 +2223,7 @@ def _index_repo_unlocked(
             FinalizeIndexReportRequest(
                 plan=plan,
                 file_hashes=scan_hashes,
+                file_analysis_inputs=scan_inputs,
                 parsed_files=persisted_files,
                 failures=failures,
                 warnings=collected_warnings,
@@ -2160,6 +2303,7 @@ def _index_repo_unlocked(
             FinalizeIndexReportRequest(
                 plan=plan,
                 file_hashes=scan_hashes,
+                file_analysis_inputs=scan_inputs,
                 parsed_files=persisted_files,
                 failures=failures,
                 warnings=collected_warnings,

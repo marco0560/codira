@@ -85,6 +85,8 @@ FunctionRow = tuple[
     int,
     int,
     int,
+    str | None,
+    str | None,
 ]
 SymbolIndexRow = tuple[int, str, str, str, str, int, int]
 DocumentationArtifactRow = tuple[
@@ -1254,6 +1256,8 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
                     method.has_docstring,
                     method.is_method,
                     method.is_public,
+                    method.owner_name,
+                    method.owner_stable_id,
                 )
             )
             symbol_row_id = _insert_symbol_index_row(
@@ -1368,6 +1372,8 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
                 fn.has_docstring,
                 fn.is_method,
                 fn.is_public,
+                fn.owner_name,
+                fn.owner_stable_id,
             )
         )
         symbol_row_id = _insert_symbol_index_row(
@@ -1376,7 +1382,7 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
             SymbolIndexInsertRequest(
                 name=fn.name,
                 stable_id=fn.stable_id,
-                symbol_type="function",
+                symbol_type="method" if fn.is_method else "function",
                 module_name=module_name,
                 file_id=file_id,
                 lineno=fn.lineno,
@@ -1388,8 +1394,8 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
                 symbol_row_id=symbol_row_id,
                 stable_id=fn.stable_id,
                 module_name=module_name,
-                symbol_name=fn.name,
-                symbol_type="function",
+                symbol_name=fn.logical_name(class_name=fn.owner_name),
+                symbol_type="method" if fn.is_method else "function",
                 signature=fn.signature,
                 docstring=fn.docstring,
                 extra_context=python_embedding_context or c_embedding_context,
@@ -1424,9 +1430,13 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
             structural_rows=structural_rows,
         )
         for call in fn.calls:
-            call_rows.append(_record_tuple(file_id, module_name, fn.name, call))
+            call_rows.append(
+                _record_tuple(file_id, module_name, fn.logical_name(), call)
+            )
         for ref in fn.callable_refs:
-            ref_rows.append(_reference_tuple(file_id, module_name, fn.name, ref))
+            ref_rows.append(
+                _reference_tuple(file_id, module_name, fn.logical_name(), ref)
+            )
 
 
 def _persist_overload_artifacts(

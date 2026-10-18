@@ -18,7 +18,7 @@ definitions for SQLite persistence actions.
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 DDL = [
     """
@@ -94,6 +94,8 @@ DDL = [
         has_docstring INTEGER NOT NULL,
         is_method INTEGER NOT NULL,
         is_public INTEGER NOT NULL,
+        owner_name TEXT,
+        owner_stable_id TEXT,
         FOREIGN KEY(module_id) REFERENCES modules(id),
         FOREIGN KEY(class_id) REFERENCES classes(id)
     );

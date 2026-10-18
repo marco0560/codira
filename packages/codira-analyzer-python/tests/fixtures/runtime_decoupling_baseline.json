@@ -40,7 +40,11 @@
           "lineno": 20,
           "name": "run",
           "overloads": [],
-          "parameters": ["value"],
+          "owner_name": null,
+          "owner_stable_id": null,
+          "parameters": [
+            "value"
+          ],
           "raises": 0,
           "returns_value": 1,
           "signature": "run(self, value)",
@@ -121,7 +125,12 @@
       "lineno": 10,
       "name": "helper",
       "overloads": [],
-      "parameters": ["item", "flag"],
+      "owner_name": null,
+      "owner_stable_id": null,
+      "parameters": [
+        "item",
+        "flag"
+      ],
       "raises": 1,
       "returns_value": 1,
       "signature": "helper()",
@@ -130,8 +139,18 @@
     }
   ],
   "imports": [
-    {"alias": "Queue", "kind": "import", "lineno": 3, "name": "collections.deque"},
-    {"alias": "paths", "kind": "import", "lineno": 4, "name": "os.path"}
+    {
+      "alias": "Queue",
+      "kind": "import",
+      "lineno": 3,
+      "name": "collections.deque"
+    },
+    {
+      "alias": "paths",
+      "kind": "import",
+      "lineno": 4,
+      "name": "os.path"
+    }
   ],
   "index_symbols": true,
   "module": {

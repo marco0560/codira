@@ -439,7 +439,7 @@ def _load_module_functions(conn: sqlite3.Connection) -> dict[str, set[str]]:
         FROM functions f
         JOIN modules m
           ON f.module_id = m.id
-        WHERE f.class_id IS NULL
+        WHERE f.class_id IS NULL AND f.is_method = 0
         ORDER BY m.name, f.name
         """).fetchall()
     module_functions: dict[str, set[str]] = {}
@@ -463,13 +463,14 @@ def _load_class_methods(conn: sqlite3.Connection) -> dict[tuple[str, str], set[s
         Method names keyed by ``(module_name, class_name)``.
     """
     rows = conn.execute("""
-        SELECT m.name, c.name, f.name
+        SELECT m.name, COALESCE(f.owner_name, c.name), f.name
         FROM functions f
-        JOIN classes c
+        LEFT JOIN classes c
           ON f.class_id = c.id
         JOIN modules m
           ON f.module_id = m.id
-        ORDER BY m.name, c.name, f.name
+        WHERE f.is_method = 1 AND COALESCE(f.owner_name, c.name) IS NOT NULL
+        ORDER BY m.name, COALESCE(f.owner_name, c.name), f.name
         """).fetchall()
     class_methods: dict[tuple[str, str], set[str]] = {}
     for module_name, class_name, method_name in rows:
@@ -549,6 +550,16 @@ def _rebuild_graph_indexes(conn: sqlite3.Connection) -> None:
     None
         The derived edge tables are replaced in place.
     """
+    conn.execute("""
+        UPDATE functions SET class_id = (
+            SELECT c.id FROM classes c
+            JOIN modules m ON m.id = c.module_id
+            JOIN symbol_index s ON s.type = 'class' AND s.file_id = m.file_id
+                AND s.name = c.name AND s.lineno = c.lineno
+            WHERE s.stable_id = functions.owner_stable_id
+            ORDER BY c.id LIMIT 1
+        ) WHERE owner_stable_id IS NOT NULL
+        """)
     module_functions = _load_module_functions(conn)
     class_methods = _load_class_methods(conn)
     import_aliases_by_module = _load_import_aliases(conn)
@@ -1363,8 +1374,8 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
         cur = conn.execute(
             "INSERT INTO functions"
             "(module_id, class_id, name, lineno, end_lineno, signature, "
-            "docstring, has_docstring, is_method, is_public) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "docstring, has_docstring, is_method, is_public, owner_name, owner_stable_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 module_id,
                 None,
@@ -1376,6 +1387,8 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
                 fn.has_docstring,
                 fn.is_method,
                 fn.is_public,
+                fn.owner_name,
+                fn.owner_stable_id,
             ),
         )
         assert cur.lastrowid is not None
@@ -1385,7 +1398,7 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
             SymbolIndexInsertRequest(
                 name=fn.name,
                 stable_id=fn.stable_id,
-                symbol_type="function",
+                symbol_type="method" if fn.is_method else "function",
                 module_name=module_name,
                 file_id=file_id,
                 lineno=fn.lineno,
@@ -1397,8 +1410,8 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
                 symbol_row_id=symbol_row_id,
                 stable_id=fn.stable_id,
                 module_name=module_name,
-                symbol_name=fn.name,
-                symbol_type="function",
+                symbol_name=fn.logical_name(class_name=fn.owner_name),
+                symbol_type="method" if fn.is_method else "function",
                 signature=fn.signature,
                 docstring=fn.docstring,
                 extra_context=python_embedding_context or c_embedding_context,
@@ -1432,9 +1445,13 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
             overloads=fn.overloads,
         )
         for call in fn.calls:
-            call_rows.append(_record_tuple(file_id, module_name, fn.name, call))
+            call_rows.append(
+                _record_tuple(file_id, module_name, fn.logical_name(), call)
+            )
         for ref in fn.callable_refs:
-            ref_rows.append(_reference_tuple(file_id, module_name, fn.name, ref))
+            ref_rows.append(
+                _reference_tuple(file_id, module_name, fn.logical_name(), ref)
+            )
 
 
 def _persist_overload_artifacts(

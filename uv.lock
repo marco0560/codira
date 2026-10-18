@@ -523,7 +523,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-cpp"
-version = "2.0.4"
+version = "2.0.5"
 source = { editable = "packages/codira-analyzer-cpp" }
 dependencies = [
     { name = "codira" },
@@ -705,7 +705,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-duckdb"
-version = "2.0.6"
+version = "2.0.7"
 source = { editable = "packages/codira-backend-duckdb" }
 dependencies = [
     { name = "codira" },
@@ -727,7 +727,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-sqlite"
-version = "2.0.4"
+version = "2.0.5"
 source = { editable = "packages/codira-backend-sqlite" }
 dependencies = [
     { name = "codira" },

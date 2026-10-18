@@ -8,7 +8,7 @@ appearing without this inventory.
 
 ## `# noqa` inventory
 
-src/codira/family_runtime.py:468 PLR0913 — federation query options expose
+src/codira/family_runtime.py:472 PLR0913 — federation query options expose
 the independently selectable operation, member filter, pagination, direction,
 and explicit partial-results policy at the shared CLI/MCP boundary.
 
@@ -63,9 +63,9 @@ scripts/characterize_similarity_indexes.py:306 PLR0913 — the reproducible
     corpus runner keeps independently selectable corpus and timing inputs.
 scripts/generate_github_snapshot.py:118 S607 — the fixed `gh` executable is
     intentionally invoked by argument vector; there is no shell interpolation.
-src/codira/indexer.py:1272 PLR0913 — bulk indexing keeps backend, transaction,
+src/codira/indexer.py:1353 PLR0913 — bulk indexing keeps backend, transaction,
     artifact, coverage, and embedding ownership explicit at the orchestration seam.
-src/codira/contracts.py:3404 PLR0913 — the plugin protocol signature is a
+src/codira/contracts.py:3441 PLR0913 — the plugin protocol signature is a
     public compatibility contract and cannot be bundled without breaking providers.
 src/codira/contracts.py:17 EM101,TRY003 — public contract validation keeps
     short, consistent exception messages at the typed boundary.
@@ -83,7 +83,7 @@ src/codira/query_daemon_lifecycle.py:580 PLR0913 — service lifecycle inputs ar
     explicit to preserve platform-independent restart behavior.
 src/codira/query_daemon_ipc.py:902 PLR0913 — IPC server construction exposes its
     authentication, runtime, and connection-boundary dependencies.
-src/codira/cli_index.py:150 C901,PLR0912 — index CLI failure/reporting branches are
+src/codira/cli_index.py:151 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
 src/codira/cli_queries.py:2395 PLR0913 — daemon context rendering receives the complete
     explicit query/output/profile request after freshness has been established.
@@ -147,7 +147,7 @@ scripts/run_final_embedding_model_campaign.py:642,
 scripts/run_final_embedding_model_campaign.py:793,
 scripts/run_retrieval_quality_benchmark.py:913,
 src/codira/docstring.py:1019, src/codira/docstring.py:1114,
-src/codira/index_generation.py:160,
+src/codira/index_generation.py:164,
 src/codira/query_daemon.py:366, src/codira/query_daemon_lifecycle.py:738, and
 src/codira/query_daemon_ipc.py:1372 retain the same category-specific reasons
 as their immediately preceding grouped entries.

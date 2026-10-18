@@ -38,6 +38,16 @@ def _rebuild_graph_indexes(conn: _DuckDBPersistenceConnection) -> None:
     None
         The derived edge tables are replaced in place.
     """
+    conn.execute("""
+        UPDATE functions SET class_id = (
+            SELECT c.id FROM classes c
+            JOIN modules m ON m.id = c.module_id
+            JOIN symbol_index s ON s.type = 'class' AND s.file_id = m.file_id
+                AND s.name = c.name AND s.lineno = c.lineno
+            WHERE s.stable_id = functions.owner_stable_id
+            ORDER BY c.id LIMIT 1
+        ) WHERE owner_stable_id IS NOT NULL
+        """)
     module_functions = _load_module_functions(conn)
     class_methods = _load_class_methods(conn)
     import_aliases_by_module = _load_import_aliases(conn)

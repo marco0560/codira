@@ -12,12 +12,16 @@ None
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 import pytest
 
-from codira_analyzer_cpp.cpp_include_context import read_include_context
+from codira_analyzer_cpp.cpp_include_context import (
+    include_identity_matches,
+    read_include_context,
+)
 from codira_analyzer_cpp.cpp_preprocessing import _parse_cpp_source
 
 
@@ -315,3 +319,73 @@ def test_transitive_annotations_cannot_recover_uses_before_include(
             ),
         )
         assert root.has_error is before
+
+
+def test_fast_identity_checks_resolution_shadowing_and_symlink_changes(
+    tmp_path: Path,
+) -> None:
+    """Invalidate captured lookup choices even when old header bytes survive.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository and explicit include roots.
+
+    Returns
+    -------
+    None
+        Shadowing and symlink retargeting are detected independently of bytes.
+    """
+    (tmp_path / "src").mkdir()
+    (tmp_path / "include").mkdir()
+    source = tmp_path / "src/main.cpp"
+    source.write_bytes(b'#include "api.h"\nAPI int run();\n')
+    header = tmp_path / "include/api.h"
+    header.write_bytes(b"#define API\n")
+    context = read_include_context(source, tmp_path, include_paths=(Path("include"),))
+    assert include_identity_matches(source, tmp_path, context.identity)
+    shadow = tmp_path / "src/api.h"
+    shadow.write_bytes(header.read_bytes())
+    assert not include_identity_matches(source, tmp_path, context.identity)
+    shadow.unlink()
+    assert include_identity_matches(source, tmp_path, context.identity)
+    alias = tmp_path / "src/alias.h"
+    other = tmp_path / "include/other.h"
+    other.write_bytes(header.read_bytes())
+    alias.symlink_to(header)
+    source.write_bytes(b'#include "alias.h"\nAPI int run();\n')
+    captured = read_include_context(source, tmp_path)
+    assert include_identity_matches(source, tmp_path, captured.identity)
+    alias.unlink()
+    alias.symlink_to(other)
+    assert not include_identity_matches(source, tmp_path, captured.identity)
+
+
+def test_fast_identity_rejects_corrupt_or_escaping_manifest(tmp_path: Path) -> None:
+    """Require a complete contained manifest before approving incremental reuse.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository.
+
+    Returns
+    -------
+    None
+        Invalid identities cannot produce a fresh result.
+    """
+    source = tmp_path / "main.cpp"
+    source.write_bytes(b'#include "api.h"\nAPI int run();\n')
+    header = tmp_path / "api.h"
+    header.write_bytes(b"#define API\n")
+    context = read_include_context(source, tmp_path)
+    assert include_identity_matches(source, tmp_path, context.identity)
+    for identity in ("", "legacy-digest", "{}", "[]", '{"format": 999}'):
+        assert not include_identity_matches(source, tmp_path, identity)
+    payload = json.loads(context.identity)
+    payload["headers"] = []
+    assert not include_identity_matches(source, tmp_path, json.dumps(payload))
+    payload["source_path"] = "../outside.cpp"
+    assert not include_identity_matches(source, tmp_path, json.dumps(payload))
+    source.write_bytes(source.read_bytes() + b"int added;\n")
+    assert not include_identity_matches(source, tmp_path, context.identity)
