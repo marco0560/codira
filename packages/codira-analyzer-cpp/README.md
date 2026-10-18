@@ -62,3 +62,18 @@ preprocessor conditions, comments and literals stay intact, and extraction reads
 the original source for signatures and call positions. The recovered tree is used
 only when it is wholly clean; unrelated syntax errors retain the original tree.
 This does not evaluate compilation conditions or perform semantic validation.
+
+## Linkage and record methods
+
+Single and braced `extern "C"` / `extern "C++"` declarations retain their
+written namespace and callable ownership. Record specifiers nested inside
+variable declarations are visited as types. Structs and unions retain their
+declaration kind; records with explicit methods also have a class-like method
+container. Data-only records retain their declaration representation.
+
+Nested records and template specializations keep distinct source names. Callable
+slots use parameter syntax and cv/ref qualifiers, preserving overloads with
+identical parameter names while merging renamed/defaulted redeclarations.
+Lexical conditional branches remain separate source variants. No build
+configuration is selected, and aliases or compiler-dependent type equivalence
+are not resolved. Function-pointer fields remain data rather than functions.

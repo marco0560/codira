@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 from tree_sitter import Node
 
 from .cpp_syntax import (
+    _canonical_node_text,
     _class_stable_id,
     _conditional_children,
     _cpp_external_target_kind,
@@ -125,11 +126,31 @@ _TYPE_LIKE_NAMES = {
 
 @dataclass(frozen=True)
 class _PendingFunction:
-    """Function candidate awaiting final ownership resolution."""
+    """Hold a callable candidate awaiting ownership and redeclaration merging.
+
+    Parameters
+    ----------
+    artifact : codira.models.FunctionArtifact
+        Original-source callable artifacts.
+    class_name : str | None
+        Known class-like owner, if any.
+    is_definition : bool
+        Whether the candidate includes a definition body.
+    binding_key : tuple[str, ...]
+        Source-syntax parameter types and cv/ref/constraint qualifiers. Parameter
+        names and default values do not distinguish redeclarations. Conditional
+        branch identity keeps alternative source definitions separate.
+
+    Returns
+    -------
+    None
+        Initializes an immutable candidate.
+    """
 
     artifact: FunctionArtifact
     class_name: str | None
     is_definition: bool
+    binding_key: tuple[str, ...]
 
 
 @dataclass
@@ -193,7 +214,7 @@ class _ClassBuilder:
         None
             The method map is updated in place.
         """
-        key = (pending.artifact.stable_id, pending.artifact.parameters)
+        key = (pending.artifact.stable_id, pending.binding_key)
         current = self.methods_by_key.get(key)
         if current is None or _prefer_pending_function(current, pending) is pending:
             self.methods_by_key[key] = pending
@@ -504,7 +525,7 @@ def _function_declarator_name(node: Node, source: bytes) -> str | None:
         "destructor_name",
         "operator_name",
     }:
-        direct_name = _node_text(direct_declarator, source)
+        direct_name = _canonical_node_text(direct_declarator, source)
         error_name = _error_identifier_name(node, source)
         if error_name is not None and _looks_like_macro_or_type_name(direct_name):
             return error_name
@@ -551,7 +572,7 @@ def _unwrap_declarator_name(node: Node, source: bytes) -> str | None:
         "destructor_name",
         "operator_name",
     }:
-        return _node_text(node, source)
+        return _canonical_node_text(node, source)
 
     child = node.child_by_field_name("declarator")
     if child is not None:
@@ -588,15 +609,136 @@ def _extract_parameter_names(
 
     parameters: list[str] = []
     for child in parameter_list.named_children:
-        if child.type != "parameter_declaration":
+        if child.type not in {
+            "parameter_declaration",
+            "optional_parameter_declaration",
+            "variadic_parameter_declaration",
+        }:
             continue
         declarator = child.child_by_field_name("declarator")
         if declarator is None:
             continue
-        name = _unwrap_declarator_name(declarator, source)
+        name = _parameter_name_node(declarator)
         if name is not None:
-            parameters.append(name.split("::")[-1])
+            parameters.append(_node_text(name, source))
     return tuple(parameters)
+
+
+def _parameter_name_node(declarator: Node) -> Node | None:
+    """Follow the declarator chain to an explicitly named parameter.
+
+    Parameters
+    ----------
+    declarator : tree_sitter.Node
+        Parameter declarator, possibly a pointer, array or callback signature.
+
+    Returns
+    -------
+    tree_sitter.Node | None
+        Declared parameter identifier, excluding type and nested parameter names.
+    """
+    current: Node | None = declarator
+    while current is not None:
+        if current.type in {"identifier", "field_identifier"}:
+            return current
+        nested = current.child_by_field_name("declarator")
+        if nested is None and current.type in {
+            "parenthesized_declarator",
+            "reference_declarator",
+            "variadic_declarator",
+        }:
+            nested = next(
+                (
+                    child
+                    for child in current.named_children
+                    if child.type.endswith("_declarator")
+                    or child.type in {"identifier", "field_identifier"}
+                ),
+                None,
+            )
+        current = nested
+    return None
+
+
+def _callable_binding_key(declarator: Node, source: bytes) -> tuple[str, ...]:
+    """Distinguish written overload types while merging named redeclarations.
+
+    Parameters
+    ----------
+    declarator : tree_sitter.Node
+        Function declarator selected by declared-name binding.
+    source : bytes
+        Original source used to retain explicit annotation/type spelling.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Parameter, cv/ref/constraint and lexical conditional-branch syntax. This
+        does not resolve type aliases or compiler-dependent type equivalence.
+    """
+    parameters = declarator.child_by_field_name("parameters")
+    if parameters is None:
+        return ()
+    types: list[str] = []
+    for parameter in parameters.named_children:
+        if parameter.type == "comment":
+            continue
+        excluded: set[tuple[int, int]] = set()
+        pending = [parameter]
+        while pending:
+            child = pending.pop()
+            if child.type == "parameter_list":
+                written = [
+                    item for item in child.named_children if item.type != "comment"
+                ]
+                if (
+                    len(written) == 1
+                    and written[0].type == "parameter_declaration"
+                    and _canonical_node_text(written[0], source) == "void"
+                ):
+                    excluded.add((written[0].start_byte, written[0].end_byte))
+            if child.type in {
+                "parameter_declaration",
+                "optional_parameter_declaration",
+                "variadic_parameter_declaration",
+            }:
+                named = child.child_by_field_name("declarator")
+                name = _parameter_name_node(named) if named is not None else None
+                if name is not None:
+                    excluded.add((name.start_byte, name.end_byte))
+                default = child.child_by_field_name("default_value")
+                if default is not None:
+                    excluded.add((default.start_byte, default.end_byte))
+                    excluded.update(
+                        (item.start_byte, item.end_byte)
+                        for item in child.children
+                        if item.type == "="
+                    )
+            pending.extend(child.named_children)
+        types.append(
+            _canonical_node_text(parameter, source, excluded=frozenset(excluded))
+        )
+    if types == ["void"]:
+        types.clear()
+    if any(child.type == "..." for child in parameters.children):
+        types.append("...")
+    qualifiers = " ".join(
+        _canonical_node_text(child, source)
+        for child in declarator.named_children
+        if child.type in {"type_qualifier", "ref_qualifier", "requires_clause"}
+    )
+    conditions: list[str] = []
+    parent = declarator.parent
+    while parent is not None:
+        if parent.type in {
+            "preproc_if",
+            "preproc_ifdef",
+            "preproc_else",
+            "preproc_elif",
+        }:
+            conditions.append(f"{parent.type}:{parent.start_byte}")
+        parent = parent.parent
+    return (*types, qualifiers, "/".join(conditions))
 
 
 def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
@@ -723,7 +865,7 @@ def _returns_value(body: Node | None) -> int:
 
 def _find_function_declarator(node: Node) -> Node | None:
     """
-    Locate a function declarator nested under one declaration node.
+    Follow the declared name's binding to distinguish functions from pointers.
 
     Parameters
     ----------
@@ -733,16 +875,67 @@ def _find_function_declarator(node: Node) -> Node | None:
     Returns
     -------
     tree_sitter.Node | None
-        Nested `function_declarator` when present.
+        Callable declarator when the name binds as a function. Function-pointer
+        variables and parameter or initializer subtrees are not callable owners.
     """
-    if node.type == "function_declarator":
+    current = (
+        node
+        if node.type == "function_declarator"
+        else node.child_by_field_name("declarator")
+    )
+    function: Node | None = None
+    binds_as_function = False
+    while current is not None:
+        if current.type == "function_declarator":
+            if function is None:
+                function = current
+            binds_as_function = True
+        elif current.type in {
+            "pointer_declarator",
+            "reference_declarator",
+            "array_declarator",
+        }:
+            function = None
+            binds_as_function = False
+        nested = current.child_by_field_name("declarator")
+        if nested is None and current.type in {
+            "parenthesized_declarator",
+            "reference_declarator",
+        }:
+            nested = next(
+                (
+                    child
+                    for child in current.named_children
+                    if child.type.endswith("_declarator")
+                    or child.type
+                    in {"identifier", "field_identifier", "qualified_identifier"}
+                ),
+                None,
+            )
+        current = nested
+    return function if binds_as_function else None
+
+
+def _declared_type_specifier(node: Node) -> Node | None:
+    """Find an explicitly declared record or enum without entering nested scopes.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Type specifier or declaration that may also declare a variable.
+
+    Returns
+    -------
+    tree_sitter.Node | None
+        Direct record/enum specifier, excluding types hidden in initializers.
+    """
+    types = {"class_specifier", "struct_specifier", "union_specifier", "enum_specifier"}
+    if node.type in types:
         return node
-    if _find_parameter_list(node) is not None:
-        return node
-    for child in node.named_children:
-        declarator = _find_function_declarator(child)
-        if declarator is not None:
-            return declarator
+    if node.type in {"declaration", "field_declaration", "type_definition"}:
+        declared_type = node.child_by_field_name("type")
+        if declared_type is not None and declared_type.type in types:
+            return declared_type
     return None
 
 
@@ -1143,19 +1336,12 @@ def _class_name_from_specifier(node: Node, source: bytes) -> str | None:
     Returns
     -------
     str | None
-        Declared class name when present.
+        Declared class name, including explicit template specialization arguments.
     """
-    name_node = next(
-        (
-            child
-            for child in node.named_children
-            if child.type in {"type_identifier", "identifier"}
-        ),
-        None,
-    )
+    name_node = node.child_by_field_name("name")
     if name_node is None:
         return None
-    return _node_text(name_node, source)
+    return _canonical_node_text(name_node, source)
 
 
 def _type_specifier_name(node: Node, source: bytes) -> str | None:
@@ -1172,12 +1358,12 @@ def _type_specifier_name(node: Node, source: bytes) -> str | None:
     Returns
     -------
     str | None
-        Declared type name when present.
+        Declared type name, including explicit template specialization arguments.
     """
-    for child in node.named_children:
-        if child.type in {"type_identifier", "identifier"}:
-            return _node_text(child, source)
-    return None
+    name = node.child_by_field_name("name")
+    if name is None:
+        return None
+    return _canonical_node_text(name, source)
 
 
 def _is_function_definition(node: Node) -> bool:
@@ -1233,6 +1419,8 @@ def _resolve_callable_identity(
 
     relative_owner = _qualified_name((*namespace, *parts[:-1]))
     if relative_owner in known_class_names:
+        return parts[-1], relative_owner
+    if any(relative_owner.startswith(name + "<") for name in known_class_names):
         return parts[-1], relative_owner
 
     qualified_name = _qualified_name((*namespace, *parts))
@@ -1329,6 +1517,7 @@ def _build_function_artifact(
         artifact=artifact,
         class_name=class_name,
         is_definition=body is not None,
+        binding_key=_callable_binding_key(declarator, source),
     )
 
 
@@ -1357,6 +1546,19 @@ def _collect_known_class_names(
     """
     known: set[str] = set()
     for child in _conditional_children(children):
+        if child.type == "linkage_specification":
+            body = child.child_by_field_name("body")
+            if body is not None:
+                known.update(
+                    _collect_known_class_names(
+                        body.named_children
+                        if body.type == "declaration_list"
+                        else (body,),
+                        source,
+                        namespace=namespace,
+                    )
+                )
+            continue
         if child.type == "template_declaration":
             inner = _template_inner_node(child)
             if inner is not None:
@@ -1386,12 +1588,20 @@ def _collect_known_class_names(
             )
             continue
 
-        if child.type != "class_specifier":
+        record = _declared_type_specifier(child)
+        if record is None or record.type == "enum_specifier":
             continue
-        class_name = _class_name_from_specifier(child, source)
+        class_name = _class_name_from_specifier(record, source)
         if class_name is None:
             continue
         known.add(_qualified_name((*namespace, class_name)))
+        body = record.child_by_field_name("body")
+        if body is not None:
+            known.update(
+                _collect_known_class_names(
+                    body.named_children, source, namespace=(*namespace, class_name)
+                )
+            )
     return known
 
 
@@ -1490,7 +1700,7 @@ class _CppAnalysisBuilder:
             The appropriate function accumulator is updated in place.
         """
         if pending.class_name is None:
-            key = (pending.artifact.stable_id, pending.artifact.parameters)
+            key = (pending.artifact.stable_id, pending.binding_key)
             current = self.functions_by_key.get(key)
             if current is None or _prefer_pending_function(current, pending) is pending:
                 self.functions_by_key[key] = pending
@@ -1703,12 +1913,13 @@ class _CppAnalysisBuilder:
         docstring: str | None,
     ) -> None:
         """
-        Record one class declaration and its in-class methods.
+        Record class-like methods while retaining existing record declarations.
 
         Parameters
         ----------
         node : tree_sitter.Node
-            Class-specifier node.
+            Class, struct or union specifier. Struct/union method containers
+            are created only when explicit methods are present.
         namespace : collections.abc.Sequence[str]
             Active namespace path.
         docstring : str | None
@@ -1731,16 +1942,20 @@ class _CppAnalysisBuilder:
             ),
             None,
         )
-        builder = self._ensure_class_builder(
-            qualified_name=qualified_name,
-            lineno=node.start_point.row + 1,
-            end_lineno=node.end_point.row + 1,
-            docstring=docstring,
+        builder = (
+            self._ensure_class_builder(
+                qualified_name=qualified_name,
+                lineno=node.start_point.row + 1,
+                end_lineno=node.end_point.row + 1,
+                docstring=docstring,
+            )
+            if node.type == "class_specifier"
+            else None
         )
         if field_list is None:
             return
 
-        current_public = any(child.type == "struct" for child in node.children)
+        current_public = node.type in {"struct_specifier", "union_specifier"}
         children = tuple(_conditional_children(field_list.children))
         attached_comments = _attached_comment_map(children, self.source)
         self.doxygen_by_lineno.update(
@@ -1755,6 +1970,22 @@ class _CppAnalysisBuilder:
                 continue
 
             child_docstring = attached_comments.get(child.start_byte)
+            candidate = (
+                _template_inner_node(child)
+                if child.type == "template_declaration"
+                else child
+            )
+            nested_type = (
+                _declared_type_specifier(candidate) if candidate is not None else None
+            )
+            if nested_type is not None:
+                self._dispatch_node(
+                    nested_type,
+                    namespace=(*namespace, class_name),
+                    docstring=child_docstring,
+                    signature_node=child,
+                )
+                continue
             if child.type == "template_declaration":
                 inner = _template_inner_node(child)
                 if inner is None:
@@ -1784,6 +2015,13 @@ class _CppAnalysisBuilder:
                             is_method=1,
                         ),
                     )
+                    if builder is None:
+                        builder = self._ensure_class_builder(
+                            qualified_name=qualified_name,
+                            lineno=node.start_point.row + 1,
+                            end_lineno=node.end_point.row + 1,
+                            docstring=docstring,
+                        )
                     builder.record_method(pending)
                 continue
 
@@ -1813,6 +2051,13 @@ class _CppAnalysisBuilder:
                     is_method=1,
                 ),
             )
+            if builder is None:
+                builder = self._ensure_class_builder(
+                    qualified_name=qualified_name,
+                    lineno=node.start_point.row + 1,
+                    end_lineno=node.end_point.row + 1,
+                    docstring=docstring,
+                )
             builder.record_method(pending)
 
     def _handle_callable_node(
@@ -1885,12 +2130,46 @@ class _CppAnalysisBuilder:
         if node.type in {"preproc_def", "preproc_function_def"}:
             self._handle_macro_declaration(node, docstring=docstring)
             return
+        if node.type == "template_declaration":
+            inner = _template_inner_node(node)
+            if inner is not None:
+                self._dispatch_node(
+                    inner,
+                    namespace=namespace,
+                    docstring=docstring,
+                    signature_node=signature_node,
+                )
+            return
+        if node.type == "linkage_specification":
+            body = node.child_by_field_name("body")
+            if body is not None:
+                if body.type == "declaration_list":
+                    self._visit_children(body.named_children, namespace=namespace)
+                else:
+                    self._dispatch_node(
+                        body,
+                        namespace=namespace,
+                        docstring=docstring,
+                        signature_node=signature_node,
+                    )
+            return
         if node.type == "namespace_definition":
             self._handle_namespace(node, namespace=namespace, docstring=docstring)
             return
         if node.type == "class_specifier":
             self._handle_class_specifier(node, namespace=namespace, docstring=docstring)
             return
+        if node.type in {"declaration", "field_declaration", "type_definition"}:
+            declared_type = _declared_type_specifier(node)
+            if declared_type is not None:
+                self._dispatch_node(
+                    declared_type,
+                    namespace=namespace,
+                    docstring=docstring,
+                    signature_node=signature_node,
+                )
+                if _find_function_declarator(node) is None:
+                    return
         if node.type == "alias_declaration":
             self._handle_alias_declaration(
                 node, namespace=namespace, docstring=docstring
@@ -1900,6 +2179,10 @@ class _CppAnalysisBuilder:
             self._handle_type_declaration(
                 node, namespace=namespace, docstring=docstring
             )
+            if node.type in {"struct_specifier", "union_specifier"}:
+                self._handle_class_specifier(
+                    node, namespace=namespace, docstring=docstring
+                )
             return
         if _is_function_definition(node):
             self._handle_callable_node(
@@ -2102,7 +2385,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "7"
+    version = "8"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
