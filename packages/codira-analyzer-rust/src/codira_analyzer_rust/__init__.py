@@ -194,6 +194,116 @@ def _descendants(node: Node) -> Iterable[Node]:
         yield from _descendants(child)
 
 
+def _scope_owner(
+    node: Node, source: bytes, owner: str, *, callable_scopes: bool
+) -> str:
+    """Qualify an identity with its written enclosing declaration scopes.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Declaration whose own name is excluded from the scope path.
+    source : bytes
+        Original source owning the declaration.
+    owner : str
+        Repository-relative file identity.
+    callable_scopes : bool
+        Omit function/class scopes already added by callable extraction.
+
+    Returns
+    -------
+    str
+        File identity extended by enclosing module and declaration names.
+    """
+    scopes: list[str] = []
+    ancestor = node.parent
+    kinds = {
+        "mod_item": "module",
+        "enum_item": "enum",
+        "const_item": "constant",
+        "static_item": "static",
+    }
+    if not callable_scopes:
+        kinds.update(
+            {
+                "function_item": "function",
+                "trait_item": "trait",
+                "impl_item": "impl",
+                "const_item": "constant",
+            }
+        )
+    while ancestor is not None:
+        if ancestor.type in kinds:
+            name = _identifier(ancestor, source)
+            if ancestor.type == "impl_item":
+                body = ancestor.child_by_field_name("body")
+                end = body.start_byte if body is not None else ancestor.end_byte
+                name = _SPACE.sub(
+                    " ", source[ancestor.start_byte : end].decode("utf-8", "replace")
+                ).strip()
+            scopes.append(f":{kinds[ancestor.type]}:{name or 'anonymous'}")
+        ancestor = ancestor.parent
+    return owner + "".join(reversed(scopes))
+
+
+def _method_container(node: Node) -> Node | None:
+    """Find the nearest trait or impl without crossing an inline module.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Callable inside a potentially nested declaration scope.
+
+    Returns
+    -------
+    tree_sitter.Node | None
+        Class-like container, including for a nested local helper function.
+    """
+    ancestor = node.parent
+    while ancestor is not None:
+        if ancestor.type == "mod_item":
+            return None
+        if ancestor.type in {"trait_item", "impl_item"}:
+            return ancestor
+        ancestor = ancestor.parent
+    return None
+
+
+def _body_nodes(body: Node) -> list[Node]:
+    """Collect expression nodes without entering separately declared item bodies.
+
+    Parameters
+    ----------
+    body : tree_sitter.Node
+        Callable body whose closures remain part of its lexical call set.
+
+    Returns
+    -------
+    list[tree_sitter.Node]
+        Named descendants excluding nested declaration scopes.
+    """
+    result: list[Node] = []
+    pending = list(reversed(body.named_children))
+    while pending:
+        node = pending.pop()
+        if node.type in {
+            "function_item",
+            "function_signature_item",
+            "impl_item",
+            "trait_item",
+            "mod_item",
+            "const_item",
+            "static_item",
+            "enum_item",
+            "struct_item",
+            "macro_definition",
+        }:
+            continue
+        result.append(node)
+        pending.extend(reversed(node.named_children))
+    return result
+
+
 def _parameters(node: Node | None, source: bytes) -> tuple[str, ...]:
     """Extract declaration parameter bindings in source order.
 
@@ -268,7 +378,7 @@ def _calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
     if body is None:
         return ()
     calls: list[CallSite] = []
-    for node in _descendants(body):
+    for node in _body_nodes(body):
         if node.type == "call_expression":
             function = node.child_by_field_name("function")
             if function is None:
@@ -341,8 +451,18 @@ def _function(
     ).strip()
     stable_owner = f":{owner_name}" if owner_name is not None else ""
     lexical_owners: list[str] = []
+    direct_method = False
+    first_scope = True
     ancestor = node.parent
     while ancestor is not None:
+        if first_scope and ancestor.type in {
+            "function_item",
+            "mod_item",
+            "impl_item",
+            "trait_item",
+        }:
+            direct_method = ancestor.type in {"impl_item", "trait_item"}
+            first_scope = False
         if ancestor.type == "function_item":
             lexical_owners.append(_identifier(ancestor, source) or "anonymous")
         ancestor = ancestor.parent
@@ -355,7 +475,7 @@ def _function(
         signature=signature,
         docstring=None,
         has_docstring=0,
-        is_method=int(owner_name is not None and not lexical_owners),
+        is_method=int(owner_name is not None and direct_method),
         is_public=int(_normalized(node, source).startswith("pub ")),
         parameters=parameters,
         returns_value=int("->" in signature),
@@ -390,7 +510,8 @@ def _enum_members(
         Enum variants with durable ordinal identities.
     """
     members: list[EnumMemberArtifact] = []
-    for child in _descendants(node):
+    body = node.child_by_field_name("body")
+    for child in body.named_children if body is not None else ():
         if child.type != "enum_variant":
             continue
         name = _identifier(child, source)
@@ -718,7 +839,7 @@ class RustAnalyzer:
     """
 
     name = "rust"
-    version = "4"
+    version = "5"
     discovery_globs: tuple[str, ...] = ("*.rs",)
     default_coverage_roots: tuple[str, ...] = ("src", "tests", "benches", "examples")
 
@@ -887,12 +1008,27 @@ class RustAnalyzer:
         imports: list[ImportArtifact] = []
 
         root_node = rust_parse_root(_parser(), source)
-        for node in root_node.named_children:
+        for node in _descendants(root_node):
+            if node.type not in {
+                "use_declaration",
+                "macro_definition",
+                "struct_item",
+                "enum_item",
+                "const_item",
+                "mod_item",
+                "function_item",
+                "function_signature_item",
+                "trait_item",
+                "impl_item",
+            }:
+                continue
+            scoped_owner = _scope_owner(node, source, owner, callable_scopes=False)
+            callable_owner = _scope_owner(node, source, owner, callable_scopes=True)
             name = _identifier(node, source)
             if node.type == "use_declaration":
                 imports.append(_import(node, source))
             elif node.type == "macro_definition":
-                macro = _macro_declaration(node, source, owner=owner)
+                macro = _macro_declaration(node, source, owner=scoped_owner)
                 if macro is not None:
                     declarations.append(macro)
             elif (
@@ -909,7 +1045,7 @@ class RustAnalyzer:
                         "mod_item": "namespace",
                     }[node.type],
                 )
-                stable_id = f"rust:{declaration_kind}:{owner}:{name}"
+                stable_id = f"rust:{declaration_kind}:{scoped_owner}:{name}"
                 declarations.append(
                     DeclarationArtifact(
                         name=name,
@@ -919,15 +1055,20 @@ class RustAnalyzer:
                         signature=_normalized(node, source),
                         enum_members=(
                             _enum_members(
-                                node, source, owner=owner, parent_id=stable_id
+                                node, source, owner=scoped_owner, parent_id=stable_id
                             )
                             if node.type == "enum_item"
                             else ()
                         ),
                     )
                 )
-            elif node.type == "function_item":
-                function = _function(node, source, owner=owner, owner_name=None)
+            elif (
+                node.type in {"function_item", "function_signature_item"}
+                and _method_container(node) is None
+            ):
+                function = _function(
+                    node, source, owner=callable_owner, owner_name=None
+                )
                 if function is not None:
                     functions.append(function)
             elif node.type in {"trait_item", "impl_item"}:
@@ -940,9 +1081,15 @@ class RustAnalyzer:
                     function
                     for child in _descendants(node)
                     if child.type in {"function_item", "function_signature_item"}
+                    if _method_container(child) == node
                     if (
                         function := _function(
-                            child, source, owner=owner, owner_name=owner_name
+                            child,
+                            source,
+                            owner=_scope_owner(
+                                child, source, owner, callable_scopes=True
+                            ),
+                            owner_name=owner_name,
                         )
                     )
                     is not None
@@ -951,7 +1098,7 @@ class RustAnalyzer:
                 classes.append(
                     ClassArtifact(
                         name=owner_name,
-                        stable_id=f"rust:{owner_kind}:{owner}:{owner_name}",
+                        stable_id=f"rust:{owner_kind}:{scoped_owner}:{owner_name}",
                         lineno=node.start_point.row + 1,
                         end_lineno=node.end_point.row + 1,
                         docstring=None,
