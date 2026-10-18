@@ -104,7 +104,7 @@ if TYPE_CHECKING:
 CallRecord = dict[str, str | int]
 CallRow = tuple[int, str, str, str, str, str, str | None, str | None, int, int]
 RefRow = tuple[int, str, str, str, str, str, str, str | None, str | None, int, int]
-FileRow = tuple[int, str, str, float, int, str, str]
+FileRow = tuple[int, str, str, float, int, str, str, str]
 ModuleRow = tuple[int, int, str, str | None, int]
 ClassRow = tuple[int, int, str, int, int | None, str | None, int]
 FunctionRow = tuple[
@@ -337,6 +337,9 @@ def _flush_structural_file_rows(
             "size": pa.array([row[4] for row in rows], type=pa.int64()),
             "analyzer_name": pa.array([row[5] for row in rows], type=pa.string()),
             "analyzer_version": pa.array([row[6] for row in rows], type=pa.string()),
+            "analysis_input_fingerprint": pa.array(
+                [row[7] for row in rows], type=pa.string()
+            ),
         }
     )
     _flush_registered_arrow_table(
@@ -344,8 +347,10 @@ def _flush_structural_file_rows(
         view_name="__codira_pending_file_rows",
         table=table,
         insert_sql="""
-            INSERT INTO files(id, path, hash, mtime, size, analyzer_name, analyzer_version)
-            SELECT id, path, hash, mtime, size, analyzer_name, analyzer_version
+            INSERT INTO files(id, path, hash, mtime, size, analyzer_name,
+                              analyzer_version, analysis_input_fingerprint)
+            SELECT id, path, hash, mtime, size, analyzer_name,
+                   analyzer_version, analysis_input_fingerprint
             FROM __codira_pending_file_rows
             """,
     )
@@ -1455,6 +1460,7 @@ def _append_analysis_rows(
             file_metadata.size,
             file_metadata.analyzer_name,
             file_metadata.analyzer_version,
+            file_metadata.analysis_input_fingerprint,
         )
     )
     if analysis.status is not None:

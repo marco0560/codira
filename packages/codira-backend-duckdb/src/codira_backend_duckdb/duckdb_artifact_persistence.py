@@ -70,7 +70,7 @@ if TYPE_CHECKING:
 CallRecord = dict[str, str | int]
 CallRow = tuple[int, str, str, str, str, str, str | None, str | None, int, int]
 RefRow = tuple[int, str, str, str, str, str, str, str | None, str | None, int, int]
-FileRow = tuple[int, str, str, float, int, str, str]
+FileRow = tuple[int, str, str, float, int, str, str, str]
 ModuleRow = tuple[int, int, str, str | None, int]
 ClassRow = tuple[int, int, str, int, int | None, str | None, int]
 FunctionRow = tuple[

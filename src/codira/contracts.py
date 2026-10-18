@@ -2048,6 +2048,93 @@ class LanguageAnalyzer(Protocol):
 
 
 @runtime_checkable
+class AnalysisInputFingerprintProvider(Protocol):
+    """Declare optional source-external inputs to incremental analysis.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Optional analyzer contract; source-only analyzers need not implement it.
+
+    Notes
+    -----
+    Implementations own deterministic resolution semantics and must include
+    negative lookups that can change their analysis. Fingerprinting must not
+    execute a compiler, build script or another source-generating process.
+    """
+
+    def analysis_input_fingerprint(self, path: Path, root: Path) -> str:
+        """Identify every external input affecting this file's analysis.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Source file being analyzed.
+        root : pathlib.Path
+            Repository boundary and resolution context.
+
+        Returns
+        -------
+        str
+            Nonempty deterministic input identity, kept separate from the
+            source hash and analyzer version. Equal identities must license
+            reuse only when the external inputs cannot change the artifacts.
+
+        Raises
+        ------
+        OSError
+            If required input identity cannot be observed safely.
+        ValueError
+            If external analysis input configuration is invalid.
+        """
+        ...
+
+
+@runtime_checkable
+class AnalysisInputStateBackend(Protocol):
+    """Declare backend persistence of per-file external analysis identity.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Optional capability required when an analyzer declares external inputs.
+
+    Notes
+    -----
+    Implementations must persist FileMetadataSnapshot.analysis_input_fingerprint
+    through both incremental and full-index writes, without changing the raw
+    source SHA-256. Source-only backends may omit this optional capability.
+    """
+
+    def load_existing_file_analysis_inputs(
+        self, root: Path, *, conn: object | None = None
+    ) -> dict[str, str]:
+        """Read persisted input fingerprints keyed by absolute source path.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository whose index owns the input identities.
+        conn : object | None, optional
+            Existing backend connection to reuse.
+
+        Returns
+        -------
+        dict[str, str]
+            Persisted identities, including empty values for source-only files.
+        """
+        ...
+
+
+@runtime_checkable
 class ConfigurablePlugin(Protocol):
     """
     Optional plugin contract for explicit configuration injection.

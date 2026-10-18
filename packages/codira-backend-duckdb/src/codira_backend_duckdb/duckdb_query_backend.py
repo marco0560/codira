@@ -63,6 +63,7 @@ from .duckdb_query_primitives import (
 from .duckdb_index_state import (
     _count_indexed_files,
     _current_embedding_state_matches,
+    _load_existing_file_analysis_inputs,
     _load_existing_file_hashes,
     _load_existing_file_ownership,
 )
@@ -1914,6 +1915,37 @@ class DuckDBQueryBackend(DuckDBQueryInventoryMixin):
             conn = self.open_connection(root)
         try:
             return _count_indexed_files(cast("_DuckDBPersistenceConnection", conn))
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def load_existing_file_analysis_inputs(
+        self,
+        root: Path,
+        *,
+        conn: _BackendCompatibleConnection | None = None,
+    ) -> dict[str, str]:
+        """Read persisted external analysis identities independently of hashes.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository whose file rows are queried.
+        conn : _BackendCompatibleConnection | None, optional
+            Existing backend connection to reuse without closing it.
+
+        Returns
+        -------
+        dict[str, str]
+            Input identity keyed by absolute source path.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            return _load_existing_file_analysis_inputs(
+                cast("_DuckDBPersistenceConnection", conn)
+            )
         finally:
             if owns_connection:
                 conn.close()

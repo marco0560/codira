@@ -584,7 +584,9 @@ def test_adapter_exposes_structural_query_tools(tmp_path: Path) -> None:
         "issues": [],
     }
     status_metadata = cast("dict[str, str]", status_result["metadata"])
-    assert status_metadata["schema_version"] == "25"
+    assert status_metadata["schema_version"] == str(
+        active_index_backend(root=tmp_path).version
+    )
     assert status_metadata["backend_name"] == "sqlite"
     codira_capabilities = cast(
         "dict[str, object]", cast("dict[str, object]", capabilities["result"])["codira"]
@@ -813,7 +815,9 @@ def test_server_symbol_tool_invokes_the_direct_adapter(tmp_path: Path) -> None:
         "index_coverage": index_coverage(tmp_path),
     }
     freshness = cast("dict[str, str]", structured["freshness"])
-    assert freshness["schema_version"] == "25"
+    assert freshness["schema_version"] == str(
+        active_index_backend(root=tmp_path).version
+    )
     assert freshness["backend_name"] == "sqlite"
     assert structured["page"] == {
         "offset": 0,

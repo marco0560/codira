@@ -155,6 +155,14 @@ class FileMetadataSnapshot:
         Analyzer name responsible for the indexed file.
     analyzer_version : str, optional
         Analyzer version responsible for the indexed file.
+    analysis_input_fingerprint : str, optional
+        Analyzer-owned identity of external analysis inputs, separate from the
+        original source SHA-256. Empty for source-only analysis.
+
+    Returns
+    -------
+    None
+        Immutable source metadata and analysis-input identity.
     """
 
     path: Path
@@ -163,6 +171,7 @@ class FileMetadataSnapshot:
     size: int
     analyzer_name: str = ""
     analyzer_version: str = ""
+    analysis_input_fingerprint: str = ""
 
 
 @dataclass(frozen=True)

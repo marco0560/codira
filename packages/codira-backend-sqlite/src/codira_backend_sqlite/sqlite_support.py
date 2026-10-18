@@ -874,8 +874,8 @@ def _store_analysis(
 
     cur = conn.execute(
         "INSERT INTO files"
-        "(path, hash, mtime, size, analyzer_name, analyzer_version) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "(path, hash, mtime, size, analyzer_name, analyzer_version, "
+        "analysis_input_fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             str(file_metadata.path),
             file_metadata.sha256,
@@ -883,6 +883,7 @@ def _store_analysis(
             file_metadata.size,
             file_metadata.analyzer_name,
             file_metadata.analyzer_version,
+            file_metadata.analysis_input_fingerprint,
         ),
     )
     assert cur.lastrowid is not None
@@ -1345,6 +1346,25 @@ def _load_existing_file_hashes(conn: sqlite3.Connection) -> dict[str, str]:
     """
     rows = conn.execute("SELECT path, hash FROM files ORDER BY path").fetchall()
     return {str(path): str(file_hash) for path, file_hash in rows}
+
+
+def _load_existing_file_analysis_inputs(conn: sqlite3.Connection) -> dict[str, str]:
+    """Read source-external input identities without altering content hashes.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open backend connection.
+
+    Returns
+    -------
+    dict[str, str]
+        External analysis-input identity keyed by absolute source path.
+    """
+    rows = conn.execute(
+        "SELECT path, analysis_input_fingerprint FROM files ORDER BY path"
+    ).fetchall()
+    return {str(path): str(fingerprint) for path, fingerprint in rows}
 
 
 def _count_indexed_files(conn: sqlite3.Connection) -> int:

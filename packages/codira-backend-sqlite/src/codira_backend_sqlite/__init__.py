@@ -62,6 +62,7 @@ from codira_backend_sqlite.sqlite_support import (
     _count_reused_embeddings,
     _current_embedding_state_matches,
     _delete_indexed_file_data,
+    _load_existing_file_analysis_inputs,
     _load_existing_file_hashes,
     _load_existing_file_ownership,
     _load_previous_embeddings_by_path,
@@ -1987,6 +1988,35 @@ class SQLiteIndexBackend:
             conn = self.open_connection(root)
         try:
             return _load_existing_file_hashes(conn)
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def load_existing_file_analysis_inputs(
+        self,
+        root: Path,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict[str, str]:
+        """Read persisted external analysis identities independently of hashes.
+
+        Parameters
+        ----------
+        root : pathlib.Path
+            Repository whose file rows are queried.
+        conn : sqlite3.Connection | None, optional
+            Existing backend connection to reuse without closing it.
+
+        Returns
+        -------
+        dict[str, str]
+            Input identity keyed by absolute source path.
+        """
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.open_connection(root)
+        try:
+            return _load_existing_file_analysis_inputs(conn)
         finally:
             if owns_connection:
                 conn.close()
