@@ -40,7 +40,11 @@ from tree_sitter import Language, Node, Parser
 from tree_sitter_c import language
 
 from .c_conditionals import CParseView, c_parse_views
-from .c_preprocessing import _original_declaration_start, _parse_c_source
+from .c_preprocessing import (
+    _is_complex_operator_call,
+    _original_declaration_start,
+    _parse_c_source,
+)
 
 from codira.contracts import (
     AnalyzerCapabilityDeclaration,
@@ -878,6 +882,8 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     codira.models.CallSite | None
         Normalized call record, or ``None`` when no supported target exists.
     """
+    if _is_complex_operator_call(node, source):
+        return None
     function_node = node.child_by_field_name("function")
     if function_node is None:
         return None
@@ -2045,7 +2051,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "14"
+    version = "15"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 

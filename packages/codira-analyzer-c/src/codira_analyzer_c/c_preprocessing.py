@@ -1,4 +1,4 @@
-"""Recover compiler pragmas and annotation macros without moving source coordinates.
+"""Recover complex syntax, pragmas and annotations at original source coordinates.
 
 Parameters
 ----------
@@ -552,6 +552,190 @@ def _pragma_source(source: bytes, root: Node) -> bytes:
     return bytes(projected)
 
 
+_COMPLEX_TYPES = frozenset({b"_Complex", b"__complex", b"__complex__"})
+_COMPLEX_OPERATORS = frozenset({b"__real", b"__real__", b"__imag", b"__imag__"})
+_COMPLEX_KEYWORDS = _COMPLEX_TYPES | _COMPLEX_OPERATORS
+_COMPLEX_WORD = re.compile(
+    rb"\b(?:_Complex|__complex(?:__)?|__real(?:__)?|__imag(?:__)?)\b"
+)
+_COMPLEX_BASES = frozenset(
+    word.encode()
+    for word in (
+        "char short int long float double signed unsigned __int128 "
+        "_Float16 _Float32 _Float64 _Float128 __float128 __fp16 __bf16"
+    ).split()
+)
+_COMPLEX_QUALIFIERS = frozenset(
+    word.encode()
+    for word in (
+        "const volatile restrict __restrict __restrict__ _Atomic "
+        "__const __const__ __volatile __volatile__"
+    ).split()
+)
+
+
+def _complex_overrides(source: bytes, root: Node) -> frozenset[bytes]:
+    """Find source-defined or undefined reserved complex keyword spellings.
+
+    Parameters
+    ----------
+    source : bytes
+        Source bytes corresponding to the provider tree.
+    root : tree_sitter.Node
+        Original provider root for this input.
+
+    Returns
+    -------
+    frozenset[bytes]
+        Spellings whose preprocessing contract must remain opaque.
+    """
+    if _COMPLEX_WORD.search(source) is None:
+        return frozenset()
+    overridden: set[bytes] = set()
+    for node in _nodes(root):
+        if node.type in {"preproc_def", "preproc_function_def"}:
+            name = node.child_by_field_name("name")
+            if name is not None:
+                token = source[name.start_byte : name.end_byte]
+                if token in _COMPLEX_KEYWORDS:
+                    overridden.add(token)
+        elif node.type == "preproc_call":
+            match = re.match(
+                rb"#\s*undef\s+(\w+)", source[node.start_byte : node.end_byte]
+            )
+            if match is not None and match[1] in _COMPLEX_KEYWORDS:
+                overridden.add(match[1])
+    return frozenset(overridden)
+
+
+def _is_complex_operator_call(node: Node, source: bytes) -> bool:
+    """Identify the non-call marker preserving a parenthesized operator operand.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Provider call-expression node considered by artifact extraction.
+    source : bytes
+        Original source bytes.
+
+    Returns
+    -------
+    bool
+        Whether a numeric view callee covers an original reserved complex operator.
+        Ordinary source calls and overridden macros cannot satisfy this marker.
+    """
+    function = node.child_by_field_name("function")
+    if function is None or function.type != "number_literal" or function.text != b"0":
+        return False
+    match = _COMPLEX_WORD.match(source, function.start_byte)
+    return match is not None and match[0] in _COMPLEX_OPERATORS
+
+
+def _complex_source(
+    source: bytes, root: Node, overridden: frozenset[bytes] = frozenset()
+) -> bytes:
+    """Represent complex types and real/imaginary operators in the provider grammar.
+
+    Parameters
+    ----------
+    source : bytes
+        Original source or an equal-width parse view.
+    root : tree_sitter.Node
+        Provider tree used to shield comments, literals and directives.
+    overridden : frozenset[bytes], optional
+        Reserved spellings overridden by captured header preprocessing inputs.
+
+    Returns
+    -------
+    bytes
+        Equal-width view, with original line endings. Complex modifiers use a
+        provider type-qualifier placeholder. Real/imaginary operators use a unary
+        placeholder, or a tagged non-call marker to keep nested operand calls out
+        of the C grammar's cast ambiguity. Bare complex types retain their spans.
+        Extractors
+        must read text from original source, never interpret placeholder semantics.
+
+    Notes
+    -----
+    This is structural grammar adaptation only; qualifier/attribute placeholders
+    assert no volatility, nonreturning, alignment, unary-plus, ABI or evaluation
+    semantics. Their byte widths exactly match the original complex keyword.
+    Accepted duplicate specifiers retain their original source text. Recovery
+    requires a wholly clean final provider tree.
+    """
+    if _COMPLEX_WORD.search(source) is None:
+        return source
+    blocked = overridden | _complex_overrides(source, root)
+    call_operands: set[int] = set()
+    for node in _nodes(root):
+        if node.type != "call_expression":
+            continue
+        function = node.child_by_field_name("function")
+        arguments = node.child_by_field_name("arguments")
+        if (
+            function is not None
+            and arguments is not None
+            and source[function.start_byte : function.end_byte] in _COMPLEX_OPERATORS
+            and any(child.type == "call_expression" for child in _nodes(arguments))
+        ):
+            call_operands.add(function.start_byte)
+    opaque: list[tuple[int, int]] = []
+    lexical = bytearray(source)
+    for node in _nodes(root):
+        if node.type in _OPAQUE_NODES:
+            opaque.append((node.start_byte, node.end_byte))
+        if node.type == "comment":
+            for offset in range(node.start_byte, node.end_byte):
+                if lexical[offset] not in {10, 13}:
+                    lexical[offset] = 32
+    protected = _hash_lines(source, root)
+    if not any(
+        match[0] not in blocked
+        and not any(
+            start <= match.start() < end for start, end in (*opaque, *protected)
+        )
+        for match in _COMPLEX_WORD.finditer(source)
+    ):
+        return source
+    for start, end in protected:
+        for offset in range(start, end):
+            if lexical[offset] not in {10, 13}:
+                lexical[offset] = 32
+        lexical[start] = 59
+    tokens = tuple(re.finditer(rb"[A-Za-z_][A-Za-z_0-9]*|[^\s]", bytes(lexical)))
+    group_words = _COMPLEX_TYPES | _COMPLEX_BASES | _COMPLEX_QUALIFIERS
+    projected = bytearray(source)
+    for index, match in enumerate(tokens):
+        token = match[0]
+        if token not in _COMPLEX_KEYWORDS or token in blocked:
+            continue
+        if any(start <= match.start() < end for start, end in (*opaque, *protected)):
+            continue
+        if token in _COMPLEX_OPERATORS:
+            replacement = b"0" if match.start() in call_operands else b"+"
+        else:
+            first = index
+            while first and tokens[first - 1][0] in group_words:
+                first -= 1
+            last = index + 1
+            while last < len(tokens) and tokens[last][0] in group_words:
+                last += 1
+            group = [item[0] for item in tokens[first:last]]
+            if not any(item in _COMPLEX_BASES for item in group):
+                leading = next(
+                    item for item in tokens[first:last] if item[0] in _COMPLEX_TYPES
+                )
+                if match.start() == leading.start():
+                    continue
+            replacement = {
+                b"_Complex": b"volatile",
+                b"__complex": b"_Noreturn",
+                b"__complex__": b"alignas(00)",
+            }[token]
+        projected[match.start() : match.end()] = replacement.ljust(len(token), b" ")
+    return bytes(projected)
+
+
 def _parse_c_source(source: bytes, parser: Parser) -> Node:
     """Recover C guards, compiler pragmas and source-local annotation macros.
 
@@ -565,11 +749,19 @@ def _parse_c_source(source: bytes, parser: Parser) -> Node:
     Returns
     -------
     tree_sitter.Node
-        Original root unless a coordinate-preserving projection is wholly clean.
+        Original partial root unless an equal-width projection is wholly clean.
+        Known reserved operators missing operands remain diagnosed even when the
+        original provider treats their spelling as an ordinary identifier.
         No header bytes, compiler flags or build commands are consulted.
     """
     original = parser.parse(source).root_node
     pragma_source = _pragma_source(source, original)
+    pragma_root = (
+        parser.parse(pragma_source).root_node if pragma_source != source else original
+    )
+    complex_view = _complex_source(pragma_source, pragma_root)
+    complex_changed = complex_view != pragma_source
+    pragma_source = complex_view
     if not original.has_error and pragma_source == source:
         return original
     pragma_root = (
@@ -579,9 +771,10 @@ def _parse_c_source(source: bytes, parser: Parser) -> Node:
     basis = parser.parse(working).root_node if working != source else original
     if not basis.has_error:
         return basis
+    fallback = basis if not original.has_error and complex_changed else original
     annotations = _annotation_definitions(working, basis, parser)
     if not annotations:
-        return original
+        return fallback
     protected = _hash_lines(working, basis)
     projected = bytearray(working)
     pending = [basis]
@@ -612,9 +805,9 @@ def _parse_c_source(source: bytes, parser: Parser) -> Node:
             child for child in node.children if child != condition and child != name
         )
     if projected == working:
-        return original
+        return fallback
     recovered = parser.parse(bytes(projected)).root_node
-    return original if recovered.has_error else recovered
+    return fallback if recovered.has_error else recovered
 
 
 def _original_declaration_start(node: Node, source: bytes) -> int:

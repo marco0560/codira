@@ -74,7 +74,11 @@ from .cpp_include_context import (
     include_identity_matches,
     read_include_context,
 )
-from .cpp_preprocessing import _original_declaration_start, _parse_cpp_source
+from .cpp_preprocessing import (
+    _is_complex_operator_call,
+    _original_declaration_start,
+    _parse_cpp_source,
+)
 
 from codira.analysis_inputs import validate_analysis_input_fingerprint
 from codira.contracts import (
@@ -764,6 +768,8 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     codira.models.CallSite | None
         Normalized call record, or ``None`` when no supported target exists.
     """
+    if _is_complex_operator_call(node, source):
+        return None
     function_node = node.child_by_field_name("function")
     if function_node is None:
         return None
@@ -2681,7 +2687,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "12"
+    version = "13"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
