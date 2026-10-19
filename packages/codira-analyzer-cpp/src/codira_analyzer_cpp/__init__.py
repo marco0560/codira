@@ -763,6 +763,35 @@ def _callable_binding_key(declarator: Node, source: bytes) -> tuple[str, ...]:
     return (*types, qualifiers, "/".join(conditions))
 
 
+def _qualified_call_parts(node: Node, source: bytes) -> tuple[str, ...]:
+    """Read qualified call components without splitting template arguments.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Qualified function expression, including nested scope components.
+    source : bytes
+        Original source buffer used for target and template argument spelling.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Ordered scope components and final target, preserving argument text.
+    """
+    parts: list[str] = []
+    current = node
+    while current.type == "qualified_identifier":
+        scope = current.child_by_field_name("scope")
+        if scope is not None:
+            parts.append(_node_text(scope, source).strip())
+        name = current.child_by_field_name("name")
+        if name is None:
+            return ()
+        current = name
+    parts.append(_node_text(current, source).strip())
+    return tuple(part for part in parts if part)
+
+
 def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     """
     Convert one tree-sitter call expression into a normalized call record.
@@ -777,7 +806,8 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     Returns
     -------
     codira.models.CallSite | None
-        Normalized call record, or ``None`` when no supported target exists.
+        Normalized call record, excluding named casts and unsupported operators.
+        Calls inside their operands are collected separately by body traversal.
     """
     if _is_complex_operator_call(node, source):
         return None
@@ -785,7 +815,17 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     if function_node is None:
         return None
 
-    if function_node.type == "identifier":
+    if function_node.type == "template_function":
+        name = function_node.child_by_field_name("name")
+        if name is not None and _node_text(name, source) in {
+            "static_cast",
+            "reinterpret_cast",
+            "const_cast",
+            "dynamic_cast",
+        }:
+            return None
+
+    if function_node.type in {"identifier", "template_function"}:
         target = _node_text(function_node, source)
         return CallSite(
             kind="name",
@@ -797,7 +837,7 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
         )
 
     if function_node.type == "qualified_identifier":
-        target_parts = _split_qualified_name(_node_text(function_node, source))
+        target_parts = _qualified_call_parts(function_node, source)
         if not target_parts:
             return None
         base = "::".join(target_parts[:-1])
@@ -2701,7 +2741,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "17"
+    version = "18"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",

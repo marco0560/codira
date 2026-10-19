@@ -25,6 +25,14 @@ Package-local verification:
 pytest -q packages/codira-analyzer-cpp/tests
 ```
 
+## Call targets
+
+Explicit template calls retain their argument spelling in the target. Namespace
+separators inside an argument do not split the surrounding call: for example,
+`api::f<api::Box<int>>(value)` has base `api` and target
+`f<api::Box<int>>`. Named C++ casts are conversions; their operand calls are
+retained without recording an additional call for the cast keyword.
+
 ## Ambiguous headers
 
 The plugin discovers `.h` as well as C++ source and header suffixes. In automatic
