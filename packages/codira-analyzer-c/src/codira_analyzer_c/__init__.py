@@ -1533,6 +1533,78 @@ def _record_nested_type_declarations(
         _record_declaration(declarations_by_stable_id, declaration)
 
 
+def _record_member_type_declarations(
+    child: Node,
+    source: bytes,
+    *,
+    attached_comments: dict[int, str],
+    declarations_by_stable_id: dict[str, DeclarationArtifact],
+    owner_id: str,
+) -> None:
+    """
+    Record written record/enum tags through declaration and member-type bindings.
+
+    Parameters
+    ----------
+    child : tree_sitter.Node
+        Record, enum, declaration or typedef node to inspect.
+    source : bytes
+        Full source buffer.
+    attached_comments : dict[int, str]
+        Comment blocks keyed by source byte offset.
+    declarations_by_stable_id : dict[str, codira.models.DeclarationArtifact]
+        Accumulator preserving typedef alternatives and other symbol identities.
+    owner_id : str
+        File-scoped owner identity preserving the source suffix.
+
+    Returns
+    -------
+    None
+        Named tags are added in place, including anonymous record containers.
+        Function bodies, parameter types, initializers and field values are opaque.
+    """
+    pending = [(child, attached_comments.get(child.start_byte))]
+    kinds: dict[str, DeclarationKind] = {
+        "struct_specifier": "struct",
+        "union_specifier": "union",
+        "enum_specifier": "enum",
+    }
+    while pending:
+        node, inherited_comment = pending.pop()
+        kind = kinds.get(node.type)
+        if kind is not None:
+            _record_declaration(
+                declarations_by_stable_id,
+                _declaration_artifact(
+                    node,
+                    source,
+                    docstring=_resolve_declaration_docstring(
+                        attached_comments, node, inherited_comment=inherited_comment
+                    ),
+                    kind=kind,
+                    owner_id=owner_id,
+                ),
+            )
+            body = node.child_by_field_name("body")
+            if body is not None and body.type == "field_declaration_list":
+                comments = _attached_comment_map(body, source)
+                pending.extend(
+                    (field, comments.get(field.start_byte))
+                    for field in reversed(tuple(_top_level_nodes(body)))
+                )
+        elif node.type in {"declaration", "field_declaration", "type_definition"}:
+            declared_type = node.child_by_field_name("type")
+            if (
+                declared_type is not None
+                and declared_type.type in kinds
+                and (
+                    node.type == "type_definition"
+                    or declared_type.child_by_field_name("body") is not None
+                )
+            ):
+                pending.append((declared_type, inherited_comment))
+
+
 def _extract_declarations(
     root: Node,
     source: bytes,
@@ -1540,7 +1612,7 @@ def _extract_declarations(
     owner_id: str,
 ) -> tuple[DeclarationArtifact, ...]:
     """
-    Extract top-level C declarations useful for exact and semantic lookup.
+    Extract file-scope declarations and absent member tags, preserving prior identities.
 
     Parameters
     ----------
@@ -1631,6 +1703,25 @@ def _extract_declarations(
                 owner_id=owner_id,
             )
             _record_declaration(declarations_by_stable_id, declaration)
+
+    additional: dict[str, DeclarationArtifact] = {}
+    for child in _top_level_nodes(root):
+        if child.type in {
+            "declaration",
+            "type_definition",
+            "struct_specifier",
+            "union_specifier",
+            "enum_specifier",
+        }:
+            _record_member_type_declarations(
+                child,
+                source,
+                attached_comments=attached_comments,
+                declarations_by_stable_id=additional,
+                owner_id=owner_id,
+            )
+    for stable_id, declaration in additional.items():
+        declarations_by_stable_id.setdefault(stable_id, declaration)
 
     return _disambiguate_type_aliases(
         tuple(
@@ -1954,7 +2045,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "13"
+    version = "14"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 

@@ -1920,7 +1920,7 @@ class _CppAnalysisBuilder:
         docstring: str | None,
     ) -> None:
         """
-        Record class-like methods while retaining existing record declarations.
+        Record class-like methods, member type aliases and nested record declarations.
 
         Parameters
         ----------
@@ -1935,7 +1935,7 @@ class _CppAnalysisBuilder:
         Returns
         -------
         None
-            Class and method artifacts are stored in place.
+            Class, method and qualified member-alias artifacts are stored in place.
         """
         class_name = _class_name_from_specifier(node, self.source)
         if class_name is None:
@@ -1982,6 +1982,13 @@ class _CppAnalysisBuilder:
                 if child.type == "template_declaration"
                 else child
             )
+            if candidate is not None and candidate.type == "alias_declaration":
+                self._handle_alias_declaration(
+                    candidate,
+                    namespace=(*namespace, class_name),
+                    docstring=child_docstring,
+                )
+                continue
             nested_type = (
                 _declared_type_specifier(candidate) if candidate is not None else None
             )
@@ -2393,6 +2400,47 @@ class _ExternalOwner:
     visibility: dict[str, set[int]] = field(default_factory=dict)
 
 
+def _external_owner_alternatives(result: AnalysisResult) -> set[str]:
+    """Retain namespace/alias conflicts without treating member aliases as owners.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Source-local or captured-header artifacts.
+
+    Returns
+    -------
+    set[str]
+        Existing namespace and nonmember alias alternatives. An alias whose
+        direct owner is a written record does not invalidate that record or
+        change the legacy treatment of namespace alias prefixes. If a written
+        namespace shares the record name in another alternative, its aliases
+        retain their conflict evidence.
+    """
+    namespaces = {
+        declaration.name
+        for declaration in result.declarations
+        if declaration.kind == "namespace"
+    }
+    records = {cls.name for cls in result.classes} | {
+        declaration.name
+        for declaration in result.declarations
+        if declaration.kind in {"class", "struct", "union"}
+    }
+    return {
+        declaration.name
+        for declaration in result.declarations
+        if declaration.kind == "namespace"
+        or (
+            declaration.kind == "type_alias"
+            and (
+                declaration.name.rpartition("::")[0] not in records
+                or declaration.name.rpartition("::")[0] in namespaces
+            )
+        )
+    }
+
+
 def _external_method_owners(
     context: IncludeContext, root: Path, source_result: AnalysisResult
 ) -> dict[str, _ExternalOwner]:
@@ -2411,14 +2459,11 @@ def _external_method_owners(
     -------
     dict[str, _ExternalOwner]
         Qualified class names and declaration/access evidence. Header artifacts
-        are not copied into the source result.
+        are not copied into the source result. Member aliases are excluded from
+        conflicting alternatives so their parent records remain valid owners.
     """
     owners: dict[str, _ExternalOwner] = {}
-    alternatives = {
-        declaration.name
-        for declaration in source_result.declarations
-        if declaration.kind in {"namespace", "type_alias"}
-    }
+    alternatives = _external_owner_alternatives(source_result)
     for header in context.headers:
         tree = _parse_cpp_source(header.source)
         if tree.has_error:
@@ -2434,11 +2479,7 @@ def _external_method_owners(
             module_stable_id=_module_stable_id(header.path, root),
             module_docstring=None,
         )
-        alternatives.update(
-            declaration.name
-            for declaration in header_result.declarations
-            if declaration.kind in {"namespace", "type_alias"}
-        )
+        alternatives.update(_external_owner_alternatives(header_result))
         for cls in header_result.classes:
             owner = owners.setdefault(cls.name, _ExternalOwner())
             owner.stable_ids.add(cls.stable_id)
@@ -2640,7 +2681,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "11"
+    version = "12"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
