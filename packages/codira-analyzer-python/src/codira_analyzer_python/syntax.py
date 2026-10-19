@@ -29,6 +29,12 @@ from typing import Any
 from tree_sitter import Language, Node, Parser
 from tree_sitter_python import language
 
+from codira_analyzer_python.grammar_recovery import (
+    invalid_attribute_offsets,
+    python_parse_root,
+    type_default_offsets,
+)
+
 __all__ = [
     "SyntaxDiagnostic",
     "SyntaxDiagnosticKind",
@@ -314,9 +320,15 @@ def _target_syntax_features(
         Provider-neutral features sorted by their source locations.
     """
     features: list[TargetSyntaxFeature] = []
+    has_type_defaults = False
     pending = [root]
     while pending:
         node = pending.pop()
+        if (
+            node.type == "type_parameter"
+            and b"=" in source[node.start_byte : node.end_byte]
+        ):
+            has_type_defaults = True
         feature: tuple[str, str] | None = None
         if node.type == "match_statement":
             feature = ("match_statement", "3.10")
@@ -340,6 +352,15 @@ def _target_syntax_features(
                 )
             )
         pending.extend(reversed(node.children))
+    if has_type_defaults:
+        line_starts = [0] + [i + 1 for i, byte in enumerate(source) if byte == 10]
+        for offset in type_default_offsets(source):
+            row = source[:offset].count(b"\n")
+            features.append(
+                TargetSyntaxFeature(
+                    "type_parameter_default", "3.13", row + 1, offset - line_starts[row]
+                )
+            )
     return tuple(
         sorted(
             features,
@@ -362,10 +383,30 @@ def parse_python_source(source: str | bytes) -> SyntaxTree:
         Provider-neutral tree with byte spans and deterministic diagnostics.
     """
     source_bytes = source.encode("utf-8") if isinstance(source, str) else source
-    root = _new_parser().parse(source_bytes).root_node
+    root = python_parse_root(source_bytes, _new_parser())
+    diagnostics = list(_diagnostics(root))
+    for offset in invalid_attribute_offsets(source_bytes):
+        row = source_bytes[:offset].count(b"\n")
+        column = offset - (source_bytes.rfind(b"\n", 0, offset) + 1)
+        diagnostics.append(
+            SyntaxDiagnostic(
+                SyntaxDiagnosticKind.ERROR,
+                offset,
+                offset + 1,
+                row + 1,
+                column,
+                row + 1,
+                column + 1,
+            )
+        )
     return SyntaxTree(
         root=_normalized_node(root),
-        diagnostics=_diagnostics(root),
+        diagnostics=tuple(
+            sorted(
+                diagnostics,
+                key=lambda item: (item.start_byte, item.end_byte, item.kind.value),
+            )
+        ),
         target_features=_target_syntax_features(root, source_bytes),
     )
 
@@ -729,7 +770,8 @@ def _calls_and_refs(
                         "base": base,
                         "target": target,
                         "lineno": callee.end_point.row + 1,
-                        "col_offset": callee.end_point.column - len(target),
+                        "col_offset": callee.end_point.column
+                        - len(target.encode("utf-8")),
                     }
                 )
             else:
@@ -797,6 +839,28 @@ def _calls_and_refs(
     )
 
 
+def _definition_end_line(node: Node) -> int:
+    """Return the final syntax line, excluding trailing comment trivia.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Function or class definition with an original-coordinate tree.
+
+    Returns
+    -------
+    int
+        One-based final non-comment syntax line.
+    """
+    current = node
+    while current.children:
+        children = [child for child in current.children if child.type != "comment"]
+        if not children:
+            break
+        current = children[-1]
+    return current.end_point.row + 1
+
+
 def _function_entry(
     function: Node, wrapper: Node | None, source: bytes, *, method: bool
 ) -> dict[str, Any]:
@@ -826,7 +890,7 @@ def _function_entry(
     return {
         "name": _text(function.child_by_field_name("name"), source),
         "lineno": _line(function),
-        "end_lineno": function.end_point.row + 1,
+        "end_lineno": _definition_end_line(function),
         "signature": signature,
         "docstring": docstring,
         "has_docstring": int(docstring is not None),
@@ -1025,9 +1089,11 @@ def parse_python_artifacts(path: Path, root: Path, source: str) -> dict[str, Any
         If Tree-sitter reports invalid Python source or a legacy print statement.
     """
     source_bytes = source.encode("utf-8")
-    tree = _new_parser().parse(source_bytes).root_node
-    if tree.has_error or any(
-        child.type == "print_statement" for child in tree.named_children
+    tree = python_parse_root(source_bytes, _new_parser())
+    if (
+        tree.has_error
+        or invalid_attribute_offsets(source_bytes)
+        or any(child.type == "print_statement" for child in tree.named_children)
     ):
         msg = f"Python syntax errors prevent artifact extraction in {path}"
         raise SyntaxError(msg)
@@ -1099,7 +1165,7 @@ def parse_python_artifacts(path: Path, root: Path, source: str) -> dict[str, Any
             class_entry: dict[str, Any] = {
                 "name": _text(node.child_by_field_name("name"), source_bytes),
                 "lineno": _line(node),
-                "end_lineno": node.end_point.row + 1,
+                "end_lineno": _definition_end_line(node),
                 "docstring": docstring,
                 "has_docstring": int(docstring is not None),
                 "methods": [],
@@ -1169,7 +1235,7 @@ def module_docstring_location(source: str) -> tuple[int, int | None] | None:
         One-based inclusive line range, or ``None`` without a module docstring.
     """
     source_bytes = source.encode("utf-8")
-    _, node = _docstring(_new_parser().parse(source_bytes).root_node, source_bytes)
+    _, node = _docstring(python_parse_root(source_bytes, _new_parser()), source_bytes)
     if node is None:
         return None
     return (node.start_point.row + 1, node.end_point.row + 1)
