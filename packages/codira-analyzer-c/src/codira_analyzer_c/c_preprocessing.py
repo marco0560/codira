@@ -1,4 +1,4 @@
-"""Recover source-local annotation macros without moving source coordinates.
+"""Recover compiler pragmas and annotation macros without moving source coordinates.
 
 Parameters
 ----------
@@ -20,6 +20,7 @@ from tree_sitter import Node, Parser
 
 
 _IDENTIFIER = re.compile(rb"\b[A-Za-z_][A-Za-z_0-9]*\b")
+_MS_PRAGMA_RAW_STRING = re.compile(rb'(?:u8|u|U|L)?R"([^ ()\\\t\r\n]{0,16})\(')
 _UNDEF = re.compile(rb"#\s*undef\s+([A-Za-z_][A-Za-z_0-9]*)")
 _OPAQUE_NODES = frozenset(
     {
@@ -350,8 +351,209 @@ def _hash_lines(source: bytes, root: Node) -> tuple[tuple[int, int], ...]:
     return tuple(sorted(protected))
 
 
+def _pragma_end(source: bytes, start: int) -> int | None:
+    """Find the end of one lexically complete compiler pragma operator.
+
+    Parameters
+    ----------
+    source : bytes
+        Bytes owning the operator and its opaque payload.
+    start : int
+        Start offset of the reserved operator spelling.
+
+    Returns
+    -------
+    int | None
+        Exclusive closing offset, or ``None`` for unsafe/incomplete input.
+    """
+    operator = (
+        b"__pragma"
+        if source[start : start + 8] == b"__pragma"
+        else b"_Pragma"
+        if source[start : start + 7] == b"_Pragma"
+        else None
+    )
+    if operator is None:
+        return None
+    standard = operator == b"_Pragma"
+    literal = False
+    cursor = start + len(operator)
+    while cursor < len(source) and source[cursor] in b" \t\r\n\f":
+        cursor += 1
+    if cursor == len(source) or source[cursor] != 40:
+        return None
+    depth = 1
+    cursor += 1
+    while cursor < len(source):
+        byte = source[cursor]
+        if source[cursor : cursor + 2] == b"/*":
+            end = source.find(b"*/", cursor + 2)
+            if end < 0:
+                return None
+            cursor = end + 2
+            continue
+        if source[cursor : cursor + 2] == b"//":
+            end = source.find(b"\n", cursor + 2)
+            if end < 0:
+                return None
+            if (
+                b"\\\n" in source[cursor : end + 1]
+                or b"\\\r\n" in source[cursor : end + 1]
+            ):
+                return None
+            cursor = end + 1
+            continue
+        if standard:
+            if byte in b" \t\r\n\f":
+                cursor += 1
+                continue
+            if literal:
+                return cursor + 1 if byte == 41 else None
+            if byte == 76 and source[cursor + 1 : cursor + 2] == b'"':
+                cursor += 1
+                byte = 34
+            if byte != 34:
+                return None
+        raw = _MS_PRAGMA_RAW_STRING.match(source, cursor)
+        if raw is not None:
+            marker = b")" + raw[1] + b'"'
+            end = source.find(marker, raw.end())
+            if end < 0:
+                return None
+            cursor = end + len(marker)
+            continue
+        if byte in {34, 39}:
+            quote = byte
+            cursor += 1
+            while cursor < len(source) and source[cursor] != quote:
+                if source[cursor] == 92:
+                    cursor += 2
+                elif source[cursor] in {10, 13}:
+                    return None
+                else:
+                    cursor += 1
+            if cursor >= len(source):
+                return None
+            cursor += 1
+            literal = True
+            continue
+        if (
+            source[cursor : cursor + 2] == b"\\\n"
+            or source[cursor : cursor + 3] == b"\\\r\n"
+        ):
+            return None
+        if byte == 40:
+            depth += 1
+        elif byte == 41:
+            depth -= 1
+            if not depth:
+                return cursor + 1
+        cursor += 1
+    return None
+
+
+def _pragma_overridden(source: bytes, root: Node) -> bool:
+    """Check source-proven declarations or preprocessing overrides of pragma names.
+
+    Parameters
+    ----------
+    source : bytes
+        Source input being checked.
+    root : tree_sitter.Node
+        Provider root for this input.
+
+    Returns
+    -------
+    bool
+        Whether an observed definition or undef prevents builtin interpretation.
+    """
+    if b"__pragma" not in source and b"_Pragma" not in source:
+        return False
+    for node in _nodes(root):
+        if node.type in {"declaration", "function_definition"} and not node.has_error:
+            declarator = node.child_by_field_name("declarator")
+            while declarator is not None:
+                if source[declarator.start_byte : declarator.end_byte] in {
+                    b"__pragma",
+                    b"_Pragma",
+                }:
+                    return True
+                declarator = declarator.child_by_field_name("declarator")
+        if node.type in {"preproc_def", "preproc_function_def"}:
+            name = node.child_by_field_name("name")
+            if name is not None and source[name.start_byte : name.end_byte] in {
+                b"__pragma",
+                b"_Pragma",
+            }:
+                return True
+        if node.type == "preproc_call" and re.match(
+            rb"#\s*undef\s+(?:__pragma|_Pragma)\b",
+            source[node.start_byte : node.end_byte],
+        ):
+            return True
+    return False
+
+
+def _pragma_source(source: bytes, root: Node) -> bytes:
+    """Hide complete compiler pragma operators from the executable grammar.
+
+    Parameters
+    ----------
+    source : bytes
+        Original or coordinate-preserving language-view source.
+    root : tree_sitter.Node
+        Provider root for the supplied source bytes.
+
+    Returns
+    -------
+    bytes
+        Equal-width view preserving newlines, literals and directives. Source
+        definitions of the reserved spelling disable this interpretation.
+
+    Notes
+    -----
+    Pragma payload semantics are left opaque, as for ordinary hash pragmas.
+    Unclosed operators and ambiguous preprocessing line splices are not
+    recovered. The caller must require a wholly clean final parse.
+    """
+    if b"__pragma" not in source and b"_Pragma" not in source:
+        return source
+    if _pragma_overridden(source, root):
+        return source
+    candidates: list[Node] = []
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type in _OPAQUE_NODES:
+            continue
+        if node.type in _IDENTIFIER_NODES and source[
+            node.start_byte : node.end_byte
+        ] in {b"__pragma", b"_Pragma"}:
+            candidates.append(node)
+        pending.extend(reversed(node.children))
+    protected = _hash_lines(source, root)
+    projected = bytearray(source)
+    for node in candidates:
+        if any(start <= node.start_byte < end for start, end in protected):
+            continue
+        cursor = _pragma_end(source, node.start_byte)
+        if cursor is None or any(
+            start < cursor and end > node.start_byte for start, end in protected
+        ):
+            continue
+        for offset in range(node.start_byte, cursor):
+            if projected[offset] not in {10, 13}:
+                projected[offset] = 32
+    for before, after in zip(source.split(b"\n"), bytes(projected).split(b"\n")):
+        if after.lstrip(b" \t\r\f").startswith(b"#") and not before.lstrip(
+            b" \t\r\f"
+        ).startswith(b"#"):
+            return source
+    return bytes(projected)
+
+
 def _parse_c_source(source: bytes, parser: Parser) -> Node:
-    """Recover C language guards and source-local annotation macros.
+    """Recover C guards, compiler pragmas and source-local annotation macros.
 
     Parameters
     ----------
@@ -367,9 +569,13 @@ def _parse_c_source(source: bytes, parser: Parser) -> Node:
         No header bytes, compiler flags or build commands are consulted.
     """
     original = parser.parse(source).root_node
-    if not original.has_error:
+    pragma_source = _pragma_source(source, original)
+    if not original.has_error and pragma_source == source:
         return original
-    working = _c_language_source(source, original)
+    pragma_root = (
+        parser.parse(pragma_source).root_node if pragma_source != source else original
+    )
+    working = _c_language_source(pragma_source, pragma_root)
     basis = parser.parse(working).root_node if working != source else original
     if not basis.has_error:
         return basis
@@ -424,8 +630,8 @@ def _original_declaration_start(node: Node, source: bytes) -> int:
     Returns
     -------
     int
-        Original declaration start, extended only over a gap that the recovered
-        tree treats entirely as whitespace. Siblings and comments bound the gap.
+        Original declaration start, extended over blanked annotations while skipping
+        standalone pragma prefixes. Siblings and comments bound the gap.
     """
     parent = node.parent
     if parent is None:
@@ -443,4 +649,15 @@ def _original_declaration_start(node: Node, source: bytes) -> int:
     ]
     if projected_gap.strip():
         return node.start_byte
-    return lower + len(gap) - len(gap.lstrip())
+    cursor = len(gap) - len(gap.lstrip())
+    while (
+        gap[cursor : cursor + 8] == b"__pragma"
+        or gap[cursor : cursor + 7] == b"_Pragma"
+    ):
+        end = _pragma_end(gap, cursor)
+        if end is None:
+            break
+        cursor = end
+        while cursor < len(gap) and gap[cursor] in b" \t\r\n\f":
+            cursor += 1
+    return lower + cursor

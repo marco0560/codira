@@ -1954,7 +1954,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "12"
+    version = "13"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 

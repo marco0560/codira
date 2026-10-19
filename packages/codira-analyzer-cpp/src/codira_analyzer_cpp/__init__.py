@@ -2640,7 +2640,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "10"
+    version = "11"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
