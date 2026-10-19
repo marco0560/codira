@@ -230,6 +230,15 @@
             },
             "type": "array"
           },
+          "include_search_paths": {
+            "default": [],
+            "description": "Ordered include search roots, relative to the repository or absolute inside it. Quoted includes search their own directory first.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
           "include_system_includes": {
             "default": true,
             "type": "boolean"

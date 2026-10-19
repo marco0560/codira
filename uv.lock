@@ -523,7 +523,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-cpp"
-version = "2.0.10"
+version = "2.0.11"
 source = { editable = "packages/codira-analyzer-cpp" }
 dependencies = [
     { name = "codira" },
@@ -914,7 +914,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-installer"
-version = "2.0.2"
+version = "2.0.3"
 source = { editable = "packages/codira-installer" }
 dependencies = [
     { name = "textual" },

@@ -32,11 +32,11 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-    from pathlib import Path
 
     from codira.contracts import LanguageAnalyzer
 
@@ -2691,7 +2691,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "14"
+    version = "15"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -2718,6 +2718,7 @@ class CppAnalyzer:
         """
         self._path_filters = AnalyzerPathFilters()
         self._header_language = "auto"
+        self._include_search_paths: tuple[Path, ...] = ()
         self._use_leading_comments = True
         self._emit_doxygen_documentation = True
         self._include_system_includes = True
@@ -2744,6 +2745,16 @@ class CppAnalyzer:
                 "use_leading_comments": boolean_property(True),
                 "emit_doxygen_documentation": boolean_property(True),
                 "include_system_includes": boolean_property(True),
+                "include_search_paths": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "default": [],
+                    "description": (
+                        "Ordered include search roots, relative to the repository "
+                        "or absolute inside it. Quoted includes search their "
+                        "own directory first."
+                    ),
+                },
                 "emit_namespaces": boolean_property(True),
                 "emit_macros": boolean_property(True),
                 "header_language": {
@@ -2772,13 +2783,21 @@ class CppAnalyzer:
         Raises
         ------
         ValueError
-            If header_language is not auto, c or cpp.
+            If header_language is not auto, c or cpp, or include_search_paths
+            is not a list of nonempty strings. Repository containment is checked
+            when analysis inputs are read.
         """
 
         self._path_filters = analyzer_path_filters_from_config(config)
         self._header_language = str(config.get("header_language", "auto"))
         if self._header_language not in {"auto", "c", "cpp"}:
             raise ValueError("header_language must be auto, c or cpp")
+        search_paths = config.get("include_search_paths", [])
+        if not isinstance(search_paths, list) or any(
+            not isinstance(item, str) or not item for item in search_paths
+        ):
+            raise ValueError("include_search_paths must be a list of nonempty strings")
+        self._include_search_paths = tuple(Path(item) for item in search_paths)
         self._use_leading_comments = bool(config.get("use_leading_comments", True))
         self._emit_doxygen_documentation = bool(
             config.get("emit_doxygen_documentation", True)
@@ -2930,7 +2949,11 @@ class CppAnalyzer:
         str
             Dependency identity including header bytes and negative lookups.
         """
-        payload = json.loads(read_include_context(path, root).identity)
+        payload = json.loads(
+            read_include_context(
+                path, root, include_paths=self._include_search_paths
+            ).identity
+        )
         payload["configuration_fingerprint"] = self.configuration_fingerprint
         return validate_analysis_input_fingerprint(
             json.dumps(
@@ -2965,7 +2988,9 @@ class CppAnalyzer:
             isinstance(payload, dict)
             and payload.get("configuration_fingerprint")
             == self.configuration_fingerprint
-            and include_identity_matches(path, root, expected)
+            and include_identity_matches(
+                path, root, expected, include_paths=self._include_search_paths
+            )
         )
 
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
@@ -2984,7 +3009,9 @@ class CppAnalyzer:
         codira.models.AnalysisResult
             Normalized analysis result for the file.
         """
-        context = read_include_context(path, root)
+        context = read_include_context(
+            path, root, include_paths=self._include_search_paths
+        )
         source = context.source
         root_node = _parse_cpp_source(
             source,

@@ -49,11 +49,35 @@ class methods, documentation and includes. Both branches are retained as static
 source evidence; compilation conditions are not evaluated. Function-local scopes
 are not flattened into module declarations.
 
+## Explicit include search roots
+
+The analyzer can read contained headers through explicitly configured search roots:
+
+```toml
+[plugins.analyzer-cpp]
+include_search_paths = ["include", "llvm/include"]
+```
+
+Use the paths declared by the repository's build or test configuration. Paths are
+ordered and relative to the indexed repository; absolute paths inside that
+repository are also accepted. Quoted includes search their own directory first;
+angle includes search the configured roots. No external system headers are read.
+The default is an empty list, and no build flags or ancestor roots are inferred.
+
+`include_search_paths` resolves header dependencies. The separate `include_paths`
+and `exclude_paths` options filter which source files the plugin analyzes.
+Header contents, failed lookups, root order and symlink targets participate in
+incremental invalidation. Missing headers remain explicit unresolved inputs.
+
+Annotation definitions can come from resolved headers as well as the source file.
+This does not expand general function macros or select conditional compilation.
+
 ## Local annotation macros
 
 When an initial parse has errors, the analyzer can recover object macros defined
-in that file whose replacements are empty or consist of GNU, Microsoft or C++
-attributes. Annotation aliases are resolved from the same file. All definitions
+in that file or resolved contained headers whose replacements are empty or consist
+of GNU, Microsoft or C++ attributes. Annotation aliases are resolved from the same
+captured inputs. All definitions
 of a name must be compatible; function macros and names appearing in `#undef`
 are excluded. Uses must follow their definition and the required alias definitions.
 

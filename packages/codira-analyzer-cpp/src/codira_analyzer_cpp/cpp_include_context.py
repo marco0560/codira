@@ -321,7 +321,13 @@ def _contained_path(root: Path, relative: str) -> Path:
     return path
 
 
-def include_identity_matches(path: Path, root: Path, identity: str) -> bool:
+def include_identity_matches(
+    path: Path,
+    root: Path,
+    identity: str,
+    *,
+    include_paths: tuple[Path, ...] | None = None,
+) -> bool:
     """Check captured hashes and lookup outcomes without parsing source syntax.
 
     Parameters
@@ -332,6 +338,9 @@ def include_identity_matches(path: Path, root: Path, identity: str) -> bool:
         Repository resolution boundary.
     identity : str
         Previously captured canonical input manifest.
+    include_paths : tuple[pathlib.Path, ...] or None, optional
+        Current configured search roots, when supplied. Their resolved order
+        must still match the manifest, including after a symlink changes target.
 
     Returns
     -------
@@ -364,6 +373,12 @@ def include_identity_matches(path: Path, root: Path, identity: str) -> bool:
         ):
             return False
         search = tuple(_contained_path(root, item) for item in payload["search"])
+        if include_paths is not None:
+            configured = tuple((root / item).resolve() for item in include_paths)
+            if configured != search or any(
+                not item.is_relative_to(root) for item in configured
+            ):
+                return False
         input_paths = {payload["source_path"]: source_path}
         for relative, digest, _ in payload["headers"]:
             header_path = _contained_path(root, relative)
