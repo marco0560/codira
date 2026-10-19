@@ -20,12 +20,15 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, TextIO
+from typing import TYPE_CHECKING, Any, TextIO
 from unittest.mock import Mock
 
 import pytest
 
 from scripts import run_test_material_benchmarks as RUNNER
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def test_stage_progress_numbers_measurements_and_prunes_exclusions(
@@ -443,13 +446,17 @@ def test_unusable_partial_index_withholds_queries(
     assert campaign.results[-1]["reason"] == "full index is partial"
 
 
-def test_architecture_timeout_stops_descendants(tmp_path: Path) -> None:
+def test_architecture_timeout_stops_descendants(
+    tmp_path: Path, assert_process_terminated: Callable[[int], None]
+) -> None:
     """Bound a dummy rendering process and terminate its sleeping descendant.
 
     Parameters
     ----------
     tmp_path : pathlib.Path
         Disposable workspace for dummy executable and logs.
+    assert_process_terminated : collections.abc.Callable[[int], None]
+        Bounded observer of owned descendant termination.
 
     Returns
     -------
@@ -476,8 +483,7 @@ def test_architecture_timeout_stops_descendants(tmp_path: Path) -> None:
     assert result["samples"][0]["timing_valid"] is False
     assert result["samples"][0]["timeout_seconds"] == 0.5
     child_pid = int(Path(result["stdout"]).read_text().strip())
-    status = Path(f"/proc/{child_pid}/status")
-    assert not status.exists() or "State:\tZ" in status.read_text()
+    assert_process_terminated(child_pid)
     assert (tmp_path / "run/stages/arch/result.json").is_file()
 
 
