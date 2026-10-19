@@ -105,3 +105,7 @@ structural equivalence and complete-output controls are retained.
 Unrelated partial headers and low-return individual cases remain open. Pending
 independent admission, the ledger still records **759 verified fixes**, **453
 separately classified files** and **24,550 open paths**.
+
+Later source-bound admission is recorded in the [qualified LLVM include-profile
+report](analyzer-parser-diagnostics-llvm-includes-qualified-2026-10-19.md). Earlier
+ledger totals above are the phase snapshot, before that admission.

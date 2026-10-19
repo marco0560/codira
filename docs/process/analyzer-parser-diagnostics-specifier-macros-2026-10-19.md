@@ -114,3 +114,7 @@ A focused identity test also exposed installed/generated core-version drift
 already-installed compatible build dependencies and the docs extra reconciles
 the environment; the identity guard remains intact. Its failed attempts and
 resolved commands are retained as `worktree-runtime-sync-r1` through `r3`.
+
+Later source-bound admission is recorded in the [qualified LLVM include-profile
+report](analyzer-parser-diagnostics-llvm-includes-qualified-2026-10-19.md). Earlier
+ledger totals above are the phase snapshot, before that admission.
