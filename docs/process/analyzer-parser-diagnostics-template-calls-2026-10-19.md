@@ -82,7 +82,11 @@ relaxation was needed.
 The full repository gate passes **2,176 tests with 3 skipped**, **87%** aggregate
 coverage, and a fresh **848-file index** without failures or coverage issues. The
 source-bound receipt covers the unchanged runtime, package pins, lock and tests.
-The 147 newly qualified originals await separate source-bound ledger admission.
+Commit `86836e0` records the implementation and validation. A separate
+source-bound admission now records all **147** newly qualified originals in v25.
+The qualification scope is unchanged from the namespace admission: checked
+artifact fields and explicit native/include profiles do not establish runtime or
+original test-harness equivalence, or a clean default full benchmark.
 
 ## Evidence
 
@@ -105,9 +109,15 @@ The durable analysis root is
   previous-qualification complete artifact replay.
 - `template-and-cast-next-fix-impact-r1.json`: prior 147-file counterfactual.
 
-The starting authoritative ledger is **v24: 1,912 verified fixes, 453 separately
-classified files, and 23,397 open paths**, or **9.18% accounted**. The separated
-language/version/repository records remain intact. The full objective remains open.
+The authoritative ledger is now **v25: 2,059 verified fixes, 453 separately
+classified files, and 23,250 open paths**, or **9.75% accounted**, up from **9.18%**.
+Remaining historical ownership is **5,897 C** and **17,353 C++** files. The
+separated language/version/repository records remain intact. The full objective
+remains open. Complete v25 JSONL/CSV and grouped summary, the generator
+`admit_template_calls_cpp18_r1.py`, and `template-calls-admission-r1.json` retain
+the source-bound admission evidence. The successful completed gate session and
+its temporary files were cleaned after examination/reporting; its durable receipt
+and all failed capture evidence remain retained.
 
 A separate 15-file C API-macro cause probe retains two clean and thirteen partial
 current artifacts. Actual error spans include record-layout macros, export
@@ -117,3 +127,7 @@ clean files as well. The complete 5,897-file pending-C token census and this pro
 are retained in `c-shared-macro-census-r1.json`, `c-shared-macros-probe-r1/` and
 `c-shared-macro-error-spans-r1.json`; they do not change classification or admit
 files. Further corrections should target demonstrated shared causes.
+
+The follow-up construct census is retained in
+`c-shared-constructs-census-r1.json`. It follows actual error-span mechanisms,
+while keeping token overlap separate from demonstrated parser recovery.
