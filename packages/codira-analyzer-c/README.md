@@ -67,3 +67,11 @@ remain outside this recovery. The resulting complete tree must be clean.
 Header bytes, lookup outcomes, search/context order, symlink targets and
 configuration participate in incremental identity. A dependency change requires
 fresh analysis even when source bytes and header modification time are unchanged.
+
+Parameter metadata can recover a plain `Type name` object replacement or a
+single-identifier wrapper, including identifier token pasting and compiler
+annotations. Every captured alternative must agree on the resulting name.
+Conflicting alternatives, undefinitions, recursive macro inputs, multi-argument
+wrappers and larger expressions retain the original extraction result. This
+changes parameter names only; signatures and call coordinates retain the written
+source.

@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 
 from tree_sitter import Node
 
+from .c_parameter_macros import ParameterMacro, macro_parameter_name, parameter_macros
 from .c_parser import _new_parser as _new_parser
 from .c_include_context import read_include_context, include_identity_matches
 from codira.analysis_inputs import validate_analysis_input_fingerprint
@@ -742,6 +743,7 @@ def _function_macro_wrapper_name(node: Node, source: bytes) -> str | None:
 def _extract_parameter_names(
     parameter_list: Node | None,
     source: bytes,
+    macros: dict[bytes, tuple[ParameterMacro, ...]] | None = None,
 ) -> tuple[str, ...]:
     """
     Extract deterministic parameter names from one parameter list.
@@ -752,6 +754,8 @@ def _extract_parameter_names(
         Parameter list node from a function declarator.
     source : bytes
         Full source buffer.
+    macros : dict[bytes, tuple[ParameterMacro, ...]] | None, optional
+        Captured parameter identity alternatives and unsafe names.
 
     Returns
     -------
@@ -764,6 +768,10 @@ def _extract_parameter_names(
     parameters: list[str] = []
     for child in parameter_list.named_children:
         if child.type != "parameter_declaration":
+            continue
+        recovered = macro_parameter_name(child, source, macros) if macros else None
+        if recovered is not None:
+            parameters.append(recovered)
             continue
         declarator = child.child_by_field_name("declarator")
         if declarator is None:
@@ -1028,6 +1036,7 @@ def _extract_functions(
     *,
     module_name: str,
     owner_id: str,
+    macros: dict[bytes, tuple[ParameterMacro, ...]] | None = None,
 ) -> tuple[FunctionArtifact, ...]:
     """
     Extract C function definitions and otherwise unrepresented prototypes.
@@ -1042,6 +1051,8 @@ def _extract_functions(
         Dotted owner module name.
     owner_id : str
         File-scoped owner identity preserving the source suffix.
+    macros : dict[bytes, tuple[ParameterMacro, ...]] | None, optional
+        Captured parameter identity alternatives and unsafe names.
 
     Returns
     -------
@@ -1069,7 +1080,7 @@ def _extract_functions(
             continue
 
         parameter_list = _find_parameter_list(declarator)
-        parameters = _extract_parameter_names(parameter_list, source)
+        parameters = _extract_parameter_names(parameter_list, source, macros)
         signature_end = body.start_byte if body is not None else declarator.end_byte
         signature_start = _original_declaration_start(child, source)
         signature = _decode_source_text(source[signature_start:signature_end]).strip()
@@ -2038,7 +2049,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "16"
+    version = "17"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -2341,13 +2352,16 @@ class CAnalyzer:
         )
         parser = _new_parser()
         base = _parse_c_source(source, parser, included_sources)
+        macros = parameter_macros(source, included_sources)
         analyses: list[AnalysisResult] = []
         for view in c_parse_views(
             source, parser, base=base, included_sources=included_sources
         ):
             if view.root.has_error:
-                return self._analyze_view(path, root, CParseView(source, base), base)
-            analyses.append(self._analyze_view(path, root, view, base))
+                return self._analyze_view(
+                    path, root, CParseView(source, base), base, macros
+                )
+            analyses.append(self._analyze_view(path, root, view, base, macros))
         return (
             analyses[0]
             if len(analyses) == 1
@@ -2355,7 +2369,12 @@ class CAnalyzer:
         )
 
     def _analyze_view(
-        self, path: Path, root: Path, view: CParseView, module_root: Node
+        self,
+        path: Path,
+        root: Path,
+        view: CParseView,
+        module_root: Node,
+        macros: dict[bytes, tuple[ParameterMacro, ...]],
     ) -> AnalysisResult:
         """Build normalized artifacts for one validated source view.
 
@@ -2369,6 +2388,8 @@ class CAnalyzer:
             Coordinate-preserving signature source and parsed tree.
         module_root : tree_sitter.Node
             Original base tree for stable module documentation provenance.
+        macros : dict[bytes, tuple[ParameterMacro, ...]]
+            Captured parameter identity alternatives and unsafe names.
 
         Returns
         -------
@@ -2395,6 +2416,7 @@ class CAnalyzer:
             source,
             module_name=module_name,
             owner_id=owner_id,
+            macros=macros,
         )
         declarations = _extract_declarations(
             root_node,
