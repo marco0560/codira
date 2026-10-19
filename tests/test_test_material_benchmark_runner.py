@@ -888,7 +888,7 @@ def test_baseline_preparation_and_resume_identity_guard(
     tmp_path : pathlib.Path
         Disposable source and run receipts.
     monkeypatch : pytest.MonkeyPatch
-        Blocks external process launch.
+        Supplies a consistent version prerequisite and blocks process launch.
 
     Returns
     -------
@@ -927,10 +927,19 @@ def test_baseline_preparation_and_resume_identity_guard(
         ["runner", str(prepared), "--run", "--resume", "--run-id", "partial-run"],
     )
     monkeypatch.setattr(subprocess, "check_output", Mock(return_value="commit\n"))
+    provenance = Mock(
+        return_value={
+            "distribution": "test-version",
+            "generated": "test-version",
+            "consistent": True,
+        }
+    )
+    monkeypatch.setattr(RUNNER, "version_provenance", provenance)
     launch = Mock()
     monkeypatch.setattr(subprocess, "Popen", launch)
     with pytest.raises(ValueError, match="resume identity differs"):
         RUNNER.main()
+    provenance.assert_called_once_with()
     launch.assert_not_called()
     assert json.loads((run / "identity.json").read_text())["partial"] is True
 
