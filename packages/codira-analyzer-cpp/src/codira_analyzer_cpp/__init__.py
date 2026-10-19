@@ -69,6 +69,7 @@ from .cpp_comments import (
 
 from .cpp_documentation import _documentation_artifacts
 from .cpp_imports import _extract_imports
+from .cpp_headers import has_named_template_parameters
 from .cpp_include_context import (
     IncludeContext,
     include_identity_matches,
@@ -2365,8 +2366,9 @@ def _is_cpp_header(path: Path) -> bool:
     Returns
     -------
     bool
-        True for a C++-only same-stem neighbour or a C++ syntax node. Shared
-        C/C++ neighbours and syntax without such evidence retain the C default.
+        True for a C++-only same-stem neighbour, a C++ syntax node or an
+        independently parsed named template parameter list. Shared C/C++
+        neighbours and syntax without such evidence retain the C default.
     """
     if not path.is_file():
         return False
@@ -2375,14 +2377,16 @@ def _is_cpp_header(path: Path) -> bool:
     )
     if cpp_neighbour and not path.with_suffix(".c").is_file():
         return True
-    pending = [_parse_cpp_source(path.read_bytes())]
+    source = path.read_bytes()
+    root = _parse_cpp_source(source)
+    pending = [root]
     while pending:
         node = pending.pop()
         if node.type in _CPP_HEADER_NODES:
             return True
         if node.type not in {"comment", "string_literal", "raw_string_literal"}:
             pending.extend(node.named_children)
-    return False
+    return root.has_error and has_named_template_parameters(source, root)
 
 
 @dataclass
@@ -2687,7 +2691,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "13"
+    version = "14"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
