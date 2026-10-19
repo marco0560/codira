@@ -38,6 +38,9 @@ _OPAQUE_NODES = frozenset(
 _ANNOTATION_NODES = frozenset(
     {"attribute_declaration", "attribute_specifier", "ms_declspec_modifier"}
 )
+_DECLARATION_SPECIFIERS = frozenset(
+    {("storage_class_specifier", b"inline"), ("type_qualifier", b"constexpr")}
+)
 _IDENTIFIER_NODES = frozenset(
     {
         "identifier",
@@ -94,7 +97,7 @@ def _nodes(root: Node) -> Iterator[Node]:
 
 
 def _is_annotation(value: bytes, parser: Parser) -> bool:
-    """Accept an empty replacement or parsed attributes before a probe.
+    """Accept attributes, inline or constexpr without changing a probe's type.
 
     Parameters
     ----------
@@ -106,7 +109,9 @@ def _is_annotation(value: bytes, parser: Parser) -> bool:
     Returns
     -------
     bool
-        Whether the replacement adds only attributes to an unchanged int probe.
+        Whether the replacement adds only attributes or supported declaration
+        specifiers to an unchanged int probe. Type, linkage and declarator
+        replacements remain unsupported.
     """
     source = value + b" int __codira_annotation_probe();"
     root = parser.parse(source).root_node
@@ -126,7 +131,11 @@ def _is_annotation(value: bytes, parser: Parser) -> bool:
     ):
         return False
     return all(
-        child == type_node or child == declarator or child.type in _ANNOTATION_NODES
+        child == type_node
+        or child == declarator
+        or child.type in _ANNOTATION_NODES
+        or (child.type, source[child.start_byte : child.end_byte])
+        in _DECLARATION_SPECIFIERS
         for child in declaration.named_children
     )
 
@@ -167,6 +176,11 @@ def _annotation_definitions(
     ]
     for content, tree, boundary in inputs:
         _collect_annotation_definitions(content, tree, boundary, state)
+    overridden_specifiers = {
+        token
+        for _, token in _DECLARATION_SPECIFIERS
+        if token in definitions or token in unsafe
+    }
     accepted: dict[bytes, int] = {}
     changed = True
     while changed:
@@ -183,7 +197,10 @@ def _annotation_definitions(
                 )
                 for value in alternatives
             ]
-            if not all(_is_annotation(value, parser) for value in expanded):
+            if any(
+                overridden_specifiers.intersection(_IDENTIFIER.findall(value))
+                for value in expanded
+            ) or not all(_is_annotation(value, parser) for value in expanded):
                 continue
             dependencies = {
                 token
@@ -686,7 +703,7 @@ def _complex_source(
 def _parse_cpp_source(
     source: bytes, *, included_sources: tuple[tuple[bytes, int], ...] = ()
 ) -> Node:
-    """Parse C++ with coordinate-preserving annotation and compiler pragma recovery.
+    """Parse C++ with coordinate-preserving macro and compiler pragma recovery.
 
     Parameters
     ----------

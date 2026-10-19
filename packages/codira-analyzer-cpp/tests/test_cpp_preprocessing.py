@@ -33,6 +33,13 @@ from codira_analyzer_cpp.cpp_syntax import _new_parser
         b"#if SHARED\n#define API __declspec(dllexport)\n#else\n#define API\n#endif\n",
         b'#define API \\\n  __attribute__((visibility("default")))\n',
         b"#define API /* export marker */\n",
+        b"#define API inline\n",
+        b"#define API constexpr\n",
+        b"#define API inline constexpr\n",
+        b"#define API [[nodiscard]] inline constexpr\n",
+        b"#define INLINE inline\n#define API INLINE constexpr\n",
+        b"#define inline [[nodiscard]]\n#define API inline\n",
+        b"#if VERSION\n#define API constexpr\n#else\n#define API\n#endif\n",
     ],
 )
 def test_local_annotation_definitions_recover_function(definition: bytes) -> None:
@@ -75,6 +82,13 @@ def test_local_annotation_definitions_recover_function(definition: bytes) -> Non
         b"#define API OTHER\n#define OTHER API\nAPI int run() {}\n",
         b"#define API int\nAPI int run() {}\n",
         b"#define API static\nAPI int run() {}\n",
+        b"#define API extern\nAPI int run() {}\n",
+        b"#define inline Widget\n#define API inline\nAPI int run() {}\n",
+        b"#define constexpr Widget\n#define API constexpr\nAPI int run() {}\n",
+        b"#undef inline\n#define API inline\nAPI int run() {}\n",
+        b"#define API const\nAPI int run() {}\n",
+        b"#define API inline Widget\nAPI int run() {}\n",
+        b"#if VERSION\n#define API constexpr\n#else\n#define API Widget\n#endif\nAPI int run() {}\n",
         b"#define API [[nodiscard]]\nAPI int run( { return; }\n",
         b"#define API [[nodiscard]]\nAPI int run() { return ; + }\n",
         b"#define API [[nodiscard]]\nAPI int run() {}\nint broken(\n",
@@ -148,6 +162,55 @@ def test_projection_preserves_directives_literals_and_artifacts(tmp_path: Path) 
     assert method.calls[0].col_offset == source.splitlines()[4].index(b"callee")
     assert any(item.name == "API" for item in result.declarations)
     assert path.read_bytes() == source
+
+
+def test_header_specifiers_preserve_constructors_and_source_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Recover source-defined specifiers without losing signatures or calls.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Repository containing an explicitly configured support directory.
+
+    Returns
+    -------
+    None
+        The production analyzer retains constructor, function and call locations
+        and the original macro spelling in signatures.
+    """
+    support = tmp_path / "support"
+    support.mkdir()
+    (support / "api.h").write_text(
+        "#define INLINE inline\n#define API INLINE constexpr\n"
+    )
+    source = (
+        '#include "api.h"\n'
+        "struct Point { API Point(int value) : value(value) {} int value; };\n"
+        "API int identity(int value) { return value; }\n"
+        "int caller(int value) { return identity(value); }\n"
+    )
+    path = tmp_path / "point.cpp"
+    path.write_text(source)
+    analyzer = CppAnalyzer()
+    assert not analyzer.analyze_file(path, tmp_path).index_symbols
+    analyzer.configure({"include_search_paths": ["support"]})
+    result = analyzer.analyze_file(path, tmp_path)
+    assert result.index_symbols
+    point = next(item for item in result.classes if item.name == "Point")
+    constructor = next(item for item in point.methods if item.name == "Point")
+    assert constructor.lineno == 2
+    assert constructor.signature == "API Point(int value) : value(value)"
+    identity = next(item for item in result.functions if item.name == "identity")
+    assert identity.signature == "API int identity(int value)"
+    assert identity.lineno == 3
+    assert identity.parameters == ("value",)
+    caller = next(item for item in result.functions if item.name == "caller")
+    call = next(item for item in caller.calls if item.target == "identity")
+    assert call.lineno == 4
+    assert call.col_offset == source.splitlines()[3].index("identity")
+    assert path.read_text() == source
 
 
 def test_multiline_annotations_keep_original_start_and_utf8_calls(

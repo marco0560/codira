@@ -72,12 +72,13 @@ incremental invalidation. Missing headers remain explicit unresolved inputs.
 Annotation definitions can come from resolved headers as well as the source file.
 This does not expand general function macros or select conditional compilation.
 
-## Local annotation macros
+## Source-defined annotation and specifier macros
 
 When an initial parse has errors, the analyzer can recover object macros defined
 in that file or resolved contained headers whose replacements are empty or consist
-of GNU, Microsoft or C++ attributes. Annotation aliases are resolved from the same
-captured inputs. All definitions
+of GNU, Microsoft or C++ attributes, `inline`, `constexpr`, or combinations of
+these. Aliases are resolved from the same captured inputs. Replacements that
+change types or linkage remain unsupported. All definitions
 of a name must be compatible; function macros and names appearing in `#undef`
 are excluded. Uses must follow their definition and the required alias definitions.
 
