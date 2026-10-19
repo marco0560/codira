@@ -27,17 +27,21 @@ None
 from __future__ import annotations
 
 import hashlib
+import json
+from pathlib import Path
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
-    from pathlib import Path
 
     from codira.contracts import LanguageAnalyzer
 
-from tree_sitter import Language, Node, Parser
-from tree_sitter_c import language
+from tree_sitter import Node
+
+from .c_parser import _new_parser as _new_parser
+from .c_include_context import read_include_context, include_identity_matches
+from codira.analysis_inputs import validate_analysis_input_fingerprint
 
 from .c_conditionals import CParseView, c_parse_views
 from .c_preprocessing import (
@@ -74,7 +78,6 @@ from codira.plugin_config import (
 )
 
 _C_SUFFIXES = {".c", ".h"}
-_LANGUAGE = Language(language())
 __all__ = ["CAnalyzer", "_disambiguate_function_stable_ids", "build_analyzer"]
 _TYPE_LIKE_NAMES = {
     "bool",
@@ -127,22 +130,6 @@ _C_MACROS = frozenset(
         "assert",
     }
 )
-
-
-def _new_parser() -> Parser:
-    """
-    Create a parser configured for the C grammar.
-
-    Parameters
-    ----------
-    None
-
-    Returns
-    -------
-    tree_sitter.Parser
-        Parser configured for ``tree-sitter-c``.
-    """
-    return Parser(_LANGUAGE)
 
 
 def _decode_source_text(source: bytes) -> str:
@@ -2051,11 +2038,24 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "15"
+    version = "16"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
     def __init__(self) -> None:
+        """Initialize independent options and explicit C input context.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Stores default options without reading repository inputs.
+        """
+        self._include_search_paths: tuple[Path, ...] = ()
+        self._preinclude_headers: tuple[Path, ...] = ()
         self._path_filters = AnalyzerPathFilters()
         self._use_leading_comments = True
         self._emit_doxygen_documentation = True
@@ -2083,6 +2083,18 @@ class CAnalyzer:
                 "emit_doxygen_documentation": boolean_property(True),
                 "include_system_includes": boolean_property(True),
                 "emit_macros": boolean_property(True),
+                "include_search_paths": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "default": [],
+                    "description": "Ordered contained include search roots; quoted includes first search their own directory.",
+                },
+                "preinclude_headers": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "default": [],
+                    "description": "Explicit contained caller-context headers whose definitions are available before the source begins.",
+                },
             }
         )
 
@@ -2099,8 +2111,26 @@ class CAnalyzer:
         -------
         None
             Analyzer options are stored on this instance.
+
+        Raises
+        ------
+        ValueError
+            If include-search or caller-context options are malformed.
         """
 
+        search_paths = config.get("include_search_paths", [])
+        preinclude = config.get("preinclude_headers", [])
+        for option, value in (
+            ("include_search_paths", search_paths),
+            ("preinclude_headers", preinclude),
+        ):
+            if not isinstance(value, list) or any(
+                not isinstance(item, str) or not item for item in value
+            ):
+                raise ValueError(f"{option} must be a list of nonempty strings")
+        assert isinstance(search_paths, list) and isinstance(preinclude, list)
+        self._include_search_paths = tuple(Path(item) for item in search_paths)
+        self._preinclude_headers = tuple(Path(item) for item in preinclude)
         self._path_filters = analyzer_path_filters_from_config(config)
         self._use_leading_comments = bool(config.get("use_leading_comments", True))
         self._emit_doxygen_documentation = bool(
@@ -2211,6 +2241,78 @@ class CAnalyzer:
 
         return analyzer_path_allowed(path=path, root=root, filters=self._path_filters)
 
+    def analysis_input_fingerprint(self, path: Path, root: Path) -> str:
+        """Bind analysis reuse to contained C header bytes and lookup outcomes.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Translation unit considered for analysis.
+        root : pathlib.Path
+            Repository boundary for all captured dependencies.
+
+        Returns
+        -------
+        str
+            Versioned source/header identity with configuration fingerprint.
+
+        Raises
+        ------
+        ValueError
+            If the source or explicit input paths escape the repository.
+        OSError
+            If the source or an explicitly required context header is unavailable.
+        """
+        context = read_include_context(
+            path,
+            root,
+            include_paths=self._include_search_paths,
+            preinclude_headers=self._preinclude_headers,
+        )
+        payload = json.loads(context.identity)
+        payload["configuration_fingerprint"] = self.configuration_fingerprint
+        return validate_analysis_input_fingerprint(
+            json.dumps(
+                payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")
+            )
+        )
+
+    def analysis_input_fingerprint_matches(
+        self, path: Path, root: Path, expected: str
+    ) -> bool:
+        """Recheck source, headers and resolutions without reparsing C syntax.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Original translation unit.
+        root : pathlib.Path
+            Repository boundary for contained input validation.
+        expected : str
+            Previously captured versioned dependency identity.
+
+        Returns
+        -------
+        bool
+            Whether exact bytes, search roots, context headers and lookups match.
+        """
+        try:
+            payload = json.loads(expected)
+        except ValueError:
+            return False
+        return (
+            isinstance(payload, dict)
+            and payload.get("configuration_fingerprint")
+            == self.configuration_fingerprint
+            and include_identity_matches(
+                path,
+                root,
+                expected,
+                include_paths=self._include_search_paths,
+                preinclude_headers=self._preinclude_headers,
+            )
+        )
+
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
         """
         Analyze one C-family source file into normalized artifacts.
@@ -2227,11 +2329,22 @@ class CAnalyzer:
         codira.models.AnalysisResult
             Normalized analysis result for the file.
         """
-        source = path.read_bytes()
+        context = read_include_context(
+            path,
+            root,
+            include_paths=self._include_search_paths,
+            preinclude_headers=self._preinclude_headers,
+        )
+        source = context.source
+        included_sources = tuple(
+            (header.source, header.available_after) for header in context.headers
+        )
         parser = _new_parser()
-        base = _parse_c_source(source, parser)
+        base = _parse_c_source(source, parser, included_sources)
         analyses: list[AnalysisResult] = []
-        for view in c_parse_views(source, parser, base=base):
+        for view in c_parse_views(
+            source, parser, base=base, included_sources=included_sources
+        ):
             if view.root.has_error:
                 return self._analyze_view(path, root, CParseView(source, base), base)
             analyses.append(self._analyze_view(path, root, view, base))

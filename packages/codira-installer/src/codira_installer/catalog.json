@@ -164,9 +164,27 @@
             },
             "type": "array"
           },
+          "include_search_paths": {
+            "default": [],
+            "description": "Ordered contained include search roots; quoted includes first search their own directory.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
           "include_system_includes": {
             "default": true,
             "type": "boolean"
+          },
+          "preinclude_headers": {
+            "default": [],
+            "description": "Explicit contained caller-context headers whose definitions are available before the source begins.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
           },
           "use_leading_comments": {
             "default": true,

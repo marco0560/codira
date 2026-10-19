@@ -50,7 +50,7 @@ class CParseView:
     Returns
     -------
     None
-        Language-owned parse view without external analysis inputs.
+        Equal-coordinate source and grammar view; callers retain header context.
     """
 
     source: bytes
@@ -191,7 +191,42 @@ def _blank(source: bytes, spans: list[tuple[int, int]]) -> bytes:
     return bytes(projected)
 
 
-def _complete_header(fragment: bytes, parser: Parser) -> bool:
+def _slice_inputs(
+    included_sources: tuple[tuple[bytes, int], ...],
+    start: int,
+    end: int,
+    prefix: int = 0,
+) -> tuple[tuple[bytes, int], ...]:
+    """Rebase captured definition availability for an isolated source probe.
+
+    Parameters
+    ----------
+    included_sources : tuple[tuple[bytes, int], ...]
+        Captured headers with original-source include boundaries.
+    start : int
+        Original start of the probed source fragment.
+    end : int
+        Original end of that fragment.
+    prefix : int, optional
+        Synthetic probe prefix byte count.
+
+    Returns
+    -------
+    tuple[tuple[bytes, int], ...]
+        Only headers available by the fragment end, at adjusted boundaries.
+    """
+    return tuple(
+        (content, 0 if boundary <= start else prefix + boundary - start)
+        for content, boundary in included_sources
+        if boundary <= end
+    )
+
+
+def _complete_header(
+    fragment: bytes,
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...] = (),
+) -> bool:
     """Recognize a complete function header needing only its shared body.
 
     Parameters
@@ -201,12 +236,15 @@ def _complete_header(fragment: bytes, parser: Parser) -> bool:
     parser : tree_sitter.Parser
         C grammar parser.
 
+    included_sources : tuple[tuple[bytes, int], ...], optional
+        Captured header bytes and original or probe-adjusted availability.
+
     Returns
     -------
     bool
         True for exactly one function definition with the appended probe body.
     """
-    root = parser.parse(fragment + b"\n{}").root_node
+    root = _parse_c_source(fragment + b"\n{}", parser, included_sources)
     declarations = [node for node in root.named_children if node.type != "comment"]
     if (
         root.has_error
@@ -219,7 +257,11 @@ def _complete_header(fragment: bytes, parser: Parser) -> bool:
 
 
 def _header_groups(
-    source: bytes, root: Node, groups: list[_Conditional], parser: Parser
+    source: bytes,
+    root: Node,
+    groups: list[_Conditional],
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...] = (),
 ) -> list[_Conditional]:
     """Find disjoint complete header choices outside function and record bodies.
 
@@ -233,6 +275,9 @@ def _header_groups(
         Balanced lexical conditional groups.
     parser : tree_sitter.Parser
         C parser for isolated header probes.
+
+    included_sources : tuple[tuple[bytes, int], ...], optional
+        Captured header bytes and original or probe-adjusted availability.
 
     Returns
     -------
@@ -267,7 +312,10 @@ def _header_groups(
         if not tail.startswith(b"{"):
             continue
         if all(
-            _complete_header(source[start:end], parser) for start, end in group.branches
+            _complete_header(
+                source[start:end], parser, _slice_inputs(included_sources, start, end)
+            )
+            for start, end in group.branches
         ):
             if headers and group.start < headers[-1].end:
                 return []
@@ -275,7 +323,9 @@ def _header_groups(
     return headers
 
 
-def _statement_projection(source: bytes, parser: Parser) -> bytes:
+def _statement_projection(
+    source: bytes, parser: Parser, included_sources: tuple[tuple[bytes, int], ...] = ()
+) -> bytes:
     """Remove wrappers only around complete statement alternatives in bodies.
 
     Parameters
@@ -285,12 +335,15 @@ def _statement_projection(source: bytes, parser: Parser) -> bytes:
     parser : tree_sitter.Parser
         C parser used for body detection and statement probes.
 
+    included_sources : tuple[tuple[bytes, int], ...], optional
+        Captured header bytes and original or probe-adjusted availability.
+
     Returns
     -------
     bytes
         All written statements retained, with eligible directive lines blanked.
     """
-    root = _parse_c_source(source, parser)
+    root = _parse_c_source(source, parser, included_sources)
     groups = _conditionals(source, root, parser)
     if groups is None:
         return source
@@ -314,7 +367,16 @@ def _statement_projection(source: bytes, parser: Parser) -> bytes:
                 b"void __codira_probe(void) {\n" + branch + b"\n}",
                 b"void __codira_probe(void) { if (0) {}\n" + branch + b"\n}",
             ]
-            if all(_parse_c_source(probe, parser).has_error for probe in probes):
+            if all(
+                _parse_c_source(
+                    probe,
+                    parser,
+                    _slice_inputs(
+                        included_sources, start, end, len(probe) - len(branch) - 2
+                    ),
+                ).has_error
+                for probe in probes
+            ):
                 complete = False
                 break
         if complete:
@@ -323,7 +385,11 @@ def _statement_projection(source: bytes, parser: Parser) -> bytes:
 
 
 def c_parse_views(
-    source: bytes, parser: Parser, *, base: Node | None = None
+    source: bytes,
+    parser: Parser,
+    *,
+    base: Node | None = None,
+    included_sources: tuple[tuple[bytes, int], ...] = (),
 ) -> Iterator[CParseView]:
     """Yield views covering every independent written signature alternative.
 
@@ -336,6 +402,9 @@ def c_parse_views(
     base : tree_sitter.Node | None, optional
         Already parsed base recovery for exactly these source bytes.
 
+    included_sources : tuple[tuple[bytes, int], ...], optional
+        Captured header bytes and original or probe-adjusted availability.
+
     Returns
     -------
     collections.abc.Iterator[CParseView]
@@ -343,7 +412,7 @@ def c_parse_views(
         Callers must retain partial status if any generated view contains errors.
     """
     if base is None:
-        base = _parse_c_source(source, parser)
+        base = _parse_c_source(source, parser, included_sources)
     if not base.has_error:
         return iter((CParseView(source, base),))
     working = _c_language_source(source, base)
@@ -351,18 +420,25 @@ def c_parse_views(
     groups = _conditionals(working, root, parser)
     if groups is None:
         return iter((CParseView(source, base),))
-    headers = _header_groups(working, root, groups, parser)
+    headers = _header_groups(working, root, groups, parser, included_sources)
     choices = [tuple(0 for _ in headers)]
     choices.extend(
         tuple(branch if index == selected else 0 for index in range(len(headers)))
         for selected, group in enumerate(headers)
         for branch in range(1, len(group.branches))
     )
-    return (_project_view(working, headers, choice, parser) for choice in choices)
+    return (
+        _project_view(working, headers, choice, parser, included_sources)
+        for choice in choices
+    )
 
 
 def _project_view(
-    source: bytes, headers: list[_Conditional], choice: tuple[int, ...], parser: Parser
+    source: bytes,
+    headers: list[_Conditional],
+    choice: tuple[int, ...],
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...] = (),
 ) -> CParseView:
     """Construct one coordinate-preserving header and statement projection.
 
@@ -377,6 +453,9 @@ def _project_view(
     parser : tree_sitter.Parser
         Package-local C grammar parser.
 
+    included_sources : tuple[tuple[bytes, int], ...], optional
+        Captured header bytes and original or probe-adjusted availability.
+
     Returns
     -------
     CParseView
@@ -389,5 +468,9 @@ def _project_view(
         for index, span in enumerate(group.branches)
         if index != selected
     )
-    signature_source = _statement_projection(_blank(source, spans), parser)
-    return CParseView(signature_source, _parse_c_source(signature_source, parser))
+    signature_source = _statement_projection(
+        _blank(source, spans), parser, included_sources
+    )
+    return CParseView(
+        signature_source, _parse_c_source(signature_source, parser, included_sources)
+    )

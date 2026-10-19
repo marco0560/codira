@@ -18,7 +18,17 @@ from dataclasses import dataclass, field
 
 from tree_sitter import Node, Parser
 
+from .c_record_prefixes import record_prefix_definitions, record_prefix_source
 
+
+_DECLARATION_SPECIFIERS = frozenset(
+    {
+        ("storage_class_specifier", b"inline"),
+        ("storage_class_specifier", b"__inline"),
+        ("storage_class_specifier", b"__inline__"),
+        ("type_qualifier", b"_Noreturn"),
+    }
+)
 _IDENTIFIER = re.compile(rb"\b[A-Za-z_][A-Za-z_0-9]*\b")
 _MS_PRAGMA_RAW_STRING = re.compile(rb'(?:u8|u|U|L)?R"([^ ()\\\t\r\n]{0,16})\(')
 _UNDEF = re.compile(rb"#\s*undef\s+([A-Za-z_][A-Za-z_0-9]*)")
@@ -125,7 +135,11 @@ def _is_annotation(value: bytes, parser: Parser) -> bool:
     ):
         return False
     return all(
-        child == type_node or child == declarator or child.type in _ANNOTATION_NODES
+        child == type_node
+        or child == declarator
+        or child.type in _ANNOTATION_NODES
+        or (child.type, source[child.start_byte : child.end_byte])
+        in _DECLARATION_SPECIFIERS
         for child in declaration.named_children
     )
 
@@ -134,6 +148,7 @@ def _annotation_definitions(
     source: bytes,
     root: Node,
     parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...] = (),
 ) -> dict[bytes, int]:
     """Resolve source-backed object macros with compatible replacements.
 
@@ -146,17 +161,80 @@ def _annotation_definitions(
     parser : tree_sitter.Parser
         Parser used to validate replacement syntax.
 
+    included_sources : tuple[tuple[bytes, int], ...], optional
+        Captured header bytes and earliest original-source availability.
+
     Returns
     -------
     dict[bytes, int]
         Eligible macro names and the earliest safe use offset. Function macros,
         undefined names and conflicting replacements are excluded file-wide.
     """
+    return _resolve_annotations(
+        _input_definitions(source, root, parser, included_sources), parser
+    )
+
+
+def _input_definitions(
+    source: bytes,
+    root: Node,
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...],
+) -> _AnnotationDefinitions:
+    """Collect source and captured header definitions at original availability.
+
+    Parameters
+    ----------
+    source : bytes
+        Original-coordinate translation unit.
+    root : tree_sitter.Node
+        Tree for the translation unit.
+    parser : tree_sitter.Parser
+        Package-local C parser.
+    included_sources : tuple[tuple[bytes, int], ...]
+        Exact contained header bytes and source availability offsets.
+
+    Returns
+    -------
+    _AnnotationDefinitions
+        Combined alternatives, availability and invalidating directives.
+    """
     state = _AnnotationDefinitions()
+    _collect_annotation_definitions(source, root, state)
+    for header, boundary in included_sources:
+        tree = parser.parse(header).root_node
+        content = _c_language_source(header, tree)
+        if content != header:
+            tree = parser.parse(content).root_node
+        _collect_annotation_definitions(content, tree, state, available_after=boundary)
+    return state
+
+
+def _resolve_annotations(
+    state: _AnnotationDefinitions, parser: Parser
+) -> dict[bytes, int]:
+    """Resolve only compatible annotation and function-specifier alternatives.
+
+    Parameters
+    ----------
+    state : _AnnotationDefinitions
+        Captured source and header macro definitions.
+    parser : tree_sitter.Parser
+        C parser used to validate unchanged declaration type and identity.
+
+    Returns
+    -------
+    dict[bytes, int]
+        Accepted names and their earliest safe original-source availability.
+    """
     definitions = state.replacements
     first_offsets = state.first_offsets
     unsafe = state.unsafe
-    _collect_annotation_definitions(source, root, state)
+    overridden = {
+        token
+        for _, token in _DECLARATION_SPECIFIERS
+        if token in definitions or token in unsafe
+    }
     accepted: dict[bytes, int] = {}
     changed = True
     while changed:
@@ -173,7 +251,10 @@ def _annotation_definitions(
                 )
                 for value in alternatives
             ]
-            if not all(_is_annotation(value, parser) for value in expanded):
+            if any(
+                overridden.intersection(_IDENTIFIER.findall(value))
+                for value in expanded
+            ) or not all(_is_annotation(value, parser) for value in expanded):
                 continue
             dependencies = {
                 token
@@ -197,6 +278,8 @@ def _collect_annotation_definitions(
     source: bytes,
     root: Node,
     definitions: _AnnotationDefinitions,
+    *,
+    available_after: int | None = None,
 ) -> None:
     """Collect alternatives and invalidating directives from one source input.
 
@@ -209,6 +292,9 @@ def _collect_annotation_definitions(
     definitions : _AnnotationDefinitions
         Mutable alternatives, earliest offsets and unsafe names accumulated
         for this source input.
+
+    available_after : int or None, optional
+        Original-source include boundary, or the local definition end offset.
 
     Returns
     -------
@@ -228,7 +314,7 @@ def _collect_annotation_definitions(
             replacement = source[value.start_byte : value.end_byte] if value else b""
             replacement = re.sub(rb"\\\r?\n", b" ", replacement)
             definitions.replacements.setdefault(token, []).append(replacement)
-            offset = node.end_byte
+            offset = node.end_byte if available_after is None else available_after
             definitions.first_offsets[token] = min(
                 definitions.first_offsets.get(token, offset), offset
             )
@@ -736,7 +822,9 @@ def _complex_source(
     return bytes(projected)
 
 
-def _parse_c_source(source: bytes, parser: Parser) -> Node:
+def _parse_c_source(
+    source: bytes, parser: Parser, included_sources: tuple[tuple[bytes, int], ...] = ()
+) -> Node:
     """Recover C guards, compiler pragmas and source-local annotation macros.
 
     Parameters
@@ -746,13 +834,17 @@ def _parse_c_source(source: bytes, parser: Parser) -> Node:
     parser : tree_sitter.Parser
         Package-owned C grammar parser.
 
+    included_sources : tuple[tuple[bytes, int], ...], optional
+        Captured header definitions, available only after their source boundary.
+
     Returns
     -------
     tree_sitter.Node
         Original partial root unless an equal-width projection is wholly clean.
         Known reserved operators missing operands remain diagnosed even when the
         original provider treats their spelling as an ordinary identifier.
-        No header bytes, compiler flags or build commands are consulted.
+        Captured contained headers can prove macros; no compiler or build tool
+        is invoked. Plain data-field prefixes affect no emitted field category.
     """
     original = parser.parse(source).root_node
     pragma_source = _pragma_source(source, original)
@@ -772,11 +864,15 @@ def _parse_c_source(source: bytes, parser: Parser) -> Node:
     if not basis.has_error:
         return basis
     fallback = basis if not original.has_error and complex_changed else original
-    annotations = _annotation_definitions(working, basis, parser)
-    if not annotations:
+    definitions = _input_definitions(working, basis, parser, included_sources)
+    annotations = _resolve_annotations(definitions, parser)
+    records = record_prefix_definitions(
+        definitions.replacements, definitions.first_offsets, definitions.unsafe, parser
+    )
+    if not annotations and not records:
         return fallback
     protected = _hash_lines(working, basis)
-    projected = bytearray(working)
+    projected = bytearray(record_prefix_source(working, basis, records, protected))
     pending = [basis]
     while pending:
         node = pending.pop()
@@ -824,13 +920,21 @@ def _original_declaration_start(node: Node, source: bytes) -> int:
     -------
     int
         Original declaration start, extended over blanked annotations while skipping
-        standalone pragma prefixes. Siblings and comments bound the gap.
+        standalone pragma prefixes. Siblings and comments bound the gap. A
+        translation unit can omit leading projected whitespace from its span;
+        that prefix is checked too, while an original UTF-8 BOM stays excluded.
     """
     parent = node.parent
     if parent is None:
         return node.start_byte
     previous = node.prev_sibling
-    lower = previous.end_byte if previous is not None else parent.start_byte
+    lower = (
+        previous.end_byte
+        if previous is not None
+        else (0 if parent.type == "translation_unit" else parent.start_byte)
+    )
+    if lower == 0 and source.startswith(b"\xef\xbb\xbf"):
+        lower = 3
     gap = source[lower : node.start_byte]
     if not gap.strip():
         return node.start_byte
@@ -838,7 +942,7 @@ def _original_declaration_start(node: Node, source: bytes) -> int:
     if projected is None:
         return node.start_byte
     projected_gap = projected[
-        lower - parent.start_byte : node.start_byte - parent.start_byte
+        max(0, lower - parent.start_byte) : node.start_byte - parent.start_byte
     ]
     if projected_gap.strip():
         return node.start_byte
