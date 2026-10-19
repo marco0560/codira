@@ -84,7 +84,9 @@ normalized written signature to match that exact source declaration. It does not
 change callable, parameter, call, prototype or other type comparisons.
 
 R5 qualifies **93 originals**, including all previous 62, with **zero qualification
-regressions**. **92** are new configured parser recoveries; **one** already parsed
+regressions**: **66 PostgreSQL** and **27 CPython** files. Their checked fields match
+**25 definitions, 1,057 callables, 1,032 prototype parameter lists, 27 lexical call
+sites and 305 named-type identities**. **92** are new configured parser recoveries; **one** already parsed
 cleanly under C15 and now receives independent qualification. The other compared
 records remain held, notably for parameter identity, lexical call-site, declaration
 and type mismatches. Groups overlap. Repeated `Py_UNUSED` and `PG_FUNCTION_ARGS`
@@ -123,9 +125,12 @@ and corrected the translation-unit byte-zero signature boundary.
 
 ## Ledger and durable evidence
 
-The starting ledger is **v25: 2,059 verified fixes, 453 separated files and 23,250
-open paths**, or **9.75% accounted**. The 93 qualified originals await separate
-source-bound admission. The complete objective remains open, and the separated
+Commit `bdfc777` records the implementation and source-bound validation.
+The authoritative ledger is now **v26: 2,152 verified fixes, 453 separated files
+and 23,157 open paths**, or **10.11% accounted**, up from **9.75%**. Admission adds
+only the **93** source-bound, native-qualified originals; the 254 parser recoveries
+are not counted as 254 verified fixes. Remaining historical ownership is **5,804 C**
+and **17,353 C++** files. The complete objective remains open, and all separated
 language/version/repository records remain unchanged.
 
 All evidence below is under
@@ -149,3 +154,8 @@ All evidence below is under
 - `c-header-context-focused-r4.log/.exit`, `c-header-context-focused-r5.log/.exit`,
   `c-header-context-quality-r2.log/.exit`: focused validation and final preflight.
 - `c-header-context-validation-receipt-r1.json`: full gate and source binding.
+
+- `classification-v26.jsonl`, `classification-v26.csv`,
+  `classification-summary-v26.json`, `admit_c_header_context_r1.py`,
+  `c-header-context-admission-r1.json`: complete ledger, separated groups, generator
+  and source/native/payload/configuration-bound admission receipt.
