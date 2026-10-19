@@ -102,3 +102,34 @@ identical parameter names while merging renamed/defaulted redeclarations.
 Lexical conditional branches remain separate source variants. No build
 configuration is selected, and aliases or compiler-dependent type equivalence
 are not resolved. Function-pointer fields remain data rather than functions.
+
+## Source-defined namespace macros
+
+When parsing remains partial, object macros may expand to complete namespace
+openings or closings. Literal namespace names, nested inline scopes and aliases
+are supported when every captured replacement resolves identically. A source map
+retains original byte offsets, lines, columns, function signatures and calls even
+when an expansion is longer than its invocation. Namespace identities use the
+expanded names; declaration snippets retain the original source.
+
+Function macros, undefinitions, conflicting alternatives, unresolved uppercase
+namespace names and expansions over 4096 bytes remain unsupported. A recovered
+tree must be wholly clean. This does not infer a generated ABI configuration,
+select a compilation branch or add a compiler dependency.
+
+An explicit namespace name normally supplied through compiler definitions can be
+provided for namespace declarations:
+
+```toml
+[plugins.analyzer-cpp]
+include_search_paths = ["libc"]
+namespace_macro_definitions = { LIBC_NAMESPACE = "__llvm_libc" }
+```
+
+Use a binding declared by the repository's build configuration. Names and values
+must be single identifiers; provider keyword tokens are rejected. Captured object
+aliases may add namespace attributes when every alternative resolves to the same
+name. Source overrides and ambiguous reaching aliases fail explicitly. The profile
+participates in incremental reuse identity. Definitions do not select compilation
+branches or substitute general expressions. Combining namespace-name bindings with
+an already expanded variable-width scope wrapper remains unsupported.

@@ -24,7 +24,9 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
-from tree_sitter import Language, Node, Parser
+from tree_sitter import Language, Parser
+
+from .cpp_projection import SyntaxNode as Node
 from tree_sitter_cpp import language
 
 from codira.models import DeclarationKind

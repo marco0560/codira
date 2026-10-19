@@ -243,6 +243,18 @@
             "default": true,
             "type": "boolean"
           },
+          "namespace_macro_definitions": {
+            "additionalProperties": {
+              "pattern": "^[A-Za-z_][A-Za-z_0-9]*$",
+              "type": "string"
+            },
+            "default": {},
+            "description": "Explicit identifier bindings for namespace declaration names; no branch selection or general expression expansion.",
+            "propertyNames": {
+              "pattern": "^[A-Za-z_][A-Za-z_0-9]*$"
+            },
+            "type": "object"
+          },
           "use_leading_comments": {
             "default": true,
             "type": "boolean"

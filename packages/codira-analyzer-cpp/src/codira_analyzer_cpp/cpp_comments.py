@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from tree_sitter import Node
+from .cpp_projection import SyntaxNode as Node
 
 from .cpp_syntax import _comment_to_doxygen_text, _comment_to_summary, _node_text
 
@@ -38,7 +38,8 @@ def _leading_module_doxygen(
     tuple[str, int, int | None] | None
         Normalized text plus source coordinates, or ``None`` when absent.
     """
-    for index, child in enumerate(root.children):
+    children: list[Node] = [*root.children]
+    for index, child in enumerate(children):
         if child.type == "comment":
             text = _comment_to_doxygen_text(_node_text(child, source))
             if text is None:
@@ -46,7 +47,7 @@ def _leading_module_doxygen(
             next_non_comment = next(
                 (
                     sibling
-                    for sibling in root.children[index + 1 :]
+                    for sibling in children[index + 1 :]
                     if sibling.type != "comment"
                 ),
                 None,

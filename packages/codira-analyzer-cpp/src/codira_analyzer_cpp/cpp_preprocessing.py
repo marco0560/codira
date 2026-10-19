@@ -16,7 +16,9 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-from tree_sitter import Node, Parser
+from tree_sitter import Parser
+
+from .cpp_projection import SyntaxNode as Node, _source_projection
 
 from .cpp_syntax import _new_parser
 
@@ -700,6 +702,116 @@ def _complex_source(
     return bytes(projected)
 
 
+def _namespace_source(
+    source: bytes,
+    root: Node,
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...],
+) -> Node | None:
+    """Expand unambiguous object macros that open or close namespace scopes.
+
+    Parameters
+    ----------
+    source : bytes
+        Coordinate-aligned source after existing grammar adaptations.
+    root : SyntaxNode
+        Partial tree used to protect directives, comments and literals.
+    parser : tree_sitter.Parser
+        Package-local C++ parser.
+    included_sources : tuple[tuple[bytes, int], ...]
+        Captured headers and their earliest source include boundaries.
+
+    Returns
+    -------
+    SyntaxNode or None
+        Complete tree with original coordinates, or None if proof is incomplete.
+
+    Notes
+    -----
+    Alternatives must resolve identically. Undefs, function macros, cycles,
+    unresolved uppercase namespace names and keyword redefinitions are held.
+    Expansions exceeding 4096 bytes are held to bound macro growth. Only complete
+    scope-opening or scope-closing expansions are substituted in source code.
+    """
+    state = _AnnotationDefinitions()
+    _collect_annotation_definitions(source, root, None, state)
+    for content, boundary in included_sources:
+        _collect_annotation_definitions(
+            content, parser.parse(content).root_node, boundary, state
+        )
+    if any(
+        token in state.replacements or token in state.unsafe
+        for token in (b"namespace", b"inline")
+    ):
+        return None
+    annotations = _annotation_definitions(source, root, parser, included_sources)
+    resolved: dict[bytes, tuple[bytes, int]] = {
+        name: (b"", boundary) for name, boundary in annotations.items()
+    }
+    changed = True
+    while changed:
+        changed = False
+        for name, alternatives in state.replacements.items():
+            if name in resolved or name in state.unsafe:
+                continue
+            values: set[bytes] = set()
+            boundary = state.first_offsets[name]
+            for value in alternatives:
+                tokens = _IDENTIFIER.findall(value)
+                if any(
+                    token in state.unsafe
+                    or (token in state.replacements and token not in resolved)
+                    for token in tokens
+                ):
+                    break
+                for token in tokens:
+                    if token in resolved:
+                        boundary = max(boundary, resolved[token][1])
+                expanded = _IDENTIFIER.sub(
+                    lambda match: resolved.get(match[0], (match[0], 0))[0], value
+                )
+                if len(expanded) > 4096:
+                    break
+                values.add(b" ".join(expanded.split()))
+            else:
+                if len(values) == 1:
+                    resolved[name] = (values.pop(), boundary)
+                    changed = True
+    openings = re.compile(
+        rb"(?:(?:inline\s+)?namespace\s+"
+        rb"[A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)*\s*\{\s*)+"
+    )
+    eligible = {
+        name: (value, boundary)
+        for name, (value, boundary) in resolved.items()
+        if (openings.fullmatch(value) or re.fullmatch(rb"(?:\}\s*)+", value))
+        and not any(
+            re.fullmatch(rb"[A-Z_][A-Z_0-9]*", token)
+            for token in _IDENTIFIER.findall(value)
+        )
+    }
+    if not eligible:
+        return None
+    protected = [*_hash_lines(source, root)]
+    protected.extend(
+        (node.start_byte, node.end_byte)
+        for node in _nodes(root)
+        if node.type in _OPAQUE_NODES
+    )
+    replacements = [
+        (match.start(), match.end(), eligible[match[0]][0])
+        for match in _IDENTIFIER.finditer(source)
+        if match[0] in eligible
+        and match.start() >= eligible[match[0]][1]
+        and not any(start <= match.start() < end for start, end in protected)
+    ]
+    if not replacements:
+        return None
+    projection = _source_projection(source, replacements)
+    recovered = parser.parse(projection.expanded).root_node
+    return None if recovered.has_error else projection.tree(recovered)
+
+
 def _parse_cpp_source(
     source: bytes, *, included_sources: tuple[tuple[bytes, int], ...] = ()
 ) -> Node:
@@ -715,7 +827,7 @@ def _parse_cpp_source(
 
     Returns
     -------
-    tree_sitter.Node
+    SyntaxNode
         Original partial root unless grammar adaptation produces a wholly clean
         tree. Known reserved operators missing operands remain diagnosed even
         when originally accepted as identifiers. Directives/literals are retained.
@@ -751,8 +863,6 @@ def _parse_cpp_source(
         return basis
     fallback = basis if not original.has_error and complex_changed else original
     annotations = _annotation_definitions(working, basis, parser, included_sources)
-    if not annotations:
-        return fallback
     protected = _hash_lines(working, basis)
     projected = bytearray(working)
     pending = [basis]
@@ -782,10 +892,13 @@ def _parse_cpp_source(
         pending.extend(
             child for child in node.children if child != condition and child != name
         )
-    if projected == working:
-        return fallback
     recovered = parser.parse(bytes(projected)).root_node
-    return fallback if recovered.has_error else recovered
+    if not recovered.has_error:
+        return recovered
+    namespace_root = _namespace_source(
+        bytes(projected), recovered, parser, included_sources
+    )
+    return fallback if namespace_root is None else namespace_root
 
 
 def _original_declaration_start(node: Node, source: bytes) -> int:

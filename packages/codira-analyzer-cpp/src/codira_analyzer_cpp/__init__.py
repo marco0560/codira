@@ -40,7 +40,11 @@ if TYPE_CHECKING:
 
     from codira.contracts import LanguageAnalyzer
 
-from tree_sitter import Node
+from .cpp_namespace_bindings import (
+    _namespace_bindings_from_config,
+    _parse_with_namespace_bindings,
+)
+from .cpp_projection import SyntaxNode as Node, _ProjectedNode
 
 from .cpp_syntax import (
     _canonical_node_text,
@@ -282,7 +286,8 @@ def _named_descendants(node: Node) -> list[Node]:
         Named descendant nodes in deterministic source order.
     """
     descendants: list[Node] = []
-    stack = list(reversed(node.named_children))
+    stack: list[Node] = [*node.named_children]
+    stack.reverse()
     while stack:
         current = stack.pop()
         descendants.append(current)
@@ -304,7 +309,8 @@ def _template_inner_node(node: Node) -> Node | None:
     tree_sitter.Node | None
         Wrapped declaration node when present.
     """
-    for child in reversed(node.named_children):
+    children: list[Node] = [*node.named_children]
+    for child in reversed(children):
         if child.type != "template_parameter_list":
             return child
     return None
@@ -329,7 +335,11 @@ def _namespace_parts(node: Node, source: bytes) -> tuple[str, ...]:
     """
     for child in node.named_children:
         if child.type in {"namespace_identifier", "nested_namespace_specifier"}:
-            return _split_qualified_name(_node_text(child, source))
+            return _split_qualified_name(
+                child.syntax_text.decode("utf-8", errors="replace")
+                if isinstance(child, _ProjectedNode)
+                else _node_text(child, source)
+            )
     return ("(anonymous namespace)",)
 
 
@@ -498,7 +508,7 @@ def _annotated_function_call_name(node: Node, source: bytes) -> str | None:
     str | None
         Callable identifier text when the annotation pattern is present.
     """
-    for named_child in reversed(node.named_children):
+    for named_child in reversed([*node.named_children]):
         if named_child.type != "call_expression":
             continue
         arguments = named_child.child_by_field_name("arguments")
@@ -2565,7 +2575,7 @@ def _external_member_calls(
                 for child in _named_descendants(node)
                 if child.type in {"identifier", "type_identifier"}
             )
-        for index, declarator in enumerate(node.children):
+        for index, declarator in enumerate([*node.children]):
             if node.field_name_for_child(index) != "declarator":
                 continue
             name = _parameter_name_node(declarator)
@@ -2691,7 +2701,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "16"
+    version = "17"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -2719,6 +2729,7 @@ class CppAnalyzer:
         self._path_filters = AnalyzerPathFilters()
         self._header_language = "auto"
         self._include_search_paths: tuple[Path, ...] = ()
+        self._namespace_macro_definitions: tuple[tuple[bytes, bytes], ...] = ()
         self._use_leading_comments = True
         self._emit_doxygen_documentation = True
         self._include_system_includes = True
@@ -2755,6 +2766,16 @@ class CppAnalyzer:
                         "own directory first."
                     ),
                 },
+                "namespace_macro_definitions": {
+                    "type": "object",
+                    "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z_0-9]*$"},
+                    "additionalProperties": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z_][A-Za-z_0-9]*$",
+                    },
+                    "default": {},
+                    "description": "Explicit identifier bindings for namespace declaration names; no branch selection or general expression expansion.",
+                },
                 "emit_namespaces": boolean_property(True),
                 "emit_macros": boolean_property(True),
                 "header_language": {
@@ -2784,7 +2805,8 @@ class CppAnalyzer:
         ------
         ValueError
             If header_language is not auto, c or cpp, or include_search_paths
-            is not a list of nonempty strings. Repository containment is checked
+            is not a list of nonempty strings, or namespace_macro_definitions
+            is not an identifier mapping. Repository containment is checked
             when analysis inputs are read.
         """
 
@@ -2798,6 +2820,9 @@ class CppAnalyzer:
         ):
             raise ValueError("include_search_paths must be a list of nonempty strings")
         self._include_search_paths = tuple(Path(item) for item in search_paths)
+        self._namespace_macro_definitions = _namespace_bindings_from_config(
+            config.get("namespace_macro_definitions", {})
+        )
         self._use_leading_comments = bool(config.get("use_leading_comments", True))
         self._emit_doxygen_documentation = bool(
             config.get("emit_doxygen_documentation", True)
@@ -3013,8 +3038,9 @@ class CppAnalyzer:
             path, root, include_paths=self._include_search_paths
         )
         source = context.source
-        root_node = _parse_cpp_source(
+        root_node = _parse_with_namespace_bindings(
             source,
+            bindings=self._namespace_macro_definitions,
             included_sources=tuple(
                 (header.source, header.available_after) for header in context.headers
             ),

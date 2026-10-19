@@ -21,7 +21,7 @@ None
 
 from __future__ import annotations
 
-from tree_sitter import Node
+from .cpp_projection import SyntaxNode as Node
 
 from codira.models import ImportArtifact, ImportKind
 
