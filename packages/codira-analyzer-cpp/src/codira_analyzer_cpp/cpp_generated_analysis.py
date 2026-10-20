@@ -25,7 +25,7 @@ from codira.generated import (
     GeneratedTokenProvenance,
     MacroInputProvenance,
 )
-from codira.models import AnalysisResult, OverloadArtifact
+from codira.models import AnalysisResult, CallSite, OverloadArtifact
 
 from .cpp_include_context import IncludeContext
 from .cpp_macro_context import MacroSelection, _ContextWalk, _directives
@@ -41,13 +41,16 @@ from .cpp_macro_projection import (
     project_macro_replacements,
 )
 from .cpp_namespace_bindings import _parse_with_namespace_bindings
-from .cpp_projection import SyntaxNode
+from .cpp_projection import SyntaxNode, _ProjectedNode
+from .cpp_preprocessing import _original_declaration_start
 from .cpp_syntax import (
     _function_stable_id,
     _node_text,
     _normalize_signature,
     _symbol_owner_id,
+    _new_parser,
 )
+from .cpp_statement_macros import statement_invocations
 
 if TYPE_CHECKING:
     from . import CppAnalyzer
@@ -149,6 +152,8 @@ class _Expansion:
         Rendered token interval in the parser projection.
     namespace : bool, optional
         Whether this replacement supplies a namespace declaration name.
+    statement : bool, optional
+        Whether this replacement supplies one source-owned static assertion.
 
     Returns
     -------
@@ -162,6 +167,7 @@ class _Expansion:
     used: frozenset[bytes]
     projected_span: tuple[int, int]
     namespace: bool = False
+    statement: bool = False
 
 
 def _invocations(source: bytes) -> tuple[tuple[int, int, bytes, bool], ...]:
@@ -371,7 +377,6 @@ def analyze_generated_file(
         If required context, declaration semantics or mapping is unsupported.
     """
     source = context.source
-    candidates = _invocations(source)
     key = path.resolve().relative_to(root.resolve()).as_posix()
     captures = {
         key: source,
@@ -390,6 +395,18 @@ def analyze_generated_file(
     }
     initial = analyzer._preprocessor_definitions
     assert initial is not None
+    statements = statement_invocations(source, captures)
+    statement_spans = {(first, last) for first, last, _ in statements}
+    candidates = tuple(
+        sorted(
+            (
+                *_invocations(source),
+                *((first, last, name, False) for first, last, name in statements),
+            )
+        )
+    )
+    if any(left[1] > right[0] for left, right in zip(candidates, candidates[1:])):
+        raise ValueError("overlapping declaration and statement macro invocations")
     walk = _ContextWalk(captures, resolutions, initial)
     walk.walk(key, offsets=tuple(sorted({item[0] for item in candidates})))
     replacements = []
@@ -397,6 +414,19 @@ def analyze_generated_file(
     for first, last, name, namespace in candidates:
         selection = walk.results[first]
         binding = dict(selection.bindings).get(name)
+        statement = (first, last) in statement_spans
+        if statement and binding is not None and binding.definition is None:
+            continue
+        if (
+            statement
+            and selection.active is not False
+            and (
+                selection.active is not True
+                or binding is None
+                or binding.definition is None
+            )
+        ):
+            raise ValueError("statement macro has uncertain reaching definition")
         if (
             selection.active is not True
             or binding is None
@@ -412,16 +442,47 @@ def analyze_generated_file(
         tokens = expander.expand(_macro_tokens(source[first:last], offset=first))
         if not expander.used:
             continue
+        if statement:
+            if not tokens or tokens[0].spelling != b"static_assert":
+                continue
+            trial = b" ".join(t.spelling for t in tokens)
+            if not trial.rstrip().endswith(b";"):
+                trial += b";"
+            assertion = _new_parser().parse(trial).root_node
+            if (
+                assertion.has_error
+                or len(assertion.named_children) != 1
+                or assertion.named_children[0].type != "static_assert_declaration"
+            ):
+                raise ValueError("statement macro is not one static assertion")
+            arguments = _macro_tokens(source[first:last], offset=first)[2:-1]
+            preserved = {
+                (t.start, t.end) for t in tokens if t.argument and not t.synthetic
+            }
+            if any(t.spelling == b"(" for t in arguments) and any(
+                t.spelling != b"," and (t.start, t.end) not in preserved
+                for t in arguments
+            ):
+                raise ValueError(
+                    "statement macro erases or transforms call-shaped argument spelling"
+                )
         replacements.append(MacroReplacement((first, last), tokens))
         records.append(
-            ((first, last), tokens, selection, frozenset(expander.used), namespace)
+            (
+                (first, last),
+                tokens,
+                selection,
+                frozenset(expander.used),
+                namespace,
+                statement,
+            )
         )
     if not replacements:
         return analyzer._analyze_captured_file(path, root, context)
     projection = project_macro_replacements(source, tuple(replacements))
     expansions = []
     token_index = 0
-    for span, tokens, selection, used, namespace in records:
+    for span, tokens, selection, used, namespace, statement in records:
         rendered = projection.generated_tokens[token_index : token_index + len(tokens)]
         if not rendered:
             raise ValueError("declaration expansion produced no syntax")
@@ -433,10 +494,15 @@ def analyze_generated_file(
                 used,
                 (rendered[0].projected_span[0], rendered[-1].projected_span[1]),
                 namespace,
+                statement,
             )
         )
         token_index += len(tokens)
     projected_context = _projected_context(context, projection)
+    if all(expansion.statement for expansion in expansions):
+        return _analyze_statements(
+            analyzer, path, root, context, projection, tuple(expansions)
+        )
     result = analyzer._analyze_captured_file(path, root, projected_context)
     return _finalize(
         analyzer,
@@ -448,6 +514,81 @@ def analyze_generated_file(
         captures,
         resolutions,
         result,
+    )
+
+
+def _analyze_statements(
+    analyzer: CppAnalyzer,
+    path: Path,
+    root: Path,
+    context: IncludeContext,
+    projection: MacroProjection,
+    expansions: tuple[_Expansion, ...],
+) -> AnalysisResult:
+    """Extract ordinary metadata from statement syntax mapped to original bytes.
+
+    Parameters
+    ----------
+    analyzer : CppAnalyzer
+        Explicitly configured source owner.
+    path, root : pathlib.Path
+        Original source and trusted repository boundary.
+    context : IncludeContext
+        Immutable original include/source snapshot.
+    projection : MacroProjection
+        Selected assertion tokens and separate argument spelling evidence.
+    expansions : tuple[_Expansion, ...]
+        Statement-only invocations licensed by the ordered context walk.
+
+    Returns
+    -------
+    AnalysisResult
+        Ordinary ownership and physical metadata, including source macro hints.
+
+    Raises
+    ------
+    ValueError
+        If generated calls lack physical source ownership or assertions are lost.
+    """
+    from . import _call_site_from_expression
+
+    projected = _projected_context(context, projection)
+    tree = _parse_with_namespace_bindings(
+        projection.source,
+        bindings=analyzer._namespace_macro_definitions,
+        included_sources=tuple(
+            (h.source, h.available_after) for h in projected.headers
+        ),
+    )
+    nodes = _nodes(tree)
+    for node in nodes:
+        if node.type != "call_expression":
+            continue
+        call = _call_site_from_expression(node, projection.source)
+        if call is None:
+            continue
+        offset = _offset(projection.source, call.lineno, call.col_offset)
+        if projection.physical_span(offset, offset + 1, include_arguments=True) is None:
+            raise ValueError(
+                f"replacement-introduced call {call.external_target_name or call.target!r} lacks separate generated ownership"
+            )
+    physical_tree = projection.syntax_tree(tree)
+    owners = {e.projected_span[0]: e for e in expansions}
+    found = set()
+    for node, physical in zip(nodes, _nodes(physical_tree), strict=True):
+        expansion = owners.get(node.start_byte)
+        if node.type != "static_assert_declaration" or expansion is None:
+            continue
+        if not isinstance(physical, _ProjectedNode):
+            raise ValueError("statement macro syntax lacks a physical projection")
+        physical.macro_hint = _macro_tokens(
+            context.source[expansion.span[0] : expansion.span[1]]
+        )[0].spelling.decode()
+        found.add(node.start_byte)
+    if found != owners.keys():
+        raise ValueError("statement macro assertion has no mapped syntax owner")
+    return analyzer._analyze_captured_file(
+        path, root, context, syntax_root=physical_tree
     )
 
 
@@ -854,6 +995,7 @@ def _finalize(
         If required identity, decltype type proof or source mapping is unsupported.
     """
     from . import (
+        _extract_calls,
         _find_function_declarator,
         _parameter_name_node,
         _unwrap_declarator_name,
@@ -870,6 +1012,123 @@ def _finalize(
         ),
     )
     nodes = _nodes(tree)
+    statements = tuple(e for e in expansions if e.statement)
+    physical_nodes = (
+        {
+            (node.type, node.start_byte, node.end_byte): physical
+            for node, physical in zip(
+                nodes, _nodes(projection.syntax_tree(tree)), strict=True
+            )
+        }
+        if statements
+        else {}
+    )
+
+    def signature_line(node: SyntaxNode) -> int:
+        """Find the extraction header boundary, including enclosing templates.
+
+        Parameters
+        ----------
+        node : SyntaxNode
+            Projected callable definition.
+
+        Returns
+        -------
+        int
+            Same one-based header line used by ordinary artifact extraction.
+        """
+        signature = node
+        while signature.parent is not None and (
+            signature.parent.type == "template_declaration"
+            or signature.parent.type == "linkage_specification"
+            and signature.parent.child_by_field_name("body") == signature
+        ):
+            signature = signature.parent
+        return _line(source, _original_declaration_start(signature, source))
+
+    def mapped_calls(
+        calls: tuple[CallSite, ...],
+        definition: SyntaxNode | None,
+        parameters: tuple[str, ...],
+    ) -> tuple[CallSite, ...]:
+        """Preserve argument calls and retain the original statement macro hint.
+
+        Parameters
+        ----------
+        calls : tuple[CallSite, ...]
+            Calls extracted from projected syntax.
+        definition : SyntaxNode or None
+            Owning projected function definition, when uniquely identified.
+        parameters : tuple[str, ...]
+            Value parameters licensing initializer argument recovery.
+
+        Returns
+        -------
+        tuple[CallSite, ...]
+            Physical lexical sites, with repeated expansion copies deduplicated.
+
+        Raises
+        ------
+        ValueError
+            If a replacement-introduced call lacks physical argument ownership.
+        """
+        mapped = []
+        for call in calls:
+            position = _offset(source, call.lineno, call.col_offset)
+            physical = projection.physical_span(
+                position, position + 1, include_arguments=bool(statements)
+            )
+            if physical is None:
+                raise ValueError(
+                    f"replacement-introduced call {call.external_target_name or call.target!r} lacks separate generated ownership"
+                )
+            mapped.append(
+                replace(
+                    call,
+                    lineno=_line(original, physical[0]),
+                    col_offset=physical[0]
+                    - (original.rfind(b"\n", 0, physical[0]) + 1),
+                )
+            )
+        body = None if definition is None else definition.child_by_field_name("body")
+        owned = tuple(
+            e
+            for e in statements
+            if body is not None
+            and body.start_byte
+            <= e.projected_span[0]
+            < e.projected_span[1]
+            <= body.end_byte
+        )
+        if not owned or body is None:
+            return tuple(mapped)
+        physical_body = physical_nodes[body.type, body.start_byte, body.end_byte]
+        original_calls = _extract_calls(
+            physical_body, original, parameter_names=parameters
+        )
+        hints = []
+        for expansion in owned:
+            name = _macro_tokens(original[expansion.span[0] : expansion.span[1]])[
+                0
+            ].spelling.decode()
+            hints.append(
+                CallSite(
+                    kind="name",
+                    target=name,
+                    lineno=_line(original, expansion.span[0]),
+                    col_offset=expansion.span[0]
+                    - (original.rfind(b"\n", 0, expansion.span[0]) + 1),
+                    external_target_kind="C++:<macro>",
+                    external_target_name=name,
+                )
+            )
+        return tuple(
+            sorted(
+                dict.fromkeys((*original_calls, *hints)),
+                key=lambda c: (c.lineno, c.col_offset),
+            )
+        )
+
     declarations = []
     for expansion in expansions:
         if expansion.namespace:
@@ -1027,11 +1286,18 @@ def _finalize(
             n
             for n in nodes
             if n.type == "function_definition"
-            and n.start_point.row + 1 == function.lineno
+            and signature_line(n) == function.lineno
             and (d := _find_function_declarator(n)) is not None
             and _unwrap_declarator_name(d, source) == function.name.rsplit("::", 1)[-1]
         ]
         definition_node = matches[0] if len(matches) == 1 else None
+        if definition_node is None and any(
+            function.lineno
+            <= _line(source, e.projected_span[0])
+            <= (function.end_lineno or function.lineno)
+            for e in statements
+        ):
+            raise ValueError("statement macro callable ownership is not unique")
         owned_expansion = next(
             (
                 e
@@ -1044,25 +1310,10 @@ def _finalize(
             ),
             None,
         )
-        calls = []
-        for call in function.calls:
-            position = _offset(source, call.lineno, call.col_offset)
-            physical = projection.physical_span(position, position + 1)
-            if physical is None:
-                raise ValueError(
-                    "replacement-introduced call lacks separate generated ownership"
-                )
-            line = _line(original, physical[0])
-            column = physical[0] - (original.rfind(b"\n", 0, physical[0]) + 1)
-            calls.append(replace(call, lineno=line, col_offset=column))
+        calls = mapped_calls(function.calls, definition_node, function.parameters)
         mapped = replace(
             function,
-            lineno=physical_line(function.lineno)
-            if definition_node is None
-            else _line(
-                original,
-                _physical_position(projection, definition_node.start_byte, expansions),
-            ),
+            lineno=physical_line(function.lineno),
             end_lineno=None
             if function.end_lineno is None
             else physical_line(function.end_lineno)
@@ -1237,26 +1488,33 @@ def _finalize(
             )
         )
     consumed = {item.span for item in generated_expansions.values()}
-    if any(not item.namespace and item.span not in consumed for item in expansions):
+    if any(
+        not item.namespace and not item.statement and item.span not in consumed
+        for item in expansions
+    ):
         raise ValueError("declaration expansion has unsupported callable ownership")
     classes = []
     for cls in result.classes:
         methods = []
         for method in cls.methods:
-            calls = []
-            for call in method.calls:
-                position = _offset(source, call.lineno, call.col_offset)
-                physical = projection.physical_span(position, position + 1)
-                if physical is None:
-                    raise ValueError("generated method call lacks physical ownership")
-                calls.append(
-                    replace(
-                        call,
-                        lineno=_line(original, physical[0]),
-                        col_offset=physical[0]
-                        - (original.rfind(b"\n", 0, physical[0]) + 1),
-                    )
-                )
+            matches = [
+                n
+                for n in nodes
+                if n.type == "function_definition"
+                and signature_line(n) == method.lineno
+                and (d := _find_function_declarator(n)) is not None
+                and _unwrap_declarator_name(d, source)
+                == method.name.rsplit("::", 1)[-1]
+            ]
+            method_definition = matches[0] if len(matches) == 1 else None
+            if method_definition is None and any(
+                method.lineno
+                <= _line(source, e.projected_span[0])
+                <= (method.end_lineno or method.lineno)
+                for e in statements
+            ):
+                raise ValueError("statement macro method ownership is not unique")
+            calls = mapped_calls(method.calls, method_definition, method.parameters)
             methods.append(
                 replace(
                     method,

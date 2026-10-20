@@ -13,6 +13,7 @@ None
 from __future__ import annotations
 
 from bisect import bisect_right
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from tree_sitter import Node, Point
@@ -44,6 +45,8 @@ class _ProjectedNode:
         Provider field names mapped to children.
     field_names : list[str or None], optional
         Field names by child position.
+    macro_hint : str or None, optional
+        Source invocation retained on an expanded statement node.
 
     Returns
     -------
@@ -67,6 +70,7 @@ class _ProjectedNode:
     prev_sibling: _ProjectedNode | None = None
     fields: dict[str, _ProjectedNode] = field(default_factory=dict)
     field_names: list[str | None] = field(default_factory=list)
+    macro_hint: str | None = None
 
     def child_by_field_name(self, name: str) -> _ProjectedNode | None:
         """Find the first child carrying a provider field.
@@ -175,12 +179,12 @@ class _SourceProjection:
         row = bisect_right(self.lines, value) - 1
         return Point(row, value - self.lines[row])
 
-    def tree(self, root: Node) -> _ProjectedNode:
+    def tree(self, root: SyntaxNode) -> _ProjectedNode:
         """Project a parsed tree iteratively without recursive depth limits.
 
         Parameters
         ----------
-        root : tree_sitter.Node
+        root : SyntaxNode
             Root parsed from this projection's expanded buffer.
 
         Returns
@@ -193,12 +197,14 @@ class _SourceProjection:
         while pending:
             native, parent = pending.pop()
             previous = None
-            for index, child in enumerate(native.children):
+            named = set(native.named_children)
+            children: Sequence[SyntaxNode] = native.children
+            for index, child in enumerate(children):
                 mapped = self.node(child)
                 mapped.parent = parent
                 mapped.prev_sibling = previous
                 parent.children.append(mapped)
-                if child.is_named:
+                if child in named:
                     parent.named_children.append(mapped)
                 name = native.field_name_for_child(index)
                 parent.field_names.append(name)
@@ -208,12 +214,12 @@ class _SourceProjection:
                 previous = mapped
         return projected
 
-    def node(self, node: Node) -> _ProjectedNode:
+    def node(self, node: SyntaxNode) -> _ProjectedNode:
         """Copy scalar provider data with original byte and point boundaries.
 
         Parameters
         ----------
-        node : tree_sitter.Node
+        node : SyntaxNode
             Native syntax node.
 
         Returns
@@ -233,7 +239,9 @@ class _SourceProjection:
             is_error=node.is_error,
             is_missing=node.is_missing,
             text=self.source[start:end],
-            syntax_text=self.expanded[node.start_byte : node.end_byte],
+            syntax_text=node.syntax_text
+            if isinstance(node, _ProjectedNode)
+            else self.expanded[node.start_byte : node.end_byte],
         )
 
 

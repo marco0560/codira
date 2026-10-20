@@ -12,9 +12,49 @@ None
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 
 from .cpp_macro_expansion import _MacroToken, _macro_tokens
+from .cpp_projection import SyntaxNode, _ProjectedNode, _SourceProjection
+
+
+class _TokenProjection(_SourceProjection):
+    """Use the preceding token for an exclusive end at a token boundary.
+
+    Parameters
+    ----------
+    source, expanded, segments, starts, lines
+        Original and projected bytes with the inherited interval mapping.
+
+    Returns
+    -------
+    None
+        Keeps adjacent argument and replacement origins separate.
+    """
+
+    def offset(self, value: int, *, end: bool = False) -> int:
+        """Map a token boundary without borrowing the next token's origin.
+
+        Parameters
+        ----------
+        value : int
+            Projected byte offset.
+        end : bool, optional
+            Whether the offset is an exclusive end.
+
+        Returns
+        -------
+        int
+            Original physical offset or generated token anchor.
+        """
+        index = (bisect_left if end else bisect_right)(self.starts, value) - 1
+        first, last, original, original_end, replaced = self.segments[max(0, index)]
+        if value == last:
+            return original_end
+        if not replaced:
+            return original + value - first
+        return original_end if end and value > first else original
 
 
 @dataclass(frozen=True)
@@ -110,13 +150,17 @@ class MacroProjection:
     original_segments: tuple[SourceSegment, ...]
     generated_tokens: tuple[ProjectedToken, ...]
 
-    def physical_span(self, start: int, end: int) -> tuple[int, int] | None:
+    def physical_span(
+        self, start: int, end: int, *, include_arguments: bool = False
+    ) -> tuple[int, int] | None:
         """Map a nonempty projected range only if every byte was copied unchanged.
 
         Parameters
         ----------
         start, end : int
             Inclusive start and exclusive end in the projected buffer.
+        include_arguments : bool, optional
+            Also accept unchanged argument token spelling when explicitly requested.
 
         Returns
         -------
@@ -131,7 +175,64 @@ class MacroProjection:
             if segment.projected_start <= start < end <= projected_end:
                 shift = first - segment.projected_start
                 return start + shift, end + shift
+        for token in self.generated_tokens if include_arguments else ():
+            first, last = token.projected_span
+            if (
+                token.physical_spelling_span is not None
+                and first <= start < end <= last
+            ):
+                shift = token.physical_spelling_span[0] - first
+                return start + shift, end + shift
         return None
+
+    def syntax_tree(self, root: SyntaxNode) -> _ProjectedNode:
+        """Map syntax to original bytes while preserving argument-token positions.
+
+        Parameters
+        ----------
+        root : SyntaxNode
+            Syntax tree over this projection, including prior syntax adapters.
+
+        Returns
+        -------
+        _ProjectedNode
+            Tree with physical argument spelling and explicit replacement anchors.
+        """
+        intervals = [
+            (s.projected_start, s.projected_start + b - a, a, b, False)
+            for s in self.original_segments
+            for a, b in (s.original_span,)
+        ]
+        intervals.extend(
+            (
+                *t.projected_span,
+                t.token.start,
+                t.token.end,
+                t.physical_spelling_span is None,
+            )
+            for t in self.generated_tokens
+        )
+        intervals.sort()
+        segments = []
+        cursor = 0
+        previous_end = 0
+        for first, last, a, b, replaced in intervals:
+            if cursor < first:
+                segments.append((cursor, first, previous_end, a, True))
+            segments.append((first, last, a, b, replaced))
+            cursor, previous_end = last, b
+        if cursor < len(self.source):
+            segments.append(
+                (cursor, len(self.source), previous_end, len(self.original), True)
+            )
+        mapping = _TokenProjection(
+            self.original,
+            self.source,
+            tuple(segments),
+            tuple(s[0] for s in segments),
+            (0, *(i + 1 for i, byte in enumerate(self.original) if byte == 10)),
+        )
+        return mapping.tree(root)
 
 
 def _render_macro_tokens(

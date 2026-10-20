@@ -815,8 +815,8 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     Returns
     -------
     codira.models.CallSite | None
-        Normalized call record, excluding primitive conversions, named casts and
-        unsupported operators.
+        Normalized call record, excluding primitive conversions, named casts,
+        noexcept expressions and unsupported operators.
         Calls inside their operands are collected separately by body traversal.
     """
     if _is_complex_operator_call(node, source):
@@ -824,16 +824,29 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     function_node = node.child_by_field_name("function")
     if function_node is None:
         return None
+    function_text = (
+        _decode_source_text(function_node.syntax_text)
+        if isinstance(function_node, _ProjectedNode)
+        else _node_text(function_node, source)
+    )
+    if function_node.type == "identifier" and function_text == "noexcept":
+        return None
     if function_node.type == "primitive_type" or (
         function_node.type == "identifier"
-        and _node_text(function_node, source)
-        in {"short", "long", "signed", "unsigned", "wchar_t"}
+        and function_text in {"short", "long", "signed", "unsigned", "wchar_t"}
     ):
         return None
 
     if function_node.type == "template_function":
         name = function_node.child_by_field_name("name")
-        if name is not None and _node_text(name, source) in {
+        name_text = (
+            _decode_source_text(name.syntax_text)
+            if isinstance(name, _ProjectedNode)
+            else _node_text(name, source)
+            if name is not None
+            else ""
+        )
+        if name is not None and name_text in {
             "static_cast",
             "reinterpret_cast",
             "const_cast",
@@ -1000,12 +1013,27 @@ def _extract_calls(
         return ()
 
     calls: list[CallSite] = []
+    statement_hints = False
     for node in _named_descendants(body):
+        if isinstance(node, _ProjectedNode) and node.macro_hint is not None:
+            statement_hints = True
+            calls.append(
+                CallSite(
+                    kind="name",
+                    target=node.macro_hint,
+                    lineno=node.start_point.row + 1,
+                    col_offset=node.start_point.column,
+                    external_target_kind="C++:<macro>",
+                    external_target_name=node.macro_hint,
+                )
+            )
         if node.type != "call_expression":
             continue
         call = _call_site_from_expression(node, source)
         if call is not None:
             calls.append(call)
+    if statement_hints:
+        calls = list(dict.fromkeys(calls))
     seen = set(calls)
     recovered: list[CallSite] = []
     for call in _initializer_argument_calls(body, source, parameter_names):
@@ -2958,7 +2986,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "26"
+    version = "27"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -3367,7 +3395,12 @@ class CppAnalyzer:
         return self._analyze_captured_file(path, root, context)
 
     def _analyze_captured_file(
-        self, path: Path, root: Path, context: IncludeContext
+        self,
+        path: Path,
+        root: Path,
+        context: IncludeContext,
+        *,
+        syntax_root: Node | None = None,
     ) -> AnalysisResult:
         """Extract ordinary syntax from an explicitly supplied immutable snapshot.
 
@@ -3377,6 +3410,8 @@ class CppAnalyzer:
             Original file and trusted repository root.
         context : IncludeContext
             Exact source/header bytes, possibly a generated parser projection.
+        syntax_root : SyntaxNode or None, optional
+            Statement-only syntax already mapped to the original source buffer.
 
         Returns
         -------
@@ -3384,12 +3419,17 @@ class CppAnalyzer:
             Ordinary normalized extraction before generated coordinate repair.
         """
         source = context.source
-        root_node = _parse_with_namespace_bindings(
-            source,
-            bindings=self._namespace_macro_definitions,
-            included_sources=tuple(
-                (header.source, header.available_after) for header in context.headers
-            ),
+        root_node = (
+            syntax_root
+            if syntax_root is not None
+            else _parse_with_namespace_bindings(
+                source,
+                bindings=self._namespace_macro_definitions,
+                included_sources=tuple(
+                    (header.source, header.available_after)
+                    for header in context.headers
+                ),
+            )
         )
         module_comment = (
             _leading_module_comment(root_node, source)
