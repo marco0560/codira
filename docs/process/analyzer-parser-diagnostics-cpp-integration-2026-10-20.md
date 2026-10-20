@@ -73,4 +73,4 @@ A live stack identifies repeated relative-path conversion during LLVM coverage s
 
 `cpp-stdfix-type-macro-experiment-r1/` expands type fragments with the macro state at the earlier declaration in an isolated process. All 80 public-packaging cases then complete. This is causal evidence for the shared type-spelling defect, not production integration or qualification: earlier type-macro origins still need to be attached to generated provenance, and independent metadata/native comparison and indexing checks remain required.
 
-The wrapper inventory now has **911 open candidates**. The full remediation goal remains active across all languages and repositories.
+The subsequent [declaration-time type proof and qualification](analyzer-parser-diagnostics-cpp-type-macros-2026-10-20.md) admits 76 stdfix originals in v43 and 206 further native-compatible originals in v44. The authoritative ledger is **3,688 verified fixes, 453 separated inputs and 21,621 open originals**. The wrapper inventory now has **705 open candidates**. The full remediation goal remains active across all languages and repositories.
