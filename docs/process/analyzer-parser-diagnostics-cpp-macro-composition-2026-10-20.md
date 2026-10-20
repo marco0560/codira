@@ -6,7 +6,7 @@ The original benchmark and corpus have not been modified.
 
 ## Verified ledger
 
-Ledger `classification-v30` admits **190 newly verified original libc++ files**:
+Ledger `classification-v30` admits **189 newly verified original libc++ files**:
 **2,420 verified fixes, 453 separated files and 22,889 open files**
 (C: 5,725; C++: 17,164). That accounts for **11.15%** of the original
 25,762 diagnostic paths. All earlier rows outside these admissions remain
@@ -73,7 +73,7 @@ directory. That was an execution-context failure, not evidence of malformed C++.
 Legacy `__cxx03` headers require separate language/include-context qualification;
 failed modern-mode probes do not classify them as malformed or future syntax.
 
-The initial spread and three modern-header batches yield 190 unique admitted
+The initial spread and three modern-header batches yield 189 unique admitted
 originals. The last 251-header batch is terminal, with 117 complete matches;
 one was already admitted, so only 116 new pending rows change in v30.
 Admission rechecks source and captured header identities, exact product payloads,
@@ -84,7 +84,7 @@ byte-identical. Native syntax success alone remains insufficient.
 
 | Language | Native validation mode | Repository | Newly admitted files |
 | --- | --- | --- | ---: |
-| C++ | C++23 | LLVM / libc++ | 189 |
+| C++ | C++23 | LLVM / libc++ | 188 |
 | C++ | C++03 | LLVM / libc++ | 1 |
 
 Native modes are validation contexts, not inferred minimum source versions.

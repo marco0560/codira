@@ -9,7 +9,7 @@ breakdown of deliberately malformed and future-syntax files is unchanged.
 This is an independent reference-coverage correction, not a new production
 analyzer change or release. Source commit `ebf61c5` remains byte-identical to its
 passing gate. The [macro recovery report](analyzer-parser-diagnostics-cpp-macro-composition-2026-10-20.md)
-records the preceding implementation and 190 admitted paths through v30.
+records the preceding implementation and 189 admitted paths through v30.
 Main remains at `91c4e07a3c25e72ee7c3346899f92e551037bf5e`; nothing was pushed
 or merged.
 
