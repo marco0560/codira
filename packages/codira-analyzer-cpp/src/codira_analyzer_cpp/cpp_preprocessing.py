@@ -13,7 +13,7 @@ None
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 
 from tree_sitter import Parser
@@ -164,6 +164,85 @@ def _keyword_macro_overridden(
                 if match is not None and match[1] == keyword:
                     return True
     return False
+
+
+def _deleted_declaration_source(
+    source: bytes,
+    root: Node,
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...],
+) -> bytes:
+    """Mask only a proven single free-function deleted-definition suffix.
+
+    Parameters
+    ----------
+    source : bytes
+        Coordinate-aligned syntax view retaining original declaration bytes.
+    root : SyntaxNode
+        Partial tree with a function declarator and incomplete delete initializer.
+    parser : tree_sitter.Parser
+        Parser used to verify keyword overrides in captured inputs.
+    included_sources : tuple[tuple[bytes, int], ...]
+        Captured headers supplying macro override evidence.
+
+    Returns
+    -------
+    bytes
+        Equal-width view preserving declarations, signatures and unrelated errors.
+    """
+    if not root.has_error or b"delete" not in source:
+        return source
+    spans: list[tuple[int, int]] = []
+    gap = rb"(?:\s|/\*[\s\S]*?\*/|//[^\r\n]*(?=\r|\n|$))*"
+    for node in _nodes(root):
+        if node.type != "init_declarator":
+            continue
+        function = node.child_by_field_name("declarator")
+        value = node.child_by_field_name("value")
+        owner = node.parent
+        if (
+            function is None
+            or function.type != "function_declarator"
+            or function.has_error
+            or value is None
+            or value.type != "delete_expression"
+            or owner is None
+            or owner.type != "declaration"
+        ):
+            continue
+        name = function.child_by_field_name("declarator")
+        if name is None or name.type not in {
+            "identifier",
+            "qualified_identifier",
+            "operator_name",
+            "destructor_name",
+        }:
+            continue
+        children: Sequence[Node] = owner.children
+        if (
+            sum(
+                owner.field_name_for_child(i) == "declarator"
+                for i, _ in enumerate(children)
+            )
+            != 1
+        ):
+            continue
+        suffix = source[function.end_byte : owner.end_byte]
+        if (
+            re.fullmatch(gap + rb"=" + gap + rb"delete" + gap + rb";", suffix)
+            is not None
+        ):
+            spans.append((function.end_byte, owner.end_byte - 1))
+    if not spans or _keyword_macro_overridden(
+        b"delete", source, root, parser, included_sources
+    ):
+        return source
+    projected = bytearray(source)
+    for start, end in spans:
+        for offset in range(start, end):
+            if projected[offset] not in b"\r\n":
+                projected[offset] = 32
+    return bytes(projected)
 
 
 def _exception_clause(value: bytes, parser: Parser) -> tuple[bool, bool]:
@@ -1535,6 +1614,10 @@ def _namespace_source(
         )
         if view != projection.expanded:
             recovered = parser.parse(view).root_node
+    if recovered.has_error:
+        view = _deleted_declaration_source(view, recovered, parser, included_sources)
+        if view != projection.expanded:
+            recovered = parser.parse(view).root_node
     if recovered.has_error and b"typename" in view:
         view = _dependent_construction_source(
             view,
@@ -1638,6 +1721,13 @@ def _parse_cpp_source(
     recovered = parser.parse(bytes(projected)).root_node
     if recovered.has_error:
         view = _exception_suffix_source(
+            bytes(projected), recovered, parser, included_sources
+        )
+        if view != bytes(projected):
+            projected = bytearray(view)
+            recovered = parser.parse(view).root_node
+    if recovered.has_error:
+        view = _deleted_declaration_source(
             bytes(projected), recovered, parser, included_sources
         )
         if view != bytes(projected):

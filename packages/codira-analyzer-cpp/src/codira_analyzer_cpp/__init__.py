@@ -29,6 +29,8 @@ None
 
 from __future__ import annotations
 
+import re
+
 import hashlib
 import json
 from dataclasses import dataclass, field, replace
@@ -152,7 +154,7 @@ class _PendingFunction:
     class_name : str | None
         Known class-like owner, if any.
     is_definition : bool
-        Whether the candidate includes a definition body.
+        Whether the candidate has a body or an explicit default/delete definition.
     binding_key : tuple[str, ...]
         Source-syntax parameter types and cv/ref/constraint qualifiers. Parameter
         names and default values do not distinguish redeclarations. Conditional
@@ -1547,6 +1549,22 @@ def _build_function_artifact(
     parameter_list = _find_parameter_list(declarator)
     parameters = _extract_parameter_names(parameter_list, source)
     body = node.child_by_field_name("body")
+    children: Sequence[Node] = node.named_children
+    bodyless_definition = node.type == "function_definition" and any(
+        child.type in {"default_method_clause", "delete_method_clause"}
+        for child in children
+    )
+    if node.type in {"declaration", "field_declaration"}:
+        suffix = source[declarator.end_byte : node.end_byte]
+        suffix = re.sub(rb"/\*[\s\S]*?\*/|//[^\r\n]*", b" ", suffix)
+        bodyless_definition = re.fullmatch(rb"\s*=\s*delete\s*;", suffix) is not None
+    definition_end = (
+        body.end_point.row + 1
+        if body is not None
+        else node.end_point.row + 1
+        if bodyless_definition
+        else None
+    )
     signature_end = body.start_byte if body is not None else signature_node.end_byte
     signature_start = _original_declaration_start(signature_node, source)
     signature = _decode_source_text(source[signature_start:signature_end]).strip()
@@ -1563,7 +1581,7 @@ def _build_function_artifact(
             + 1
             - source.count(b"\n", signature_start, signature_node.start_byte)
         ),
-        end_lineno=body.end_point.row + 1 if body is not None else None,
+        end_lineno=definition_end,
         signature=_normalize_signature(signature),
         docstring=docstring,
         has_docstring=int(docstring is not None),
@@ -1581,7 +1599,7 @@ def _build_function_artifact(
     return _PendingFunction(
         artifact=artifact,
         class_name=class_name,
-        is_definition=body is not None,
+        is_definition=definition_end is not None,
         binding_key=_callable_binding_key(declarator, source),
     )
 
@@ -2798,7 +2816,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "21"
+    version = "22"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
