@@ -28,8 +28,8 @@ The focused behavioral/package/contract run passed 343 tests, including 39 new
 regression cases. All eight workflow preflight checks passed. Semgrep ran
 outside the sandbox. The source full repository gate passed: **2,315 passed, three skipped, 87%
 coverage**, a fresh 866-file index, zero index failures and zero coverage issues.
-The compact receipt binds the result to exact source digests. Ledger admission
-remains pending the source commit.
+The compact receipt binds the result to exact source digests. Source commit: `610e738`. Classification v33 admits the 44 fully qualified
+originals after checking source, dependencies, native evidence and controls.
 
 The production replay completed 571 distinct profile requests: all 343 legacy
 originals and all 316 previously admitted macro/profile paths, with identical
@@ -45,9 +45,9 @@ Native AST, preprocessing and written-call evidence was complete for 275 of the
 276 clean outputs. Existing native evidence was reused only after verifying its
 hashes and original context; 63 written-call captures were newly obtained.
 The complete comparison qualifies 106 legacy files, preserving all 89 earlier
-qualifications and adding 17 candidates. The 17 are **not yet admitted**: the source commit remains required. A separate
-scope correction described below qualifies another 27 outputs, for 133 total
-legacy qualifications and 44 candidates relative to the earlier 89.
+qualifications and adding 17 candidates. The grammar changes contribute 17 additional qualifications. A separate scope
+correction described below contributes another 27, for 133 total legacy
+qualifications and 44 newly admitted originals relative to the earlier 89.
 
 The native-call scorer was independently challenged. Two coordinated changes
 to product payloads and native receipts passed the earlier draft scorer:
@@ -99,5 +99,26 @@ All measurement records remain in the worktree under
 - `cpp20-native-grammar-controls-r2/` and `cpp20-written-call-negative-r2/`:
   fresh positive, held and negative controls for R8;
 - `cpp20-grammar-qualification-summary-r1.json`: candidate gains and overlapping
-  remaining diagnostic groups. Classification remains at v32 pending admission.
+  remaining diagnostic groups. Classification is now v33: **2,591 verified fixes, 453 separated, 22,718 open**
+  (C 5,725; C++ 16,993). Only the 44 admitted rows differ from v32.
 - `cpp20-grammar-validation-receipt-r1.json`: examined successful source gate.
+
+## Admission and continuation
+
+The complete comparison replay preserves all basic checks across 275 files;
+only the inconsistent callable-local eligibility in the additional full identity
+check changes. `cpp20-legacy-qualification-invariants-r1.json` retains that audit,
+sorting only unordered missing/extra counters and preserving parameter order
+and multiplicity. The source-bound admission is
+`cpp20-legacy-context-admission-r1.json`; complete JSONL/CSV and
+language/version/repository groups are in `classification-v33.*` and
+`classification-summary-v33.json`. Overall accounted share is 11.82%;
+the remaining 22,718 paths are not declared resolved.
+
+A targeted continuation selected 133 previously partial modern libc++ originals
+containing `typename` or `_NOEXCEPT`. Its completed frozen-source replay found
+61 clean and 72 partial outputs, with no execution exceptions. All 61 clean
+outputs have complete native AST/preprocessing/written-call captures in the
+same C++23 context. Qualification remains separate; they are not added to v33.
+Records remain under `cpp20-modern-grammar-production-r1/` and
+`cpp20-modern-native-r1/`.
