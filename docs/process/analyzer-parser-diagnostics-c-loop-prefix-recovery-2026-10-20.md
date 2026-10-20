@@ -2,7 +2,8 @@
 
 The dedicated worktree implements the shared PostgreSQL loop-prefix correction
 identified in the [diagnosis](analyzer-parser-diagnostics-c-loop-prefix-diagnosis-2026-10-20.md).
-The source batch is validated; cohort measurements and admission remain pending.
+The source batch, corpus comparison and independent native qualification are
+complete. Ledger v38 admits **114 newly verified PostgreSQL files**.
 
 ## Behavior
 
@@ -57,11 +58,26 @@ equality and clean status**, under their recorded product profiles: 188 defaults
 and 172 explicit header contexts. The source-bound receipt is
 `c18-loop-prefix-prior-regression-receipt-r1.json`.
 
-The complete 294-file recognized loop cohort is still being measured with
-checkpoint/resume. Measurements compare the frozen analyzer v17 from commit
-`2c517bf` with v18; candidate default and configured results are kept separate.
-Canonical equality and parser cleanliness do not replace independent native
-qualification.
+The completed production comparison covers **654 distinct original paths**:
+360 previous qualifications and 294 loop candidates. Under identical explicit
+PostgreSQL profiles, the frozen v17 baseline recovers none of the 294 candidates;
+v18 recovers 151. Neither version recovers these candidates under unconfigured
+defaults. The product profile supplies `src/include` as an include search path
+and preincludes `src/include/postgres.h`, relative to the PostgreSQL checkout.
+The other **143 candidates remain partial**.
+
+All 151 configured-clean candidates undergo independent Clang 22 C17 comparison
+in separate baseline-context and source-declared assertion-enabled modes.
+A complete match within one mode is required; reference fields are never merged
+across modes. **114 unique originals qualify**: the admission selects baseline
+mode for 54 and assertion-enabled mode for the other 60. Of the 37 held files,
+32 have a native-accepted mode but retain metadata/reference mismatches or
+limitations; five have no accepted native mode. Neither group is counted fixed.
+
+The admitted subset compares **1,747 definitions and callable records, 24,662
+lexical call sites and 135 named-type targets**. It adds no prototype-parameter
+coverage. These checks establish the represented parser/metadata scope, not
+original PostgreSQL build, runtime or project-harness success.
 
 One additional native-profile contrast checks PostgreSQL's source-declared
 assertion-enabled mode. `configure.ac` defines `USE_ASSERT_CHECKING=1` for
@@ -93,10 +109,34 @@ Under `.artifacts/analysis/parser-diagnostics-20261017-r1/`:
 - `c18-loop-prefix-c17-baseline-r1/`: immutable baseline package source;
 - `c18-loop-prefix-production-r1/`: full input manifest, original source hashes,
   actual baseline/current artifacts, dependency identities and resumable records;
-- `c18-loop-prefix-native-cohort-r1/run.py`: prepared resumable capture/comparison
+- `c18-loop-prefix-native-cohort-r1/`: completed resumable capture/comparison
   stage for every actual current-clean candidate. Baseline and source-declared
   assertion-enabled native modes are separate; a complete match is required
   within one mode, with no union of reference results;
 - `c18-loop-prefix-gate-launch-r1.json`: exact full-gate session and file paths.
 
-The ledger remains v37: **2,672 verified fixes, 453 separated and 22,637 open**.
+## Admission and remaining gap
+
+Ledger **v38** records **2,786 verified fixes, 453 separately classified originals
+and 22,523 open files** (5,611 C and 16,912 C++). Verified fixes plus separately
+classified inputs account for **12.57%** of the original 25,762-file gap. Fixes
+alone cover **11.01%** of the 25,309-file correction population after separating
+453 inputs. This batch adds 114 verified fixes, or 0.44 percentage points of the
+original population. All 25,648 non-admitted ledger rows remain unchanged.
+
+Admission verifies all 25,762 original source hashes, source-commit and validation
+bindings, current header dependency identities, unchanged comparator identity,
+raw native evidence hashes, clean actual product artifacts and complete grades
+without issues, limitations or outstanding role-review flags. The source commit
+is `7d51ec9e7a2c3b75da5a37e33584e1444198cb28`.
+
+Durable ignored evidence additionally includes:
+
+- `classification-v38.jsonl`, `.csv` and `classification-summary-v38.json`;
+- `admit_c18_loop_prefixes_r1.py` and `c18-loop-prefix-admission-r1.json`;
+- `c18-loop-prefix-source-commit-binding-r1.json`;
+- `c18-loop-prefix-prior-regression-receipt-r1.json`.
+
+The language/version/repository table for the unchanged 453 separated inputs
+remains in the [separation report](analyzer-parser-diagnostics-verify-prefixes-2026-10-19.md).
+Its surrounding overall progress totals are historical; v38 above is current.
