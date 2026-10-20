@@ -13,7 +13,7 @@ None
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
 from tree_sitter import Parser
@@ -21,6 +21,7 @@ from tree_sitter import Parser
 from .cpp_projection import SyntaxNode as Node, _source_projection
 
 from .cpp_syntax import _new_parser
+from .cpp_dependent_construction import _dependent_construction_source
 
 _IDENTIFIER = re.compile(rb"\b[A-Za-z_][A-Za-z_0-9]*\b")
 _MS_PRAGMA_RAW_STRING = re.compile(rb'(?:u8|u|U|L)?R"([^ ()\\\t\r\n]{0,16})\(')
@@ -110,6 +111,302 @@ def _nodes(root: Node) -> Iterator[Node]:
         node = pending.pop()
         yield node
         pending.extend(reversed(node.children))
+
+
+def _keyword_macro_overridden(
+    keyword: bytes,
+    source: bytes,
+    root: Node,
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...],
+) -> bool:
+    """Hold keyword recovery when captured directives redefine its spelling.
+
+    Parameters
+    ----------
+    keyword : bytes
+        Reserved spelling used by the grammar adaptation.
+    source : bytes
+        Original source bytes.
+    root : SyntaxNode
+        Provider tree for the source.
+    parser : tree_sitter.Parser
+        Package-local parser for candidate headers.
+    included_sources : tuple[tuple[bytes, int], ...]
+        Captured header bytes and source availability boundaries.
+
+    Returns
+    -------
+    bool
+        Whether any real definition or undefinition invalidates the keyword.
+    """
+    gap = rb"(?:\s|/\*[\s\S]*?\*/|\\\r?\n)+"
+    candidate = re.compile(rb"\b(?:define|undef)" + gap + re.escape(keyword) + rb"\b")
+    inputs = [(source, root)] + [
+        (content, parser.parse(content).root_node)
+        for content, _ in included_sources
+        if candidate.search(content)
+    ]
+    for content, tree in inputs:
+        for node in _nodes(tree):
+            if node.type in {"preproc_def", "preproc_function_def"}:
+                name = node.child_by_field_name("name")
+                if (
+                    name is not None
+                    and content[name.start_byte : name.end_byte] == keyword
+                ):
+                    return True
+            elif node.type == "preproc_call":
+                text = re.sub(
+                    rb"/\*[\s\S]*?\*/", b" ", content[node.start_byte : node.end_byte]
+                )
+                match = _UNDEF.match(text)
+                if match is not None and match[1] == keyword:
+                    return True
+    return False
+
+
+def _exception_clause(value: bytes, parser: Parser) -> tuple[bool, bool]:
+    """Prove an empty replacement or one unchanged function exception clause.
+
+    Parameters
+    ----------
+    value : bytes
+        Fully expanded object-macro alternative.
+    parser : tree_sitter.Parser
+        Package-local parser.
+
+    Returns
+    -------
+    tuple[bool, bool]
+        Whether the value is supported and whether it adds an exception clause.
+    """
+    prefix = b"int __codira_exception_probe() "
+    source = prefix + value + b";"
+    root = parser.parse(source).root_node
+    declarations = [n for n in root.named_children if n.type != "comment"]
+    if root.has_error or len(declarations) != 1:
+        return False, False
+    declaration = declarations[0]
+    declared_type = declaration.child_by_field_name("type")
+    function = declaration.child_by_field_name("declarator")
+    if (
+        declaration.type != "declaration"
+        or declared_type is None
+        or source[declared_type.start_byte : declared_type.end_byte] != b"int"
+        or declared_type.start_byte != 0
+        or function is None
+        or function.type != "function_declarator"
+        or len([n for n in declaration.named_children if n.type != "comment"]) != 2
+    ):
+        return False, False
+    name = function.child_by_field_name("declarator")
+    parameters = function.child_by_field_name("parameters")
+    if (
+        name is None
+        or name.type != "identifier"
+        or source[name.start_byte : name.end_byte] != b"__codira_exception_probe"
+        or parameters is None
+        or parameters.end_byte != len(prefix) - 1
+    ):
+        return False, False
+    extras = [
+        n
+        for n in function.named_children
+        if n not in (name, parameters) and n.type != "comment"
+    ]
+    if extras:
+        return (
+            len(extras) == 1 and extras[0].type in {"noexcept", "throw_specifier"}
+        ), True
+    remainder = bytearray(value)
+    for node in _nodes(root):
+        if node.type == "comment" and len(prefix) <= node.start_byte < len(
+            prefix
+        ) + len(value):
+            a, b = node.start_byte - len(prefix), node.end_byte - len(prefix)
+            remainder[a:b] = b" " * (b - a)
+    return not bytes(remainder).strip(), False
+
+
+def _exception_macro_forms(
+    name: bytes,
+    state: _AnnotationDefinitions,
+    parser: Parser,
+    cache: dict[bytes, tuple[tuple[bytes, ...], int] | None],
+    active: frozenset[bytes] = frozenset(),
+) -> tuple[tuple[bytes, ...], int] | None:
+    """Expand bounded object alternatives without selecting conditional branches.
+
+    Parameters
+    ----------
+    name : bytes
+        Object macro whose alternatives are required.
+    state : _AnnotationDefinitions
+        Captured replacement bodies, unsafe names and reaching boundaries.
+    parser : tree_sitter.Parser
+        Parser supplying literal and comment protection.
+    cache : dict[bytes, tuple[tuple[bytes, ...], int] or None]
+        Request-local resolved alternatives and availability.
+    active : frozenset[bytes], optional
+        Current dependency chain for cycle and depth guards.
+
+    Returns
+    -------
+    tuple[tuple[bytes, ...], int] or None
+        Expanded alternatives and latest boundary, or unsupported proof.
+    """
+    if name in cache:
+        return cache[name]
+    if name in state.unsafe or name in active or len(active) >= 32:
+        return None
+    alternatives = state.replacements.get(name)
+    if alternatives is None:
+        return None
+    latest = state.first_offsets[name]
+    values: set[bytes] = set()
+    for body in alternatives:
+        opaque = [
+            (n.start_byte, n.end_byte)
+            for n in _nodes(parser.parse(body).root_node)
+            if n.type in _OPAQUE_NODES | {"number_literal", "user_defined_literal"}
+        ]
+        variants = {b""}
+        cursor = 0
+        for match in _IDENTIFIER.finditer(body):
+            if any(a <= match.start() < b for a, b in opaque):
+                continue
+            token = match[0]
+            if token not in state.replacements and token not in state.unsafe:
+                continue
+            nested = _exception_macro_forms(
+                token, state, parser, cache, active | {name}
+            )
+            if nested is None:
+                cache[name] = None
+                return None
+            forms, boundary = nested
+            latest = max(latest, boundary)
+            variants = {
+                prefix + body[cursor : match.start()] + form
+                for prefix in variants
+                for form in forms
+            }
+            if len(variants) > 64 or any(len(value) > 4096 for value in variants):
+                cache[name] = None
+                return None
+            cursor = match.end()
+        values.update(prefix + body[cursor:] for prefix in variants)
+        if len(values) > 64 or any(len(value) > 4096 for value in values):
+            cache[name] = None
+            return None
+    result = (tuple(sorted(values)), latest)
+    cache[name] = result
+    return result
+
+
+def _exception_suffix_source(
+    source: bytes,
+    root: Node,
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...],
+    *,
+    position_map: Callable[[int], int] | None = None,
+) -> bytes:
+    """Mask proven exception aliases only in callable declarator suffix slots.
+
+    Parameters
+    ----------
+    source : bytes
+        Current coordinate-aligned syntax view.
+    root : SyntaxNode
+        Partial tree supplying declarators, bodies and protected spans.
+    parser : tree_sitter.Parser
+        Package-local parser.
+    included_sources : tuple[tuple[bytes, int], ...]
+        Captured headers with original source availability boundaries.
+    position_map : collections.abc.Callable[[int], int] or None, optional
+        Map expanded namespace coordinates back to original source positions.
+
+    Returns
+    -------
+    bytes
+        Equal-width suffix view; prefixes, bodies and unproven aliases survive.
+    """
+    state = _AnnotationDefinitions()
+    _collect_annotation_definitions(source, root, None, state)
+    if position_map is not None:
+        state.first_offsets = {
+            name: position_map(offset) for name, offset in state.first_offsets.items()
+        }
+    for content, boundary in included_sources:
+        _collect_annotation_definitions(
+            content, parser.parse(content).root_node, boundary, state
+        )
+    protected = list(_hash_lines(source, root))
+    protected.extend(
+        (n.start_byte, n.end_byte) for n in _nodes(root) if n.type in _OPAQUE_NODES
+    )
+    cache: dict[bytes, tuple[tuple[bytes, ...], int] | None] = {}
+    accepted: dict[bytes, int] = {}
+    rejected: set[bytes] = set()
+    projected = bytearray(source)
+    for node in _nodes(root):
+        if node.type != "function_declarator":
+            continue
+        parameters = node.child_by_field_name("parameters")
+        if parameters is None:
+            continue
+        owner = node.parent
+        while owner is not None and owner.type not in {
+            "function_definition",
+            "declaration",
+            "field_declaration",
+            "parameter_declaration",
+        }:
+            if owner.type == "compound_statement":
+                break
+            owner = owner.parent
+        if owner is None or owner.type == "compound_statement":
+            continue
+        body = owner.child_by_field_name("body")
+        limit = body.start_byte if body is not None else owner.end_byte
+        slots = []
+        for match in _IDENTIFIER.finditer(source, parameters.end_byte, limit):
+            if any(a <= match.start() < b for a, b in protected):
+                continue
+            token = match[0]
+            if token not in accepted and token not in rejected:
+                resolved = _exception_macro_forms(token, state, parser, cache)
+                proofs = (
+                    [_exception_clause(value, parser) for value in resolved[0]]
+                    if resolved
+                    else []
+                )
+                if (
+                    proofs
+                    and all(valid for valid, _ in proofs)
+                    and any(positive for _, positive in proofs)
+                ):
+                    assert resolved is not None
+                    accepted[token] = resolved[1]
+                else:
+                    rejected.add(token)
+            if token in accepted:
+                slots.append(match)
+        if len(slots) != 1:
+            continue
+        match = slots[0]
+        prefix = source[parameters.end_byte : match.start()]
+        prefix = re.sub(rb"/\*[\s\S]*?\*/|//[^\r\n]*", b" ", prefix)
+        if re.fullmatch(rb"(?:\s|const\b|volatile\b|&&?)*", prefix) is None:
+            continue
+        position = (
+            position_map(match.start()) if position_map is not None else match.start()
+        )
+        if position >= accepted[match[0]]:
+            projected[match.start() : match.end()] = b" " * len(match[0])
+    return bytes(projected)
 
 
 def _is_annotation(value: bytes, parser: Parser) -> bool:
@@ -1231,6 +1528,25 @@ def _namespace_source(
         return None
     projection = _source_projection(source, sorted(replacements))
     recovered = parser.parse(projection.expanded).root_node
+    view = projection.expanded
+    if recovered.has_error:
+        view = _exception_suffix_source(
+            view, recovered, parser, included_sources, position_map=projection.offset
+        )
+        if view != projection.expanded:
+            recovered = parser.parse(view).root_node
+    if recovered.has_error and b"typename" in view:
+        view = _dependent_construction_source(
+            view,
+            recovered,
+            parser,
+            protected_ranges=_hash_lines(view, recovered),
+            keyword_overridden=_keyword_macro_overridden(
+                b"typename", source, root, parser, included_sources
+            ),
+        )
+        if view != projection.expanded:
+            recovered = parser.parse(view).root_node
     return None if recovered.has_error else projection.tree(recovered)
 
 
@@ -1320,6 +1636,26 @@ def _parse_cpp_source(
             child for child in node.children if child != condition and child != name
         )
     recovered = parser.parse(bytes(projected)).root_node
+    if recovered.has_error:
+        view = _exception_suffix_source(
+            bytes(projected), recovered, parser, included_sources
+        )
+        if view != bytes(projected):
+            projected = bytearray(view)
+            recovered = parser.parse(view).root_node
+    if recovered.has_error and b"typename" in projected:
+        view = _dependent_construction_source(
+            bytes(projected),
+            recovered,
+            parser,
+            protected_ranges=protected,
+            keyword_overridden=_keyword_macro_overridden(
+                b"typename", working, basis, parser, included_sources
+            ),
+        )
+        if view != bytes(projected):
+            projected = bytearray(view)
+            recovered = parser.parse(view).root_node
     if not recovered.has_error:
         return recovered
     namespace_root = _namespace_source(
