@@ -38,6 +38,7 @@ QUALITY_STEPS = frozenset(
         "mypy",
         "mypy-packages",
         "semgrep",
+        "lint-semgrep-hygiene",
         "docstring-audit",
     }
 )

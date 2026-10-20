@@ -22,14 +22,14 @@ def test_bundle_package_declares_expected_first_party_dependencies() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.48"
+    assert project["project"]["version"] == "2.0.49"
     assert project["project"]["dependencies"] == [
         "codira[semantic]==2.0.0",
         "einops>=0.8,<1.0",
         "codira-analyzer-python==2.0.2",
         "codira-analyzer-json==2.0.0",
         "codira-analyzer-c==2.0.8",
-        "codira-analyzer-cpp==2.0.22",
+        "codira-analyzer-cpp==2.0.23",
         "codira-analyzer-rust==2.0.3",
         "codira-analyzer-javascript==2.0.0",
         "codira-analyzer-typescript==2.0.3",
@@ -44,14 +44,14 @@ def test_bundle_package_declares_expected_first_party_dependencies() -> None:
         "codira-documentation-audit-jsdoc==2.0.0",
         "codira-documentation-audit-tsdoc==2.0.0",
         "codira-documentation-audit-go-doc-comments==2.0.0",
-        "codira-backend-sqlite==2.0.5",
-        "codira-backend-duckdb==2.0.7",
+        "codira-backend-sqlite==2.0.6",
+        "codira-backend-duckdb==2.0.8",
         "codira-embedding-sentence-transformers==2.0.1",
         "codira-embedding-onnx==2.0.0",
         "codira-vector-store-sqlite==2.0.0",
         "codira-vector-store-duckdb==2.0.0",
         "codira-similarity-index-qdrant==2.0.0",
-        "codira-installer==2.0.5",
+        "codira-installer==2.0.6",
     ]
     assert project["project"]["optional-dependencies"]["faiss"] == [
         "codira-similarity-index-faiss==2.0.1"

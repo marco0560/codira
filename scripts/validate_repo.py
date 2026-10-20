@@ -113,6 +113,7 @@ VALIDATION_STEPS: tuple[ValidationStep, ...] = (
         "semgrep",
         (
             "scan",
+            "--error",
             "--config",
             "semgrep/rules",
             "--metrics=off",

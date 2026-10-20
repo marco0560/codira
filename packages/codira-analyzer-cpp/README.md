@@ -141,3 +141,44 @@ name. Source overrides and ambiguous reaching aliases fail explicitly. The profi
 participates in incremental reuse identity. Definitions do not select compilation
 branches or substitute general expressions. Combining namespace-name bindings with
 an already expanded variable-width scope wrapper remains unsupported.
+
+## Explicit declaration-macro profiles
+
+The optional `preprocessor_definitions` mapping enables bounded declaration-macro
+analysis under an explicit initial preprocessing profile. Each value is a string
+object replacement, `true` for replacement `1`, `false` for explicitly undefined,
+or `{ defined = true }` for known-defined with an unavailable replacement. Missing
+states remain unknown; an empty mapping enables analysis without assuming that
+unlisted macros are undefined. Omitting the mapping preserves ordinary analysis.
+
+For example, a repository that supplies the following build facts can express
+them without a compiler dependency during indexing:
+
+```toml
+[plugins.analyzer-cpp.preprocessor_definitions]
+PROJECT_FEATURE = "1"
+PROJECT_DISABLED_FEATURE = false
+OPAQUE_COMPILER_MACRO = { defined = true }
+```
+
+The analyzer follows captured include and directive order, source overrides,
+undefinitions and include guards. Selected object/function macros may use argument
+substitution, prescan, stringification and token pasting within explicit bounds.
+Unknown required conditions, unsupported semantics and exhausted bounds retain
+partial diagnostics rather than selecting a convenient branch. A complete
+project profile may require many more initial facts than the example above.
+
+Generated free-function definitions, prototypes and aliases retain their actual
+names and namespace ownership. A generated `decltype` declaration requires a
+unique active, earlier source declaration with compatible source-spelled types.
+Prototypes retain unnamed parameters instead of borrowing implementation names;
+aliases retain their proven target without acquiring the implementation body.
+Unsupported ownership or type inference remains explicit.
+
+Generated metadata carries invocation anchors, captured macro inputs and token
+derivations separately from physical spelling locations. Original body calls keep
+their original coordinates. SQLite and DuckDB persist this provenance, and symbol
+evidence validates its source and dependency identity before returning it.
+Configuration and dependency changes invalidate incremental reuse. See
+[ADR-034](../../docs/adr/ADR-034-bounded-cpp-declaration-macro-analysis.md) for the
+architecture and original-file qualification requirements.

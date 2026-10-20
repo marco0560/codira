@@ -14,6 +14,7 @@ None
 from __future__ import annotations
 
 import re
+from typing import Literal
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
@@ -55,6 +56,8 @@ class _MacroToken:
         Whether the spelling was supplied or changed by macro replacement.
     unavailable : frozenset[bytes], optional
         Macro names suppressed during subsequent rescanning.
+    operation : {'source', 'replacement', 'paste', 'stringify'}, optional
+        Final derivation, separate from the original invocation/argument anchor.
 
     Returns
     -------
@@ -69,6 +72,7 @@ class _MacroToken:
     argument: bool = False
     synthetic: bool = False
     unavailable: frozenset[bytes] = frozenset()
+    operation: Literal["source", "replacement", "paste", "stringify"] = "source"
 
 
 @dataclass(frozen=True)
@@ -269,6 +273,7 @@ def _paste_tokens(left: _MacroToken, right: _MacroToken) -> _MacroToken:
         argument=bool(left.argument or right.argument),
         synthetic=True,
         unavailable=left.unavailable & right.unavailable,
+        operation="paste",
     )
 
 
@@ -307,6 +312,7 @@ class _MacroExpander:
         self.definitions = dict(definitions)
         self.templates: dict[bytes, tuple[_MacroToken, ...]] = {}
         self.steps = 0
+        self.used: set[bytes] = set()
         for name, definition in self.definitions.items():
             parameters = definition.parameters
             if not _IDENTIFIER.fullmatch(name) or name == b"__VA_ARGS__":
@@ -403,6 +409,7 @@ class _MacroExpander:
                     continue
                 arguments, end, separators = _macro_arguments(work, index + 1)
             self.steps += 1
+            self.used.add(name)
             if self.steps > _MAX_STEPS:
                 raise ValueError("macro expansion substitution limit exceeded")
             hidden = token.unavailable
@@ -503,6 +510,7 @@ class _MacroExpander:
                     space_before=token.space_before,
                     argument=bool(raw),
                     synthetic=True,
+                    operation="stringify",
                 )
                 pieces.append((False, (value,)))
             elif spelling in actual:
@@ -539,6 +547,7 @@ class _MacroExpander:
                                 closing.end,
                                 space_before=token.space_before,
                                 synthetic=True,
+                                operation="replacement",
                             ),
                         ),
                     )

@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from codira.contracts import LanguageAnalyzer
+    from .cpp_macro_expansion import _MacroDefinition
 
 from .cpp_namespace_bindings import (
     _namespace_bindings_from_config,
@@ -95,6 +96,9 @@ from codira.contracts import (
 )
 from codira.models import (
     AnalysisResult,
+    AnalysisDiagnostic,
+    AnalysisStatus,
+    AnalysisCoverageState,
     CallSite,
     ClassArtifact,
     DeclarationArtifact,
@@ -2816,7 +2820,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "22"
+    version = "23"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -2845,6 +2849,9 @@ class CppAnalyzer:
         self._header_language = "auto"
         self._include_search_paths: tuple[Path, ...] = ()
         self._namespace_macro_definitions: tuple[tuple[bytes, bytes], ...] = ()
+        self._preprocessor_definitions: dict[bytes, _MacroDefinition | None] | None = (
+            None
+        )
         self._use_leading_comments = True
         self._emit_doxygen_documentation = True
         self._include_system_includes = True
@@ -2890,6 +2897,24 @@ class CppAnalyzer:
                     },
                     "default": {},
                     "description": "Explicit identifier bindings for namespace declaration names; no branch selection or general expression expansion.",
+                },
+                "preprocessor_definitions": {
+                    "type": "object",
+                    "maxProperties": 4096,
+                    "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z_0-9]*$"},
+                    "additionalProperties": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "boolean"},
+                            {
+                                "type": "object",
+                                "properties": {"defined": {"const": True}},
+                                "required": ["defined"],
+                                "additionalProperties": False,
+                            },
+                        ]
+                    },
+                    "description": "Opt-in bounded captured declaration-macro analysis. Strings are object replacements, true is 1, false is explicitly undefined, and {defined: true} supplies opaque definedness. Missing names remain unknown.",
                 },
                 "emit_namespaces": boolean_property(True),
                 "emit_macros": boolean_property(True),
@@ -2937,6 +2962,13 @@ class CppAnalyzer:
         self._include_search_paths = tuple(Path(item) for item in search_paths)
         self._namespace_macro_definitions = _namespace_bindings_from_config(
             config.get("namespace_macro_definitions", {})
+        )
+        from .cpp_generated_analysis import preprocessor_definitions
+
+        self._preprocessor_definitions = (
+            preprocessor_definitions(config["preprocessor_definitions"])
+            if "preprocessor_definitions" in config
+            else None
         )
         self._use_leading_comments = bool(config.get("use_leading_comments", True))
         self._emit_doxygen_documentation = bool(
@@ -3089,15 +3121,14 @@ class CppAnalyzer:
         str
             Dependency identity including header bytes and negative lookups.
         """
-        payload = json.loads(
-            read_include_context(
-                path, root, include_paths=self._include_search_paths
-            ).identity
-        )
-        payload["configuration_fingerprint"] = self.configuration_fingerprint
+        from .cpp_generated_analysis import captured_identity
+
         return validate_analysis_input_fingerprint(
-            json.dumps(
-                payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")
+            captured_identity(
+                read_include_context(
+                    path, root, include_paths=self._include_search_paths
+                ),
+                self.configuration_fingerprint,
             )
         )
 
@@ -3126,10 +3157,20 @@ class CppAnalyzer:
             return False
         return (
             isinstance(payload, dict)
+            and payload.get("generated_provenance_version") == 1
             and payload.get("configuration_fingerprint")
             == self.configuration_fingerprint
             and include_identity_matches(
-                path, root, expected, include_paths=self._include_search_paths
+                path,
+                root,
+                json.dumps(
+                    {
+                        key: value
+                        for key, value in payload.items()
+                        if key != "generated_provenance_version"
+                    }
+                ),
+                include_paths=self._include_search_paths,
             )
         )
 
@@ -3152,6 +3193,58 @@ class CppAnalyzer:
         context = read_include_context(
             path, root, include_paths=self._include_search_paths
         )
+        if self._preprocessor_definitions is not None:
+            from .cpp_generated_analysis import analyze_generated_file
+
+            try:
+                return analyze_generated_file(self, path, root, context)
+            except ValueError as error:
+                result = self._analyze_captured_file(path, root, context)
+                status = result.status
+                diagnostic = AnalysisDiagnostic(
+                    category="macro_context", message=str(error)
+                )
+                return replace(
+                    result,
+                    index_symbols=False,
+                    status=AnalysisStatus(
+                        grammar="tree-sitter-cpp",
+                        target_contract={"language": "cpp"},
+                        diagnostics=(
+                            *(status.diagnostics if status is not None else ()),
+                            diagnostic,
+                        ),
+                        reliable_categories=(),
+                        omitted_categories=(
+                            "module",
+                            "class",
+                            "function",
+                            "declaration",
+                            "import",
+                            "documentation",
+                        ),
+                        coverage_state=AnalysisCoverageState.PARTIAL,
+                    ),
+                )
+        return self._analyze_captured_file(path, root, context)
+
+    def _analyze_captured_file(
+        self, path: Path, root: Path, context: IncludeContext
+    ) -> AnalysisResult:
+        """Extract ordinary syntax from an explicitly supplied immutable snapshot.
+
+        Parameters
+        ----------
+        path, root : pathlib.Path
+            Original file and trusted repository root.
+        context : IncludeContext
+            Exact source/header bytes, possibly a generated parser projection.
+
+        Returns
+        -------
+        AnalysisResult
+            Ordinary normalized extraction before generated coordinate repair.
+        """
         source = context.source
         root_node = _parse_with_namespace_bindings(
             source,

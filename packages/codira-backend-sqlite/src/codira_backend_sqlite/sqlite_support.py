@@ -24,6 +24,8 @@ import json
 from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
+from codira.generated import generated_provenance_rows
+
 from codira.contracts import (
     EmbeddingIndexingMetrics,
     EmbeddingIndexingPolicy,
@@ -109,6 +111,7 @@ def _clear_index_tables(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM functions")
     conn.execute("DELETE FROM classes")
     conn.execute("DELETE FROM modules")
+    conn.execute("DELETE FROM artifact_provenance")
     conn.execute("DELETE FROM files")
     conn.execute("DELETE FROM analysis_status")
 
@@ -958,6 +961,12 @@ def _store_analysis(
     )
     _persist_class_artifacts(artifact_request)
     _persist_function_artifacts(artifact_request)
+    provenance = generated_provenance_rows(analysis)
+    if provenance:
+        conn.executemany(
+            "INSERT INTO artifact_provenance(file_id, stable_id, payload) VALUES (?, ?, ?)",
+            [(file_id, stable_id, payload) for stable_id, payload in provenance],
+        )
     _persist_declaration_artifacts(artifact_request)
     _persist_import_artifacts(
         conn,
@@ -1202,6 +1211,7 @@ def _delete_indexed_file_data(conn: sqlite3.Connection, file_path: str) -> None:
     conn.execute("DELETE FROM call_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM callable_ref_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM reference_scan_lines WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM artifact_provenance WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM files WHERE path = ?", (file_path,))
     conn.execute("DELETE FROM analysis_status WHERE path = ?", (file_path,))
 

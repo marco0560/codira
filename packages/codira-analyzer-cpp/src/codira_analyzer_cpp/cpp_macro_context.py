@@ -250,6 +250,8 @@ def _merge(outcomes: list[_Environment]) -> _Environment:
     _Environment
         Agreed definitions; conflicting or possibly absent names stay uncertain.
     """
+    if len(outcomes) == 1:
+        return outcomes[0].clone()
     common = set(outcomes[0].bindings)
     all_names: set[bytes] = set()
     uncertain: set[bytes] = set()
@@ -551,6 +553,8 @@ class _ContextWalk:
         captures: Mapping[str, bytes],
         resolutions: Mapping[tuple[str, str, bool], str | None],
         initial: Mapping[bytes, _MacroDefinition | None],
+        *,
+        query_offsets: Mapping[str, tuple[int, ...]] | None = None,
     ) -> None:
         """Snapshot explicit macro state and initialize traversal bounds.
 
@@ -562,6 +566,8 @@ class _ContextWalk:
             Already observed include resolutions.
         initial : Mapping[bytes, _MacroDefinition | None]
             Explicit initial macro states.
+        query_offsets : Mapping[str, tuple[int, ...]] | None, optional
+            Additional physical declaration queries in captured headers.
 
         Returns
         -------
@@ -587,6 +593,34 @@ class _ContextWalk:
         self.stack: list[str] = []
         self.visits = self.bytes = self.events = 0
         self.results: dict[int, MacroSelection] = {}
+        self.query_offsets = query_offsets or {}
+        self.file_results: dict[tuple[str, int], list[MacroSelection]] = {}
+        self.query_events: dict[tuple[str, int], list[int]] = {}
+        self.query_sequence = 0
+
+    def save_query(self, path: str, offset: int, active: bool | None) -> None:
+        """Retain per-visit declaration activity without conflating file offsets.
+
+        Parameters
+        ----------
+        path : str
+            Captured file owning the physical query.
+        offset : int
+            Original byte offset in that file.
+        active : bool | None
+            Activity under the current ordered include visit.
+
+        Returns
+        -------
+        None
+            Root queries retain their existing API; headers retain every visit.
+        """
+        selection = self.snapshot(active)
+        self.file_results.setdefault((path, offset), []).append(selection)
+        self.query_sequence += 1
+        self.query_events.setdefault((path, offset), []).append(self.query_sequence)
+        if len(self.stack) == 1:
+            self.results[offset] = selection
 
     def snapshot(self, active: bool | None) -> MacroSelection:
         """Freeze the current environment and ordered observations.
@@ -634,6 +668,7 @@ class _ContextWalk:
         """
         if path in self.environment.once:
             return
+        offsets = offsets or self.query_offsets.get(path, ())
         skipped = None
         if path in self.environment.maybe_once:
             skipped = self.environment.clone()
@@ -665,7 +700,7 @@ class _ContextWalk:
         query = 0
         for start, end, kind, payload in self.cache[path]:
             while query < len(offsets) and offsets[query] < start:
-                self.results[offsets[query]] = self.snapshot(active)
+                self.save_query(path, offsets[query], active)
                 query += 1
             if query < len(offsets) and start <= offsets[query] < end:
                 raise ValueError("macro query lies inside a preprocessing directive")
@@ -731,7 +766,7 @@ class _ContextWalk:
         if len(self.environment.bindings) + len(self.environment.uncertain) > 4096:
             raise ValueError("macro binding limit exceeded")
         while query < len(offsets):
-            self.results[offsets[query]] = self.snapshot(active)
+            self.save_query(path, offsets[query], active)
             query += 1
         self.stack.pop()
         if skipped is not None:

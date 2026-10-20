@@ -31,6 +31,9 @@ The opt-in `preprocessor_definitions` mapping supplies explicit initial macro
 states alongside existing contained include paths and
 namespace bindings. String values supply object replacements, `true` means a
 defined macro with replacement `1`, and `false` explicitly means undefined.
+The value `{ "defined": true }` records a known-defined macro whose replacement
+is unavailable. It can prove definedness, but cannot supply invented tokens or
+a numeric value. Missing initial states remain unknown.
 An absent mapping disables the new capability. Invalid keys, values or
 unsupported replacement syntax fail configuration explicitly.
 

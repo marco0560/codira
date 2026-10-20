@@ -15,10 +15,14 @@ from __future__ import annotations
 import pytest
 
 from codira_analyzer_cpp.cpp_macro_context import (
+    MacroBinding,
+    MacroOrigin,
     MacroSelection,
     _ContextWalk,
+    _Environment,
     _controlling_guard,
     _directives,
+    _merge,
     select_macro_environments,
 )
 from codira_analyzer_cpp.cpp_macro_expansion import (
@@ -47,6 +51,34 @@ def _end(
     return select_macro_environments(
         "main.cpp", (len(source),), {"main.cpp": source}, {}, initial or {}
     )[len(source)]
+
+
+def test_single_outcome_merge_preserves_independent_state() -> None:
+    """Copy one proven branch without rebuilding origins or sharing mutable state.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Bindings, uncertainty and once-state remain equal and independently owned.
+    """
+    original = _Environment(
+        {b"M": MacroBinding(_MacroDefinition(None, b"x"), (MacroOrigin(None, None),))},
+        {b"UNKNOWN"},
+        {"a.h"},
+        {"b.h"},
+    )
+    merged = _merge([original])
+    assert merged == original and merged is not original
+    merged.bindings.clear()
+    merged.uncertain.clear()
+    merged.once.clear()
+    merged.maybe_once.clear()
+    assert b"M" in original.bindings and original.uncertain == {b"UNKNOWN"}
+    assert original.once == {"a.h"} and original.maybe_once == {"b.h"}
 
 
 @pytest.mark.parametrize(

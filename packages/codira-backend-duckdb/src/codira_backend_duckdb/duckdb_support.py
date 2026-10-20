@@ -27,6 +27,8 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
+from codira.generated import generated_provenance_rows
+
 from codira.contracts import (
     BackendError,
     EmbeddingIndexingMetrics,
@@ -1361,6 +1363,49 @@ def _process_pending_embedding_rows(
     return (recomputed, reused)
 
 
+def _flush_generated_provenance(
+    conn: _DuckDBPersistenceConnection,
+    file_id: int,
+    rows: Sequence[tuple[str, str]],
+) -> None:
+    """Persist generated callable provenance through a columnar replacement scan.
+
+    Parameters
+    ----------
+    conn : _DuckDBPersistenceConnection
+        Open backend-owned transaction connection.
+    file_id : int
+        Reserved identity for the containing source file.
+    rows : collections.abc.Sequence[tuple[str, str]]
+        Stable callable identities and deterministic provenance JSON.
+
+    Returns
+    -------
+    None
+        Inserts all available records and unregisters the temporary Arrow view.
+    """
+    if not rows:
+        return
+    import pyarrow as pa
+
+    table = pa.table(
+        {
+            "file_id": pa.array([file_id] * len(rows), type=pa.int64()),
+            "stable_id": pa.array([row[0] for row in rows], type=pa.string()),
+            "payload": pa.array([row[1] for row in rows], type=pa.string()),
+        }
+    )
+    _flush_registered_arrow_table(
+        conn,
+        view_name="_codira_generated_provenance",
+        table=table,
+        insert_sql=(
+            "INSERT INTO artifact_provenance(file_id, stable_id, payload) "
+            "SELECT file_id, stable_id, payload FROM _codira_generated_provenance"
+        ),
+    )
+
+
 def _append_analysis_rows(
     conn: _DuckDBPersistenceConnection,
     root: Path,
@@ -1553,6 +1598,7 @@ def _append_analysis_rows(
     )
     _persist_class_artifacts(artifact_request)
     _persist_function_artifacts(artifact_request)
+    _flush_generated_provenance(conn, file_id, generated_provenance_rows(analysis))
     _persist_declaration_artifacts(artifact_request)
     _persist_import_artifacts(
         conn,
@@ -1973,5 +2019,6 @@ def _delete_indexed_file_data(
     conn.execute("DELETE FROM call_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM callable_ref_records WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM reference_scan_lines WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM artifact_provenance WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM files WHERE path = ?", (file_path,))
     conn.execute("DELETE FROM analysis_status WHERE path = ?", (file_path,))

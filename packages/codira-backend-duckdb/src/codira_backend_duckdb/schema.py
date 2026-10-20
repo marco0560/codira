@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 DDL: tuple[str, ...] = (
     "CREATE SEQUENCE IF NOT EXISTS files_id_seq START 1;",
@@ -37,6 +37,14 @@ DDL: tuple[str, ...] = (
         reliable_categories TEXT NOT NULL,
         omitted_categories TEXT NOT NULL,
         coverage_state TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS artifact_provenance (
+        file_id INTEGER NOT NULL,
+        stable_id TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        PRIMARY KEY(file_id, stable_id)
     );
     """,
     """
@@ -337,6 +345,7 @@ DDL: tuple[str, ...] = (
 )
 
 INDEX_DATA_TABLES: tuple[str, ...] = (
+    "artifact_provenance",
     "docstring_issues",
     "call_edges",
     "callable_refs",

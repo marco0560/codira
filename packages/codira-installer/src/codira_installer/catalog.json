@@ -273,6 +273,36 @@
             },
             "type": "object"
           },
+          "preprocessor_definitions": {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "defined": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "defined"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "description": "Opt-in bounded captured declaration-macro analysis. Strings are object replacements, true is 1, false is explicitly undefined, and {defined: true} supplies opaque definedness. Missing names remain unknown.",
+            "maxProperties": 4096,
+            "propertyNames": {
+              "pattern": "^[A-Za-z_][A-Za-z_0-9]*$"
+            },
+            "type": "object"
+          },
           "use_leading_comments": {
             "default": true,
             "type": "boolean"

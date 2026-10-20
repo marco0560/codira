@@ -107,8 +107,9 @@ def _plugin_config_sections(plugins: Mapping[str, object]) -> str:
     sections: list[str] = []
     for key in _ordered_plugin_config_keys(plugins):
         section = _require_table(plugins[key], key=f"plugins.{key}")
-        body = tomlkit.dumps(_toml_table_from_mapping(section)).strip()
-        sections.append(f"[plugins.{key}]\n{body}" if body else f"[plugins.{key}]")
+        # Serialize the full table path so nested options stay inside the plugin.
+        body = tomlkit.dumps({"plugins": {key: section}}).strip()
+        sections.append(body)
     return "\n\n".join(sections)
 
 

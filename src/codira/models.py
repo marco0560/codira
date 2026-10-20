@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from codira.generated import GeneratedCallableProvenance
+
 CallKind = Literal["name", "attribute", "unresolved"]
 CallableReferenceKind = Literal[
     "mapping_value",
@@ -96,6 +98,13 @@ class OverloadArtifact:
         Inclusive last source line when reported by the parser.
     docstring : str | None
         Overload docstring when present.
+    generated : codira.generated.GeneratedCallableProvenance | None, optional
+        Generated declaration evidence, distinct from physical source spelling.
+
+    Returns
+    -------
+    None
+        Immutable overload metadata.
     """
 
     stable_id: str
@@ -105,6 +114,8 @@ class OverloadArtifact:
     lineno: int
     end_lineno: int | None
     docstring: str | None
+
+    generated: GeneratedCallableProvenance | None = None
 
 
 @dataclass(frozen=True)
@@ -344,6 +355,8 @@ class FunctionArtifact:
         Explicit class owner for a method whose declaration lives in another file.
     owner_stable_id : str | None, optional
         Proven declaration identity of that owner when uniquely known.
+    generated : codira.generated.GeneratedCallableProvenance | None, optional
+        Generated declaration evidence, distinct from physical source spelling.
 
     Returns
     -------
@@ -371,6 +384,7 @@ class FunctionArtifact:
     overloads: tuple[OverloadArtifact, ...] = ()
     owner_name: str | None = None
     owner_stable_id: str | None = None
+    generated: GeneratedCallableProvenance | None = None
 
     def logical_name(self, *, class_name: str | None = None) -> str:
         """

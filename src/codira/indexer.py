@@ -45,6 +45,8 @@ from codira.config import (
     DEFAULT_EMBEDDING_INDEX_MODE,
     IndexConcurrencyConfig,
     load_effective_config,
+    override_repo_config_path,
+    repo_config_path,
     with_effective_config_cache,
 )
 from codira.contracts import (
@@ -117,6 +119,7 @@ _ANALYZER_COVERAGE_ROOTS: dict[str, tuple[str, ...]] = {
 }
 _PROCESS_ANALYSIS_ROOT: Path | None = None
 _PROCESS_WORKER_ANALYZERS: list[LanguageAnalyzer] | None = None
+_PROCESS_ANALYSIS_CONFIG: Path | None = None
 __all__ = [
     "PendingEmbeddingRow",
     "StoredEmbeddingRow",
@@ -929,7 +932,9 @@ def _analyze_index_task(
     )
 
 
-def _initialize_process_analysis_worker(root: Path) -> None:
+def _initialize_process_analysis_worker(
+    root: Path, selected_config: Path | None = None
+) -> None:
     """
     Configure one reusable analyzer set for a process-pool worker.
 
@@ -937,6 +942,8 @@ def _initialize_process_analysis_worker(root: Path) -> None:
     ----------
     root : pathlib.Path
         Repository root whose configuration is loaded in the worker.
+    selected_config : pathlib.Path | None, optional
+        Caller-selected repository configuration, including CLI overrides.
 
     Returns
     -------
@@ -944,9 +951,11 @@ def _initialize_process_analysis_worker(root: Path) -> None:
         Worker-global analysis state is initialized for subsequent tasks.
     """
 
-    global _PROCESS_ANALYSIS_ROOT, _PROCESS_WORKER_ANALYZERS
+    global _PROCESS_ANALYSIS_ROOT, _PROCESS_WORKER_ANALYZERS, _PROCESS_ANALYSIS_CONFIG
     _PROCESS_ANALYSIS_ROOT = root
-    _PROCESS_WORKER_ANALYZERS = active_language_analyzers(root=root)
+    _PROCESS_ANALYSIS_CONFIG = selected_config
+    with override_repo_config_path(selected_config):
+        _PROCESS_WORKER_ANALYZERS = active_language_analyzers(root=root)
 
 
 def _analyze_index_task_in_process_worker(task: _AnalysisTask) -> _AnalysisTaskResult:
@@ -972,7 +981,10 @@ def _analyze_index_task_in_process_worker(task: _AnalysisTask) -> _AnalysisTaskR
     if _PROCESS_ANALYSIS_ROOT is None or _PROCESS_WORKER_ANALYZERS is None:
         msg = "Process analysis worker was not initialized."
         raise RuntimeError(msg)
-    return _analyze_index_task(task, _PROCESS_ANALYSIS_ROOT, _PROCESS_WORKER_ANALYZERS)
+    with override_repo_config_path(_PROCESS_ANALYSIS_CONFIG):
+        return _analyze_index_task(
+            task, _PROCESS_ANALYSIS_ROOT, _PROCESS_WORKER_ANALYZERS
+        )
 
 
 def _resolve_index_concurrency(
@@ -1118,7 +1130,7 @@ def _collect_indexed_file_analyses(
             max_workers=effective.workers,
             mp_context=get_context("spawn"),
             initializer=_initialize_process_analysis_worker,
-            initargs=(root,),
+            initargs=(root, repo_config_path(root)),
         ) as executor:
             results = list(executor.map(_analyze_index_task_in_process_worker, tasks))
     else:
