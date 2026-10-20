@@ -1,5 +1,11 @@
 # LLVM libc declaration-macro expansion — 2026-10-20
 
+This historical token-only phase records commit `7927dd7`. The operator has
+since accepted option A in [ADR-034](../adr/ADR-034-bounded-cpp-declaration-macro-analysis.md);
+the [reaching-context report](analyzer-parser-diagnostics-cpp-macro-context-2026-10-20.md)
+records the next implementation phase. Its current ledger totals supersede the
+historical totals below.
+
 The shared function-wrapper correction now has a tested token-expansion
 foundation in the C++ plugin. This is an intermediate implementation step,
 not a corpus qualification: classification v37 remains **2,672 verified fixes,
@@ -77,6 +83,6 @@ The existing [wrapper diagnosis](analyzer-parser-diagnostics-libc-wrapper-readin
 records the native symbol differences and why both packaging branches are
 required. Integration would cross ADR-030's shared syntax-only macro policy.
 The [capability proposal](analyzer-cpp-expansion-decision-proposal-2026-10-20.md)
-records the unresolved operator decision: an explicit opt-in C++ expansion
-capability under a new ADR, or retaining the accepted indexing boundary and
-prioritizing another shared cause. No integration is authorized by this report.
+records the options presented at that time. The operator subsequently accepted
+option A, authorizing integration under ADR-034. This earlier token-only report
+does not itself establish integration or qualified corpus fixes.

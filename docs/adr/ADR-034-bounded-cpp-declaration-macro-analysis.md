@@ -28,7 +28,7 @@ external process or mandatory compiler dependency is added to indexing.
 ### Explicit inputs and active definitions
 
 The opt-in `preprocessor_definitions` mapping supplies explicit initial macro
-states alongside existing contained include paths, preincluded headers and
+states alongside existing contained include paths and
 namespace bindings. String values supply object replacements, `true` means a
 defined macro with replacement `1`, and `false` explicitly means undefined.
 An absent mapping disables the new capability. Invalid keys, values or

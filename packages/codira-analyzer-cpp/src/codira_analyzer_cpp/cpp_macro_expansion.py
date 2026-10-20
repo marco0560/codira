@@ -83,6 +83,9 @@ class _MacroDefinition:
         Replacement-list bytes from the selected source definition.
     variadic : bool, optional
         Whether a function macro accepts a trailing ``__VA_ARGS__`` argument.
+    opaque : bool, optional
+        Whether only definedness is known. Such a macro cannot be expanded;
+        parameters and replacement are not interpreted as a selected template.
 
     Returns
     -------
@@ -93,6 +96,7 @@ class _MacroDefinition:
     parameters: tuple[bytes, ...] | None
     replacement: bytes
     variadic: bool = False
+    opaque: bool = False
 
 
 def _macro_tokens(source: bytes, *, offset: int = 0) -> tuple[_MacroToken, ...]:
@@ -307,6 +311,8 @@ class _MacroExpander:
             parameters = definition.parameters
             if not _IDENTIFIER.fullmatch(name) or name == b"__VA_ARGS__":
                 raise ValueError("invalid macro name")
+            if definition.opaque:
+                continue
             if definition.variadic and parameters is None:
                 raise ValueError("an object macro cannot be variadic")
             if parameters is not None and (
@@ -386,6 +392,8 @@ class _MacroExpander:
             if definition is None or name in token.unavailable:
                 index += 1
                 continue
+            if definition.opaque:
+                raise ValueError("macro replacement is unavailable")
             end = index
             arguments: list[tuple[_MacroToken, ...]] = []
             separators: tuple[_MacroToken, ...] = ()
