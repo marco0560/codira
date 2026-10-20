@@ -2876,10 +2876,28 @@ def _attach_external_method_owners(
     -------
     AnalysisResult
         Methods retain source spans and refer to the original header declaration.
+        Header owner discovery is skipped when source namespace or alias
+        evidence already excludes every requested owner. Callable identities
+        still receive the same final disambiguation.
     """
     if not any("::" in function.name for function in result.functions):
         return result
-    owners = _external_method_owners(context, root, result)
+    requested_owners = {
+        _qualified_name(_split_qualified_name(function.name)[:-1])
+        for function in result.functions
+    }
+    source_conflicts = {
+        _qualified_name(_split_qualified_name(name)[:end])
+        for name in _external_owner_alternatives(result)
+        for end in range(1, len(_split_qualified_name(name)) + 1)
+    }
+    # Header alternatives can only add conflicts, never remove source evidence.
+    # Include unqualified functions above so mixed inputs retain header lookup.
+    owners = (
+        {}
+        if requested_owners <= source_conflicts
+        else _external_method_owners(context, root, result)
+    )
     functions: list[FunctionArtifact] = []
     for function in result.functions:
         parts = _split_qualified_name(function.name)
