@@ -1,6 +1,10 @@
 # Proposed C++ declaration-macro capability — 2026-10-20
 
-Status: **proposed; integration is awaiting the operator's decision**.
+Status: **option A accepted by the operator on 2026-10-20**.
+
+[ADR-034](../adr/ADR-034-bounded-cpp-declaration-macro-analysis.md) records the
+authorized capability and validation contract. Implementation and corpus
+qualification remain open; acceptance alone adds no verified fixes.
 
 [ADR-030](../adr/ADR-030-syntax-only-macro-analysis.md) adopts a shared
 syntax-only macro policy and says not to broaden it silently in a language
