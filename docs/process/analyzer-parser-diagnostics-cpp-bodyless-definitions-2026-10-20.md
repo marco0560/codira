@@ -2,8 +2,9 @@
 
 ## Shared issue
 
-The starting ledger remains classification v36: **2,669 verified fixes, 453
-separated, 22,640 open**, or 12.12% accounted. This batch is not admitted yet.
+The starting ledger was classification v36: **2,669 verified fixes, 453
+separated, 22,640 open**, or 12.12% accounted. Classification v37 now records **2,672 verified fixes, 453 separated and 22,637
+open** (C 5,725; C++ 16,912), or **12.13% accounted**. Source commit: `be9b334`.
 
 The analyzer distinguished definitions only by the presence of a compound body.
 Valid `= default` and `= delete` definitions therefore had no end position and
@@ -82,8 +83,8 @@ expected contrast, not a waived failure.
 Three pending LLVM headers fully qualify: `llvm/ABI/TargetInfo.h`,
 `llvm/Analysis/SimplifyQuery.h` and `llvm/IR/DiagnosticPrinter.h`. These are
 measured in the source-generated C++17 LLVM context; their original minimum
-language version is not inferred. Admission follows the source commit. The 20
-existing rows need updated source/native evidence, not another fixed-file count.
+language version is not inferred. Classification v37 admits these three paths and updates evidence for 20 existing
+rows; those updates do not add another fixed-file count.
 
 Six newly complete outputs received fresh native captures: four were previously
 partial trees and two previously hit execution limits. All six remain held for
@@ -125,3 +126,20 @@ proves the 61 exact end-line additions and otherwise identical output;
 payloads against their original admission hashes. The initially incomplete
 profile audit and fresh `cpp22-bodyless-stack-context-r1/` plus grading retain
 how the historical include-root variant was resolved.
+
+## Final ledger and retention audit
+
+`cpp22-bodyless-admission-r1.json` binds the three new fixes and 20 updated
+qualifications to source commit `be9b334`, native/source/tool/dependency hashes
+and the successful full gate. The audit in `cpp22-bodyless-ledger-invariants-r1.json`
+proves that exactly 23 ledger rows change and all other 25,739 rows are unchanged.
+All 438 prior qualifications preserve their actual recorded compiler mode and
+include profile, rather than merely matching by source filename.
+
+Complete results/groups are `classification-v37.jsonl/.csv` and
+`classification-summary-v37.json`. The new fixes are C++, measured in C++17 mode,
+from the LLVM repository. No malformed/future-syntax separation changes in this
+batch; the existing 453-file language/version/repository separation remains.
+The examined successful gate session and its three temporary validation files
+were cleaned; the compact validation receipt and all failed/native/campaign
+evidence remain retained. Main is unchanged.
