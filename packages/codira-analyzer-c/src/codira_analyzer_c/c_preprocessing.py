@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from tree_sitter import Node, Parser
 
 from .c_record_prefixes import record_prefix_definitions, record_prefix_source
+from .c_statement_macros import statement_macro_source
 
 
 _DECLARATION_SPECIFIERS = frozenset(
@@ -825,7 +826,7 @@ def _complex_source(
 def _parse_c_source(
     source: bytes, parser: Parser, included_sources: tuple[tuple[bytes, int], ...] = ()
 ) -> Node:
-    """Recover C guards, compiler pragmas and source-local annotation macros.
+    """Recover guards, pragmas, annotations and proven loop-prefix syntax.
 
     Parameters
     ----------
@@ -845,6 +846,8 @@ def _parse_c_source(
         original provider treats their spelling as an ordinary identifier.
         Captured contained headers can prove macros; no compiler or build tool
         is invoked. Plain data-field prefixes affect no emitted field category.
+        Loop-prefix views retain original coordinates; callers must preserve
+        their written macro invocation when extracting source calls.
     """
     original = parser.parse(source).root_node
     pragma_source = _pragma_source(source, original)
@@ -869,8 +872,6 @@ def _parse_c_source(
     records = record_prefix_definitions(
         definitions.replacements, definitions.first_offsets, definitions.unsafe, parser
     )
-    if not annotations and not records:
-        return fallback
     protected = _hash_lines(working, basis)
     projected = bytearray(record_prefix_source(working, basis, records, protected))
     pending = [basis]
@@ -900,9 +901,12 @@ def _parse_c_source(
         pending.extend(
             child for child in node.children if child != condition and child != name
         )
-    if projected == working:
+    view = bytes(projected)
+    loop_basis = basis if view == working else parser.parse(view).root_node
+    view = statement_macro_source(view, loop_basis, parser, included_sources)
+    if view == working:
         return fallback
-    recovered = parser.parse(bytes(projected)).root_node
+    recovered = parser.parse(view).root_node
     return fallback if recovered.has_error else recovered
 
 

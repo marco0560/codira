@@ -50,6 +50,7 @@ from .c_preprocessing import (
     _original_declaration_start,
     _parse_c_source,
 )
+from .c_statement_macros import projected_statement_macro_name
 
 from codira.contracts import (
     AnalyzerCapabilityDeclaration,
@@ -932,16 +933,28 @@ def _extract_calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
     Returns
     -------
     tuple[codira.models.CallSite, ...]
-        Call records in deterministic source order.
+        Call records in deterministic source order, including original macro
+        invocations retained beside proven loop-prefix grammar projections.
     """
     if body is None:
         return ()
 
     calls: list[CallSite] = []
     for node in _named_descendants(body):
-        if node.type != "call_expression":
-            continue
-        call = _call_site_from_expression(node, source)
+        call = None
+        if node.type == "call_expression":
+            call = _call_site_from_expression(node, source)
+        else:
+            macro = projected_statement_macro_name(node, source)
+            if macro is not None:
+                call = CallSite(
+                    kind="name",
+                    target=macro,
+                    lineno=node.start_point.row + 1,
+                    col_offset=node.start_point.column,
+                    external_target_kind=_c_external_target_kind(macro),
+                    external_target_name=macro,
+                )
         if call is not None:
             calls.append(call)
     return tuple(calls)
@@ -2049,7 +2062,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "17"
+    version = "18"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 

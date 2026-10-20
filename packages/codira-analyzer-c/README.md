@@ -75,3 +75,23 @@ Conflicting alternatives, undefinitions, recursive macro inputs, multi-argument
 wrappers and larger expressions retain the original extraction result. This
 changes parameter names only; signatures and call coordinates retain the written
 source.
+
+## Statement-shaped loop macros
+
+A source-defined function macro that supplies one or more complete `for` headers
+before a written statement can recover that statement's grammar. The analyzer
+requires reaching definitions in the source or configured contained headers,
+compatible alternatives and matching fixed arity. A forwarding function macro
+can inherit the same proven statement role.
+
+The written macro invocation remains a call at its original position. Calls in
+its arguments and following body also remain. Replacement-body variables and
+helper calls are not emitted, and no macro replacement is expanded or compilation
+condition selected. Original signatures, source bytes and line/column positions
+are preserved.
+
+This recovery currently requires names at least five bytes long, non-variadic
+parameters, balanced literal loop headers and a completely clean final tree.
+Resolution is bounded to eight loop headers per replacement and 64 alias passes.
+Missing or late definitions, undefinitions, incompatible alternatives, keyword
+overrides, invalid arity and unrelated parser errors retain partial status.
