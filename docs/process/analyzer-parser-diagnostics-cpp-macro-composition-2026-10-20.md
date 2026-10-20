@@ -6,10 +6,11 @@ The original benchmark and corpus have not been modified.
 
 ## Verified ledger
 
-The authoritative ledger remains `classification-v28`: 2,231 verified fixes,
-453 separately classified paths and 23,078 open paths (C: 5,725; C++: 17,353).
-That accounts for 10.42% of the original 25,762 diagnostic paths.
-No provisional results below have been admitted to that ledger.
+Ledger `classification-v29` admits **73 newly verified original libc++ files**:
+**2,304 verified fixes, 453 separated files and 23,005 open files**
+(C: 5,725; C++: 17,280). That accounts for **10.70%** of the original
+25,762 diagnostic paths. All earlier rows outside this 73-file admission remain
+unchanged. The full correction objective remains open.
 The language/version/repository separation report remains
 [the preceding classification report](analyzer-parser-diagnostics-verify-prefixes-2026-10-19.md).
 No new malformed or future-syntax classifications were made in this batch.
@@ -32,6 +33,7 @@ positions remain covered by regression tests.
 Unbound uppercase namespaces, undefinitions, cycles, incompatible alternatives,
 late dependencies, arity failures, type/linkage changes and keyword overrides
 remain held. This is bounded macro recovery, not conditional branch evaluation.
+Implementation commit `ebf61c5` is on the dedicated branch.
 The distribution metadata advances the C++ plugin to 2.0.15 and the official
 bundle to 2.0.40. No release or merge has been performed.
 
@@ -52,7 +54,9 @@ Durable evidence is under the worktree's
 | Composed namespace native controls | Six qualified cases; 18 callable identities, six record identities, 12 calls | `cpp-composed-namespaces-native-controls-r3` |
 | Namespace receipt controls | Positive retained; five altered inputs/ownership cases rejected | `cpp-namespace-receipt-controls-r1` |
 | Spread of unchanged originals | 10/16 parser-clean, four timeouts, two partial | `cpp-libcxx-recovery-probe-r4` |
-| Fast native batch | 63/63 syntax-clean; 16 currently match all artifact checks | `cpp-libcxx-fast-native-r1`, `cpp-libcxx-fast-grading-r2` |
+| Fast native batches | 163/163 syntax-clean; 71 match all artifact checks before overlap with the initial spread | `cpp-libcxx-fast-native-r1/r2`, `cpp-libcxx-fast-grading-r2/r3` |
+| Source-bound admission | 73 unique originals admitted to v29 | `cpp-libcxx-composition-admission-r2.json` |
+| Earlier qualified regression spread | All 12 complete payloads byte-identical | `cpp19-previous-qualified-r2` |
 | Full repository gate | 2,276 passed, three skipped, 87% coverage; fresh 860-file index, zero failures/issues | `cpp-libcxx-validation-receipt-r1.json` |
 
 Native namespace receipts bind target invocation tokens and preprocessing events
@@ -69,10 +73,22 @@ directory. That was an execution-context failure, not evidence of malformed C++.
 Legacy `__cxx03` headers require separate language/include-context qualification;
 failed modern-mode probes do not classify them as malformed or future syntax.
 
-Across the initial spread and fast batch there are 20 provisional matching
-paths. The repository gate and a 12-file spread of earlier qualified namespace,
-template-call and specifier results pass; all 12 payloads are byte-identical.
-The new matches still await final admission checks and a ledger update. Native syntax success alone is insufficient.
+The initial spread and two fast batches yield 73 unique admitted originals.
+Admission rechecks source and captured header identities, exact product payloads,
+native AST and preprocessing digests, tool binaries, native spelling origins,
+the source-bound gate receipt and committed C++19 implementation. The 12-file
+spread of earlier qualified namespace, template-call and specifier results is
+byte-identical. Native syntax success alone remains insufficient.
+
+| Language | Native validation mode | Repository | Newly admitted files |
+| --- | --- | --- | ---: |
+| C++ | C++23 | LLVM / libc++ | 72 |
+| C++ | C++03 | LLVM / libc++ | 1 |
+
+Native modes are validation contexts, not inferred minimum source versions.
+Ownership comparisons normalize template arguments in qualified type components;
+complete native signatures, attributes, data fields, ABI/runtime behavior and
+original project-harness equivalence remain outside this qualification.
 
 ## Work in progress
 
