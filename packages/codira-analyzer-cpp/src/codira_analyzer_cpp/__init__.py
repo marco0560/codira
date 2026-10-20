@@ -46,6 +46,7 @@ from .cpp_namespace_bindings import (
 )
 from .cpp_projection import SyntaxNode as Node, _ProjectedNode
 
+from .cpp_typedefs import _typedef_name_nodes
 from .cpp_syntax import (
     _canonical_node_text,
     _class_stable_id,
@@ -1843,6 +1844,41 @@ class _CppAnalysisBuilder:
             )
         )
 
+    def _handle_typedef_definition(
+        self,
+        node: Node,
+        *,
+        namespace: Sequence[str],
+        docstring: str | None,
+    ) -> None:
+        """Record every written alias in one module or class typedef.
+
+        Parameters
+        ----------
+        node : SyntaxNode
+            Complete typedef declaration, including its original signature.
+        namespace : collections.abc.Sequence[str]
+            Enclosing namespace and class path.
+        docstring : str | None
+            Leading declaration documentation when present.
+
+        Returns
+        -------
+        None
+            Qualified typedef artifacts are stored without visiting local scopes.
+        """
+        for name in _typedef_name_nodes(node):
+            self._record_declaration(
+                _build_type_declaration(
+                    "typedef",
+                    _qualified_name((*namespace, _node_text(name, self.source))),
+                    node,
+                    self.source,
+                    owner_id=self.owner_id,
+                    docstring=docstring,
+                )
+            )
+
     def _handle_alias_declaration(
         self,
         node: Node,
@@ -2039,6 +2075,14 @@ class _CppAnalysisBuilder:
                 if child.type == "template_declaration"
                 else child
             )
+            if candidate is not None and candidate.type == "type_definition":
+                self._dispatch_node(
+                    candidate,
+                    namespace=(*namespace, class_name),
+                    docstring=child_docstring,
+                    signature_node=child,
+                )
+                continue
             if candidate is not None and candidate.type == "alias_declaration":
                 self._handle_alias_declaration(
                     candidate,
@@ -2230,7 +2274,20 @@ class _CppAnalysisBuilder:
         if node.type == "class_specifier":
             self._handle_class_specifier(node, namespace=namespace, docstring=docstring)
             return
-        if node.type in {"declaration", "field_declaration", "type_definition"}:
+        if node.type == "type_definition":
+            self._handle_typedef_definition(
+                node, namespace=namespace, docstring=docstring
+            )
+            declared_type = _declared_type_specifier(node)
+            if declared_type is not None:
+                self._dispatch_node(
+                    declared_type,
+                    namespace=namespace,
+                    docstring=docstring,
+                    signature_node=signature_node,
+                )
+            return
+        if node.type in {"declaration", "field_declaration"}:
             declared_type = _declared_type_specifier(node)
             if declared_type is not None:
                 self._dispatch_node(
@@ -2741,7 +2798,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "20"
+    version = "21"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
