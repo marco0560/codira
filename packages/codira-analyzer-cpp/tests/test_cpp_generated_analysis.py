@@ -13,6 +13,7 @@ None
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 
 import pytest
 
@@ -173,6 +174,164 @@ def test_later_function_declaration_cannot_supply_earlier_decltype(
     path.write_bytes(_SOURCE.replace(b"\n}\n", b"\ndouble f(double x);\n}\n"))
     result = _analyzer(True).analyze_file(path, tmp_path)
     assert not result.index_symbols and result.status is not None
+
+
+@pytest.mark.parametrize("redefine", [False, True])
+def test_header_type_macros_use_their_earlier_state_and_origins(
+    tmp_path: Path, redefine: bool
+) -> None:
+    """Prove expanded types from earlier macro bindings despite later changes.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Synthetic contained repository.
+    redefine : bool
+        Whether the root changes the underlying type macro after the header.
+
+    Returns
+    -------
+    None
+        All generated roles retain the earlier chained type macro origins.
+    """
+    header = (
+        _DEFINITIONS
+        + b"#define BASE double\n#define RET BASE\n#define ARG BASE\n"
+        + b"namespace NS { RET f(ARG x); }\n#endif\n"
+    )
+    (tmp_path / "h.h").write_bytes(header)
+    source = _SOURCE
+    if redefine:
+        source = source.replace(
+            b"namespace NS", b"#undef BASE\n#define BASE int\nnamespace NS"
+        )
+    path = tmp_path / "main.cpp"
+    path.write_bytes(source)
+    result = _analyzer(True).analyze_file(path, tmp_path)
+    assert result.index_symbols and result.status is None
+    names = {function.name: function for function in result.functions}
+    implementation = names["ns::impl_f"]
+    for artifact in (implementation, implementation.overloads[0], names["ns::f"]):
+        assert artifact.generated is not None
+        assert artifact.generated.parameter_types == ("double",)
+        inputs = {
+            item.name: item
+            for item in artifact.generated.inputs
+            if item.name in {"BASE", "RET", "ARG"}
+        }
+        assert set(inputs) == {"BASE", "RET", "ARG"}
+        for item in inputs.values():
+            assert item.source_path == "h.h"
+            assert item.source_sha256 == hashlib.sha256(header).hexdigest()
+            assert item.span is not None
+        base_span = inputs["BASE"].span
+        assert base_span is not None
+        first, last = base_span
+        assert header[first:last].strip() == b"#define BASE double"
+
+
+def test_equivalent_header_type_proofs_preserve_distinct_macro_origins(
+    tmp_path: Path,
+) -> None:
+    """Keep both definitions when repeated declarations prove one callable type.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Synthetic contained repository.
+
+    Returns
+    -------
+    None
+        Equal expanded types do not erase different contributing source origins.
+    """
+    header = (
+        _DEFINITIONS
+        + b"#define RET double\nnamespace NS { RET f(RET x); }\n"
+        + b"#undef RET\n#define RET double\nnamespace NS { RET f(RET x); }\n"
+        + b"#endif\n"
+    )
+    (tmp_path / "h.h").write_bytes(header)
+    path = tmp_path / "main.cpp"
+    path.write_bytes(_SOURCE)
+    result = _analyzer(True).analyze_file(path, tmp_path)
+    assert result.index_symbols and result.status is None
+    for function in result.functions:
+        assert function.generated is not None
+        origins = [item for item in function.generated.inputs if item.name == "RET"]
+        assert len(origins) == 2
+        assert origins[0].span != origins[1].span
+        assert all(item.source_path == "h.h" for item in origins)
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        b"#define RET int\nnamespace NS { RET f(double x); }",
+        b"#define ARG int\nnamespace NS { double f(ARG x); }",
+        b"#if UNKNOWN\n#define RET double\n#else\n#define RET int\n#endif\n"
+        b"namespace NS { RET f(double x); }",
+        b"#define RET BASE\n#if UNKNOWN\n#define BASE double\n"
+        b"#else\n#define BASE int\n#endif\nnamespace NS { RET f(double x); }",
+    ],
+)
+def test_incompatible_or_uncertain_expanded_header_types_remain_held(
+    tmp_path: Path, declaration: bytes
+) -> None:
+    """Reject incompatible types and branch-dependent type replacements.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Synthetic contained repository.
+    declaration : bytes
+        Header fragment without a compatible, unambiguous expanded type.
+
+    Returns
+    -------
+    None
+        The analyzer preserves an explicit partial result.
+    """
+    (tmp_path / "h.h").write_bytes(_DEFINITIONS + declaration + b"\n#endif\n")
+    path = tmp_path / "main.cpp"
+    path.write_bytes(_SOURCE)
+    result = _analyzer(True).analyze_file(path, tmp_path)
+    assert not result.index_symbols and result.status is not None
+    assert any(d.category == "macro_context" for d in result.status.diagnostics)
+
+
+def test_opaque_header_type_macro_remains_held(tmp_path: Path) -> None:
+    """Reject a required type macro with known definedness but no replacement.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Synthetic contained repository.
+
+    Returns
+    -------
+    None
+        Definedness alone does not prove the generated callable's type.
+    """
+    (tmp_path / "h.h").write_bytes(
+        _DEFINITIONS + b"namespace NS { RET f(double x); }\n#endif\n"
+    )
+    path = tmp_path / "main.cpp"
+    path.write_bytes(_SOURCE)
+    analyzer = CppAnalyzer()
+    analyzer.configure(
+        {
+            "preprocessor_definitions": {
+                "H": False,
+                "PUBLIC": True,
+                "NS": "ns",
+                "RET": {"defined": True},
+            }
+        }
+    )
+    result = analyzer.analyze_file(path, tmp_path)
+    assert not result.index_symbols and result.status is not None
+    assert any(d.category == "macro_context" for d in result.status.diagnostics)
 
 
 @pytest.mark.parametrize(

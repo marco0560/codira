@@ -569,14 +569,18 @@ def _physical_position(
 
 
 def _inputs(
-    expansion: _Expansion, captures: Mapping[str, bytes]
+    selection: MacroSelection,
+    used: frozenset[bytes],
+    captures: Mapping[str, bytes],
 ) -> tuple[MacroInputProvenance, ...]:
     """Bind actually used replacement templates to all agreed captured origins.
 
     Parameters
     ----------
-    expansion : _Expansion
-        Selected bindings and names actually substituted.
+    selection : MacroSelection
+        Bindings at the source position supplying replacement tokens.
+    used : frozenset[bytes]
+        Names actually substituted at that position.
     captures : Mapping[str, bytes]
         Frozen source bytes keyed by contained relative path.
 
@@ -585,9 +589,9 @@ def _inputs(
     tuple[MacroInputProvenance, ...]
         Profile or physical directive evidence, with exact definition digests.
     """
-    bindings = dict(expansion.selection.bindings)
+    bindings = dict(selection.bindings)
     result = []
-    for name in sorted(expansion.used):
+    for name in sorted(used):
         binding = bindings[name]
         encoded = (
             json.dumps(
@@ -617,6 +621,87 @@ def _inputs(
     return tuple(result)
 
 
+@dataclass(frozen=True)
+class _CallableTypeProof:
+    """Retain expanded callable types and the earlier macros proving them.
+
+    Parameters
+    ----------
+    return_type : str
+        Expanded return type spelling.
+    parameter_types : tuple[str, ...]
+        Expanded parameter type spellings without parameter names.
+    inputs : tuple[MacroInputProvenance, ...]
+        Contributing definitions at the earlier declaration positions.
+
+    Returns
+    -------
+    None
+        Immutable type evidence independent of later macro redefinitions.
+    """
+
+    return_type: str
+    parameter_types: tuple[str, ...]
+    inputs: tuple[MacroInputProvenance, ...]
+
+
+def _declaration_type_proof(
+    node: SyntaxNode,
+    source: bytes,
+    selection: MacroSelection,
+    captures: Mapping[str, bytes],
+) -> _CallableTypeProof:
+    """Expand callable type fragments with their declaration-time macro state.
+
+    Parameters
+    ----------
+    node : SyntaxNode
+        Earlier active callable declaration.
+    source : bytes
+        Coordinate-aligned captured declaration source.
+    selection : MacroSelection
+        Reaching definitions at this declaration, before later changes.
+    captures : Mapping[str, bytes]
+        Frozen source bytes for definition provenance.
+
+    Returns
+    -------
+    _CallableTypeProof
+        Exact expanded spellings and contributing macro origins.
+
+    Raises
+    ------
+    ValueError
+        If types are unavailable or depend on uncertain or opaque replacements.
+    """
+    from .cpp_macro_projection import _render_macro_tokens
+
+    type_node = node.child_by_field_name("type")
+    if type_node is None:
+        raise ValueError("required callable return type is unavailable")
+    definitions = {
+        name: binding.definition
+        for name, binding in selection.bindings
+        if binding.definition is not None
+    }
+    expander = _MacroExpander(definitions)
+    expanded = []
+    for fragment in (_node_text(type_node, source), *_parameter_types(node, source)):
+        tokens = _macro_tokens(fragment.encode())
+        if any(token.spelling in selection.uncertain for token in tokens):
+            raise ValueError("required callable type has uncertain macro state")
+        tokens = expander.expand(tokens)
+        if any(token.spelling in selection.uncertain for token in tokens):
+            raise ValueError("expanded callable type has uncertain macro state")
+        rendered, _ = _render_macro_tokens(tokens)
+        expanded.append(_normalize_signature(rendered.decode()))
+    return _CallableTypeProof(
+        expanded[0],
+        tuple(expanded[1:]),
+        _inputs(selection, frozenset(expander.used), captures),
+    )
+
+
 def _header_callable_types(
     analyzer: CppAnalyzer,
     path: Path,
@@ -626,7 +711,7 @@ def _header_callable_types(
     resolutions: Mapping[tuple[str, str, bool], str | None],
     expansions: tuple[_Expansion, ...],
     references: frozenset[str],
-) -> dict[tuple[int, str], tuple[str, tuple[str, ...]]]:
+) -> dict[tuple[int, str], _CallableTypeProof]:
     """Prove unique function types from active declarations reaching each invocation.
 
     Parameters
@@ -646,8 +731,8 @@ def _header_callable_types(
 
     Returns
     -------
-    dict[tuple[int, str], tuple[str, tuple[str, ...]]]
-        Proven return/parameter spellings at each original invocation offset.
+    dict[tuple[int, str], _CallableTypeProof]
+        Expanded types and earlier macro origins at each invocation offset.
 
     Raises
     ------
@@ -697,6 +782,7 @@ def _header_callable_types(
         before = walk.query_events[key, expansion.span[0]][0]
         for reference in references:
             alternatives = set()
+            origins: list[MacroInputProvenance] = []
             for owner, node, name, raw in declarations:
                 for selection, event in zip(
                     walk.file_results.get((owner, node.start_byte), ()),
@@ -713,20 +799,17 @@ def _header_callable_types(
                         raise ValueError(
                             "required callable declaration has unknown activity"
                         )
-                    type_node = node.child_by_field_name("type")
-                    if type_node is None:
-                        raise ValueError("required callable return type is unavailable")
-                    alternatives.add(
-                        (
-                            _normalize_signature(_node_text(type_node, raw)),
-                            _parameter_types(node, raw),
-                        )
-                    )
+                    proof = _declaration_type_proof(node, raw, selection, captures)
+                    alternatives.add((proof.return_type, proof.parameter_types))
+                    origins.extend(proof.inputs)
             if len(alternatives) != 1:
                 raise ValueError(
                     "decltype requires a unique reaching function declaration"
                 )
-            result[expansion.span[0], reference] = alternatives.pop()
+            return_type, parameter_types = alternatives.pop()
+            result[expansion.span[0], reference] = _CallableTypeProof(
+                return_type, parameter_types, tuple(dict.fromkeys(origins))
+            )
     return result
 
 
@@ -838,6 +921,9 @@ def _finalize(
     )
     input_identity = captured_identity(context, analyzer.configuration_fingerprint)
     source_digest = hashlib.sha256(original).hexdigest()
+    type_inputs: dict[int, list[MacroInputProvenance]] = {}
+    for (offset, _), proof in types.items():
+        type_inputs.setdefault(offset, []).extend(proof.inputs)
 
     def provenance(
         expansion: _Expansion,
@@ -897,7 +983,12 @@ def _finalize(
             parent = parent.parent
         inputs = tuple(
             dict.fromkeys(
-                origin for item in related for origin in _inputs(item, captures)
+                [
+                    origin
+                    for item in related
+                    for origin in _inputs(item.selection, item.used, captures)
+                ]
+                + type_inputs.get(expansion.span[0], [])
             )
         )
         return GeneratedCallableProvenance(
@@ -1046,7 +1137,8 @@ def _finalize(
         raw = source[node.start_byte : node.end_byte]
         alias = re.search(rb'gnu\s*::\s*alias\s*\(\s*("(?:[^"\\]|\\.)*")\s*\)', raw)
         asm = re.search(rb'\basm\s*\(\s*("(?:[^"\\]|\\.)*")\s*\)', raw)
-        return_type, parameter_types = types[expansion.span[0], reference]
+        proof = types[expansion.span[0], reference]
+        return_type, parameter_types = proof.return_type, proof.parameter_types
         if alias is not None:
             aliases.append(
                 (expansion, node, qualified, parameter_types, json.loads(alias[1]))
