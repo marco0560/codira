@@ -33,6 +33,7 @@ import re
 
 import hashlib
 import json
+from bisect import bisect_right
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -61,6 +62,7 @@ from .cpp_syntax import (
     _function_stable_id,
     _module_name_for_path,
     _module_stable_id,
+    _new_parser,
     _node_text,
     _normalize_signature,
     _qualified_name,
@@ -883,7 +885,93 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     )
 
 
-def _extract_calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
+def _initializer_argument_calls(
+    body: Node, source: bytes, parameter_names: tuple[str, ...]
+) -> tuple[CallSite, ...]:
+    """Recover expression arguments when a value parameter excludes a prototype.
+
+    Parameters
+    ----------
+    body : Node
+        Function compound statement; nested scopes are not adapted.
+    source : bytes
+        Coordinate-aligned original source.
+    parameter_names : tuple[str, ...]
+        Explicit value parameters belonging to this function.
+
+    Returns
+    -------
+    tuple[CallSite, ...]
+        Nested argument calls at original byte positions. The declared variable
+        and synthetic expression wrapper never acquire call records.
+    """
+    if not parameter_names:
+        return ()
+    recovered: list[CallSite] = []
+    original_lines: list[int] | None = None
+    prefix = b"void __codira_probe() { __codira_probe"
+    for declaration in body.named_children:
+        if declaration.type != "declaration":
+            continue
+        declarator = declaration.child_by_field_name("declarator")
+        if declarator is None or declarator.type != "function_declarator":
+            continue
+        parameters = declarator.child_by_field_name("parameters")
+        if parameters is None:
+            continue
+        arguments = [n for n in parameters.named_children if n.type != "comment"]
+        if len(arguments) < 2 or arguments[0].type != "parameter_declaration":
+            continue
+        first = arguments[0]
+        written = [n for n in first.named_children if n.type != "comment"]
+        value = first.child_by_field_name("type")
+        if (
+            len(written) != 1
+            or value is None
+            or value.type != "type_identifier"
+            or _node_text(value, source) not in parameter_names
+        ):
+            continue
+        # A parameter cannot be redeclared as a type in this outermost block.
+        # Reparse only the proven initializer arguments, excluding its variable.
+        fragment = prefix + source[parameters.start_byte : parameters.end_byte]
+        fragment += b"; }"
+        root = _new_parser().parse(fragment).root_node
+        if root.has_error:
+            continue
+        fragment_lines = [0, *(i + 1 for i, byte in enumerate(fragment) if byte == 10)]
+        for node in _named_descendants(root):
+            if node.type != "call_expression" or node.start_byte < len(prefix):
+                continue
+            call = _call_site_from_expression(node, fragment)
+            if call is None:
+                continue
+            offset = (
+                parameters.start_byte
+                + fragment_lines[call.lineno - 1]
+                + call.col_offset
+                - len(prefix)
+            )
+            if not parameters.start_byte <= offset < parameters.end_byte:
+                continue
+            if original_lines is None:
+                original_lines = [
+                    0,
+                    *(i + 1 for i, byte in enumerate(source) if byte == 10),
+                ]
+            line = bisect_right(original_lines, offset)
+            recovered.append(
+                replace(call, lineno=line, col_offset=offset - original_lines[line - 1])
+            )
+    return tuple(recovered)
+
+
+def _extract_calls(
+    body: Node | None,
+    source: bytes,
+    *,
+    parameter_names: tuple[str, ...] = (),
+) -> tuple[CallSite, ...]:
     """
     Extract normalized calls from one function body.
 
@@ -893,6 +981,8 @@ def _extract_calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
         Compound-statement node owning the function body.
     source : bytes
         Full source buffer.
+    parameter_names : tuple[str, ...], optional
+        Explicit value parameters licensing direct initializer disambiguation.
 
     Returns
     -------
@@ -909,7 +999,30 @@ def _extract_calls(body: Node | None, source: bytes) -> tuple[CallSite, ...]:
         call = _call_site_from_expression(node, source)
         if call is not None:
             calls.append(call)
-    return tuple(calls)
+    seen = set(calls)
+    recovered: list[CallSite] = []
+    for call in _initializer_argument_calls(body, source, parameter_names):
+        if call not in seen:
+            seen.add(call)
+            recovered.append(call)
+    if not recovered:
+        return tuple(calls)
+    recovered.sort(key=lambda call: (call.lineno, call.col_offset))
+    merged: list[CallSite] = []
+    pending = iter(recovered)
+    next_call = next(pending, None)
+    for call in calls:
+        while next_call is not None and (next_call.lineno, next_call.col_offset) < (
+            call.lineno,
+            call.col_offset,
+        ):
+            merged.append(next_call)
+            next_call = next(pending, None)
+        merged.append(call)
+    if next_call is not None:
+        merged.append(next_call)
+    merged.extend(pending)
+    return tuple(merged)
 
 
 def _returns_value(body: Node | None) -> int:
@@ -1597,7 +1710,7 @@ def _build_function_artifact(
         raises=0,
         has_asserts=0,
         decorators=(),
-        calls=_extract_calls(body, source),
+        calls=_extract_calls(body, source, parameter_names=parameters),
         callable_refs=(),
     )
     return _PendingFunction(
@@ -2820,7 +2933,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "24"
+    version = "25"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
