@@ -6,10 +6,10 @@ The original benchmark and corpus have not been modified.
 
 ## Verified ledger
 
-Ledger `classification-v29` admits **73 newly verified original libc++ files**:
-**2,304 verified fixes, 453 separated files and 23,005 open files**
-(C: 5,725; C++: 17,280). That accounts for **10.70%** of the original
-25,762 diagnostic paths. All earlier rows outside this 73-file admission remain
+Ledger `classification-v30` admits **190 newly verified original libc++ files**:
+**2,420 verified fixes, 453 separated files and 22,889 open files**
+(C: 5,725; C++: 17,164). That accounts for **11.15%** of the original
+25,762 diagnostic paths. All earlier rows outside these admissions remain
 unchanged. The full correction objective remains open.
 The language/version/repository separation report remains
 [the preceding classification report](analyzer-parser-diagnostics-verify-prefixes-2026-10-19.md).
@@ -54,8 +54,8 @@ Durable evidence is under the worktree's
 | Composed namespace native controls | Six qualified cases; 18 callable identities, six record identities, 12 calls | `cpp-composed-namespaces-native-controls-r3` |
 | Namespace receipt controls | Positive retained; five altered inputs/ownership cases rejected | `cpp-namespace-receipt-controls-r1` |
 | Spread of unchanged originals | 10/16 parser-clean, four timeouts, two partial | `cpp-libcxx-recovery-probe-r4` |
-| Fast native batches | 163/163 syntax-clean; 71 match all artifact checks before overlap with the initial spread | `cpp-libcxx-fast-native-r1/r2`, `cpp-libcxx-fast-grading-r2/r3` |
-| Source-bound admission | 73 unique originals admitted to v29 | `cpp-libcxx-composition-admission-r2.json` |
+| Modern-header native batches | 414/414 syntax-clean; 188 match all artifact checks before overlap with the initial spread | `cpp-libcxx-fast-native-r1/r2/r3`, `cpp-libcxx-fast-grading-r2/r3/r4` |
+| Source-bound admissions | 73 originals in v29, then 116 additional originals in v30 | `cpp-libcxx-composition-admission-r2.json`, `cpp-libcxx-composition-admission-r3.json` |
 | Earlier qualified regression spread | All 12 complete payloads byte-identical | `cpp19-previous-qualified-r2` |
 | Full repository gate | 2,276 passed, three skipped, 87% coverage; fresh 860-file index, zero failures/issues | `cpp-libcxx-validation-receipt-r1.json` |
 
@@ -73,7 +73,9 @@ directory. That was an execution-context failure, not evidence of malformed C++.
 Legacy `__cxx03` headers require separate language/include-context qualification;
 failed modern-mode probes do not classify them as malformed or future syntax.
 
-The initial spread and two fast batches yield 73 unique admitted originals.
+The initial spread and three modern-header batches yield 190 unique admitted
+originals. The last 251-header batch is terminal, with 117 complete matches;
+one was already admitted, so only 116 new pending rows change in v30.
 Admission rechecks source and captured header identities, exact product payloads,
 native AST and preprocessing digests, tool binaries, native spelling origins,
 the source-bound gate receipt and committed C++19 implementation. The 12-file
@@ -82,7 +84,7 @@ byte-identical. Native syntax success alone remains insufficient.
 
 | Language | Native validation mode | Repository | Newly admitted files |
 | --- | --- | --- | ---: |
-| C++ | C++23 | LLVM / libc++ | 72 |
+| C++ | C++23 | LLVM / libc++ | 189 |
 | C++ | C++03 | LLVM / libc++ | 1 |
 
 Native modes are validation contexts, not inferred minimum source versions.
@@ -92,10 +94,18 @@ original project-harness equivalence remain outside this qualification.
 
 ## Work in progress
 
-`cpp-libcxx-cohort-replay-r1` checkpoints all 1,273 pending wrapper candidates
-with four worker processes. Parse and fingerprint stages each have a five-second
+`cpp-libcxx-cohort-replay-r1` completed all 1,273 pending wrapper candidates
+with four worker processes: 639 parser-clean, 392 partial and 242 timed out.
+Its source-digest invariant passed and its terminal exit status is zero. Parse and fingerprint stages each have a five-second
 diagnostic limit. Timed-out paths remain open; the cohort size is not a promised
 fix count. Evidence is saved per file, with source digests and input fingerprints.
+
+The retained `cpp-libcxx-call-gap-analysis-r1` isolates 51 modern-header paths
+whose only remaining mismatches are lexical calls, while complete namespace
+and qualified symbol ownership already match. Native locations identify
+construction expressions and dependent callee forms as shared causes; the
+reference must honor the existing lexical-call contract rather than erase
+product records to force agreement.
 
 The next shared qualification clusters are lexical-call differences (including
 functional casts, construction and dependent callees), complete type ownership,
