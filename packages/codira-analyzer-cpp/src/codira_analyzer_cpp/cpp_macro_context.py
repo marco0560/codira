@@ -408,6 +408,62 @@ def _skip_space(source: bytes) -> int:
     return cursor
 
 
+def _controlling_guard(
+    source: bytes, directives: tuple[tuple[int, int, bytes, bytes], ...]
+) -> bytes | None:
+    """Prove that one balanced ifndef encloses every non-comment source token.
+
+    Parameters
+    ----------
+    source : bytes
+        Frozen physical source bytes already checked by the directive scanner.
+    directives : tuple[tuple[int, int, bytes, bytes], ...]
+        Scanned physical spans, directive keywords and logical suffixes.
+
+    Returns
+    -------
+    bytes | None
+        Controlling macro name, or None when structural proof is unavailable.
+        Malformed alternatives and closing directives cannot qualify for skipping.
+    """
+    if not directives or directives[0][2] != b"ifndef":
+        return None
+    prefix = _SPLICE.sub(b"", source[: directives[0][0]])
+    suffix = _SPLICE.sub(b"", source[directives[-1][1] :])
+    if _skip_space(prefix) != len(prefix) or _skip_space(suffix) != len(suffix):
+        return None
+    alternatives: list[bool] = []
+    guard = None
+    try:
+        for index, (_, _, kind, payload) in enumerate(directives):
+            if kind in {b"if", b"ifdef", b"ifndef"}:
+                if len(alternatives) >= 64:
+                    return None
+                if kind != b"if":
+                    tokens = _macro_tokens(payload)
+                    if len(tokens) != 1 or _NAME.fullmatch(tokens[0].spelling) is None:
+                        return None
+                    if index == 0:
+                        guard = tokens[0].spelling
+                alternatives.append(False)
+            elif kind in {b"elif", b"elifdef", b"elifndef", b"else"}:
+                if len(alternatives) <= 1 or alternatives[-1]:
+                    return None
+                if kind == b"else":
+                    if _macro_tokens(payload):
+                        return None
+                    alternatives[-1] = True
+            elif kind == b"endif":
+                if not alternatives or _macro_tokens(payload):
+                    return None
+                alternatives.pop()
+                if not alternatives and index != len(directives) - 1:
+                    return None
+        return guard if not alternatives and directives[-1][2] == b"endif" else None
+    except ValueError:
+        return None
+
+
 def _definition(payload: bytes) -> tuple[bytes, _MacroDefinition | None]:
     """Parse a definition's name and supported object/function parameter shape.
 
@@ -527,6 +583,7 @@ class _ContextWalk:
         )
         self.observations: list[MacroObservation] = []
         self.cache: dict[str, tuple[tuple[int, int, bytes, bytes], ...]] = {}
+        self.guards: dict[str, bytes | None] = {}
         self.stack: list[str] = []
         self.visits = self.bytes = self.events = 0
         self.results: dict[int, MacroSelection] = {}
@@ -593,6 +650,16 @@ class _ContextWalk:
         self.stack.append(path)
         if path not in self.cache:
             self.cache[path] = _directives(self.captures[path])
+            self.guards[path] = _controlling_guard(
+                self.captures[path], self.cache[path]
+            )
+        guard = self.guards[path]
+        binding = self.environment.bindings.get(guard) if guard is not None else None
+        if not offsets and binding is not None and binding.definition is not None:
+            self.stack.pop()
+            if skipped is not None:
+                self.environment = _merge([skipped, self.environment])
+            return
         frames: list[_Conditional] = []
         active = parent
         query = 0

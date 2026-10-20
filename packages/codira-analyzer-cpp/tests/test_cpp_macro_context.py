@@ -16,6 +16,9 @@ import pytest
 
 from codira_analyzer_cpp.cpp_macro_context import (
     MacroSelection,
+    _ContextWalk,
+    _controlling_guard,
+    _directives,
     select_macro_environments,
 )
 from codira_analyzer_cpp.cpp_macro_expansion import (
@@ -356,6 +359,165 @@ def test_guarded_include_cycle_terminates() -> None:
     )[len(source)]
     assert dict(result.bindings)[b"A"].definition == _MacroDefinition(None, b"one")
     assert dict(result.bindings)[b"B"].definition == _MacroDefinition(None, b"two")
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (b"#ifndef G\n#define G\n#endif\n", b"G"),
+        (b"/* before */ #ifndef /* name */ G\n#define G\n#endif /* after */\n", b"G"),
+        (b"// before\n#ifndef G\n#if X\n#else\n#endif\n#endif\n", b"G"),
+        (b"\\\n#ifndef G\n#endif\n\\\n", b"G"),
+        (b"#ifndef G\n#endif\nint outside;\n", None),
+        (b"int outside;\n#ifndef G\n#endif\n", None),
+        (b'"outside"\n#ifndef G\n#endif\n', None),
+        (b"#define BEFORE 1\n#ifndef G\n#endif\n", None),
+        (b"#ifndef G\n#endif\n#define AFTER 1\n", None),
+        (b"#ifndef G\n#else\n#define M alternate\n#endif\n", None),
+        (b"#ifndef G\n#elif 1\n#define M alternate\n#endif\n", None),
+        (b"#ifndef G\n#elifdef OTHER\n#endif\n", None),
+        (b"#ifndef G\n#elifndef OTHER\n#endif\n", None),
+        (b"#ifndef G EXTRA\n#endif\n", None),
+        (b"#ifndef G\n#if 0\n#else extra\n#endif\n#endif\n", None),
+        (b"#ifndef G\n#if 0\n#else\n#else\n#endif\n#endif\n", None),
+        (b"#ifndef G\n#if 0\n#else\n#elif 1\n#endif\n#endif\n", None),
+        (b"#ifndef G\n#if 0\n#endif extra\n#endif\n", None),
+        (b"#ifndef G\n#if 0\n#endif\n", None),
+        (b"#ifndef G\n#endif\n#endif\n", None),
+        (b"#ifndef G\n", None),
+        (b"#if !defined(G)\n#endif\n", None),
+        (b"", None),
+    ],
+)
+def test_whole_file_guard_requires_structural_proof(
+    source: bytes, expected: bytes | None
+) -> None:
+    """Require a controlling guard without hiding outside tokens or bad structure.
+
+    Parameters
+    ----------
+    source : bytes
+        Candidate header with positive or negative guard evidence.
+    expected : bytes | None
+        Proven guard name or absence of proof.
+
+    Returns
+    -------
+    None
+        Invalid and non-controlling forms cannot use the skip optimization.
+    """
+    assert _controlling_guard(source, _directives(source)) == expected
+
+
+def test_guarded_revisits_preserve_directive_budget() -> None:
+    """Process a large guarded header once across many captured include visits.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        More than 8192 repeated directives fit only through proven guard skips.
+    """
+    source = b'#include "h.h"\n' * 100
+    header = b"#ifndef G\n#define G\n" + b"#define M value\n" * 100 + b"#endif\n"
+    walker = _ContextWalk(
+        {"main.cpp": source, "h.h": header},
+        {("main.cpp", "h.h", True): "h.h"},
+        {b"G": None},
+    )
+    walker.walk("main.cpp", offsets=(len(source),))
+    result = walker.results[len(source)]
+    assert walker.events == 203
+    assert len(result.observations) == 100
+    assert dict(result.bindings)[b"M"].definition == _MacroDefinition(None, b"value")
+    assert dict(result.bindings)[b"M"].origins[0].source_path == "h.h"
+
+
+@pytest.mark.parametrize("guard", [None, _MacroDefinition(None, b"1")])
+def test_guard_undefinition_allows_reinclude(guard: _MacroDefinition | None) -> None:
+    """Re-evaluate a header after an explicit source undefinition of its guard.
+
+    Parameters
+    ----------
+    guard : _MacroDefinition | None
+        Initially defined or explicitly undefined guard.
+
+    Returns
+    -------
+    None
+        Later re-inclusion restores the header's captured definition.
+    """
+    source = b'#include "h.h"\n#undef G\n#include "h.h"\n'
+    result = select_macro_environments(
+        "main.cpp",
+        (len(source),),
+        {"main.cpp": source, "h.h": b"#ifndef G\n#define G\n#define M value\n#endif\n"},
+        {("main.cpp", "h.h", True): "h.h"},
+        {b"G": guard},
+    )[len(source)]
+    assert dict(result.bindings)[b"M"].definition == _MacroDefinition(None, b"value")
+
+
+def test_unknown_guard_and_root_queries_are_not_skipped() -> None:
+    """Keep unknown guard alternatives and snapshot inactive queried root regions.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        A missing guard is never treated as defined or undefined.
+    """
+    header = b"#ifndef G\n#define G\n#define M value\nHERE\n#endif\n"
+    assert b"M" in _end(header).uncertain
+    offset = header.index(b"HERE")
+    result = select_macro_environments(
+        "main.cpp",
+        (offset,),
+        {"main.cpp": header},
+        {},
+        {b"G": _MacroDefinition(None, b"", opaque=True)},
+    )[offset]
+    assert result.active is False
+    assert b"M" not in dict(result.bindings)
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        b"#ifndef G\n#if 0\n#else extra\n#endif\n#endif\n",
+        b"#ifndef G\n#if 0\n#else\n#else\n#endif\n#endif\n",
+        b"#ifndef G\n#endif extra\n",
+        b"#ifndef G\n#if 0\n#endif\n",
+    ],
+)
+def test_defined_guard_does_not_hide_structural_errors(header: bytes) -> None:
+    """Retain structural failures even under a known-defined outer guard.
+
+    Parameters
+    ----------
+    header : bytes
+        Malformed captured header.
+
+    Returns
+    -------
+    None
+        The optimization falls back to the original diagnostic path.
+    """
+    source = b'#include "h.h"\n'
+    with pytest.raises(ValueError):
+        select_macro_environments(
+            "main.cpp",
+            (len(source),),
+            {"main.cpp": source, "h.h": header},
+            {("main.cpp", "h.h", True): "h.h"},
+            {b"G": _MacroDefinition(None, b"1")},
+        )
 
 
 @pytest.mark.parametrize(
