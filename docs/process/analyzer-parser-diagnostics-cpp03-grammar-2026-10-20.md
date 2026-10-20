@@ -122,3 +122,76 @@ outputs have complete native AST/preprocessing/written-call captures in the
 same C++23 context. Qualification remains separate; they are not added to v33.
 Records remain under `cpp20-modern-grammar-production-r1/` and
 `cpp20-modern-native-r1/`.
+
+## Modern-header qualification (v34)
+
+All 61 newly clean modern originals completed the independent native capture
+and full artifact comparison. Twenty-eight qualify; 33 remain held. Missing or
+different function/type/prototype/call metadata is retained as a failure rather
+than waived. The same documented callable-local eligibility and all 26 positive,
+24 negative written-call controls remain in force; a fresh scope-control identity
+checks the actual modern driver and rejects all six ownership mutations.
+
+Classification v34 admits exactly those 28 paths, with every other v33 row
+unchanged. Totals are **2,619 verified fixes, 453 separated and 22,690 open**
+(C 5,725; C++ 16,965): **11.92% accounted**. This source batch contributes 72
+new ledger qualifications overall: 17 strict legacy grammar recoveries, 27
+legacy evaluator-scope corrections and 28 modern grammar recoveries. These
+contributions are distinguished; evaluator corrections are not new product
+functionality. No separate future-syntax or malformed classification is inferred
+from a failed native invocation.
+
+Additional evidence: `cpp20-modern-grading-r1/`,
+`cpp-full-identity-scope-controls-r2/`,
+`cpp20-modern-context-admission-r1.json`,
+`cpp20-modern-qualification-invariants-r1.json`, and full
+`classification-v34.jsonl/.csv` plus `classification-summary-v34.json`.
+The source-bound gate remains the successful `610e738` gate; this qualification
+phase makes no production changes.
+
+## Implicit member-call evaluator correction (v35)
+
+The R8 scorer also treated a native implicit `CXXThisExpr` as a written receiver.
+For example, source `take(value)` was expected as an attribute call with receiver
+`take`, despite there being no receiver in the source. The actual analyzer name
+call is correct. `cpp-implicit-method-scorer-reproduction-r1.json` retains the
+old failure against the same native AST and actual product. R9 recognizes a name
+call only when native `CXXThisExpr` is explicitly marked implicit, raw spelling
+exactly equals the native method name, and name/expression offsets coincide.
+Explicit `this->take(value)` retains its attribute form.
+
+Fresh controls pass 29 positive cases, retain three held cases, and reject all
+27 negative cases, including wrong form, target and invented receiver for the
+implicit method. Regrading all 336 native-compared legacy/modern paths preserves
+all earlier qualifications and all noncall comparisons. Seven legacy and two
+modern originals newly qualify. V35 changes exactly those nine ledger rows.
+
+Current totals are **2,628 verified fixes, 453 separated and 22,681 open**
+(C 5,725; C++ 16,956): **11.96% accounted**. The complete source/qualification
+batch adds 81 ledger qualifications: 45 from grammar recovery and 36 from
+evaluator corrections. No new product behavior is attributed to the latter.
+Evidence: `cpp20-legacy-grading-r3/`, `cpp20-modern-grading-r2/`,
+`cpp20-native-grammar-controls-r3/`, `cpp20-written-call-negative-r3/`,
+`cpp20-implicit-call-admission-r1.json`, `cpp20-implicit-call-invariants-r1.json`,
+and complete classification v35 JSONL/CSV/grouped summary.
+
+## Remaining partial-tree investigation
+
+Sixteen evenly spread originals from the 72 modern partials were traced through
+the final namespace projection. All sixteen compile in the same declared C++23
+native context. The retained evidence is `cpp20-modern-partial-errors-r1/`; no
+source changes or extra qualifications are claimed by this diagnostic probe.
+
+| Observed final parser failure | Concrete source examples |
+| --- | --- |
+| Preprocessor branches inside declaration syntax | `__algorithm/shuffle.h`, `__memory/swap_allocator.h`, `__type_traits/common_reference.h` |
+| Extension type syntax | `__atomic/support/c11.h` (`_Atomic`), `__math/abs.h` (`_BitInt`) |
+| Requires-expression / constrained declarations | `__expected/expected.h`, `__iterator/move_iterator.h` |
+| Explicit operator spelling | `__iterator/common_iterator.h` |
+| Annotation and exception suffix interaction / cascading declaration failures | `__functional/reference_wrapper.h`, `__memory/valid_range.h`, `__utility/pair.h` |
+
+The locations expose grammar/adaptation work; they do not yet establish one
+independent root cause per row or promise a recovery count. Next corrections
+should prioritize forms shared across many pending files and preserve the
+strict source/native metadata checks. Native success in this selected context
+is not equivalent to original project-harness success.
