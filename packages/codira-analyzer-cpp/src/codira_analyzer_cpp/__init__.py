@@ -815,13 +815,20 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     Returns
     -------
     codira.models.CallSite | None
-        Normalized call record, excluding named casts and unsupported operators.
+        Normalized call record, excluding primitive conversions, named casts and
+        unsupported operators.
         Calls inside their operands are collected separately by body traversal.
     """
     if _is_complex_operator_call(node, source):
         return None
     function_node = node.child_by_field_name("function")
     if function_node is None:
+        return None
+    if function_node.type == "primitive_type" or (
+        function_node.type == "identifier"
+        and _node_text(function_node, source)
+        in {"short", "long", "signed", "unsigned", "wchar_t"}
+    ):
         return None
 
     if function_node.type == "template_function":
@@ -2951,7 +2958,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "25"
+    version = "26"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
