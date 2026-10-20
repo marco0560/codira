@@ -4,7 +4,7 @@
 
 This implements the indexing path approved in [ADR-034](../adr/ADR-034-bounded-cpp-declaration-macro-analysis.md), following the independently checked [context budget repair](analyzer-parser-diagnostics-cpp-guard-budget-2026-10-20.md) and [projection layer](analyzer-parser-diagnostics-cpp-projection-2026-10-20.md).
 
-The current classification-v38 baseline remains **2,786 verified fixes, 453 separated inputs and 22,523 open originals**. No clean parse, helper control, synthetic indexing test or candidate inventory changes these counts. Original-file native qualification and the repository gate must precede admission.
+The starting classification-v38 baseline was **2,786 verified fixes, 453 separated inputs and 22,523 open originals**. Classification v39 admits 70 `stdbit` originals; v40 then admits 497 generic math originals. The current totals are **3,353 verified fixes, 453 separated inputs and 21,956 open originals** (C 5,611; C++ 16,345). These 567 admissions follow complete original-file native and production qualification; helper controls and clean parses contribute no fixed-file count.
 
 The shared-cause inventory contains 1,607 still-open LLVM libc function-wrapper files. The first batch contains 501 generic math files, each checked under packaging-disabled and public-packaging profiles. All 501 captured dependency graphs match the immutable inventory source hashes. Native predefined-macro and definedness probes provide initial states; an omitted macro is never assumed undefined.
 
@@ -49,4 +49,10 @@ The next shared group, 70 `libc/src/stdbit` originals, also passes all 140 nativ
 
 `cpp-stdbit-index-verification-r4/` compares every stored function, prototype, provenance payload and lexical call for all 140 cases, then passes six actual CLI discovery/evidence commands. Complete CLI evidence equals normalized direct-helper evidence, with the CLI's additional selected-file coverage report separately checked. Earlier harness failures are retained: DuckDB cached handles must be released through its backend lifecycle before starting another process; the CLI adds coverage metadata to its JSON response. Neither mismatch was waived or counted as a product fix.
 
-The 70 `stdbit` originals are ready for ledger admission after the implementation commit. The 497 math candidates still await completion of their final CLI evidence checks. Classification-v38 remains the accounting baseline at this implementation checkpoint. The full remediation goal remains active.
+Implementation commit: `6ee42c4e1c78ffc38ccfa5cdeb7bdd754b9f9d4d`. `cpp-integrated-validation-receipt-r3.json` verifies every executed tracked source against that commit and retains the ignored, build-generated runtime version module separately as an exact snapshot. No generated runtime file is committed.
+
+`cpp-math-generic-index-verification-r5/` also passes all 1,002 persisted-artifact comparisons and six actual CLI commands. Together with `cpp-stdbit-index-verification-r4/`, the checks cover all 1,142 original/profile index cases. Only the 567 originals passing both native profiles enter the ledger: **1,134 definition records, 567 prototypes, 567 aliases and 1,262 lexical calls checked**. The four math holds remain open.
+
+Classification-v39 and v40 preserve all 25,762 original identities. All 25,195 rows outside these admissions, including every prior fixed or separated record, remain unchanged from v38. The existing v38 separated-input reports still describe the same 453 inputs by language, version and repository. `cpp23-combined-admission-audit-r1.json` independently checks the classification chain and counts native roles; it records the retained v39 raw counter spelling `aliass` without altering that evidence.
+
+The wrapper inventory now has **1,040 open candidates**, including the four generic-math holds and 1,036 other wrapper files. The full remediation goal remains active across all languages and repositories.
