@@ -2,9 +2,10 @@
 
 ## Shared cause and priority
 
-The starting ledger is classification v35: **2,628 verified fixes, 453
-separated, 22,681 open** (C 5,725; C++ 16,956). The source gate, regression replay and independent qualification are now
-complete; admission follows the atomic source commit.
+The starting ledger was classification v35: **2,628 verified fixes, 453
+separated, 22,681 open** (C 5,725; C++ 16,956). Classification v36 now has **2,669 verified fixes, 453 separated and 22,640
+open** (C 5,725; C++ 16,915), or **12.12% accounted**. Source commit: `ddff8a2`.
+The source gate, regression replay, native qualification and admission are complete.
 
 A prioritized inventory found `typedef` tokens in 2,763 pending C++ originals
 across seven repositories. This is a token footprint, not a recovery estimate:
@@ -47,9 +48,8 @@ this does not infer the minimum language version of every affected source.
 The full gate passed: **2,330 tests passed, three skipped, 87% coverage**, a
 fresh 869-file index, zero index failures and zero coverage issues. Semgrep ran
 outside the sandbox. `cpp21-typedef-validation-receipt-r1.json` binds the examined
-result to source digests. The completed gate log/status remain retained until
-the source commit and receipt are reported, then only those successful gate
-files and the completed tmux pane are cleaned.
+result to source digests. The examined successful gate session and its three temporary validation files
+were cleaned; compact receipt and all campaign/native evidence remain retained.
 
 The fresh replay completed all 861 distinct requests. All 397 previously
 admitted requests completed: 396 payloads are byte-identical; one, modern
@@ -69,8 +69,8 @@ Another 15 LLVM headers qualify under the configured include profile with
 payloads unchanged relative the retained source20 configured replay. These
 profile qualifications are distinguished from new product corrections.
 Overall, 41 pending originals qualify for admission, plus one existing row is
-requalified against its explicit C++17 context. Admission remains pending the
-atomic source commit.
+requalified against its explicit C++17 context. Classification v36 admits those 41 paths and requalifies the existing row;
+all other rows are unchanged.
 
 ## Broader LLVM header context
 
@@ -129,3 +129,35 @@ Additional durable evidence: `cpp21-typedef-production-r2/summary.json`,
 `cpp21-optional-hash-delta-r1.json`, both
 `cpp21-optional-hash-{cpp17,cpp23}-r2/` native captures and matching grading dirs,
 and the examined source-bound validation receipt.
+
+## Final admission and retained limits
+
+`cpp21-typedef-admission-r1.json` binds all new qualifications to `ddff8a2`,
+source/header/native/tool hashes and the successful full gate. The explicit
+ledger audit in `cpp21-typedef-ledger-invariants-r1.json` proves that exactly 41
+open rows become verified fixes, one existing row changes its measured context
+and evidence, and all other 25,720 rows remain unchanged. No malformed/future
+classification changes in this batch. The [complete separated population by
+language, version and repository](analyzer-parser-diagnostics-verify-prefixes-2026-10-19.md#complete-separated-population-by-language-version-and-repository)
+still contains 453 files; current complete totals/groups are in
+`classification-v36.jsonl/.csv` and `classification-summary-v36.json`.
+
+| Language | Measured native context | Repository | New typedef fixes | New include-profile qualifications |
+| --- | --- | --- | ---: | ---: |
+| C++ | C++03, explicit legacy libc++/ABI profile | LLVM | 18 | 0 |
+| C++ | C++23, explicit modern libc++/ABI profile | LLVM | 2 | 0 |
+| C++ | C++17, LLVM source/generated configuration | LLVM | 6 | 15 |
+
+The separately requalified existing `__optional/hash.h` row uses C++17 with its
+libc++/ABI profile; it does not add another fixed-file count. These contexts
+state what was independently measured, not inferred minimum language versions.
+Full native signatures/attributes, data fields, ABI/runtime behavior and original
+project-harness equivalence remain outside this artifact comparison.
+
+The 2,763-file typedef footprint remains a prioritization aid. Files containing
+a typedef are not counted as corrected unless their complete output qualifies.
+Remaining gaps include generated native dependencies, template/call metadata,
+conditional declarations and parser adaptation. The retained
+`cpp-defaulted-callable-reproduction-r1/` is a concrete next candidate: native-valid
+defaulted/deleted methods are represented without definition end positions;
+no correction for that separate issue is claimed here.
