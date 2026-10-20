@@ -101,11 +101,11 @@ def _parse_with_namespace_bindings(
     Notes
     -----
     No branch selection or general expression substitution occurs. Source
-    overrides of configured names or replacements are held. Combining multiple
-    variable-width projections remains held pending composition support.
+    overrides of configured names or replacements are held. Scope wrappers and
+    explicit namespace names share a single original-coordinate projection.
     """
     root = _parse_cpp_source(source, included_sources=included_sources)
-    if not bindings or root.has_error:
+    if not bindings:
         return root
     parser = _new_parser()
     state = _AnnotationDefinitions()
@@ -115,6 +115,8 @@ def _parse_with_namespace_bindings(
         )
     blocked = set(state.replacements) | state.unsafe
     if b"namespace" in blocked or b"inline" in blocked:
+        if root.has_error:
+            return root
         raise ValueError(
             "namespace_macro_definitions conflicts with namespace keywords"
         )
@@ -126,6 +128,8 @@ def _parse_with_namespace_bindings(
         )
         for name, replacement in bindings
     ):
+        if root.has_error:
+            return root
         raise ValueError("namespace_macro_definitions conflicts with captured source")
     related = {name for name, _ in bindings}
     changed = True
@@ -187,6 +191,36 @@ def _parse_with_namespace_bindings(
                 if len(names) == 1:
                     resolved[name] = (names.pop(), boundary)
                     changed = True
+    if root.has_error or isinstance(root, _ProjectedNode):
+        for node in _nodes(parser.parse(source).root_node):
+            if node.type != "namespace_definition":
+                continue
+            identifier = node.child_by_field_name("name")
+            if identifier is None:
+                continue
+            token = source[identifier.start_byte : identifier.end_byte]
+            if (
+                token in related
+                and token not in resolved
+                and identifier.start_byte >= state.first_offsets.get(token, 0)
+            ):
+                if root.has_error:
+                    return root
+                raise ValueError(
+                    "namespace_macro_definitions cannot resolve namespace alias "
+                    + token.decode("ascii")
+                )
+        recovered = _parse_cpp_source(
+            source,
+            included_sources=included_sources,
+            namespace_bindings=tuple(
+                (name, value, boundary) for name, (value, boundary) in resolved.items()
+            ),
+        )
+        if not recovered.has_error:
+            return recovered
+        if root.has_error:
+            return root
     replacements: list[tuple[int, int, bytes]] = []
     for node in _nodes(root):
         if node.type != "namespace_definition":

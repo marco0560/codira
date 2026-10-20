@@ -66,6 +66,14 @@ class _AnnotationDefinitions:
         Earliest source definition or reaching include boundary.
     unsafe : set[bytes], optional
         Names with function-like definitions or undef directives.
+    functions : dict[bytes, list[tuple[tuple[bytes, ...], bytes]]], optional
+        Supported function replacement alternatives and their formal arguments.
+    invalid_functions : set[bytes], optional
+        Names with undefinitions or unsupported formal arguments.
+    stringifiers : dict[bytes, tuple[int, int]] | None, optional
+        Cached pure stringifier arity and availability, local to these inputs.
+    pragma_overridden : bool, optional
+        Whether captured declarations or directives override pragma spellings.
 
     Returns
     -------
@@ -76,6 +84,12 @@ class _AnnotationDefinitions:
     replacements: dict[bytes, list[bytes]] = field(default_factory=dict)
     first_offsets: dict[bytes, int] = field(default_factory=dict)
     unsafe: set[bytes] = field(default_factory=set)
+    functions: dict[bytes, list[tuple[tuple[bytes, ...], bytes]]] = field(
+        default_factory=dict
+    )
+    invalid_functions: set[bytes] = field(default_factory=set)
+    stringifiers: dict[bytes, tuple[int, int]] | None = None
+    pragma_overridden: bool = False
 
 
 def _nodes(root: Node) -> Iterator[Node]:
@@ -165,8 +179,9 @@ def _annotation_definitions(
     Returns
     -------
     dict[bytes, int]
-        Eligible macro names and the earliest safe use offset. Function macros,
-        undefined names and conflicting replacements are excluded file-wide.
+        Object annotation names and earliest safe use offsets. Compatible
+        function replacements can license their object aliases. Function names,
+        undefinitions and conflicting replacements remain excluded file-wide.
     """
     state = _AnnotationDefinitions()
     definitions = state.replacements
@@ -190,6 +205,10 @@ def _annotation_definitions(
         for name, alternatives in definitions.items():
             if name in accepted or name in unsafe:
                 continue
+            function_views = [
+                _function_annotation_source(value, state, accepted, parser)
+                for value in alternatives
+            ]
             expanded = [
                 _IDENTIFIER.sub(
                     lambda match: (
@@ -197,7 +216,7 @@ def _annotation_definitions(
                     ),
                     value,
                 )
-                for value in alternatives
+                for value, _, _ in function_views
             ]
             if any(
                 overridden_specifiers.intersection(_IDENTIFIER.findall(value))
@@ -218,8 +237,356 @@ def _annotation_definitions(
                 if dependencies
                 else first_offsets[name]
             )
+            accepted[name] = max(
+                accepted[name], *(boundary for _, boundary, _ in function_views)
+            )
             changed = True
     return accepted
+
+
+def _macro_call_arguments(source: bytes, arguments: Node) -> tuple[bytes, ...] | None:
+    """Split macro arguments by preprocessing parentheses rather than templates.
+
+    Parameters
+    ----------
+    source : bytes
+        Replacement buffer containing the call.
+    arguments : tree_sitter.Node
+        Provider argument list with complete written parentheses.
+
+    Returns
+    -------
+    tuple[bytes, ...] | None
+        Raw arguments, or None for incomplete or unbalanced input.
+    """
+    return _macro_argument_span(
+        source, arguments.start_byte, arguments.end_byte, tuple(_nodes(arguments))
+    )
+
+
+def _macro_argument_span(
+    source: bytes, start: int, end: int, nodes: tuple[Node, ...]
+) -> tuple[bytes, ...] | None:
+    """Split a lexically bounded macro invocation even inside opaque pragma text.
+
+    Parameters
+    ----------
+    source : bytes
+        Buffer owning the invocation.
+    start, end : int
+        Original opening parenthesis and exclusive closing offset.
+    nodes : tuple[tree_sitter.Node, ...]
+        Provider nodes supplying literal and comment spans.
+
+    Returns
+    -------
+    tuple[bytes, ...] | None
+        Preprocessing arguments, or None for incomplete parentheses.
+    """
+    if source[start : start + 1] != b"(" or source[end - 1 : end] != b")":
+        return None
+    protected = {
+        node.start_byte: node.end_byte for node in nodes if node.type in _OPAQUE_NODES
+    }
+    values: list[bytes] = []
+    cursor = beginning = start + 1
+    depth = 0
+    while cursor < end - 1:
+        if cursor in protected:
+            cursor = protected[cursor]
+            continue
+        byte = source[cursor]
+        if byte == 40:
+            depth += 1
+        elif byte == 41:
+            depth -= 1
+            if depth < 0:
+                return None
+        elif byte == 44 and depth == 0:
+            values.append(source[beginning:cursor].strip())
+            beginning = cursor + 1
+        cursor += 1
+    if depth:
+        return None
+    tail = source[beginning : end - 1].strip()
+    tail_view = bytearray(source[beginning : end - 1])
+    for node in nodes:
+        if node.type == "comment" and beginning <= node.start_byte < end - 1:
+            a, b = node.start_byte - beginning, node.end_byte - beginning
+            tail_view[a:b] = b" " * (b - a)
+    return tuple([*values, tail]) if values or bytes(tail_view).strip() else ()
+
+
+def _stringifier_definitions(
+    state: _AnnotationDefinitions, parser: Parser
+) -> dict[bytes, tuple[int, int]]:
+    """Prove only parameter stringification and single-stringifier wrappers.
+
+    Parameters
+    ----------
+    state : _AnnotationDefinitions
+        Complete captured alternatives and invalidations.
+    parser : tree_sitter.Parser
+        Parser for simple wrapper invocations.
+
+    Returns
+    -------
+    dict[bytes, tuple[int, int]]
+        String-only macro arities and latest dependency availability.
+    """
+    if state.stringifiers is not None:
+        return state.stringifiers
+    resolved: dict[bytes, tuple[int, int]] = {}
+    changed = True
+    while changed:
+        changed = False
+        for name, alternatives in state.functions.items():
+            if (
+                name in resolved
+                or name in state.invalid_functions
+                or name in state.replacements
+            ):
+                continue
+            arities = {len(parameters) for parameters, _ in alternatives}
+            if len(arities) != 1:
+                continue
+            latest = state.first_offsets[name]
+            for parameters, body in alternatives:
+                body = body.strip()
+                sharp = re.fullmatch(rb"#\s*([A-Za-z_][A-Za-z_0-9]*)", body)
+                if sharp and sharp[1] in parameters:
+                    continue
+                prefix = _IDENTIFIER.match(body)
+                if prefix is None or prefix[0] not in resolved:
+                    break
+                call = next(
+                    (
+                        node
+                        for node in _nodes(parser.parse(body).root_node)
+                        if node.type == "call_expression"
+                        and node.start_byte == 0
+                        and node.end_byte == len(body)
+                    ),
+                    None,
+                )
+                arguments = call.child_by_field_name("arguments") if call else None
+                actual = _macro_call_arguments(body, arguments) if arguments else None
+                count, dependency = resolved[prefix[0]]
+                if actual is None or not (
+                    len(actual) == count or count == 1 and not actual
+                ):
+                    break
+                latest = max(latest, dependency)
+            else:
+                resolved[name] = (next(iter(arities)), latest)
+                changed = True
+    state.stringifiers = resolved
+    return resolved
+
+
+def _pragma_annotation_source(
+    value: bytes, state: _AnnotationDefinitions, parser: Parser
+) -> tuple[bytes, int, bool]:
+    """Hide complete pragma operators in replacement values with proven operands.
+
+    Parameters
+    ----------
+    value : bytes
+        Macro replacement bytes, not an executable source body.
+    state : _AnnotationDefinitions
+        Captured declarations, definitions and stringifier proof inputs.
+    parser : tree_sitter.Parser
+        Parser supplying protected literal and comment spans.
+
+    Returns
+    -------
+    tuple[bytes, int, bool]
+        Equal-width view, latest dependency boundary and pragma proof flag.
+    """
+    if state.pragma_overridden or (
+        b"_Pragma" not in value and b"__pragma" not in value
+    ):
+        return value, 0, False
+    nodes = tuple(_nodes(parser.parse(value).root_node))
+    protected = [(n.start_byte, n.end_byte) for n in nodes if n.type in _OPAQUE_NODES]
+    projected = bytearray(value)
+    boundary = 0
+    proven = False
+    covered = 0
+    for match in _IDENTIFIER.finditer(value):
+        if (
+            match[0] not in {b"_Pragma", b"__pragma"}
+            or match.start() < covered
+            or any(a <= match.start() < b for a, b in protected)
+        ):
+            continue
+        end = _pragma_end(value, match.start())
+        dependency = 0
+        if end is None and match[0] == b"_Pragma":
+            # The existing MS pragma lexer supplies balanced opaque parentheses;
+            # only a separately proven stringifier licenses a standard operand.
+            surrogate = b"__pragma" + value[match.end() :]
+            balanced = _pragma_end(surrogate, 0)
+            if balanced is None:
+                continue
+            candidate_end = match.start() + balanced - 1
+            opening = match.end()
+            while opening < len(value) and value[opening] in b" \t\r\n\f":
+                opening += 1
+            operand_start = opening + 1
+            while (
+                operand_start < candidate_end and value[operand_start] in b" \t\r\n\f"
+            ):
+                operand_start += 1
+            operand = value[operand_start : candidate_end - 1].rstrip()
+            name = _IDENTIFIER.match(operand)
+            stringifiers = _stringifier_definitions(state, parser)
+            if name is None or name[0] not in stringifiers:
+                continue
+            arity, dependency = stringifiers[name[0]]
+            inner_end = _pragma_end(b"__pragma" + operand[name.end() :], 0)
+            if inner_end is None or inner_end - 8 + name.end() != len(operand):
+                continue
+            parenthesis = name.end()
+            while parenthesis < len(operand) and operand[parenthesis] in b" \t\r\n\f":
+                parenthesis += 1
+            actual = _macro_argument_span(
+                operand,
+                parenthesis,
+                len(operand),
+                tuple(_nodes(parser.parse(operand).root_node)),
+            )
+            if actual is None or not (
+                len(actual) == arity or arity == 1 and not actual
+            ):
+                continue
+            end = candidate_end
+        if end is not None:
+            for offset in range(match.start(), end):
+                if projected[offset] not in {10, 13}:
+                    projected[offset] = 32
+            boundary = max(boundary, dependency)
+            proven = True
+            covered = end
+    return bytes(projected), boundary, proven
+
+
+def _function_annotation_source(
+    value: bytes,
+    state: _AnnotationDefinitions,
+    accepted: dict[bytes, int],
+    parser: Parser,
+    active: frozenset[bytes] = frozenset(),
+) -> tuple[bytes, int, bool]:
+    """Blank only function replacements proven to preserve an annotation probe.
+
+    Parameters
+    ----------
+    value : bytes
+        Object or nested function replacement, never an executable source body.
+    state : _AnnotationDefinitions
+        Captured alternatives, availability and invalidations.
+    accepted : dict[bytes, int]
+        Already proven object annotation aliases.
+    parser : tree_sitter.Parser
+        Package-local C++ parser.
+    active : frozenset[bytes], optional
+        Current dependency chain, bounding recursion and rejecting cycles.
+
+    Returns
+    -------
+    tuple[bytes, int, bool]
+        Equal-width replacement, latest definition boundary and whether any
+        nonempty compiler annotation was proven. Pure empty functions stay opaque.
+    """
+    if len(active) >= 32:
+        return value, 0, False
+    value, boundary, proven = _pragma_annotation_source(value, state, parser)
+    if not state.functions.keys() & set(_IDENTIFIER.findall(value)):
+        return value, boundary, proven
+    root = parser.parse(value).root_node
+    projected = bytearray(value)
+    covered: list[tuple[int, int]] = []
+    overridden = {
+        token
+        for _, token in _DECLARATION_SPECIFIERS
+        if token in state.replacements or token in state.unsafe
+    }
+    for node in _nodes(root):
+        if node.type not in {"call_expression", "init_declarator"} or any(
+            a <= node.start_byte < b for a, b in covered
+        ):
+            continue
+        function = node.child_by_field_name(
+            "declarator" if node.type == "init_declarator" else "function"
+        )
+        arguments = node.child_by_field_name(
+            "value" if node.type == "init_declarator" else "arguments"
+        )
+        if function is None or function.type != "identifier" or arguments is None:
+            continue
+        if arguments.type != "argument_list":
+            continue
+        name = value[function.start_byte : function.end_byte]
+        alternatives = state.functions.get(name, [])
+        if (
+            not alternatives
+            or name in active
+            or name in state.invalid_functions
+            or name in state.replacements
+        ):
+            continue
+        actual = _macro_call_arguments(value, arguments)
+        if actual is None:
+            continue
+        latest = state.first_offsets[name]
+        positive = False
+        for formals, body in alternatives:
+            supplied = (b"",) if len(formals) == 1 and not actual else actual
+            if len(formals) != len(supplied):
+                break
+            bindings = dict(zip(formals, supplied, strict=True))
+            opaque = [
+                (n.start_byte, n.end_byte)
+                for n in _nodes(parser.parse(body).root_node)
+                if n.type in _OPAQUE_NODES | {"user_defined_literal", "number_literal"}
+            ]
+            substituted = _IDENTIFIER.sub(
+                lambda match: (
+                    match[0]
+                    if any(a <= match.start() < b for a, b in opaque)
+                    else bindings.get(match[0], match[0])
+                ),
+                body,
+            )
+            if len(substituted) > 4096:
+                break
+            substituted, nested, nested_positive = _function_annotation_source(
+                substituted, state, accepted, parser, active | {name}
+            )
+            dependencies = accepted.keys() & set(_IDENTIFIER.findall(substituted))
+            latest = max(latest, nested, *(accepted[token] for token in dependencies))
+            substituted = _IDENTIFIER.sub(
+                lambda match: (
+                    b" " * len(match[0]) if match[0] in accepted else match[0]
+                ),
+                substituted,
+            )
+            if overridden.intersection(
+                _IDENTIFIER.findall(substituted)
+            ) or not _is_annotation(substituted, parser):
+                break
+            positive = positive or nested_positive or bool(substituted.strip())
+        else:
+            if not positive:
+                continue
+            projected[node.start_byte : node.end_byte] = b" " * (
+                node.end_byte - node.start_byte
+            )
+            covered.append((node.start_byte, node.end_byte))
+            boundary = max(boundary, latest)
+            proven = True
+    return bytes(projected), boundary, proven
 
 
 def _collect_annotation_definitions(
@@ -247,27 +614,50 @@ def _collect_annotation_definitions(
     None
         Updates the supplied collections without expanding declarations.
     """
+    definitions.stringifiers = None
+    if not definitions.pragma_overridden and (
+        b"_Pragma" in source or b"__pragma" in source
+    ):
+        definitions.pragma_overridden = _pragma_overridden(source, root)
     for node in _nodes(root):
         if node.type in {"preproc_def", "preproc_function_def"}:
             name_node = node.child_by_field_name("name")
             if name_node is None:
                 continue
             token = source[name_node.start_byte : name_node.end_byte]
-            if node.type == "preproc_function_def":
-                definitions.unsafe.add(token)
-                continue
-            value = node.child_by_field_name("value")
-            replacement = source[value.start_byte : value.end_byte] if value else b""
-            replacement = re.sub(rb"\\\r?\n", b" ", replacement)
-            definitions.replacements.setdefault(token, []).append(replacement)
             offset = node.end_byte if boundary is None else boundary
             definitions.first_offsets[token] = min(
                 definitions.first_offsets.get(token, offset), offset
             )
+            value = node.child_by_field_name("value")
+            replacement = source[value.start_byte : value.end_byte] if value else b""
+            replacement = re.sub(rb"\\\r?\n", b" ", replacement)
+            if node.type == "preproc_function_def":
+                definitions.unsafe.add(token)
+                parameters = node.child_by_field_name("parameters")
+                text = (
+                    source[parameters.start_byte : parameters.end_byte]
+                    if parameters
+                    else b""
+                )
+                if re.fullmatch(
+                    rb"\(\s*(?:[A-Za-z_][A-Za-z_0-9]*(?:\s*,\s*[A-Za-z_][A-Za-z_0-9]*)*)?\s*\)",
+                    text,
+                ):
+                    formals = tuple(_IDENTIFIER.findall(text))
+                    if len(set(formals)) == len(formals):
+                        definitions.functions.setdefault(token, []).append(
+                            (formals, replacement)
+                        )
+                        continue
+                definitions.invalid_functions.add(token)
+                continue
+            definitions.replacements.setdefault(token, []).append(replacement)
         elif node.type == "preproc_call":
             match = _UNDEF.match(source[node.start_byte : node.end_byte])
             if match is not None:
                 definitions.unsafe.add(match[1])
+                definitions.invalid_functions.add(match[1])
 
 
 def _hash_lines(source: bytes, root: Node) -> tuple[tuple[int, int], ...]:
@@ -707,6 +1097,7 @@ def _namespace_source(
     root: Node,
     parser: Parser,
     included_sources: tuple[tuple[bytes, int], ...],
+    namespace_bindings: tuple[tuple[bytes, bytes, int], ...] = (),
 ) -> Node | None:
     """Expand unambiguous object macros that open or close namespace scopes.
 
@@ -720,6 +1111,8 @@ def _namespace_source(
         Package-local C++ parser.
     included_sources : tuple[tuple[bytes, int], ...]
         Captured headers and their earliest source include boundaries.
+    namespace_bindings : tuple[tuple[bytes, bytes, int], ...], optional
+        Validated namespace-only identifiers and their availability boundaries.
 
     Returns
     -------
@@ -728,8 +1121,10 @@ def _namespace_source(
 
     Notes
     -----
-    Alternatives must resolve identically. Undefs, function macros, cycles,
+    Alternatives must resolve identically after namespace brace spacing is
+    normalized. Undefs, function macros, cycles,
     unresolved uppercase namespace names and keyword redefinitions are held.
+    Explicitly validated namespace binding values may use uppercase names.
     Expansions exceeding 4096 bytes are held to bound macro growth. Only complete
     scope-opening or scope-closing expansions are substituted in source code.
     """
@@ -748,6 +1143,13 @@ def _namespace_source(
     resolved: dict[bytes, tuple[bytes, int]] = {
         name: (b"", boundary) for name, boundary in annotations.items()
     }
+    resolved.update(
+        {name: (value, boundary) for name, value, boundary in namespace_bindings}
+    )
+    openings = re.compile(
+        rb"(?:(?:inline\s+)?namespace\s+"
+        rb"[A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)*\s*\{\s*)+"
+    )
     changed = True
     while changed:
         changed = False
@@ -757,6 +1159,10 @@ def _namespace_source(
             values: set[bytes] = set()
             boundary = state.first_offsets[name]
             for value in alternatives:
+                value, annotation_boundary, _ = _function_annotation_source(
+                    value, state, annotations, parser
+                )
+                boundary = max(boundary, annotation_boundary)
                 tokens = _IDENTIFIER.findall(value)
                 if any(
                     token in state.unsafe
@@ -772,25 +1178,29 @@ def _namespace_source(
                 )
                 if len(expanded) > 4096:
                     break
-                values.add(b" ".join(expanded.split()))
+                expanded = b" ".join(expanded.split())
+                if openings.fullmatch(expanded) or re.fullmatch(
+                    rb"(?:\}\s*)+", expanded
+                ):
+                    expanded = b" ".join(
+                        re.sub(rb"\s*([{}])\s*", rb" \1 ", expanded).split()
+                    )
+                values.add(expanded)
             else:
                 if len(values) == 1:
                     resolved[name] = (values.pop(), boundary)
                     changed = True
-    openings = re.compile(
-        rb"(?:(?:inline\s+)?namespace\s+"
-        rb"[A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)*\s*\{\s*)+"
-    )
+    bound_names = {value for _, value, _ in namespace_bindings}
     eligible = {
         name: (value, boundary)
         for name, (value, boundary) in resolved.items()
         if (openings.fullmatch(value) or re.fullmatch(rb"(?:\}\s*)+", value))
         and not any(
-            re.fullmatch(rb"[A-Z_][A-Z_0-9]*", token)
+            token not in bound_names and re.fullmatch(rb"[A-Z_][A-Z_0-9]*", token)
             for token in _IDENTIFIER.findall(value)
         )
     }
-    if not eligible:
+    if not eligible and not namespace_bindings:
         return None
     protected = [*_hash_lines(source, root)]
     protected.extend(
@@ -805,15 +1215,30 @@ def _namespace_source(
         and match.start() >= eligible[match[0]][1]
         and not any(start <= match.start() < end for start, end in protected)
     ]
+    names = {name: (value, boundary) for name, value, boundary in namespace_bindings}
+    for node in _nodes(root):
+        if node.type != "namespace_definition":
+            continue
+        identifier = node.child_by_field_name("name")
+        if identifier is None or identifier.type != "namespace_identifier":
+            continue
+        token = source[identifier.start_byte : identifier.end_byte]
+        if token in names and identifier.start_byte >= names[token][1]:
+            replacements.append(
+                (identifier.start_byte, identifier.end_byte, names[token][0])
+            )
     if not replacements:
         return None
-    projection = _source_projection(source, replacements)
+    projection = _source_projection(source, sorted(replacements))
     recovered = parser.parse(projection.expanded).root_node
     return None if recovered.has_error else projection.tree(recovered)
 
 
 def _parse_cpp_source(
-    source: bytes, *, included_sources: tuple[tuple[bytes, int], ...] = ()
+    source: bytes,
+    *,
+    included_sources: tuple[tuple[bytes, int], ...] = (),
+    namespace_bindings: tuple[tuple[bytes, bytes, int], ...] = (),
 ) -> Node:
     """Parse C++ with coordinate-preserving macro and compiler pragma recovery.
 
@@ -824,6 +1249,8 @@ def _parse_cpp_source(
     included_sources : tuple[tuple[bytes, int], ...], optional
         Captured header bytes and earliest source include-end offsets. Callers
         must bind these external analysis inputs to incremental reuse identity.
+    namespace_bindings : tuple[tuple[bytes, bytes, int], ...], optional
+        Validated namespace-only bindings used in the same scope projection.
 
     Returns
     -------
@@ -896,7 +1323,7 @@ def _parse_cpp_source(
     if not recovered.has_error:
         return recovered
     namespace_root = _namespace_source(
-        bytes(projected), recovered, parser, included_sources
+        bytes(projected), recovered, parser, included_sources, namespace_bindings
     )
     return fallback if namespace_root is None else namespace_root
 

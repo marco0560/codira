@@ -148,6 +148,31 @@ def test_namespace_macros_do_not_hide_errors_or_late_definitions() -> None:
     ).has_error
 
 
+def test_namespace_alternatives_ignore_brace_spacing() -> None:
+    """Accept equivalent nested closing scopes with different brace spacing.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Equivalent token sequences recover while different scope counts fail.
+    """
+    definitions = (
+        b"#define OPEN namespace outer { namespace inner {\n"
+        b"#define CLOSE_INNER }\n"
+        b"#if BUILD\n#define CLOSE } CLOSE_INNER\n"
+        b"#else\n#define CLOSE }}\n#endif\n"
+    )
+    source = definitions + b"OPEN\nint run() { return 0; }\nCLOSE\n"
+    assert not _parse_cpp_source(source).has_error
+    assert _parse_cpp_source(
+        source.replace(b"#define CLOSE }}", b"#define CLOSE }")
+    ).has_error
+
+
 def test_projection_boundaries_and_invalid_ranges() -> None:
     """Map invocation interiors and EOF while rejecting overlapping edits.
 

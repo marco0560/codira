@@ -161,3 +161,86 @@ def test_namespace_profile_alias_order_and_unresolved_branches(tmp_path: Path) -
     header.write_text("#if BUILD\n#define NS ROOT\n#else\n#define NS OTHER\n#endif\n")
     with pytest.raises(ValueError, match="cannot resolve namespace alias NS"):
         analyzer.analyze_file(path, tmp_path)
+
+
+@pytest.mark.parametrize("namespace", ["__1", "UPPER_SCOPE", "__one"])
+def test_namespace_profile_composes_scope_wrappers(
+    tmp_path: Path, namespace: str
+) -> None:
+    """Resolve configured names inside wrappers without losing source positions.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source directory.
+    namespace : str
+        Explicit namespace name, including uppercase-like identifiers.
+
+    Returns
+    -------
+    None
+        Qualified function names and source signatures retain their ownership.
+    """
+    source = tmp_path / "wrapped.cpp"
+    source.write_bytes(
+        b"#define BEGIN namespace std { inline namespace ABI {\r\n"
+        b"#define END } }\r\n"
+        b"// UTF-8: \xc3\xa8\r\n"
+        b"BEGIN\r\n"
+        b"int run(int x) { return callee(x); }\r\n"
+        b"namespace ABI { int nested() { return other(); } }\r\n"
+        b"END\r\n"
+    )
+    analyzer = CppAnalyzer()
+    analyzer.configure({"namespace_macro_definitions": {"ABI": namespace}})
+    result = analyzer.analyze_file(source, tmp_path)
+    assert result.index_symbols
+    functions = {function.name: function for function in result.functions}
+    assert set(functions) == {
+        f"std::{namespace}::run",
+        f"std::{namespace}::{namespace}::nested",
+    }
+    function = functions[f"std::{namespace}::run"]
+    assert function.lineno == 5
+    assert function.signature == "int run(int x)"
+    assert [(call.target, call.lineno, call.col_offset) for call in function.calls] == [
+        ("callee", 5, len(b"int run(int x) { return "))
+    ]
+    assert functions[f"std::{namespace}::{namespace}::nested"].lineno == 6
+
+
+def test_namespace_profile_composes_pragma_wrappers(tmp_path: Path) -> None:
+    """Compose header diagnostic aliases with configured namespace ownership.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source and header directory.
+
+    Returns
+    -------
+    None
+        Markup disappears only from the parse view and preserves original calls.
+    """
+    (tmp_path / "scope.h").write_text(
+        '#define S(x) #x\n#define PUSH _Pragma("clang diagnostic push")\n'
+        "#define IGNORE(x) _Pragma(S(clang diagnostic ignored x))\n"
+        '#define DIAG PUSH IGNORE("-Wunused") IGNORE("-Wextra")\n'
+        "#define BEGIN DIAG namespace outer { inline namespace ABI {\n"
+        '#define END } } _Pragma("clang diagnostic pop")\n'
+    )
+    path = tmp_path / "scope.cpp"
+    path.write_text(
+        '#include "scope.h"\nBEGIN\n'
+        "int run(int x) { /* café */ return callee(x); }\nEND\n"
+    )
+    analyzer = CppAnalyzer()
+    analyzer.configure({"namespace_macro_definitions": {"ABI": "__1"}})
+    result = analyzer.analyze_file(path, tmp_path)
+    assert result.index_symbols
+    function = result.functions[0]
+    assert function.name == "outer::__1::run"
+    assert function.signature == "int run(int x)"
+    assert [(call.target, call.lineno, call.col_offset) for call in function.calls] == [
+        ("callee", 3, len("int run(int x) { /* café */ return ".encode()))
+    ]
