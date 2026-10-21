@@ -8,6 +8,11 @@ Returns
 -------
 None
     Source-only conditional selection; this module performs no filesystem reads.
+
+Notes
+-----
+At most 2,048 snapshots and 32,768 directive events are admitted. Active include
+traversal retains separate limits of 1,024 visits, 8 MiB and 64 nested includes.
 """
 
 from __future__ import annotations
@@ -25,6 +30,9 @@ _DIRECTIVE = re.compile(rb"(?m)^[ \t]*#[ \t]*([A-Za-z_][A-Za-z_0-9]*)([^\n]*)")
 _NAME = re.compile(rb"[A-Za-z_][A-Za-z_0-9]*")
 _RAW = re.compile(rb'(?:u8|u|U|L)?R"([^ ()\\\t\r\n]{0,16})\(')
 _SPLICE = re.compile(rb"\\\r?\n")
+
+_MAX_CAPTURE_FILES = 2048
+_MAX_DIRECTIVE_EVENTS = 32768
 
 
 @dataclass(frozen=True)
@@ -751,7 +759,7 @@ class _ContextWalk:
                 raise ValueError("macro query lies inside a preprocessing directive")
             self.events += 1
             if (
-                self.events > 16384
+                self.events > _MAX_DIRECTIVE_EVENTS
                 or len(self.environment.bindings) + len(self.environment.uncertain)
                 > 4096
             ):
@@ -1010,8 +1018,17 @@ def select_macro_environments(
     ------
     ValueError
         If names, paths, directives, query positions or traversal bounds fail.
+
+    Notes
+    -----
+    Captured but inactive headers count toward snapshot capacity without
+    consuming the independent active traversal budget.
     """
-    if path not in captures or len(captures) > 1024 or len(initial) > 4096:
+    if (
+        path not in captures
+        or len(captures) > _MAX_CAPTURE_FILES
+        or len(initial) > 4096
+    ):
         raise ValueError("invalid or excessive macro context inputs")
     if any(
         not name

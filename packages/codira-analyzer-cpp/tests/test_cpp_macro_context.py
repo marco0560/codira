@@ -651,7 +651,7 @@ def test_unavailable_include_remains_explicit() -> None:
         b'auto s = R"(unterminated',
         b'auto s = "unterminated',
         b"#if 1\n" * 65 + b"#endif\n" * 65,
-        b"#define M 1\n" * 16385,
+        b"#define M 1\n" * 32769,
         b"".join(b"#define M" + str(i).encode() + b" 1\n" for i in range(4097)),
     ],
 )
@@ -895,7 +895,7 @@ def test_include_attempts_and_real_reentries_stay_bounded(guarded: bool) -> None
     from codira_analyzer_cpp.cpp_macro_context import _ContextWalk
 
     header = b"#ifndef G\n#define G\n#endif\n" if guarded else b"#undef VALUE\n"
-    source = b'#include "header.h"\n' * (16400 if guarded else 1100)
+    source = b'#include "header.h"\n' * (32800 if guarded else 1100)
     walk = _ContextWalk(
         {"unit.cpp": source, "header.h": header},
         {("unit.cpp", "header.h", True): "header.h"},
@@ -944,8 +944,82 @@ def test_valid_directive_population_above_former_limit() -> None:
     None
         The final source definition still reaches the original query exactly.
     """
-    source = b"#define M 1\n" * 9000 + b"#define M 7\nQUERY\n"
+    source = b"#define M 1\n" * 18000 + b"#define M 7\nQUERY\n"
     selection = select_macro_environments(
         "main.cpp", (source.index(b"QUERY"),), {"main.cpp": source}, {}, {}
     )[source.index(b"QUERY")]
     assert dict(selection.bindings)[b"M"].definition == _MacroDefinition(None, b"7")
+
+
+@pytest.mark.parametrize("capture_count", [1342, 2048])
+def test_static_graph_can_exceed_visited_header_count(capture_count: int) -> None:
+    """Keep inactive snapshots without charging them as traversed source.
+
+    Parameters
+    ----------
+    capture_count : int
+        Full graph cardinality, including the source and one active header.
+
+    Returns
+    -------
+    None
+        The real included definition reaches the exact original query.
+    """
+    source = b'#include "value.h"\nQUERY\n'
+    captures = {
+        "unit.cpp": source,
+        "value.h": b"#define VALUE 7\n",
+        **{f"unused{i}.h": b"#error inactive\n" for i in range(capture_count - 2)},
+    }
+    offset = source.index(b"QUERY")
+    selected = select_macro_environments(
+        "unit.cpp",
+        (offset,),
+        captures,
+        {("unit.cpp", "value.h", True): "value.h"},
+        {},
+    )[offset]
+    assert dict(selected.bindings)[b"VALUE"].definition == _MacroDefinition(None, b"7")
+    walk = _ContextWalk(captures, {("unit.cpp", "value.h", True): "value.h"}, {})
+    walk.walk("unit.cpp", offsets=(offset,))
+    assert walk.visits == 2
+    assert walk.bytes == len(source) + len(captures["value.h"])
+
+
+def test_static_graph_still_rejects_excessive_snapshots() -> None:
+    """Reject oversized input graphs before any source traversal.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The finite graph capacity remains enforced.
+    """
+    captures = {"unit.cpp": b"QUERY", **{f"u{i}.h": b"" for i in range(2048)}}
+    with pytest.raises(ValueError, match="excessive macro context inputs"):
+        select_macro_environments("unit.cpp", (0,), captures, {}, {})
+
+
+def test_large_static_graph_keeps_active_visit_limit() -> None:
+    """Keep actual include work bounded inside an admitted static graph.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Distinct active includes still exhaust the original visit budget.
+    """
+    source = b"".join(f'#include "h{i}.h"\n'.encode() for i in range(1100))
+    captures = {
+        "unit.cpp": source,
+        **{f"h{i}.h": b"#undef VALUE\n" for i in range(1341)},
+    }
+    resolutions = {("unit.cpp", f"h{i}.h", True): f"h{i}.h" for i in range(1100)}
+    with pytest.raises(ValueError, match="include traversal limit"):
+        select_macro_environments("unit.cpp", (), captures, resolutions, {})

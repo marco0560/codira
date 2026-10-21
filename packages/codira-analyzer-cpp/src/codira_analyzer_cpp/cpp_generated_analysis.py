@@ -33,6 +33,7 @@ from .cpp_include_context import IncludeContext
 from .cpp_macro_context import (
     MacroSelection,
     _ContextWalk,
+    _MAX_CAPTURE_FILES,
     _directives,
 )
 from .cpp_macro_expansion import (
@@ -395,7 +396,7 @@ def analyze_generated_file(
             for h in context.headers
         },
     }
-    if len(captures) > 1024:
+    if len(captures) > _MAX_CAPTURE_FILES:
         raise ValueError("macro context capture limit exceeded")
     identity = json.loads(context.identity)
     resolutions = {

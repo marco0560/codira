@@ -702,3 +702,39 @@ def test_declarations_after_multiline_assertion_keep_physical_lines(
         ("after", 5, 5, ())
     ]
     assert next(d for d in result.declarations if d.kind == "type_alias").lineno == 5
+
+
+def test_large_inactive_include_graph_preserves_statement_analysis(
+    tmp_path: Path,
+) -> None:
+    """Analyze an SDK-sized graph while keeping inactive headers out of the walk.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Trusted source and literal include root.
+
+    Returns
+    -------
+    None
+        The active assertion macro and original function ownership are retained.
+    """
+    (tmp_path / "assert.h").write_text("#define CHECK(X) static_assert(X)\n")
+    includes = []
+    for i in range(1340):
+        (tmp_path / f"unused{i}.h").write_text("#error inactive header\n")
+        includes.append(f'#include "unused{i}.h"\n')
+    source = (
+        '#include "assert.h"\n#if 0\n'
+        + "".join(includes)
+        + "#endif\nvoid entry() { CHECK(true); }\n"
+    ).encode()
+    result = _analyze(tmp_path, source)
+    assert result.status is None and result.index_symbols
+    assert [f.name for f in result.functions] == ["entry"]
+    function = result.functions[0]
+    assert function.signature == "void entry()"
+    assert [c.target for c in function.calls] == ["CHECK"]
+    call = function.calls[0]
+    assert call.lineno == source[: source.index(b"CHECK(true)")].count(b"\n") + 1
+    assert call.col_offset == 15
