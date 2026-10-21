@@ -26,6 +26,51 @@ from codira_analyzer_cpp.cpp_macro_projection import (
     project_macro_replacements,
 )
 from codira_analyzer_cpp.cpp_syntax import _new_parser
+from codira_analyzer_cpp.cpp_preprocessing import _original_declaration_start
+from codira_analyzer_cpp.cpp_projection import _source_projection
+
+
+@pytest.mark.parametrize("mask_generated", [False, True])
+def test_source_layout_preserves_annotation_padding_without_generated_spelling(
+    mask_generated: bool,
+) -> None:
+    """Carry provider blanks through physical and repeated source projections.
+
+    Parameters
+    ----------
+    mask_generated : bool
+        Whether the parsed view also blanks a generated replacement keyword.
+
+    Returns
+    -------
+    None
+        Annotation padding survives while original invocation bytes remain intact.
+    """
+    source = "// café\r\nMARK bool entry() { TOKEN(); return true; }\r\n".encode()
+    first = source.index(b"TOKEN()")
+    mapping = _source_projection(
+        source, [(first, first + len(b"TOKEN()"), b"static_assert(true)")]
+    )
+    view = mapping.expanded.replace(b"MARK", b"    ")
+    if mask_generated:
+        view = view.replace(b"static_assert", b" " * len(b"static_assert"))
+    root = _new_parser().parse(view).root_node
+    assert not root.has_error
+    projected = mapping.tree(root)
+    expected = source.replace(b"MARK", b"    ")
+    assert projected.text == expected
+    assert mapping.source == source
+    assert b"TOKEN()" in projected.text
+    function = next(
+        n for n in projected.named_children if n.type == "function_definition"
+    )
+    assert _original_declaration_start(function, source) == source.index(b"MARK")
+    repeated = _source_projection(source, []).tree(projected)
+    assert repeated.text == expected
+    function = next(
+        n for n in repeated.named_children if n.type == "function_definition"
+    )
+    assert _original_declaration_start(function, source) == source.index(b"MARK")
 
 
 @pytest.mark.parametrize(

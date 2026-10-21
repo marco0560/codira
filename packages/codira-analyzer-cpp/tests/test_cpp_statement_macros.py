@@ -43,6 +43,88 @@ def _analyze(
     return analyzer.analyze_file(path, tmp_path)
 
 
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "MARK ",
+        "MARK\r\n",
+        '_Pragma("GCC diagnostic push")\r\nMARK ',
+        "MARK /* boundary */ ",
+    ],
+)
+def test_statement_projection_retains_original_header_boundaries(
+    tmp_path: Path, prefix: str
+) -> None:
+    """Preserve annotation, comment and pragma boundaries after statement mapping.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Trusted root for original source controls.
+    prefix : str
+        Physical header prefix, including multiline and pragma cases.
+
+    Returns
+    -------
+    None
+        Projection matches direct syntax without moving source call coordinates.
+    """
+    source = (
+        "// café\r\n#define MARK constexpr\r\n"
+        "#define CHECK(X) static_assert(X)\r\n"
+        f"{prefix}bool entry() {{ CHECK(true); return true; }}\r\n"
+    ).encode()
+    direct = _analyze(tmp_path, source.replace(b"CHECK(true)", b"static_assert(true)"))
+    result = _analyze(tmp_path, source)
+    assert result.index_symbols and result.status is None
+    assert direct.index_symbols and direct.status is None
+    function, expected = result.functions[0], direct.functions[0]
+    assert (function.signature, function.lineno, function.end_lineno) == (
+        expected.signature,
+        expected.lineno,
+        expected.end_lineno,
+    )
+    if "boundary" not in prefix:
+        assert function.signature == "MARK bool entry()"
+    call = function.calls[0]
+    offset = source.index(b"CHECK(true)")
+    assert (call.target, call.lineno, call.col_offset) == (
+        "CHECK",
+        source[:offset].count(b"\n") + 1,
+        offset - source.rfind(b"\n", 0, offset) - 1,
+    )
+
+
+def test_statement_projection_preserves_other_callable_annotation_prefixes(
+    tmp_path: Path,
+) -> None:
+    """Retain original method and unrelated function headers across one projection.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Trusted root containing unchanged physical source.
+
+    Returns
+    -------
+    None
+        One assertion expansion cannot strip another callable's leading annotation.
+    """
+    source = (
+        b"#define MARK constexpr\n#define CHECK(X) static_assert(X)\n"
+        b"struct Item { MARK bool empty() const {return true;} };\n"
+        b"MARK bool entry() {CHECK(true);return true;}\n"
+        b"MARK bool other() {return false;}\n"
+    )
+    result = _analyze(tmp_path, source)
+    assert result.index_symbols and result.status is None
+    assert [f.signature for f in result.functions] == [
+        "MARK bool entry()",
+        "MARK bool other()",
+    ]
+    assert result.classes[0].methods[0].signature == "MARK bool empty() const"
+
+
 @pytest.mark.parametrize("name", ["ASSERT_TYPES", "assert_types"])
 def test_variadic_type_assertion_retains_macro_hint(tmp_path: Path, name: str) -> None:
     """Accept template commas while preserving the physical source invocation.

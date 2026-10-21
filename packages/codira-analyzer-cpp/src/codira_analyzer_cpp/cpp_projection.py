@@ -34,7 +34,7 @@ class _ProjectedNode:
     has_error, is_error, is_missing : bool
         Provider diagnostics, retained without modification.
     text : bytes
-        Coordinate-aligned buffer before variable-width expansion.
+        Original-coordinate parser layout, retaining licensed annotation blanks.
     syntax_text : bytes
         Actual parsed text, for expanded namespace identities only.
     children, named_children : list[_ProjectedNode], optional
@@ -196,7 +196,8 @@ class _SourceProjection:
         _ProjectedNode
             Equivalent tree with original coordinates and namespace syntax text.
         """
-        projected = self.node(root)
+        layout = self._parser_layout(root)
+        projected = self.node(root, source_layout=layout)
         pending = [(root, projected)]
         while pending:
             native, parent = pending.pop()
@@ -204,7 +205,7 @@ class _SourceProjection:
             named = set(native.named_children)
             children: Sequence[SyntaxNode] = native.children
             for index, child in enumerate(children):
-                mapped = self.node(child)
+                mapped = self.node(child, source_layout=layout)
                 mapped.parent = parent
                 mapped.prev_sibling = previous
                 parent.children.append(mapped)
@@ -218,13 +219,57 @@ class _SourceProjection:
                 previous = mapped
         return projected
 
-    def node(self, node: SyntaxNode) -> _ProjectedNode:
+    def _parser_layout(self, root: SyntaxNode) -> bytes:
+        """Retain parser annotation blanks only across unchanged physical spelling.
+
+        Parameters
+        ----------
+        root : SyntaxNode
+            Parsed root whose coordinate-aligned text may erase annotations.
+
+        Returns
+        -------
+        bytes
+            Original-width layout; generated segments and nonblank rewrites retain
+            their original bytes. Unavailable or misaligned views authorize no mask.
+        """
+        parsed = root.text
+        if parsed is None or len(parsed) != root.end_byte - root.start_byte:
+            return self.source
+        layout: bytearray | None = None
+        whitespace = b" \t\r\n\f"
+        for first, last, original, original_end, replaced in self.segments:
+            if (
+                replaced
+                or last - first != original_end - original
+                or self.expanded[first:last] != self.source[original:original_end]
+            ):
+                continue
+            start, end = max(first, root.start_byte), min(last, root.end_byte)
+            if start >= end:
+                continue
+            raw = self.expanded[start:end]
+            view = parsed[start - root.start_byte : end - root.start_byte]
+            if raw == view:
+                continue
+            for index, (before, after) in enumerate(zip(raw, view, strict=True)):
+                if after in b" \t\f" and before not in whitespace:
+                    if layout is None:
+                        layout = bytearray(self.source)
+                    layout[original + start - first + index] = after
+        return self.source if layout is None else bytes(layout)
+
+    def node(
+        self, node: SyntaxNode, *, source_layout: bytes | None = None
+    ) -> _ProjectedNode:
         """Copy scalar provider data with original byte and point boundaries.
 
         Parameters
         ----------
         node : SyntaxNode
             Native syntax node.
+        source_layout : bytes or None, optional
+            Original-width parser layout with independently retained blanks.
 
         Returns
         -------
@@ -242,7 +287,7 @@ class _SourceProjection:
             has_error=node.has_error,
             is_error=node.is_error,
             is_missing=node.is_missing,
-            text=self.source[start:end],
+            text=(self.source if source_layout is None else source_layout)[start:end],
             syntax_text=node.syntax_text
             if isinstance(node, _ProjectedNode)
             else self.expanded[node.start_byte : node.end_byte],
