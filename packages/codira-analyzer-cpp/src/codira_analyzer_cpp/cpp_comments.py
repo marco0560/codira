@@ -17,7 +17,46 @@ from collections.abc import Sequence
 
 from .cpp_projection import SyntaxNode as Node
 
-from .cpp_syntax import _comment_to_doxygen_text, _comment_to_summary, _node_text
+from .cpp_syntax import (
+    _comment_to_doxygen_text,
+    _comment_to_summary,
+    _conditional_children,
+    _node_text,
+)
+
+CommentMaps = tuple[dict[int, str], dict[int, tuple[str, int, int | None]]]
+
+
+def source_comment_maps(root: Node, source: bytes) -> CommentMaps:
+    """Snapshot physical comment attachment before a visibility view drops syntax.
+
+    Parameters
+    ----------
+    root : SyntaxNode
+        Ordinary recovered syntax retaining physical directive/comment barriers.
+    source : bytes
+        The same unmasked source buffer used by the attachment policy.
+
+    Returns
+    -------
+    CommentMaps
+        Summary attachments by byte offset and Doxygen attachments by line.
+    """
+    summaries: dict[int, str] = {}
+    doxygen: dict[int, tuple[str, int, int | None]] = {}
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type in {
+            "translation_unit",
+            "declaration_list",
+            "field_declaration_list",
+        }:
+            children = tuple(_conditional_children(node.children))
+            summaries.update(_attached_comment_map(children, source))
+            doxygen.update(_attached_doxygen_comment_map(children, source))
+        pending.extend(node.named_children)
+    return summaries, doxygen
 
 
 def _leading_module_doxygen(

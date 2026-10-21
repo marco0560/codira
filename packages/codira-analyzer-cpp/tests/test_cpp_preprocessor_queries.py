@@ -549,10 +549,10 @@ def test_warning_feature_uses_exact_literal_operand(tmp_path: Path) -> None:
     assert result.index_symbols and result.status is None
 
 
-def test_known_warning_query_does_not_suppress_original_grammar_errors(
+def test_known_warning_query_licenses_root_conditional_visibility(
     tmp_path: Path,
 ) -> None:
-    """Retain the separate provider gap for string operands in a root directive.
+    """Resolve string operands using explicit facts before rendering root syntax.
 
     Parameters
     ----------
@@ -562,7 +562,7 @@ def test_known_warning_query_does_not_suppress_original_grammar_errors(
     Returns
     -------
     None
-        Query facts license definitions without masking unrelated grammar recovery.
+        Only the known branch contributes its generated function declaration.
     """
     config = _feature_config()
     definitions = config["preprocessor_definitions"]
@@ -576,11 +576,9 @@ def test_known_warning_query_does_not_suppress_original_grammar_errors(
         b"#else\n#error unknown warning\n#endif\nDECLARE(entry) {}\n",
         config,
     )
-    assert not result.index_symbols and result.status is not None
-    assert any("Tree-sitter recovered" in d.message for d in result.status.diagnostics)
-    assert not any(
-        "active error directive" in d.message for d in result.status.diagnostics
-    )
+    assert result.index_symbols and result.status is None
+    assert [f.name for f in result.functions] == ["entry"]
+    assert result.functions[0].generated is not None
 
 
 def test_intrinsic_answer_rescan_retains_substitution_bound() -> None:

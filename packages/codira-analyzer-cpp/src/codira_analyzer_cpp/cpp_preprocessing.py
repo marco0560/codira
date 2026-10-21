@@ -22,6 +22,7 @@ from .cpp_projection import SyntaxNode as Node, _source_projection
 
 from .cpp_syntax import _new_parser
 from .cpp_dependent_construction import _dependent_construction_source
+from .cpp_macro_context import _directives
 
 _IDENTIFIER = re.compile(rb"\b[A-Za-z_][A-Za-z_0-9]*\b")
 _MS_PRAGMA_RAW_STRING = re.compile(rb'(?:u8|u|U|L)?R"([^ ()\\\t\r\n]{0,16})\(')
@@ -1638,6 +1639,8 @@ def _conditional_else_source(
     root: Node,
     parser: Parser,
     included_sources: tuple[tuple[bytes, int], ...],
+    *,
+    retained_regions: list[tuple[int, int]] | None = None,
 ) -> bytes:
     """Join a single guarded else arm without selecting a compilation branch.
 
@@ -1651,6 +1654,8 @@ def _conditional_else_source(
         Package-local parser used to validate the resulting ownership.
     included_sources : tuple[tuple[bytes, int], ...]
         Captured headers whose keyword overrides prevent this adaptation.
+    retained_regions : list[tuple[int, int]] or None, optional
+        Receive complete proven guard ranges after all ownership checks pass.
 
     Returns
     -------
@@ -1767,6 +1772,10 @@ def _conditional_else_source(
                 != (after.start_byte, after.end_byte)
             ):
                 return source
+    if retained_regions is not None:
+        retained_regions.extend(
+            (ranges[0][0], ranges[-1][1]) for _, _, _, ranges in candidates
+        )
     return view
 
 
@@ -1919,7 +1928,8 @@ def _original_declaration_start(node: Node, source: bytes) -> int:
     -------
     int
         Original declaration start, extended over blanked annotations while skipping
-        standalone pragma prefixes. Siblings and comments bound the gap.
+        standalone pragma prefixes. Siblings, comments and masked directives
+        outside the declaration bound the gap.
     """
     parent = node.parent
     if parent is None:
@@ -1937,6 +1947,17 @@ def _original_declaration_start(node: Node, source: bytes) -> int:
     ]
     if projected_gap.strip():
         return node.start_byte
+    # A known activity view can blank entire earlier branches. They are not
+    # declaration annotations, even when no surviving sibling separates them.
+    if b"#" in gap:
+        try:
+            directives = _directives(gap)
+        except ValueError:
+            return node.start_byte
+        if directives:
+            boundary = directives[-1][1]
+            lower += boundary
+            gap = gap[boundary:]
     cursor = len(gap) - len(gap.lstrip())
     while (
         gap[cursor : cursor + 8] == b"__pragma"

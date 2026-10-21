@@ -19,6 +19,7 @@ from .cpp_macro_expansion import _MacroToken, _macro_tokens
 from .cpp_projection import SyntaxNode, _ProjectedNode, _SourceProjection
 
 
+@dataclass(frozen=True)
 class _TokenProjection(_SourceProjection):
     """Use the preceding token for an exclusive end at a token boundary.
 
@@ -26,12 +27,36 @@ class _TokenProjection(_SourceProjection):
     ----------
     source, expanded, segments, starts, lines
         Original and projected bytes with the inherited interval mapping.
+    masked_spans : tuple[tuple[int, int], ...], optional
+        Licensed original-coordinate blanks, distinct from physical spelling.
 
     Returns
     -------
     None
         Keeps adjacent argument and replacement origins separate.
     """
+
+    masked_spans: tuple[tuple[int, int], ...] = ()
+
+    def _parser_layout(self, root: SyntaxNode) -> bytes:
+        """Combine annotation padding with separately licensed activity blanks.
+
+        Parameters
+        ----------
+        root : SyntaxNode
+            Parsed root over this projection.
+
+        Returns
+        -------
+        bytes
+            Original-width layout without claiming masked bytes are spelling.
+        """
+        layout = bytearray(super()._parser_layout(root))
+        for first, last in self.masked_spans:
+            for offset in range(first, last):
+                if layout[offset] not in (10, 13):
+                    layout[offset] = 32
+        return bytes(layout)
 
     def offset(self, value: int, *, end: bool = False) -> int:
         """Map a token boundary without borrowing the next token's origin.
@@ -138,6 +163,11 @@ class MacroProjection:
         Unchanged byte intervals; generated intervals are deliberately excluded.
     generated_tokens : tuple[ProjectedToken, ...]
         Rendered tokens with separate argument spelling evidence when available.
+    coordinate_segments : tuple[tuple[int, int, int], ...], optional
+        Projected start and original start/end for coordinate-only copied ranges,
+        including licensed blanks. These do not license physical spelling.
+    masked_spans : tuple[tuple[int, int], ...], optional
+        Original-coordinate source intervals blanked by known activity.
 
     Returns
     -------
@@ -149,6 +179,8 @@ class MacroProjection:
     source: bytes
     original_segments: tuple[SourceSegment, ...]
     generated_tokens: tuple[ProjectedToken, ...]
+    coordinate_segments: tuple[tuple[int, int, int], ...] = ()
+    masked_spans: tuple[tuple[int, int], ...] = ()
 
     def physical_span(
         self, start: int, end: int, *, include_arguments: bool = False
@@ -198,11 +230,10 @@ class MacroProjection:
         _ProjectedNode
             Tree with physical argument spelling and explicit replacement anchors.
         """
-        intervals = [
-            (s.projected_start, s.projected_start + b - a, a, b, False)
-            for s in self.original_segments
-            for a, b in (s.original_span,)
-        ]
+        coordinates = self.coordinate_segments or tuple(
+            (s.projected_start, *s.original_span) for s in self.original_segments
+        )
+        intervals = [(start, start + b - a, a, b, False) for start, a, b in coordinates]
         intervals.extend(
             (
                 *t.projected_span,
@@ -231,6 +262,7 @@ class MacroProjection:
             tuple(segments),
             tuple(s[0] for s in segments),
             (0, *(i + 1 for i, byte in enumerate(self.original) if byte == 10)),
+            self.masked_spans,
         )
         return mapping.tree(root)
 

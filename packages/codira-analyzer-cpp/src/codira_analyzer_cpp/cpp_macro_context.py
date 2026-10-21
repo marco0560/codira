@@ -33,6 +33,7 @@ _SPLICE = re.compile(rb"\\\r?\n")
 
 _MAX_CAPTURE_FILES = 2048
 _MAX_DIRECTIVE_EVENTS = 32768
+SourceActivity = tuple[int, int, bool | None, bytes | None]
 
 
 @dataclass(frozen=True)
@@ -571,6 +572,8 @@ class _ContextWalk:
         Explicit intrinsic answers bound to source and profile context.
     feature_resolver : FeatureQueryResolver or None, optional
         The same licensed pure intrinsic answers after ordinary macro rescan.
+    track_root_activity : bool, optional
+        Retain bounded primary-source regions without copying macro environments.
 
     Returns
     -------
@@ -587,6 +590,7 @@ class _ContextWalk:
         query_offsets: Mapping[str, tuple[int, ...]] | None = None,
         query_resolver: ConditionQueryResolver | None = None,
         feature_resolver: FeatureQueryResolver | None = None,
+        track_root_activity: bool = False,
     ) -> None:
         """Snapshot explicit macro state and initialize traversal bounds.
 
@@ -604,6 +608,8 @@ class _ContextWalk:
             Explicit source/profile-bound intrinsic answers; never branch values.
         feature_resolver : FeatureQueryResolver or None, optional
             Licensed pure intrinsic answers reached through captured aliases.
+        track_root_activity : bool, optional
+            Record primary-source regions and directive activity for syntax views.
 
         Returns
         -------
@@ -636,6 +642,8 @@ class _ContextWalk:
         self.file_results: dict[tuple[str, int], list[MacroSelection]] = {}
         self.query_events: dict[tuple[str, int], list[int]] = {}
         self.query_sequence = 0
+        self.track_root_activity = track_root_activity
+        self.root_activity: list[SourceActivity] = []
 
     def save_query(self, path: str, offset: int, active: bool | None) -> None:
         """Retain per-visit declaration activity without conflating file offsets.
@@ -705,7 +713,12 @@ class _ContextWalk:
         ValueError
             If bounds, source directives, queries or unguarded cycles are invalid.
         """
+        primary = self.track_root_activity and not self.stack
+        if primary:
+            self.root_activity = []
         if path in self.environment.once:
+            if primary:
+                self.root_activity.append((0, len(self.captures[path]), False, None))
             return
         offsets = offsets or self.query_offsets.get(path, ())
         skipped = None
@@ -726,6 +739,8 @@ class _ContextWalk:
             and cached_binding is not None
             and cached_binding.definition is not None
         ):
+            if primary:
+                self.root_activity.append((0, len(self.captures[path]), False, None))
             if skipped is not None:
                 self.environment = _merge([skipped, self.environment])
             return
@@ -744,6 +759,8 @@ class _ContextWalk:
         guard = self.guards[path]
         binding = self.environment.bindings.get(guard) if guard is not None else None
         if not offsets and binding is not None and binding.definition is not None:
+            if primary:
+                self.root_activity.append((0, len(self.captures[path]), False, None))
             self.stack.pop()
             if skipped is not None:
                 self.environment = _merge([skipped, self.environment])
@@ -751,7 +768,10 @@ class _ContextWalk:
         frames: list[_Conditional] = []
         active = parent
         query = 0
+        cursor = 0
         for start, end, kind, payload in self.cache[path]:
+            if primary and cursor < start:
+                self.root_activity.append((cursor, start, active, None))
             while query < len(offsets) and offsets[query] < start:
                 self.save_query(path, offsets[query], active)
                 query += 1
@@ -819,6 +839,9 @@ class _ContextWalk:
                 active = frame.parent
             elif active is not False:
                 self.directive(path, start, end, kind, payload, active)
+            if primary:
+                self.root_activity.append((start, end, active, kind))
+            cursor = end
         if frames:
             raise ValueError("unterminated preprocessing conditional")
         if len(self.environment.bindings) + len(self.environment.uncertain) > 4096:
@@ -826,6 +849,8 @@ class _ContextWalk:
         while query < len(offsets):
             self.save_query(path, offsets[query], active)
             query += 1
+        if primary and cursor < len(self.captures[path]):
+            self.root_activity.append((cursor, len(self.captures[path]), active, None))
         self.stack.pop()
         if skipped is not None:
             self.environment = _merge([skipped, self.environment])

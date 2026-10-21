@@ -30,6 +30,7 @@ from codira.generated import (
 from codira.models import AnalysisResult, CallSite, OverloadArtifact
 
 from .cpp_include_context import IncludeContext
+from .cpp_active_source import project_root_activity
 from .cpp_macro_context import (
     MacroSelection,
     _ContextWalk,
@@ -49,7 +50,7 @@ from .cpp_macro_projection import (
 )
 from .cpp_namespace_bindings import _parse_with_namespace_bindings
 from .cpp_projection import SyntaxNode, _ProjectedNode
-from .cpp_preprocessing import _original_declaration_start
+from .cpp_preprocessing import _conditional_else_source, _original_declaration_start
 from .cpp_syntax import (
     _function_stable_id,
     _node_text,
@@ -427,6 +428,7 @@ def analyze_generated_file(
         feature_resolver=None
         if query_answers is None
         else query_answers.expand_feature,
+        track_root_activity=True,
     )
     walk.walk(key, offsets=tuple(sorted({item[0] for item in candidates})))
     replacements = []
@@ -503,9 +505,31 @@ def analyze_generated_file(
                 argument_tree,
             )
         )
-    if not replacements:
+    if not replacements and not any(
+        active is False or directive in {b"if", b"ifdef", b"ifndef"}
+        for _, _, active, directive in walk.root_activity
+    ):
         return analyzer._analyze_captured_file(path, root, context)
-    projection = project_macro_replacements(source, tuple(replacements))
+    retained_regions: list[tuple[int, int]] = []
+    if b"else" in source:
+        parser = _new_parser()
+        _conditional_else_source(
+            source,
+            parser.parse(source).root_node,
+            parser,
+            tuple((h.source, h.available_after) for h in context.headers),
+            retained_regions=retained_regions,
+        )
+    unmasked = project_macro_replacements(source, tuple(replacements))
+    projection = project_root_activity(
+        unmasked,
+        walk.root_activity,
+        retained_regions=retained_regions,
+    )
+    if not replacements:
+        if not projection.masked_spans:
+            return analyzer._analyze_captured_file(path, root, context)
+        return _analyze_statements(analyzer, path, root, context, projection, ())
     expansions = []
     token_index = 0
     for span, tokens, selection, used, namespace, statement, argument_tree in records:
@@ -530,7 +554,12 @@ def analyze_generated_file(
         return _analyze_statements(
             analyzer, path, root, context, projection, tuple(expansions)
         )
-    result = analyzer._analyze_captured_file(path, root, projected_context)
+    result = analyzer._analyze_captured_file(
+        path,
+        root,
+        projected_context,
+        comment_source=unmasked.source if projection.masked_spans else None,
+    )
     return _finalize(
         analyzer,
         path,
@@ -738,7 +767,11 @@ def _analyze_statements(
             )
     physical_tree = _statement_tree(context.source, projection, tree, expansions)
     return analyzer._analyze_captured_file(
-        path, root, context, syntax_root=physical_tree
+        path,
+        root,
+        context,
+        syntax_root=physical_tree,
+        comment_source=context.source if projection.masked_spans else None,
     )
 
 
@@ -768,13 +801,15 @@ def _projected_context(
     for header in context.headers:
         boundary = next(
             (
-                segment.projected_start
-                + header.available_after
-                - segment.original_span[0]
-                for segment in projection.original_segments
-                if segment.original_span[0]
-                <= header.available_after
-                <= segment.original_span[1]
+                projected_start + header.available_after - first
+                for projected_start, first, last in (
+                    projection.coordinate_segments
+                    or tuple(
+                        (s.projected_start, *s.original_span)
+                        for s in projection.original_segments
+                    )
+                )
+                if first <= header.available_after <= last
             ),
             None,
         )

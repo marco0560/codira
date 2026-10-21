@@ -78,10 +78,12 @@ from .cpp_syntax import (
 )
 
 from .cpp_comments import (
+    CommentMaps,
     _attached_comment_map,
     _attached_doxygen_comment_map,
     _leading_module_comment,
     _leading_module_doxygen,
+    source_comment_maps,
 )
 
 from .cpp_documentation import _documentation_artifacts
@@ -1870,6 +1872,12 @@ class _CppAnalysisBuilder:
         File-scoped owner identity preserving the source suffix.
     known_class_names : set[str]
         Qualified class names collected from the file.
+    comment_maps : CommentMaps or None, optional
+        Unmasked source attachment facts, independent of syntax visibility.
+
+    Returns
+    -------
+    None
     """
 
     def __init__(
@@ -1879,7 +1887,27 @@ class _CppAnalysisBuilder:
         root: Node,
         owner_id: str,
         known_class_names: set[str],
+        comment_maps: CommentMaps | None = None,
     ) -> None:
+        """Initialize artifact accumulators and optional physical comment facts.
+
+        Parameters
+        ----------
+        source : bytes
+            Buffer used for declaration and callable extraction.
+        root : SyntaxNode
+            Syntax view rooted in the same coordinate space.
+        owner_id : str
+            File-scoped symbol identity.
+        known_class_names : set[str]
+            Collected qualified class names.
+        comment_maps : CommentMaps or None, optional
+            Attachments captured before visibility projection.
+
+        Returns
+        -------
+        None
+        """
         self.source = source
         self.root = root
         self.owner_id = owner_id
@@ -1888,6 +1916,9 @@ class _CppAnalysisBuilder:
         self.functions_by_key: dict[tuple[str, tuple[str, ...]], _PendingFunction] = {}
         self.declarations_by_id: dict[str, DeclarationArtifact] = {}
         self.doxygen_by_lineno: dict[int, tuple[str, int, int | None]] = {}
+        self.source_comments = comment_maps[0] if comment_maps is not None else None
+        if comment_maps is not None:
+            self.doxygen_by_lineno.update(comment_maps[1])
 
     def _ensure_class_builder(
         self,
@@ -2243,10 +2274,12 @@ class _CppAnalysisBuilder:
 
         current_public = node.type in {"struct_specifier", "union_specifier"}
         children = tuple(_conditional_children(field_list.children))
-        attached_comments = _attached_comment_map(children, self.source)
-        self.doxygen_by_lineno.update(
-            _attached_doxygen_comment_map(children, self.source)
-        )
+        attached_comments = self.source_comments
+        if attached_comments is None:
+            attached_comments = _attached_comment_map(children, self.source)
+            self.doxygen_by_lineno.update(
+                _attached_doxygen_comment_map(children, self.source)
+            )
         for child in children:
             if child.type == "access_specifier":
                 current_public = _node_text(child, self.source) in {
@@ -2539,10 +2572,12 @@ class _CppAnalysisBuilder:
             Matching artifacts are stored in place.
         """
         children = tuple(_conditional_children(children))
-        attached_comments = _attached_comment_map(children, self.source)
-        self.doxygen_by_lineno.update(
-            _attached_doxygen_comment_map(children, self.source)
-        )
+        attached_comments = self.source_comments
+        if attached_comments is None:
+            attached_comments = _attached_comment_map(children, self.source)
+            self.doxygen_by_lineno.update(
+                _attached_doxygen_comment_map(children, self.source)
+            )
         for child in children:
             if child.type in {"comment", "preproc_include"}:
                 continue
@@ -3002,7 +3037,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "32"
+    version = "33"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -3447,6 +3482,7 @@ class CppAnalyzer:
         context: IncludeContext,
         *,
         syntax_root: Node | None = None,
+        comment_source: bytes | None = None,
     ) -> AnalysisResult:
         """Extract ordinary syntax from an explicitly supplied immutable snapshot.
 
@@ -3458,6 +3494,8 @@ class CppAnalyzer:
             Exact source/header bytes, possibly a generated parser projection.
         syntax_root : SyntaxNode or None, optional
             Statement-only syntax already mapped to the original source buffer.
+        comment_source : bytes or None, optional
+            Unmasked source in the same coordinate space for physical attachment.
 
         Returns
         -------
@@ -3477,12 +3515,23 @@ class CppAnalyzer:
                 ),
             )
         )
+        comment_root = root_node
+        if comment_source is not None:
+            comment_root = _parse_with_namespace_bindings(
+                comment_source,
+                bindings=self._namespace_macro_definitions,
+                included_sources=tuple(
+                    (header.source, header.available_after)
+                    for header in context.headers
+                ),
+            )
+        comment_bytes = source if comment_source is None else comment_source
         module_comment = (
-            _leading_module_comment(root_node, source)
+            _leading_module_comment(comment_root, comment_bytes)
             if self._use_leading_comments
             else None
         )
-        module_doxygen = _leading_module_doxygen(root_node, source)
+        module_doxygen = _leading_module_doxygen(comment_root, comment_bytes)
         module_name = _module_name_for_path(path, root)
         module_stable_id = _module_stable_id(path, root)
         owner_id = _symbol_owner_id(path, root)
@@ -3492,6 +3541,11 @@ class CppAnalyzer:
             root=root_node,
             owner_id=owner_id,
             known_class_names=known_class_names,
+            comment_maps=(
+                source_comment_maps(comment_root, comment_bytes)
+                if comment_source is not None
+                else None
+            ),
         )
         result = builder.build(
             source_path=path,
