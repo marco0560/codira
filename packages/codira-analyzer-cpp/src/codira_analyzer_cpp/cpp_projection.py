@@ -47,6 +47,9 @@ class _ProjectedNode:
         Field names by child position.
     macro_hint : str or None, optional
         Source invocation retained on an expanded statement node.
+    macro_arguments : tree_sitter.Node or None, optional
+        Separately parsed original arguments erased by a selected replacement.
+        Only lexical call extraction visits this detached source tree.
 
     Returns
     -------
@@ -71,6 +74,7 @@ class _ProjectedNode:
     fields: dict[str, _ProjectedNode] = field(default_factory=dict)
     field_names: list[str | None] = field(default_factory=list)
     macro_hint: str | None = None
+    macro_arguments: Node | None = None
 
     def child_by_field_name(self, name: str) -> _ProjectedNode | None:
         """Find the first child carrying a provider field.

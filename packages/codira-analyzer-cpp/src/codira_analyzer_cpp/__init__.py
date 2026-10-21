@@ -1007,7 +1007,8 @@ def _extract_calls(
     Returns
     -------
     tuple[codira.models.CallSite, ...]
-        Call records in deterministic source order.
+        Call records in deterministic source order, including written operands
+        erased by a source-selected statement macro.
     """
     if body is None:
         return ()
@@ -1027,6 +1028,14 @@ def _extract_calls(
                     external_target_name=node.macro_hint,
                 )
             )
+            if node.macro_arguments is not None:
+                calls.extend(
+                    _extract_calls(
+                        node.macro_arguments,
+                        source,
+                        parameter_names=parameter_names,
+                    )
+                )
         if node.type != "call_expression":
             continue
         call = _call_site_from_expression(node, source)
@@ -2986,7 +2995,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "27"
+    version = "28"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",

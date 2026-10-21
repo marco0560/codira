@@ -20,6 +20,8 @@ from pathlib import Path
 import re
 from typing import TYPE_CHECKING
 
+from tree_sitter import Node
+
 from codira.generated import (
     GeneratedCallableProvenance,
     GeneratedTokenProvenance,
@@ -154,6 +156,8 @@ class _Expansion:
         Whether this replacement supplies a namespace declaration name.
     statement : bool, optional
         Whether this replacement supplies one source-owned static assertion.
+    arguments : tree_sitter.Node or None, optional
+        Original argument syntax when a replacement completely erases operands.
 
     Returns
     -------
@@ -168,6 +172,7 @@ class _Expansion:
     projected_span: tuple[int, int]
     namespace: bool = False
     statement: bool = False
+    arguments: Node | None = None
 
 
 def _invocations(source: bytes) -> tuple[tuple[int, int, bytes, bool], ...]:
@@ -442,6 +447,7 @@ def analyze_generated_file(
         tokens = expander.expand(_macro_tokens(source[first:last], offset=first))
         if not expander.used:
             continue
+        argument_tree = None
         if statement:
             if not tokens or tokens[0].spelling != b"static_assert":
                 continue
@@ -463,9 +469,13 @@ def analyze_generated_file(
                 t.spelling != b"," and (t.start, t.end) not in preserved
                 for t in arguments
             ):
-                raise ValueError(
-                    "statement macro erases or transforms call-shaped argument spelling"
-                )
+                if any(
+                    t.argument or t.operation in {"paste", "stringify"} for t in tokens
+                ):
+                    raise ValueError(
+                        "statement macro erases or transforms call-shaped argument spelling"
+                    )
+                argument_tree = _statement_argument_tree(source, first, last)
         replacements.append(MacroReplacement((first, last), tokens))
         records.append(
             (
@@ -475,6 +485,7 @@ def analyze_generated_file(
                 frozenset(expander.used),
                 namespace,
                 statement,
+                argument_tree,
             )
         )
     if not replacements:
@@ -482,7 +493,7 @@ def analyze_generated_file(
     projection = project_macro_replacements(source, tuple(replacements))
     expansions = []
     token_index = 0
-    for span, tokens, selection, used, namespace, statement in records:
+    for span, tokens, selection, used, namespace, statement, argument_tree in records:
         rendered = projection.generated_tokens[token_index : token_index + len(tokens)]
         if not rendered:
             raise ValueError("declaration expansion produced no syntax")
@@ -495,6 +506,7 @@ def analyze_generated_file(
                 (rendered[0].projected_span[0], rendered[-1].projected_span[1]),
                 namespace,
                 statement,
+                argument_tree,
             )
         )
         token_index += len(tokens)
@@ -515,6 +527,102 @@ def analyze_generated_file(
         resolutions,
         result,
     )
+
+
+def _statement_argument_tree(source: bytes, first: int, last: int) -> Node:
+    """Parse erased written operands separately without adding declaration syntax.
+
+    Parameters
+    ----------
+    source : bytes
+        Immutable physical translation unit.
+    first, last : int
+        Complete selected macro invocation boundaries.
+
+    Returns
+    -------
+    tree_sitter.Node
+        Argument list with unchanged physical byte and line coordinates.
+
+    Raises
+    ------
+    ValueError
+        If the invocation cannot be parsed as exactly one ordinary call.
+    """
+    prefix = re.sub(rb"[^\r\n]", b" ", source[:first])
+    root = _new_parser().parse(prefix + source[first:last] + b";").root_node
+    expression = (
+        root.named_children[0]
+        if not root.has_error and len(root.named_children) == 1
+        else None
+    )
+    call = (
+        expression.named_children[0]
+        if expression is not None
+        and expression.type == "expression_statement"
+        and len(expression.named_children) == 1
+        else None
+    )
+    arguments = (
+        call.child_by_field_name("arguments")
+        if call is not None
+        and call.type == "call_expression"
+        and (call.start_byte, call.end_byte) == (first, last)
+        else None
+    )
+    if arguments is None:
+        raise ValueError(
+            "erased statement macro arguments lack complete lexical syntax"
+        )
+    return arguments
+
+
+def _statement_tree(
+    source: bytes,
+    projection: MacroProjection,
+    tree: SyntaxNode,
+    expansions: tuple[_Expansion, ...],
+) -> SyntaxNode:
+    """Attach source hints and detached lexical operands to projected assertions.
+
+    Parameters
+    ----------
+    source : bytes
+        Original physical source.
+    projection : MacroProjection
+        Selected replacement tokens and physical origin mapping.
+    tree : SyntaxNode
+        Parsed replacement syntax.
+    expansions : tuple[_Expansion, ...]
+        Statement expansions whose reaching definitions are known.
+
+    Returns
+    -------
+    SyntaxNode
+        Physical syntax with separately owned original call operands.
+
+    Raises
+    ------
+    ValueError
+        If a selected assertion has no unique mapped syntax owner.
+    """
+    physical_tree = projection.syntax_tree(tree)
+    owners = {e.projected_span[0]: e for e in expansions}
+    found = set()
+    for node, physical in zip(_nodes(tree), _nodes(physical_tree), strict=True):
+        expansion = owners.get(node.start_byte)
+        if node.type != "static_assert_declaration" or expansion is None:
+            continue
+        if not isinstance(physical, _ProjectedNode):
+            raise ValueError("statement macro syntax lacks a physical projection")
+        physical.macro_hint = _macro_tokens(
+            source[expansion.span[0] : expansion.span[1]]
+        )[0].spelling.decode()
+        physical.macro_arguments = expansion.arguments
+        found.add(node.start_byte)
+    if found != owners.keys():
+        raise ValueError("statement macro assertion has no mapped syntax owner")
+    return physical_tree
 
 
 def _analyze_statements(
@@ -572,21 +680,7 @@ def _analyze_statements(
             raise ValueError(
                 f"replacement-introduced call {call.external_target_name or call.target!r} lacks separate generated ownership"
             )
-    physical_tree = projection.syntax_tree(tree)
-    owners = {e.projected_span[0]: e for e in expansions}
-    found = set()
-    for node, physical in zip(nodes, _nodes(physical_tree), strict=True):
-        expansion = owners.get(node.start_byte)
-        if node.type != "static_assert_declaration" or expansion is None:
-            continue
-        if not isinstance(physical, _ProjectedNode):
-            raise ValueError("statement macro syntax lacks a physical projection")
-        physical.macro_hint = _macro_tokens(
-            context.source[expansion.span[0] : expansion.span[1]]
-        )[0].spelling.decode()
-        found.add(node.start_byte)
-    if found != owners.keys():
-        raise ValueError("statement macro assertion has no mapped syntax owner")
+    physical_tree = _statement_tree(context.source, projection, tree, expansions)
     return analyzer._analyze_captured_file(
         path, root, context, syntax_root=physical_tree
     )
@@ -1017,7 +1111,9 @@ def _finalize(
         {
             (node.type, node.start_byte, node.end_byte): physical
             for node, physical in zip(
-                nodes, _nodes(projection.syntax_tree(tree)), strict=True
+                nodes,
+                _nodes(_statement_tree(original, projection, tree, statements)),
+                strict=True,
             )
         }
         if statements

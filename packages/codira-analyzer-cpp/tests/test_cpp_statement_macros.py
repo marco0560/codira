@@ -143,7 +143,8 @@ def test_method_argument_and_following_call_keep_ownership(tmp_path: Path) -> No
 @pytest.mark.parametrize(
     ("replacement", "message"),
     [
-        ("static_assert(true)", "erases or transforms"),
+        ("static_assert(sizeof(#X) > 0)", "erases or transforms"),
+        ("static_assert(sizeof(X##suffix) > 0)", "macro paste"),
         ("static_assert(helper(X))", "replacement-introduced call"),
         ("static_assert(X); int extra", "not one static assertion"),
     ],
@@ -151,7 +152,7 @@ def test_method_argument_and_following_call_keep_ownership(tmp_path: Path) -> No
 def test_unsupported_statement_expansion_is_explicitly_partial(
     tmp_path: Path, replacement: str, message: str
 ) -> None:
-    """Hold erased operands, synthetic calls and additional generated declarations.
+    """Hold transformed operands, synthetic calls and extra generated declarations.
 
     Parameters
     ----------
@@ -172,6 +173,124 @@ def test_unsupported_statement_expansion_is_explicitly_partial(
     result = _analyze(tmp_path, source)
     assert not result.index_symbols and result.status is not None
     assert any(message in d.message for d in result.status.diagnostics)
+
+
+@pytest.mark.parametrize("generated", [False, True])
+def test_erased_arguments_keep_physical_calls_and_method_ownership(
+    tmp_path: Path, generated: bool
+) -> None:
+    """Retain erased operands without changing selected declaration syntax.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source root.
+    generated : bool
+        Whether a declaration macro also produces the following function.
+
+    Returns
+    -------
+    None
+    """
+    source = (
+        b'#define CHECK(...) static_assert(true, "")\r\n'
+        b"#define DECLARE(N) void N()\r\n"
+        b"struct Owner {\r\n"
+        + "void entry(int value) { /* π */ CHECK(\r\n".encode()
+        + b"    object.member(value), ns::target<int>()\r\n"
+        b"  ); after(); }\r\n};\r\n"
+        + (
+            b"DECLARE(unrelated) { following(); }\r\n"
+            if generated
+            else b"void unrelated() { following(); }\r\n"
+        )
+    )
+    result = _analyze(tmp_path, source)
+    assert result.index_symbols and result.status is None
+    owner = next(c for c in result.classes if c.name == "Owner")
+    method = next(m for m in owner.methods if m.name == "entry")
+    assert [
+        (c.kind, c.base, c.target, c.lineno, c.col_offset) for c in method.calls
+    ] == [
+        ("name", "", "CHECK", 4, source.splitlines()[3].index(b"CHECK")),
+        ("attribute", "object", "member", 5, 11),
+        ("name", "ns", "target<int>", 5, 26),
+        ("name", "", "after", 6, 5),
+    ]
+    assert method.calls[0].external_target_kind == "C++:<macro>"
+    assert [c.target for c in result.functions[-1].calls] == ["following"]
+
+
+def test_erased_operands_do_not_add_declarations(tmp_path: Path) -> None:
+    """Visit an erased lambda only for lexical calls rather than symbol inventory.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source root.
+
+    Returns
+    -------
+    None
+    """
+    result = _analyze(
+        tmp_path,
+        b"#define CHECK(...) static_assert(true)\n"
+        b"void entry() { CHECK(([&] { struct Hidden {}; nested(); return true; })()); }\n",
+    )
+    assert result.index_symbols and result.status is None
+    assert [f.name for f in result.functions] == ["entry"]
+    assert not result.classes
+    assert not any(d.name == "Hidden" for d in result.declarations)
+    assert [(c.kind, c.target) for c in result.functions[0].calls] == [
+        ("name", "CHECK"),
+        ("unresolved", ""),
+        ("name", "nested"),
+    ]
+
+
+def test_partial_argument_erasure_remains_partial(tmp_path: Path) -> None:
+    """Keep mixed preserved and erased operands outside this supported boundary.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source root.
+
+    Returns
+    -------
+    None
+    """
+    result = _analyze(
+        tmp_path,
+        b"#define CHECK(X,Y) static_assert(X)\n"
+        b"void entry() { CHECK(first(), second()); }\n",
+    )
+    assert not result.index_symbols and result.status is not None
+    assert any("erases or transforms" in d.message for d in result.status.diagnostics)
+
+
+def test_erased_ambiguous_type_arguments_remain_partial(tmp_path: Path) -> None:
+    """Reject an erased invocation whose complete argument syntax is unproven.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source root.
+
+    Returns
+    -------
+    None
+    """
+    result = _analyze(
+        tmp_path,
+        b"#define CHECK(...) static_assert(true)\n"
+        b"void entry() { CHECK(int, target()); }\n",
+    )
+    assert not result.index_symbols and result.status is not None
+    assert any(
+        "complete lexical syntax" in d.message for d in result.status.diagnostics
+    )
 
 
 @pytest.mark.parametrize("known", [False, True])
