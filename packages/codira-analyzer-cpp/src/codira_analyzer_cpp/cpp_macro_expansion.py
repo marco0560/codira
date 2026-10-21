@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from typing import Literal
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
 _IDENTIFIER = re.compile(rb"[A-Za-z_][A-Za-z_0-9]*\Z")
@@ -277,6 +277,11 @@ def _paste_tokens(left: _MacroToken, right: _MacroToken) -> _MacroToken:
     )
 
 
+OpaqueMacroResolver = Callable[
+    [tuple[_MacroToken, ...]], tuple[_MacroToken, ...] | None
+]
+
+
 class _MacroExpander:
     """Bound expansion work across rescanning and nested argument prescans.
 
@@ -284,6 +289,8 @@ class _MacroExpander:
     ----------
     definitions : Mapping[bytes, _MacroDefinition]
         Unambiguous active macro definitions selected by the caller.
+    opaque_resolver : OpaqueMacroResolver or None, optional
+        Explicit intrinsic answers during conditional expansion only.
 
     Returns
     -------
@@ -291,13 +298,20 @@ class _MacroExpander:
         One expansion budget shared by recursive argument processing.
     """
 
-    def __init__(self, definitions: Mapping[bytes, _MacroDefinition]) -> None:
+    def __init__(
+        self,
+        definitions: Mapping[bytes, _MacroDefinition],
+        *,
+        opaque_resolver: OpaqueMacroResolver | None = None,
+    ) -> None:
         """Snapshot definitions and initialize the shared substitution budget.
 
         Parameters
         ----------
         definitions : Mapping[bytes, _MacroDefinition]
             Selected object and function definitions.
+        opaque_resolver : OpaqueMacroResolver or None, optional
+            Source/profile-licensed scalar answers after ordinary macro rescan.
 
         Returns
         -------
@@ -310,6 +324,7 @@ class _MacroExpander:
             If names, parameters or replacement operators are unsupported.
         """
         self.definitions = dict(definitions)
+        self.opaque_resolver = opaque_resolver
         self.templates: dict[bytes, tuple[_MacroToken, ...]] = {}
         self.steps = 0
         self.used: set[bytes] = set()
@@ -399,6 +414,24 @@ class _MacroExpander:
                 index += 1
                 continue
             if definition.opaque:
+                if (
+                    self.opaque_resolver is not None
+                    and index + 1 < len(work)
+                    and work[index + 1].spelling == b"("
+                ):
+                    _, closing, _ = _macro_arguments(work, index + 1)
+                    answer = self.opaque_resolver(tuple(work[index : closing + 1]))
+                    if answer is not None:
+                        self.steps += 1
+                        self.used.add(name)
+                        if self.steps > _MAX_STEPS:
+                            raise ValueError(
+                                "macro expansion substitution limit exceeded"
+                            )
+                        work[index : closing + 1] = answer
+                        if len(work) > _MAX_TOKENS:
+                            raise ValueError("macro expansion token limit exceeded")
+                        continue
                 raise ValueError("macro replacement is unavailable")
             end = index
             arguments: list[tuple[_MacroToken, ...]] = []

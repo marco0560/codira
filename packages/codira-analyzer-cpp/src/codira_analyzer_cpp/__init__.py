@@ -49,6 +49,13 @@ from .cpp_namespace_bindings import (
     _parse_with_namespace_bindings,
 )
 from .cpp_projection import SyntaxNode as Node, _ProjectedNode
+from .cpp_preprocessor_queries import (
+    FeatureAnswers,
+    HeaderQuerySet,
+    feature_answers,
+    header_query_sets,
+    header_queries_schema,
+)
 
 from .cpp_typedefs import _typedef_name_nodes
 from .cpp_syntax import (
@@ -2995,7 +3002,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "28"
+    version = "29"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -3026,6 +3033,11 @@ class CppAnalyzer:
         self._namespace_macro_definitions: tuple[tuple[bytes, bytes], ...] = ()
         self._preprocessor_definitions: dict[bytes, _MacroDefinition | None] | None = (
             None
+        )
+        self._preprocessor_features: FeatureAnswers = {}
+        self._preprocessor_header_queries: dict[str, HeaderQuerySet] = {}
+        self._preprocessor_query_profile_fingerprint = plugin_configuration_fingerprint(
+            {}
         )
         self._use_leading_comments = True
         self._emit_doxygen_documentation = True
@@ -3091,6 +3103,13 @@ class CppAnalyzer:
                     },
                     "description": "Opt-in bounded captured declaration-macro analysis. Strings are object replacements, true is 1, false is explicitly undefined, and {defined: true} supplies opaque definedness. Missing names remain unknown.",
                 },
+                "preprocessor_features": {
+                    "type": "object",
+                    "maxProperties": 4096,
+                    "additionalProperties": {"type": "string", "maxLength": 32},
+                    "description": "Explicit exact native integer answers for pure compiler feature queries. Source overrides and changed argument macros remain unsupported.",
+                },
+                "preprocessor_header_queries": header_queries_schema(),
                 "emit_namespaces": boolean_property(True),
                 "emit_macros": boolean_property(True),
                 "header_language": {
@@ -3122,7 +3141,8 @@ class CppAnalyzer:
             If header_language is not auto, c or cpp, or include_search_paths
             is not a list of nonempty strings, or namespace_macro_definitions
             is not an identifier mapping. Repository containment is checked
-            when analysis inputs are read.
+            when analysis inputs are read. Invalid compiler query literals,
+            observation identities, ranges or bounds are rejected explicitly.
         """
 
         self._path_filters = analyzer_path_filters_from_config(config)
@@ -3144,6 +3164,23 @@ class CppAnalyzer:
             preprocessor_definitions(config["preprocessor_definitions"])
             if "preprocessor_definitions" in config
             else None
+        )
+        self._preprocessor_features = feature_answers(
+            config.get("preprocessor_features", {}), self._preprocessor_definitions
+        )
+        self._preprocessor_header_queries = header_query_sets(
+            config.get("preprocessor_header_queries", {})
+        )
+        if self._preprocessor_header_queries and self._preprocessor_definitions is None:
+            raise ValueError(
+                "header query observations require explicit preprocessor_definitions"
+            )
+        self._preprocessor_query_profile_fingerprint = plugin_configuration_fingerprint(
+            {
+                key: value
+                for key, value in config.items()
+                if key != "preprocessor_header_queries"
+            }
         )
         self._use_leading_comments = bool(config.get("use_leading_comments", True))
         self._emit_doxygen_documentation = bool(

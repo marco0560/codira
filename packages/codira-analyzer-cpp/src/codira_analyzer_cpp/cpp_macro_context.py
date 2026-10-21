@@ -13,13 +13,13 @@ None
 from __future__ import annotations
 
 from bisect import bisect_right
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 import re
 
 from .cpp_macro_conditions import condition_value
-from .cpp_macro_expansion import _LEXEME, _MacroDefinition, _macro_tokens
+from .cpp_macro_expansion import _LEXEME, _MacroDefinition, _MacroToken, _macro_tokens
 
 _DIRECTIVE = re.compile(rb"(?m)^[ \t]*#[ \t]*([A-Za-z_][A-Za-z_0-9]*)([^\n]*)")
 _NAME = re.compile(rb"[A-Za-z_][A-Za-z_0-9]*")
@@ -127,6 +127,22 @@ class MacroSelection:
     uncertain: frozenset[bytes]
     active: bool | None
     observations: tuple[MacroObservation, ...]
+
+
+ConditionQueryResolver = Callable[
+    [
+        str,
+        tuple[int, int],
+        tuple[tuple[str, int], ...],
+        bytes,
+        Mapping[bytes, MacroBinding],
+    ],
+    bytes,
+]
+FeatureQueryResolver = Callable[
+    [tuple[_MacroToken, ...], Mapping[bytes, MacroBinding]],
+    tuple[_MacroToken, ...] | None,
+]
 
 
 @dataclass
@@ -541,6 +557,12 @@ class _ContextWalk:
         Captured owner/spelling/quoted lookups; None records unavailable context.
     initial : Mapping[bytes, _MacroDefinition | None]
         Explicit initial definitions and undefined states.
+    query_offsets : Mapping[str, tuple[int, ...]] or None, optional
+        Additional physical declaration queries in captured headers.
+    query_resolver : ConditionQueryResolver or None, optional
+        Explicit intrinsic answers bound to source and profile context.
+    feature_resolver : FeatureQueryResolver or None, optional
+        The same licensed pure intrinsic answers after ordinary macro rescan.
 
     Returns
     -------
@@ -555,6 +577,8 @@ class _ContextWalk:
         initial: Mapping[bytes, _MacroDefinition | None],
         *,
         query_offsets: Mapping[str, tuple[int, ...]] | None = None,
+        query_resolver: ConditionQueryResolver | None = None,
+        feature_resolver: FeatureQueryResolver | None = None,
     ) -> None:
         """Snapshot explicit macro state and initialize traversal bounds.
 
@@ -568,6 +592,10 @@ class _ContextWalk:
             Explicit initial macro states.
         query_offsets : Mapping[str, tuple[int, ...]] | None, optional
             Additional physical declaration queries in captured headers.
+        query_resolver : ConditionQueryResolver or None, optional
+            Explicit source/profile-bound intrinsic answers; never branch values.
+        feature_resolver : FeatureQueryResolver or None, optional
+            Licensed pure intrinsic answers reached through captured aliases.
 
         Returns
         -------
@@ -591,6 +619,9 @@ class _ContextWalk:
         self.cache: dict[str, tuple[tuple[int, int, bytes, bytes], ...]] = {}
         self.guards: dict[str, bytes | None] = {}
         self.stack: list[str] = []
+        self.include_sites: list[tuple[str, int]] = []
+        self.query_resolver = query_resolver
+        self.feature_resolver = feature_resolver
         self.visits = self.bytes = self.events = 0
         self.results: dict[int, MacroSelection] = {}
         self.query_offsets = query_offsets or {}
@@ -676,6 +707,20 @@ class _ContextWalk:
             skipped.once.add(path)
             self.environment = self.environment.clone()
             self.environment.maybe_once.discard(path)
+        cached_guard = self.guards.get(path)
+        cached_binding = (
+            self.environment.bindings.get(cached_guard)
+            if cached_guard is not None
+            else None
+        )
+        if (
+            not offsets
+            and cached_binding is not None
+            and cached_binding.definition is not None
+        ):
+            if skipped is not None:
+                self.environment = _merge([skipped, self.environment])
+            return
         if len(self.stack) >= 64:
             raise ValueError("unguarded include cycle or include depth limit")
         self.visits += 1
@@ -706,7 +751,7 @@ class _ContextWalk:
                 raise ValueError("macro query lies inside a preprocessing directive")
             self.events += 1
             if (
-                self.events > 8192
+                self.events > 16384
                 or len(self.environment.bindings) + len(self.environment.uncertain)
                 > 4096
             ):
@@ -714,7 +759,11 @@ class _ContextWalk:
             if kind in {b"if", b"ifdef", b"ifndef"}:
                 if len(frames) >= 64:
                     raise ValueError("macro conditional depth limit exceeded")
-                value = self.condition(kind, payload) if active is not False else False
+                value = (
+                    self.condition(kind, payload, span=(start, end))
+                    if active is not False
+                    else False
+                )
                 remaining = None if value is None else not value
                 frames.append(_Conditional(self.environment.clone(), active, remaining))
                 active = _both(active, value)
@@ -739,6 +788,7 @@ class _ContextWalk:
                                 b"elifndef": b"ifndef",
                             }[kind],
                             payload,
+                            span=(start, end),
                         )
                         if _both(frame.parent, frame.remaining) is not False
                         else False
@@ -772,7 +822,9 @@ class _ContextWalk:
         if skipped is not None:
             self.environment = _merge([skipped, self.environment])
 
-    def condition(self, kind: bytes, payload: bytes) -> bool | None:
+    def condition(
+        self, kind: bytes, payload: bytes, *, span: tuple[int, int] | None = None
+    ) -> bool | None:
         """Evaluate a condition using only currently proven reaching states.
 
         Parameters
@@ -781,6 +833,8 @@ class _ContextWalk:
             If, ifdef or ifndef keyword.
         payload : bytes
             Original logical condition suffix.
+        span : tuple[int, int] or None, optional
+            Physical directive interval licensing source-bound intrinsic queries.
 
         Returns
         -------
@@ -793,7 +847,24 @@ class _ContextWalk:
             If an ifdef/ifndef directive does not contain exactly one name.
         """
         if kind == b"if":
-            return condition_value(payload, self.environment.states())
+            if self.query_resolver is not None and span is not None:
+                payload = self.query_resolver(
+                    self.stack[-1],
+                    span,
+                    tuple(self.include_sites),
+                    payload,
+                    self.environment.bindings,
+                )
+            feature = self.feature_resolver
+            return condition_value(
+                payload,
+                self.environment.states(),
+                opaque_resolver=(
+                    None
+                    if feature is None
+                    else lambda tokens: feature(tokens, self.environment.bindings)
+                ),
+            )
         tokens = _macro_tokens(payload)
         if len(tokens) != 1 or _NAME.fullmatch(tokens[0].spelling) is None:
             raise ValueError("ifdef/ifndef requires exactly one macro name")
@@ -887,7 +958,11 @@ class _ContextWalk:
                     )
                 )
                 if target is not None and target in self.captures:
-                    self.walk(target, active)
+                    self.include_sites.append((path, start))
+                    try:
+                        self.walk(target, active)
+                    finally:
+                        self.include_sites.pop()
                 return
         elif kind == b"pragma" and tuple(
             token.spelling for token in _macro_tokens(payload)

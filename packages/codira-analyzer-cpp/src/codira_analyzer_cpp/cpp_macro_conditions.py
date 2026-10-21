@@ -16,6 +16,7 @@ import re
 from collections.abc import Mapping
 
 from .cpp_macro_expansion import (
+    OpaqueMacroResolver,
     _MacroDefinition,
     _MacroExpander,
     _MacroToken,
@@ -330,7 +331,10 @@ def _defined_tokens(
 
 
 def condition_value(
-    source: bytes, states: Mapping[bytes, _MacroDefinition | None]
+    source: bytes,
+    states: Mapping[bytes, _MacroDefinition | None],
+    *,
+    opaque_resolver: OpaqueMacroResolver | None = None,
 ) -> bool | None:
     """Evaluate a condition from explicit states, preserving unknown settings.
 
@@ -341,6 +345,8 @@ def condition_value(
     states : Mapping[bytes, _MacroDefinition | None]
         Captured active definitions and explicitly undefined names. Missing
         names remain unknown; they are not inferred compiler/platform defaults.
+    opaque_resolver : OpaqueMacroResolver or None, optional
+        Explicit intrinsic answers reached through captured macro aliases.
 
     Returns
     -------
@@ -371,7 +377,9 @@ def condition_value(
                     pending.extend(
                         t.spelling for t in _macro_tokens(definition.replacement)
                     )
-        expanded = _MacroExpander(definitions).expand(tokens)
+        expanded = _MacroExpander(definitions, opaque_resolver=opaque_resolver).expand(
+            tokens
+        )
         if len(expanded) > 1024:
             return None
         if any(

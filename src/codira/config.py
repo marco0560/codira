@@ -215,6 +215,26 @@ def config_path(level: LevelName, *, root: Path | None = None) -> Path:
     raise ConfigError(msg)
 
 
+def _deep_copy_config_value(value: object) -> object:
+    """Copy configuration containers recursively, including nested TOML arrays.
+
+    Parameters
+    ----------
+    value : object
+        Configuration scalar, mapping or sequence.
+
+    Returns
+    -------
+    object
+        Independent built-in containers with scalar values preserved.
+    """
+    if isinstance(value, Mapping):
+        return _deep_copy_mapping(value)
+    if isinstance(value, (list, tuple)):
+        return [_deep_copy_config_value(item) for item in value if item != {}]
+    return value
+
+
 def _deep_copy_mapping(value: Mapping[str, object]) -> dict[str, object]:
     """
     Copy one nested config mapping into mutable built-in containers.
@@ -230,19 +250,7 @@ def _deep_copy_mapping(value: Mapping[str, object]) -> dict[str, object]:
         Deep copied mapping.
     """
 
-    copied: dict[str, object] = {}
-    for key, item in value.items():
-        if isinstance(item, (list, tuple)):
-            copied_items = [
-                _deep_copy_mapping(value) if isinstance(value, Mapping) else value
-                for value in item
-            ]
-            copied[key] = [value for value in copied_items if value != {}]
-        elif isinstance(item, Mapping):
-            copied[key] = _deep_copy_mapping(item)
-        else:
-            copied[key] = item
-    return copied
+    return {key: _deep_copy_config_value(item) for key, item in value.items()}
 
 
 def _leaf_keys(value: Mapping[str, object], *, prefix: str = "") -> list[str]:

@@ -451,7 +451,7 @@ def test_guarded_revisits_preserve_directive_budget() -> None:
     Returns
     -------
     None
-        More than 8192 repeated directives fit only through proven guard skips.
+        Exact event accounting proves skipped bodies are never processed again.
     """
     source = b'#include "h.h"\n' * 100
     header = b"#ifndef G\n#define G\n" + b"#define M value\n" * 100 + b"#endif\n"
@@ -651,7 +651,7 @@ def test_unavailable_include_remains_explicit() -> None:
         b'auto s = R"(unterminated',
         b'auto s = "unterminated',
         b"#if 1\n" * 65 + b"#endif\n" * 65,
-        b"#define M 1\n" * 8193,
+        b"#define M 1\n" * 16385,
         b"".join(b"#define M" + str(i).encode() + b" 1\n" for i in range(4097)),
     ],
 )
@@ -845,3 +845,107 @@ def test_crlf_utf8_origins_remain_physical() -> None:
     binding = dict(selection.bindings)[b"M"]
     assert binding.definition == _MacroDefinition((b"x",), b"x+1")
     assert binding.origins[0].span == (len(prefix), len(prefix) + len(directive))
+
+
+def test_cached_guard_skips_do_not_charge_unread_header_bytes() -> None:
+    """Skip proven reentries before spending traversal and source-byte budgets.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Root include directives remain charged; skipped header bodies are not.
+    """
+    from codira_analyzer_cpp.cpp_macro_context import _ContextWalk
+
+    header = b"#ifndef G\n#define G\n#define VALUE 7\n#endif\n" + b" " * 9000
+    source = b'#include "guard.h"\n' * 1100 + b"QUERY\n"
+    walk = _ContextWalk(
+        {"unit.cpp": source, "guard.h": header},
+        {("unit.cpp", "guard.h", True): "guard.h"},
+        {b"G": None},
+    )
+    offset = source.index(b"QUERY")
+    walk.walk("unit.cpp", offsets=(offset,))
+    assert walk.visits == 2
+    assert walk.bytes == len(source) + len(header)
+    assert walk.events == 1104
+    assert dict(walk.results[offset].bindings)[b"VALUE"].definition == _MacroDefinition(
+        None, b"7"
+    )
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_include_attempts_and_real_reentries_stay_bounded(guarded: bool) -> None:
+    """Retain directive limits for guarded attempts and visit limits for real work.
+
+    Parameters
+    ----------
+    guarded : bool
+        Whether only source directives or actual header reentries consume work.
+
+    Returns
+    -------
+    None
+        Existing bounds still reject an excessive input.
+    """
+    from codira_analyzer_cpp.cpp_macro_context import _ContextWalk
+
+    header = b"#ifndef G\n#define G\n#endif\n" if guarded else b"#undef VALUE\n"
+    source = b'#include "header.h"\n' * (16400 if guarded else 1100)
+    walk = _ContextWalk(
+        {"unit.cpp": source, "header.h": header},
+        {("unit.cpp", "header.h", True): "header.h"},
+        {b"G": None},
+    )
+    with pytest.raises(
+        ValueError,
+        match="directive or binding limit" if guarded else "include traversal limit",
+    ):
+        walk.walk("unit.cpp")
+
+
+def test_uncached_source_bytes_remain_bounded() -> None:
+    """Charge a first read even when its guard was initially supplied as defined.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        A cached-guard optimization cannot hide an oversized new buffer.
+    """
+    from codira_analyzer_cpp.cpp_macro_context import _ContextWalk
+
+    header = b"#ifndef G\n#define G\n#endif\n" + b" " * (8 * 1024 * 1024)
+    walk = _ContextWalk(
+        {"unit.cpp": b'#include "large.h"\n', "large.h": header},
+        {("unit.cpp", "large.h", True): "large.h"},
+        {b"G": _MacroDefinition(None, b"1")},
+    )
+    with pytest.raises(ValueError, match="include traversal limit"):
+        walk.walk("unit.cpp")
+
+
+def test_valid_directive_population_above_former_limit() -> None:
+    """Admit measured SDK-sized work while retaining the new finite event bound.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The final source definition still reaches the original query exactly.
+    """
+    source = b"#define M 1\n" * 9000 + b"#define M 7\nQUERY\n"
+    selection = select_macro_environments(
+        "main.cpp", (source.index(b"QUERY"),), {"main.cpp": source}, {}, {}
+    )[source.index(b"QUERY")]
+    assert dict(selection.bindings)[b"M"].definition == _MacroDefinition(None, b"7")

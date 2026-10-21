@@ -52,6 +52,32 @@ variadic arguments, argument prescan/rescan, stringification and token pasting.
 The tested helper supplies token substitution only; its tests do not establish
 active-definition correctness or production integration.
 
+### Explicit intrinsic-query observations
+
+An explicit profile may also supply bounded `preprocessor_features` answers for
+pure compiler intrinsics and `preprocessor_header_queries` observations for
+literal `__has_include` / `__has_include_next` calls. These are operator results,
+not opaque macro replacements or whole conditional-branch answers. Preserve exact
+native integer literals, including attribute version values. An operator must
+remain the initial opaque binding; source redefinition or undefinition cannot be
+overridden by an observation. Pure-feature operands require unchanged explicit
+initial undefined states rather than guessed macro substitutions.
+
+Header-search observations are specific to a translation unit. Bind them to the
+full contained source/include-graph SHA-256, the configuration fingerprint with
+only the header observations removed, the exact owner and invocation span,
+literal query tokens, and every original include directive in the root-to-owner
+chain. Include search order or source/dependency changes invalidate their use.
+A missing, stale, unobserved or macro-produced site remains unknown. Observations
+do not add external header reads or a compiler invocation to indexing.
+
+Conditional expressions still pass through the bounded source evaluator after
+licensed operator substitution. Unsupported conditional grammar remains held;
+a native `#if` result cannot bypass it. Native query capture, compiler/dependency
+bindings and physical-origin controls are QA evidence, independently retained
+from the profile consumed by indexing. A complete product is still subject to
+actual-file native metadata and persisted-index qualification.
+
 ### Provenance and normalized artifacts
 
 Expansion may expose real declarations, aliases and definitions only when the

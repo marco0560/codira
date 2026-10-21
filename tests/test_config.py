@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import asdict
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -111,6 +112,41 @@ def test_config_facade_reexports_public_model_types() -> None:
         is config_validation.validate_config_mapping
     )
     assert config_module.render_config_toml is config_toml.render_config_toml
+
+
+def test_nested_plugin_arrays_support_config_fingerprinting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Copy nested TOML arrays into containers accepted by dataclass serialization.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Redirects host configuration paths.
+    tmp_path : pathlib.Path
+        Root containing the isolated plugin configuration.
+
+    Returns
+    -------
+    None
+        Nested source sites retain their values through the fingerprint boundary.
+    """
+    _isolate_config_paths(monkeypatch, tmp_path)
+    path = tmp_path / ".codira" / "config.toml"
+    path.parent.mkdir()
+    path.write_text(
+        "[plugins.analyzer-example]\n"
+        'sites = [["unit.cpp", 0], ["probe.h", 17]]\n'
+        "observations = [{ spans = [[1, 4], [8, 12]], value = true }]\n",
+        encoding="utf-8",
+    )
+    config = load_effective_config(root=tmp_path)
+    copied = asdict(config)["plugins"]["configs"]["analyzer-example"]
+    assert copied == {
+        "sites": [["unit.cpp", 0], ["probe.h", 17]],
+        "observations": [{"spans": [[1, 4], [8, 12]], "value": True}],
+    }
+    assert all(type(site) is list for site in copied["sites"])
 
 
 def test_effective_config_merges_with_env_precedence(

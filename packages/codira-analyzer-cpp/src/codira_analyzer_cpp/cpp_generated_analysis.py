@@ -30,7 +30,11 @@ from codira.generated import (
 from codira.models import AnalysisResult, CallSite, OverloadArtifact
 
 from .cpp_include_context import IncludeContext
-from .cpp_macro_context import MacroSelection, _ContextWalk, _directives
+from .cpp_macro_context import (
+    MacroSelection,
+    _ContextWalk,
+    _directives,
+)
 from .cpp_macro_expansion import (
     _MacroDefinition,
     _MacroExpander,
@@ -53,6 +57,7 @@ from .cpp_syntax import (
     _new_parser,
 )
 from .cpp_statement_macros import statement_invocations
+from .cpp_preprocessor_queries import QueryResolver
 
 if TYPE_CHECKING:
     from . import CppAnalyzer
@@ -412,7 +417,16 @@ def analyze_generated_file(
     )
     if any(left[1] > right[0] for left, right in zip(candidates, candidates[1:])):
         raise ValueError("overlapping declaration and statement macro invocations")
-    walk = _ContextWalk(captures, resolutions, initial)
+    query_answers = _query_resolver(analyzer, key, context, captures)
+    walk = _ContextWalk(
+        captures,
+        resolutions,
+        initial,
+        query_resolver=None if query_answers is None else query_answers.resolve,
+        feature_resolver=None
+        if query_answers is None
+        else query_answers.expand_feature,
+    )
     walk.walk(key, offsets=tuple(sorted({item[0] for item in candidates})))
     replacements = []
     records = []
@@ -527,6 +541,47 @@ def analyze_generated_file(
         resolutions,
         result,
     )
+
+
+def _query_resolver(
+    analyzer: CppAnalyzer,
+    key: str,
+    context: IncludeContext,
+    captures: Mapping[str, bytes],
+) -> QueryResolver | None:
+    """License header facts only against this full input graph and prefix profile.
+
+    Parameters
+    ----------
+    analyzer : CppAnalyzer
+        Explicitly configured profile owner.
+    key : str
+        Contained original translation-unit path.
+    context : IncludeContext
+        Unmodified physical input identity, including dependency hashes.
+    captures : Mapping[str, bytes]
+        Exact source buffers consumed by the context walk.
+
+    Returns
+    -------
+    QueryResolver or None
+        Offline operator resolution; stale or absent facts remain unknown.
+    """
+    initial = analyzer._preprocessor_definitions
+    assert initial is not None
+    supplied = analyzer._preprocessor_header_queries.get(key)
+    headers = (
+        supplied.queries
+        if supplied is not None
+        and supplied.profile_fingerprint
+        == analyzer._preprocessor_query_profile_fingerprint
+        and supplied.context_sha256
+        == hashlib.sha256(context.identity.encode()).hexdigest()
+        else ()
+    )
+    if not analyzer._preprocessor_features and not headers:
+        return None
+    return QueryResolver(captures, initial, analyzer._preprocessor_features, headers)
 
 
 def _statement_argument_tree(source: bytes, first: int, last: int) -> Node:
@@ -1003,6 +1058,7 @@ def _header_callable_types(
     initial = analyzer._preprocessor_definitions
     assert initial is not None
     root_offsets = sorted({e.span[0] for e in expansions} | set(queries.get(key, ())))
+    query_answers = _query_resolver(analyzer, key, context, captures)
     walk = _ContextWalk(
         captures,
         resolutions,
@@ -1010,6 +1066,10 @@ def _header_callable_types(
         query_offsets={
             owner: tuple(sorted(set(values))) for owner, values in queries.items()
         },
+        query_resolver=None if query_answers is None else query_answers.resolve,
+        feature_resolver=None
+        if query_answers is None
+        else query_answers.expand_feature,
     )
     walk.walk(key, offsets=tuple(root_offsets))
     result = {}
