@@ -849,12 +849,18 @@ def _verify_analysis_task_inputs(
         If source bytes or external inputs changed after the scan.
     OSError
         If source or required input identity cannot be read.
+
+    Notes
+    -----
+    Analyzer-owned content validation may avoid reparsing unchanged inputs.
+    The coordinator recomputes identities when that validation is unavailable
+    or does not establish a match.
     """
     path = Path(task.path)
     if str(file_metadata(path)["hash"]) != str(
         task.metadata["hash"]
-    ) or analysis_input_fingerprint(analyzer, path, root) != str(
-        task.metadata.get("analysis_input_fingerprint", "")
+    ) or not analysis_input_fingerprint_matches(
+        analyzer, path, root, str(task.metadata.get("analysis_input_fingerprint", ""))
     ):
         message = "Source or external analysis inputs changed during indexing"
         raise ValueError(message)

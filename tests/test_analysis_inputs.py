@@ -242,28 +242,40 @@ def test_changed_header_retries_retained_analysis_failure(
         assert hashlib.sha256((tmp_path / path).read_bytes()).hexdigest() == digest
 
 
-def test_worker_rejects_header_changed_during_analysis(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
+@pytest.mark.parametrize("mutation", ["header", "source", "new_header"])
+def test_worker_rejects_inputs_changed_during_analysis(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    backend_name: str,
+    mutation: str,
 ) -> None:
-    """Do not publish artifacts against the header identity preceding a race.
+    """Reject raced source bytes, header bytes and newly resolved includes.
 
     Parameters
     ----------
     tmp_path : pathlib.Path
         Disposable repository.
     monkeypatch : pytest.MonkeyPatch
-        Injects a header write after real parsing and before worker validation.
+        Injects a write after real parsing and before worker validation.
+    backend_name : str
+        Real structural backend used to check that no stale symbols publish.
+    mutation : str
+        Source, captured header or previously missing include to change.
 
     Returns
     -------
     None
         Raced analysis becomes a failure and its stale symbols are absent.
     """
-    header, backend = _repository(tmp_path, "sqlite")
+    header, backend = _repository(tmp_path, backend_name)
+    if mutation == "new_header":
+        for source in tmp_path.glob("*.cpp"):
+            source.write_bytes(b'#include "new_marker.inc"\n' + source.read_bytes())
     original = CppAnalyzer.analyze_file
 
     def raced(self: CppAnalyzer, path: Path, root: Path) -> AnalysisResult:
-        """Change captured header bytes after producing real source artifacts.
+        """Change observed inputs after producing real source artifacts.
 
         Parameters
         ----------
@@ -280,7 +292,24 @@ def test_worker_rejects_header_changed_during_analysis(
             Artifacts bound to the preceding header state.
         """
         result = original(self, path, root)
-        header.write_bytes(header.read_bytes() + b"// changed\n")
+        target = (
+            path
+            if mutation == "source"
+            else root / "new_marker.inc"
+            if mutation == "new_header"
+            else header
+        )
+        stamp = target.stat() if target.exists() else None
+        replacement = (
+            target.read_bytes().replace(b"42", b"43")
+            if mutation == "source"
+            else b"#define NEW_MARKER 1\n"
+            if mutation == "new_header"
+            else target.read_bytes().replace(b"dllexport", b"dllimport")
+        )
+        target.write_bytes(replacement)
+        if stamp is not None:
+            os.utime(target, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
         return result
 
     monkeypatch.setattr(CppAnalyzer, "analyze_file", raced)
@@ -288,6 +317,70 @@ def test_worker_rejects_header_changed_during_analysis(
     assert report.failed == 2
     assert all("inputs changed" in failure.reason for failure in report.failures)
     assert not backend.find_symbol(tmp_path, "answer")
+
+
+@pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
+@pytest.mark.parametrize("strategy", ["off", "thread"])
+def test_worker_validates_unchanged_inputs_without_recomputing_fingerprints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    backend_name: str,
+    strategy: str,
+) -> None:
+    """Keep worker race checks without repeating successful input captures.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository with real C++ include dependencies.
+    monkeypatch : pytest.MonkeyPatch
+        Allows planning captures but rejects subsequent full recomputation.
+    backend_name : str
+        Real structural backend receiving complete artifacts.
+    strategy : str
+        Serial or shared-memory thread scheduling.
+
+    Returns
+    -------
+    None
+        Real indexing publishes both files after content-based verification.
+    """
+    _, backend = _repository(tmp_path, backend_name)
+    original = CppAnalyzer.analysis_input_fingerprint
+    captures: dict[Path, int] = {}
+
+    def capture_once(self: CppAnalyzer, path: Path, root: Path) -> str:
+        """Permit each planning capture without repeating it in workers.
+
+        Parameters
+        ----------
+        self : CppAnalyzer
+            Configured source owner.
+        path : pathlib.Path
+            Original source path.
+        root : pathlib.Path
+            Repository context.
+
+        Returns
+        -------
+        str
+            Actual source-bound include identity.
+
+        Raises
+        ------
+        AssertionError
+            If worker validation rebuilds a previously captured identity.
+        """
+        captures[path] = captures.get(path, 0) + 1
+        assert captures[path] == 1
+        return original(self, path, root)
+
+    monkeypatch.setattr(CppAnalyzer, "analysis_input_fingerprint", capture_once)
+    concurrency = IndexConcurrencyConfig(strategy=strategy, max_workers=2, min_files=1)
+    report = index_repo(tmp_path, analysis_concurrency=concurrency)
+    assert report.failed == 0 and report.indexed == 2
+    assert len(captures) == 2 and set(captures.values()) == {1}
+    assert backend.find_symbol(tmp_path, "answer")
 
 
 @pytest.mark.parametrize("backend_name", ["sqlite", "duckdb"])
