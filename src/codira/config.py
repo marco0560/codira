@@ -16,6 +16,7 @@ can consume configuration without circular imports.
 from __future__ import annotations
 
 import os
+import tomllib
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -362,13 +363,24 @@ def _read_config_file(path: Path) -> dict[str, object]:
     ------
     ConfigError
         If the file cannot be parsed or does not contain a TOML table.
+
+    Notes
+    -----
+    Runtime reads use the native parser to avoid constructing formatting trees
+    for large plugin configurations. Syntax unsupported by the native reader
+    retains the existing parser and error behavior. Editing uses its separate
+    comment-preserving path.
     """
 
+    text = path.read_text(encoding="utf-8")
     try:
-        parsed = tomlkit.parse(path.read_text(encoding="utf-8"))
-    except tomlkit.exceptions.ParseError as exc:
-        msg = f"Failed to parse config file {path}: {exc}"
-        raise ConfigError(msg) from exc
+        parsed: Mapping[str, object] = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        try:
+            parsed = tomlkit.parse(text)
+        except tomlkit.exceptions.ParseError as exc:
+            msg = f"Failed to parse config file {path}: {exc}"
+            raise ConfigError(msg) from exc
     return _deep_copy_mapping(parsed)
 
 
