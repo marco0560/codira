@@ -1,4 +1,4 @@
-"""Recover complex syntax, pragmas and annotations at original source coordinates.
+"""Recover compiler syntax, annotations and guarded continuations at source coordinates.
 
 Parameters
 ----------
@@ -1633,6 +1633,143 @@ def _namespace_source(
     return None if recovered.has_error else projection.tree(recovered)
 
 
+def _conditional_else_source(
+    source: bytes,
+    root: Node,
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...],
+) -> bytes:
+    """Join a single guarded else arm without selecting a compilation branch.
+
+    Parameters
+    ----------
+    source : bytes
+        Coordinate-aligned parser input, retaining original conditional content.
+    root : SyntaxNode
+        Partial provider tree containing a guarded continuation.
+    parser : tree_sitter.Parser
+        Package-local parser used to validate the resulting ownership.
+    included_sources : tuple[tuple[bytes, int], ...]
+        Captured headers whose keyword overrides prevent this adaptation.
+
+    Returns
+    -------
+    bytes
+        Layout with only proven guard markers blanked. Both statement bodies,
+        comments and physical coordinates remain; alternatives and unrelated
+        errors are never removed.
+    """
+    if b"else" not in source or re.search(rb"(?m)^[ \t]*#[ \t]*if", source) is None:
+        return source
+    layout = re.compile(rb"(?:[ \t\r\n\f]|/\*[\s\S]*?\*/|//[^\r\n]*)*\Z")
+    lines = dict(_hash_lines(source, root))
+    comments = [(n.start_byte, n.end_byte) for n in _nodes(root) if n.type == "comment"]
+    candidates: list[tuple[Node, int, int, tuple[tuple[int, int], ...]]] = []
+    for node in _nodes(root):
+        if (
+            node.type not in {"preproc_if", "preproc_ifdef"}
+            or node.parent is None
+            or node.parent.type != "compound_statement"
+        ):
+            continue
+        previous = node.prev_sibling
+        while previous is not None and previous.type == "comment":
+            previous = previous.prev_sibling
+        if (
+            previous is None
+            or previous.type != "if_statement"
+            or previous.has_error
+            or previous.child_by_field_name("alternative") is not None
+        ):
+            continue
+        header = node.child_by_field_name("condition") or node.child_by_field_name(
+            "name"
+        )
+        if header is None or header.has_error or header.is_missing:
+            continue
+        if any(n != node and n.type.startswith("preproc_") for n in _nodes(node)):
+            continue
+        children: Sequence[Node] = node.children
+        closing = next((c for c in reversed(children) if c.type == "#endif"), None)
+        if closing is None:
+            continue
+        opening_start = source.rfind(b"\n", 0, node.start_byte) + 1
+        closing_start = source.rfind(b"\n", 0, closing.start_byte) + 1
+        if opening_start not in lines or closing_start not in lines:
+            continue
+        opening_end, closing_end = lines[opening_start], lines[closing_start]
+        if not opening_start <= header.start_byte < header.end_byte <= opening_end:
+            continue
+        if not layout.fullmatch(
+            re.sub(rb"\\\r?\n", b"", source[header.end_byte : opening_end])
+        ) or not layout.fullmatch(source[closing.end_byte : closing_end]):
+            continue
+        body = [c for c in node.named_children if c != header and c.type != "comment"]
+        if not body:
+            continue
+        start = body[0].start_byte
+        if (
+            start <= opening_end
+            or source[start : start + 4] != b"else"
+            or source[start + 4 : start + 5] not in (b" ", b"\t", b"\r", b"\n", b"{")
+            or not layout.fullmatch(source[opening_end:start])
+        ):
+            continue
+        candidates.append(
+            (
+                previous,
+                start,
+                closing_start,
+                ((opening_start, opening_end), (closing_start, closing_end)),
+            )
+        )
+    if not candidates or any(
+        _keyword_macro_overridden(keyword, source, root, parser, included_sources)
+        for keyword in (b"if", b"else")
+    ):
+        return source
+    projected = bytearray(source)
+    for _, _, _, ranges in candidates:
+        for start, end in ranges:
+            projected[start:end] = re.sub(rb"[^\r\n]", b" ", source[start:end])
+            for first, last in comments:
+                low, high = max(start, first), min(end, last)
+                if low < high:
+                    projected[low:high] = source[low:high]
+    view = bytes(projected)
+    recovered = parser.parse(view).root_node
+    statements = {
+        n.start_byte: n for n in _nodes(recovered) if n.type == "if_statement"
+    }
+    for previous, start, closing_start, _ in candidates:
+        current = statements.get(previous.start_byte)
+        if current is None or current.has_error:
+            return source
+        alternative = current.child_by_field_name("alternative")
+        if (
+            alternative is None
+            or alternative.start_byte != start
+            or not layout.fullmatch(source[alternative.end_byte : closing_start])
+        ):
+            return source
+        for field_name in ("condition", "consequence"):
+            before, after = (
+                previous.child_by_field_name(field_name),
+                current.child_by_field_name(field_name),
+            )
+            if (
+                before is None
+                or after is None
+                or (
+                    before.start_byte,
+                    before.end_byte,
+                )
+                != (after.start_byte, after.end_byte)
+            ):
+                return source
+    return view
+
+
 def _parse_cpp_source(
     source: bytes,
     *,
@@ -1654,9 +1791,10 @@ def _parse_cpp_source(
     Returns
     -------
     SyntaxNode
-        Original partial root unless grammar adaptation produces a wholly clean
+        Original root unless grammar adaptation produces a wholly clean
         tree. Known reserved operators missing operands remain diagnosed even
-        when originally accepted as identifiers. Directives/literals are retained.
+        when originally accepted as identifiers. Literals, conditional bodies and
+        unrelated directives are retained.
     """
     parser = _new_parser()
     original = parser.parse(source).root_node
@@ -1682,9 +1820,15 @@ def _parse_cpp_source(
     complex_view = _complex_source(working, basis, complex_overrides)
     complex_changed = complex_view != working
     working = complex_view
+    basis = parser.parse(working).root_node if working != source else original
+    conditional_view = _conditional_else_source(
+        working, basis, parser, included_sources
+    )
+    if conditional_view != working:
+        working = conditional_view
+        basis = parser.parse(working).root_node
     if not original.has_error and working == source:
         return original
-    basis = parser.parse(working).root_node if working != source else original
     if not basis.has_error:
         return basis
     fallback = basis if not original.has_error and complex_changed else original
@@ -1719,6 +1863,13 @@ def _parse_cpp_source(
             child for child in node.children if child != condition and child != name
         )
     recovered = parser.parse(bytes(projected)).root_node
+    if recovered.has_error and b"else" in projected:
+        view = _conditional_else_source(
+            bytes(projected), recovered, parser, included_sources
+        )
+        if view != bytes(projected):
+            projected = bytearray(view)
+            recovered = parser.parse(view).root_node
     if recovered.has_error:
         view = _exception_suffix_source(
             bytes(projected), recovered, parser, included_sources

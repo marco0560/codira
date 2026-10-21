@@ -22,6 +22,170 @@ from codira_analyzer_cpp.cpp_syntax import _new_parser
 
 
 @pytest.mark.parametrize(
+    "guard", ["ifdef FEATURE", "ifndef FEATURE", "if FEATURE", "if FLAG >= 1"]
+)
+@pytest.mark.parametrize("defined", [False, True])
+@pytest.mark.parametrize("condition", ["cond", "!cond"])
+def test_guarded_else_retains_both_static_bodies_and_original_scope(
+    tmp_path: Path, guard: str, defined: bool, condition: str
+) -> None:
+    """Recover a guarded continuation without choosing a compilation branch.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Trusted root for original source and artifact coordinates.
+    guard : str
+        Single-arm conditional directive surrounding the else clause.
+    defined : bool
+        Explicit initial macro state; static extraction retains both arms.
+    condition : str
+        Continuation condition, including provider-clean but misparsed syntax.
+
+    Returns
+    -------
+    None
+        If-initializer scope, signatures and byte columns remain source-owned.
+    """
+    source = (
+        "// café\r\nint make(); int left(int); int right(int);\r\n"
+        "int entry(bool cond) {\r\n"
+        "  if (int value = make(); cond) { return left(value); }\r\n"
+        f"#{guard} // opening comment\r\n"
+        f"  else if ({condition}) {{ return right(value); }}\r\n"
+        "#endif // closing comment\r\n"
+        "  return 0;\r\n}\r\n"
+    ).encode()
+    original = _new_parser().parse(source).root_node
+    if condition.startswith("!"):
+        assert original.has_error
+    parsed = _parse_cpp_source(source)
+    assert not parsed.has_error
+    assert parsed.text is not None
+    assert b"// opening comment" in parsed.text and b"// closing comment" in parsed.text
+    function = next(n for n in parsed.named_children if n.type == "function_definition")
+    body = function.child_by_field_name("body")
+    assert body is not None
+    statement = body.named_children[0]
+    alternative = statement.child_by_field_name("alternative")
+    assert alternative is not None
+    assert source[alternative.start_byte : alternative.start_byte + 4] == b"else"
+    path = tmp_path / "unit.cpp"
+    path.write_bytes(source)
+    analyzer = CppAnalyzer()
+    analyzer.configure(
+        {
+            "preprocessor_definitions": {
+                "FEATURE": "1" if defined else False,
+                "FLAG": "1" if defined else False,
+            }
+        }
+    )
+    result = analyzer.analyze_file(path, tmp_path)
+    assert result.index_symbols and result.status is None
+    artifact = next(f for f in result.functions if f.name == "entry")
+    assert artifact.signature == "int entry(bool cond)"
+    assert [c.target for c in artifact.calls] == ["make", "left", "right"]
+    for call in artifact.calls:
+        offset = source.index(call.target.encode() + b"(", source.index(b"int entry"))
+        assert (call.lineno, call.col_offset) == (
+            source[:offset].count(b"\n") + 1,
+            offset - source.rfind(b"\n", 0, offset) - 1,
+        )
+    assert path.read_bytes() == source
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        b"#ifdef F\nelse if(!c) {}\n#endif\n",
+        b"if(c) {}\nfirst();\n#ifdef F\nelse if(!c) {}\n#endif\n",
+        b"if(c) {} else {}\n#ifdef F\nelse if(!c) {}\n#endif\n",
+        b"if(c) {}\n#ifdef F\nelse if(!c) {}\n#else\nelse {}\n#endif\n",
+        b"if(c) {}\n#ifdef F\nelse if(!c) {\n#ifdef G\nsecond();\n#endif\n}\n#endif\n",
+        b"if(c) {}\n#ifdef F EXTRA\nelse if(!c) {}\n#endif\n",
+        b"if(c) {}\n#ifdef F\nelse if(!c) {}\n#endif extra();\n",
+        b"if(c) {}\n#ifdef F\nelse if(!c) {}\n",
+        b"if(c) {}\n#ifdef F\nelse if(!c) {} second();\n#endif\n",
+        b"if(c) {}\n#ifdef F\nelse if(!c) { int bad = ; }\n#endif\n",
+    ],
+)
+def test_unproven_else_guards_and_unrelated_errors_remain_visible(
+    fragment: bytes,
+) -> None:
+    """Preserve malformed or unsupported continuations without suppressing errors.
+
+    Parameters
+    ----------
+    fragment : bytes
+        Unpaired, alternative, nested or otherwise malformed conditional suffix.
+
+    Returns
+    -------
+    None
+        The original partial tree and original bytes remain unchanged.
+    """
+    source = b"void entry(bool c) {\n" + fragment + b"}\n"
+    original = _new_parser().parse(source).root_node
+    assert original.has_error
+    recovered = _parse_cpp_source(source)
+    assert recovered.has_error
+    assert str(recovered) == str(original)
+    assert recovered.text == source
+
+
+@pytest.mark.parametrize("keyword", [b"if", b"else"])
+@pytest.mark.parametrize("directive", [b"define", b"undef"])
+def test_conditional_else_keyword_overrides_prevent_recovery(
+    keyword: bytes, directive: bytes
+) -> None:
+    """Hold continuation adaptation when captured headers override its keywords.
+
+    Parameters
+    ----------
+    keyword : bytes
+        Reserved control-flow spelling.
+    directive : bytes
+        Definition or undefinition invalidating its assumed meaning.
+
+    Returns
+    -------
+    None
+        Header-dependent recovery does not silently reinterpret a keyword macro.
+    """
+    source = b"void f(bool c) {if(c) {}\n#ifdef F\nelse if(!c) {}\n#endif\n}\n"
+    header = (
+        b"#"
+        + directive
+        + b" "
+        + keyword
+        + (b" value" if directive == b"define" else b"")
+        + b"\n"
+    )
+    root = _parse_cpp_source(source, included_sources=((header, 0),))
+    assert root.has_error and root.text == source
+
+
+def test_missing_guard_name_is_not_a_continuation_recovery_candidate() -> None:
+    """Preserve the provider result when its guard name crosses a physical newline.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        This adapter does not hide or reinterpret a malformed directive header.
+    """
+    source = b"void f(bool c) {if(c) {}\n#ifdef\nelse if(!c) {}\n#endif\n}\n"
+    original = _new_parser().parse(source).root_node
+    recovered = _parse_cpp_source(source)
+    assert str(recovered) == str(original)
+    assert recovered.text == source
+
+
+@pytest.mark.parametrize(
     "definition",
     [
         b"#define API\n",
