@@ -58,7 +58,12 @@ from .cpp_syntax import (
     _symbol_owner_id,
     _new_parser,
 )
-from .cpp_statement_macros import statement_invocations
+from .cpp_statement_macros import (
+    declaration_invocations,
+    has_lexical_calls,
+    is_declaration_statement,
+    statement_invocations,
+)
 from .cpp_preprocessor_queries import QueryResolver
 
 if TYPE_CHECKING:
@@ -163,6 +168,8 @@ class _Expansion:
         Whether this replacement supplies a namespace declaration name.
     statement : bool, optional
         Whether this replacement supplies one source-owned static assertion.
+    declaration_statement : bool, optional
+        Whether this replacement forwards one bounded declaration statement.
     arguments : tree_sitter.Node or None, optional
         Original argument syntax when a replacement completely erases operands.
 
@@ -180,6 +187,7 @@ class _Expansion:
     namespace: bool = False
     statement: bool = False
     arguments: Node | None = None
+    declaration_statement: bool = False
 
 
 def _invocations(source: bytes) -> tuple[tuple[int, int, bytes, bool], ...]:
@@ -409,12 +417,15 @@ def analyze_generated_file(
     assert initial is not None
     statements = statement_invocations(source, captures)
     statement_spans = {(first, last) for first, last, _ in statements}
+    declarations = declaration_invocations(source, captures)
+    declaration_spans = {(first, last) for first, last, _ in declarations}
     candidates = tuple(
         sorted(
-            (
+            {
                 *_invocations(source),
                 *((first, last, name, False) for first, last, name in statements),
-            )
+                *((first, last, name, False) for first, last, name in declarations),
+            }
         )
     )
     if any(left[1] > right[0] for left, right in zip(candidates, candidates[1:])):
@@ -436,11 +447,17 @@ def analyze_generated_file(
     for first, last, name, namespace in candidates:
         selection = walk.results[first]
         binding = dict(selection.bindings).get(name)
-        statement = (first, last) in statement_spans
-        if statement and binding is not None and binding.definition is None:
+        statement_candidate = (first, last) in statement_spans
+        declaration_candidate = (first, last) in declaration_spans
+        declaration_statement = declaration_candidate
+        if (
+            (statement_candidate or declaration_statement)
+            and binding is not None
+            and binding.definition is None
+        ):
             continue
         if (
-            statement
+            (statement_candidate or declaration_statement)
             and selection.active is not False
             and (
                 selection.active is not True
@@ -464,6 +481,17 @@ def analyze_generated_file(
         tokens = expander.expand(_macro_tokens(source[first:last], offset=first))
         if not expander.used:
             continue
+        if declaration_statement and not is_declaration_statement(tokens):
+            declaration_statement = False
+        statement = statement_candidate and not declaration_statement
+        if declaration_candidate and not declaration_statement and not statement:
+            continue
+        if declaration_statement and not tokens:
+            # An empty replacement may erase a declaration containing written
+            # calls. Keep parseable expression wrappers intact, and leave any
+            # unsupported/invalid operand syntax to the normal error path.
+            if has_lexical_calls(source, first, last) is not False:
+                continue
         argument_tree = None
         if statement:
             if not tokens or tokens[0].spelling != b"static_assert":
@@ -496,6 +524,7 @@ def analyze_generated_file(
         replacements.append(MacroReplacement((first, last), tokens))
         records.append(
             (
+                len(replacements) - 1,
                 (first, last),
                 tokens,
                 selection,
@@ -503,6 +532,7 @@ def analyze_generated_file(
                 namespace,
                 statement,
                 argument_tree,
+                declaration_statement,
             )
         )
     if not replacements and not any(
@@ -532,25 +562,41 @@ def analyze_generated_file(
         return _analyze_statements(analyzer, path, root, context, projection, ())
     expansions = []
     token_index = 0
-    for span, tokens, selection, used, namespace, statement, argument_tree in records:
+    for (
+        replacement_index,
+        span,
+        tokens,
+        selection,
+        used,
+        namespace,
+        statement,
+        argument_tree,
+        declaration_statement,
+    ) in records:
         rendered = projection.generated_tokens[token_index : token_index + len(tokens)]
-        if not rendered:
+        if tokens and not rendered:
             raise ValueError("declaration expansion produced no syntax")
+        projected_span = (
+            (rendered[0].projected_span[0], rendered[-1].projected_span[1])
+            if rendered
+            else projection.replacement_spans[replacement_index]
+        )
         expansions.append(
             _Expansion(
                 span,
                 tokens,
                 selection,
                 used,
-                (rendered[0].projected_span[0], rendered[-1].projected_span[1]),
+                projected_span,
                 namespace,
                 statement,
                 argument_tree,
+                declaration_statement,
             )
         )
         token_index += len(tokens)
     projected_context = _projected_context(context, projection)
-    if all(expansion.statement for expansion in expansions):
+    if expansions and all(expansion.statement for expansion in expansions):
         return _analyze_statements(
             analyzer, path, root, context, projection, tuple(expansions)
         )
@@ -692,7 +738,7 @@ def _statement_tree(
         If a selected assertion has no unique mapped syntax owner.
     """
     physical_tree = projection.syntax_tree(tree)
-    owners = {e.projected_span[0]: e for e in expansions}
+    owners = {e.projected_span[0]: e for e in expansions if e.statement}
     found = set()
     for node, physical in zip(_nodes(tree), _nodes(physical_tree), strict=True):
         expansion = owners.get(node.start_byte)
@@ -1202,7 +1248,7 @@ def _finalize(
         ),
     )
     nodes = _nodes(tree)
-    statements = tuple(e for e in expansions if e.statement)
+    statements = tuple(e for e in expansions if e.statement or e.declaration_statement)
     physical_nodes = (
         {
             (node.type, node.start_byte, node.end_byte): physical
@@ -1268,7 +1314,9 @@ def _finalize(
         for call in calls:
             position = _offset(source, call.lineno, call.col_offset)
             physical = projection.physical_span(
-                position, position + 1, include_arguments=bool(statements)
+                position,
+                position + 1,
+                include_arguments=bool(statements),
             )
             if physical is None:
                 raise ValueError(
@@ -1287,10 +1335,11 @@ def _finalize(
             e
             for e in statements
             if body is not None
-            and body.start_byte
-            <= e.projected_span[0]
-            < e.projected_span[1]
-            <= body.end_byte
+            and body.start_byte <= e.projected_span[0] < body.end_byte
+            and (
+                e.projected_span[0] == e.projected_span[1]
+                or e.projected_span[1] <= body.end_byte
+            )
         )
         if not owned or body is None:
             return tuple(mapped)
@@ -1323,7 +1372,11 @@ def _finalize(
 
     declarations = []
     for expansion in expansions:
-        if expansion.namespace:
+        if (
+            expansion.namespace
+            or expansion.statement
+            or expansion.declaration_statement
+        ):
             continue
         for node in nodes:
             type_node = (
@@ -1364,7 +1417,11 @@ def _finalize(
             context,
             captures,
             resolutions,
-            tuple(e for e in expansions if not e.namespace),
+            tuple(
+                e
+                for e in expansions
+                if not e.namespace and not e.statement and not e.declaration_statement
+            ),
             references,
         )
         if references
@@ -1681,7 +1738,10 @@ def _finalize(
         )
     consumed = {item.span for item in generated_expansions.values()}
     if any(
-        not item.namespace and not item.statement and item.span not in consumed
+        not item.namespace
+        and not item.statement
+        and not item.declaration_statement
+        and item.span not in consumed
         for item in expansions
     ):
         raise ValueError("declaration expansion has unsupported callable ownership")

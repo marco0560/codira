@@ -168,6 +168,8 @@ class MacroProjection:
         including licensed blanks. These do not license physical spelling.
     masked_spans : tuple[tuple[int, int], ...], optional
         Original-coordinate source intervals blanked by known activity.
+    replacement_spans : tuple[tuple[int, int], ...], optional
+        Projected token ranges for replacements, including empty expansions.
 
     Returns
     -------
@@ -181,6 +183,7 @@ class MacroProjection:
     generated_tokens: tuple[ProjectedToken, ...]
     coordinate_segments: tuple[tuple[int, int, int], ...] = ()
     masked_spans: tuple[tuple[int, int], ...] = ()
+    replacement_spans: tuple[tuple[int, int], ...] = ()
 
     def physical_span(
         self, start: int, end: int, *, include_arguments: bool = False
@@ -352,6 +355,7 @@ def project_macro_replacements(
     output = bytearray()
     segments: list[SourceSegment] = []
     projected: list[ProjectedToken] = []
+    replacement_spans: list[tuple[int, int]] = []
     cursor = 0
     for replacement in replacements:
         start, end = replacement.span
@@ -365,6 +369,7 @@ def project_macro_replacements(
         base = len(output)
         output.extend(rendered)
         output.extend(b" ")
+        replacement_spans.append((base, base + len(rendered)))
         for token, (first, last) in zip(replacement.tokens, spans, strict=True):
             if not start <= token.start < token.end <= end:
                 raise ValueError("macro token anchor escapes original invocation")
@@ -389,4 +394,10 @@ def project_macro_replacements(
         output.extend(source[cursor:])
     if len(output) > 8 * 1024 * 1024:
         raise ValueError("macro projection output byte limit exceeded")
-    return MacroProjection(source, bytes(output), tuple(segments), tuple(projected))
+    return MacroProjection(
+        source,
+        bytes(output),
+        tuple(segments),
+        tuple(projected),
+        replacement_spans=tuple(replacement_spans),
+    )
