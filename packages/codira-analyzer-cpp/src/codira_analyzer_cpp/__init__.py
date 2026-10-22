@@ -3208,7 +3208,10 @@ class _CppAnalysisBuilder:
             self.doxygen_by_lineno.update(
                 _attached_doxygen_comment_map(children, self.source)
             )
+        friend_sibling_starts: set[int] = set()
         for child in children:
+            if child.start_byte in friend_sibling_starts:
+                continue
             if child.type == "access_specifier":
                 current_public = _node_text(child, self.source) in {
                     "public",
@@ -3222,6 +3225,25 @@ class _CppAnalysisBuilder:
                 if child.type == "template_declaration"
                 else child
             )
+            if candidate is not None and candidate.type == "friend_declaration":
+                self._handle_friend_declaration(
+                    candidate,
+                    namespace=namespace,
+                    docstring=child_docstring,
+                    signature_node=child,
+                )
+                continue
+            if child.type == "field_declaration":
+                sibling = self._friend_prefix_has_callable_sibling(children, child)
+                if sibling is not None:
+                    friend_sibling_starts.add(sibling.start_byte)
+                    self._handle_friend_declaration(
+                        sibling,
+                        namespace=namespace,
+                        docstring=child_docstring,
+                        signature_node=sibling,
+                    )
+                    continue
             if candidate is not None and candidate.type == "type_definition":
                 self._dispatch_node(
                     candidate,
@@ -3325,6 +3347,108 @@ class _CppAnalysisBuilder:
                     is_definition=True,
                 )
             builder.record_method(pending)
+
+    def _friend_prefix_has_callable_sibling(
+        self, children: Sequence[Node], prefix: Node
+    ) -> Node | None:
+        """Return a parser-split friend declarator following its prefix node.
+
+        Parameters
+        ----------
+        children : collections.abc.Sequence[tree_sitter.Node]
+            Class-body children in source order.
+        prefix : tree_sitter.Node
+            Field node containing a trailing `friend` token.
+
+        Returns
+        -------
+        tree_sitter.Node | None
+            Adjacent callable field node when the grammar split the declaration.
+        """
+        leaf = next(
+            (
+                item
+                for item in reversed(_named_descendants(prefix))
+                if _node_text(item, self.source) == "friend"
+            ),
+            None,
+        )
+        if leaf is None or leaf.end_byte != prefix.end_byte:
+            return None
+        position = children.index(prefix)
+        if position + 1 >= len(children):
+            return None
+        candidate = children[position + 1]
+        if candidate.type not in {
+            "declaration",
+            "field_declaration",
+            "function_definition",
+        }:
+            return None
+        between = self.source[prefix.end_byte : candidate.start_byte]
+        if b"\n" in between or between.strip():
+            return None
+        if _find_function_declarator(candidate) is None:
+            return None
+        return candidate
+
+    def _handle_friend_declaration(
+        self,
+        node: Node,
+        *,
+        namespace: Sequence[str],
+        docstring: str | None,
+        signature_node: Node,
+    ) -> None:
+        """Record a callable friend with its namespace or qualified owner.
+
+        Parameters
+        ----------
+        node : tree_sitter.Node
+            Friend wrapper or parser-split callable declaration.
+        namespace : collections.abc.Sequence[str]
+            Enclosing namespace path; the befriending class is excluded.
+        docstring : str | None
+            Attached comment summary when present.
+        signature_node : tree_sitter.Node
+            Original syntax node used for signature and source position.
+
+        Returns
+        -------
+        None
+            Callable friends are stored using ordinary declaration coalescing.
+        """
+        callable_node = next(
+            (
+                candidate
+                for candidate in _named_descendants(node)
+                if candidate.type
+                in {"function_definition", "declaration", "field_declaration"}
+                and _find_function_declarator(candidate) is not None
+            ),
+            None,
+        )
+        if callable_node is None:
+            return
+        friend_namespace = list(namespace)
+        while (
+            friend_namespace
+            and _qualified_name(friend_namespace) in self.known_class_names
+        ):
+            friend_namespace.pop()
+        pending = _build_function_artifact(
+            callable_node,
+            self.source,
+            namespace=friend_namespace,
+            known_class_names=self.known_class_names,
+            owner_id=self.owner_id,
+            docstring=docstring,
+            is_public=_is_likely_public_definition(callable_node, self.source),
+            signature_node=signature_node,
+            initializer_value_bindings=self.initializer_value_bindings,
+        )
+        if pending is not None:
+            self._record_function(pending)
 
     def _handle_callable_node(
         self,
@@ -3970,7 +4094,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "39"
+    version = "40"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
