@@ -22,7 +22,9 @@ from codira_analyzer_c.c_declaration_macros import (
     _Expander,
     _directive_rows,
     _include_guard,
+    project_empty_function_macro_arguments,
 )
+from codira_analyzer_c.c_include_context import read_include_context
 import codira_analyzer_c.c_declaration_macros as declaration_macros
 
 
@@ -48,6 +50,296 @@ def _fixture(root: Path, header: str, source: str) -> Path:
     path = root / "module.c"
     path.write_text(source, encoding="utf-8")
     return path
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "#define JOIN(a,b,c) a ## b ## c\n"
+            "int f(void) { return JOIN(alpha,,omega); }\n",
+            "#define JOIN(a,b,c) a ## b ## c\n"
+            "int f(void) { return JOIN(alpha ,omega); }\n",
+        ),
+        (
+            "#define JOIN(a,b,c) a ## b ## c\nint f(void) { return JOIN(alpha,,); }\n",
+            "#define JOIN(a,b,c) a ## b ## c\nint f(void) { return JOIN(alpha  ); }\n",
+        ),
+        (
+            "#define JOIN(a,b,c) a ## b ## c\n"
+            "int f(void) { return JOIN(alpha,beta,omega); }\n",
+            "#define JOIN(a,b,c) a ## b ## c\n"
+            "int f(void) { return JOIN(alpha,beta,omega); }\n",
+        ),
+    ],
+)
+def test_empty_function_macro_argument_projection_is_same_width(
+    tmp_path: Path, source: str, expected: str
+) -> None:
+    """Project only empty separators while retaining every source offset.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository root.
+    source : str
+        Source containing a source-defined fixed-arity function macro.
+    expected : str
+        Parser-only spelling with empty-slot separators blanked.
+
+    Returns
+    -------
+    None
+        The invocation and nested source calls retain their original positions.
+    """
+    path = tmp_path / "module.c"
+    path.write_text(source, encoding="utf-8")
+    context = read_include_context(path, tmp_path)
+    projected = project_empty_function_macro_arguments(context, tmp_path, path)
+    assert projected.decode() == expected
+    assert len(projected) == len(source.encode())
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "int f(void) { return UNKNOWN(alpha,,omega); }\n",
+        "#define JOIN(a,b,c) a ## b ## c\n"
+        "int f(void) { return JOIN(alpha,,omega,extra); }\n",
+        "#define JOIN alpha\nint f(void) { return JOIN(alpha,,omega); }\n",
+        "#define JOIN(a,b,c) a ## b ## c\n"
+        "#define JOIN(a,b,d,e) a ## b ## d ## e\n"
+        "int f(void) { return JOIN(alpha,,omega); }\n",
+        "#define JOIN(a,b,c) a ## b ## c\n"
+        "#undef JOIN\nint f(void) { return JOIN(alpha,,omega); }\n",
+        "#define JOIN(a,b,c) a ## b ## c\nint f(void) { return JOIN(alpha,,omega; }\n",
+    ],
+)
+def test_empty_macro_projection_rejects_unproven_call_shapes(
+    tmp_path: Path, source: str
+) -> None:
+    """Keep unknown, ambiguous, invalid-arity, and malformed calls untouched.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository root.
+    source : str
+        Negative call or macro-definition witness.
+
+    Returns
+    -------
+    None
+        Unsupported shapes remain byte-identical parser inputs.
+    """
+    path = tmp_path / "module.c"
+    path.write_text(source, encoding="utf-8")
+    context = read_include_context(path, tmp_path)
+    assert (
+        project_empty_function_macro_arguments(context, tmp_path, path)
+        == source.encode()
+    )
+
+
+def test_valid_empty_call_projection_keeps_opaque_target_and_nested_calls(
+    tmp_path: Path,
+) -> None:
+    """Keep written call targets, nested calls, and source coordinates intact.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository root.
+
+    Returns
+    -------
+    None
+        A source-valid empty macro slot is parser-only and does not expand calls.
+    """
+    path = tmp_path / "module.c"
+    source = (
+        "#define PICK(a,b,c) a\nint f(void) { return PICK(outer(inner(1)),,unused); }\n"
+    )
+    path.write_text(source, encoding="utf-8")
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    assert result.index_symbols
+    assert len(result.functions) == 1
+    function = result.functions[0]
+    assert [
+        (call.target, call.kind, call.lineno, call.col_offset)
+        for call in function.calls
+    ] == [
+        ("PICK", "name", 2, 21),
+        ("outer", "name", 2, 26),
+        ("inner", "name", 2, 32),
+    ]
+
+
+def test_complete_conditional_signature_alternatives_license_projection(
+    tmp_path: Path,
+) -> None:
+    """Accept complete branches that agree on the fixed macro arity.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository root.
+
+    Returns
+    -------
+    None
+        Both written alternatives license the same empty argument slot.
+    """
+    path = tmp_path / "module.c"
+    source = (
+        "#if MODE\n#define PICK(a,b,c) a\n#else\n"
+        "#define PICK(a,b,c) a\n#endif\n"
+        "int f(void) { return PICK(outer(inner(1)),,unused); }\n"
+    )
+    path.write_text(source, encoding="utf-8")
+    context = read_include_context(path, tmp_path)
+    projected = project_empty_function_macro_arguments(context, tmp_path, path)
+    assert projected != source.encode()
+    assert len(projected) == len(source.encode())
+
+
+def test_incomplete_conditional_macro_signature_does_not_license_projection(
+    tmp_path: Path,
+) -> None:
+    """Reject a conditional definition that leaves a branch unproven.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository root.
+
+    Returns
+    -------
+    None
+        No empty separator is blanked when a written branch lacks the macro.
+    """
+    path = tmp_path / "module.c"
+    source = (
+        "#if MODE\n#define PICK(a,b,c) a\n#endif\n"
+        "int f(void) { return PICK(outer(inner(1)),,unused); }\n"
+    )
+    path.write_text(source, encoding="utf-8")
+    context = read_include_context(path, tmp_path)
+    assert (
+        project_empty_function_macro_arguments(context, tmp_path, path)
+        == source.encode()
+    )
+
+
+def test_conditional_undef_in_one_alternative_does_not_license_projection(
+    tmp_path: Path,
+) -> None:
+    """Reject an alternative that undefines its otherwise valid signature.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository root.
+
+    Returns
+    -------
+    None
+        A prior branch-local undef keeps the empty slot in the parser view.
+    """
+    path = tmp_path / "module.c"
+    source = (
+        "#if MODE\n#define PICK(a,b,c) a ## b ## c\n#undef PICK\n#else\n"
+        "#define PICK(a,b,c) a ## b ## c\n#endif\n"
+        "int f(void) { return PICK(outer,,unused); }\n"
+    )
+    path.write_text(source, encoding="utf-8")
+    context = read_include_context(path, tmp_path)
+    assert (
+        project_empty_function_macro_arguments(context, tmp_path, path)
+        == source.encode()
+    )
+
+
+def test_incomplete_outer_conditional_keeps_nested_macro_call_partial(
+    tmp_path: Path,
+) -> None:
+    """Require every enclosing conditional family to define the macro.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository root.
+
+    Returns
+    -------
+    None
+        An inner complete family cannot stand in for an outer missing branch.
+    """
+    path = tmp_path / "module.c"
+    source = (
+        "#ifdef OUTER\n#if INNER\n#define PICK(a,b,c) a\n#else\n"
+        "#define PICK(a,b,c) a\n#endif\n#endif\n"
+        "int f(void) { return PICK(outer(inner(1)),,unused); }\n"
+    )
+    path.write_text(source, encoding="utf-8")
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    assert not result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
+def test_nested_complete_conditional_families_license_projection(
+    tmp_path: Path,
+) -> None:
+    """Accept nested alternatives only when every branch is covered.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository root.
+
+    Returns
+    -------
+    None
+        Complete inner and outer branch families agree on one arity.
+    """
+    path = tmp_path / "module.c"
+    source = (
+        "#ifdef OUTER\n#if INNER\n#define PICK(a,b,c) a\n#else\n"
+        "#define PICK(a,b,c) a\n#endif\n#else\n"
+        "#define PICK(a,b,c) a\n#endif\n"
+        "int f(void) { return PICK(outer(inner(1)),,unused); }\n"
+    )
+    path.write_text(source, encoding="utf-8")
+    context = read_include_context(path, tmp_path)
+    projected = project_empty_function_macro_arguments(context, tmp_path, path)
+    assert projected != source.encode()
+    assert len(projected) == len(source.encode())
+
+
+def test_wrong_arity_empty_call_remains_a_parser_error(tmp_path: Path) -> None:
+    """Do not let an empty-slot projection hide wrong macro arity.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Disposable repository root.
+
+    Returns
+    -------
+    None
+        The unsupported call stays partial and is not indexed as clean.
+    """
+    path = tmp_path / "module.c"
+    source = (
+        "#define PICK(a,b,c) a\n"
+        "int f(void) { return PICK(outer(inner(1)),,unused,extra); }\n"
+    )
+    path.write_text(source, encoding="utf-8")
+    result = CAnalyzer().analyze_file(path, tmp_path)
+    assert not result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
 
 
 def test_opt_in_expands_generated_callable_with_source_provenance(

@@ -413,6 +413,12 @@ def c_parse_views(
     """
     if base is None:
         base = _parse_c_source(source, parser, included_sources)
+    if base.text is not None and base.text != source:
+        # _parse_c_source only returns a changed partial tree after proving
+        # that its equal-width parser projection removed empty macro slots
+        # while retaining every unrelated diagnostic. Keep that tree beside
+        # the original bytes instead of reparsing away the licensed view.
+        return iter((CParseView(source, base),))
     if not base.has_error:
         return iter((CParseView(source, base),))
     working = _c_language_source(source, base)

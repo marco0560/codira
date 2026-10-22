@@ -599,7 +599,9 @@ def _definition_rows(
         if any(token.spelling in {b"##", b"#"} for token in replacement_tokens):
             unsafe_boundary = start if source_path == "@source" else available_after
             undefs.append((name, unsafe_boundary, source_path, start, source_order))
-            continue
+            # Retain the signature so non-expanding parser projections can
+            # validate arity. The same-offset unsafe event keeps this
+            # replacement unavailable to the declaration expander.
         definition_start = start if source_path == "@source" else available_after
         definitions.append(
             MacroDefinition(
@@ -1142,6 +1144,248 @@ def _ordered_definition_rows(
         walk(owner, 0)
     walk(source_name, -1)
     return definitions, undefs
+
+
+def project_empty_function_macro_arguments(
+    context: IncludeContext, root: Path, source_path: Path
+) -> bytes:
+    """Blank separators for proven empty fixed-arity macro arguments.
+
+    Parameters
+    ----------
+    context : IncludeContext
+        Exact captured translation unit and contained include inputs.
+    root : pathlib.Path
+        Repository boundary for the translation unit and captured headers.
+    source_path : pathlib.Path
+        Source file whose same-width parser view is being constructed.
+
+    Returns
+    -------
+    bytes
+        A same-length parser-only source view. The original source remains the
+        authority for artifact text, coordinates, calls, and provenance.
+    """
+    source = context.source
+    try:
+        definitions, undefs = _ordered_definition_rows(context, root, source_path)
+        tokens = _tokens(source)
+    except (ExpansionRejected, OSError, ValueError):
+        return source
+
+    directives = tuple((start, end) for start, end, _, _ in _directive_rows(source))
+    definitions_by_name: dict[bytes, list[MacroDefinition]] = {}
+    for definition in definitions:
+        definitions_by_name.setdefault(definition.name, []).append(definition)
+    undef_events: dict[bytes, list[tuple[int, str, int]]] = {}
+    for name, available, owner, offset, _ in undefs:
+        undef_events.setdefault(name, []).append((available, owner, offset))
+    header_sources = {
+        item.path.relative_to(root.resolve()).as_posix(): item.source
+        for item in context.headers
+    }
+    source_name = source_path.resolve().relative_to(root.resolve()).as_posix()
+    sources = {**header_sources, source_name: source, "@source": source}
+    directive_kinds = {
+        owner: {start: kind for start, _, kind, _ in _directive_rows(content)}
+        for owner, content in sources.items()
+    }
+    conditional_cache: dict[tuple[bytes, tuple[int, ...]], bool] = {}
+
+    projected = bytearray(source)
+    changed = False
+    index = 0
+    while index + 1 < len(tokens):
+        macro_token = tokens[index]
+        opening = tokens[index + 1]
+        if (
+            macro_token.start is None
+            or macro_token.end is None
+            or opening.spelling != b"("
+            or opening.start is None
+            or any(start <= macro_token.start < end for start, end in directives)
+        ):
+            index += 1
+            continue
+        candidates = [
+            definition
+            for definition in definitions_by_name.get(macro_token.spelling, ())
+            if definition.available_after <= macro_token.start
+        ]
+        if not candidates or any(
+            definition.parameters is None or definition.variadic
+            for definition in candidates
+        ):
+            index += 1
+            continue
+        if len(candidates) > 1 and not all(item.conditional for item in candidates):
+            index += 1
+            continue
+        arities = {len(definition.parameters or ()) for definition in candidates}
+        if len(arities) != 1:
+            index += 1
+            continue
+        conditional_candidates = [item for item in candidates if item.conditional]
+        if conditional_candidates:
+            cache_key = (
+                macro_token.spelling,
+                tuple(item.available_after for item in candidates),
+            )
+            family_is_complete = conditional_cache.get(cache_key)
+            if family_is_complete is None:
+                family_is_complete = _conditional_definition_family_is_complete(
+                    sources,
+                    macro_token.spelling,
+                    next(iter(arities)),
+                    conditional_candidates,
+                )
+                conditional_cache[cache_key] = family_is_complete
+            if not family_is_complete:
+                index += 1
+                continue
+        first_candidate_available_after = min(
+            item.available_after for item in candidates
+        )
+        events = [
+            event
+            for event in undef_events.get(macro_token.spelling, ())
+            if first_candidate_available_after <= event[0] <= macro_token.start
+        ]
+        if any(
+            owner == "@unresolved"
+            or directive_kinds.get(owner, {}).get(offset) != b"define"
+            for _, owner, offset in events
+        ):
+            index += 1
+            continue
+
+        depth = 0
+        closing: int | None = None
+        for position in range(index + 1, len(tokens)):
+            spelling = tokens[position].spelling
+            if spelling == b"(":
+                depth += 1
+            elif spelling == b")":
+                depth -= 1
+                if depth == 0:
+                    closing = position
+                    break
+        if closing is None:
+            index += 1
+            continue
+        argument_tokens = tuple(tokens[index + 2 : closing])
+        try:
+            arguments, commas = _split_arguments_with_commas(argument_tokens)
+        except ExpansionRejected:
+            index = closing + 1
+            continue
+        if len(arguments) != next(iter(arities)) or not any(
+            not argument for argument in arguments
+        ):
+            index = closing + 1
+            continue
+        removed: set[int] = set()
+        for argument_index, argument in enumerate(arguments):
+            if argument:
+                continue
+            adjacent = []
+            if argument_index:
+                adjacent.append(argument_index - 1)
+            if argument_index < len(commas):
+                adjacent.append(argument_index)
+            for separator_index in adjacent:
+                if separator_index not in removed:
+                    removed.add(separator_index)
+                    break
+            else:
+                removed.clear()
+                break
+        for comma_index in removed:
+            comma = commas[comma_index]
+            if comma.start is None or comma.end is None:
+                removed.clear()
+                break
+            projected[comma.start : comma.end] = b" " * (comma.end - comma.start)
+            changed = True
+        index = closing + 1
+    result = bytes(projected)
+    return result if changed and len(result) == len(source) else source
+
+
+def _conditional_definition_family_is_complete(
+    sources: dict[str, bytes],
+    name: bytes,
+    arity: int,
+    definitions: list[MacroDefinition],
+) -> bool:
+    """Require a complete conditional alternative for each uncertain define.
+
+    Parameters
+    ----------
+    sources : dict[str, bytes]
+        Captured source and header contents keyed by macro provenance path.
+    name : bytes
+        Macro identifier whose conditional definitions are checked.
+    arity : int
+        One agreed fixed parameter count.
+    definitions : list[MacroDefinition]
+        Conditional definitions applicable to the invocation.
+
+    Returns
+    -------
+    bool
+        Whether every branch of each enclosing group defines that signature.
+    """
+    for definition in definitions:
+        content = sources.get(definition.source_path)
+        if content is None:
+            return False
+        stack: list[dict[str, object]] = []
+        groups: list[tuple[list[tuple[int, int]], bool]] = []
+        for start, end, kind, _ in _directive_rows(content):
+            if kind in {b"if", b"ifdef", b"ifndef"}:
+                stack.append({"branch_start": end, "branches": [], "has_else": False})
+            elif kind in {b"elif", b"else"} and stack:
+                group = stack[-1]
+                branches = group["branches"]
+                assert isinstance(branches, list)
+                branch_start = group["branch_start"]
+                assert isinstance(branch_start, int)
+                branches.append((branch_start, start))
+                group["branch_start"] = end
+                group["has_else"] = kind == b"else" or group["has_else"]
+            elif kind == b"endif" and stack:
+                group = stack.pop()
+                branches = group["branches"]
+                assert isinstance(branches, list)
+                branch_start = group["branch_start"]
+                assert isinstance(branch_start, int)
+                branches.append((branch_start, start))
+                groups.append((branches, bool(group["has_else"])))
+        containing = [
+            group
+            for group in groups
+            if any(start <= definition.span[0] < end for start, end in group[0])
+        ]
+        if not containing:
+            return False
+        for branches, has_else in containing:
+            if not has_else or len(branches) < 2:
+                return False
+            for start, end in branches:
+                branch_definitions = [
+                    item
+                    for item in definitions
+                    if item.source_path == definition.source_path
+                    and start <= item.span[0] < end
+                    and item.name == name
+                    and item.parameters is not None
+                    and not item.variadic
+                    and len(item.parameters) == arity
+                ]
+                if not branch_definitions:
+                    return False
+    return True
 
 
 def declaration_expansions(

@@ -46,6 +46,7 @@ from .c_declaration_macros import (
     ExpandedDeclaration,
     ExpansionRejected,
     declaration_expansions,
+    project_empty_function_macro_arguments,
 )
 from codira.analysis_inputs import validate_analysis_input_fingerprint
 from codira.generated import (
@@ -2409,7 +2410,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "20"
+    version = "21"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -2720,7 +2721,10 @@ class CAnalyzer:
             (header.source, header.available_after) for header in context.headers
         )
         parser = _new_parser()
-        base = _parse_c_source(source, parser, included_sources)
+        parse_projection = project_empty_function_macro_arguments(context, root, path)
+        base = _parse_c_source(
+            source, parser, included_sources, parse_projection=parse_projection
+        )
         expansion_rejection: ExpansionRejected | None = None
         try:
             candidates = (

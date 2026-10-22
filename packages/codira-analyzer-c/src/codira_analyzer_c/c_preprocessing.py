@@ -824,7 +824,10 @@ def _complex_source(
 
 
 def _parse_c_source(
-    source: bytes, parser: Parser, included_sources: tuple[tuple[bytes, int], ...] = ()
+    source: bytes,
+    parser: Parser,
+    included_sources: tuple[tuple[bytes, int], ...] = (),
+    parse_projection: bytes | None = None,
 ) -> Node:
     """Recover guards, pragmas, annotations and proven loop-prefix syntax.
 
@@ -850,6 +853,17 @@ def _parse_c_source(
         their written macro invocation when extracting source calls.
     """
     original = parser.parse(source).root_node
+    if (
+        original.has_error
+        and parse_projection is not None
+        and len(parse_projection) == len(source)
+        and parse_projection != source
+    ):
+        projected_root = parser.parse(parse_projection).root_node
+        if not projected_root.has_error or _projection_preserves_other_errors(
+            source, original, parse_projection, projected_root
+        ):
+            return projected_root
     pragma_source = _pragma_source(source, original)
     pragma_root = (
         parser.parse(pragma_source).root_node if pragma_source != source else original
@@ -908,6 +922,60 @@ def _parse_c_source(
         return fallback
     recovered = parser.parse(view).root_node
     return fallback if recovered.has_error else recovered
+
+
+def _projection_preserves_other_errors(
+    source: bytes, original: Node, projected_source: bytes, projected: Node
+) -> bool:
+    """Allow a parse-only repair only when unrelated error nodes are unchanged.
+
+    Parameters
+    ----------
+    source : bytes
+        Original translation-unit bytes.
+    original : tree_sitter.Node
+        Original syntax tree.
+    projected_source : bytes
+        Equal-width parser-only projection.
+    projected : tree_sitter.Node
+        Syntax tree parsed from the projection.
+
+    Returns
+    -------
+    bool
+        Whether every error outside changed bytes remains at the same range.
+    """
+    changed = {
+        index
+        for index, (left, right) in enumerate(zip(source, projected_source))
+        if left != right
+    }
+
+    def errors(root: Node) -> list[tuple[str, int, int, bool]]:
+        result: list[tuple[str, int, int, bool]] = []
+        pending = [root]
+        while pending:
+            node = pending.pop()
+            if node.type == "ERROR" or node.is_missing:
+                result.append(
+                    (node.type, node.start_byte, node.end_byte, node.is_missing)
+                )
+            pending.extend(node.children)
+        return result
+
+    original_errors = errors(original)
+    expected_empty_slots = {
+        item
+        for item in original_errors
+        if item[0] == "identifier"
+        and item[3]
+        and any(item[1] in {offset, offset + 1} for offset in changed)
+    }
+    remaining_original = sorted(
+        item for item in original_errors if item not in expected_empty_slots
+    )
+    projected_errors = sorted(errors(projected))
+    return remaining_original == projected_errors
 
 
 def _original_declaration_start(node: Node, source: bytes) -> int:
