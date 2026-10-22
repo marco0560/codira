@@ -104,6 +104,12 @@ variable declarations are visited as types. Structs and unions retain their
 declaration kind; records with explicit methods also have a class-like method
 container. Data-only records retain their declaration representation.
 
+Repeated record declarations share a semantic identity. A complete definition
+supplies the record's source range, written body and attached documentation;
+earlier or later forward declarations do not replace that definition. Types
+without a definition retain their first declaration. Source movement preserves
+record and method identities.
+
 Nested records and template specializations keep distinct source names. Callable
 slots use parameter syntax and cv/ref qualifiers, preserving overloads with
 identical parameter names while merging renamed/defaulted redeclarations.

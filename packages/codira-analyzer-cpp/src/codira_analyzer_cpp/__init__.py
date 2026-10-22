@@ -190,7 +190,30 @@ class _PendingFunction:
 
 @dataclass
 class _ClassBuilder:
-    """Mutable accumulator for one class artifact before finalization."""
+    """Accumulate one logical record with coherent primary-source metadata.
+
+    Parameters
+    ----------
+    qualified_name, stable_id : str
+        Logical name and source-offset-independent identity.
+    lineno : int
+        Starting line of the represented definition, declaration or owner.
+    end_lineno : int or None
+        Matching ending line, absent for synthesized method owners.
+    docstring : str or None
+        Attached documentation when available.
+    has_docstring : int
+        Whether documentation is present.
+    has_definition : bool, optional
+        Whether the represented source range belongs to a complete record.
+    methods_by_key : dict, optional
+        Source methods grouped by semantic identity and declarator binding.
+
+    Returns
+    -------
+    None
+        Creates a mutable accumulator before immutable artifact finalization.
+    """
 
     qualified_name: str
     stable_id: str
@@ -198,6 +221,7 @@ class _ClassBuilder:
     end_lineno: int | None
     docstring: str | None
     has_docstring: int
+    has_definition: bool = False
     methods_by_key: dict[tuple[str, tuple[str, ...]], _PendingFunction] = field(
         default_factory=dict
     )
@@ -208,9 +232,10 @@ class _ClassBuilder:
         lineno: int,
         end_lineno: int | None,
         docstring: str | None,
+        is_definition: bool = False,
     ) -> None:
         """
-        Merge class metadata from a declaration or synthesized owner.
+        Select coherent metadata from definitions, declarations or owners.
 
         Parameters
         ----------
@@ -220,17 +245,26 @@ class _ClassBuilder:
             Candidate ending line for the class artifact.
         docstring : str | None
             Candidate class docstring from an attached comment.
+        is_definition : bool, optional
+            Whether the candidate range contains a complete record body.
 
         Returns
         -------
         None
-            The stored class metadata is updated in place when the new values are
-            richer.
+            Definitions take precedence over forward declarations and synthesized
+            owners. Equal source roles retain the earliest complete range.
         """
-        if lineno < self.lineno:
+        candidate_role = (is_definition, end_lineno is not None)
+        current_role = (self.has_definition, self.end_lineno is not None)
+        if candidate_role > current_role or (
+            candidate_role == current_role and lineno < self.lineno
+        ):
             self.lineno = lineno
-        if self.end_lineno is None and end_lineno is not None:
             self.end_lineno = end_lineno
+            self.has_definition = is_definition
+            if docstring is not None:
+                self.docstring = docstring
+                self.has_docstring = 1
         if self.docstring is None and docstring is not None:
             self.docstring = docstring
             self.has_docstring = 1
@@ -2792,6 +2826,7 @@ class _CppAnalysisBuilder:
         self.class_builders: dict[str, _ClassBuilder] = {}
         self.functions_by_key: dict[tuple[str, tuple[str, ...]], _PendingFunction] = {}
         self.declarations_by_id: dict[str, DeclarationArtifact] = {}
+        self.type_definition_ids: set[str] = set()
         self.doxygen_by_lineno: dict[int, tuple[str, int, int | None]] = {}
         self.source_comments = comment_maps[0] if comment_maps is not None else None
         if comment_maps is not None:
@@ -2804,6 +2839,7 @@ class _CppAnalysisBuilder:
         lineno: int,
         end_lineno: int | None,
         docstring: str | None,
+        is_definition: bool = False,
     ) -> _ClassBuilder:
         """
         Return the mutable builder for one class, creating it when needed.
@@ -2818,6 +2854,8 @@ class _CppAnalysisBuilder:
             Candidate ending line for the class.
         docstring : str | None
             Candidate docstring attached to the class.
+        is_definition : bool, optional
+            Whether the candidate range contains a complete record body.
 
         Returns
         -------
@@ -2834,6 +2872,7 @@ class _CppAnalysisBuilder:
                 end_lineno=end_lineno,
                 docstring=docstring,
                 has_docstring=int(docstring is not None),
+                has_definition=is_definition,
             )
             self.class_builders[qualified_name] = builder
             return builder
@@ -2841,6 +2880,7 @@ class _CppAnalysisBuilder:
             lineno=lineno,
             end_lineno=end_lineno,
             docstring=docstring,
+            is_definition=is_definition,
         )
         return builder
 
@@ -2898,7 +2938,7 @@ class _CppAnalysisBuilder:
         docstring: str | None,
     ) -> None:
         """
-        Record one enum, struct, or union declaration.
+        Prefer a complete enum, struct or union over its forward declarations.
 
         Parameters
         ----------
@@ -2912,7 +2952,8 @@ class _CppAnalysisBuilder:
         Returns
         -------
         None
-            Matching declaration artifacts are stored in place.
+            One logical type retains its first complete definition, otherwise its
+            first forward declaration.
         """
         if node.type == "enum_specifier":
             kind: DeclarationKind = "enum"
@@ -2927,16 +2968,25 @@ class _CppAnalysisBuilder:
         if name is None:
             return
         qualified_name = _qualified_name((*namespace, name))
-        self._record_declaration(
-            _build_type_declaration(
-                kind,
-                qualified_name,
-                node,
-                self.source,
-                owner_id=self.owner_id,
-                docstring=docstring,
-            )
+        declaration = _build_type_declaration(
+            kind,
+            qualified_name,
+            node,
+            self.source,
+            owner_id=self.owner_id,
+            docstring=docstring,
         )
+        is_definition = any(
+            child.type in {"field_declaration_list", "enumerator_list"}
+            for child in node.named_children
+        )
+        current = self.declarations_by_id.get(declaration.stable_id)
+        if current is None or (
+            is_definition and declaration.stable_id not in self.type_definition_ids
+        ):
+            self._record_declaration(declaration)
+        if is_definition:
+            self.type_definition_ids.add(declaration.stable_id)
 
     def _handle_typedef_definition(
         self,
@@ -3142,6 +3192,7 @@ class _CppAnalysisBuilder:
                 lineno=node.start_point.row + 1,
                 end_lineno=node.end_point.row + 1,
                 docstring=docstring,
+                is_definition=field_list is not None,
             )
             if node.type == "class_specifier"
             else None
@@ -3233,6 +3284,7 @@ class _CppAnalysisBuilder:
                             lineno=node.start_point.row + 1,
                             end_lineno=node.end_point.row + 1,
                             docstring=docstring,
+                            is_definition=True,
                         )
                     builder.record_method(pending)
                 continue
@@ -3270,6 +3322,7 @@ class _CppAnalysisBuilder:
                     lineno=node.start_point.row + 1,
                     end_lineno=node.end_point.row + 1,
                     docstring=docstring,
+                    is_definition=True,
                 )
             builder.record_method(pending)
 
@@ -3917,7 +3970,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "38"
+    version = "39"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
