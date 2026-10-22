@@ -23,6 +23,7 @@ from codira_analyzer_c.c_declaration_macros import (
     _directive_rows,
     _include_guard,
 )
+import codira_analyzer_c.c_declaration_macros as declaration_macros
 
 
 def _fixture(root: Path, header: str, source: str) -> Path:
@@ -378,6 +379,58 @@ def test_opt_in_configuration_requires_a_boolean() -> None:
         assert "must be a boolean" in str(error)
     else:
         raise AssertionError("non-boolean expansion configuration was accepted")
+
+
+def test_public_analysis_marks_macro_token_budget_rejection_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retain the ordinary parse while recording bounded macro rejection.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source repository.
+    monkeypatch : pytest.MonkeyPatch
+        Lower the private token limit to exercise the public boundary cheaply.
+
+    Returns
+    -------
+    None
+        The parser result survives, and status reports incomplete expansion.
+    """
+    path = _fixture(
+        tmp_path,
+        "#define DECLARE(name) int name(void);\n",
+        '#include "api.h"\nDECLARE(generated_entry);\n'
+        "int ordinary(void) { return 0; }\n",
+    )
+    baseline = CAnalyzer().analyze_file(path, tmp_path)
+    analyzer = CAnalyzer()
+    analyzer.configure(
+        {"include_search_paths": ["include"], "expand_declaration_macros": True}
+    )
+    monkeypatch.setattr(declaration_macros, "_MAX_TOKENS", 2)
+
+    result = analyzer.analyze_file(path, tmp_path)
+
+    assert result.functions == baseline.functions
+    assert result.declarations == baseline.declarations
+    assert result.imports == baseline.imports
+    assert baseline.index_symbols
+    assert not result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    baseline_diagnostics = (
+        baseline.status.diagnostics if baseline.status is not None else ()
+    )
+    assert (
+        result.status.diagnostics[: len(baseline_diagnostics)] == baseline_diagnostics
+    )
+    assert any(
+        item.category == "declaration_macro_expansion"
+        and "macro token bound exceeded" in item.message
+        for item in result.status.diagnostics
+    )
 
 
 def test_unrelated_syntax_error_remains_partial_after_macro_recovery(

@@ -80,5 +80,10 @@ the authoritative classification ledger.
 The explicit option can recover source-backed generated C callables without
 changing default analysis or introducing a compiler dependency. Strict
 site-level rejection limits false clean results, but valid macros outside the
-supported bounded replacement grammar remain partial. Native and persisted
-qualification remain necessary before any candidate is classified fixed.
+supported bounded replacement grammar remain partial. A bounded selection
+failure preserves the ordinary parser result and diagnostics, adds an explicit
+declaration-macro diagnostic, records partial coverage, and disables symbol
+indexing so omitted generated artifacts are not mistaken for complete
+analysis. The backend retains the partial-coverage record and skips structural
+symbols for that analysis. Native and persisted qualification remain necessary
+before any candidate is classified fixed.

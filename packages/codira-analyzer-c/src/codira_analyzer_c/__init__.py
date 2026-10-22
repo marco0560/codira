@@ -42,7 +42,11 @@ from tree_sitter import Node
 from .c_parameter_macros import ParameterMacro, macro_parameter_name, parameter_macros
 from .c_parser import _new_parser as _new_parser
 from .c_include_context import read_include_context, include_identity_matches
-from .c_declaration_macros import ExpandedDeclaration, declaration_expansions
+from .c_declaration_macros import (
+    ExpandedDeclaration,
+    ExpansionRejected,
+    declaration_expansions,
+)
 from codira.analysis_inputs import validate_analysis_input_fingerprint
 from codira.generated import (
     GeneratedCallableProvenance,
@@ -63,7 +67,10 @@ from codira.contracts import (
     AnalyzerConcurrencyDeclaration,
 )
 from codira.models import (
+    AnalysisCoverageState,
+    AnalysisDiagnostic,
     AnalysisResult,
+    AnalysisStatus,
     CallSite,
     DeclarationArtifact,
     DeclarationKind,
@@ -2402,7 +2409,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "19"
+    version = "20"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -2714,11 +2721,20 @@ class CAnalyzer:
         )
         parser = _new_parser()
         base = _parse_c_source(source, parser, included_sources)
-        candidates = (
-            declaration_expansions(context, root, path)
-            if self._expand_declaration_macros
-            else ()
-        )
+        expansion_rejection: ExpansionRejected | None = None
+        try:
+            candidates = (
+                declaration_expansions(context, root, path)
+                if self._expand_declaration_macros
+                else ()
+            )
+        except ExpansionRejected as exc:
+            # A bounded expansion failure must leave the original parse result
+            # intact. In particular, keep its recovery status and diagnostics
+            # instead of exposing an internal exception or implying that the
+            # generated declarations were analyzed.
+            candidates = ()
+            expansion_rejection = exc
         context_identity = _analysis_context_identity(
             context.identity, self.configuration_fingerprint
         )
@@ -2786,6 +2802,38 @@ class CAnalyzer:
                             key=lambda item: (item.lineno, item.name, item.signature),
                         )
                     )
+                ),
+            )
+        if expansion_rejection is not None:
+            status = result.status or AnalysisStatus(
+                grammar="tree-sitter-c",
+                target_contract={"language": "c"},
+            )
+            result = replace(
+                result,
+                index_symbols=False,
+                status=replace(
+                    status,
+                    diagnostics=(
+                        *status.diagnostics,
+                        AnalysisDiagnostic(
+                            category="declaration_macro_expansion",
+                            message=(
+                                "Declaration macro expansion was not completed: "
+                                f"{expansion_rejection}"
+                            ),
+                        ),
+                    ),
+                    reliable_categories=(),
+                    omitted_categories=(
+                        "module",
+                        "class",
+                        "function",
+                        "declaration",
+                        "import",
+                        "documentation",
+                    ),
+                    coverage_state=AnalysisCoverageState.PARTIAL,
                 ),
             )
         return result
