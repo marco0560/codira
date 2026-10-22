@@ -669,6 +669,42 @@ class _ContextWalk:
         if len(self.stack) == 1:
             self.results[offset] = selection
 
+    def save_skipped_root_queries(self, path: str, offsets: tuple[int, ...]) -> None:
+        """Snapshot root queries beneath a proven inactive whole-file guard.
+
+        Parameters
+        ----------
+        path : str
+            Captured primary source path.
+        offsets : tuple[int, ...]
+            Original source offsets requested by the caller.
+
+        Returns
+        -------
+        None
+            Root queries receive inactive snapshots without traversing the body.
+
+        Raises
+        ------
+        ValueError
+            If a query falls inside a preprocessing directive.
+        """
+        if not offsets:
+            return
+        directives = self.cache.get(path)
+        if directives is None:
+            directives = _directives(self.captures[path])
+        self.stack.append(path)
+        try:
+            for offset in offsets:
+                if any(start <= offset < end for start, end, *_ in directives):
+                    raise ValueError(
+                        "macro query lies inside a preprocessing directive"
+                    )
+                self.save_query(path, offset, False)
+        finally:
+            self.stack.pop()
+
     def snapshot(self, active: bool | None) -> MacroSelection:
         """Freeze the current environment and ordered observations.
 
@@ -719,6 +755,7 @@ class _ContextWalk:
         if path in self.environment.once:
             if primary:
                 self.root_activity.append((0, len(self.captures[path]), False, None))
+                self.save_skipped_root_queries(path, offsets)
             return
         offsets = offsets or self.query_offsets.get(path, ())
         skipped = None
@@ -735,12 +772,18 @@ class _ContextWalk:
             else None
         )
         if (
-            not offsets
-            and cached_binding is not None
+            cached_binding is not None
             and cached_binding.definition is not None
+            and not cached_binding.definition.opaque
         ):
+            # An active controlling guard skips the complete header body even
+            # when a caller requested declaration snapshots there. Replaying a
+            # guarded body would fabricate another preprocessing visit and can
+            # turn an otherwise bounded primary walk into repeated traversal.
+            # A query reached only through this skipped visit remains unknown.
             if primary:
                 self.root_activity.append((0, len(self.captures[path]), False, None))
+                self.save_skipped_root_queries(path, offsets)
             if skipped is not None:
                 self.environment = _merge([skipped, self.environment])
             return
@@ -758,9 +801,14 @@ class _ContextWalk:
             )
         guard = self.guards[path]
         binding = self.environment.bindings.get(guard) if guard is not None else None
-        if not offsets and binding is not None and binding.definition is not None:
+        if (
+            binding is not None
+            and binding.definition is not None
+            and not binding.definition.opaque
+        ):
             if primary:
                 self.root_activity.append((0, len(self.captures[path]), False, None))
+                self.save_skipped_root_queries(path, offsets)
             self.stack.pop()
             if skipped is not None:
                 self.environment = _merge([skipped, self.environment])

@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 
     from codira.contracts import LanguageAnalyzer
     from .cpp_macro_expansion import _MacroDefinition
+    from .cpp_macro_context import MacroSelection
 
 from .cpp_namespace_bindings import (
     _namespace_bindings_from_config,
@@ -915,33 +916,35 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
 
 
 def _initializer_argument_calls(
-    body: Node, source: bytes, parameter_names: tuple[str, ...]
+    body: Node,
+    source: bytes,
+    parameter_names: tuple[str, ...],
+    initializer_value_bindings: Mapping[str, tuple[int, ...]],
 ) -> tuple[CallSite, ...]:
-    """Recover expression arguments when a value parameter excludes a prototype.
+    """Recover nested expression calls after a visible value binding proves initialization.
 
     Parameters
     ----------
     body : Node
-        Function compound statement; nested scopes are not adapted.
+        Function compound statement whose nested lexical scopes are inspected.
     source : bytes
         Coordinate-aligned original source.
     parameter_names : tuple[str, ...]
         Explicit value parameters belonging to this function.
+    initializer_value_bindings : collections.abc.Mapping[str, tuple[int, ...]]
+        Captured source/header value names and the offsets at which they are available.
 
     Returns
     -------
     tuple[CallSite, ...]
-        Nested argument calls at original byte positions. The declared variable
-        and synthetic expression wrapper never acquire call records.
+        Nested argument calls at original byte positions. Unknown or shadowed
+        first arguments remain conservative; declared variables and synthetic
+        expression wrappers never acquire call records.
     """
-    if not parameter_names:
-        return ()
     recovered: list[CallSite] = []
     original_lines: list[int] | None = None
     prefix = b"void __codira_probe() { __codira_probe"
-    for declaration in body.named_children:
-        if declaration.type != "declaration":
-            continue
+    for declaration in _initializer_candidate_declarations(body):
         declarator = declaration.child_by_field_name("declarator")
         if declarator is None or declarator.type != "function_declarator":
             continue
@@ -954,14 +957,25 @@ def _initializer_argument_calls(
         first = arguments[0]
         written = [n for n in first.named_children if n.type != "comment"]
         value = first.child_by_field_name("type")
-        if (
-            len(written) != 1
-            or value is None
-            or value.type != "type_identifier"
-            or _node_text(value, source) not in parameter_names
+        if value is None:
+            continue
+        first_name = _node_text(value, source).strip()
+        values, types = _initializer_visible_bindings(
+            body, declaration, source, parameter_names
+        )
+        if value.type not in {"type_identifier", "qualified_identifier"}:
+            continue
+        qualified_value = (
+            value.type == "qualified_identifier"
+            and declaration.start_byte in initializer_value_bindings.get(first_name, ())
+        )
+        if len(written) != 1 and not (
+            qualified_value
+            and _initializer_parenthesized_call_shape(first, value, source)
         ):
             continue
-        # A parameter cannot be redeclared as a type in this outermost block.
+        if (first_name not in values or first_name in types) and not (qualified_value):
+            continue
         # Reparse only the proven initializer arguments, excluding its variable.
         fragment = prefix + source[parameters.start_byte : parameters.end_byte]
         fragment += b"; }"
@@ -995,11 +1009,852 @@ def _initializer_argument_calls(
     return tuple(recovered)
 
 
+def _initializer_parenthesized_call_shape(
+    declaration: Node,
+    value: Node,
+    source: bytes,
+) -> bool:
+    """Recognize a qualified call-shaped node misparsed as a declarator.
+
+    Parameters
+    ----------
+    declaration : tree_sitter.Node
+        First parameter-like node inside a declaration-shaped initializer.
+    value : tree_sitter.Node
+        Qualified function name parsed as the parameter type.
+    source : bytes
+        Coordinate-aligned original source.
+
+    Returns
+    -------
+    bool
+        Whether the qualified name has the specific abstract-function shape
+        produced by a call expression; a separately captured declaration proof
+        is still required before this shape can license call extraction.
+    """
+    if value.type != "qualified_identifier":
+        return False
+    declarator = declaration.child_by_field_name("declarator")
+    if declarator is None or declarator.type != "abstract_function_declarator":
+        return False
+    parameters = declarator.child_by_field_name("parameters")
+    if parameters is None:
+        return False
+    arguments = [node for node in parameters.named_children if node.type != "comment"]
+    if len(arguments) != 1 or arguments[0].type != "parameter_declaration":
+        return False
+    argument_type = arguments[0].child_by_field_name("type")
+    argument_declarator = arguments[0].child_by_field_name("declarator")
+    if (
+        argument_type is None
+        or argument_type.type != "type_identifier"
+        or argument_declarator is not None
+    ):
+        return False
+    return bool(_node_text(argument_type, source).strip())
+
+
+def _initializer_candidate_declarations(body: Node) -> tuple[Node, ...]:
+    """Find declaration-shaped candidates in executable lexical blocks.
+
+    Parameters
+    ----------
+    body : tree_sitter.Node
+        Function body to inspect without entering nested lambdas or functions.
+
+    Returns
+    -------
+    tuple[tree_sitter.Node, ...]
+        Source-ordered declaration nodes that may represent direct initialization.
+    """
+    candidates: list[Node] = []
+
+    def visit(node: Node, *, root: bool = False) -> None:
+        """Walk statement containers while preserving nested callable boundaries.
+
+        Parameters
+        ----------
+        node : tree_sitter.Node
+            Current statement or compound scope.
+        root : bool, optional
+            Whether this is the body whose parameter bindings are supplied.
+
+        Returns
+        -------
+        None
+            Candidate declarations are appended in source order.
+        """
+        if not root and node.type in {"lambda_expression", "function_definition"}:
+            return
+        if node.type == "declaration":
+            if any(
+                child.type == "function_declarator" for child in node.named_children
+            ):
+                candidates.append(node)
+            return
+        for child in node.named_children:
+            visit(child)
+
+    visit(body, root=True)
+    return tuple(candidates)
+
+
+def _initializer_visible_bindings(
+    body: Node,
+    candidate: Node,
+    source: bytes,
+    parameter_names: tuple[str, ...],
+) -> tuple[set[str], set[str]]:
+    """Resolve simple value and type names visible before one candidate.
+
+    Parameters
+    ----------
+    body : tree_sitter.Node
+        Owning function compound statement.
+    candidate : tree_sitter.Node
+        Declaration whose first parameter-like argument is being checked.
+    source : bytes
+        Original coordinate-aligned translation unit.
+    parameter_names : tuple[str, ...]
+        Value parameters belonging to the owning function.
+
+    Returns
+    -------
+    tuple[set[str], set[str]]
+        Visible value and type names after lexical shadowing.
+
+    Notes
+    -----
+    Only declarations in the candidate's enclosing compound scopes and before
+    the candidate are considered. Preprocessor branches and nested lambdas are
+    not used as binding evidence.
+    """
+    values = set(parameter_names)
+    types: set[str] = set()
+    scopes: list[Node] = []
+    current: Node | None = candidate.parent
+    while current is not None:
+        if current.type == "compound_statement":
+            scopes.append(current)
+        if current == body:
+            break
+        current = current.parent
+    if not scopes or scopes[-1] != body:
+        return values, types
+
+    for scope in reversed(scopes):
+        direct_child: Node = candidate
+        while direct_child.parent is not None and direct_child.parent != scope:
+            direct_child = direct_child.parent
+        for sibling in scope.named_children:
+            if sibling.start_byte >= direct_child.start_byte:
+                break
+            if sibling.type == "preproc_if":
+                continue
+            _update_initializer_bindings(sibling, source, values, types)
+    return values, types
+
+
+def _update_initializer_bindings(
+    node: Node,
+    source: bytes,
+    values: set[str],
+    types: set[str],
+) -> None:
+    """Apply one preceding declaration to the visible local name sets.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Declaration or type declaration in the current lexical scope.
+    source : bytes
+        Original translation-unit bytes.
+    values : set[str]
+        Mutable visible value names.
+    types : set[str]
+        Mutable visible type names.
+
+    Returns
+    -------
+    None
+        The visible bindings are updated in place.
+    """
+    if node.type == "alias_declaration":
+        name = node.child_by_field_name("name")
+        if name is not None:
+            identifier = _node_text(name, source).strip()
+            values.discard(identifier)
+            types.add(identifier)
+        return
+    if node.type == "type_definition":
+        for name in _typedef_name_nodes(node):
+            identifier = _node_text(name, source).strip()
+            values.discard(identifier)
+            types.add(identifier)
+        return
+    if node.type in {
+        "class_specifier",
+        "struct_specifier",
+        "union_specifier",
+        "enum_specifier",
+    }:
+        name = node.child_by_field_name("name")
+        if name is not None:
+            identifier = _node_text(name, source).strip()
+            values.discard(identifier)
+            types.add(identifier)
+        return
+    if node.type != "declaration":
+        return
+    declarator = node.child_by_field_name("declarator")
+    if declarator is None or _find_function_declarator(node) is not None:
+        return
+    names = _initializer_declarator_names(declarator, source)
+    for identifier in names:
+        types.discard(identifier)
+        values.add(identifier)
+
+
+def _initializer_declarator_names(node: Node, source: bytes) -> tuple[str, ...]:
+    """Collect written variable names from declarator structure only.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Declarator or initialized declarator node.
+    source : bytes
+        Original source bytes.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Written identifier names, excluding names nested in types or expressions.
+    """
+    if node.type in {"identifier", "field_identifier"}:
+        return (_node_text(node, source).strip(),)
+    child = node.child_by_field_name("declarator")
+    if child is not None:
+        return _initializer_declarator_names(child, source)
+    for child in node.named_children:
+        if child.type.endswith("_declarator") or child.type in {
+            "identifier",
+            "field_identifier",
+        }:
+            names = _initializer_declarator_names(child, source)
+            if names:
+                return names
+    return ()
+
+
+@dataclass(frozen=True)
+class _InitializerHeaderValuePlan:
+    """Bounded syntax queries needed for qualified initializer value proof."""
+
+    root_offsets: tuple[int, ...]
+    root_spans: Mapping[int, int]
+    header_query_offsets: Mapping[str, tuple[int, ...]]
+    requested_by_leaf: Mapping[bytes, frozenset[str]]
+    declarations_by_header: Mapping[str, tuple[tuple[Node, str, bytes, bool], ...]]
+    macro_offsets_by_header: Mapping[str, tuple[int, ...]]
+
+
+def _initializer_header_value_query_plan(
+    analyzer: CppAnalyzer,
+    source_root: Node,
+    source: bytes,
+    context: IncludeContext,
+    root: Path,
+) -> _InitializerHeaderValuePlan:
+    """Collect bounded declaration and wrapper queries for one captured TU.
+
+    Parameters
+    ----------
+    source_root : tree_sitter.Node
+        Parsed translation unit used to discover qualified first arguments.
+    source : bytes
+        Original translation-unit bytes.
+    context : IncludeContext
+        Immutable source and contained header snapshots with resolution identity.
+    root : pathlib.Path
+        Repository boundary for relative paths in the include identity.
+    analyzer : CppAnalyzer
+        Profile owner whose configured macro and pure-query state drives the
+        same captured primary translation-unit traversal.
+
+    Returns
+    -------
+    _InitializerHeaderValuePlan
+        Original-source candidate offsets and captured header queries.
+    """
+    requested: set[str] = set()
+    root_queries: set[int] = set()
+    root_spans: dict[int, int] = {}
+    for node in _named_descendants(source_root):
+        if node.type != "function_definition":
+            continue
+        body = node.child_by_field_name("body")
+        if body is None:
+            continue
+        for declaration in _initializer_candidate_declarations(body):
+            declarator = declaration.child_by_field_name("declarator")
+            parameters = (
+                declarator.child_by_field_name("parameters")
+                if declarator is not None
+                else None
+            )
+            arguments = (
+                [item for item in parameters.named_children if item.type != "comment"]
+                if parameters is not None
+                else []
+            )
+            first = arguments[0] if arguments else None
+            value = first.child_by_field_name("type") if first is not None else None
+            if value is not None and value.type == "qualified_identifier":
+                requested.add(_node_text(value, source).strip())
+                root_queries.add(declaration.start_byte)
+                root_spans[declaration.start_byte] = declaration.end_byte
+    requested_by_leaf: dict[bytes, set[str]] = {}
+    for name in requested:
+        requested_by_leaf.setdefault(name.split("::")[-1].encode(), set()).add(name)
+
+    declarations_by_header: dict[str, tuple[tuple[Node, str, bytes, bool], ...]] = {}
+    header_queries: dict[str, set[int]] = {}
+    macro_offsets_by_header: dict[str, tuple[int, ...]] = {}
+    for header in context.headers:
+        raw = header.source
+        leaves = [
+            leaf for leaf in requested_by_leaf if re.search(rb"\b" + leaf + rb"\b", raw)
+        ]
+        if not leaves:
+            continue
+        relative = header.path.resolve().relative_to(root.resolve()).as_posix()
+        header_root = _parse_with_namespace_bindings(
+            raw, bindings=analyzer._namespace_macro_definitions
+        )
+        declarations: list[tuple[Node, str, bool]] = []
+        for node in _named_descendants(header_root):
+            if (
+                node.type != "declaration"
+                or not _initializer_namespace_visible_declaration(node)
+            ):
+                continue
+            function_declaration = _find_function_declarator(node) is not None
+            if not function_declaration and any(
+                child.type == "storage_class_specifier"
+                and _node_text(child, raw).strip() == "typedef"
+                for child in node.named_children
+            ):
+                continue
+            declarator = node.child_by_field_name("declarator")
+            if declarator is None:
+                continue
+            for name in _initializer_declarator_names(declarator, raw):
+                encoded = name.encode()
+                if encoded in requested_by_leaf:
+                    declarations.append((node, name, function_declaration))
+        if not declarations:
+            continue
+        declarations_by_header[relative] = tuple(
+            (node, leaf_name, raw, function_declaration)
+            for node, leaf_name, function_declaration in declarations
+        )
+        macros = _initializer_macro_line_offsets(header_root, raw)
+        macro_offsets_by_header[relative] = macros
+        header_queries[relative] = {
+            *(node.start_byte for node, _leaf_name, _is_function in declarations),
+            *macros,
+        }
+    return _InitializerHeaderValuePlan(
+        root_offsets=tuple(sorted(root_queries)),
+        root_spans=root_spans,
+        header_query_offsets={
+            owner: tuple(sorted(offsets)) for owner, offsets in header_queries.items()
+        },
+        requested_by_leaf={
+            leaf: frozenset(values) for leaf, values in requested_by_leaf.items()
+        },
+        declarations_by_header=declarations_by_header,
+        macro_offsets_by_header=macro_offsets_by_header,
+    )
+
+
+def _initializer_namespace_visible_declaration(node: Node) -> bool:
+    """Require a declaration to occur at namespace or translation-unit scope.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Declaration candidate from a captured header.
+
+    Returns
+    -------
+    bool
+        Whether only namespace-level wrappers enclose the declaration.
+    """
+    parent = node.parent
+    while parent is not None:
+        if parent.type == "translation_unit":
+            return True
+        if parent.type not in {
+            "declaration_list",
+            "namespace_definition",
+            "linkage_specification",
+            "template_declaration",
+            "export_declaration",
+            "preproc_if",
+            "preproc_ifdef",
+            "preproc_ifndef",
+            "preproc_elif",
+            "preproc_elifdef",
+            "preproc_elifndef",
+            "preproc_else",
+        }:
+            return False
+        parent = parent.parent
+    return False
+
+
+def _initializer_header_value_bindings_from_walk(
+    analyzer: CppAnalyzer,
+    source_root: Node,
+    source: bytes,
+    context: IncludeContext,
+    root: Path,
+    captures: Mapping[str, bytes],
+    walk: object,
+    plan: _InitializerHeaderValuePlan,
+) -> dict[str, tuple[int, ...]]:
+    """Prove qualified values from per-visit state in the primary TU walk.
+
+    Parameters
+    ----------
+    analyzer : CppAnalyzer
+        Configured profile owner.
+    source_root : tree_sitter.Node
+        Parsed primary translation unit.
+    source : bytes
+        Original primary translation-unit bytes.
+    context : IncludeContext
+        Immutable source and contained header snapshots.
+    root : pathlib.Path
+        Trusted repository boundary.
+    captures : collections.abc.Mapping[str, bytes]
+        Exact captured bytes supplied to the primary include walk.
+    walk : object
+        The one primary translation-unit ``_ContextWalk``.
+    plan : _InitializerHeaderValuePlan
+        Declaration offsets requested from that walk.
+
+    Returns
+    -------
+    dict[str, tuple[int, ...]]
+        Qualified values mapped to exact root declaration offsets proven by an
+        active prior header visit. Conflicting and unknown visits are omitted.
+    """
+    from .cpp_macro_context import _ContextWalk
+
+    if not isinstance(walk, _ContextWalk) or not plan.root_offsets:
+        return {}
+    identity = json.loads(context.identity)
+    root_key = identity["source_path"]
+    available: dict[str, set[int]] = {}
+
+    for relative, declarations in plan.declarations_by_header.items():
+        macro_offsets = set(plan.macro_offsets_by_header[relative])
+        for declaration, leaf_name, raw, _function_declaration in declarations:
+            selections = walk.file_results.get((relative, declaration.start_byte), ())
+            events = walk.query_events.get((relative, declaration.start_byte), ())
+            if len(selections) != 1 or len(selections) != len(events):
+                continue
+            if any(selection.active is None for selection in selections):
+                continue
+            for selected, event in zip(selections, events, strict=True):
+                if selected.active is not True:
+                    continue
+                scopes = _initializer_namespace_scopes(declaration, raw)
+                macro_namespaces = _initializer_header_macro_namespaces_for_event(
+                    declaration.start_byte,
+                    raw,
+                    macro_offsets,
+                    event,
+                    walk,
+                    relative,
+                )
+                if macro_namespaces is None:
+                    continue
+                for qualified in plan.requested_by_leaf[leaf_name.encode()]:
+                    requested_scope = tuple(qualified.split("::")[:-1])
+                    if not _initializer_namespace_matches(
+                        (*macro_namespaces, *scopes), requested_scope
+                    ):
+                        continue
+                    for root_offset in plan.root_offsets:
+                        if not _initializer_namespace_aliases_allow(
+                            source_root,
+                            source,
+                            root_offset,
+                            requested_scope,
+                        ):
+                            continue
+                        root_events = walk.query_events.get((root_key, root_offset), ())
+                        if not root_events or event >= root_events[0]:
+                            continue
+                        available.setdefault(qualified, set()).add(root_offset)
+    return {
+        name: tuple(sorted(offsets)) for name, offsets in available.items() if offsets
+    }
+
+
+def _initializer_header_macro_namespaces_for_event(
+    declaration_offset: int,
+    source: bytes,
+    macro_offsets: set[int],
+    declaration_event: int,
+    walk: object,
+    path: str,
+) -> tuple[tuple[str, bool], ...] | None:
+    """Resolve namespace wrapper macros from the same header visit as a declaration.
+
+    Parameters
+    ----------
+    declaration_offset : int
+        Original byte offset of the declaration query.
+    source : bytes
+        Exact captured header bytes.
+    macro_offsets : set[int]
+        Standalone namespace-wrapper macro offsets in the header.
+    declaration_event : int
+        Primary-walk query sequence number for this declaration visit.
+    walk : object
+        The primary translation-unit ``_ContextWalk`` retaining query events.
+    path : str
+        Captured repository-relative header key.
+
+    Returns
+    -------
+    tuple[tuple[str, bool], ...] | None
+        Namespace wrappers proven at this visit, or ``None`` when a required
+        query is absent or uncertain.
+    """
+    from .cpp_macro_context import _ContextWalk
+
+    if not isinstance(walk, _ContextWalk):
+        return None
+    selections: dict[int, MacroSelection] = {}
+    for offset in macro_offsets:
+        if offset >= declaration_offset:
+            continue
+        events = walk.query_events.get((path, offset), ())
+        visits = walk.file_results.get((path, offset), ())
+        preceding = [
+            (event, selection)
+            for event, selection in zip(events, visits, strict=True)
+            if event < declaration_event
+        ]
+        if not preceding:
+            continue
+        event, selection = max(preceding, key=lambda item: item[0])
+        del event
+        selections[offset] = selection
+    return _initializer_header_macro_namespaces(
+        declaration_offset, source, macro_offsets, selections
+    )
+
+
+def _initializer_namespace_aliases_allow(
+    root: Node, source: bytes, declaration_offset: int, requested_scope: tuple[str, ...]
+) -> bool:
+    """Reject qualified header proofs shadowed by a visible namespace alias.
+
+    Parameters
+    ----------
+    root : tree_sitter.Node
+        Primary translation-unit syntax tree.
+    source : bytes
+        Original primary translation-unit bytes.
+    declaration_offset : int
+        Original byte offset of the candidate call declaration.
+    requested_scope : tuple[str, ...]
+        Namespace components written before the qualified value leaf.
+
+    Returns
+    -------
+    bool
+        Whether no visible namespace alias rebinds the qualified root names.
+    """
+    ancestors: set[tuple[str, int, int]] = set()
+    node: Node | _ProjectedNode | None = max(
+        (
+            candidate
+            for candidate in _named_descendants(root)
+            if candidate.start_byte <= declaration_offset < candidate.end_byte
+        ),
+        key=lambda candidate: (candidate.start_byte, -candidate.end_byte),
+        default=root,
+    )
+    while node is not None:
+        ancestors.add((node.type, node.start_byte, node.end_byte))
+        node = node.parent
+    for candidate in _named_descendants(root):
+        if candidate.type != "namespace_alias_definition":
+            continue
+        name = candidate.child_by_field_name("name")
+        if name is None or _node_text(name, source).strip() not in requested_scope:
+            continue
+        if candidate.start_byte >= declaration_offset:
+            continue
+        parent = candidate.parent
+        if (
+            parent is not None
+            and (
+                parent.type,
+                parent.start_byte,
+                parent.end_byte,
+            )
+            in ancestors
+        ):
+            return False
+    return True
+
+
+def _select_initializer_macro_environments(
+    path: str,
+    offsets: tuple[int, ...],
+    captures: Mapping[str, bytes],
+    resolutions: Mapping[tuple[str, str, bool], str | None],
+    initial: Mapping[bytes, _MacroDefinition | None],
+) -> Mapping[int, MacroSelection]:
+    """Use the shared source macro walker for captured declaration locations.
+
+    Parameters
+    ----------
+    path : str
+        Repository-relative captured header path.
+    offsets : tuple[int, ...]
+        Declaration and macro invocation offsets to resolve.
+    captures : collections.abc.Mapping[str, bytes]
+        Exact source/header snapshots from the include context.
+    resolutions : collections.abc.Mapping[tuple[str, str, bool | None], str | None]
+        Captured include resolution outcomes.
+    initial : collections.abc.Mapping[bytes, _MacroDefinition | None]
+        Explicit initial macro environment.
+
+    Returns
+    -------
+    collections.abc.Mapping[int, MacroSelection]
+        Macro selections at the requested original offsets.
+    """
+    from .cpp_macro_context import select_macro_environments
+
+    return select_macro_environments(path, offsets, captures, resolutions, initial)
+
+
+def _initializer_macro_line_offsets(root: Node, source: bytes) -> tuple[int, ...]:
+    """Find standalone macro invocation lines before declaration parsing.
+
+    Parameters
+    ----------
+    root : tree_sitter.Node
+        Parsed captured header.
+    source : bytes
+        Exact captured header bytes.
+
+    Returns
+    -------
+    tuple[int, ...]
+        Source offsets of standalone identifier invocations outside comments.
+    """
+    from bisect import bisect_right
+
+    comments = sorted(
+        (node.start_byte, node.end_byte)
+        for node in _named_descendants(root)
+        if node.type == "comment"
+    )
+    comment_starts = [start for start, _end in comments]
+    offsets: set[int] = set()
+    for match in re.finditer(rb"(?m)^[ \t]*([A-Za-z_][A-Za-z_0-9]*)[ \t]*\r?$", source):
+        start = match.start(1)
+        comment_index = bisect_right(comment_starts, start) - 1
+        in_comment = comment_index >= 0 and start < comments[comment_index][1]
+        if not in_comment:
+            offsets.add(start)
+    return tuple(sorted(offsets))
+
+
+def _initializer_namespace_scopes(
+    node: Node, source: bytes
+) -> tuple[tuple[str, bool], ...]:
+    """Return explicit namespace ancestors for a captured declaration.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node
+        Declaration whose qualified owner is needed.
+    source : bytes
+        Captured source bytes.
+
+    Returns
+    -------
+    tuple[tuple[str, bool], ...]
+        Namespace names and whether each is inline, ordered outermost first.
+    """
+    scopes: list[tuple[str, bool]] = []
+    parent = node.parent
+    while parent is not None:
+        if parent.type == "namespace_definition":
+            name = parent.child_by_field_name("name")
+            if name is not None:
+                prefix = source[parent.start_byte : name.start_byte]
+                scopes.append((_node_text(name, source).strip(), b"inline" in prefix))
+        parent = parent.parent
+    scopes.reverse()
+    return tuple(scopes)
+
+
+def _initializer_header_macro_namespaces(
+    declaration_offset: int,
+    source: bytes,
+    macro_offsets: set[int],
+    selections: Mapping[int, MacroSelection],
+) -> tuple[tuple[str, bool], ...] | None:
+    """Expand active namespace wrapper macros before one captured declaration.
+
+    Parameters
+    ----------
+    declaration_offset : int
+        Original byte offset of the declaration.
+    source : bytes
+        Captured header bytes.
+    macro_offsets : set[int]
+        Candidate standalone macro invocation locations.
+    selections : collections.abc.Mapping[int, object]
+        Source-based activity and macro selections at those locations.
+
+    Returns
+    -------
+    tuple[tuple[str, bool], ...] | None
+        Proven macro namespace stack, or ``None`` when expansion is uncertain.
+    """
+    from .cpp_macro_expansion import _MacroExpander, _macro_tokens
+
+    scopes: list[tuple[str, bool]] = []
+    for offset in sorted(item for item in macro_offsets if item < declaration_offset):
+        selected = selections.get(offset)
+        if selected is None or selected.active is None:
+            return None
+        if selected.active is False:
+            continue
+        line_end = source.find(b"\n", offset)
+        if line_end < 0:
+            line_end = len(source)
+        macro = source[offset:line_end].strip()
+        bindings = dict(selected.bindings)
+        binding = bindings.get(macro)
+        if binding is None or binding.definition is None:
+            continue
+        definitions = {
+            name: item.definition
+            for name, item in selected.bindings
+            if item.definition is not None
+        }
+        try:
+            tokens = _MacroExpander(definitions).expand(
+                _macro_tokens(macro, offset=offset)
+            )
+        except ValueError:
+            return None
+        spellings = tuple(token.spelling for token in tokens)
+        if b"namespace" in spellings:
+            position = 0
+            while position < len(spellings):
+                if spellings[position] != b"namespace":
+                    position += 1
+                    continue
+                cursor = position + 1
+                while cursor < len(spellings) and spellings[cursor] in {
+                    b"__attribute__",
+                    b"__declspec",
+                }:
+                    cursor += 1
+                    if cursor >= len(spellings) or spellings[cursor] != b"(":
+                        return None
+                    depth = 0
+                    while cursor < len(spellings):
+                        if spellings[cursor] == b"(":
+                            depth += 1
+                        elif spellings[cursor] == b")":
+                            depth -= 1
+                            if depth == 0:
+                                cursor += 1
+                                break
+                        cursor += 1
+                    else:
+                        return None
+                names: list[bytes] = []
+                if cursor >= len(spellings) or not re.fullmatch(
+                    rb"[A-Za-z_][A-Za-z_0-9]*", spellings[cursor]
+                ):
+                    return None
+                is_inline = position > 0 and spellings[position - 1] == b"inline"
+                names.append(spellings[cursor])
+                cursor += 1
+                while cursor < len(spellings) and spellings[cursor] == b"::":
+                    cursor += 1
+                    if cursor >= len(spellings) or not re.fullmatch(
+                        rb"[A-Za-z_][A-Za-z_0-9]*", spellings[cursor]
+                    ):
+                        return None
+                    names.append(spellings[cursor])
+                    cursor += 1
+                if cursor >= len(spellings) or spellings[cursor] != b"{":
+                    return None
+                if is_inline and len(names) != 1:
+                    return None
+                scopes.extend(
+                    (name.decode(), is_inline and index == len(names) - 1)
+                    for index, name in enumerate(names)
+                )
+                position = cursor + 1
+        elif b"}" in spellings and not any(token not in {b"}"} for token in spellings):
+            for _ in spellings:
+                if not scopes:
+                    return None
+                scopes.pop()
+    return tuple(scopes)
+
+
+def _initializer_namespace_matches(
+    scopes: tuple[tuple[str, bool], ...], requested: tuple[str, ...]
+) -> bool:
+    """Check a qualified name against explicit and inline namespace scopes.
+
+    Parameters
+    ----------
+    scopes : tuple[tuple[str, bool], ...]
+        Namespace path, with inline namespace flags.
+    requested : tuple[str, ...]
+        Qualified namespace prefix written at the call site.
+
+    Returns
+    -------
+    bool
+        Whether inline namespace elision yields the requested exact prefix.
+    """
+    paths: set[tuple[str, ...]] = {()}
+    for name, is_inline in scopes:
+        paths = {(*path, name) for path in paths}
+        if is_inline:
+            paths.update(path[:-1] for path in tuple(paths) if path[-1] == name)
+    return requested in paths
+
+
 def _extract_calls(
     body: Node | None,
     source: bytes,
     *,
     parameter_names: tuple[str, ...] = (),
+    initializer_value_bindings: Mapping[str, tuple[int, ...]] | None = None,
 ) -> tuple[CallSite, ...]:
     """
     Extract normalized calls from one function body.
@@ -1012,6 +1867,8 @@ def _extract_calls(
         Full source buffer.
     parameter_names : tuple[str, ...], optional
         Explicit value parameters licensing direct initializer disambiguation.
+    initializer_value_bindings : collections.abc.Mapping[str, tuple[int, ...]] | None, optional
+        Qualified source/header values proven for original declaration offsets.
 
     Returns
     -------
@@ -1021,6 +1878,9 @@ def _extract_calls(
     """
     if body is None:
         return ()
+    value_bindings = (
+        {} if initializer_value_bindings is None else initializer_value_bindings
+    )
 
     calls: list[CallSite] = []
     statement_hints = False
@@ -1043,6 +1903,7 @@ def _extract_calls(
                         node.macro_arguments,
                         source,
                         parameter_names=parameter_names,
+                        initializer_value_bindings=value_bindings,
                     )
                 )
         if node.type != "call_expression":
@@ -1054,7 +1915,9 @@ def _extract_calls(
         calls = list(dict.fromkeys(calls))
     seen = set(calls)
     recovered: list[CallSite] = []
-    for call in _initializer_argument_calls(body, source, parameter_names):
+    for call in _initializer_argument_calls(
+        body, source, parameter_names, value_bindings
+    ):
         if call not in seen:
             seen.add(call)
             recovered.append(call)
@@ -1674,6 +2537,7 @@ def _build_function_artifact(
     docstring: str | None,
     is_public: int,
     signature_node: Node,
+    initializer_value_bindings: Mapping[str, tuple[int, ...]],
 ) -> _PendingFunction | None:
     """
     Build one function or method artifact from a definition or declaration node.
@@ -1696,6 +2560,8 @@ def _build_function_artifact(
         Public-visibility flag for the callable.
     signature_node : tree_sitter.Node
         Node whose source span should be used for signature extraction.
+    initializer_value_bindings : collections.abc.Mapping[str, tuple[int, ...]]
+        Qualified source/header values proven at original declaration offsets.
 
     Returns
     -------
@@ -1763,7 +2629,12 @@ def _build_function_artifact(
         raises=0,
         has_asserts=0,
         decorators=(),
-        calls=_extract_calls(body, source, parameter_names=parameters),
+        calls=_extract_calls(
+            body,
+            source,
+            parameter_names=parameters,
+            initializer_value_bindings=initializer_value_bindings,
+        ),
         callable_refs=(),
     )
     return _PendingFunction(
@@ -1888,6 +2759,7 @@ class _CppAnalysisBuilder:
         owner_id: str,
         known_class_names: set[str],
         comment_maps: CommentMaps | None = None,
+        initializer_value_bindings: Mapping[str, tuple[int, ...]] | None = None,
     ) -> None:
         """Initialize artifact accumulators and optional physical comment facts.
 
@@ -1903,6 +2775,8 @@ class _CppAnalysisBuilder:
             Collected qualified class names.
         comment_maps : CommentMaps or None, optional
             Attachments captured before visibility projection.
+        initializer_value_bindings : collections.abc.Mapping[str, tuple[int, ...]] | None, optional
+            Profile-bound qualified value names proven by the primary include walk.
 
         Returns
         -------
@@ -1912,6 +2786,9 @@ class _CppAnalysisBuilder:
         self.root = root
         self.owner_id = owner_id
         self.known_class_names = known_class_names
+        self.initializer_value_bindings = (
+            {} if initializer_value_bindings is None else initializer_value_bindings
+        )
         self.class_builders: dict[str, _ClassBuilder] = {}
         self.functions_by_key: dict[tuple[str, tuple[str, ...]], _PendingFunction] = {}
         self.declarations_by_id: dict[str, DeclarationArtifact] = {}
@@ -2333,6 +3210,7 @@ class _CppAnalysisBuilder:
                     docstring=child_docstring,
                     is_public=int(current_public),
                     signature_node=child,
+                    initializer_value_bindings=self.initializer_value_bindings,
                 )
                 if pending is not None:
                     pending = replace(
@@ -2368,6 +3246,7 @@ class _CppAnalysisBuilder:
                 docstring=child_docstring,
                 is_public=int(current_public),
                 signature_node=child,
+                initializer_value_bindings=self.initializer_value_bindings,
             )
             if pending is None:
                 continue
@@ -2430,6 +3309,7 @@ class _CppAnalysisBuilder:
             docstring=docstring,
             is_public=_is_likely_public_definition(node, self.source),
             signature_node=signature_node,
+            initializer_value_bindings=self.initializer_value_bindings,
         )
         if pending is not None:
             self._record_function(pending)
@@ -3037,7 +3917,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "37"
+    version = "38"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -3483,6 +4363,7 @@ class CppAnalyzer:
         *,
         syntax_root: Node | None = None,
         comment_source: bytes | None = None,
+        initializer_value_bindings: Mapping[str, tuple[int, ...]] | None = None,
     ) -> AnalysisResult:
         """Extract ordinary syntax from an explicitly supplied immutable snapshot.
 
@@ -3496,6 +4377,8 @@ class CppAnalyzer:
             Statement-only syntax already mapped to the original source buffer.
         comment_source : bytes or None, optional
             Unmasked source in the same coordinate space for physical attachment.
+        initializer_value_bindings : collections.abc.Mapping[str, tuple[int, ...]] | None, optional
+            Qualified header values proven by the primary macro-context walk.
 
         Returns
         -------
@@ -3541,6 +4424,9 @@ class CppAnalyzer:
             root=root_node,
             owner_id=owner_id,
             known_class_names=known_class_names,
+            initializer_value_bindings=(
+                {} if initializer_value_bindings is None else initializer_value_bindings
+            ),
             comment_maps=(
                 source_comment_maps(comment_root, comment_bytes)
                 if comment_source is not None

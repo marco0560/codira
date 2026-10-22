@@ -430,18 +430,49 @@ def analyze_generated_file(
     )
     if any(left[1] > right[0] for left, right in zip(candidates, candidates[1:])):
         raise ValueError("overlapping declaration and statement macro invocations")
+    from . import (
+        _initializer_header_value_bindings_from_walk,
+        _initializer_header_value_query_plan,
+    )
+
+    initializer_root = _parse_with_namespace_bindings(
+        source,
+        bindings=analyzer._namespace_macro_definitions,
+        included_sources=tuple((h.source, h.available_after) for h in context.headers),
+    )
+    initializer_plan = _initializer_header_value_query_plan(
+        analyzer, initializer_root, source, context, root
+    )
     query_answers = _query_resolver(analyzer, key, context, captures)
     walk = _ContextWalk(
         captures,
         resolutions,
         initial,
+        query_offsets=initializer_plan.header_query_offsets,
         query_resolver=None if query_answers is None else query_answers.resolve,
         feature_resolver=None
         if query_answers is None
         else query_answers.expand_feature,
         track_root_activity=True,
     )
-    walk.walk(key, offsets=tuple(sorted({item[0] for item in candidates})))
+    walk.walk(
+        key,
+        offsets=tuple(
+            sorted(
+                {item[0] for item in candidates} | set(initializer_plan.root_offsets)
+            )
+        ),
+    )
+    initializer_value_bindings = _initializer_header_value_bindings_from_walk(
+        analyzer,
+        initializer_root,
+        source,
+        context,
+        root,
+        captures,
+        walk,
+        initializer_plan,
+    )
     replacements = []
     records = []
     for first, last, name, namespace in candidates:
@@ -539,7 +570,12 @@ def analyze_generated_file(
         active is False or directive in {b"if", b"ifdef", b"ifndef"}
         for _, _, active, directive in walk.root_activity
     ):
-        return analyzer._analyze_captured_file(path, root, context)
+        return analyzer._analyze_captured_file(
+            path,
+            root,
+            context,
+            initializer_value_bindings=initializer_value_bindings,
+        )
     retained_regions: list[tuple[int, int]] = []
     if b"else" in source:
         parser = _new_parser()
@@ -558,8 +594,21 @@ def analyze_generated_file(
     )
     if not replacements:
         if not projection.masked_spans:
-            return analyzer._analyze_captured_file(path, root, context)
-        return _analyze_statements(analyzer, path, root, context, projection, ())
+            return analyzer._analyze_captured_file(
+                path,
+                root,
+                context,
+                initializer_value_bindings=initializer_value_bindings,
+            )
+        return _analyze_statements(
+            analyzer,
+            path,
+            root,
+            context,
+            projection,
+            (),
+            initializer_value_bindings=initializer_value_bindings,
+        )
     expansions = []
     token_index = 0
     for (
@@ -596,15 +645,25 @@ def analyze_generated_file(
         )
         token_index += len(tokens)
     projected_context = _projected_context(context, projection)
+    projected_initializer_bindings = _project_initializer_value_bindings(
+        initializer_value_bindings, initializer_plan.root_spans, projection
+    )
     if expansions and all(expansion.statement for expansion in expansions):
         return _analyze_statements(
-            analyzer, path, root, context, projection, tuple(expansions)
+            analyzer,
+            path,
+            root,
+            context,
+            projection,
+            tuple(expansions),
+            initializer_value_bindings=initializer_value_bindings,
         )
     result = analyzer._analyze_captured_file(
         path,
         root,
         projected_context,
         comment_source=unmasked.source if projection.masked_spans else None,
+        initializer_value_bindings=projected_initializer_bindings,
     )
     return _finalize(
         analyzer,
@@ -616,6 +675,7 @@ def analyze_generated_file(
         captures,
         resolutions,
         result,
+        initializer_value_bindings=initializer_value_bindings,
     )
 
 
@@ -763,6 +823,8 @@ def _analyze_statements(
     context: IncludeContext,
     projection: MacroProjection,
     expansions: tuple[_Expansion, ...],
+    *,
+    initializer_value_bindings: Mapping[str, tuple[int, ...]] | None = None,
 ) -> AnalysisResult:
     """Extract ordinary metadata from statement syntax mapped to original bytes.
 
@@ -778,6 +840,8 @@ def _analyze_statements(
         Selected assertion tokens and separate argument spelling evidence.
     expansions : tuple[_Expansion, ...]
         Statement-only invocations licensed by the ordered context walk.
+    initializer_value_bindings : collections.abc.Mapping[str, tuple[int, ...]] | None, optional
+        Qualified header values keyed by original declaration offsets.
 
     Returns
     -------
@@ -818,7 +882,47 @@ def _analyze_statements(
         context,
         syntax_root=physical_tree,
         comment_source=context.source if projection.masked_spans else None,
+        initializer_value_bindings=initializer_value_bindings,
     )
+
+
+def _project_initializer_value_bindings(
+    bindings: Mapping[str, tuple[int, ...]],
+    declaration_ends: Mapping[int, int],
+    projection: MacroProjection,
+) -> dict[str, tuple[int, ...]]:
+    """Map facts only for complete declarations copied unchanged to a projection.
+
+    Parameters
+    ----------
+    bindings : collections.abc.Mapping[str, tuple[int, ...]]
+        Proven qualified names and original candidate declaration starts.
+    declaration_ends : collections.abc.Mapping[int, int]
+        Original end offsets for each candidate declaration start.
+    projection : MacroProjection
+        Selected parser projection with explicit unchanged source segments.
+
+    Returns
+    -------
+    dict[str, tuple[int, ...]]
+        Facts keyed by projected starts when the entire candidate lies in one
+        unchanged interval. Generated or partial declarations remain unknown.
+    """
+    result: dict[str, set[int]] = {}
+    for name, offsets in bindings.items():
+        for original_start in offsets:
+            original_end = declaration_ends.get(original_start)
+            if original_end is None:
+                continue
+            for segment in projection.original_segments:
+                segment_start, segment_end = segment.original_span
+                if segment_start <= original_start < original_end <= segment_end:
+                    projected_start = segment.projected_start + (
+                        original_start - segment_start
+                    )
+                    result.setdefault(name, set()).add(projected_start)
+                    break
+    return {name: tuple(sorted(offsets)) for name, offsets in result.items()}
 
 
 def _projected_context(
@@ -1200,6 +1304,8 @@ def _finalize(
     captures: Mapping[str, bytes],
     resolutions: Mapping[tuple[str, str, bool], str | None],
     result: AnalysisResult,
+    *,
+    initializer_value_bindings: Mapping[str, tuple[int, ...]] | None = None,
 ) -> AnalysisResult:
     """Normalize generated declarations, relationships and original body coordinates.
 
@@ -1219,6 +1325,8 @@ def _finalize(
         Exact captured bytes and ordered resolution observations.
     result : AnalysisResult
         Ordinary extraction from the projected buffer, before coordinate repair.
+    initializer_value_bindings : collections.abc.Mapping[str, tuple[int, ...]] | None, optional
+        Qualified header values keyed by original declaration offsets.
 
     Returns
     -------
@@ -1345,7 +1453,10 @@ def _finalize(
             return tuple(mapped)
         physical_body = physical_nodes[body.type, body.start_byte, body.end_byte]
         original_calls = _extract_calls(
-            physical_body, original, parameter_names=parameters
+            physical_body,
+            original,
+            parameter_names=parameters,
+            initializer_value_bindings=initializer_value_bindings,
         )
         hints = []
         for expansion in owned:

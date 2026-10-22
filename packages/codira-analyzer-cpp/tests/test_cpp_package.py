@@ -25,7 +25,7 @@ def test_cpp_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.38"
+    assert project["project"]["version"] == "2.0.39"
     assert "codira>=2.0.0,<3.0.0" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "cpp": "codira_analyzer_cpp:build_analyzer"
@@ -49,7 +49,7 @@ def test_cpp_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CppAnalyzer)
     assert analyzer.name == "cpp"
-    assert analyzer.version == "37"
+    assert analyzer.version == "38"
 
 
 def test_cpp_syntax_helpers_remain_available_to_package_traversal() -> None:

@@ -454,11 +454,13 @@ def test_guarded_revisits_preserve_directive_budget() -> None:
         Exact event accounting proves skipped bodies are never processed again.
     """
     source = b'#include "h.h"\n' * 100
-    header = b"#ifndef G\n#define G\n" + b"#define M value\n" * 100 + b"#endif\n"
+    header = b"#ifndef G\n#define G\n" + b"#define M value\n" * 100 + b"QUERY\n#endif\n"
+    query = header.index(b"QUERY")
     walker = _ContextWalk(
         {"main.cpp": source, "h.h": header},
         {("main.cpp", "h.h", True): "h.h"},
         {b"G": None},
+        query_offsets={"h.h": (query,)},
     )
     walker.walk("main.cpp", offsets=(len(source),))
     result = walker.results[len(source)]
@@ -466,6 +468,156 @@ def test_guarded_revisits_preserve_directive_budget() -> None:
     assert len(result.observations) == 100
     assert dict(result.bindings)[b"M"].definition == _MacroDefinition(None, b"value")
     assert dict(result.bindings)[b"M"].origins[0].source_path == "h.h"
+    assert walker.visits == 2
+    assert walker.bytes == len(source) + len(header)
+    assert walker.file_results["h.h", query][0].active is True
+    assert len(walker.file_results["h.h", query]) == 1
+
+
+def test_guarded_query_with_predefined_guard_has_no_declaration_snapshot() -> None:
+    """Keep a declaration query unknown when a guard is predefined first.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The guard body is skipped without manufacturing a query event.
+    """
+    source = b'#include "h.h"\nEND\n'
+    header = b"#ifndef G\n#define G\nDECL\n#endif\n"
+    query = header.index(b"DECL")
+    walker = _ContextWalk(
+        {"main.cpp": source, "h.h": header},
+        {("main.cpp", "h.h", True): "h.h"},
+        {b"G": _MacroDefinition(None, b"1")},
+        query_offsets={"h.h": (query,)},
+    )
+    walker.walk("main.cpp", offsets=(len(source),))
+    assert walker.visits == 2
+    assert walker.file_results.get(("h.h", query), []) == []
+    assert walker.query_events.get(("h.h", query), []) == []
+
+
+def test_guarded_query_reappears_after_explicit_guard_undefinition() -> None:
+    """Retain a fresh active query after the source explicitly undefines a guard.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Two actual preprocessing visits remain visible and independently ordered.
+    """
+    source = b'#include "h.h"\n#undef G\n#include "h.h"\nEND\n'
+    header = b"#ifndef G\n#define G\n#define M value\nDECL\n#endif\n"
+    query = header.index(b"DECL")
+    walker = _ContextWalk(
+        {"main.cpp": source, "h.h": header},
+        {("main.cpp", "h.h", True): "h.h"},
+        {b"G": None},
+        query_offsets={"h.h": (query,)},
+    )
+    walker.walk("main.cpp", offsets=(len(source),))
+    visits = walker.file_results["h.h", query]
+    events = walker.query_events["h.h", query]
+    assert walker.visits == 3
+    assert len(visits) == len(events) == 2
+    assert all(item.active is True for item in visits)
+    assert events[0] < events[1]
+
+
+def test_guarded_query_tracks_undefine_and_redefine_in_source_order() -> None:
+    """Skip defined guards and retain only the intervening active visit.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Guard state changes control each query without replaying skipped bodies.
+    """
+    source = (
+        b'#define G initial\n#include "h.h"\n#undef G\n'
+        b'#include "h.h"\n#define G header\n#include "h.h"\n'
+    )
+    header = b"#ifndef G\n#define G header\nDECL\n#endif\n"
+    query = header.index(b"DECL")
+    walker = _ContextWalk(
+        {"main.cpp": source, "h.h": header},
+        {("main.cpp", "h.h", True): "h.h"},
+        {b"G": _MacroDefinition(None, b"initial")},
+        query_offsets={"h.h": (query,)},
+    )
+    walker.walk("main.cpp", offsets=(len(source),))
+    visits = walker.file_results.get(("h.h", query), [])
+    events = walker.query_events.get(("h.h", query), [])
+    assert walker.visits == 3
+    assert walker.bytes == len(source) + 2 * len(header)
+    assert len(visits) == len(events) == 1
+    assert visits[0].active is True
+    assert events[0] < walker.query_events[("main.cpp", len(source))][0]
+
+
+def test_conditional_guard_redefinition_keeps_conflicting_query_unknown() -> None:
+    """Do not skip a guard whose conditional redefinition has two origins.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Conflicting reaching definitions remain an uncertain active query.
+    """
+    source = b'#if FLAG\n#undef G\n#else\n#define G one\n#endif\n#include "h.h"\n'
+    header = b"#ifndef G\n#define G header\nDECL\n#endif\n"
+    query = header.index(b"DECL")
+    walker = _ContextWalk(
+        {"main.cpp": source, "h.h": header},
+        {("main.cpp", "h.h", True): "h.h"},
+        {b"G": _MacroDefinition(None, b"initial")},
+        query_offsets={"h.h": (query,)},
+    )
+    walker.walk("main.cpp", offsets=(len(source),))
+    visits = walker.file_results.get(("h.h", query), [])
+    assert walker.visits == 2
+    assert len(visits) == 1
+    assert visits[0].active is None
+
+
+def test_unguarded_repeated_query_remains_ambiguous() -> None:
+    """Preserve separate snapshots for unguarded repeated-header visits.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Unguarded source is still processed on every include visit.
+    """
+    source = b'#include "h.h"\n#include "h.h"\n'
+    header = b"DECL\n#define M value\n"
+    query = header.index(b"DECL")
+    walker = _ContextWalk(
+        {"main.cpp": source, "h.h": header},
+        {("main.cpp", "h.h", True): "h.h"},
+        {},
+        query_offsets={"h.h": (query,)},
+    )
+    walker.walk("main.cpp", offsets=(len(source),))
+    assert walker.visits == 3
+    assert len(walker.file_results["h.h", query]) == 2
+    assert len(walker.query_events["h.h", query]) == 2
 
 
 @pytest.mark.parametrize("guard", [None, _MacroDefinition(None, b"1")])
