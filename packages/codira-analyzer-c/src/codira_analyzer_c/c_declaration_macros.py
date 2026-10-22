@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from bisect import bisect_right
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -102,6 +103,110 @@ class MacroDefinition:
     replacement_sha256: str
     span: tuple[int, int]
     available_after: int
+
+
+@dataclass(frozen=True)
+class _ExpansionIndex:
+    """Index captured definitions and undefinitions for invocation lookups.
+
+    Parameters
+    ----------
+    definitions_by_name : dict[bytes, tuple[MacroDefinition, ...]]
+        Definitions grouped in their original capture order.
+    undef_keys_by_name : dict[bytes, tuple[tuple[int, int, int], ...]]
+        Sorted undefinition event keys grouped by macro name.
+    unresolved_undefs_by_name : dict[bytes, tuple[int, ...]]
+        Sorted unresolved-annotation availability offsets by macro name.
+    max_source_order : int
+        Maximum captured definition order used to bound source invocations.
+
+    Returns
+    -------
+    None
+        Stores immutable per-name rows for candidate-local binary searches.
+    """
+
+    definitions_by_name: dict[bytes, tuple[MacroDefinition, ...]]
+    undef_keys_by_name: dict[bytes, tuple[tuple[int, int, int], ...]]
+    unresolved_undefs_by_name: dict[bytes, tuple[int, ...]]
+    max_source_order: int
+
+    @classmethod
+    def build(
+        cls,
+        definitions: tuple[MacroDefinition, ...],
+        undefs: tuple[tuple[bytes, int, str, int, int], ...],
+    ) -> _ExpansionIndex:
+        """Build the shared lookup index once for a translation unit.
+
+        Parameters
+        ----------
+        definitions : tuple[MacroDefinition, ...]
+            Captured macro definitions in source order.
+        undefs : tuple[tuple[bytes, int, str, int, int], ...]
+            Captured undefinition events.
+
+        Returns
+        -------
+        _ExpansionIndex
+            Grouped rows without changing their ordering semantics.
+        """
+        definitions_by_name: dict[bytes, list[MacroDefinition]] = {}
+        for item in definitions:
+            definitions_by_name.setdefault(item.name, []).append(item)
+        undef_events: dict[bytes, list[tuple[int, int, int]]] = {}
+        unresolved_events: dict[bytes, list[int]] = {}
+        for name, undef_at, path_name, undef_offset, undef_order in undefs:
+            undef_events.setdefault(name, []).append(
+                (undef_at, undef_order, undef_offset)
+            )
+            if path_name == "@unresolved":
+                unresolved_events.setdefault(name, []).append(undef_at)
+        return cls(
+            {name: tuple(items) for name, items in definitions_by_name.items()},
+            {name: tuple(sorted(events)) for name, events in undef_events.items()},
+            {name: tuple(sorted(events)) for name, events in unresolved_events.items()},
+            max((item.source_order for item in definitions), default=0),
+        )
+
+    def latest_undef_before(
+        self, name: bytes, invocation_key: tuple[int, int, int]
+    ) -> tuple[int, int, int] | None:
+        """Return the final undefinition visible at an invocation, if any.
+
+        Parameters
+        ----------
+        name : bytes
+            Macro identifier.
+        invocation_key : tuple[int, int, int]
+            Invocation byte offset, source order and offset tie breaker.
+
+        Returns
+        -------
+        tuple[int, int, int] or None
+            Last visible undefinition event key.
+        """
+        events = self.undef_keys_by_name.get(name, ())
+        index = bisect_right(events, invocation_key) - 1
+        return events[index] if index >= 0 else None
+
+    def unresolved_annotation_before(self, name: bytes, invocation: int) -> bool:
+        """Check whether an unresolved annotation undef is visible.
+
+        Parameters
+        ----------
+        name : bytes
+            Annotation macro identifier.
+        invocation : int
+            Invocation byte offset.
+
+        Returns
+        -------
+        bool
+            Whether a captured unresolved undef is available by the invocation.
+        """
+        events = self.unresolved_undefs_by_name.get(name, ())
+        return bool(events) and events[0] <= invocation
 
 
 @dataclass(frozen=True)
@@ -660,8 +765,7 @@ class _Expander:
 
     def __init__(
         self,
-        definitions: tuple[MacroDefinition, ...],
-        undefs: tuple[tuple[bytes, int, str, int, int], ...],
+        index: _ExpansionIndex,
         invocation: int,
         annotations: dict[bytes, int],
     ) -> None:
@@ -669,10 +773,8 @@ class _Expander:
 
         Parameters
         ----------
-        definitions : tuple[MacroDefinition, ...]
-            All proven definitions captured for this translation unit.
-        undefs : tuple[tuple[bytes, int, str, int, int], ...]
-            Unconditional undefinitions and their ordered source identities.
+        index : _ExpansionIndex
+            Shared per-translation-unit definition and undefinition index.
         invocation : int
             Original invocation byte offset.
         annotations : dict[bytes, int]
@@ -688,21 +790,14 @@ class _Expander:
         self._annotations = {
             name for name, available in annotations.items() if available <= invocation
         }
-        self._annotation_inputs: dict[bytes, tuple[MacroDefinition, ...]] = {
+        self._annotation_inputs = {
             name: tuple(
                 item
-                for item in definitions
-                if item.name == name
-                and item.parameters is None
-                and item.available_after <= invocation
+                for item in index.definitions_by_name.get(name, ())
+                if item.parameters is None and item.available_after <= invocation
             )
             for name in self._annotations
         }
-        relevant = [
-            item
-            for item in definitions
-            if item.available_after <= invocation and not item.conditional
-        ]
 
         def definition_key(item: MacroDefinition) -> tuple[int, int, int]:
             """Order a definition by include boundary, header and directive."""
@@ -710,13 +805,17 @@ class _Expander:
 
         invocation_key = (
             invocation,
-            max((item.source_order for item in definitions), default=0),
+            index.max_source_order,
             invocation,
         )
-        by_name: dict[bytes, list[MacroDefinition]] = {}
-        for definition in relevant:
-            by_name.setdefault(definition.name, []).append(definition)
-        for name, candidates in by_name.items():
+        for name, definitions_for_name in index.definitions_by_name.items():
+            candidates = [
+                item
+                for item in definitions_for_name
+                if item.available_after <= invocation and not item.conditional
+            ]
+            if not candidates:
+                continue
             latest = max(definition_key(item) for item in candidates)
             selected = [item for item in candidates if definition_key(item) == latest]
             if len(selected) > 1:
@@ -731,39 +830,27 @@ class _Expander:
             }
             if len(fingerprints) != 1:
                 continue
-            if any(
-                undef_name == name
-                and (undef_at, undef_order, undef_offset) <= invocation_key
-                and (undef_at, undef_order, undef_offset) >= latest
-                for undef_name, undef_at, _undef_path, undef_offset, undef_order in undefs
-            ):
+            latest_undef = index.latest_undef_before(name, invocation_key)
+            if latest_undef is not None and latest_undef >= latest:
                 continue
             self._definitions[name] = selected[-1]
-        all_names = set(by_name) | {name for name, _, _, _, _ in undefs}
         self._unsafe_names: set[bytes] = set()
-        for name in all_names:
+        for name in index.undef_keys_by_name:
             selected_definition = self._definitions.get(name)
             selected_key = (
                 (-1, -1, -1)
                 if selected_definition is None
                 else definition_key(selected_definition)
             )
-            if any(
-                undef_name == name
-                and (undef_at, undef_order, undef_offset) <= invocation_key
-                and (
-                    selected_definition is None
-                    or (undef_at, undef_order, undef_offset) >= selected_key
-                )
-                for undef_name, undef_at, _, undef_offset, undef_order in undefs
+            latest_undef = index.latest_undef_before(name, invocation_key)
+            if latest_undef is not None and (
+                selected_definition is None or latest_undef >= selected_key
             ):
                 self._unsafe_names.add(name)
         self._annotations.difference_update(
             name
-            for name, available, path_name, _, _ in undefs
-            if path_name == "@unresolved"
-            and available <= invocation
-            and name not in self._definitions
+            for name in self._annotations - self._definitions.keys()
+            if index.unresolved_annotation_before(name, invocation)
         )
 
     def expand(
@@ -1098,12 +1185,13 @@ def declaration_expansions(
     candidates = _scan_invocations(context.source, names)
     if len(candidates) > _MAX_EXPANSIONS:
         return ()
+    index = _ExpansionIndex.build(tuple(definitions), tuple(undefs))
     result: list[ExpandedDeclaration] = []
     for name, start, end, arguments_tokens in candidates:
         if start > end or end - start > _MAX_BYTES:
             continue
         try:
-            expander = _Expander(tuple(definitions), tuple(undefs), start, annotations)
+            expander = _Expander(index, start, annotations)
             outer = expander._definitions.get(name)
             if outer is not None and outer.parameters is None:
                 outer = None

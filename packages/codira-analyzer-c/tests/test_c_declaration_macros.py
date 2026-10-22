@@ -15,7 +15,14 @@ from pathlib import Path
 import pytest
 
 from codira_analyzer_c import CAnalyzer
-from codira_analyzer_c.c_declaration_macros import _directive_rows, _include_guard
+from codira_analyzer_c.c_declaration_macros import (
+    MacroDefinition,
+    MacroToken,
+    _ExpansionIndex,
+    _Expander,
+    _directive_rows,
+    _include_guard,
+)
 
 
 def _fixture(root: Path, header: str, source: str) -> Path:
@@ -167,6 +174,99 @@ def test_source_redefinition_and_undef_are_selected_per_invocation(
     assert generated[0].generated.inputs[0].replacement_sha256 != (
         generated[1].generated.inputs[0].replacement_sha256
     )
+
+
+def test_shared_expansion_index_preserves_availability_and_undef_order() -> None:
+    """Select invocation-local definitions from shared name indexes.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Later availability, undefinition and conditional rules remain exact.
+    """
+
+    def definition(
+        name: bytes,
+        spelling: bytes,
+        *,
+        available: int,
+        order: int,
+        conditional: bool = False,
+    ) -> MacroDefinition:
+        """Create a minimal captured definition for index behavior checks.
+
+        Parameters
+        ----------
+        name : bytes
+            Macro identifier.
+        spelling : bytes
+            Single replacement token.
+        available : int
+            Translation-unit byte offset where the definition becomes visible.
+        order : int
+            Captured directive order.
+        conditional : bool, optional
+            Whether the definition is unresolved conditional evidence.
+
+        Returns
+        -------
+        MacroDefinition
+            Synthetic immutable definition with a unique source span.
+        """
+        return MacroDefinition(
+            name=name,
+            parameters=None,
+            variadic=False,
+            replacement=(MacroToken(spelling),),
+            source_path="include/api.h",
+            source_sha256="0" * 64,
+            source_order=order,
+            conditional=conditional,
+            replacement_sha256="1" * 64,
+            span=(order * 10, order * 10 + 5),
+            available_after=available,
+        )
+
+    definitions = (
+        definition(b"VALUE", b"early", available=0, order=1),
+        definition(b"VALUE", b"late", available=40, order=3),
+        definition(b"VALUE", b"branch", available=0, order=4, conditional=True),
+        definition(b"LATE_ANNOTATION", b"1", available=45, order=5),
+        definition(b"FUTURE_ONLY", b"1", available=100, order=7),
+    )
+    undefs = (
+        (b"VALUE", 30, "module.c", 30, 2),
+        (b"UNRESOLVED", 40, "@unresolved", 40, 6),
+    )
+    index = _ExpansionIndex.build(definitions, undefs)
+    assert sum(len(items) for items in index.definitions_by_name.values()) == len(
+        definitions
+    )
+    assert sum(len(items) for items in index.undef_keys_by_name.values()) == len(undefs)
+    annotations = {b"LATE_ANNOTATION": 0, b"UNRESOLVED": 0}
+
+    before_undef = _Expander(index, 20, annotations)
+    after_undef = _Expander(index, 35, annotations)
+    after_redefinition = _Expander(index, 50, annotations)
+
+    assert before_undef._definitions[b"VALUE"].replacement[0].spelling == b"early"
+    assert b"VALUE" not in before_undef._unsafe_names
+    assert b"FUTURE_ONLY" not in before_undef._unsafe_names
+    assert b"VALUE" not in after_undef._definitions
+    assert b"VALUE" in after_undef._unsafe_names
+    assert after_redefinition._definitions[b"VALUE"].replacement[0].spelling == b"late"
+    assert b"branch" not in {
+        item.replacement[0].spelling
+        for item in after_redefinition._definitions.values()
+    }
+    assert before_undef._annotation_inputs[b"LATE_ANNOTATION"] == ()
+    assert len(after_redefinition._annotation_inputs[b"LATE_ANNOTATION"]) == 1
+    assert b"UNRESOLVED" in after_undef._annotations
+    assert b"UNRESOLVED" not in after_redefinition._annotations
 
 
 def test_unresolved_conditional_definition_keeps_original_error(
