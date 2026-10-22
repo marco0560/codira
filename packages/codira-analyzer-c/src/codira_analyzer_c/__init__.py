@@ -30,7 +30,7 @@ import hashlib
 import json
 from pathlib import Path
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -42,7 +42,13 @@ from tree_sitter import Node
 from .c_parameter_macros import ParameterMacro, macro_parameter_name, parameter_macros
 from .c_parser import _new_parser as _new_parser
 from .c_include_context import read_include_context, include_identity_matches
+from .c_declaration_macros import ExpandedDeclaration, declaration_expansions
 from codira.analysis_inputs import validate_analysis_input_fingerprint
+from codira.generated import (
+    GeneratedCallableProvenance,
+    GeneratedTokenProvenance,
+    MacroInputProvenance,
+)
 
 from .c_conditionals import CParseView, c_parse_views
 from .c_preprocessing import (
@@ -2047,6 +2053,340 @@ def _merge_c_views(analyses: list[AnalysisResult], owner_id: str) -> AnalysisRes
     )
 
 
+def _blank_expansions(
+    source: bytes, expansions: tuple[ExpandedDeclaration, ...]
+) -> bytes:
+    """Blank only completely proven invocation spans without shifting offsets.
+
+    Parameters
+    ----------
+    source : bytes
+        Original translation unit.
+    expansions : tuple[ExpandedDeclaration, ...]
+        Fully selected expansion records.
+
+    Returns
+    -------
+    bytes
+        Coordinate preserving source projection.
+    """
+    projected = bytearray(source)
+    for expansion in expansions:
+        site_end = expansion.end
+        while site_end < len(source) and source[site_end] in b" \t\r\n":
+            site_end += 1
+        if site_end < len(source) and source[site_end : site_end + 1] == b";":
+            site_end += 1
+        for offset in range(expansion.start, site_end):
+            if projected[offset] not in (10, 13):
+                projected[offset] = 32
+    return bytes(projected)
+
+
+def _analysis_context_identity(identity: str, configuration: str) -> str:
+    """Add the active C configuration to a captured include identity.
+
+    Parameters
+    ----------
+    identity : str
+        Canonical include-context identity JSON.
+    configuration : str
+        Analyzer configuration fingerprint.
+
+    Returns
+    -------
+    str
+        Canonical generated-provenance context identity.
+    """
+    payload = json.loads(identity)
+    payload["configuration_fingerprint"] = configuration
+    return json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+
+
+def _expanded_functions(
+    expansion: ExpandedDeclaration,
+    *,
+    path: Path,
+    root: Path,
+    source: bytes,
+    included_sources: tuple[tuple[bytes, int], ...],
+    context_identity: str,
+    module_name: str,
+    owner_id: str,
+) -> tuple[FunctionArtifact, ...]:
+    """Extract generated callable declarations with invocation anchored evidence.
+
+    Parameters
+    ----------
+    expansion : ExpandedDeclaration
+        Fully expanded declaration macro and selected definition chain.
+    path : pathlib.Path
+        Original source path.
+    root : pathlib.Path
+        Repository root used for module ownership.
+    source : bytes
+        Original translation unit.
+    included_sources : tuple[tuple[bytes, int], ...]
+        Captured headers available at the original invocation boundary.
+    context_identity : str
+        Configuration and exact include-context identity.
+    module_name : str
+        Dotted module name for source-owned artifacts.
+    owner_id : str
+        Stable file owner identity.
+
+    Returns
+    -------
+    tuple[codira.models.FunctionArtifact, ...]
+        Generated prototypes and definitions represented by the existing model.
+
+    Raises
+    ------
+    ValueError
+        If the generated token stream is malformed or contains unmodeled types.
+    """
+    parser = _new_parser()
+    parsed = _parse_c_source(expansion.source, parser, included_sources)
+    if parsed.has_error:
+        raise ValueError("generated declaration does not parse completely")
+    top_level = tuple(node for node in parsed.named_children if node.type != "comment")
+    if any(
+        node.type not in {"function_definition", "declaration"} for node in top_level
+    ):
+        raise ValueError("generated expansion contains an unsupported top-level node")
+    modeled_declarations = _extract_declarations(
+        parsed, expansion.source, owner_id=owner_id
+    )
+    if modeled_declarations:
+        raise ValueError("generated expansion contains an unmodeled type or constant")
+    for node in top_level:
+        if node.type != "declaration":
+            continue
+        declarators = node.children_by_field_name("declarator")
+        if len(declarators) == 1 and _function_declaration(node) is not None:
+            continue
+        if any(child.type == "call_expression" for child in _named_descendants(node)):
+            raise ValueError("unmodeled generated declaration contains a call")
+    line = source.count(b"\n", 0, expansion.start) + 1
+    previous_newline = source.rfind(b"\n", 0, expansion.start)
+    column = expansion.start - previous_newline - 1
+    source_digest = hashlib.sha256(source).hexdigest()
+    token_provenance = tuple(
+        GeneratedTokenProvenance(
+            spelling.decode("utf-8", "surrogateescape"),
+            physical_span
+            if physical_span is not None
+            else (expansion.start, expansion.end),
+            physical_span,
+            "source" if physical_span is not None else "replacement",
+        )
+        for spelling, physical_span, _generated_span in expansion.tokens
+    )
+    input_provenance = tuple(
+        MacroInputProvenance(
+            name=item.name.decode("ascii"),
+            replacement_sha256=item.replacement_sha256,
+            source_path=(
+                path.relative_to(root).as_posix()
+                if item.source_path == "@source"
+                else item.source_path
+            ),
+            source_sha256=(
+                source_digest if item.source_path == "@source" else item.source_sha256
+            ),
+            span=item.span,
+        )
+        for item in expansion.definitions
+    )
+    functions: list[FunctionArtifact] = []
+    for node in parsed.named_children:
+        if node.type not in {"function_definition", "declaration"}:
+            continue
+        if node.type == "declaration" and _function_declaration(node) is None:
+            continue
+        node_source = expansion.source[node.start_byte : node.end_byte]
+        node_tree = _parse_c_source(node_source, parser, included_sources)
+        artifacts = _extract_functions(
+            node_tree,
+            node_source,
+            module_name=module_name,
+            owner_id=owner_id,
+        )
+        if len(artifacts) != 1:
+            continue
+        function = artifacts[0]
+        role: Literal["definition", "prototype"] = (
+            "definition" if node.type == "function_definition" else "prototype"
+        )
+        parameter_list = _find_parameter_list(node.child_by_field_name("declarator"))
+        parameter_rows: list[tuple[str | None, str]] = []
+        for parameter in parameter_list.named_children if parameter_list else ():
+            if parameter.type != "parameter_declaration":
+                if parameter.type == "comment":
+                    continue
+                raise ValueError("generated callable has unsupported parameter syntax")
+            raw = expansion.source[parameter.start_byte : parameter.end_byte]
+            declarator = parameter.child_by_field_name("declarator")
+            name_node = _parameter_declarator_name(declarator)
+            parameter_name = (
+                None if name_node is None else _node_text(name_node, expansion.source)
+            )
+            if name_node is not None:
+                first = name_node.start_byte - parameter.start_byte
+                last = name_node.end_byte - parameter.start_byte
+                raw = raw[:first] + raw[last:]
+            parameter_type = " ".join(_decode_source_text(raw).split())
+            parameter_rows.append((parameter_name, parameter_type))
+        if len(parameter_rows) == 1 and parameter_rows[0][1] == "void":
+            parameter_rows.clear()
+        parameter_names = tuple(name for name, _ in parameter_rows)
+        parameter_types = tuple(type_name for _, type_name in parameter_rows)
+        generated = GeneratedCallableProvenance(
+            role=role,
+            invocation_span=(expansion.start, expansion.end),
+            source_sha256=source_digest,
+            context_identity=context_identity,
+            tokens=token_provenance,
+            inputs=input_provenance,
+            parameter_names=parameter_names,
+            parameter_types=parameter_types,
+        )
+        calls = tuple(
+            _anchor_generated_call(
+                call,
+                node_start=node.start_byte,
+                source=source,
+                expansion=expansion,
+                invocation=(line, column),
+            )
+            for call in function.calls
+        )
+        functions.append(
+            replace(
+                function,
+                stable_id=_function_stable_id(owner_id, function.name),
+                lineno=line,
+                end_lineno=line if role == "definition" else None,
+                calls=calls,
+                generated=generated,
+            )
+        )
+    represented = [
+        child
+        for child in top_level
+        if child.type == "function_definition"
+        or (child.type == "declaration" and _function_declaration(child) is not None)
+    ]
+    if len(functions) != len(represented):
+        raise ValueError("generated callable could not be represented completely")
+    if not functions:
+        raise ValueError("expansion has no represented generated callable")
+    by_name: dict[str, list[FunctionArtifact]] = {}
+    for function in functions:
+        by_name.setdefault(function.name, []).append(function)
+    selected: list[FunctionArtifact] = []
+    for declarations in by_name.values():
+        definitions = [
+            function
+            for function in declarations
+            if function.generated is not None
+            and function.generated.role == "definition"
+        ]
+        prototypes = [
+            function
+            for function in declarations
+            if function.generated is not None and function.generated.role == "prototype"
+        ]
+        if len({function.signature for function in definitions}) > 1:
+            raise ValueError("generated definitions have conflicting signatures")
+        if not definitions and len({function.signature for function in prototypes}) > 1:
+            raise ValueError("generated prototypes have conflicting signatures")
+        selected.append((definitions or prototypes)[0])
+    return tuple(selected)
+
+
+def _parameter_declarator_name(node: Node | None) -> Node | None:
+    """Locate the identifier belonging to a parameter declarator.
+
+    Parameters
+    ----------
+    node : tree_sitter.Node | None
+        Parameter declarator, when it has a name.
+
+    Returns
+    -------
+    tree_sitter.Node | None
+        Exact identifier node, excluding nested parameter identifiers.
+    """
+    if node is None:
+        return None
+    if node.type in {"identifier", "field_identifier"}:
+        return node
+    declarator = node.child_by_field_name("declarator")
+    if declarator is not None:
+        return _parameter_declarator_name(declarator)
+    for child in node.named_children:
+        found = _parameter_declarator_name(child)
+        if found is not None:
+            return found
+    return None
+
+
+def _anchor_generated_call(
+    call: CallSite,
+    *,
+    node_start: int,
+    source: bytes,
+    expansion: ExpandedDeclaration,
+    invocation: tuple[int, int],
+) -> CallSite:
+    """Map a generated call to its source argument or invocation anchor.
+
+    Parameters
+    ----------
+    call : codira.models.CallSite
+        Call extracted from an isolated generated declaration.
+    node_start : int
+        Generated-buffer start of the containing callable node.
+    source : bytes
+        Original physical translation unit.
+    expansion : ExpandedDeclaration
+        Generated token and source-origin mapping.
+    invocation : tuple[int, int]
+        Original invocation line and byte column.
+
+    Returns
+    -------
+    codira.models.CallSite
+        Call with a physical argument coordinate when its target token came
+        from an argument, otherwise the original invocation coordinate.
+    """
+    generated_line_start = node_start
+    for _ in range(call.lineno - 1):
+        newline = expansion.source.find(b"\n", generated_line_start)
+        if newline < 0:
+            generated_line_start = -1
+            break
+        generated_line_start = newline + 1
+    generated_position = (
+        -1 if generated_line_start < 0 else generated_line_start + call.col_offset
+    )
+    physical = next(
+        (
+            physical_span
+            for _, physical_span, generated_span in expansion.tokens
+            if generated_span[0] == generated_position
+        ),
+        None,
+    )
+    if physical is None:
+        return replace(call, lineno=invocation[0], col_offset=invocation[1])
+    start = physical[0]
+    line = source.count(b"\n", 0, start) + 1
+    previous_newline = source.rfind(b"\n", 0, start)
+    return replace(call, lineno=line, col_offset=start - previous_newline - 1)
+
+
 class CAnalyzer:
     """
     Concrete C analyzer for repository indexing.
@@ -2062,7 +2402,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "18"
+    version = "19"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -2085,6 +2425,7 @@ class CAnalyzer:
         self._emit_doxygen_documentation = True
         self._include_system_includes = True
         self._emit_macros = True
+        self._expand_declaration_macros = False
         self.configuration_fingerprint = plugin_configuration_fingerprint({})
 
     def configuration_json_schema(self) -> Mapping[str, object]:
@@ -2107,6 +2448,10 @@ class CAnalyzer:
                 "emit_doxygen_documentation": boolean_property(True),
                 "include_system_includes": boolean_property(True),
                 "emit_macros": boolean_property(True),
+                "expand_declaration_macros": {
+                    **boolean_property(False),
+                    "description": "Expand fully proven bounded file-scope declaration macros from captured source and contained headers; unsupported or uncertain sites remain partial.",
+                },
                 "include_search_paths": {
                     "type": "array",
                     "items": {"type": "string", "minLength": 1},
@@ -2139,11 +2484,14 @@ class CAnalyzer:
         Raises
         ------
         ValueError
-            If include-search or caller-context options are malformed.
+            If include-search, caller-context or expansion options are malformed.
         """
 
         search_paths = config.get("include_search_paths", [])
         preinclude = config.get("preinclude_headers", [])
+        expand_declaration_macros = config.get("expand_declaration_macros", False)
+        if type(expand_declaration_macros) is not bool:
+            raise ValueError("expand_declaration_macros must be a boolean")
         for option, value in (
             ("include_search_paths", search_paths),
             ("preinclude_headers", preinclude),
@@ -2164,6 +2512,7 @@ class CAnalyzer:
             config.get("include_system_includes", True)
         )
         self._emit_macros = bool(config.get("emit_macros", True))
+        self._expand_declaration_macros = expand_declaration_macros
         self.configuration_fingerprint = plugin_configuration_fingerprint(config)
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
@@ -2365,21 +2714,81 @@ class CAnalyzer:
         )
         parser = _new_parser()
         base = _parse_c_source(source, parser, included_sources)
+        candidates = (
+            declaration_expansions(context, root, path)
+            if self._expand_declaration_macros
+            else ()
+        )
+        context_identity = _analysis_context_identity(
+            context.identity, self.configuration_fingerprint
+        )
+        generated_by_expansion: dict[tuple[int, int], tuple[FunctionArtifact, ...]] = {}
+        accepted: list[ExpandedDeclaration] = []
+        for expansion in candidates:
+            try:
+                generated_by_expansion[(expansion.start, expansion.end)] = (
+                    _expanded_functions(
+                        expansion,
+                        path=path,
+                        root=root,
+                        source=source,
+                        included_sources=tuple(
+                            (header.source, 0)
+                            for header in context.headers
+                            if header.available_after <= expansion.start
+                        ),
+                        context_identity=context_identity,
+                        module_name=_module_name_for_path(path, root),
+                        owner_id=_symbol_owner_id(path, root),
+                    )
+                )
+            except ValueError:
+                continue
+            accepted.append(expansion)
+        expansions = tuple(accepted)
+        analysis_source = _blank_expansions(source, expansions)
+        if analysis_source != source:
+            base = _parse_c_source(analysis_source, parser, included_sources)
         macros = parameter_macros(source, included_sources)
         analyses: list[AnalysisResult] = []
         for view in c_parse_views(
-            source, parser, base=base, included_sources=included_sources
+            analysis_source, parser, base=base, included_sources=included_sources
         ):
             if view.root.has_error:
-                return self._analyze_view(
-                    path, root, CParseView(source, base), base, macros
-                )
+                analyses = [
+                    self._analyze_view(
+                        path,
+                        root,
+                        CParseView(analysis_source, base),
+                        _parse_c_source(source, parser, included_sources),
+                        macros,
+                    )
+                ]
+                break
             analyses.append(self._analyze_view(path, root, view, base, macros))
-        return (
+        result = (
             analyses[0]
             if len(analyses) == 1
             else _merge_c_views(analyses, _symbol_owner_id(path, root))
         )
+        if expansions:
+            generated = tuple(
+                function
+                for expansion in expansions
+                for function in generated_by_expansion[(expansion.start, expansion.end)]
+            )
+            result = replace(
+                result,
+                functions=_disambiguate_function_stable_ids(
+                    tuple(
+                        sorted(
+                            (*result.functions, *generated),
+                            key=lambda item: (item.lineno, item.name, item.signature),
+                        )
+                    )
+                ),
+            )
+        return result
 
     def _analyze_view(
         self,

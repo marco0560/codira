@@ -155,6 +155,11 @@
             },
             "type": "array"
           },
+          "expand_declaration_macros": {
+            "default": false,
+            "description": "Expand fully proven bounded file-scope declaration macros from captured source and contained headers; unsupported or uncertain sites remain partial.",
+            "type": "boolean"
+          },
           "include_paths": {
             "default": [],
             "items": {

@@ -76,6 +76,29 @@ wrappers and larger expressions retain the original extraction result. This
 changes parameter names only; signatures and call coordinates retain the written
 source.
 
+## Declaration-generating macros
+
+`expand_declaration_macros` is an explicit opt-in, defaulting to `false`:
+
+```toml
+[plugins.analyzer-c]
+expand_declaration_macros = true
+include_search_paths = ["src/include"]
+preinclude_headers = ["src/include/postgres.h"]
+```
+
+The analyzer expands only bounded file-scope function-like macros whose exact
+source and contained-header definitions are available in invocation order.
+Generated callables use the existing generated-provenance metadata. A
+prototype and definition for the same function use the existing C behavior of
+retaining the definition. Calls from source arguments keep their physical
+coordinates; replacement-only calls anchor to the macro invocation. Unsupported
+or ambiguous definitions, unknown conditional alternatives, `#undef`, token
+stringification/pasting, over-budget inputs, and generated top-level artifacts
+outside the callable model retain the original partial result. Ordinary calls
+and function-body macros are not expanded. The default analyzer result remains
+unchanged when this option is omitted.
+
 ## Statement-shaped loop macros
 
 A source-defined function macro that supplies one or more complete `for` headers
