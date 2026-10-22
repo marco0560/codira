@@ -21,6 +21,7 @@ from tree_sitter import Parser
 from .cpp_projection import SyntaxNode as Node, _source_projection
 
 from .cpp_syntax import _new_parser
+from .cpp_member_operator_syntax import _member_operator_syntax
 from .cpp_dependent_construction import _dependent_construction_source
 from .cpp_macro_context import _directives
 
@@ -1906,6 +1907,17 @@ def _parse_cpp_source(
         if view != bytes(projected):
             projected = bytearray(view)
             recovered = parser.parse(view).root_node
+    if recovered.has_error and b"operator" in projected:
+        member_operator_tree = _member_operator_syntax(
+            bytes(projected),
+            recovered,
+            parser,
+            keyword_overridden=_keyword_macro_overridden(
+                b"operator", working, basis, parser, included_sources
+            ),
+        )
+        if member_operator_tree is not None:
+            return member_operator_tree
     if not recovered.has_error:
         return recovered
     namespace_root = _namespace_source(
