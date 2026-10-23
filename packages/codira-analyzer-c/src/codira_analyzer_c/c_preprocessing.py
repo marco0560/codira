@@ -19,7 +19,11 @@ from dataclasses import dataclass, field
 from tree_sitter import Node, Parser
 
 from .c_record_prefixes import record_prefix_definitions, record_prefix_source
-from .c_statement_macros import statement_macro_source
+from .c_statement_macros import (
+    statement_argument_macro_source,
+    statement_macro_source,
+    type_argument_macro_source,
+)
 
 
 _DECLARATION_SPECIFIERS = frozenset(
@@ -872,14 +876,24 @@ def _parse_c_source(
     complex_changed = complex_view != pragma_source
     pragma_source = complex_view
     if not original.has_error and pragma_source == source:
-        return original
+        type_view = type_argument_macro_source(
+            source, original, parser, included_sources
+        )
+        if type_view == source:
+            return original
+        recovered = parser.parse(type_view).root_node
+        return recovered if not recovered.has_error else original
     pragma_root = (
         parser.parse(pragma_source).root_node if pragma_source != source else original
     )
     working = _c_language_source(pragma_source, pragma_root)
     basis = parser.parse(working).root_node if working != source else original
     if not basis.has_error:
-        return basis
+        type_view = type_argument_macro_source(working, basis, parser, included_sources)
+        if type_view == working:
+            return basis
+        recovered = parser.parse(type_view).root_node
+        return recovered if not recovered.has_error else basis
     fallback = basis if not original.has_error and complex_changed else original
     definitions = _input_definitions(working, basis, parser, included_sources)
     annotations = _resolve_annotations(definitions, parser)
@@ -917,6 +931,10 @@ def _parse_c_source(
         )
     view = bytes(projected)
     loop_basis = basis if view == working else parser.parse(view).root_node
+    view = type_argument_macro_source(view, loop_basis, parser, included_sources)
+    loop_basis = parser.parse(view).root_node if view != working else loop_basis
+    view = statement_argument_macro_source(view, loop_basis, parser, included_sources)
+    loop_basis = parser.parse(view).root_node if view != working else loop_basis
     view = statement_macro_source(view, loop_basis, parser, included_sources)
     if view == working:
         return fallback
