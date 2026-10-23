@@ -230,6 +230,9 @@ class _Conditional:
         Completed possible branch states.
     has_else : bool, optional
         Whether a final else directive has occurred.
+    false_defined_name : bytes or None, optional
+        Structurally proven controlling guard known to be defined on the
+        skipped branch of an unknown outer ``#ifndef``.
 
     Returns
     -------
@@ -242,6 +245,7 @@ class _Conditional:
     remaining: bool | None
     outcomes: list[_Environment] = field(default_factory=list)
     has_else: bool = False
+    false_defined_name: bytes | None = None
 
 
 def _both(left: bool | None, right: bool | None) -> bool | None:
@@ -263,7 +267,7 @@ def _both(left: bool | None, right: bool | None) -> bool | None:
 
 
 def _merge(outcomes: list[_Environment]) -> _Environment:
-    """Retain identical states across every possible branch with their origins.
+    """Retain agreed states and common definedness across possible branches.
 
     Parameters
     ----------
@@ -273,28 +277,31 @@ def _merge(outcomes: list[_Environment]) -> _Environment:
     Returns
     -------
     _Environment
-        Agreed definitions; conflicting or possibly absent names stay uncertain.
+        Agreed definitions; differing replacements known defined on every
+        branch remain opaque, while missing or partly undefined names stay
+        uncertain.
     """
     if len(outcomes) == 1:
         return outcomes[0].clone()
-    common = set(outcomes[0].bindings)
     all_names: set[bytes] = set()
     uncertain: set[bytes] = set()
     once = set(outcomes[0].once)
     possible_once: set[str] = set()
     for outcome in outcomes:
-        common.intersection_update(outcome.bindings)
         all_names.update(outcome.bindings)
         uncertain.update(outcome.uncertain)
         once.intersection_update(outcome.once)
         possible_once.update(outcome.once | outcome.maybe_once)
     bindings: dict[bytes, MacroBinding] = {}
-    for name in common:
-        definition = outcomes[0].bindings[name].definition
-        if not all(
-            outcome.bindings[name].definition == definition for outcome in outcomes
-        ):
+    for name in all_names:
+        if not all(name in outcome.bindings for outcome in outcomes):
             continue
+        definitions = [outcome.bindings[name].definition for outcome in outcomes]
+        definition = definitions[0]
+        if not all(candidate == definition for candidate in definitions):
+            if any(candidate is None for candidate in definitions):
+                continue
+            definition = _MacroDefinition(None, b"", opaque=True)
         origins = {
             origin for outcome in outcomes for origin in outcome.bindings[name].origins
         }
@@ -694,7 +701,9 @@ class _ContextWalk:
         directives = self.cache.get(path)
         if directives is None:
             directives = _directives(self.captures[path])
-        self.stack.append(path)
+        pushed = not self.stack or self.stack[-1] != path
+        if pushed:
+            self.stack.append(path)
         try:
             for offset in offsets:
                 if any(start <= offset < end for start, end, *_ in directives):
@@ -703,7 +712,8 @@ class _ContextWalk:
                     )
                 self.save_query(path, offset, False)
         finally:
-            self.stack.pop()
+            if pushed:
+                self.stack.pop()
 
     def snapshot(self, active: bool | None) -> MacroSelection:
         """Freeze the current environment and ordered observations.
@@ -749,13 +759,17 @@ class _ContextWalk:
         ValueError
             If bounds, source directives, queries or unguarded cycles are invalid.
         """
-        primary = self.track_root_activity and not self.stack
+        root_walk = not self.stack
+        primary = self.track_root_activity and root_walk
         if primary:
             self.root_activity = []
         if path in self.environment.once:
-            if primary:
-                self.root_activity.append((0, len(self.captures[path]), False, None))
+            if root_walk:
                 self.save_skipped_root_queries(path, offsets)
+                if primary:
+                    self.root_activity.append(
+                        (0, len(self.captures[path]), False, None)
+                    )
             return
         offsets = offsets or self.query_offsets.get(path, ())
         skipped = None
@@ -771,19 +785,18 @@ class _ContextWalk:
             if cached_guard is not None
             else None
         )
-        if (
-            cached_binding is not None
-            and cached_binding.definition is not None
-            and not cached_binding.definition.opaque
-        ):
+        if cached_binding is not None and cached_binding.definition is not None:
             # An active controlling guard skips the complete header body even
             # when a caller requested declaration snapshots there. Replaying a
             # guarded body would fabricate another preprocessing visit and can
             # turn an otherwise bounded primary walk into repeated traversal.
             # A query reached only through this skipped visit remains unknown.
-            if primary:
-                self.root_activity.append((0, len(self.captures[path]), False, None))
+            if root_walk:
                 self.save_skipped_root_queries(path, offsets)
+                if primary:
+                    self.root_activity.append(
+                        (0, len(self.captures[path]), False, None)
+                    )
             if skipped is not None:
                 self.environment = _merge([skipped, self.environment])
             return
@@ -801,14 +814,13 @@ class _ContextWalk:
             )
         guard = self.guards[path]
         binding = self.environment.bindings.get(guard) if guard is not None else None
-        if (
-            binding is not None
-            and binding.definition is not None
-            and not binding.definition.opaque
-        ):
-            if primary:
-                self.root_activity.append((0, len(self.captures[path]), False, None))
+        if binding is not None and binding.definition is not None:
+            if root_walk:
                 self.save_skipped_root_queries(path, offsets)
+                if primary:
+                    self.root_activity.append(
+                        (0, len(self.captures[path]), False, None)
+                    )
             self.stack.pop()
             if skipped is not None:
                 self.environment = _merge([skipped, self.environment])
@@ -841,7 +853,25 @@ class _ContextWalk:
                     else False
                 )
                 remaining = None if value is None else not value
-                frames.append(_Conditional(self.environment.clone(), active, remaining))
+                false_defined_name = (
+                    guard
+                    if (
+                        active is not False
+                        and not frames
+                        and kind == b"ifndef"
+                        and guard is not None
+                        and _macro_tokens(payload)[0].spelling == guard
+                    )
+                    else None
+                )
+                frames.append(
+                    _Conditional(
+                        self.environment.clone(),
+                        active,
+                        remaining,
+                        false_defined_name=false_defined_name,
+                    )
+                )
                 active = _both(active, value)
             elif kind in {b"elif", b"elifdef", b"elifndef", b"else"}:
                 if not frames or frames[-1].has_else:
@@ -880,7 +910,14 @@ class _ContextWalk:
                 if active is not False:
                     frame.outcomes.append(self.environment)
                 if frame.remaining is not False:
-                    frame.outcomes.append(frame.initial)
+                    skipped = frame.initial.clone()
+                    guard_name = frame.false_defined_name
+                    if guard_name is not None and guard_name not in skipped.bindings:
+                        skipped.bindings[guard_name] = MacroBinding(
+                            _MacroDefinition(None, b"", opaque=True), ()
+                        )
+                        skipped.uncertain.add(guard_name)
+                    frame.outcomes.append(skipped)
                 self.environment = (
                     _merge(frame.outcomes) if frame.outcomes else frame.initial
                 )
@@ -1051,6 +1088,29 @@ class _ContextWalk:
             self.environment.once.add(path)
             self.environment.maybe_once.discard(path)
             status = "once"
+        elif kind == b"pragma":
+            pragma_tokens = _macro_tokens(payload)
+            if pragma_tokens and pragma_tokens[0].spelling in {
+                b"push_macro",
+                b"pop_macro",
+            }:
+                pragma_match = re.fullmatch(
+                    rb'\s*(?:push_macro|pop_macro)\s*\(\s*"([A-Za-z_][A-Za-z_0-9]*)"\s*\)\s*',
+                    payload,
+                )
+                if pragma_match is None:
+                    affected = set(self.environment.bindings) | set(
+                        self.environment.uncertain
+                    )
+                    for owner in self.stack:
+                        guard = self.guards.get(owner)
+                        if guard is not None:
+                            affected.add(guard)
+                else:
+                    affected = {pragma_match[1]}
+                for name in affected:
+                    self.environment.bindings.pop(name, None)
+                    self.environment.uncertain.add(name)
         elif kind == b"error":
             raise ValueError("possible active error directive in captured context")
         self.observations.append(

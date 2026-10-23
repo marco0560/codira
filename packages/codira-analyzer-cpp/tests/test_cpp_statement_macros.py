@@ -222,6 +222,112 @@ def test_method_argument_and_following_call_keep_ownership(tmp_path: Path) -> No
     assert all(c.lineno == 4 for c in method.calls)
 
 
+@pytest.mark.parametrize("ndebug", [False, True])
+def test_configured_statement_macro_keeps_written_calls_not_replacement_calls(
+    tmp_path: Path, ndebug: bool
+) -> None:
+    """Keep lexical operand calls across debug and erased native expansions.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source root.
+    ndebug : bool
+        Select the source-defined no-op branch when true.
+
+    Returns
+    -------
+    None
+        Source-written calls and the macro hint survive; implementation calls do not.
+    """
+    source = (
+        b"#define DEBUG_WITH_TYPE(T, ...) do { replacement_only(); __VA_ARGS__; } while(false)\n"
+        b"#ifdef NDEBUG\n"
+        b"#define TRACE(...) do { } while(false)\n"
+        b"#else\n"
+        b'#define TRACE(...) DEBUG_WITH_TYPE("trace", __VA_ARGS__)\n'
+        b"#endif\n"
+        b"void entry() { TRACE(first(); second()); after(); }\n"
+    )
+    definitions: dict[str, str | bool] = {"NDEBUG": ndebug}
+    result = _analyze(tmp_path, source, definitions)
+    assert result.index_symbols and result.status is None
+    function = next(item for item in result.functions if item.name == "entry")
+    assert [call.target for call in function.calls] == [
+        "TRACE",
+        "first",
+        "second",
+        "after",
+    ]
+    assert [(call.lineno, call.col_offset) for call in function.calls] == [
+        (7, source.splitlines()[6].index(b"TRACE")),
+        (7, source.splitlines()[6].index(b"first")),
+        (7, source.splitlines()[6].index(b"second")),
+        (7, source.splitlines()[6].index(b"after")),
+    ]
+    assert all(call.target != "replacement_only" for call in function.calls)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "do { consume(#x); } while(false)",
+        "do { consume(prefix##x); } while(false)",
+    ],
+)
+def test_statement_macro_holds_transformed_call_arguments(
+    tmp_path: Path, replacement: str
+) -> None:
+    """Do not report calls whose only macro use stringifies or pastes them.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source root.
+    replacement : str
+        Statement replacement that transforms its call-shaped argument.
+
+    Returns
+    -------
+    None
+        The file remains partial instead of inventing a physical call.
+    """
+    source = (
+        f"#define CHECK(x) {replacement}\nvoid entry() {{ CHECK(fake()); }}\n"
+    ).encode()
+    result = _analyze(tmp_path, source)
+    assert not result.index_symbols and result.status is not None
+    assert any(
+        "erases or transforms call-shaped argument spelling" in diagnostic.message
+        for diagnostic in result.status.diagnostics
+    )
+
+
+def test_statement_macro_allows_argument_used_and_stringified(
+    tmp_path: Path,
+) -> None:
+    """Keep a call when its source tokens are both evaluated and stringified.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source root.
+
+    Returns
+    -------
+    None
+        The source call remains visible while replacement calls stay excluded.
+    """
+    source = (
+        b"#define CHECK(x) do { consume(#x); consume(x); } while(false)\n"
+        b"void entry() { CHECK(fake()); }\n"
+    )
+    result = _analyze(tmp_path, source)
+    assert result.index_symbols and result.status is None
+    function = next(item for item in result.functions if item.name == "entry")
+    assert [call.target for call in function.calls] == ["CHECK", "fake"]
+
+
 @pytest.mark.parametrize(
     ("replacement", "message"),
     [

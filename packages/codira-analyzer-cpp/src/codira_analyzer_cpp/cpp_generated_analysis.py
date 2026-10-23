@@ -61,7 +61,10 @@ from .cpp_syntax import (
 from .cpp_statement_macros import (
     declaration_invocations,
     has_lexical_calls,
+    has_transformed_call_arguments,
     is_declaration_statement,
+    is_empty_statement_replacement,
+    is_statement_macro_replacement,
     statement_invocations,
 )
 from .cpp_preprocessor_queries import QueryResolver
@@ -419,10 +422,18 @@ def analyze_generated_file(
     statement_spans = {(first, last) for first, last, _ in statements}
     declarations = declaration_invocations(source, captures)
     declaration_spans = {(first, last) for first, last, _ in declarations}
+    ordinary = tuple(
+        item
+        for item in _invocations(source)
+        if not any(
+            first <= item[0] and item[1] <= last and (item[0], item[1]) != (first, last)
+            for first, last in statement_spans
+        )
+    )
     candidates = tuple(
         sorted(
             {
-                *_invocations(source),
+                *ordinary,
                 *((first, last, name, False) for first, last, name in statements),
                 *((first, last, name, False) for first, last, name in declarations),
             }
@@ -481,8 +492,13 @@ def analyze_generated_file(
         statement_candidate = (first, last) in statement_spans
         declaration_candidate = (first, last) in declaration_spans
         declaration_statement = declaration_candidate
+        if (statement_candidate or declaration_statement) and (
+            name in selection.uncertain or selection.active is None
+        ):
+            raise ValueError("statement macro has uncertain reaching definition")
         if (
             (statement_candidate or declaration_statement)
+            and selection.active is True
             and binding is not None
             and binding.definition is None
         ):
@@ -525,33 +541,44 @@ def analyze_generated_file(
                 continue
         argument_tree = None
         if statement:
-            if not tokens or tokens[0].spelling != b"static_assert":
-                continue
-            trial = b" ".join(t.spelling for t in tokens)
-            if not trial.rstrip().endswith(b";"):
-                trial += b";"
-            assertion = _new_parser().parse(trial).root_node
-            if (
-                assertion.has_error
-                or len(assertion.named_children) != 1
-                or assertion.named_children[0].type != "static_assert_declaration"
-            ):
-                raise ValueError("statement macro is not one static assertion")
-            arguments = _macro_tokens(source[first:last], offset=first)[2:-1]
-            preserved = {
-                (t.start, t.end) for t in tokens if t.argument and not t.synthetic
-            }
-            if any(t.spelling == b"(" for t in arguments) and any(
-                t.spelling != b"," and (t.start, t.end) not in preserved
-                for t in arguments
-            ):
-                if any(
-                    t.argument or t.operation in {"paste", "stringify"} for t in tokens
+            if tokens and tokens[0].spelling == b"static_assert":
+                trial = b" ".join(t.spelling for t in tokens)
+                if not trial.rstrip().endswith(b";"):
+                    trial += b";"
+                assertion = _new_parser().parse(trial).root_node
+                if (
+                    assertion.has_error
+                    or len(assertion.named_children) != 1
+                    or assertion.named_children[0].type != "static_assert_declaration"
                 ):
+                    raise ValueError("statement macro is not one static assertion")
+                if has_transformed_call_arguments(source, first, last, tokens):
                     raise ValueError(
                         "statement macro erases or transforms call-shaped argument spelling"
                     )
-                argument_tree = _statement_argument_tree(source, first, last)
+                arguments = _macro_tokens(source[first:last], offset=first)[2:-1]
+                preserved = {
+                    (t.start, t.end) for t in tokens if t.argument and not t.synthetic
+                }
+                if any(t.spelling == b"(" for t in arguments) and any(
+                    t.spelling != b"," and (t.start, t.end) not in preserved
+                    for t in arguments
+                ):
+                    argument_tree = _statement_argument_tree(source, first, last)
+            elif is_statement_macro_replacement(tokens) and (
+                any(token.argument for token in tokens)
+                or is_empty_statement_replacement(tokens)
+            ):
+                if has_transformed_call_arguments(source, first, last, tokens):
+                    raise ValueError(
+                        "statement macro erases or transforms call-shaped argument spelling"
+                    )
+                argument_tree = _statement_macro_arguments_tree(source, first, last)
+                if argument_tree is None:
+                    continue
+                tokens = (_MacroToken(b";", first, first + 1, synthetic=True),)
+            else:
+                continue
         replacements.append(MacroReplacement((first, last), tokens))
         records.append(
             (
@@ -768,6 +795,59 @@ def _statement_argument_tree(source: bytes, first: int, last: int) -> Node:
     return arguments
 
 
+def _statement_macro_arguments_tree(
+    source: bytes, first: int, last: int
+) -> Node | None:
+    """Parse written statement-macro operands at their original coordinates.
+
+    Parameters
+    ----------
+    source : bytes
+        Immutable physical translation unit.
+    first, last : int
+        Complete selected macro invocation boundaries.
+
+    Returns
+    -------
+    tree_sitter.Node or None
+        The synthetic compound body containing original argument statements,
+        or ``None`` when the invocation cannot be mapped without shifting them.
+    """
+    tokens = _macro_tokens(source[first:last], offset=first)
+    if len(tokens) < 3 or tokens[1].spelling != b"(":
+        return None
+    argument_start, argument_end = tokens[1].end, tokens[-1].start
+    if argument_start >= argument_end:
+        return None
+    wrapper = b"void f(){"
+    starts = range(
+        max(0, argument_start - 256), min(first + 1, argument_start - len(wrapper) + 1)
+    )
+    wrapper_start = next(
+        (
+            offset
+            for offset in reversed(tuple(starts))
+            if b"\n" not in source[offset : offset + len(wrapper)]
+            and b"\r" not in source[offset : offset + len(wrapper)]
+        ),
+        None,
+    )
+    if wrapper_start is None:
+        return None
+    prefix = bytearray(re.sub(rb"[^\r\n]", b" ", source[:argument_start]))
+    prefix[wrapper_start : wrapper_start + len(wrapper)] = wrapper
+    candidate = bytes(prefix) + source[argument_start:argument_end] + b"\n;}"
+    tree = _new_parser().parse(candidate).root_node
+    function = next(
+        (node for node in tree.named_children if node.type == "function_definition"),
+        None,
+    )
+    body = None if function is None else function.child_by_field_name("body")
+    if tree.has_error or body is None:
+        return None
+    return body
+
+
 def _statement_tree(
     source: bytes,
     projection: MacroProjection,
@@ -802,17 +882,22 @@ def _statement_tree(
     found = set()
     for node, physical in zip(_nodes(tree), _nodes(physical_tree), strict=True):
         expansion = owners.get(node.start_byte)
-        if node.type != "static_assert_declaration" or expansion is None:
+        if expansion is None:
             continue
         if not isinstance(physical, _ProjectedNode):
             raise ValueError("statement macro syntax lacks a physical projection")
+        if expansion.tokens and expansion.tokens[0].spelling == b";":
+            if node.type not in {"empty_statement", "expression_statement"}:
+                continue
+        elif node.type != "static_assert_declaration":
+            continue
         physical.macro_hint = _macro_tokens(
             source[expansion.span[0] : expansion.span[1]]
         )[0].spelling.decode()
         physical.macro_arguments = expansion.arguments
         found.add(node.start_byte)
     if found != owners.keys():
-        raise ValueError("statement macro assertion has no mapped syntax owner")
+        raise ValueError("statement macro has no mapped syntax owner")
     return physical_tree
 
 

@@ -172,7 +172,13 @@ def test_late_definitions_do_not_reach_earlier_queries() -> None:
             False,
             2,
         ),
-        (b"#if CFG\n#define M x\n#else\n#define M y\n#endif\n", None, True, 0),
+        (
+            b"#if CFG\n#define M(x) x\n#else\n#define M y\n#endif\n",
+            _MacroDefinition(None, b"", opaque=True),
+            True,
+            2,
+        ),
+        (b"#if CFG\n#define M x\n#else\n#undef M\n#endif\n", None, True, 0),
         (b"#if CFG\n#define M x\n#endif\n", None, True, 0),
         (b"#if CFG\n#undef M\n#else\n#undef M\n#endif\n", None, False, 2),
         (
@@ -225,10 +231,14 @@ def test_possible_branch_merge(
     selection = _end(source)
     assert (b"M" in selection.uncertain) is uncertain
     binding = dict(selection.bindings).get(b"M")
-    if uncertain:
+    if expected is None and uncertain:
         assert binding is None
-    else:
+    elif expected is not None:
         assert binding is not None and binding.definition == expected
+        assert len(binding.origins) == origins
+        assert (b"M" in selection.uncertain) is uncertain
+    else:
+        assert binding is not None and binding.definition is None
         assert len(binding.origins) == origins
 
 
@@ -474,6 +484,173 @@ def test_guarded_revisits_preserve_directive_budget() -> None:
     assert len(walker.file_results["h.h", query]) == 1
 
 
+def test_unknown_controlling_guard_becomes_opaque_defined_after_first_visit() -> None:
+    """Use a proven skipped-branch predicate to avoid repeated guarded work.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The guard is known defined while its replacement and body facts remain
+        uncertain across the active and skipped paths.
+    """
+    source = b'#include "h.h"\n' * 3
+    header = b"#ifndef G\n#define G\n#define M value\n#endif\n"
+    walker = _ContextWalk(
+        {"main.cpp": source, "h.h": header},
+        {("main.cpp", "h.h", True): "h.h"},
+        {},
+    )
+
+    walker.walk("main.cpp")
+
+    guard = walker.environment.bindings[b"G"]
+    assert guard.definition is not None and guard.definition.opaque
+    assert b"G" in walker.environment.uncertain
+    assert b"M" not in walker.environment.bindings
+    assert b"M" in walker.environment.uncertain
+    assert walker.visits == 2
+    assert walker.events == 7
+
+
+def test_guard_join_preserves_defined_test_but_not_numeric_value() -> None:
+    """Keep definedness known when conditional replacements disagree.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        ``#ifdef`` is true while a numeric test and replacement expansion stay
+        unresolved for the opaque macro value.
+    """
+    source = (
+        b"#if FLAG\n#define G 1\n#else\n#define G 2\n#endif\n"
+        b"#ifdef G\n#define PRESENT 1\n#else\n#define PRESENT 0\n#endif\n"
+        b"#if G\n#define VALUE 1\n#else\n#define VALUE 0\n#endif\n"
+    )
+    selection = _end(source)
+    bindings = dict(selection.bindings)
+    assert bindings[b"G"].definition is not None
+    assert bindings[b"G"].definition.opaque
+    assert b"G" in selection.uncertain
+    assert bindings[b"PRESENT"].definition == _MacroDefinition(None, b"1")
+    assert bindings[b"VALUE"].definition is not None
+    assert bindings[b"VALUE"].definition.opaque
+    assert b"VALUE" in selection.uncertain
+
+
+def test_captured_nested_guard_undef_keeps_repeated_visits_ambiguous() -> None:
+    """Do not promote a guard when a captured nested include can undefine it.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The active-path undefinition conflicts with the refined skipped path.
+    """
+    source = b'#include "h.h"\n#include "h.h"\n'
+    header = b'#ifndef G\n#define G\n#include "mutator.h"\n#endif\n'
+    mutator = b"#undef G\n"
+    walker = _ContextWalk(
+        {"main.cpp": source, "h.h": header, "mutator.h": mutator},
+        {
+            ("main.cpp", "h.h", True): "h.h",
+            ("h.h", "mutator.h", True): "mutator.h",
+        },
+        {},
+    )
+
+    walker.walk("main.cpp")
+
+    assert walker.visits == 5
+    assert b"G" not in walker.environment.bindings
+    assert b"G" in walker.environment.uncertain
+
+
+def test_unavailable_include_keeps_existing_macro_context_policy() -> None:
+    """Leave unresolved includes as observations without inventing mutations.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The existing bounded policy is preserved for unavailable include bytes.
+    """
+    source = b'#include "h.h"\n#include "h.h"\n'
+    header = b"#ifndef G\n#define G\n#include <unknown_sdk.h>\n#endif\n"
+    walker = _ContextWalk(
+        {"main.cpp": source, "h.h": header},
+        {("main.cpp", "h.h", True): "h.h", ("h.h", "unknown_sdk.h", False): None},
+        {},
+    )
+
+    walker.walk("main.cpp")
+
+    guard = walker.environment.bindings[b"G"]
+    assert guard.definition is not None and guard.definition.opaque
+    assert walker.visits == 2
+    unavailable = [
+        item
+        for item in walker.observations
+        if item.kind == "include" and item.status == "unavailable"
+    ]
+    assert len(unavailable) == 1
+
+
+def test_guard_macro_push_pop_pragmas_invalidate_reaching_state() -> None:
+    """Keep unsupported macro stack pragmas from certifying a guard state.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        Literal targets become uncertain; unparseable targets invalidate all
+        tracked definitions rather than silently retaining stale bindings.
+    """
+    source = b'#include "h.h"\n#include "h.h"\n'
+    header = b'#ifndef G\n#define G\n#pragma push_macro("G")\n#endif\n'
+    walker = _ContextWalk(
+        {"main.cpp": source, "h.h": header},
+        {("main.cpp", "h.h", True): "h.h"},
+        {},
+    )
+    walker.walk("main.cpp")
+    assert walker.visits == 3
+    assert b"G" not in walker.environment.bindings
+    assert b"G" in walker.environment.uncertain
+
+    nonliteral = b"#ifndef G\n#define G\n#pragma push_macro(NAME)\n#endif\n"
+    nonliteral_walker = _ContextWalk(
+        {"main.cpp": source, "h.h": nonliteral},
+        {("main.cpp", "h.h", True): "h.h"},
+        {},
+    )
+    nonliteral_walker.walk("main.cpp")
+    assert nonliteral_walker.visits == 3
+    assert b"G" not in nonliteral_walker.environment.bindings
+    assert b"G" in nonliteral_walker.environment.uncertain
+
+    malformed = b"#define KNOWN 1\n#pragma push_macro(NAME)\n"
+    result = _end(malformed)
+    assert b"KNOWN" not in dict(result.bindings)
+    assert b"KNOWN" in result.uncertain
+
+
 def test_guarded_query_with_predefined_guard_has_no_declaration_snapshot() -> None:
     """Keep a declaration query unknown when a guard is predefined first.
 
@@ -655,7 +832,8 @@ def test_unknown_guard_and_root_queries_are_not_skipped() -> None:
     Returns
     -------
     None
-        A missing guard is never treated as defined or undefined.
+        Missing guards stay uncertain; known-defined opaque guards still retain
+        inactive root snapshots.
     """
     header = b"#ifndef G\n#define G\n#define M value\nHERE\n#endif\n"
     assert b"M" in _end(header).uncertain
@@ -903,7 +1081,9 @@ def test_opaque_definition_retains_definedness_without_a_replacement_guess() -> 
     bindings = dict(selection.bindings)
     assert bindings[b"__has_attribute"].definition == initial[b"__has_attribute"]
     assert b"__has_attribute" in selection.uncertain
-    assert b"ATTR" in selection.uncertain and b"ATTR" not in bindings
+    assert b"ATTR" in selection.uncertain
+    assert bindings[b"ATTR"].definition is not None
+    assert bindings[b"ATTR"].definition.opaque
     assert bindings[b"M"].definition == _MacroDefinition(None, b"own")
     definitions = {
         name: binding.definition

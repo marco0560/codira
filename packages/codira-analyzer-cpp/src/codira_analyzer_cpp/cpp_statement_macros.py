@@ -21,7 +21,7 @@ from .cpp_syntax import _new_parser
 def statement_invocations(
     source: bytes, captures: Mapping[str, bytes]
 ) -> tuple[tuple[int, int, bytes], ...]:
-    """Locate complete invocations of captured function-like assertion macros.
+    """Locate complete standalone invocations of captured statement macros.
 
     Parameters
     ----------
@@ -42,8 +42,6 @@ def statement_invocations(
     """
     names = set()
     for content in captures.values():
-        if b"static_assert" not in content:
-            continue
         for _, _, kind, payload in _directives(content):
             if kind != b"define":
                 continue
@@ -51,7 +49,21 @@ def statement_invocations(
             if definition is None or definition.parameters is None:
                 continue
             tokens = _macro_tokens(definition.replacement)
-            if tokens and tokens[0].spelling == b"static_assert":
+            forwards_argument = any(
+                token.spelling in definition.parameters
+                or definition.variadic
+                and token.spelling == b"__VA_ARGS__"
+                for token in tokens
+            )
+            if (tokens and tokens[0].spelling == b"static_assert") or (
+                forwards_argument
+                and (
+                    is_statement_macro_replacement(tokens)
+                    or is_statement_macro_replacement(
+                        _statement_template_shape(tokens, definition.parameters)
+                    )
+                )
+            ):
                 names.add(name)
     if not names or not any(name in source for name in names):
         return ()
@@ -72,12 +84,121 @@ def statement_invocations(
             spelling = tokens[closing].spelling
             depth += int(spelling == b"(") - int(spelling == b")")
             if depth == 0:
-                result.append((token.start, tokens[closing].end, token.spelling))
-                covered = closing
+                previous = None if index == 0 else tokens[index - 1].spelling
+                if (
+                    previous in {None, b"{", b";", b"}"}
+                    and closing + 1 < len(tokens)
+                    and tokens[closing + 1].spelling == b";"
+                ):
+                    result.append((token.start, tokens[closing].end, token.spelling))
+                    covered = closing
                 break
         else:
             raise ValueError("unclosed statement macro invocation")
     return tuple(result)
+
+
+def is_statement_macro_replacement(tokens: tuple[_MacroToken, ...]) -> bool:
+    """Check whether captured replacement syntax is one standalone statement.
+
+    Parameters
+    ----------
+    tokens : tuple[_MacroToken, ...]
+        Unexpanded replacement tokens from a captured function-like definition.
+
+    Returns
+    -------
+    bool
+        Whether the replacement parses as one C++ statement or declaration.
+    """
+    if not tokens:
+        return False
+    rendered, _ = _render_macro_tokens(tokens)
+    tree = _new_parser().parse(b"void codira_probe() { " + rendered + b"; }").root_node
+    function = next(
+        (node for node in tree.named_children if node.type == "function_definition"),
+        None,
+    )
+    body = None if function is None else function.child_by_field_name("body")
+    statements = () if body is None else body.named_children
+    return not tree.has_error and len(statements) == 1
+
+
+def _statement_template_shape(
+    tokens: tuple[_MacroToken, ...], parameters: tuple[bytes, ...] | None
+) -> tuple[_MacroToken, ...]:
+    """Replace valid preprocessing operators with parser-safe operand tokens.
+
+    Parameters
+    ----------
+    tokens : tuple[_MacroToken, ...]
+        Unexpanded function-like replacement tokens.
+    parameters : tuple[bytes, ...] or None
+        Parameters accepted by the selected definition.
+
+    Returns
+    -------
+    tuple[_MacroToken, ...]
+        Shape-only tokens for candidate discovery; these are never expanded.
+    """
+    if parameters is None:
+        return tokens
+    result: list[_MacroToken] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if (
+            token.spelling == b"#"
+            and index + 1 < len(tokens)
+            and tokens[index + 1].spelling in parameters
+        ):
+            result.append(tokens[index + 1])
+            index += 2
+            continue
+        if token.spelling == b"##" and result and index + 1 < len(tokens):
+            index += 2
+            continue
+        result.append(token)
+        index += 1
+    return tuple(result)
+
+
+def is_empty_statement_replacement(tokens: tuple[_MacroToken, ...]) -> bool:
+    """Recognize an explicitly empty do-while replacement statement.
+
+    Parameters
+    ----------
+    tokens : tuple[_MacroToken, ...]
+        Fully expanded replacement tokens.
+
+    Returns
+    -------
+    bool
+        Whether the sole statement has an empty compound body.
+    """
+    if not is_statement_macro_replacement(tokens):
+        return False
+    rendered, _ = _render_macro_tokens(tokens)
+    tree = _new_parser().parse(b"void codira_probe() { " + rendered + b"; }").root_node
+    function = next(
+        (node for node in tree.named_children if node.type == "function_definition"),
+        None,
+    )
+    body = None if function is None else function.child_by_field_name("body")
+    statement = (
+        None if body is None or not body.named_children else body.named_children[0]
+    )
+    if statement is None or statement.type != "do_statement":
+        return False
+    contents = next(
+        (
+            child
+            for child in statement.named_children
+            if child.type == "compound_statement"
+        ),
+        None,
+    )
+    return contents is not None and not contents.named_children
 
 
 def declaration_invocations(
@@ -232,3 +353,44 @@ def has_lexical_calls(source: bytes, first: int, last: int) -> bool | None:
             return True
         pending.extend(node.named_children)
     return False
+
+
+def has_transformed_call_arguments(
+    source: bytes,
+    first: int,
+    last: int,
+    expanded: tuple[_MacroToken, ...],
+) -> bool:
+    """Detect call-shaped argument spelling erased by stringification or paste.
+
+    Parameters
+    ----------
+    source : bytes
+        Original translation unit containing the complete macro invocation.
+    first, last : int
+        Physical byte boundaries of the invocation.
+    expanded : tuple[_MacroToken, ...]
+        Fully rescanned replacement tokens with argument provenance.
+
+    Returns
+    -------
+    bool
+        Whether call-shaped source argument tokens were transformed or lost.
+    """
+    arguments = _macro_tokens(source[first:last], offset=first)[2:-1]
+    if not any(token.spelling == b"(" for token in arguments):
+        return False
+    preserved = {
+        (token.start, token.end)
+        for token in expanded
+        if token.argument and not token.synthetic
+    }
+    lost_spelling = any(
+        token.spelling != b"," and (token.start, token.end) not in preserved
+        for token in arguments
+    )
+    transformed = any(
+        token.argument or token.operation in {"paste", "stringify"}
+        for token in expanded
+    )
+    return lost_spelling and transformed
