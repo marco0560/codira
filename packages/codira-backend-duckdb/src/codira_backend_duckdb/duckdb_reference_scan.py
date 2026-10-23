@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .duckdb_bulk_io import _temporary_csv_path_for_rows
+from .duckdb_bulk_io import _CSV_READ_OPTIONS, _temporary_csv_path_for_rows
 from .profiling import DuckDBProfileRecorder
 
 if TYPE_CHECKING:
@@ -116,18 +116,17 @@ def _flush_pending_reference_scan_rows(
     try:
         with active_profiler.span("csv.read_csv.reference_scan_lines", rows=len(rows)):
             conn.execute(
-                """
+                f"""
                 INSERT INTO reference_scan_lines(file_id, lineno, line_text)
                 SELECT *
                 FROM read_csv(
                     ?,
-                    header=false,
-                    nullstr=?,
-                    columns={
+                    {_CSV_READ_OPTIONS},
+                    columns={{
                         'file_id': 'INTEGER',
                         'lineno': 'INTEGER',
                         'line_text': 'VARCHAR'
-                    }
+                    }}
                 )
                 """,
                 (str(csv_path), null_sentinel),

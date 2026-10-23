@@ -11,6 +11,9 @@ from codira_backend_duckdb.duckdb_artifact_persistence import (
     _flush_call_record_rows,
     _flush_callable_ref_record_rows,
 )
+from codira_backend_duckdb.duckdb_reference_scan import (
+    _flush_pending_reference_scan_rows,
+)
 from codira_backend_duckdb.schema import DDL
 
 if TYPE_CHECKING:
@@ -195,3 +198,41 @@ def test_bulk_csv_distinguishes_null_empty_and_literal_null_tokens(
                 "SELECT * FROM call_records ORDER BY lineno"
             ).fetchall()
             assert actual == call_rows
+
+
+def test_reference_scan_csv_preserves_embedded_quotes_and_delimiters() -> None:
+    """Preserve source lines that contain CSV dialect characters.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The staged reference-scan reader retains quotes, commas, empty lines,
+        and embedded newlines as source text.
+    """
+    prefix = "x,y " + "x" * 100
+    rows = [(7, line_number, prefix) for line_number in range(1, 2500)]
+    rows.extend(
+        (
+            (7, 2500, 'target("aarch64.svcount")'),
+            (7, 2501, "CHECK: call void @f(i32 1, i32 2)"),
+            (7, 2502, ""),
+            (7, 2503, 'first line\nsecond line with "quotes"'),
+        )
+    )
+    with duckdb.connect(":memory:") as raw:
+        for statement in DDL:
+            raw.execute(statement)
+        conn = cast("_DuckDBPersistenceConnection", raw)
+
+        _flush_pending_reference_scan_rows(conn, rows)
+
+        actual = raw.execute(
+            "SELECT file_id, lineno, line_text "
+            "FROM reference_scan_lines ORDER BY lineno"
+        ).fetchall()
+
+    assert actual == rows

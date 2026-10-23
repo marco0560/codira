@@ -11,6 +11,15 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .duckdb_support import _DuckDBPersistenceConnection
 
+_CSV_READ_OPTIONS = """
+    auto_detect=false,
+    header=false,
+    delim=',',
+    quote='"',
+    escape='"',
+    nullstr=?
+"""
+
 
 def _temporary_csv_path_for_rows(rows: Sequence[Sequence[object]]) -> tuple[Path, str]:
     """

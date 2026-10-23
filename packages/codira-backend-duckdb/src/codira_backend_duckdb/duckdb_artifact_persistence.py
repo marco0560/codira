@@ -34,7 +34,7 @@ from codira.semantic.embeddings import (
     embed_texts as embed_texts,
 )
 from .duckdb_call_resolution import _qualified_callable_name
-from .duckdb_bulk_io import _temporary_csv_path_for_rows
+from .duckdb_bulk_io import _CSV_READ_OPTIONS, _temporary_csv_path_for_rows
 from .duckdb_embedding_payload import (
     _c_embedding_context,
     _embedding_text,
@@ -1874,7 +1874,7 @@ def _flush_call_record_rows(
     try:
         with active_profiler.span("csv.read_csv.call_records", rows=len(rows)):
             conn.execute(
-                """
+                f"""
                 INSERT INTO call_records(
                     file_id,
                     owner_module,
@@ -1890,13 +1890,8 @@ def _flush_call_record_rows(
                 SELECT *
                 FROM read_csv(
                     ?,
-                    auto_detect=false,
-                    header=false,
-                    delim=',',
-                    quote='"',
-                    escape='"',
-                    nullstr=?,
-                    columns={
+                    {_CSV_READ_OPTIONS},
+                    columns={{
                         'file_id': 'INTEGER',
                         'owner_module': 'VARCHAR',
                         'owner_name': 'VARCHAR',
@@ -1907,7 +1902,7 @@ def _flush_call_record_rows(
                         'external_target_name': 'VARCHAR',
                         'lineno': 'INTEGER',
                         'col_offset': 'INTEGER'
-                    }
+                    }}
                 )
                 """,
                 (str(csv_path), null_sentinel),
@@ -1953,7 +1948,7 @@ def _flush_callable_ref_record_rows(
     try:
         with active_profiler.span("csv.read_csv.callable_ref_records", rows=len(rows)):
             conn.execute(
-                """
+                f"""
                 INSERT INTO callable_ref_records(
                     file_id,
                     owner_module,
@@ -1970,13 +1965,8 @@ def _flush_callable_ref_record_rows(
                 SELECT *
                 FROM read_csv(
                     ?,
-                    auto_detect=false,
-                    header=false,
-                    delim=',',
-                    quote='"',
-                    escape='"',
-                    nullstr=?,
-                    columns={
+                    {_CSV_READ_OPTIONS},
+                    columns={{
                         'file_id': 'INTEGER',
                         'owner_module': 'VARCHAR',
                         'owner_name': 'VARCHAR',
@@ -1988,7 +1978,7 @@ def _flush_callable_ref_record_rows(
                         'external_target_name': 'VARCHAR',
                         'lineno': 'INTEGER',
                         'col_offset': 'INTEGER'
-                    }
+                    }}
                 )
                 """,
                 (str(csv_path), null_sentinel),
