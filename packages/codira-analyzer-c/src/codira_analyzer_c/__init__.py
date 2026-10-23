@@ -2151,7 +2151,7 @@ def _expanded_functions(
     Raises
     ------
     ValueError
-        If the generated token stream is malformed or contains unmodeled types.
+        If any top-level generated artifact is malformed or unsupported.
     """
     parser = _new_parser()
     parsed = _parse_c_source(expansion.source, parser, included_sources)
@@ -2171,8 +2171,10 @@ def _expanded_functions(
         if node.type != "declaration":
             continue
         declarators = node.children_by_field_name("declarator")
-        if len(declarators) == 1 and _function_declaration(node) is not None:
-            continue
+        if len(declarators) != 1 or _function_declaration(node) is None:
+            raise ValueError(
+                "generated expansion contains an unsupported non-callable declaration"
+            )
         if any(child.type == "call_expression" for child in _named_descendants(node)):
             raise ValueError("unmodeled generated declaration contains a call")
     line = source.count(b"\n", 0, expansion.start) + 1
@@ -2410,7 +2412,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "22"
+    version = "23"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -2762,9 +2764,16 @@ class CAnalyzer:
                         owner_id=_symbol_owner_id(path, root),
                     )
                 )
-            except ValueError:
-                continue
+            except ValueError as exc:
+                line = source.count(b"\n", 0, expansion.start) + 1
+                expansion_rejection = ExpansionRejected(
+                    f"{expansion.name} at line {line}: {exc}"
+                )
+                break
             accepted.append(expansion)
+        if expansion_rejection is not None:
+            accepted.clear()
+            generated_by_expansion.clear()
         expansions = tuple(accepted)
         analysis_source = _blank_expansions(source, expansions)
         if analysis_source != source:

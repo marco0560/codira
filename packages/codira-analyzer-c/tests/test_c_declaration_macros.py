@@ -593,6 +593,47 @@ def test_unresolved_conditional_definition_keeps_original_error(
     assert not result.index_symbols
     assert any(item.generated is not None for item in result.functions) is False
     assert result.status is not None
+    assert any(
+        item.category == "declaration_macro_expansion"
+        and "DECLARE at line 3" in item.message
+        for item in result.status.diagnostics
+    )
+
+
+def test_macro_context_replay_failure_is_reported_by_public_analyzer(
+    tmp_path: Path,
+) -> None:
+    """Expose macro replay failures as partial analyzer coverage.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source repository.
+
+    Returns
+    -------
+    None
+        The API reports the bounded replay failure and disables symbol indexing.
+    """
+    path = _fixture(
+        tmp_path,
+        "#if FEATURE_LEVEL\n#define DECLARE(...) int generated_entry(void);\n",
+        '#include "api.h"\nDECLARE(.name = "module");\n',
+    )
+    analyzer = CAnalyzer()
+    analyzer.configure(
+        {"include_search_paths": ["include"], "expand_declaration_macros": True}
+    )
+
+    result = analyzer.analyze_file(path, tmp_path)
+
+    assert not result.index_symbols
+    assert result.status is not None
+    assert any(
+        item.category == "declaration_macro_expansion"
+        and "unbalanced captured directives" in item.message
+        for item in result.status.diagnostics
+    )
 
 
 def test_include_guard_proof_requires_exact_outer_structure() -> None:
@@ -789,6 +830,50 @@ def test_unsupported_token_pasting_keeps_original_macro_diagnostic(
 
     assert not any(item.generated is not None for item in result.functions)
     assert result.status is not None
+    assert any(
+        item.category == "declaration_macro_expansion"
+        and "DECLARE at line 2" in item.message
+        for item in result.status.diagnostics
+    )
+
+
+def test_unmodeled_object_rejects_the_complete_generated_site(
+    tmp_path: Path,
+) -> None:
+    """Reject a callable site that also generates an unsupported object.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary source repository.
+
+    Returns
+    -------
+    None
+        No partial generated site is emitted as complete analysis.
+    """
+    path = _fixture(
+        tmp_path,
+        "#define INFO(name) int name(void) { return 1; } extern int sentinel;\n",
+        '#include "api.h"\nINFO(generated_entry);\n',
+    )
+    analyzer = CAnalyzer()
+    analyzer.configure(
+        {"include_search_paths": ["include"], "expand_declaration_macros": True}
+    )
+
+    result = analyzer.analyze_file(path, tmp_path)
+
+    assert not result.index_symbols
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+    assert not any(item.generated is not None for item in result.functions)
+    assert any(
+        item.category == "declaration_macro_expansion"
+        and "INFO at line 2" in item.message
+        and "unsupported non-callable declaration" in item.message
+        for item in result.status.diagnostics
+    )
 
 
 def test_nested_unknown_macro_state_rejects_outer_expansion(
@@ -977,7 +1062,7 @@ def test_nested_headers_follow_directive_execution_order(
         Generated identity follows preprocessing order rather than header paths.
     """
     prefix = "#ifndef A_H\n#define A_H\n"
-    definition = "#undef DECL\n#define DECL(...) int outer(void) { return 1; } extern int marker\n"
+    definition = "#undef DECL\n#define DECL(...) int outer(void) { return 1; }\n"
     include = '#include "z.h"\n'
     (tmp_path / "a.h").write_text(
         prefix
@@ -985,7 +1070,7 @@ def test_nested_headers_follow_directive_execution_order(
         + "#endif\n"
     )
     (tmp_path / "z.h").write_text(
-        "#ifndef Z_H\n#define Z_H\n#undef DECL\n#define DECL(...) int inner(void) { return 2; } extern int marker\n#endif\n"
+        "#ifndef Z_H\n#define Z_H\n#undef DECL\n#define DECL(...) int inner(void) { return 2; }\n#endif\n"
     )
     path = tmp_path / "module.c"
     path.write_text('#include "a.h"\nDECL(.x = 1);\n')
@@ -1019,11 +1104,11 @@ def test_repeated_header_respects_guard_and_source_undef(
         Later source redefinitions survive skipped headers and not reexecution.
     """
     (tmp_path / "a.h").write_text(
-        "#ifndef A_H\n#define A_H\n#undef DECL\n#define DECL(...) int header(void) { return 1; } extern int marker\n#endif\n"
+        "#ifndef A_H\n#define A_H\n#undef DECL\n#define DECL(...) int header(void) { return 1; }\n#endif\n"
     )
     path = tmp_path / "module.c"
     path.write_text(
-        '#include "a.h"\n#undef DECL\n#define DECL(...) int source(void) { return 2; } extern int marker\n'
+        '#include "a.h"\n#undef DECL\n#define DECL(...) int source(void) { return 2; }\n'
         + ("#undef A_H\n" if reset_guard else "")
         + '#include "a.h"\nDECL(.x = 1);\n'
     )

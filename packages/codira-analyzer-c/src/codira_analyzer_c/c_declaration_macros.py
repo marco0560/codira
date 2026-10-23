@@ -1408,12 +1408,15 @@ def declaration_expansions(
     -------
     tuple[ExpandedDeclaration, ...]
         Only invocations with complete bounded expansions; uncertain sites are
-        omitted so callers preserve the original grammar diagnostic.
+        rejected with their source site so callers can retain partial coverage.
+
+    Raises
+    ------
+    ExpansionRejected
+        If captured include replay is incomplete or a detected file-scope
+        declaration-macro site cannot be selected and expanded completely.
     """
-    try:
-        definitions, undefs = _ordered_definition_rows(context, root, source_path)
-    except ExpansionRejected:
-        return ()
+    definitions, undefs = _ordered_definition_rows(context, root, source_path)
     parser = _new_parser()
     annotation_inputs = _input_definitions(
         context.source,
@@ -1428,31 +1431,40 @@ def declaration_expansions(
     )
     candidates = _scan_invocations(context.source, names)
     if len(candidates) > _MAX_EXPANSIONS:
-        return ()
+        raise ExpansionRejected(
+            "file-scope declaration macro candidate count exceeded bound"
+        )
     index = _ExpansionIndex.build(tuple(definitions), tuple(undefs))
     result: list[ExpandedDeclaration] = []
+    rejected_sites: list[str] = []
     for name, start, end, arguments_tokens in candidates:
-        if start > end or end - start > _MAX_BYTES:
-            continue
+        line = context.source.count(b"\n", 0, start) + 1
+        site = f"{name.decode('ascii', 'replace')} at line {line}"
         try:
+            if start > end:
+                raise ExpansionRejected("malformed invocation span")
+            if end - start > _MAX_BYTES:
+                raise ExpansionRejected("invocation exceeds byte bound")
             expander = _Expander(index, start, annotations)
             outer = expander._definitions.get(name)
             if outer is not None and outer.parameters is None:
                 outer = None
             if outer is None:
-                continue
+                raise ExpansionRejected(
+                    "no unique unconditional reaching function-like definition"
+                )
             invocation_args = _split_arguments(arguments_tokens)
             if any(
                 token.start is None or token.end is None
                 for argument in invocation_args
                 for token in argument
             ):
-                continue
+                raise ExpansionRejected("invocation argument source span is incomplete")
             if len(invocation_args) < len(outer.parameters or ()) or (
                 not outer.variadic
                 and len(invocation_args) != len(outer.parameters or ())
             ):
-                continue
+                raise ExpansionRejected("invocation argument count does not match")
             original_call = (
                 MacroToken(name),
                 MacroToken(b"("),
@@ -1483,7 +1495,9 @@ def declaration_expansions(
                 )
             rendered = b"".join(rendered_parts)
             if not rendered or len(rendered) > _MAX_BYTES:
-                continue
+                raise ExpansionRejected(
+                    "expanded declaration is empty or over byte bound"
+                )
             following = context.source[end:]
             if following.lstrip().startswith(b";") and expanded[-1].spelling not in {
                 b";",
@@ -1495,7 +1509,7 @@ def declaration_expansions(
                 rendered += b" ;"
             chain = tuple(expander._used.values())
             if not chain or outer not in chain:
-                continue
+                raise ExpansionRejected("selected definition chain is incomplete")
             result.append(
                 ExpandedDeclaration(
                     start,
@@ -1506,6 +1520,8 @@ def declaration_expansions(
                     chain,
                 )
             )
-        except (ExpansionRejected, UnicodeDecodeError, ValueError):
-            continue
+        except (ExpansionRejected, UnicodeDecodeError, ValueError) as exc:
+            rejected_sites.append(f"{site}: {exc}")
+    if rejected_sites:
+        raise ExpansionRejected("; ".join(rejected_sites))
     return tuple(result)
