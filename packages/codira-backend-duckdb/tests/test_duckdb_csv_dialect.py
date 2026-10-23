@@ -73,3 +73,125 @@ def test_bulk_csv_preserves_late_quoted_fields(reference: bool) -> None:
             _flush_call_record_rows(conn, calls)
             actual = raw.execute("SELECT * FROM call_records ORDER BY rowid").fetchall()
             assert actual == calls
+
+
+@pytest.mark.parametrize("reference", [False, True])
+def test_bulk_csv_distinguishes_null_empty_and_literal_null_tokens(
+    reference: bool,
+) -> None:
+    """Preserve NULL, empty text, and token-like strings through bulk CSV.
+
+    Parameters
+    ----------
+    reference : bool
+        Whether to exercise callable-reference rows instead of calls.
+
+    Returns
+    -------
+    None
+        The test asserts null encoding stays distinct from empty and literal
+        values for both nullable record tables.
+    """
+    literal_tokens = (
+        "__CODIRA_NULL_SENTINEL__",
+        "__CODIRA_NULL_SENTINEL___",
+        "__CODIRA_NULL_SENTINEL____",
+    )
+    with duckdb.connect(":memory:") as raw:
+        for statement in DDL:
+            raw.execute(statement)
+        conn = cast("_DuckDBPersistenceConnection", raw)
+        if reference:
+            ref_rows: list[RefRow] = [
+                (
+                    1,
+                    "module",
+                    "owner",
+                    "callable",
+                    "callback",
+                    "",
+                    "target",
+                    None,
+                    None,
+                    1,
+                    0,
+                ),
+                (
+                    1,
+                    "module",
+                    "owner",
+                    "callable",
+                    "callback",
+                    "",
+                    "target",
+                    "",
+                    "",
+                    2,
+                    0,
+                ),
+                (
+                    1,
+                    "module",
+                    "owner",
+                    "callable",
+                    "callback",
+                    "",
+                    "target",
+                    literal_tokens[0],
+                    literal_tokens[1],
+                    3,
+                    0,
+                ),
+                (
+                    1,
+                    "module",
+                    "owner",
+                    "callable",
+                    "callback",
+                    "",
+                    "target",
+                    literal_tokens[2],
+                    None,
+                    4,
+                    0,
+                ),
+            ]
+            _flush_callable_ref_record_rows(conn, ref_rows)
+            actual = raw.execute(
+                "SELECT * FROM callable_ref_records ORDER BY lineno"
+            ).fetchall()
+            assert actual == ref_rows
+        else:
+            call_rows: list[CallRow] = [
+                (1, "module", "owner", "name", "", "target", None, None, 1, 0),
+                (1, "module", "owner", "name", "", "target", "", "", 2, 0),
+                (
+                    1,
+                    "module",
+                    "owner",
+                    "name",
+                    "",
+                    "target",
+                    literal_tokens[0],
+                    literal_tokens[1],
+                    3,
+                    0,
+                ),
+                (
+                    1,
+                    "module",
+                    "owner",
+                    "name",
+                    "",
+                    "target",
+                    literal_tokens[2],
+                    None,
+                    4,
+                    0,
+                ),
+            ]
+            _flush_call_record_rows(conn, call_rows)
+            actual = raw.execute(
+                "SELECT * FROM call_records ORDER BY lineno"
+            ).fetchall()
+            assert actual == call_rows

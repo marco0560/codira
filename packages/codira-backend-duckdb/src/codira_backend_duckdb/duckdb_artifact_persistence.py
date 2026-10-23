@@ -1870,7 +1870,7 @@ def _flush_call_record_rows(
         DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
     )
     with active_profiler.span("csv.write.call_records", rows=len(rows)):
-        csv_path = _temporary_csv_path_for_rows(rows)
+        csv_path, null_sentinel = _temporary_csv_path_for_rows(rows)
     try:
         with active_profiler.span("csv.read_csv.call_records", rows=len(rows)):
             conn.execute(
@@ -1895,7 +1895,7 @@ def _flush_call_record_rows(
                     delim=',',
                     quote='"',
                     escape='"',
-                    nullstr='__CODIRA_NULL_SENTINEL__',
+                    nullstr=?,
                     columns={
                         'file_id': 'INTEGER',
                         'owner_module': 'VARCHAR',
@@ -1910,7 +1910,7 @@ def _flush_call_record_rows(
                     }
                 )
                 """,
-                (str(csv_path),),
+                (str(csv_path), null_sentinel),
             )
     finally:
         try:
@@ -1949,7 +1949,7 @@ def _flush_callable_ref_record_rows(
         DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
     )
     with active_profiler.span("csv.write.callable_ref_records", rows=len(rows)):
-        csv_path = _temporary_csv_path_for_rows(rows)
+        csv_path, null_sentinel = _temporary_csv_path_for_rows(rows)
     try:
         with active_profiler.span("csv.read_csv.callable_ref_records", rows=len(rows)):
             conn.execute(
@@ -1975,7 +1975,7 @@ def _flush_callable_ref_record_rows(
                     delim=',',
                     quote='"',
                     escape='"',
-                    nullstr='__CODIRA_NULL_SENTINEL__',
+                    nullstr=?,
                     columns={
                         'file_id': 'INTEGER',
                         'owner_module': 'VARCHAR',
@@ -1991,7 +1991,7 @@ def _flush_callable_ref_record_rows(
                     }
                 )
                 """,
-                (str(csv_path),),
+                (str(csv_path), null_sentinel),
             )
     finally:
         try:

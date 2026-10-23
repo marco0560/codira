@@ -347,8 +347,9 @@ def test_duckdb_bulk_io_helpers_preserve_csv_and_cleanup_rules() -> None:
     None
         The test asserts CSV rows are retained and temporary views are released.
     """
-    csv_path = _temporary_csv_path_for_rows(((1, "alpha"), (2, "")))
+    csv_path, null_sentinel = _temporary_csv_path_for_rows(((1, "alpha"), (2, "")))
     try:
+        assert null_sentinel == "__CODIRA_NULL_SENTINEL__"
         assert csv_path.read_text(encoding="utf-8").splitlines() == [
             "1,alpha",
             "2,",

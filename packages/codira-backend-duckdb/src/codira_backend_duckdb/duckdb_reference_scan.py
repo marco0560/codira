@@ -112,7 +112,7 @@ def _flush_pending_reference_scan_rows(
         DuckDBProfileRecorder(enabled=False) if profiler is None else profiler
     )
     with active_profiler.span("csv.write.reference_scan_lines", rows=len(rows)):
-        csv_path = _temporary_csv_path_for_rows(rows)
+        csv_path, null_sentinel = _temporary_csv_path_for_rows(rows)
     try:
         with active_profiler.span("csv.read_csv.reference_scan_lines", rows=len(rows)):
             conn.execute(
@@ -122,7 +122,7 @@ def _flush_pending_reference_scan_rows(
                 FROM read_csv(
                     ?,
                     header=false,
-                    nullstr='__CODIRA_NULL_SENTINEL__',
+                    nullstr=?,
                     columns={
                         'file_id': 'INTEGER',
                         'lineno': 'INTEGER',
@@ -130,7 +130,7 @@ def _flush_pending_reference_scan_rows(
                     }
                 )
                 """,
-                (str(csv_path),),
+                (str(csv_path), null_sentinel),
             )
     finally:
         try:

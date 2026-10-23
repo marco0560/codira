@@ -22,6 +22,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from codira.contracts import (
+    BackendRelationQueryRequest,
     BackendError,
     BackendPersistAnalysisRequest,
     BackendResolveDocumentationScoresRequest,
@@ -67,6 +68,7 @@ from codira_backend_duckdb.profiling import (
     duckdb_profile_path,
 )
 from codira_backend_duckdb import duckdb_support as duckdb_support_module
+from codira_backend_duckdb.duckdb_artifact_persistence import _flush_call_record_rows
 
 if TYPE_CHECKING:
     from codira_backend_duckdb.duckdb_support import _DuckDBPersistenceConnection
@@ -96,7 +98,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.8"
+    assert project["project"]["version"] == "2.0.9"
     assert project["project"]["dependencies"] == [
         "codira>=2.0.0,<3.0.0",
         "duckdb>=1.4,<2.0",
@@ -1175,6 +1177,68 @@ def test_duckdb_backend_rebuild_keeps_distinct_unresolved_call_edges(
         )
         for kind, base, target, _lineno, _col_offset in _UNRESOLVED_CALL_RECORDS
     ]
+
+
+def test_duckdb_call_edge_query_preserves_absent_optional_targets(
+    tmp_path: Path,
+) -> None:
+    """Return absent call target metadata as ``None`` through the public query.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test asserts DuckDB round-trips nullable call metadata through
+        persistence, graph rebuild, and ``find_call_edges``.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    db_path = _duckdb_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    raw = duckdb.connect(str(db_path))
+    try:
+        for statement in _duckdb_schema_ddl():
+            raw.execute(statement)
+        raw.execute(
+            """
+            INSERT INTO files(
+                id,
+                path,
+                hash,
+                mtime,
+                size,
+                analyzer_name,
+                analyzer_version
+            ) VALUES (1, ?, 'seed-hash', 1.0, 1, 'c', '21')
+            """,
+            (str(tmp_path / "sample.c"),),
+        )
+        _flush_call_record_rows(
+            cast("_DuckDBPersistenceConnection", raw),
+            [
+                (1, "pkg.sample", "caller", "name", "", "missing_a", None, None, 1, 0),
+                (1, "pkg.sample", "caller", "name", "", "missing_b", "", "", 2, 0),
+            ],
+        )
+        raw.commit()
+    finally:
+        raw.close()
+
+    backend = DuckDBIndexBackend()
+    backend.rebuild_derived_indexes(tmp_path)
+    rows = backend.find_call_edges(
+        BackendRelationQueryRequest(
+            root=tmp_path,
+            name="caller",
+            module="pkg.sample",
+        )
+    )
+
+    assert len(rows) == 2
+    assert {row[4:6] for row in rows} == {(None, None), ("", "")}
 
 
 def test_duckdb_backend_rebuild_replaces_existing_resolved_edges(
