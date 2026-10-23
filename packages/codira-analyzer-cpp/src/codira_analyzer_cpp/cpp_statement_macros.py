@@ -13,7 +13,7 @@ None
 from collections.abc import Mapping
 
 from .cpp_macro_context import _definition, _directives
-from .cpp_macro_expansion import _MacroToken, _macro_tokens
+from .cpp_macro_expansion import _MacroToken, _macro_arguments, _macro_tokens
 from .cpp_macro_projection import _render_macro_tokens
 from .cpp_syntax import _new_parser
 
@@ -377,20 +377,119 @@ def has_transformed_call_arguments(
     bool
         Whether call-shaped source argument tokens were transformed or lost.
     """
-    arguments = _macro_tokens(source[first:last], offset=first)[2:-1]
-    if not any(token.spelling == b"(" for token in arguments):
+    invocation = _macro_tokens(source[first:last], offset=first)
+    arguments, _, _ = _macro_arguments(list(invocation), 1)
+    if not any(token.spelling == b"(" for argument in arguments for token in argument):
         return False
     preserved = {
         (token.start, token.end)
         for token in expanded
         if token.argument and not token.synthetic
     }
-    lost_spelling = any(
-        token.spelling != b"," and (token.start, token.end) not in preserved
-        for token in arguments
-    )
     transformed = any(
         token.argument or token.operation in {"paste", "stringify"}
         for token in expanded
     )
-    return lost_spelling and transformed
+    if not transformed:
+        return False
+
+    call_spans = _source_call_token_spans(source, first, arguments)
+    if not call_spans:
+        return transformed and any(
+            token.spelling != b"," and (token.start, token.end) not in preserved
+            for argument in arguments
+            for token in argument
+        )
+    return transformed and any(
+        (token.start, token.end) not in preserved
+        for span in call_spans
+        for token in span
+    )
+
+
+def has_unpreserved_call_arguments(
+    source: bytes,
+    first: int,
+    last: int,
+    expanded: tuple[_MacroToken, ...],
+) -> bool:
+    """Check whether expansion lost tokens belonging to a written call.
+
+    Parameters
+    ----------
+    source : bytes
+        Original translation unit containing the complete macro invocation.
+    first, last : int
+        Physical byte boundaries of the invocation.
+    expanded : tuple[_MacroToken, ...]
+        Fully rescanned replacement tokens with argument provenance.
+
+    Returns
+    -------
+    bool
+        Whether a source call token needs recovery from the original syntax.
+    """
+    invocation = _macro_tokens(source[first:last], offset=first)
+    arguments, _, _ = _macro_arguments(list(invocation), 1)
+    call_spans = _source_call_token_spans(source, first, arguments)
+    preserved = {
+        (token.start, token.end)
+        for token in expanded
+        if token.argument and not token.synthetic
+    }
+    return any(
+        (token.start, token.end) not in preserved
+        for span in call_spans
+        for token in span
+    )
+
+
+def _source_call_token_spans(
+    source: bytes,
+    first: int,
+    arguments: list[tuple[_MacroToken, ...]],
+) -> tuple[tuple[_MacroToken, ...], ...]:
+    """Return lexical token groups belonging to parsed source call expressions.
+
+    Parameters
+    ----------
+    source : bytes
+        Original translation unit.
+    first : int
+        Physical start of the macro invocation.
+    arguments : list[tuple[_MacroToken, ...]]
+        Preprocessor arguments extracted from the invocation.
+
+    Returns
+    -------
+    tuple[tuple[_MacroToken, ...], ...]
+        Source token groups for each parsed call expression.
+    """
+    result: list[tuple[_MacroToken, ...]] = []
+    prefix = b"void codira_probe() { "
+    for argument in arguments:
+        if not any(token.spelling == b"(" for token in argument):
+            continue
+        if not argument:
+            continue
+        start, end = argument[0].start, argument[-1].end
+        tree = _new_parser().parse(prefix + source[start:end] + b"; }").root_node
+        calls = []
+        pending = [tree]
+        while pending:
+            node = pending.pop()
+            if node.type == "call_expression":
+                calls.append(node)
+            pending.extend(node.named_children)
+        for call in calls:
+            call_start = call.start_byte - len(prefix)
+            call_end = call.end_byte - len(prefix)
+            result.append(
+                tuple(
+                    token
+                    for token in argument
+                    if call_start <= token.start - start
+                    and token.end - start <= call_end
+                )
+            )
+    return tuple(result)

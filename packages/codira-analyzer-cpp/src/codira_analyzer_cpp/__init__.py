@@ -875,6 +875,15 @@ def _call_site_from_expression(node: Node, source: bytes) -> CallSite | None:
     )
     if function_node.type == "identifier" and function_text == "noexcept":
         return None
+    type_operator_text = (
+        _node_text(function_node, source).encode()
+        if isinstance(function_node, _ProjectedNode)
+        else function_text.encode()
+    )
+    if _may_be_type_operator_expression(type_operator_text) and (
+        _is_type_operator_expression(type_operator_text)
+    ):
+        return None
     if function_node.type == "primitive_type" or (
         function_node.type == "identifier"
         and function_text in {"short", "long", "signed", "unsigned", "wchar_t"}
@@ -2071,6 +2080,45 @@ def _declared_type_specifier(node: Node) -> Node | None:
         if declared_type is not None and declared_type.type in types:
             return declared_type
     return None
+
+
+def _may_be_type_operator_expression(source: bytes) -> bool:
+    """Gate syntax parsing to expressions beginning with the decltype keyword.
+
+    Parameters
+    ----------
+    source : bytes
+        Candidate function spelling from physical or projected syntax.
+
+    Returns
+    -------
+    bool
+        Whether the spelling begins with the exact language-operator token.
+    """
+    return re.match(rb"\s*decltype\b\s*\(", source) is not None
+
+
+def _is_type_operator_expression(source: bytes) -> bool:
+    """Check whether source spelling is exactly one C++ decltype operand.
+
+    Parameters
+    ----------
+    source : bytes
+        Function-node spelling to classify from syntax rather than its name.
+
+    Returns
+    -------
+    bool
+        Whether the complete spelling parses as a decltype language construct.
+    """
+    prefix = b"void codira_type_operator_probe() { "
+    tree = _new_parser().parse(prefix + source + b"; }").root_node
+    return any(
+        node.type == "decltype"
+        and node.start_byte == len(prefix)
+        and node.end_byte == len(prefix) + len(source)
+        for node in _named_descendants(tree)
+    )
 
 
 def _extract_enum_members(
@@ -4094,7 +4142,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "41"
+    version = "42"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",

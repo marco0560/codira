@@ -62,6 +62,7 @@ from .cpp_statement_macros import (
     declaration_invocations,
     has_lexical_calls,
     has_transformed_call_arguments,
+    has_unpreserved_call_arguments,
     is_declaration_statement,
     is_empty_statement_replacement,
     is_statement_macro_replacement,
@@ -556,14 +557,7 @@ def analyze_generated_file(
                     raise ValueError(
                         "statement macro erases or transforms call-shaped argument spelling"
                     )
-                arguments = _macro_tokens(source[first:last], offset=first)[2:-1]
-                preserved = {
-                    (t.start, t.end) for t in tokens if t.argument and not t.synthetic
-                }
-                if any(t.spelling == b"(" for t in arguments) and any(
-                    t.spelling != b"," and (t.start, t.end) not in preserved
-                    for t in arguments
-                ):
+                if has_unpreserved_call_arguments(source, first, last, tokens):
                     argument_tree = _statement_argument_tree(source, first, last)
             elif is_statement_macro_replacement(tokens) and (
                 any(token.argument for token in tokens)
@@ -704,6 +698,138 @@ def analyze_generated_file(
         result,
         initializer_value_bindings=initializer_value_bindings,
     )
+
+
+def _is_forwarded_type_operator_call(
+    call: Node | _ProjectedNode,
+    projection: MacroProjection,
+    feature_answers: Mapping[tuple[bytes, ...], bytes],
+) -> bool:
+    """Recognize a generated call replacing a source type-operator wrapper.
+
+    Parameters
+    ----------
+    call : tree_sitter.Node
+        Generated call-expression node with no direct physical spelling.
+    projection : MacroProjection
+        Source and generated-token mapping for the selected preprocessing context.
+    feature_answers : collections.abc.Mapping[tuple[bytes, ...], bytes]
+        Exact native compiler answers for supported preprocessing feature queries.
+
+    Returns
+    -------
+    bool
+        Whether the generated callee replaces a written ``decltype`` wrapper
+        while every nested source call remains physically represented.
+    """
+    function = call.child_by_field_name("function")
+    if function is None:
+        return False
+    operator_tokens = tuple(
+        item
+        for item in projection.generated_tokens
+        if item.projected_span == (function.start_byte, function.end_byte)
+    )
+    if (
+        len(operator_tokens) != 1
+        or operator_tokens[0].token.spelling != b"__decltype"
+        or not operator_tokens[0].token.synthetic
+        or operator_tokens[0].token.operation != "replacement"
+        or operator_tokens[0].physical_spelling_span is not None
+        or operator_tokens[0].token.spelling in operator_tokens[0].token.unavailable
+        or feature_answers.get((b"__is_identifier", b"(", b"__decltype", b")")) != b"0"
+    ):
+        return False
+    for projected in projection.generated_tokens:
+        token = projected.token
+        if (
+            projected.projected_span != (function.start_byte, function.end_byte)
+            or not token.argument
+            or not token.synthetic
+            or not 0 <= token.start < token.end <= len(projection.original)
+        ):
+            continue
+        original = projection.original[token.start : token.end]
+        prefix = b"void codira_type_probe() { "
+        source_tree = _new_parser().parse(prefix + original + b"; }").root_node
+        wrapper = next(
+            (
+                candidate
+                for candidate in _nodes(source_tree)
+                if candidate.type == "decltype"
+                and candidate.start_byte == len(prefix)
+                and candidate.end_byte == len(prefix) + len(original)
+            ),
+            None,
+        )
+        if wrapper is None or not any(
+            candidate.type == "call_expression" for candidate in _nodes(wrapper)
+        ):
+            continue
+        nested_calls = [
+            candidate
+            for candidate in _nodes(call)
+            if candidate is not call and candidate.type == "call_expression"
+        ]
+        if not nested_calls:
+            continue
+        if all(
+            _projected_call_preserves_source_tokens(candidate, projection, token)
+            for candidate in nested_calls
+        ):
+            return True
+    return False
+
+
+def _projected_call_preserves_source_tokens(
+    call: Node | _ProjectedNode,
+    projection: MacroProjection,
+    wrapper: _MacroToken,
+) -> bool:
+    """Verify that one projected nested call retains every source token.
+
+    Parameters
+    ----------
+    call : tree_sitter.Node
+        Nested call node inside the projected type-operator wrapper.
+    projection : MacroProjection
+        Source and generated-token coordinate mapping.
+    wrapper : _MacroToken
+        Source span of the written type-operator wrapper.
+
+    Returns
+    -------
+    bool
+        Whether the projected call token sequence matches its physical source.
+    """
+    generated = tuple(
+        item
+        for item in projection.generated_tokens
+        if item.projected_span[0] < call.end_byte
+        and call.start_byte < item.projected_span[1]
+    )
+    if any(
+        item.projected_span[0] < call.start_byte
+        or call.end_byte < item.projected_span[1]
+        or item.physical_spelling_span is None
+        for item in generated
+    ):
+        return False
+    physical = tuple(item.physical_spelling_span for item in generated)
+    if not physical or any(span is None for span in physical):
+        return False
+    physical_spans = tuple(span for span in physical if span is not None)
+    if any(
+        not wrapper.start <= span[0] < span[1] <= wrapper.end for span in physical_spans
+    ):
+        return False
+    expected = _macro_tokens(
+        projection.original[physical_spans[0][0] : physical_spans[-1][1]],
+        offset=physical_spans[0][0],
+    )
+    return tuple(item.token.spelling for item in generated) == tuple(
+        token.spelling for token in expected
+    ) and physical_spans == tuple((token.start, token.end) for token in expected)
 
 
 def _query_resolver(
@@ -956,7 +1082,11 @@ def _analyze_statements(
         if call is None:
             continue
         offset = _offset(projection.source, call.lineno, call.col_offset)
-        if projection.physical_span(offset, offset + 1, include_arguments=True) is None:
+        if projection.physical_span(
+            offset, offset + 1, include_arguments=True
+        ) is None and not _is_forwarded_type_operator_call(
+            node, projection, analyzer._preprocessor_features
+        ):
             raise ValueError(
                 f"replacement-introduced call {call.external_target_name or call.target!r} lacks separate generated ownership"
             )

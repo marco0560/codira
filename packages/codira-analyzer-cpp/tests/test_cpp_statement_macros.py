@@ -18,7 +18,10 @@ from codira_analyzer_cpp import CppAnalyzer
 
 
 def _analyze(
-    tmp_path: Path, source: bytes, definitions: dict[str, str | bool] | None = None
+    tmp_path: Path,
+    source: bytes,
+    definitions: dict[str, str | bool] | None = None,
+    features: dict[str, str] | None = None,
 ) -> AnalysisResult:
     """Analyze original bytes with explicit preprocessing facts.
 
@@ -30,6 +33,8 @@ def _analyze(
         Original physical source.
     definitions : dict[str, str or bool] or None, optional
         Known initial macro replacements or undefined states.
+    features : dict[str, str] or None, optional
+        Exact supported compiler query answers for this test profile.
 
     Returns
     -------
@@ -39,7 +44,14 @@ def _analyze(
     path = tmp_path / "unit.cpp"
     path.write_bytes(source)
     analyzer = CppAnalyzer()
-    analyzer.configure({"preprocessor_definitions": definitions or {}})
+    config: dict[str, object] = {"preprocessor_definitions": dict(definitions or {})}
+    if features:
+        config["preprocessor_definitions"] = {
+            **dict(definitions or {}),
+            "__is_identifier": {"defined": True},
+        }
+        config["preprocessor_features"] = features
+    analyzer.configure(config)
     return analyzer.analyze_file(path, tmp_path)
 
 
@@ -326,6 +338,124 @@ def test_statement_macro_allows_argument_used_and_stringified(
     assert result.index_symbols and result.status is None
     function = next(item for item in result.functions if item.name == "entry")
     assert [call.target for call in function.calls] == ["CHECK", "fake"]
+
+
+def test_statement_macro_keeps_nested_call_through_type_wrapper_expansion(
+    tmp_path: Path,
+) -> None:
+    """Retain a source call when only its enclosing type operator is rewritten.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source root.
+
+    Returns
+    -------
+    None
+        The nested source call and adjacent runtime assertion remain indexed.
+    """
+    source = (
+        b"#define decltype(...) __decltype(__VA_ARGS__)\n"
+        b"#define CHECK(X) static_assert(sizeof(X) > 0)\n"
+        b"int fake(); int runtime();\n"
+        b"void entry() { CHECK(decltype(fake())); assert(runtime()); }\n"
+    )
+    result = _analyze(tmp_path, source, features={"__is_identifier(__decltype)": "0"})
+    assert result.index_symbols and result.status is None
+    function = next(item for item in result.functions if item.name == "entry")
+    assert [call.target for call in function.calls] == [
+        "CHECK",
+        "fake",
+        "assert",
+        "runtime",
+    ]
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "injected(__VA_ARGS__)",
+        "__decltype(injected(__VA_ARGS__))",
+        "__decltype(fake(__VA_ARGS__, 42))",
+    ],
+)
+def test_statement_macro_holds_non_operator_or_modified_type_wrapper(
+    tmp_path: Path, replacement: str
+) -> None:
+    """Reject generated helpers or extra call tokens inside type wrappers.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source root.
+    replacement : str
+        Deliberately introduced helper or argument transformation.
+
+    Returns
+    -------
+    None
+        Unsupported expansion remains partial instead of claiming a complete
+        source-call projection.
+    """
+    source = (
+        f"#define decltype(...) {replacement}\n"
+        "#define CHECK(X) static_assert(sizeof(X) > 0)\n"
+        "int fake(); void entry() { CHECK(decltype(fake())); }\n"
+    ).encode()
+    result = _analyze(tmp_path, source, features={"__is_identifier(__decltype)": "0"})
+    assert not result.index_symbols and result.status is not None
+
+
+def test_statement_macro_holds_type_wrapper_without_native_operator_proof(
+    tmp_path: Path,
+) -> None:
+    """Keep generated operator identity unknown without compiler evidence.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source root.
+
+    Returns
+    -------
+    None
+        An unresolved reserved-token query cannot authorize call projection.
+    """
+    source = (
+        b"#define decltype(...) __decltype(__VA_ARGS__)\n"
+        b"#define CHECK(X) static_assert(sizeof(X) > 0)\n"
+        b"int fake(); void entry() { CHECK(decltype(fake())); }\n"
+    )
+    result = _analyze(tmp_path, source)
+    assert not result.index_symbols and result.status is not None
+
+
+def test_statement_macro_holds_mixed_lost_and_preserved_calls(
+    tmp_path: Path,
+) -> None:
+    """Reject a macro that preserves one argument call and stringifies another.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated source root.
+
+    Returns
+    -------
+    None
+        A preserved sibling call does not license a stringified source call.
+    """
+    result = _analyze(
+        tmp_path,
+        b"#define CHECK(X, Y) do { consume(#X); consume(Y); } while(false)\n"
+        b"void entry() { CHECK(lost(), kept()); }\n",
+    )
+    assert not result.index_symbols and result.status is not None
+    assert any(
+        "erases or transforms call-shaped argument spelling" in diagnostic.message
+        for diagnostic in result.status.diagnostics
+    )
 
 
 @pytest.mark.parametrize(
