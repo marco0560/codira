@@ -8,6 +8,41 @@ appearing without this inventory.
 
 ## `# noqa` inventory
 
+scripts/clang_frontend_pilot/adapter.py:559 C901, PLR0913, PLR0912 — the
+single-row adapter preserves its direct qualification API while keeping source,
+profile, toolchain, and evidence state transitions explicit.
+
+scripts/clang_frontend_pilot/run.py:142 C901, PLR0912 — checkpoint reuse
+revalidates source, dependency, compiler, helper, receipt, and producer identity
+at one explicit resume boundary.
+
+scripts/clang_frontend_pilot/run.py:306 C901, PLR0913, PLR0912 — the batch
+runner keeps manifest, compile database, checkout, helper, output/checkpoint,
+selection, and capture-mode inputs independently bound and auditable.
+
+scripts/clang_frontend_pilot/cohort.py:35 PLR0913 — cohort entry keeps manifest,
+attempt, repository, fixture, and baseline inputs explicit for deterministic
+grading.
+
+scripts/clang_frontend_pilot/cohort.py:369 PLR0913 — identity validation receives
+every producer/profile/source binding explicitly so mismatch findings remain
+reviewable.
+
+scripts/clang_frontend_pilot/cohort.py:508 PLR0913 — descriptive baseline
+comparison keeps source roots, grader facts, and raw artifact paths explicit.
+
+scripts/clang_frontend_pilot/measure.py:37 PLR0913 — the measurement runner
+receives all input identities and output roots explicitly for resumable batch
+binding.
+
+scripts/clang_frontend_pilot/measure.py:581 C901 — retained-input validation
+checks all source, dependency, helper, and compiler identity dimensions together
+at the resume boundary.
+
+scripts/clang_frontend_pilot/baseline.py:322 BLE001 — analyzer exceptions of any
+type are retained as per-case failure evidence instead of aborting the batch
+and losing later cases.
+
 src/codira/family_runtime.py:472 PLR0913 — federation query options expose
 the independently selectable operation, member filter, pagination, direction,
 and explicit partial-results policy at the shared CLI/MCP boundary.
