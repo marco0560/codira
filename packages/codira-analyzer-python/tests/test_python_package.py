@@ -71,10 +71,17 @@ def _golden_analysis_payload(
     ]
     for function_payload in [*functions, *methods]:
         function_payload.pop("generated")
+        assert function_payload.pop("semantic_identity") is None
+        for call_payload in cast("list[dict[str, object]]", function_payload["calls"]):
+            for optional_key in ("target_identity", "resolution_mode", "origin"):
+                assert call_payload.pop(optional_key) is None
         for overload_payload in cast(
             "list[dict[str, object]]", function_payload["overloads"]
         ):
             overload_payload.pop("generated")
+    for declaration in cast("list[dict[str, object]]", payload["declarations"]):
+        for optional_key in ("owner_name", "owner_stable_id", "access", "type_text"):
+            assert declaration.pop(optional_key) is None
     payload.pop("status")
     payload["source_path"] = str(
         Path(cast("str", payload["source_path"])).relative_to(root)

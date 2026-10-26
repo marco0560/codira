@@ -3595,13 +3595,14 @@ class IndexBackend(Protocol):
         """
         ...
 
-    def find_logical_symbols(
+    def find_logical_symbols(  # noqa: PLR0913 - query filters are independent.
         self,
         root: Path,
         module_name: str,
         logical_name: str,
         *,
         prefix: str | None = None,
+        stable_id: str | None = None,
         conn: object | None = None,
     ) -> list[SymbolRow]:
         """
@@ -3617,6 +3618,8 @@ class IndexBackend(Protocol):
             Logical symbol identity such as ``helper`` or ``Class.method``.
         prefix : str | None, optional
             Repo-root-relative path prefix used to restrict symbol files.
+        stable_id : str | None, optional
+            Optional exact analyzer-owned symbol identity.
         conn : object | None, optional
             Existing backend connection to reuse.
 
@@ -4061,7 +4064,19 @@ class IndexBackend(Protocol):
     def find_call_edges(
         self,
         request: BackendRelationQueryRequest,
-    ) -> list[tuple[str, str, str | None, str | None, str | None, str | None, int]]:
+    ) -> list[
+        tuple[
+            str,
+            str,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            int,
+        ]
+    ]:
         """
         Find exact call edges for a caller or callee logical name.
 
@@ -4072,7 +4087,12 @@ class IndexBackend(Protocol):
 
         Returns
         -------
-        list[tuple[str, str, str | None, str | None, str | None, str | None, int]]
+        list[
+            tuple[
+                str, str, str | None, str | None, str | None, str | None,
+                str | None, str | None, int,
+            ]
+        ]
             Matching call-edge rows ordered deterministically.
         """
         ...

@@ -102,6 +102,8 @@ src/codira/indexer.py:1371 PLR0913 — bulk indexing keeps backend, transaction,
     artifact, coverage, and embedding ownership explicit at the orchestration seam.
 src/codira/contracts.py:3441 PLR0913 — the plugin protocol signature is a
     public compatibility contract and cannot be bundled without breaking providers.
+src/codira/contracts.py:3598 PLR0913 — exact symbol lookup keeps the optional
+    stable identity alongside the existing root, name, prefix, and connection filters.
 src/codira/contracts.py:17 EM101,TRY003 — public contract validation keeps
     short, consistent exception messages at the typed boundary.
 src/codira/config_validation.py:574 C901 — configuration semantics remain deliberately
@@ -120,8 +122,10 @@ src/codira/query_daemon_ipc.py:902 PLR0913 — IPC server construction exposes i
     authentication, runtime, and connection-boundary dependencies.
 src/codira/cli_index.py:151 C901,PLR0912 — index CLI failure/reporting branches are
     deliberately explicit because they are the user-facing command contract.
-src/codira/cli_queries.py:2395 PLR0913 — daemon context rendering receives the complete
+src/codira/cli_queries.py:2439 PLR0913 — daemon context rendering receives the complete
     explicit query/output/profile request after freshness has been established.
+src/codira/query/exact.py:949 PLR0913 — graph lookup keeps root, module, name,
+    stable identity, prefix, and connection as explicit independent filters.
 src/codira/cli.py:463 PLR0913 — command dispatch receives parsed arguments and
     resolved routing/runtime state as one explicit integration boundary.
 src/codira/cli.py:381 E402 — compatibility re-export import ordering avoids
@@ -277,7 +281,9 @@ host parser.
 - `src/codira/cli.py:419` (E402): Compatibility imports retain their established initialization order.
 - `src/codira/cli.py:424` (E402): Compatibility imports retain their established initialization order.
 - `src/codira/cli.py:463` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `src/codira/cli_queries.py:2395` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/cli_queries.py:2439` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/contracts.py:3598` (PLR0913): Exact symbol identity remains an explicit optional backend query filter.
+- `src/codira/query/exact.py:949` (PLR0913): Exact symbol identity remains an explicit graph lookup filter.
 - `src/codira/mcp/server.py:272` (SLF001 - required SDK transport boundary): The MCP transport adapter requires the SDK private server boundary.
 - `src/codira/query/context_scoring.py:638` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
 - `src/codira/query/context_scoring.py:787` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
@@ -308,3 +314,8 @@ host parser.
 
 - `scripts/agent_efficiency/preparation.py:396` (TRY301): retain a failed boundary record before propagating rejection; changed controls stop before model work.
 - `scripts/run_agent_efficiency_phase6_pilot.py:1787` (PLR0913): readiness supplies an already indexed canary workspace to the same provider executor used by campaign attempts; ordinary attempts retain their original agent workspace.
+
+
+
+
+- `scripts/clang_parity_qualification.py:2144` (BLE001): Retain terminal evidence for every failed native preparation attempt.

@@ -68,7 +68,23 @@ if TYPE_CHECKING:
     )
 
 CallRecord = dict[str, str | int]
-CallRow = tuple[int, str, str, str, str, str, str | None, str | None, int, int]
+CallRow = tuple[
+    int,
+    str,
+    str,
+    str | None,
+    str,
+    str,
+    str,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    int,
+    int,
+]
 RefRow = tuple[int, str, str, str, str, str, str, str | None, str | None, int, int]
 FileRow = tuple[int, str, str, float, int, str, str, str]
 ModuleRow = tuple[int, int, str, str | None, int]
@@ -88,7 +104,22 @@ FunctionRow = tuple[
     str | None,
     str | None,
 ]
-SymbolIndexRow = tuple[int, str, str, str, str, int, int]
+SymbolIndexRow = tuple[
+    int,
+    str,
+    str,
+    str,
+    str,
+    int,
+    int,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+]
 DocumentationArtifactRow = tuple[
     int,
     int,
@@ -144,8 +175,10 @@ _CALL_EDGES_REBUILD_TABLE_DDL = """
         caller_file_id INTEGER NOT NULL,
         caller_module TEXT NOT NULL,
         caller_name TEXT NOT NULL,
+        caller_stable_id TEXT,
         callee_module TEXT,
         callee_name TEXT,
+        callee_stable_id TEXT,
         unresolved_identity TEXT NOT NULL DEFAULT '',
         external_target_kind TEXT,
         external_target_name TEXT,
@@ -172,8 +205,10 @@ _DERIVED_GRAPH_INDEX_DDL = (
         caller_file_id,
         caller_module,
         caller_name,
+        COALESCE(caller_stable_id, ''),
         COALESCE(callee_module, ''),
         COALESCE(callee_name, ''),
+        COALESCE(callee_stable_id, ''),
         unresolved_identity
     );
     """,
@@ -498,6 +533,8 @@ class CallResolutionRequest:
         Known top-level functions keyed by module name.
     class_methods : dict[tuple[str, str], set[str]]
         Known method names keyed by ``(module_name, class_name)``.
+    semantic_identity_lookup : dict[tuple[str, str], set[tuple[str, str, str]]] | None
+        Exact callable candidates keyed by opaque identity namespace/value.
     """
 
     call: dict[str, str | int]
@@ -506,6 +543,9 @@ class CallResolutionRequest:
     import_aliases: dict[str, str]
     module_functions: dict[str, set[str]]
     class_methods: dict[tuple[str, str], set[str]]
+    semantic_identity_lookup: (
+        dict[tuple[str, str], set[tuple[str, str, str]]] | None
+    ) = None
 
 
 @dataclass(frozen=True)
@@ -556,6 +596,8 @@ class SymbolIndexInsertRequest:
         Integer identifier of the owner file.
     lineno : int
         Source line of the indexed symbol.
+    signature, type_text : str | None, optional
+        Analyzer-provided declaration signature and type text when available.
     """
 
     name: str
@@ -564,6 +606,13 @@ class SymbolIndexInsertRequest:
     module_name: str
     file_id: int
     lineno: int
+    semantic_identity_namespace: str | None = None
+    semantic_identity_value: str | None = None
+    owner_name: str | None = None
+    owner_stable_id: str | None = None
+    access: str | None = None
+    signature: str | None = None
+    type_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -749,6 +798,7 @@ def _record_tuple(
     file_id: int,
     owner_module: str,
     owner_name: str,
+    owner_stable_id: str,
     record: CallSite,
 ) -> CallRow:
     """
@@ -762,6 +812,8 @@ def _record_tuple(
         Owning module name.
     owner_name : str
         Logical owner name.
+    owner_stable_id : str
+        Analyzer-owned stable identity of the owning callable.
     record : codira.models.CallSite
         Normalized call-site record.
 
@@ -774,9 +826,14 @@ def _record_tuple(
         file_id,
         owner_module,
         owner_name,
+        owner_stable_id if record.resolution_mode == "exact" else None,
         record.kind,
         record.base,
         record.target,
+        None if record.target_identity is None else record.target_identity.namespace,
+        None if record.target_identity is None else record.target_identity.value,
+        record.resolution_mode,
+        record.origin,
         record.external_target_kind,
         record.external_target_name,
         record.lineno,
@@ -856,6 +913,13 @@ def _insert_symbol_index_row(
             request.module_name,
             request.file_id,
             request.lineno,
+            request.semantic_identity_namespace,
+            request.semantic_identity_value,
+            request.owner_name,
+            request.owner_stable_id,
+            request.access,
+            request.signature,
+            request.type_text,
         )
     )
     return symbol_row_id
@@ -1270,6 +1334,16 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
                     module_name=module_name,
                     file_id=file_id,
                     lineno=method.lineno,
+                    semantic_identity_namespace=(
+                        None
+                        if method.semantic_identity is None
+                        else method.semantic_identity.namespace
+                    ),
+                    semantic_identity_value=(
+                        None
+                        if method.semantic_identity is None
+                        else method.semantic_identity.value
+                    ),
                 ),
             )
             _append_embedding_row(
@@ -1317,7 +1391,9 @@ def _persist_class_artifacts(request: ArtifactPersistenceRequest) -> None:
             )
             for call in method.calls:
                 call_rows.append(
-                    _record_tuple(file_id, module_name, logical_name, call)
+                    _record_tuple(
+                        file_id, module_name, logical_name, method.stable_id, call
+                    )
                 )
             for ref in method.callable_refs:
                 ref_rows.append(
@@ -1386,6 +1462,14 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
                 module_name=module_name,
                 file_id=file_id,
                 lineno=fn.lineno,
+                semantic_identity_namespace=(
+                    None
+                    if fn.semantic_identity is None
+                    else fn.semantic_identity.namespace
+                ),
+                semantic_identity_value=(
+                    None if fn.semantic_identity is None else fn.semantic_identity.value
+                ),
             ),
         )
         _append_embedding_row(
@@ -1431,7 +1515,9 @@ def _persist_function_artifacts(request: ArtifactPersistenceRequest) -> None:
         )
         for call in fn.calls:
             call_rows.append(
-                _record_tuple(file_id, module_name, fn.logical_name(), call)
+                _record_tuple(
+                    file_id, module_name, fn.logical_name(), fn.stable_id, call
+                )
             )
         for ref in fn.callable_refs:
             ref_rows.append(
@@ -1546,6 +1632,11 @@ def _persist_declaration_artifacts(request: ArtifactPersistenceRequest) -> None:
                 module_name=module_name,
                 file_id=file_id,
                 lineno=decl.lineno,
+                owner_name=decl.owner_name,
+                owner_stable_id=decl.owner_stable_id,
+                access=decl.access,
+                signature=decl.signature,
+                type_text=decl.type_text,
             ),
         )
         _append_embedding_row(
@@ -1879,9 +1970,14 @@ def _flush_call_record_rows(
                     file_id,
                     owner_module,
                     owner_name,
+                    owner_stable_id,
                     kind,
                     base,
                     target,
+                    target_identity_namespace,
+                    target_identity_value,
+                    resolution_mode,
+                    origin,
                     external_target_kind,
                     external_target_name,
                     lineno,
@@ -1895,9 +1991,14 @@ def _flush_call_record_rows(
                         'file_id': 'INTEGER',
                         'owner_module': 'VARCHAR',
                         'owner_name': 'VARCHAR',
+                        'owner_stable_id': 'VARCHAR',
                         'kind': 'VARCHAR',
                         'base': 'VARCHAR',
                         'target': 'VARCHAR',
+                        'target_identity_namespace': 'VARCHAR',
+                        'target_identity_value': 'VARCHAR',
+                        'resolution_mode': 'VARCHAR',
+                        'origin': 'VARCHAR',
                         'external_target_kind': 'VARCHAR',
                         'external_target_name': 'VARCHAR',
                         'lineno': 'INTEGER',

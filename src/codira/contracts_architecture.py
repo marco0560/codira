@@ -23,7 +23,15 @@ if TYPE_CHECKING:
 
 
 ArchitectureRelationRow = tuple[
-    str, str, str | None, str | None, str | None, str | None, int
+    str,
+    str,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    int,
 ]
 
 

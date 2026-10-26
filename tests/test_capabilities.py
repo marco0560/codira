@@ -292,7 +292,7 @@ def test_capability_contract_validates_against_schema() -> None:
     caps_command = cast("Mapping[str, object]", commands["caps"])
     assert "aliases" not in caps_command
     assert mcp["server_command"] == "codira-mcp"
-    assert mcp["contract_version"] == "2.0.0"
+    assert mcp["contract_version"] == "2.1.0"
     mcp_parameters = cast("Mapping[str, object]", mcp["parameters"])
     context_parameters = cast(
         "Mapping[str, object]", mcp_parameters["context_for_task"]

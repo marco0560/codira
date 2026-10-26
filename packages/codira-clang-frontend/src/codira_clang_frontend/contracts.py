@@ -12,7 +12,7 @@ None
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -22,12 +22,137 @@ EnvironmentMode = Literal["controlled_no_ambient", "captured_allowlisted"]
 EntityProvenance = Literal[
     "source_written",
     "macro_replacement",
+    "macro_argument",
     "implicit",
     "template_instantiation",
     "unknown",
 ]
 FrontendStatus = Literal["parsed", "diagnostics", "held", "failed"]
 CoverageState = Literal["complete", "partial"]
+PreprocessorEventKind = Literal[
+    "macro_definition",
+    "macro_undefinition",
+    "macro_expansion",
+    "if",
+    "elif",
+    "ifdef",
+    "ifndef",
+    "else",
+    "endif",
+]
+ConditionResult = Literal["true", "false", "not_evaluated", "unknown"]
+
+
+@dataclass(frozen=True)
+class FrontendInclude:
+    """One include directive observed by Clang.
+
+    Parameters
+    ----------
+    spelled_path : str
+        Exact include token contents as written in the directive.
+    resolved_path : str or None
+        Resolved dependency path, or ``None`` when Clang did not resolve it.
+    angled : bool
+        Whether the directive used angle brackets.
+    search_path, relative_path : str
+        Clang's selected search directory and relative dependency path.
+    module_imported : bool
+        Whether the include was satisfied through a module import.
+    location : SourcePoint or None
+        Physical directive location when reported by Clang.
+
+    Returns
+    -------
+    None
+        Immutable compiler-observed include record.
+    """
+
+    spelled_path: str
+    resolved_path: str | None
+    angled: bool
+    search_path: str
+    relative_path: str
+    module_imported: bool
+    location: SourcePoint | None
+
+
+@dataclass(frozen=True)
+class FrontendPreprocessorEvent:
+    """One macro or evaluated conditional event emitted by Clang.
+
+    Parameters
+    ----------
+    kind : PreprocessorEventKind
+        Native preprocessor callback kind.
+    name : str or None
+        Macro name when the event identifies one.
+    replacement : tuple[str, ...]
+        Clang token spellings for a macro replacement list.
+    replacement_truncated : bool
+        Whether the native helper stopped capturing replacement tokens.
+    function_like : bool or None
+        Whether a macro definition takes parameters.
+    parameters : tuple[str, ...]
+        Ordered parameter names for a function-like macro.
+    source_text : str or None
+        Original macro directive text when Clang provides its full range.
+    condition : str or None
+        Source condition text for ``if`` and ``elif`` events.
+    result : ConditionResult or None
+        Clang's evaluated conditional result.
+    macro_defined : bool or None
+        Observed macro definedness for ``ifdef`` or ``ifndef``.
+    invocation : str or None
+        Source spelling of one macro invocation.
+    location : SourcePoint or None
+        Callback source location with spelling and expansion provenance.
+    span : SourceSpan or None
+        Callback expression range when available.
+
+    Returns
+    -------
+    None
+        Immutable preprocessor event.
+    """
+
+    kind: PreprocessorEventKind
+    name: str | None
+    replacement: tuple[str, ...]
+    replacement_truncated: bool
+    function_like: bool | None
+    parameters: tuple[str, ...]
+    source_text: str | None
+    condition: str | None
+    result: ConditionResult | None
+    macro_defined: bool | None
+    invocation: str | None
+    location: SourcePoint | None
+    span: SourceSpan | None
+
+
+@dataclass(frozen=True)
+class FrontendDocumentationComment:
+    """One source-written documentation comment captured by Clang.
+
+    Parameters
+    ----------
+    text : str
+        Clang-formatted Doxygen comment body.
+    location : SourcePoint or None
+        Physical start of the comment.
+    span : SourceSpan or None
+        Physical comment source range.
+
+    Returns
+    -------
+    None
+        Immutable documentation comment evidence.
+    """
+
+    text: str
+    location: SourcePoint | None
+    span: SourceSpan | None
 
 
 @dataclass(frozen=True)
@@ -265,6 +390,30 @@ class FrontendDeclaration:
         Clang spelling and expansion location.
     span : SourceSpan or None
         Clang spelling and expansion range.
+    owner_usr : str or None, optional
+        Clang USR for the semantic owner, such as a record owning a field.
+    owner_name : str or None, optional
+        Qualified semantic owner name when Clang exposes one.
+    owner_location : SourcePoint or None, optional
+        Physical source location of the semantic owner declaration.
+    owner_kind : str or None, optional
+        Clang declaration kind of the semantic owner.
+    access : {"public", "protected", "private"} or None, optional
+        C++ member access when the declaration is a class member.
+    is_definition : bool or None, optional
+        Whether this declaration defines its entity when Clang can determine it.
+    source_text : str or None, optional
+        Original source spelling for the declaration range.
+    documentation : str or None, optional
+        Clang-formatted attached documentation comment.
+    documentation_location : SourcePoint or None, optional
+        Physical source location of the attached comment.
+    documentation_span : SourceSpan or None, optional
+        Physical comment range when available.
+    enum_ordinal : int or None, optional
+        One-based position for an enum constant in its owning enum.
+    is_file_scope : bool, optional
+        Whether the declaration belongs to the translation-unit scope.
 
     Returns
     -------
@@ -285,6 +434,17 @@ class FrontendDeclaration:
     provenance: EntityProvenance
     location: SourcePoint | None
     span: SourceSpan | None
+    owner_usr: str | None = None
+    owner_name: str | None = None
+    owner_location: SourcePoint | None = None
+    owner_kind: str | None = None
+    access: Literal["public", "protected", "private"] | None = None
+    source_text: str | None = None
+    documentation: str | None = None
+    documentation_location: SourcePoint | None = None
+    documentation_span: SourceSpan | None = None
+    enum_ordinal: int | None = None
+    is_file_scope: bool = False
 
 
 @dataclass(frozen=True)
@@ -322,6 +482,40 @@ class FrontendCall:
 
 
 @dataclass(frozen=True)
+class FrontendCallableQualifiers:
+    """Native C++ method or constructor qualifiers.
+
+    Parameters
+    ----------
+    is_method : bool
+        Whether Clang classifies this callable as a method.
+    is_const, is_volatile, is_static, is_virtual, is_pure_virtual : bool or None
+        Method qualifiers when the declaration is a C++ method.
+    ref_qualifier : {"none", "lvalue", "rvalue"} or None
+        C++ method reference qualifier.
+    constructor_kind : str or None
+        Clang constructor category, if this callable is a constructor.
+    is_explicit : bool or None
+        Explicitness of a constructor, when applicable.
+
+    Returns
+    -------
+    None
+        Immutable compiler-reported qualifier facts.
+    """
+
+    is_method: bool = False
+    is_const: bool | None = None
+    is_volatile: bool | None = None
+    is_static: bool | None = None
+    is_virtual: bool | None = None
+    is_pure_virtual: bool | None = None
+    ref_qualifier: Literal["none", "lvalue", "rvalue"] | None = None
+    constructor_kind: str | None = None
+    is_explicit: bool | None = None
+
+
+@dataclass(frozen=True)
 class FrontendCallable:
     """Callable record with its owned call expressions.
 
@@ -352,6 +546,24 @@ class FrontendCallable:
         Clang source range.
     calls : tuple[FrontendCall, ...]
         Calls whose enclosing callable USR matches this record.
+    returns_value : bool, optional
+        Whether the native function body contains a return with a value.
+    is_variadic : bool, optional
+        Whether the native function declaration is variadic.
+    owner_usr : str or None, optional
+        Clang identity of the lexical C++ record owner.
+    owner_location : SourcePoint or None, optional
+        Physical source location of the owning record declaration.
+    documentation : str or None, optional
+        Clang-formatted attached documentation comment.
+    documentation_location : SourcePoint or None, optional
+        Physical source location of the attached comment.
+    documentation_span : SourceSpan or None, optional
+        Physical source range of the attached comment.
+    instantiated_from_usr : str or None, optional
+        Primary template USR from which Clang instantiated this callable.
+    qualifiers : FrontendCallableQualifiers, optional
+        C++ method and constructor qualifiers reported by Clang.
 
     Returns
     -------
@@ -375,6 +587,17 @@ class FrontendCallable:
     location: SourcePoint | None
     span: SourceSpan | None
     calls: tuple[FrontendCall, ...]
+    returns_value: bool = False
+    is_variadic: bool = False
+    owner_usr: str | None = None
+    owner_location: SourcePoint | None = None
+    documentation: str | None = None
+    documentation_location: SourcePoint | None = None
+    documentation_span: SourceSpan | None = None
+    instantiated_from_usr: str | None = None
+    qualifiers: FrontendCallableQualifiers = field(
+        default_factory=FrontendCallableQualifiers
+    )
 
 
 @dataclass(frozen=True)
@@ -522,6 +745,12 @@ class FrontendResult:
         Explicit process environment policy used for the helper invocation.
     compilation_context : CompilationContext or None, optional
         Actual target and sysroot reported by this helper invocation.
+    includes : tuple[FrontendInclude, ...], optional
+        Source includes observed by the preprocessor.
+    preprocessing : tuple[FrontendPreprocessorEvent, ...], optional
+        Macro and conditional events captured by the preprocessor callbacks.
+    documentation_comments : tuple[FrontendDocumentationComment, ...], optional
+        Doxygen comments physically written in the main translation unit.
 
     Returns
     -------
@@ -548,3 +777,6 @@ class FrontendResult:
     argument_transformations: tuple[str, ...] = ()
     environment_mode: EnvironmentMode = "controlled_no_ambient"
     compilation_context: CompilationContext | None = None
+    includes: tuple[FrontendInclude, ...] = ()
+    preprocessing: tuple[FrontendPreprocessorEvent, ...] = ()
+    documentation_comments: tuple[FrontendDocumentationComment, ...] = ()

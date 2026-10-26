@@ -30,11 +30,16 @@ from .contracts import (
     EntityProvenance,
     FrontendCall,
     FrontendCallable,
+    FrontendCallableQualifiers,
     FrontendDeclaration,
     FrontendDiagnostic,
+    FrontendDocumentationComment,
+    FrontendInclude,
+    FrontendPreprocessorEvent,
     FrontendResult,
     FrontendStatus,
     IncludeDirectoryInput,
+    PreprocessorEventKind,
     SourcePoint,
     SourcePosition,
     SourceSpan,
@@ -214,7 +219,7 @@ def _validate_response(response: dict[str, object]) -> str | None:
         Stable protocol failure reason, or ``None`` when required fields have
         the expected version and JSON shapes.
     """
-    if response.get("schema_version") != "codira.clang-frontend-native/2":
+    if response.get("schema_version") != "codira.clang-frontend-native/3":
         return "unsupported_native_protocol_version"
     array_fields = (
         "declarations",
@@ -223,6 +228,9 @@ def _validate_response(response: dict[str, object]) -> str | None:
         "diagnostics",
         "dependency_paths",
         "search_directories",
+        "includes",
+        "preprocessing",
+        "documentation_comments",
     )
     if any(not isinstance(response.get(field), list) for field in array_fields):
         return "invalid_native_protocol_array_field"
@@ -232,6 +240,9 @@ def _validate_response(response: dict[str, object]) -> str | None:
         "calls",
         "diagnostics",
         "search_directories",
+        "includes",
+        "preprocessing",
+        "documentation_comments",
     )
     if any(
         any(_mapping(item) is None for item in cast("list[object]", response[field]))
@@ -239,10 +250,67 @@ def _validate_response(response: dict[str, object]) -> str | None:
     ):
         return "invalid_native_protocol_record_shape"
     if any(
+        not isinstance(cast("dict[str, object]", _mapping(item)).get("text"), str)
+        for item in cast("list[object]", response["documentation_comments"])
+    ):
+        return "invalid_native_protocol_documentation_comment_shape"
+    if any(
         not isinstance(item, str)
         for item in cast("list[object]", response["dependency_paths"])
     ):
         return "invalid_native_protocol_dependency_path_shape"
+    for item in cast("list[object]", response["includes"]):
+        row = cast("dict[str, object]", _mapping(item))
+        if (
+            not isinstance(row.get("spelled_path"), str)
+            or not isinstance(row.get("angled"), bool)
+            or not isinstance(row.get("search_path"), str)
+            or not isinstance(row.get("relative_path"), str)
+            or not isinstance(row.get("module_imported"), bool)
+        ):
+            return "invalid_native_protocol_include_shape"
+        if row.get("resolved_path") is not None and not isinstance(
+            row.get("resolved_path"), str
+        ):
+            return "invalid_native_protocol_include_shape"
+    allowed_events = {
+        "macro_definition",
+        "macro_undefinition",
+        "macro_expansion",
+        "if",
+        "elif",
+        "ifdef",
+        "ifndef",
+        "else",
+        "endif",
+    }
+    allowed_condition_results = {"true", "false", "not_evaluated", "unknown"}
+    for item in cast("list[object]", response["preprocessing"]):
+        row = cast("dict[str, object]", _mapping(item))
+        if row.get("kind") not in allowed_events:
+            return "invalid_native_protocol_preprocessing_kind"
+        if "replacement" in row and (
+            not isinstance(row["replacement"], list)
+            or any(not isinstance(token, str) for token in row["replacement"])
+        ):
+            return "invalid_native_protocol_preprocessing_replacement"
+        if "replacement_truncated" in row and not isinstance(
+            row["replacement_truncated"], bool
+        ):
+            return "invalid_native_protocol_preprocessing_truncation"
+        if "function_like" in row and not isinstance(row["function_like"], bool):
+            return "invalid_native_protocol_preprocessing_function_like"
+        if "parameters" in row and (
+            not isinstance(row["parameters"], list)
+            or any(not isinstance(name, str) for name in row["parameters"])
+        ):
+            return "invalid_native_protocol_preprocessing_parameters"
+        if "source_text" in row and not isinstance(row["source_text"], str):
+            return "invalid_native_protocol_preprocessing_source_text"
+        if "result" in row and row["result"] not in allowed_condition_results:
+            return "invalid_native_protocol_preprocessing_result"
+        if "macro_defined" in row and not isinstance(row["macro_defined"], bool):
+            return "invalid_native_protocol_preprocessing_definedness"
     if response.get("capture_mode") != "source_relevant":
         return "invalid_native_protocol_capture_mode"
     result_code = response.get("tool_return_code")
@@ -318,7 +386,11 @@ def _decode_compilation_context(
         if not candidate.is_absolute():
             candidate = working_directory / candidate
         sysroot_path = candidate.resolve()
-    return CompilationContext(triple, sysroot, sysroot_path)
+    return CompilationContext(
+        target_triple=triple,
+        sysroot=sysroot,
+        sysroot_path=sysroot_path,
+    )
 
 
 def _context_record(context: CompilationContext | None) -> dict[str, str | None] | None:
@@ -435,11 +507,43 @@ def _provenance(value: object) -> EntityProvenance:
         return "source_written"
     if value == "macro_replacement":
         return "macro_replacement"
+    if value == "macro_argument":
+        return "macro_argument"
     if value == "implicit":
         return "implicit"
     if value in {"template_instantiation", "explicit_template_instantiation"}:
         return "template_instantiation"
     return "unknown"
+
+
+def _callable_qualifiers(value: object) -> FrontendCallableQualifiers:
+    """Decode Clang's C++ method-specific qualifier fields.
+
+    Parameters
+    ----------
+    value : object
+        Native ``method_qualifiers`` object.
+
+    Returns
+    -------
+    codira_clang_frontend.contracts.FrontendCallableQualifiers
+        Typed method and constructor metadata.
+    """
+    row = _mapping(value) or {}
+    ref_qualifier = row.get("ref_qualifier")
+    return FrontendCallableQualifiers(
+        is_method=row.get("is_method") is True,
+        is_const=_optional_bool(row.get("is_const")),
+        is_volatile=_optional_bool(row.get("is_volatile")),
+        is_static=_optional_bool(row.get("is_static")),
+        is_virtual=_optional_bool(row.get("is_virtual")),
+        is_pure_virtual=_optional_bool(row.get("is_pure_virtual")),
+        ref_qualifier=cast("Literal['none', 'lvalue', 'rvalue']", ref_qualifier)
+        if ref_qualifier in {"none", "lvalue", "rvalue"}
+        else None,
+        constructor_kind=_optional_string(row.get("constructor_kind")),
+        is_explicit=_optional_bool(row.get("is_explicit")),
+    )
 
 
 def _declaration_provenance(identity: dict[str, object]) -> EntityProvenance:
@@ -501,15 +605,17 @@ def _decode_entities(
         qualified = callee.get("qualified_name") if callee is not None else None
         caller_usr = row.get("caller_usr")
         call = FrontendCall(
-            _optional_string(target) or "",
-            _optional_string(qualified),
-            _optional_string(callee.get("usr")) if callee is not None else None,
-            _optional_string(caller_usr),
-            _optional_string(row.get("caller_name")),
-            _optional_string(row.get("caller_qualified_name")),
-            _provenance(row.get("origin")),
-            _point(row.get("location")),
-            _span(row.get("range")),
+            target=_optional_string(target) or "",
+            qualified_target=_optional_string(qualified),
+            target_usr=(
+                _optional_string(callee.get("usr")) if callee is not None else None
+            ),
+            caller_usr=_optional_string(caller_usr),
+            caller_name=_optional_string(row.get("caller_name")),
+            caller_qualified_name=_optional_string(row.get("caller_qualified_name")),
+            origin=_provenance(row.get("origin")),
+            location=_point(row.get("location")),
+            span=_span(row.get("range")),
         )
         if isinstance(caller_usr, str) and caller_usr:
             calls_by_usr.setdefault(caller_usr, []).append(call)
@@ -529,29 +635,40 @@ def _decode_entities(
         is_definition = row.get("is_definition") is True
         callables.append(
             FrontendCallable(
-                usr if isinstance(usr, str) else None,
-                cast("str", row.get("decl_kind", "unknown")),
-                cast("str", row.get("name", "")),
-                qualified_name,
-                _optional_string(row.get("lexical_owner")) or owner,
-                cast(
+                usr=usr if isinstance(usr, str) else None,
+                kind=cast("str", row.get("decl_kind", "unknown")),
+                name=cast("str", row.get("name", "")),
+                qualified_name=qualified_name,
+                lexical_owner=_optional_string(row.get("lexical_owner")) or owner,
+                decl_kind=cast(
                     "str",
                     row.get("native_decl_kind", row.get("decl_kind", "function")),
                 ),
-                cast("str", row.get("signature", "")),
-                cast("str", row.get("function_type", "")),
-                _arguments(row.get("parameters")),
-                row.get("has_prototype") is True,
-                is_definition,
-                _optional_bool(row.get("is_public")),
-                _declaration_provenance(identity),
-                _point(row.get("location")),
-                _span(row.get("range")),
-                (
+                signature=cast("str", row.get("signature", "")),
+                function_type=cast("str", row.get("function_type", "")),
+                parameters=_arguments(row.get("parameters")),
+                has_prototype=row.get("has_prototype") is True,
+                is_definition=is_definition,
+                is_public=_optional_bool(row.get("is_public")),
+                provenance=_declaration_provenance(identity),
+                location=_point(row.get("location")),
+                span=_span(row.get("range")),
+                calls=(
                     tuple(calls_by_usr.pop(usr, ()))
                     if is_definition and isinstance(usr, str)
                     else ()
                 ),
+                returns_value=row.get("returns_value") is True,
+                is_variadic=row.get("is_variadic") is True,
+                owner_usr=_optional_string(row.get("owner_usr")),
+                owner_location=_point(row.get("owner_location")),
+                documentation=_optional_string(row.get("documentation")),
+                documentation_location=_point(row.get("documentation_location")),
+                documentation_span=_span(row.get("documentation_range")),
+                instantiated_from_usr=_optional_string(
+                    identity.get("instantiated_from")
+                ),
+                qualifiers=_callable_qualifiers(row.get("method_qualifiers")),
             )
         )
     declarations: list[FrontendDeclaration] = []
@@ -564,19 +681,41 @@ def _decode_entities(
         type_value = row.get("type")
         declarations.append(
             FrontendDeclaration(
-                _optional_string(identity.get("usr")),
-                cast("str", row.get("entity_kind", "declaration")),
-                cast("str", row.get("name", "")),
-                cast("str", row.get("qualified_name", "")),
-                cast("str", row.get("decl_kind", "declaration")),
-                None,
-                type_value if isinstance(type_value, str) and type_value else None,
-                (),
-                None,
-                None,
-                _declaration_provenance(identity),
-                _point(row.get("location")),
-                _span(row.get("range")),
+                usr=_optional_string(identity.get("usr")),
+                kind=cast("str", row.get("entity_kind", "declaration")),
+                name=cast("str", row.get("name", "")),
+                qualified_name=cast("str", row.get("qualified_name", "")),
+                decl_kind=cast("str", row.get("decl_kind", "declaration")),
+                signature=None,
+                type_text=type_value
+                if isinstance(type_value, str) and type_value
+                else None,
+                parameters=(),
+                has_prototype=None,
+                is_definition=_optional_bool(row.get("is_definition")),
+                provenance=_declaration_provenance(identity),
+                location=_point(row.get("location")),
+                span=_span(row.get("range")),
+                owner_usr=_optional_string(row.get("owner_usr")),
+                owner_name=_optional_string(row.get("owner_name")),
+                owner_location=_point(row.get("owner_location")),
+                owner_kind=_optional_string(row.get("owner_kind")),
+                access=(
+                    cast("Literal['public', 'protected', 'private']", row["access"])
+                    if row.get("access") in {"public", "protected", "private"}
+                    else None
+                ),
+                source_text=_optional_string(row.get("source_text")),
+                documentation=_optional_string(row.get("documentation")),
+                documentation_location=_point(row.get("documentation_location")),
+                documentation_span=_span(row.get("documentation_range")),
+                enum_ordinal=(
+                    cast("int", row.get("enum_ordinal"))
+                    if isinstance(row.get("enum_ordinal"), int)
+                    and not isinstance(row.get("enum_ordinal"), bool)
+                    else None
+                ),
+                is_file_scope=row.get("is_file_scope") is True,
             )
         )
     for remaining in calls_by_usr.values():
@@ -967,6 +1106,11 @@ class ClangFrontend:
                 compilation_context=compilation_context,
             )
         declarations, callables, unowned_calls = _decode_entities(response)
+        includes = _decode_includes(response.get("includes"))
+        preprocessing = _decode_preprocessing(response.get("preprocessing"))
+        documentation_comments = _decode_documentation_comments(
+            response.get("documentation_comments")
+        )
         diagnostics = _diagnostics(response.get("diagnostics"))
         dependency_closure = _dependency_closure(
             response,
@@ -997,25 +1141,28 @@ class ClangFrontend:
             }
         )
         return FrontendResult(
-            status,
-            coverage,
-            tuple(reasons),
-            diagnostics,
-            declarations,
-            callables,
-            dependency_closure,
-            profile.identity,
-            toolchain,
-            cache_fingerprint,
-            stdout_path,
-            stdout_digest,
-            stderr_path,
-            stderr_digest,
-            unowned_calls,
-            tuple(adapted),
-            tuple(transformations),
-            profile.environment_mode,
-            compilation_context,
+            status=status,
+            coverage_state=coverage,
+            reasons=tuple(reasons),
+            diagnostics=diagnostics,
+            declarations=declarations,
+            callables=callables,
+            dependency_closure=dependency_closure,
+            profile_identity=profile.identity,
+            toolchain_identity=toolchain,
+            cache_fingerprint=cache_fingerprint,
+            stdout_path=stdout_path,
+            stdout_sha256=stdout_digest,
+            stderr_path=stderr_path,
+            stderr_sha256=stderr_digest,
+            unowned_calls=unowned_calls,
+            adapted_argv=tuple(adapted),
+            argument_transformations=tuple(transformations),
+            environment_mode=profile.environment_mode,
+            compilation_context=compilation_context,
+            includes=includes,
+            preprocessing=preprocessing,
+            documentation_comments=documentation_comments,
         )
 
     def prepare_profile(
@@ -1191,20 +1338,20 @@ class ClangFrontend:
             Held or failed status with empty entity tuples.
         """
         return FrontendResult(
-            "failed" if failed else "held",
-            "partial",
-            (reason,),
-            (),
-            (),
-            (),
-            None,
-            profile.identity,
-            toolchain,
-            fingerprint,
-            stdout_path,
-            stdout_sha,
-            stderr_path,
-            stderr_sha,
+            status="failed" if failed else "held",
+            coverage_state="partial",
+            reasons=(reason,),
+            diagnostics=(),
+            declarations=(),
+            callables=(),
+            dependency_closure=None,
+            profile_identity=profile.identity,
+            toolchain_identity=toolchain,
+            cache_fingerprint=fingerprint,
+            stdout_path=stdout_path,
+            stdout_sha256=stdout_sha,
+            stderr_path=stderr_path,
+            stderr_sha256=stderr_sha,
             compilation_context=compilation_context,
         )
 
@@ -1729,6 +1876,128 @@ def _adapt_arguments(
         adapted.extend(["-resource-dir", str(resource_dir)])
         transformations.append("add receipt-bound Clang resource directory")
     return adapted, unsupported, transformations
+
+
+def _decode_documentation_comments(
+    value: object,
+) -> tuple[FrontendDocumentationComment, ...]:
+    """Decode Doxygen comments and their original source coordinates.
+
+    Parameters
+    ----------
+    value : object
+        Native helper documentation-comment array.
+
+    Returns
+    -------
+    tuple[codira_clang_frontend.contracts.FrontendDocumentationComment, ...]
+        Source-ordered Doxygen comment records.
+    """
+    if not isinstance(value, list):
+        return ()
+    comments: list[FrontendDocumentationComment] = []
+    for item in value:
+        row = _mapping(item)
+        if row is None:
+            continue
+        comments.append(
+            FrontendDocumentationComment(
+                text=cast("str", row.get("text", "")),
+                location=_point(row.get("location")),
+                span=_span(row.get("range")),
+            )
+        )
+    return tuple(comments)
+
+
+def _decode_includes(value: object) -> tuple[FrontendInclude, ...]:
+    """Decode include events without normalizing compiler path evidence.
+
+    Parameters
+    ----------
+    value : object
+        Native helper include array.
+
+    Returns
+    -------
+    tuple[codira_clang_frontend.contracts.FrontendInclude, ...]
+        Source-ordered include records.
+    """
+    if not isinstance(value, list):
+        return ()
+    includes: list[FrontendInclude] = []
+    for item in value:
+        row = _mapping(item)
+        if row is None:
+            continue
+        includes.append(
+            FrontendInclude(
+                spelled_path=cast("str", row.get("spelled_path", "")),
+                resolved_path=_optional_string(row.get("resolved_path")),
+                angled=row.get("angled") is True,
+                search_path=cast("str", row.get("search_path", "")),
+                relative_path=cast("str", row.get("relative_path", "")),
+                module_imported=row.get("module_imported") is True,
+                location=_point(row.get("location")),
+            )
+        )
+    return tuple(includes)
+
+
+def _decode_preprocessing(value: object) -> tuple[FrontendPreprocessorEvent, ...]:
+    """Decode captured macro and conditional events from Clang callbacks.
+
+    Parameters
+    ----------
+    value : object
+        Native helper preprocessing array.
+
+    Returns
+    -------
+    tuple[codira_clang_frontend.contracts.FrontendPreprocessorEvent, ...]
+        Ordered typed preprocessor events.
+    """
+    if not isinstance(value, list):
+        return ()
+    events: list[FrontendPreprocessorEvent] = []
+    for item in value:
+        row = _mapping(item)
+        if row is None:
+            continue
+        replacement = row.get("replacement")
+        tokens = (
+            tuple(token for token in replacement if isinstance(token, str))
+            if isinstance(replacement, list)
+            else ()
+        )
+        kind = cast("PreprocessorEventKind", row.get("kind", "endif"))
+        result = row.get("result")
+        events.append(
+            FrontendPreprocessorEvent(
+                kind=kind,
+                name=_optional_string(row.get("name")),
+                replacement=tokens,
+                replacement_truncated=row.get("replacement_truncated") is True,
+                function_like=_optional_bool(row.get("function_like")),
+                parameters=tuple(
+                    name
+                    for name in cast("list[object]", row.get("parameters", []))
+                    if isinstance(name, str)
+                ),
+                source_text=_optional_string(row.get("source_text")),
+                condition=_optional_string(row.get("condition")),
+                result=(
+                    cast("Literal['true', 'false', 'not_evaluated', 'unknown']", result)
+                    if isinstance(result, str)
+                    else None
+                ),
+                macro_defined=_optional_bool(row.get("macro_defined")),
+                invocation=_optional_string(row.get("invocation")),
+                location=_point(row.get("location")),
+                span=_span(row.get("range")),
+            )
+        )
+    return tuple(events)
 
 
 def _diagnostics(value: object) -> tuple[FrontendDiagnostic, ...]:

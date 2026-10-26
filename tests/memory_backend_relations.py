@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 from codira.prefix import normalize_prefix, path_has_prefix
 
@@ -10,7 +10,12 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-    from memory_backend_models import CallEdgeRow, _MemoryRelation, _MemoryState
+    from memory_backend_models import (
+        CallableRefRow,
+        CallEdgeRow,
+        _MemoryRelation,
+        _MemoryState,
+    )
 
 
 class _MemoryRelationStateOwner(Protocol):
@@ -202,7 +207,9 @@ class MemoryRelationBackendMixin:
         self,
         state: _MemoryState,
         records: Sequence[_MemoryRelation],
-    ) -> list[CallEdgeRow]:
+        *,
+        include_endpoint_ids: bool,
+    ) -> list[CallEdgeRow] | list[CallableRefRow]:
         """
         Resolve raw relation records into public edge rows.
 
@@ -218,32 +225,50 @@ class MemoryRelationBackendMixin:
         list[codira.contracts.CallEdgeRow]
             Derived graph edge rows.
         """
-        rows = {
-            (
-                record.owner_module,
-                record.owner_name,
-                target_module,
-                target_name,
-                None if resolved else record.external_target_kind,
-                None if resolved else record.external_target_name,
-                resolved,
+        rows: set[CallEdgeRow] | set[CallableRefRow]
+        if include_endpoint_ids:
+            rows = cast(
+                "set[CallEdgeRow]",
+                {
+                    (
+                        record.owner_module,
+                        record.owner_name,
+                        None,
+                        target_module,
+                        target_name,
+                        None,
+                        None if resolved else record.external_target_kind,
+                        None if resolved else record.external_target_name,
+                        resolved,
+                    )
+                    for record in records
+                    for target_module, target_name, resolved in (
+                        self._resolve_relation(state, record),
+                    )
+                },
             )
-            for record in records
-            for target_module, target_name, resolved in (
-                self._resolve_relation(state, record),
+        else:
+            rows = cast(
+                "set[CallableRefRow]",
+                {
+                    (
+                        record.owner_module,
+                        record.owner_name,
+                        target_module,
+                        target_name,
+                        None if resolved else record.external_target_kind,
+                        None if resolved else record.external_target_name,
+                        resolved,
+                    )
+                    for record in records
+                    for target_module, target_name, resolved in (
+                        self._resolve_relation(state, record),
+                    )
+                },
             )
-        }
-        return sorted(
-            rows,
-            key=lambda row: (
-                row[0],
-                row[1],
-                row[2] or "",
-                row[3] or "",
-                row[4] or "",
-                row[5] or "",
-                row[6],
-            ),
+        return cast(
+            "list[CallEdgeRow] | list[CallableRefRow]",
+            sorted(rows, key=lambda row: tuple(str(value or "") for value in row)),
         )
 
     def _find_relations(
@@ -256,7 +281,8 @@ class MemoryRelationBackendMixin:
         incoming: bool,
         prefix: str | None,
         conn: object | None,
-    ) -> list[CallEdgeRow]:
+        stable_id: str | None = None,
+    ) -> list[CallEdgeRow] | list[CallableRefRow]:
         """
         Find derived relation rows for calls or callable refs.
 
@@ -276,6 +302,8 @@ class MemoryRelationBackendMixin:
             Optional repository-relative path prefix.
         conn : object | None
             Optional backend connection.
+        stable_id : str | None, optional
+            Optional exact caller or callee identity.
 
         Returns
         -------
@@ -293,16 +321,30 @@ class MemoryRelationBackendMixin:
         if not isinstance(records, list):
             msg = f"Unknown relation collection: {records_attr}"
             raise TypeError(msg)
+        include_endpoint_ids = records_attr == "call_records"
+        if stable_id is not None and include_endpoint_ids:
+            return []
         file_path_by_owner = {
             (record.owner_module, record.owner_name): state.files[record.file_id].path
             for record in records
         }
         rows = [
             row
-            for row in self._derived_relations(state, records)
+            for row in self._derived_relations(
+                state,
+                records,
+                include_endpoint_ids=include_endpoint_ids,
+            )
             if path_has_prefix(file_path_by_owner[(row[0], row[1])], normalized_prefix)
             and (
-                (incoming and row[3] == name and (module is None or row[2] == module))
+                (
+                    incoming
+                    and row[4 if include_endpoint_ids else 3] == name
+                    and (
+                        module is None
+                        or row[3 if include_endpoint_ids else 2] == module
+                    )
+                )
                 or (
                     not incoming
                     and row[1] == name
@@ -310,15 +352,7 @@ class MemoryRelationBackendMixin:
                 )
             )
         ]
-        return sorted(
-            rows,
-            key=lambda row: (
-                row[0],
-                row[1],
-                row[2] or "",
-                row[3] or "",
-                row[4] or "",
-                row[5] or "",
-                row[6],
-            ),
+        return cast(
+            "list[CallEdgeRow] | list[CallableRefRow]",
+            sorted(rows, key=lambda row: tuple(str(value or "") for value in row)),
         )

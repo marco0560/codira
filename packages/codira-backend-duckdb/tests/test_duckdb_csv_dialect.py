@@ -46,16 +46,37 @@ def test_bulk_csv_preserves_late_quoted_fields(reference: bool) -> None:
             1,
             "module",
             "owner",
+            None,
             "attribute",
             "plain",
             "map",
+            None,
+            None,
+            None,
+            None,
             "",
             "",
             23,
             17,
         )
         special: list[CallRow] = [
-            (2, "module", "owner", "attribute", base, "map", "", "", 408, 27)
+            (
+                2,
+                "module",
+                "owner",
+                None,
+                "attribute",
+                base,
+                "map",
+                None,
+                None,
+                None,
+                None,
+                "",
+                "",
+                408,
+                27,
+            )
             for base in (
                 "opcodes.split(',')",
                 'quoted "value", café',
@@ -66,7 +87,22 @@ def test_bulk_csv_preserves_late_quoted_fields(reference: bool) -> None:
         ]
         calls = [plain] * 25_000 + special
         if reference:
-            refs: list[RefRow] = [(*row[:4], "callback", *row[4:]) for row in calls]
+            refs: list[RefRow] = [
+                (
+                    row[0],
+                    row[1],
+                    row[2],
+                    row[4],
+                    "callback",
+                    row[5],
+                    row[6],
+                    row[11],
+                    row[12],
+                    row[13],
+                    row[14],
+                )
+                for row in calls
+            ]
             _flush_callable_ref_record_rows(conn, refs)
             actual = raw.execute(
                 "SELECT * FROM callable_ref_records ORDER BY rowid"
@@ -166,15 +202,52 @@ def test_bulk_csv_distinguishes_null_empty_and_literal_null_tokens(
             assert actual == ref_rows
         else:
             call_rows: list[CallRow] = [
-                (1, "module", "owner", "name", "", "target", None, None, 1, 0),
-                (1, "module", "owner", "name", "", "target", "", "", 2, 0),
                 (
                     1,
                     "module",
                     "owner",
+                    None,
                     "name",
                     "",
                     "target",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    1,
+                    0,
+                ),
+                (
+                    1,
+                    "module",
+                    "owner",
+                    None,
+                    "name",
+                    "",
+                    "target",
+                    None,
+                    None,
+                    None,
+                    None,
+                    "",
+                    "",
+                    2,
+                    0,
+                ),
+                (
+                    1,
+                    "module",
+                    "owner",
+                    None,
+                    "name",
+                    "",
+                    "target",
+                    None,
+                    None,
+                    None,
+                    None,
                     literal_tokens[0],
                     literal_tokens[1],
                     3,
@@ -184,9 +257,14 @@ def test_bulk_csv_distinguishes_null_empty_and_literal_null_tokens(
                     1,
                     "module",
                     "owner",
+                    None,
                     "name",
                     "",
                     "target",
+                    None,
+                    None,
+                    None,
+                    None,
                     literal_tokens[2],
                     None,
                     4,

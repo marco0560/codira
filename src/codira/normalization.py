@@ -17,10 +17,11 @@ This module belongs to the **normalization layer** that bridges AST parsing and 
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
     from pathlib import Path
 
 from codira.models import (
@@ -28,8 +29,11 @@ from codira.models import (
     CallableReference,
     CallableReferenceKind,
     CallKind,
+    CallOrigin,
+    CallResolutionMode,
     CallSite,
     ClassArtifact,
+    DeclarationAccess,
     DeclarationArtifact,
     DeclarationKind,
     FunctionArtifact,
@@ -37,6 +41,7 @@ from codira.models import (
     ImportKind,
     ModuleArtifact,
     OverloadArtifact,
+    SemanticIdentity,
 )
 
 
@@ -236,6 +241,90 @@ def _call_kind(value: object) -> CallKind:
     return cast("CallKind", kind)
 
 
+def _call_resolution_mode(value: object) -> CallResolutionMode | None:
+    """Validate an optional call-resolution policy.
+
+    Parameters
+    ----------
+    value : object
+        Raw analyzer-provided policy value.
+
+    Returns
+    -------
+    codira.models.CallResolutionMode | None
+        Supported resolution policy, or ``None`` when absent.
+
+    Raises
+    ------
+    ValueError
+        If the parsed value is not a supported resolution policy.
+    """
+    if value is None:
+        return None
+    mode = str(value)
+    if mode not in {"legacy", "exact"}:
+        msg = f"Unsupported call resolution mode: {mode}"
+        raise ValueError(msg)
+    return cast("CallResolutionMode", mode)
+
+
+def _call_origin(value: object) -> CallOrigin | None:
+    """Validate an optional analyzer-provided source-origin classification.
+
+    Parameters
+    ----------
+    value : object
+        Raw source-origin value.
+
+    Returns
+    -------
+    codira.models.CallOrigin | None
+        Supported source-origin classification, or ``None`` when absent.
+
+    Raises
+    ------
+    ValueError
+        If the parsed origin is not supported.
+    """
+    if value is None:
+        return None
+    origin = str(value)
+    supported: set[str] = {
+        "source_written",
+        "macro_replacement",
+        "macro_argument",
+        "implicit",
+        "template_instantiation",
+        "unknown",
+    }
+    if origin not in supported:
+        msg = f"Unsupported call origin: {origin}"
+        raise ValueError(msg)
+    return cast("CallOrigin", origin)
+
+
+def _semantic_identity_from_mapping(value: object) -> SemanticIdentity | None:
+    """Convert an optional semantic identity mapping into its DTO.
+
+    Parameters
+    ----------
+    value : object
+        Raw identity mapping with namespace and value fields.
+
+    Returns
+    -------
+    codira.models.SemanticIdentity | None
+        Parsed identity, or ``None`` when either component is absent.
+    """
+    if not isinstance(value, Mapping):
+        return None
+    namespace = _optional_string(value.get("namespace"))
+    identity_value = _optional_string(value.get("value"))
+    if namespace is None or identity_value is None:
+        return None
+    return SemanticIdentity(namespace=namespace, value=identity_value)
+
+
 def _optional_string(value: object) -> str | None:
     """
     Normalize an optional analyzer-provided string field.
@@ -337,6 +426,9 @@ def _call_site_from_mapping(raw: Mapping[str, object]) -> CallSite:
         base=str(raw.get("base", "")),
         external_target_kind=_optional_string(raw.get("external_target_kind")),
         external_target_name=_optional_string(raw.get("external_target_name")),
+        target_identity=_semantic_identity_from_mapping(raw.get("target_identity")),
+        resolution_mode=_call_resolution_mode(raw.get("resolution_mode")),
+        origin=_call_origin(raw.get("origin")),
     )
 
 
@@ -420,6 +512,7 @@ def _function_from_mapping(
             str(value) for value in cast("Sequence[object]", raw.get("decorators", ()))
         ),
         calls=tuple(_call_site_from_mapping(row) for row in call_rows),
+        semantic_identity=_semantic_identity_from_mapping(raw.get("semantic_identity")),
         callable_refs=tuple(_callable_reference_from_mapping(row) for row in ref_rows),
         overloads=tuple(
             OverloadArtifact(
@@ -470,7 +563,38 @@ def _declaration_from_mapping(
         lineno=_int_value(raw["lineno"]),
         signature=str(raw["signature"]),
         docstring=cast("str | None", raw.get("docstring")),
+        owner_name=_optional_string(raw.get("owner_name")),
+        owner_stable_id=_optional_string(raw.get("owner_stable_id")),
+        access=_declaration_access(raw.get("access")),
+        type_text=_optional_string(raw.get("type_text")),
     )
+
+
+def _declaration_access(value: object) -> DeclarationAccess | None:
+    """Validate an optional declaration access classification.
+
+    Parameters
+    ----------
+    value : object
+        Raw language-neutral access value.
+
+    Returns
+    -------
+    codira.models.DeclarationAccess | None
+        Supported access classification, or ``None`` when absent.
+
+    Raises
+    ------
+    ValueError
+        If a supplied access value is unsupported.
+    """
+    if value is None:
+        return None
+    access = str(value)
+    if access not in {"public", "protected", "private"}:
+        msg = f"Unsupported declaration access: {access}"
+        raise ValueError(msg)
+    return cast("DeclarationAccess", access)
 
 
 def analysis_result_from_parsed(

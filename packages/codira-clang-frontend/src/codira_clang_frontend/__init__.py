@@ -21,8 +21,12 @@ from .contracts import (
     DependencyInput,
     FrontendCall,
     FrontendCallable,
+    FrontendCallableQualifiers,
     FrontendDeclaration,
     FrontendDiagnostic,
+    FrontendDocumentationComment,
+    FrontendInclude,
+    FrontendPreprocessorEvent,
     FrontendResult,
     IncludeDirectoryInput,
     SourcePoint,
@@ -47,7 +51,7 @@ from .profile import (
 try:
     __version__ = version("codira-clang-frontend")
 except PackageNotFoundError:
-    __version__ = "0.1.0"
+    __version__ = "0.2.0"
 
 
 def create_frontend_profile(
@@ -155,8 +159,12 @@ __all__ = [
     "DependencyInput",
     "FrontendCall",
     "FrontendCallable",
+    "FrontendCallableQualifiers",
     "FrontendDeclaration",
     "FrontendDiagnostic",
+    "FrontendDocumentationComment",
+    "FrontendInclude",
+    "FrontendPreprocessorEvent",
     "FrontendResult",
     "IncludeDirectoryInput",
     "SourcePoint",

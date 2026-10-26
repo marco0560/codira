@@ -98,7 +98,7 @@ def test_duckdb_backend_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.10"
+    assert project["project"]["version"] == "2.0.11"
     assert project["project"]["dependencies"] == [
         "codira>=2.0.0,<3.0.0",
         "duckdb>=1.4,<2.0",
@@ -1219,8 +1219,40 @@ def test_duckdb_call_edge_query_preserves_absent_optional_targets(
         _flush_call_record_rows(
             cast("_DuckDBPersistenceConnection", raw),
             [
-                (1, "pkg.sample", "caller", "name", "", "missing_a", None, None, 1, 0),
-                (1, "pkg.sample", "caller", "name", "", "missing_b", "", "", 2, 0),
+                (
+                    1,
+                    "pkg.sample",
+                    "caller",
+                    None,
+                    "name",
+                    "",
+                    "missing_a",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    1,
+                    0,
+                ),
+                (
+                    1,
+                    "pkg.sample",
+                    "caller",
+                    None,
+                    "name",
+                    "",
+                    "missing_b",
+                    None,
+                    None,
+                    None,
+                    None,
+                    "",
+                    "",
+                    2,
+                    0,
+                ),
             ],
         )
         raw.commit()
@@ -1238,7 +1270,7 @@ def test_duckdb_call_edge_query_preserves_absent_optional_targets(
     )
 
     assert len(rows) == 2
-    assert {row[4:6] for row in rows} == {(None, None), ("", "")}
+    assert {row[6:8] for row in rows} == {(None, None), ("", "")}
 
 
 def test_duckdb_backend_rebuild_replaces_existing_resolved_edges(

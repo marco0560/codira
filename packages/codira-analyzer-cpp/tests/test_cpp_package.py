@@ -33,8 +33,8 @@ def test_cpp_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.44"
-    assert version("codira-analyzer-cpp") == "2.0.44"
+    assert project["project"]["version"] == "2.0.45"
+    assert version("codira-analyzer-cpp") == "2.0.45"
     assert (
         Path(inspect.getfile(CppAnalyzer)).resolve()
         == (
@@ -64,7 +64,7 @@ def test_cpp_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CppAnalyzer)
     assert analyzer.name == "cpp"
-    assert analyzer.version == "43"
+    assert analyzer.version == "44"
 
 
 def test_cpp_clang_frontend_is_opt_in_and_missing_profile_is_visible(
@@ -179,6 +179,9 @@ def test_cpp_clang_projection_preserves_source_using_alias(tmp_path: Path) -> No
         declarations=(alias,),
         callables=functions,
         diagnostics=(),
+        includes=(),
+        preprocessing=(),
+        documentation_comments=(),
         profile_identity="test-profile",
         cache_fingerprint="test-fingerprint",
         toolchain_identity=None,
@@ -207,7 +210,7 @@ def test_cpp_clang_projection_preserves_source_using_alias(tmp_path: Path) -> No
     ]
     assert len({item.stable_id for item in analysis.functions}) == 2
     assert analysis.status is not None
-    assert "macro" in analysis.status.omitted_categories
+    assert analysis.status.omitted_categories == ()
     expected_context = {
         "target_triple": "x86_64-unknown-linux-gnu",
         "sysroot": "/usr/x86_64-unknown-linux-gnu",
@@ -217,6 +220,116 @@ def test_cpp_clang_projection_preserves_source_using_alias(tmp_path: Path) -> No
     attempt = analysis.status.target_contract["attempt_evidence"]
     assert isinstance(attempt, dict)
     assert attempt["compilation_context"] == expected_context
+
+
+def test_cpp_clang_projection_selects_call_coordinates_by_macro_origin(
+    tmp_path: Path,
+) -> None:
+    """Use spelling coordinates for macro arguments and expansion for replacements.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing one C++ translation unit.
+
+    Returns
+    -------
+    None
+        The test checks projected call columns for both macro origins.
+    """
+    source = tmp_path / "calls.cpp"
+    source.write_text("int invoke() { return argument_call() + replacement_call(); }\n")
+
+    def macro_point(spelling_column: int, expansion_column: int) -> SimpleNamespace:
+        """Build one macro-derived location with distinct source coordinates.
+
+        Parameters
+        ----------
+        spelling_column : int
+            One-based physical spelling column.
+        expansion_column : int
+            One-based macro expansion column.
+
+        Returns
+        -------
+        types.SimpleNamespace
+            Frontend-compatible point retaining spelling and expansion.
+        """
+        spelling = SimpleNamespace(
+            path=str(source), line=1, column=spelling_column, offset=spelling_column
+        )
+        expansion = SimpleNamespace(
+            path=str(source), line=1, column=expansion_column, offset=expansion_column
+        )
+        return SimpleNamespace(spelling=spelling, expansion=expansion, is_macro=True)
+
+    calls = (
+        SimpleNamespace(
+            target="argument_call",
+            qualified_target="argument_call",
+            target_usr="c:@F@argument_call",
+            origin="macro_argument",
+            location=macro_point(30, 11),
+        ),
+        SimpleNamespace(
+            target="replacement_call",
+            qualified_target="replacement_call",
+            target_usr="c:@F@replacement_call",
+            origin="macro_replacement",
+            location=macro_point(50, 61),
+        ),
+    )
+    callable_item = SimpleNamespace(
+        usr="c:@F@invoke",
+        kind="function",
+        name="invoke",
+        qualified_name="invoke",
+        lexical_owner=None,
+        decl_kind="Function",
+        signature="int invoke()",
+        function_type="int ()",
+        parameters=(),
+        has_prototype=True,
+        is_definition=True,
+        is_public=True,
+        provenance="source_written",
+        location=macro_point(5, 5),
+        span=None,
+        calls=calls,
+        returns_value=True,
+        is_variadic=False,
+        qualifiers=SimpleNamespace(is_method=False),
+    )
+    result = SimpleNamespace(
+        status="parsed",
+        coverage_state="complete",
+        reasons=(),
+        declarations=(),
+        callables=(callable_item,),
+        diagnostics=(),
+        includes=(),
+        preprocessing=(),
+        documentation_comments=(),
+        profile_identity="test-profile",
+        cache_fingerprint="test-fingerprint",
+        toolchain_identity=None,
+        compilation_context=None,
+        dependency_closure=None,
+        stdout_path=None,
+        stdout_sha256=None,
+        stderr_path=None,
+        stderr_sha256=None,
+    )
+
+    analysis = cpp_analyzer_module._analysis_from_clang_result(
+        source, tmp_path, cast("FrontendResult", result)
+    )
+
+    assert analysis is not None
+    assert [(call.target, call.col_offset) for call in analysis.functions[0].calls] == [
+        ("argument_call", 29),
+        ("replacement_call", 60),
+    ]
 
 
 def test_cpp_syntax_helpers_remain_available_to_package_traversal() -> None:

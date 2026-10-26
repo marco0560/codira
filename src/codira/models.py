@@ -27,6 +27,15 @@ if TYPE_CHECKING:
     from codira.generated import GeneratedCallableProvenance
 
 CallKind = Literal["name", "attribute", "unresolved"]
+CallResolutionMode = Literal["legacy", "exact"]
+CallOrigin = Literal[
+    "source_written",
+    "macro_replacement",
+    "macro_argument",
+    "implicit",
+    "template_instantiation",
+    "unknown",
+]
 CallableReferenceKind = Literal[
     "mapping_value",
     "sequence_item",
@@ -61,6 +70,7 @@ DeclarationKind = Literal[
     "json_release_plugin",
     "json_release_branch",
 ]
+DeclarationAccess = Literal["public", "protected", "private"]
 DocumentationKind = Literal["module", "file", "section", "declaration"]
 DocumentationSourceFormat = Literal[
     "markdown_section",
@@ -230,6 +240,14 @@ class DeclarationArtifact:
     enum_members : tuple[codira.models.EnumMemberArtifact, ...], optional
         Ordered enum members attached to the declaration when ``kind`` is
         ``"enum"``.
+    owner_name : str | None, optional
+        Qualified lexical owner for member declarations when known.
+    owner_stable_id : str | None, optional
+        Analyzer-owned stable identity of the member declaration's owner.
+    access : DeclarationAccess | None, optional
+        Language-neutral access classification when the language defines one.
+    type_text : str | None, optional
+        Analyzer-reported declaration type, without a source-spelling guarantee.
     """
 
     name: str
@@ -239,6 +257,31 @@ class DeclarationArtifact:
     signature: str
     docstring: str | None = None
     enum_members: tuple[EnumMemberArtifact, ...] = ()
+    owner_name: str | None = None
+    owner_stable_id: str | None = None
+    access: DeclarationAccess | None = None
+    type_text: str | None = None
+
+
+@dataclass(frozen=True)
+class SemanticIdentity:
+    """Opaque analyzer-provided identity used for exact callable matching.
+
+    Parameters
+    ----------
+    namespace : str
+        Identity scheme identifier chosen by the producing analyzer.
+    value : str
+        Opaque identity value whose interpretation remains analyzer-owned.
+
+    Returns
+    -------
+    None
+        Immutable semantic identity pair.
+    """
+
+    namespace: str
+    value: str
 
 
 @dataclass(frozen=True)
@@ -262,6 +305,14 @@ class CallSite:
         Analyzer-provided classifier for unresolved external targets.
     external_target_name : str | None, optional
         Analyzer-provided display name for unresolved external targets.
+    target_identity : codira.models.SemanticIdentity | None, optional
+        Exact analyzer-provided target identity when known.
+    resolution_mode : {"legacy", "exact"} | None, optional
+        Resolution policy. ``"exact"`` prevents name-based fallback even when
+        ``target_identity`` is absent; ``None`` preserves legacy behavior.
+    origin : CallOrigin | None, optional
+        Source origin classification when the analyzer can distinguish written,
+        macro-generated, implicit, or instantiated calls.
     """
 
     kind: CallKind
@@ -271,6 +322,9 @@ class CallSite:
     base: str = ""
     external_target_kind: str | None = None
     external_target_name: str | None = None
+    target_identity: SemanticIdentity | None = None
+    resolution_mode: CallResolutionMode | None = None
+    origin: CallOrigin | None = None
 
 
 @dataclass(frozen=True)
@@ -357,6 +411,8 @@ class FunctionArtifact:
         Proven declaration identity of that owner when uniquely known.
     generated : codira.generated.GeneratedCallableProvenance | None, optional
         Generated declaration evidence, distinct from physical source spelling.
+    semantic_identity : codira.models.SemanticIdentity | None, optional
+        Exact analyzer-provided callable identity when known.
 
     Returns
     -------
@@ -385,6 +441,7 @@ class FunctionArtifact:
     owner_name: str | None = None
     owner_stable_id: str | None = None
     generated: GeneratedCallableProvenance | None = None
+    semantic_identity: SemanticIdentity | None = None
 
     def logical_name(self, *, class_name: str | None = None) -> str:
         """

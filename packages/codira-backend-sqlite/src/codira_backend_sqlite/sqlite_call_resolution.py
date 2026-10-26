@@ -116,7 +116,7 @@ def _resolve_module_attribute_call(
 
 def _resolve_call_record(
     request: CallResolutionRequest,
-) -> tuple[str | None, str | None, int]:
+) -> tuple[str | None, str | None, str | None, int]:
     """
     Resolve one parsed call-site record into a stored call edge.
 
@@ -127,11 +127,24 @@ def _resolve_call_record(
 
     Returns
     -------
-    tuple[str | None, str | None, int]
-        Callee module, callee name, and resolved flag for the call edge.
+    tuple[str | None, str | None, str | None, int]
+        Callee module, name, stable identity, and resolved flag.
     """
     kind = str(request.call.get("kind", "unresolved"))
     target = str(request.call.get("target", ""))
+    if str(request.call.get("resolution_mode", "")) == "exact":
+        namespace = str(request.call.get("target_identity_namespace", ""))
+        identity_value = str(request.call.get("target_identity_value", ""))
+        if namespace and identity_value:
+            identity_candidates = (
+                request.semantic_identity_lookup.get((namespace, identity_value), set())
+                if request.semantic_identity_lookup is not None
+                else set()
+            )
+            if len(identity_candidates) == 1:
+                module_name, callable_name, stable_id = next(iter(identity_candidates))
+                return (module_name, callable_name, stable_id, 1)
+        return (None, None, None, 0)
     candidates: set[tuple[str, str]] = set()
     if kind == "name" and target:
         imported = request.import_aliases.get(target)
@@ -168,8 +181,8 @@ def _resolve_call_record(
             candidates.add(resolved_module_call)
     if len(candidates) == 1:
         callee_module, callee_name = next(iter(candidates))
-        return (callee_module, callee_name, 1)
-    return (None, None, 0)
+        return (callee_module, callee_name, None, 1)
+    return (None, None, None, 0)
 
 
 def _unresolved_identity(record: Mapping[str, str | int], *, resolved: int) -> str:
@@ -190,6 +203,18 @@ def _unresolved_identity(record: Mapping[str, str | int], *, resolved: int) -> s
     """
     if resolved:
         return ""
+    if str(record.get("resolution_mode", "")) == "exact":
+        return json.dumps(
+            (
+                "exact",
+                str(record.get("kind", "")),
+                str(record.get("base", "")),
+                str(record.get("target", "")),
+                str(record.get("target_identity_namespace", "")),
+                str(record.get("target_identity_value", "")),
+            ),
+            separators=(",", ":"),
+        )
     return json.dumps(
         (
             str(record.get("kind", "")),

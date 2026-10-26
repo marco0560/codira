@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from codira.contracts import BackendRelationQueryRequest
 from codira.contracts_architecture import (
+    ArchitectureRelationRow,
     BackendArchitectureSnapshot,
     BulkArchitectureBackend,
 )
@@ -854,7 +855,8 @@ def _legacy_architecture_snapshot(
         for module in sorted({item.module for item in inventory})
         for name, kind, line in backend.module_imports(root, module, conn=conn)
     )
-    calls, references = [], []
+    calls: list[ArchitectureRelationRow] = []
+    references: list[ArchitectureRelationRow] = []
     for item in inventory:
         if item.symbol_type == "module":
             continue
@@ -862,7 +864,10 @@ def _legacy_architecture_snapshot(
             root=root, name=item.name, module=item.module, incoming=False, conn=conn
         )
         calls.extend(backend.find_call_edges(request))
-        references.extend(backend.find_callable_refs(request))
+        references.extend(
+            (row[0], row[1], None, row[2], row[3], None, *row[4:])
+            for row in backend.find_callable_refs(request)
+        )
     return BackendArchitectureSnapshot(
         symbols, imports, tuple(calls), tuple(references)
     )
@@ -928,8 +933,10 @@ def _architecture_model_from_snapshot(
         for (
             source,
             name,
+            _source_stable_id,
             destination,
             _target,
+            _target_stable_id,
             _target_kind,
             _external,
             _resolved,

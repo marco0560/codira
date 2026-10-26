@@ -1,0 +1,4 @@
+#ifndef CODIRA_CLANG_PARITY_API_H
+#define CODIRA_CLANG_PARITY_API_H
+
+#endif

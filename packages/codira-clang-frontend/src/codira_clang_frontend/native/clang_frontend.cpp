@@ -1,5 +1,8 @@
 #include <clang/AST/ASTConsumer.h>
+#include <clang/AST/ASTContext.h>
 #include <clang/AST/DeclCXX.h>
+#include <clang/AST/DeclTemplate.h>
+#include <clang/AST/RawCommentList.h>
 #include <clang/AST/RecursiveASTVisitor.h>
 #include <clang/Basic/Diagnostic.h>
 #include <clang/Basic/SourceManager.h>
@@ -38,6 +41,7 @@ struct FrontendData {
   Array NonFunctionDeclarations;
   Array Calls;
   Array Preprocessing;
+  Array DocumentationComments;
   Array Includes;
   Array SearchDirectories;
   Array Diagnostics;
@@ -96,11 +100,59 @@ std::string usr(const clang::Decl *Declaration) {
   return Buffer.str().str();
 }
 
+std::string semanticUSR(const clang::NamedDecl *Declaration) {
+  std::string Identity = usr(Declaration);
+  if (Identity.empty() || Declaration->hasExternalFormalLinkage())
+    return Identity;
+  clang::SourceManager &SM = Declaration->getASTContext().getSourceManager();
+  const clang::SourceLocation Location =
+      SM.getFileLoc(Declaration->getLocation());
+  std::string Path = SM.getFilename(Location).str();
+  const clang::SourceLocation MainLocation =
+      SM.getLocForStartOfFile(SM.getMainFileID());
+  std::string TranslationUnit = SM.getFilename(MainLocation).str();
+  if (Path.empty() || TranslationUnit.empty())
+    return Identity;
+  std::error_code Error;
+  std::filesystem::path Canonical = std::filesystem::weakly_canonical(Path, Error);
+  if (!Error)
+    Path = Canonical.string();
+  Error.clear();
+  std::filesystem::path CanonicalTranslationUnit =
+      std::filesystem::weakly_canonical(TranslationUnit, Error);
+  if (!Error)
+    TranslationUnit = CanonicalTranslationUnit.string();
+  return "internal:" + TranslationUnit + ":" + Path + ":" + Identity;
+}
+
+class ValueReturnVisitor final
+    : public clang::RecursiveASTVisitor<ValueReturnVisitor> {
+public:
+  bool VisitReturnStmt(clang::ReturnStmt *Return) {
+    HasValueReturn = HasValueReturn || Return->getRetValue() != nullptr;
+    return true;
+  }
+
+  bool HasValueReturn = false;
+};
+
+bool hasValueReturn(const clang::FunctionDecl *Function) {
+  if (!Function->doesThisDeclarationHaveABody())
+    return false;
+  ValueReturnVisitor Visitor;
+  Visitor.TraverseStmt(Function->getBody());
+  return Visitor.HasValueReturn;
+}
+
 std::string functionSignature(const clang::FunctionDecl *Function) {
   clang::PrintingPolicy Policy(Function->getASTContext().getLangOpts());
   Policy.SuppressScope = false;
-  std::string Result = Function->getReturnType().getAsString(Policy) + " " +
-                       Function->getQualifiedNameAsString() + "(";
+  std::string Result;
+  if (!llvm::isa<clang::CXXConstructorDecl>(Function) &&
+      !llvm::isa<clang::CXXDestructorDecl>(Function) &&
+      !llvm::isa<clang::CXXConversionDecl>(Function))
+    Result = Function->getReturnType().getAsString(Policy) + " ";
+  Result += Function->getQualifiedNameAsString() + "(";
   for (unsigned Index = 0; Index < Function->getNumParams(); ++Index) {
     if (Index)
       Result += ", ";
@@ -115,6 +167,22 @@ std::string functionSignature(const clang::FunctionDecl *Function) {
     Result += "...";
   }
   Result += ")";
+  if (const auto *Method = llvm::dyn_cast<clang::CXXMethodDecl>(Function)) {
+    if (Method->isConst())
+      Result += " const";
+    if (Method->isVolatile())
+      Result += " volatile";
+    if (Method->getRefQualifier() == clang::RQ_LValue)
+      Result += " &";
+    else if (Method->getRefQualifier() == clang::RQ_RValue)
+      Result += " &&";
+    if (Method->isPureVirtual())
+      Result += " = 0";
+  }
+  if (Function->isDeletedAsWritten())
+    Result += " = delete";
+  else if (Function->isDefaulted())
+    Result += " = default";
   return Result;
 }
 
@@ -137,6 +205,52 @@ std::string declarationKind(const clang::FunctionDecl *Function) {
     return "written";
   }
   return "written";
+}
+
+std::string templateOrigin(clang::TemplateSpecializationKind Kind) {
+  switch (Kind) {
+  case clang::TSK_ImplicitInstantiation:
+    return "template_instantiation";
+  case clang::TSK_ExplicitInstantiationDeclaration:
+  case clang::TSK_ExplicitInstantiationDefinition:
+    return "explicit_template_instantiation";
+  case clang::TSK_Undeclared:
+  case clang::TSK_ExplicitSpecialization:
+    return {};
+  }
+  return {};
+}
+
+std::string namedDeclarationOrigin(const clang::NamedDecl *Declaration,
+                                  const clang::SourceManager &SM) {
+  if (Declaration->isImplicit())
+    return "implicit";
+  if (const auto *Function = llvm::dyn_cast<clang::FunctionDecl>(Declaration))
+    if (std::string Origin =
+            templateOrigin(Function->getTemplateSpecializationKind());
+        !Origin.empty())
+      return Origin;
+  if (const auto *Variable =
+          llvm::dyn_cast<clang::VarTemplateSpecializationDecl>(Declaration))
+    if (std::string Origin = templateOrigin(Variable->getSpecializationKind());
+        !Origin.empty())
+      return Origin;
+  if (const auto *Specialization =
+          llvm::dyn_cast<clang::ClassTemplateSpecializationDecl>(Declaration))
+    if (std::string Origin =
+            templateOrigin(Specialization->getSpecializationKind());
+        !Origin.empty())
+      return Origin;
+  if (const auto *Context = llvm::dyn_cast<clang::ClassTemplateSpecializationDecl>(
+          Declaration->getDeclContext()))
+    if (std::string Origin = templateOrigin(Context->getSpecializationKind());
+        !Origin.empty())
+      return Origin;
+  const clang::SourceLocation Location = Declaration->getLocation();
+  if (Location.isMacroID())
+    return SM.isMacroArgExpansion(Location) ? "macro_argument"
+                                            : "macro_replacement";
+  return "source_written";
 }
 
 std::string declarationDeclKind(const clang::FunctionDecl *Function) {
@@ -168,11 +282,25 @@ std::string namedDeclarationKind(const clang::NamedDecl *Declaration) {
   if (llvm::isa<clang::NamespaceDecl>(Declaration))
     return "namespace";
   if (llvm::isa<clang::FieldDecl>(Declaration))
-    return "field";
+    return "variable";
   if (const auto *Variable = llvm::dyn_cast<clang::VarDecl>(Declaration))
-    return Variable->isFileVarDecl() && Variable->isConstexpr() ? "constant"
-                                                                : "variable";
+    return Variable->isConstexpr() || Variable->getType().isConstQualified()
+               ? "constant"
+               : "variable";
   return "declaration";
+}
+
+bool namedDeclarationIsDefinition(const clang::NamedDecl *Declaration) {
+  if (const auto *Tag = llvm::dyn_cast<clang::TagDecl>(Declaration))
+    return Tag->isThisDeclarationADefinition();
+  if (const auto *Variable = llvm::dyn_cast<clang::VarDecl>(Declaration))
+    return Variable->isThisDeclarationADefinition();
+  if (llvm::isa<clang::FieldDecl>(Declaration) ||
+      llvm::isa<clang::EnumConstantDecl>(Declaration) ||
+      llvm::isa<clang::TypedefNameDecl>(Declaration) ||
+      llvm::isa<clang::NamespaceDecl>(Declaration))
+    return true;
+  return false;
 }
 
 Object methodQualifiers(const clang::FunctionDecl *Function) {
@@ -216,15 +344,11 @@ Object methodQualifiers(const clang::FunctionDecl *Function) {
 Value declarationIdentity(const clang::FunctionDecl *Function) {
   std::string ParentUSR;
   if (const clang::FunctionTemplateDecl *Template = Function->getPrimaryTemplate())
-    ParentUSR = usr(Template->getTemplatedDecl());
-  const clang::SourceLocation Location = Function->getLocation();
+    ParentUSR = semanticUSR(Template->getTemplatedDecl());
   const clang::SourceManager &SM = Function->getASTContext().getSourceManager();
-  return Object{{"usr", usr(Function)},
+  return Object{{"usr", semanticUSR(Function)},
                 {"kind", declarationKind(Function)},
-                {"provenance",
-                 Location.isMacroID() && !SM.isMacroArgExpansion(Location)
-                     ? "macro_replacement"
-                     : "source_written"},
+                {"provenance", namedDeclarationOrigin(Function, SM)},
                 {"decl_kind", declarationDeclKind(Function)},
                 {"instantiated_from", ParentUSR.empty() ? Value(nullptr)
                                                           : Value(ParentUSR)}};
@@ -386,10 +510,20 @@ private:
       }
       Replacement.push_back(clang::Lexer::getSpelling(Token, SM, LangOpts));
     }
+    Array Parameters;
+    for (const clang::IdentifierInfo *Parameter : Record.Info->params())
+      Parameters.push_back(Parameter->getName().str());
+    const std::string SourceText = sourceText(
+        clang::SourceRange(Record.Info->getDefinitionLoc(),
+                           Record.Info->getDefinitionEndLoc()),
+        SM, LangOpts);
     return Object{{"kind", "macro_definition"},
                   {"name", Record.Name},
                   {"replacement", std::move(Replacement)},
                   {"replacement_truncated", Truncated},
+                  {"function_like", Record.Info->isFunctionLike()},
+                  {"parameters", std::move(Parameters)},
+                  {"source_text", SourceText},
                   {"location", location(Record.Location, SM)}};
   }
 
@@ -450,14 +584,17 @@ public:
     const std::string PreviousCallerUSR = CurrentCallerUSR;
     const std::string PreviousCallerName = CurrentCallerName;
     const std::string PreviousCallerQualifiedName = CurrentCallerQualifiedName;
-    CurrentCallerUSR = usr(Function);
+    const std::string PreviousCallerOrigin = CurrentCallerOrigin;
+    CurrentCallerUSR = semanticUSR(Function);
     CurrentCallerName = Function->getNameAsString();
     CurrentCallerQualifiedName = Function->getQualifiedNameAsString();
+    CurrentCallerOrigin = declarationKind(Function);
     const bool Traversed =
         clang::RecursiveASTVisitor<FrontendVisitor>::TraverseDecl(Declaration);
     CurrentCallerUSR = PreviousCallerUSR;
     CurrentCallerName = PreviousCallerName;
     CurrentCallerQualifiedName = PreviousCallerQualifiedName;
+    CurrentCallerOrigin = PreviousCallerOrigin;
     return Traversed;
   }
 
@@ -481,6 +618,8 @@ public:
     Array Parameters;
     for (const clang::ParmVarDecl *Parameter : Function->parameters())
       Parameters.push_back(parameter(Parameter));
+    const auto *Owner =
+        llvm::dyn_cast<clang::NamedDecl>(Function->getDeclContext());
     Object DeclarationRecord{
         {"identity", declarationIdentity(Function)},
         {"decl_kind", declarationDeclKind(Function)},
@@ -492,23 +631,40 @@ public:
         {"signature_kind", "derived_display_only"},
         {"function_type", functionType(Function)},
         {"lexical_owner",
-         llvm::dyn_cast<clang::NamedDecl>(Function->getDeclContext())
-             ? llvm::dyn_cast<clang::NamedDecl>(Function->getDeclContext())
-                   ->getQualifiedNameAsString()
-             : std::string()},
+         Owner ? Owner->getQualifiedNameAsString() : std::string()},
+        {"owner_usr", Owner ? semanticUSR(Owner) : std::string()},
+        {"owner_location", Owner ? location(Owner->getLocation(), SM) : Value(nullptr)},
         {"has_prototype", Function->hasPrototype()},
         {"is_variadic", Function->isVariadic()},
         {"method_qualifiers", methodQualifiers(Function)},
-        {"is_definition", Function->doesThisDeclarationHaveABody()},
+        {"is_definition", Function->isThisDeclarationADefinition()},
+        {"returns_value", hasValueReturn(Function)},
         {"parameters", std::move(Parameters)},
         {"location", location(Location, SM)},
         {"range", sourceRange(Function->getSourceRange(), SM)}};
     if (const auto *Method = llvm::dyn_cast<clang::CXXMethodDecl>(Function)) {
-      if (Method->getAccess() != clang::AS_none)
-        DeclarationRecord["is_public"] = Method->getAccess() == clang::AS_public;
+      clang::AccessSpecifier Access = Method->getAccess();
+      if (Access == clang::AS_none) {
+        if (const auto *Record =
+                llvm::dyn_cast<clang::CXXRecordDecl>(Method->getParent()))
+          Access = Record->isClass() ? clang::AS_private : clang::AS_public;
+      }
+      if (Access != clang::AS_none)
+        DeclarationRecord["is_public"] = Access == clang::AS_public;
     } else {
       DeclarationRecord["is_public"] =
           Function->getStorageClass() != clang::SC_Static;
+    }
+    if (const clang::RawComment *Comment =
+            Context.getRawCommentForAnyRedecl(Function)) {
+      if (Comment->isDocumentation()) {
+        DeclarationRecord["documentation"] = Comment->getFormattedText(
+            SM, Context.getDiagnostics());
+        DeclarationRecord["documentation_location"] =
+            location(Comment->getBeginLoc(), SM);
+        DeclarationRecord["documentation_range"] =
+            sourceRange(Comment->getSourceRange(), SM);
+      }
     }
     Data.Declarations.push_back(std::move(DeclarationRecord));
     return true;
@@ -520,7 +676,7 @@ public:
         llvm::isa<clang::TemplateTypeParmDecl>(Declaration) ||
         llvm::isa<clang::NonTypeTemplateParmDecl>(Declaration) ||
         llvm::isa<clang::TemplateTemplateParmDecl>(Declaration) ||
-        Declaration->isImplicit() || Declaration->getNameAsString().empty())
+        Declaration->getNameAsString().empty())
       return true;
     clang::SourceManager &SM = Context.getSourceManager();
     const clang::SourceLocation Location = Declaration->getLocation();
@@ -531,19 +687,78 @@ public:
     if (const auto *ValueDeclaration =
             llvm::dyn_cast<clang::ValueDecl>(Declaration))
       Type = ValueDeclaration->getType().getAsString(Policy);
-    Data.NonFunctionDeclarations.push_back(Object{
-        {"identity", Object{{"usr", usr(Declaration)},
-                             {"kind", Location.isMacroID() &&
-                                              !SM.isMacroArgExpansion(Location)
-                                          ? "macro_replacement"
-                                          : "written"}}},
+    const auto *Owner =
+        llvm::dyn_cast<clang::NamedDecl>(Declaration->getDeclContext());
+    Value OwnerUSR = Owner ? Value(semanticUSR(Owner)) : Value(nullptr);
+    Value OwnerName =
+        Owner ? Value(Owner->getQualifiedNameAsString()) : Value(nullptr);
+    Value OwnerLocation =
+        Owner ? location(Owner->getLocation(), SM) : Value(nullptr);
+    Value Access = nullptr;
+    if (Owner && llvm::isa<clang::CXXRecordDecl>(Owner) &&
+        Declaration->getAccess() != clang::AS_none) {
+      switch (Declaration->getAccess()) {
+      case clang::AS_public:
+        Access = "public";
+        break;
+      case clang::AS_protected:
+        Access = "protected";
+        break;
+      case clang::AS_private:
+        Access = "private";
+        break;
+      case clang::AS_none:
+        break;
+      }
+    }
+    Value EnumOrdinal = nullptr;
+    if (const auto *Enumerator =
+            llvm::dyn_cast<clang::EnumConstantDecl>(Declaration)) {
+      if (const auto *Enum = llvm::dyn_cast<clang::EnumDecl>(Owner)) {
+        int64_t Ordinal = 1;
+        for (const clang::EnumConstantDecl *Item : Enum->enumerators()) {
+          if (Item == Enumerator) {
+            EnumOrdinal = Ordinal;
+            break;
+          }
+          ++Ordinal;
+        }
+      }
+    }
+    Object Record{
+        {"identity", Object{{"usr", semanticUSR(Declaration)},
+                             {"kind", namedDeclarationOrigin(Declaration, SM)},
+                             {"provenance",
+                              namedDeclarationOrigin(Declaration, SM)}}},
         {"decl_kind", Declaration->getDeclKindName()},
         {"entity_kind", namedDeclarationKind(Declaration)},
         {"name", Declaration->getNameAsString()},
         {"qualified_name", Declaration->getQualifiedNameAsString()},
         {"type", Type},
+        {"is_file_scope", Declaration->getDeclContext()->isTranslationUnit()},
+        {"owner_usr", std::move(OwnerUSR)},
+        {"owner_name", std::move(OwnerName)},
+        {"owner_location", std::move(OwnerLocation)},
+        {"owner_kind", Owner ? Owner->getDeclKindName() : std::string()},
+        {"access", std::move(Access)},
+        {"is_definition", namedDeclarationIsDefinition(Declaration)},
+        {"source_text", sourceText(Declaration->getSourceRange(), SM,
+                                    Context.getLangOpts())},
+        {"enum_ordinal", std::move(EnumOrdinal)},
         {"location", location(Location, SM)},
-        {"range", sourceRange(Declaration->getSourceRange(), SM)}});
+        {"range", sourceRange(Declaration->getSourceRange(), SM)}};
+    if (const clang::RawComment *Comment =
+            Context.getRawCommentForAnyRedecl(Declaration)) {
+      if (Comment->isDocumentation()) {
+        Record["documentation"] = Comment->getFormattedText(
+            SM, Context.getDiagnostics());
+        Record["documentation_location"] =
+            location(Comment->getBeginLoc(), SM);
+        Record["documentation_range"] =
+            sourceRange(Comment->getSourceRange(), SM);
+      }
+    }
+    Data.NonFunctionDeclarations.push_back(std::move(Record));
     return true;
   }
 
@@ -555,7 +770,11 @@ public:
       return true;
     clang::SourceLocation Spelled = SM.getSpellingLoc(Begin);
     clang::SourceLocation Expanded = SM.getExpansionLoc(Begin);
-    bool MacroBody = Begin.isMacroID() && !SM.isMacroArgExpansion(Begin);
+    const std::string CallOrigin =
+        Begin.isMacroID()
+            ? (SM.isMacroArgExpansion(Begin) ? "macro_argument"
+                                             : "macro_replacement")
+            : CurrentCallerOrigin;
     const clang::FunctionDecl *Callee = Call->getDirectCallee();
     Array Arguments;
     for (unsigned Index = 0; Index < Call->getNumArgs(); ++Index) {
@@ -573,7 +792,7 @@ public:
     int64_t ExpansionOffset = static_cast<int64_t>(SM.getFileOffset(SM.getFileLoc(Expanded)));
     Object CalleeRecord;
     if (Callee) {
-      CalleeRecord["usr"] = usr(Callee);
+      CalleeRecord["usr"] = semanticUSR(Callee);
       CalleeRecord["name"] = Callee->getNameAsString();
       CalleeRecord["qualified_name"] = Callee->getQualifiedNameAsString();
       CalleeRecord["signature"] = functionSignature(Callee);
@@ -597,7 +816,7 @@ public:
                                    Context.getLangOpts())},
         {"site_identity", SpellingPath + ":" + std::to_string(SpellingOffset)},
         {"expansion_identity", ExpansionPath + ":" + std::to_string(ExpansionOffset)},
-        {"origin", MacroBody ? "macro_replacement" : "source_written"},
+        {"origin", CallOrigin},
         {"callee", Callee ? Value(std::move(CalleeRecord)) : Value(nullptr)},
         {"arguments", std::move(Arguments)},
         {"location", location(Begin, SM)},
@@ -629,6 +848,7 @@ private:
   std::string CurrentCallerUSR;
   std::string CurrentCallerName;
   std::string CurrentCallerQualifiedName;
+  std::string CurrentCallerOrigin;
 };
 
 class Consumer final : public clang::ASTConsumer {
@@ -636,13 +856,28 @@ public:
   Consumer(clang::ASTContext &Context, FrontendData &Data,
            llvm::StringRef MainFile, llvm::StringRef RepositoryRoot,
            bool FullCapture)
-      : Visitor(Context, Data, MainFile, RepositoryRoot, FullCapture) {}
+      : Data(Data), Visitor(Context, Data, MainFile, RepositoryRoot, FullCapture) {}
 
   void HandleTranslationUnit(clang::ASTContext &Context) override {
     Visitor.TraverseDecl(Context.getTranslationUnitDecl());
+    clang::SourceManager &SM = Context.getSourceManager();
+    const auto *Comments =
+        Context.Comments.getCommentsInFile(SM.getMainFileID());
+    if (!Comments)
+      return;
+    for (const auto &[Offset, Comment] : *Comments) {
+      (void)Offset;
+      if (!Comment || !Comment->isDocumentation())
+        continue;
+      Data.DocumentationComments.push_back(Object{
+          {"text", Comment->getFormattedText(SM, Context.getDiagnostics())},
+          {"location", location(Comment->getBeginLoc(), SM)},
+          {"range", sourceRange(Comment->getSourceRange(), SM)}});
+    }
   }
 
 private:
+  FrontendData &Data;
   FrontendVisitor Visitor;
 };
 
@@ -783,12 +1018,14 @@ int main() {
   Array Dependencies;
   for (const std::string &Path : Data.DependencyPaths)
     Dependencies.push_back(Path);
-  Object Output{{"schema_version", "codira.clang-frontend-native/2"},
+  Object Output{{"schema_version", "codira.clang-frontend-native/3"},
                 {"declarations", std::move(Data.Declarations)},
                 {"non_function_declarations",
                  std::move(Data.NonFunctionDeclarations)},
                 {"calls", std::move(Data.Calls)},
                 {"preprocessing", std::move(Data.Preprocessing)},
+                {"documentation_comments",
+                 std::move(Data.DocumentationComments)},
                 {"includes", std::move(Data.Includes)},
                 {"search_directories", std::move(Data.SearchDirectories)},
                 {"diagnostics", std::move(Data.Diagnostics)},

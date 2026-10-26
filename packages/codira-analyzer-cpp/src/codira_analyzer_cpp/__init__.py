@@ -48,8 +48,10 @@ if TYPE_CHECKING:
         ClangFrontend,
         CompilationContext,
         CompileProfile,
+        FrontendCallable,
         FrontendResult,
         SourcePoint,
+        SourceSpan,
     )
     from codira.contracts import LanguageAnalyzer
     from .cpp_macro_expansion import _MacroDefinition
@@ -126,9 +128,12 @@ from codira.models import (
     ClassArtifact,
     DeclarationArtifact,
     DeclarationKind,
+    DocumentationArtifact,
     EnumMemberArtifact,
     FunctionArtifact,
+    ImportArtifact,
     ModuleArtifact,
+    SemanticIdentity,
     tree_sitter_recovery_status,
 )
 from codira.plugin_config import (
@@ -295,7 +300,10 @@ def _clang_package_version() -> str | None:
 
 
 def _clang_source_position(
-    point: SourcePoint | None, source_path: Path
+    point: SourcePoint | None,
+    source_path: Path,
+    *,
+    prefer_expansion: bool = False,
 ) -> tuple[int, int] | None:
     """Return a verified physical source line and zero-based column.
 
@@ -314,7 +322,12 @@ def _clang_source_position(
     """
     if point is None:
         return None
-    for position in (point.spelling, point.expansion):
+    positions = (
+        (point.expansion, point.spelling)
+        if prefer_expansion
+        else (point.spelling, point.expansion)
+    )
+    for position in positions:
         if position is None or position.path is None or position.line is None:
             continue
         try:
@@ -438,6 +451,52 @@ def _clang_compilation_context_payload(
     }
 
 
+def _clang_owner_stable_id(
+    owner_location: SourcePoint | None,
+    owner_name: str,
+    owner_kind: str,
+    root: Path,
+) -> str | None:
+    """Derive an external C++ owner identity from its physical declaration.
+
+    Parameters
+    ----------
+    owner_location : codira_clang_frontend.SourcePoint or None
+        Physical location of the owner declaration returned by Clang.
+    owner_name : str
+        Fully qualified C++ owner name.
+    owner_kind : str
+        Native owner declaration kind.
+    root : pathlib.Path
+        Repository root used to reject out-of-repository owner identities.
+
+    Returns
+    -------
+    str or None
+        Same stable identity used when the owning header is indexed, or ``None``
+        when the location is unavailable or outside the repository.
+    """
+    if owner_location is None:
+        return None
+    for position in (owner_location.spelling, owner_location.expansion):
+        if position is None or position.path is None:
+            continue
+        try:
+            owner_path = Path(position.path).resolve()
+            relative = owner_path.relative_to(root.resolve())
+        except (OSError, ValueError):
+            continue
+        if not owner_path.is_file():
+            continue
+        owner_id = relative.as_posix()
+        if owner_kind in {"Record", "CXXRecord"}:
+            return _class_stable_id(owner_id, owner_name)
+        if owner_kind in {"Namespace", "NamespaceAlias"}:
+            return _declaration_stable_id(owner_id, "namespace", owner_name)
+        return None
+    return None
+
+
 def _analysis_from_clang_result(
     path: Path, root: Path, result: FrontendResult
 ) -> AnalysisResult | None:
@@ -461,6 +520,111 @@ def _analysis_from_clang_result(
     if result.status != "parsed" or result.coverage_state != "complete":
         return None
     owner_id = _symbol_owner_id(path, root)
+    module_name = _module_name_for_path(path, root)
+    module_stable_id = _module_stable_id(path, root)
+    documentation: list[DocumentationArtifact] = []
+
+    def add_documentation(
+        stable_id: str,
+        owner_kind: str,
+        title: str,
+        text: str | None,
+        location: SourcePoint | None,
+        span: SourceSpan | None,
+    ) -> None:
+        """Attach one Clang comment at its physical spelling location.
+
+        Parameters
+        ----------
+        stable_id : str
+            Identity of the function, declaration, or module owner.
+        owner_kind : str
+            Canonical kind of the documented owner.
+        title : str
+            Human-readable owner name.
+        text : str or None
+            Clang-formatted Doxygen text.
+        location : codira_clang_frontend.SourcePoint or None
+            Comment start coordinate.
+        span : codira_clang_frontend.SourceSpan or None
+            Comment source range.
+
+        Returns
+        -------
+        None
+            A documentation artifact is appended when a physical comment path
+            and line are available.
+        """
+        if not text or location is None:
+            return
+        point = next(
+            (
+                item
+                for item in (location.spelling, location.expansion)
+                if item is not None and item.path is not None and item.line is not None
+            ),
+            None,
+        )
+        if point is None or point.line is None:
+            return
+        source_path = Path(point.path or "")
+        try:
+            source_path = source_path.resolve()
+        except OSError:
+            return
+        end_line = None
+        if span is not None and span.end is not None:
+            end_point = next(
+                (
+                    item
+                    for item in (span.end.spelling, span.end.expansion)
+                    if item is not None
+                    and item.path is not None
+                    and item.line is not None
+                    and Path(item.path).resolve() == source_path
+                ),
+                None,
+            )
+            end_line = end_point.line if end_point is not None else None
+        documentation.append(
+            DocumentationArtifact(
+                stable_id=(
+                    f"doc:{'module' if owner_kind == 'module' else 'declaration'}:{stable_id}:doxygen"
+                ),
+                kind="declaration" if owner_kind != "module" else "module",
+                source_format="doxygen",
+                source_path=source_path,
+                lineno=point.line,
+                end_lineno=end_line,
+                title=title,
+                heading_path=(),
+                text=text,
+                owner_stable_id=stable_id,
+                owner_kind=owner_kind,
+                attachment_confidence="explicit",
+            )
+        )
+
+    module_comment = next(
+        (
+            comment
+            for comment in getattr(result, "documentation_comments", ())
+            if any(
+                line.lstrip().startswith(("\\file", "@file"))
+                for line in comment.text.splitlines()
+            )
+        ),
+        None,
+    )
+    if module_comment is not None:
+        add_documentation(
+            module_stable_id,
+            "module",
+            module_name,
+            module_comment.text,
+            module_comment.location,
+            module_comment.span,
+        )
     class_declarations = {
         item.qualified_name: item
         for item in result.declarations
@@ -480,30 +644,35 @@ def _analysis_from_clang_result(
             stable_id=_class_stable_id(owner_id, qualified_name),
             lineno=position[0],
             end_lineno=end_position[0] if end_position is not None else None,
-            docstring=None,
-            has_docstring=0,
+            docstring=declaration.documentation,
+            has_docstring=int(declaration.documentation is not None),
             methods=(),
+        )
+        add_documentation(
+            _class_stable_id(owner_id, qualified_name),
+            "type",
+            qualified_name,
+            declaration.documentation,
+            declaration.documentation_location,
+            declaration.documentation_span,
         )
     functions: list[FunctionArtifact] = []
     methods: dict[str, list[FunctionArtifact]] = {name: [] for name in class_rows}
-    overload_types: dict[str, set[str]] = {}
+    callable_rows: dict[str, FrontendCallable] = {}
     for callable_item in result.callables:
         if callable_item.provenance != "source_written":
             continue
-        overload_types.setdefault(callable_item.qualified_name, set()).add(
-            callable_item.function_type or callable_item.signature
+        identity_key = callable_item.usr or (
+            f"{callable_item.qualified_name}:{callable_item.signature}:"
+            f"{callable_item.location!r}"
         )
-    overloaded_targets = {
-        qualified_name
-        for qualified_name, function_types in overload_types.items()
-        if len(function_types) > 1
-    }
-    for callable_item in result.callables:
-        if (
-            callable_item.provenance != "source_written"
-            or not callable_item.is_definition
-        ):
-            continue
+        current = callable_rows.get(identity_key)
+        if current is None or callable_item.is_definition:
+            callable_rows[identity_key] = callable_item
+    omitted_generated = any(
+        item.provenance != "source_written" for item in result.callables
+    ) or any(item.provenance != "source_written" for item in result.declarations)
+    for callable_item in callable_rows.values():
         if (
             callable_item.kind
             not in {
@@ -536,25 +705,34 @@ def _analysis_from_clang_result(
             and class_name is None
         ):
             return None
-        if class_name is not None and class_name not in class_rows:
-            return None
+        class_stable_id = (
+            class_rows[class_name].stable_id
+            if class_name in class_rows
+            else _clang_owner_stable_id(
+                callable_item.owner_location, class_name, "CXXRecord", root
+            )
+            if class_name is not None
+            else None
+        )
         end_position = _clang_source_position(
             callable_item.span.end if callable_item.span is not None else None, path
         )
         calls: list[CallSite] = []
         for call in callable_item.calls:
-            if call.origin != "source_written":
-                continue
             if not call.target:
                 return None
-            call_position = _clang_source_position(call.location, path)
+            call_position = _clang_source_position(
+                call.location,
+                path,
+                prefer_expansion=call.origin == "macro_replacement",
+            )
             if call_position is None:
                 return None
             qualified_target = call.qualified_target or call.target
-            if qualified_target in overloaded_targets:
+            if call.target_usr is None:
                 call_kind = "unresolved"
                 base = ""
-                target = qualified_target
+                target = call.target
             elif "::" in qualified_target:
                 base, target = qualified_target.rsplit("::", 1)
                 call_kind = "attribute"
@@ -569,6 +747,15 @@ def _analysis_from_clang_result(
                     col_offset=call_position[1],
                     external_target_kind=_cpp_external_target_kind(base, target),
                     external_target_name=qualified_target,
+                    target_identity=(
+                        SemanticIdentity(
+                            namespace="clang.usr.v1", value=call.target_usr
+                        )
+                        if call.target_usr is not None
+                        else None
+                    ),
+                    resolution_mode="exact",
+                    origin=call.origin,
                 )
             )
         function = FunctionArtifact(
@@ -588,13 +775,38 @@ def _analysis_from_clang_result(
             ),
             lineno=position[0],
             end_lineno=end_position[0] if end_position is not None else None,
-            signature=callable_item.signature,
-            docstring=None,
-            has_docstring=0,
+            signature=(
+                (
+                    "explicit "
+                    if getattr(
+                        getattr(callable_item, "qualifiers", None), "is_explicit", False
+                    )
+                    else ""
+                )
+                + (
+                    "virtual "
+                    if getattr(
+                        getattr(callable_item, "qualifiers", None), "is_virtual", False
+                    )
+                    else ""
+                )
+                + (
+                    "static "
+                    if getattr(
+                        getattr(callable_item, "qualifiers", None), "is_static", False
+                    )
+                    else ""
+                )
+                + callable_item.signature
+            ),
+            docstring=getattr(callable_item, "documentation", None),
+            has_docstring=int(
+                getattr(callable_item, "documentation", None) is not None
+            ),
             is_method=int(class_name is not None),
             is_public=int(callable_item.is_public),
             parameters=tuple(name for name, _ in callable_item.parameters if name),
-            returns_value=0,
+            returns_value=int(getattr(callable_item, "returns_value", False)),
             yields_value=0,
             raises=0,
             has_asserts=0,
@@ -602,11 +814,14 @@ def _analysis_from_clang_result(
             calls=tuple(sorted(calls, key=lambda item: (item.lineno, item.col_offset))),
             callable_refs=(),
             owner_name=class_name,
-            owner_stable_id=(
-                class_rows[class_name].stable_id if class_name is not None else None
+            owner_stable_id=class_stable_id,
+            semantic_identity=(
+                SemanticIdentity(namespace="clang.usr.v1", value=callable_item.usr)
+                if callable_item.is_definition and callable_item.usr is not None
+                else None
             ),
         )
-        if class_name is None:
+        if class_name is None or class_name not in class_rows:
             functions.append(function)
         else:
             methods[class_name].append(function)
@@ -624,14 +839,85 @@ def _analysis_from_clang_result(
         )
         for name in sorted(class_rows, key=lambda key: (class_rows[key].lineno, key))
     )
+    for function in (
+        *functions,
+        *(method for class_artifact in classes for method in class_artifact.methods),
+    ):
+        matched_callable = next(
+            (
+                item
+                for item in callable_rows.values()
+                if (
+                    item.usr is not None
+                    and function.semantic_identity is not None
+                    and item.usr == function.semantic_identity.value
+                )
+                or (
+                    item.name == function.name
+                    and (item_position := _clang_source_position(item.location, path))
+                    is not None
+                    and item_position[0] == function.lineno
+                )
+            ),
+            None,
+        )
+        if matched_callable is not None:
+            add_documentation(
+                function.stable_id,
+                "function",
+                function.name,
+                getattr(matched_callable, "documentation", None),
+                getattr(matched_callable, "documentation_location", None),
+                getattr(matched_callable, "documentation_span", None),
+            )
     declaration_kinds = {
         "constant",
         "enum",
+        "macro",
         "namespace",
         "type_alias",
         "typedef",
         "variable",
     }
+    enum_members: dict[str, list[EnumMemberArtifact]] = {}
+    enum_names = {
+        item.usr: item.qualified_name or item.name
+        for item in result.declarations
+        if getattr(item, "usr", None) is not None and item.kind == "enum"
+    }
+    for member in result.declarations:
+        if (
+            member.kind != "constant"
+            or member.owner_usr not in enum_names
+            or member.enum_ordinal is None
+        ):
+            continue
+        enum_name = enum_names[cast("str", member.owner_usr)]
+        enum_stable_id = _declaration_stable_id(owner_id, "enum", enum_name)
+        member_stable_id = _enum_member_stable_id(
+            owner_id, enum_name, member.enum_ordinal
+        )
+        position = _clang_source_position(member.location, path)
+        if position is None:
+            return None
+        enum_members.setdefault(cast("str", member.owner_usr), []).append(
+            EnumMemberArtifact(
+                stable_id=member_stable_id,
+                parent_stable_id=enum_stable_id,
+                ordinal=member.enum_ordinal,
+                name=member.name,
+                signature=member.source_text or member.type_text or member.name,
+                lineno=position[0],
+            )
+        )
+        add_documentation(
+            member_stable_id,
+            "enum_member",
+            member.name,
+            member.documentation,
+            member.documentation_location,
+            member.documentation_span,
+        )
     declarations: list[DeclarationArtifact] = []
     for declaration in result.declarations:
         if declaration.provenance != "source_written":
@@ -640,23 +926,103 @@ def _analysis_from_clang_result(
             continue
         if declaration.kind not in declaration_kinds:
             continue
+        if declaration.kind == "constant" and declaration.owner_usr in enum_names:
+            continue
+        if declaration.kind in {"variable", "constant"} and not (
+            declaration.is_file_scope
+            or declaration.owner_kind in {"CXXRecord", "Record"}
+            or declaration.owner_kind in {"Namespace", "NamespaceAlias"}
+        ):
+            continue
         position = _clang_source_position(declaration.location, path)
         if position is None:
             return None
-        signature = declaration.signature or declaration.type_text or declaration.name
+        qualified_name = declaration.qualified_name or declaration.name
+        signature = (
+            declaration.signature
+            or (declaration.source_text if declaration.kind != "namespace" else None)
+            or declaration.type_text
+            or declaration.name
+        )
+        owner_stable_id = None
+        owner_name = getattr(declaration, "owner_name", None)
+        owner_location = getattr(declaration, "owner_location", None)
+        if owner_name is not None and owner_location is not None:
+            owner_stable_id = _clang_owner_stable_id(
+                owner_location,
+                owner_name,
+                getattr(declaration, "owner_kind", "") or "",
+                root,
+            )
+        enum_members_for_declaration = (
+            tuple(
+                sorted(
+                    enum_members.get(declaration.usr or "", ()),
+                    key=lambda item: item.ordinal,
+                )
+            )
+            if declaration.kind == "enum"
+            else ()
+        )
+        stable_id = _declaration_stable_id(
+            owner_id,
+            cast("DeclarationKind", declaration.kind),
+            qualified_name,
+        )
         declarations.append(
             DeclarationArtifact(
-                name=declaration.qualified_name or declaration.name,
-                stable_id=_declaration_stable_id(
-                    owner_id,
-                    cast("DeclarationKind", declaration.kind),
-                    declaration.qualified_name or declaration.name,
-                ),
+                name=qualified_name,
+                stable_id=stable_id,
                 kind=cast("DeclarationKind", declaration.kind),
                 lineno=position[0],
                 signature=signature,
+                docstring=getattr(declaration, "documentation", None),
+                enum_members=enum_members_for_declaration,
+                type_text=declaration.type_text,
+                owner_name=getattr(declaration, "owner_name", None),
+                owner_stable_id=owner_stable_id,
+                access=getattr(declaration, "access", None),
             )
         )
+        add_documentation(
+            stable_id,
+            "variable" if declaration.kind == "variable" else declaration.kind,
+            qualified_name,
+            getattr(declaration, "documentation", None),
+            getattr(declaration, "documentation_location", None),
+            getattr(declaration, "documentation_span", None),
+        )
+    macro_declarations: list[DeclarationArtifact] = []
+    for event in getattr(result, "preprocessing", ()):
+        if event.kind != "macro_definition" or not event.name:
+            continue
+        macro_position = _clang_source_position(event.location, path)
+        if macro_position is None:
+            continue
+        macro_signature = event.source_text or " ".join(
+            ("#define", event.name, *event.parameters, *event.replacement)
+        )
+        stable_id = _declaration_stable_id(owner_id, "macro", event.name)
+        macro_declarations.append(
+            DeclarationArtifact(
+                name=event.name,
+                stable_id=stable_id,
+                kind="macro",
+                lineno=macro_position[0],
+                signature=macro_signature,
+            )
+        )
+    declarations.extend(macro_declarations)
+    imports = tuple(
+        ImportArtifact(
+            name=item.spelled_path,
+            alias=None,
+            lineno=position[0],
+            kind="include_system" if item.angled else "include_local",
+        )
+        for item in getattr(result, "includes", ())
+        if (position := _clang_source_position(item.location, path)) is not None
+    )
     status_diagnostics = tuple(
         AnalysisDiagnostic(
             category="clang_diagnostic",
@@ -668,15 +1034,31 @@ def _analysis_from_clang_result(
         )
         for diagnostic in result.diagnostics
     )
+    omitted_categories: list[str] = []
+    if omitted_generated:
+        omitted_categories.append("generated_declaration")
+    if any(
+        function.is_method and function.owner_stable_id is None
+        for function in (
+            *functions,
+            *(method for cls in classes for method in cls.methods),
+        )
+    ):
+        omitted_categories.append("method_owner_identity")
+    coverage_state = (
+        AnalysisCoverageState.PARTIAL
+        if omitted_categories
+        else AnalysisCoverageState.COMPLETE
+    )
     toolchain = result.toolchain_identity
     dependency_closure = result.dependency_closure
     return AnalysisResult(
         source_path=path,
         module=ModuleArtifact(
-            name=_module_name_for_path(path, root),
-            stable_id=_module_stable_id(path, root),
-            docstring=None,
-            has_docstring=0,
+            name=module_name,
+            stable_id=module_stable_id,
+            docstring=module_comment.text if module_comment is not None else None,
+            has_docstring=int(module_comment is not None),
         ),
         classes=classes,
         functions=_disambiguate_callable_stable_ids(
@@ -689,7 +1071,10 @@ def _analysis_from_clang_result(
         declarations=tuple(
             sorted(declarations, key=lambda item: (item.lineno, item.name, item.kind))
         ),
-        imports=(),
+        imports=imports,
+        documentation=tuple(
+            sorted(documentation, key=lambda item: (item.lineno, item.stable_id))
+        ),
         index_symbols=True,
         status=AnalysisStatus(
             grammar="clang-cpp-frontend",
@@ -729,17 +1114,16 @@ def _analysis_from_clang_result(
                 ),
             },
             diagnostics=status_diagnostics,
-            reliable_categories=("module", "class", "function", "declaration"),
-            omitted_categories=(
+            reliable_categories=(
+                "module",
+                "class",
+                "function",
+                "declaration",
                 "import",
                 "documentation",
-                "macro",
-                "field",
-                "variable",
-                "function_body_flags",
-                "resolved_overload_dispatch",
             ),
-            coverage_state=AnalysisCoverageState.PARTIAL,
+            omitted_categories=tuple(omitted_categories),
+            coverage_state=coverage_state,
         ),
     )
 
@@ -4756,7 +5140,7 @@ class CppAnalyzer:
     """
 
     name = "cpp"
-    version = "43"
+    version = "44"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -5041,8 +5425,9 @@ class CppAnalyzer:
                 "constant",
                 "namespace",
                 "documentation",
+                *(("variable",) if self._frontend == "clang" else ()),
             ),
-            does_not_support=("variable",),
+            does_not_support=(() if self._frontend == "clang" else ("variable",)),
             mappings={
                 "module": "module",
                 "class": "type",
@@ -5057,6 +5442,11 @@ class CppAnalyzer:
                 "include_local": "import",
                 "include_system": "import",
                 "doxygen": "documentation",
+                **(
+                    {"variable": "variable", "field": "variable"}
+                    if self._frontend == "clang"
+                    else {}
+                ),
             },
         )
 

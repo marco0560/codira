@@ -92,7 +92,8 @@ toolchain files so edits invalidate prior results.
 
 ## Result and fallback semantics
 
-The public result records typed source declarations, callables, and calls
+Native protocol v3 records typed includes, preprocessing events, documentation,
+source declarations, callable metadata, and calls
 owned by their callable USR, along with source spans, diagnostics, provenance,
 dependency evidence, helper stdout/stderr digests, and explicit status and
 coverage reasons. Calls are assigned to a definition when both a prototype
@@ -120,3 +121,9 @@ records, profile loaders, `create_frontend_profile`,
 `frontend_profile_fingerprint`, and `captured_profile_fingerprint`. The latter
 two fingerprint functions do not invoke Clang. The package itself does not
 depend on Codira core DTOs or analyzer plugins.
+
+Compiler identities use `clang.usr.v1`; internal-linkage identities additionally
+bind the actual translation unit and declaration file. Source-invoked generated
+callables still require compiler-origin persistence in the adapters and remain
+explicit partial coverage until that representation is implemented. See
+[ADR-038](../../docs/adr/ADR-038-clang-metadata-and-exact-call-identities.md).

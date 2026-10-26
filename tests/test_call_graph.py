@@ -160,8 +160,8 @@ def test_call_edges_are_resolved_and_deduplicated(tmp_path: Path) -> None:
     assert find_call_edges(
         EdgeQueryRequest(root=tmp_path, name="caller", module="pkg.a")
     ) == [
-        ("pkg.a", "caller", "pkg.a", "dynamic", None, None, 1),
-        ("pkg.a", "caller", "pkg.a", "helper", None, None, 1),
+        ("pkg.a", "caller", None, "pkg.a", "dynamic", None, None, None, 1),
+        ("pkg.a", "caller", None, "pkg.a", "helper", None, None, None, 1),
     ]
     assert find_call_edges(
         EdgeQueryRequest(
@@ -171,7 +171,17 @@ def test_call_edges_are_resolved_and_deduplicated(tmp_path: Path) -> None:
             incoming=True,
         )
     ) == [
-        ("pkg.a", "imported_caller", "pkg.b", "imported_helper", None, None, 1),
+        (
+            "pkg.a",
+            "imported_caller",
+            None,
+            "pkg.b",
+            "imported_helper",
+            None,
+            None,
+            None,
+            1,
+        ),
     ]
 
     assert find_callable_refs(
@@ -481,7 +491,17 @@ def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> N
     assert find_call_edges(
         EdgeQueryRequest(root=tmp_path, name="public_api", module="native.sample")
     ) == [
-        ("native.sample", "public_api", "native.sample", "helper", None, None, 1),
+        (
+            "native.sample",
+            "public_api",
+            None,
+            "native.sample",
+            "helper",
+            None,
+            None,
+            None,
+            1,
+        ),
     ]
     assert find_call_edges(
         EdgeQueryRequest(
@@ -490,7 +510,19 @@ def test_c_call_edges_are_indexed_for_same_module_functions(tmp_path: Path) -> N
             module="native.sample",
             incoming=True,
         )
-    ) == [("native.sample", "public_api", "native.sample", "helper", None, None, 1)]
+    ) == [
+        (
+            "native.sample",
+            "public_api",
+            None,
+            "native.sample",
+            "helper",
+            None,
+            None,
+            None,
+            1,
+        ),
+    ]
 
 
 def test_top_level_help_includes_examples_and_calls_command() -> None:

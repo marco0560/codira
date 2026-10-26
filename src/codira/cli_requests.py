@@ -10,12 +10,17 @@ from codira.version import package_version
 
 if TYPE_CHECKING:
     import argparse
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
     from pathlib import Path
     from typing import Protocol
 
     from codira.indexer import CoverageIssue, IndexReport
-    from codira.query.exact import CallTreeResult, EdgeQueryRequest, TreeQueryRequest
+    from codira.query.exact import (
+        CallTreeResult,
+        EdgeQueryRequest,
+        RelationRow as RelationRow,
+        TreeQueryRequest,
+    )
 
     class _IndexedFileHashLoader(Protocol):
         """
@@ -335,7 +340,7 @@ class RelationCommandSpec:
         JSON key for the target name field.
     row_fetcher : collections.abc.Callable[
         [codira.query.exact.EdgeQueryRequest],
-        list[tuple[str, str, str | None, str | None, str | None, str | None, int]],
+        list[codira.query.exact.RelationRow],
     ]
         Exact lookup helper for flat relation rows.
     tree_builder : collections.abc.Callable[
@@ -359,7 +364,7 @@ class RelationCommandSpec:
     target_name_key: str
     row_fetcher: Callable[
         [EdgeQueryRequest],
-        list[tuple[str, str, str | None, str | None, str | None, str | None, int]],
+        Sequence[RelationRow],
     ]
     tree_builder: Callable[[TreeQueryRequest], CallTreeResult | None]
 

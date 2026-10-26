@@ -18,7 +18,7 @@ definitions for SQLite persistence actions.
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 DDL = [
     """
@@ -176,8 +176,14 @@ DDL = [
         type TEXT NOT NULL,
         module_name TEXT NOT NULL,
         file_id INTEGER NOT NULL,
-        lineno INTEGER NOT NULL
-        ,
+        lineno INTEGER NOT NULL,
+        semantic_identity_namespace TEXT,
+        semantic_identity_value TEXT,
+        owner_name TEXT,
+        owner_stable_id TEXT,
+        access TEXT,
+        signature TEXT,
+        type_text TEXT,
         FOREIGN KEY(file_id) REFERENCES files(id)
     );
     """,
@@ -216,8 +222,10 @@ DDL = [
         caller_file_id INTEGER NOT NULL,
         caller_module TEXT NOT NULL,
         caller_name TEXT NOT NULL,
+        caller_stable_id TEXT,
         callee_module TEXT,
         callee_name TEXT,
+        callee_stable_id TEXT,
         unresolved_identity TEXT NOT NULL DEFAULT '',
         external_target_kind TEXT,
         external_target_name TEXT,
@@ -226,8 +234,10 @@ DDL = [
             caller_file_id,
             caller_module,
             caller_name,
+            caller_stable_id,
             callee_module,
             callee_name,
+            callee_stable_id,
             unresolved_identity
         ),
         FOREIGN KEY(caller_file_id) REFERENCES files(id)
@@ -239,8 +249,10 @@ DDL = [
         caller_file_id,
         caller_module,
         caller_name,
+        caller_stable_id,
         COALESCE(callee_module, ''),
         COALESCE(callee_name, ''),
+        COALESCE(callee_stable_id, ''),
         unresolved_identity
     );
     """,
@@ -338,9 +350,14 @@ DDL = [
         file_id INTEGER NOT NULL,
         owner_module TEXT NOT NULL,
         owner_name TEXT NOT NULL,
+        owner_stable_id TEXT,
         kind TEXT NOT NULL,
         base TEXT NOT NULL,
         target TEXT NOT NULL,
+        target_identity_namespace TEXT,
+        target_identity_value TEXT,
+        resolution_mode TEXT,
+        origin TEXT,
         external_target_kind TEXT,
         external_target_name TEXT,
         lineno INTEGER NOT NULL,
@@ -349,9 +366,13 @@ DDL = [
             file_id,
             owner_module,
             owner_name,
+            owner_stable_id,
             kind,
             base,
             target,
+            target_identity_namespace,
+            target_identity_value,
+            resolution_mode,
             lineno,
             col_offset
         ),
@@ -461,6 +482,10 @@ DDL = [
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_symbol_file ON symbol_index(file_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_symbol_semantic_identity
+    ON symbol_index(semantic_identity_namespace, semantic_identity_value);
     """,
     """
     CREATE UNIQUE INDEX IF NOT EXISTS idx_symbol_stable_id ON symbol_index(stable_id);

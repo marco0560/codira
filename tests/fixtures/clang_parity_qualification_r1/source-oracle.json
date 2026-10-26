@@ -1,0 +1,617 @@
+{
+    "oracle_version": 1,
+    "source_authored_oracle": true,
+    "cases": {
+        "parity_c.c": {
+            "language": "c",
+            "includes": [
+                {"name": "stddef.h", "kind": "include_system", "line": 1},
+                {"name": "parity_api.h", "kind": "include_local", "line": 2}
+            ],
+            "declarations": [
+                {"kind": "macro", "name": "PARITY_C_SCALE", "line": 4},
+                {"kind": "macro", "name": "PARITY_C_CALL", "line": 5},
+                {"kind": "macro", "name": "PARITY_C_GENERATE", "line": 31},
+                {
+                    "kind": "enum",
+                    "name": "ParityMode",
+                    "line": 7,
+                    "enum_members": [
+                        {"name": "PARITY_IDLE", "ordinal": 1, "line": 8},
+                        {"name": "PARITY_BUSY", "ordinal": 2, "line": 9}
+                    ]
+                },
+        {"kind": "typedef", "name": "ParityMode", "line": 10},
+                {"kind": "struct", "name": "ParityRecord", "line": 12},
+        {"kind": "typedef", "name": "ParityRecord", "line": 15},
+                {"kind": "variable", "name": "c_count", "line": 19}
+            ],
+            "fields": [
+                {"owner": "ParityRecord", "name": "value", "type": "int", "line": 13},
+                {
+                    "owner": "ParityRecord",
+                    "name": "mode",
+                    "type": "ParityMode",
+                    "line": 14
+                }
+            ],
+            "callables": [
+                {
+                    "kind": "function",
+                    "name": "c_internal",
+                    "return_type": "int",
+                    "parameter_types": ["int"],
+                    "returns_value": true,
+                    "definition_line": 22,
+                    "prototype_line": 17
+                },
+                {
+                    "kind": "function",
+                    "name": "c_entry",
+                    "return_type": "int",
+                    "parameter_types": ["int"],
+                    "returns_value": true,
+                    "definition_line": 27
+                }
+            ],
+            "documentation": [
+                {
+                    "owner": "c_internal",
+                    "text": "Add one to the supplied value.",
+                    "line": 21
+                },
+                {
+                    "owner": "c_entry",
+                    "text": "Exercise direct, macro-expanded, and external calls.",
+                    "line": 26
+                }
+            ],
+            "calls": [
+                {
+                    "caller": "c_entry",
+                    "target": "c_internal",
+                    "definition_line": 22,
+                    "line": 28,
+                    "column": 11,
+                    "origin": "source_written"
+                },
+                {
+                    "caller": "c_entry",
+                    "target": "c_internal",
+                    "definition_line": 22,
+                    "line": 28,
+                    "column": 47,
+                    "origin": "macro_replacement",
+                    "invocation": "PARITY_C_CALL"
+                },
+                {
+                    "caller": "c_entry",
+                    "target": "c_external",
+                    "line": 28,
+                    "column": 70,
+                    "resolution": "external_or_unindexed"
+                }
+            ],
+            "pending": {
+                "callables": [
+                    {
+                        "kind": "function",
+                        "name": "c_generated_from_macro",
+                        "return_type": "int",
+                        "parameter_types": [],
+                        "returns_value": true,
+                        "generated": true,
+                        "generated_macro": "PARITY_C_GENERATE",
+                        "generated_spelling_line": 31,
+                        "invocation_line": 32,
+                        "generated_invocation_span": [704, 745]
+                    }
+                ]
+            }
+        },
+        "parity_cpp.cpp": {
+            "language": "cpp",
+            "includes": [
+                {"name": "cstddef", "kind": "include_system", "line": 1},
+                {"name": "parity_cpp.hpp", "kind": "include_local", "line": 2}
+            ],
+            "declarations": [
+                {"kind": "namespace", "name": "parity", "line": 4},
+                {"kind": "type_alias", "name": "parity::Count", "line": 6},
+                {"kind": "enum", "name": "parity::Mode", "line": 8},
+                {"kind": "macro", "name": "PARITY_CPP_GENERATE", "line": 53},
+                {"kind": "type_alias", "name": "parity::IntFunction", "line": 30},
+                {"kind": "variable", "name": "parity::global_count", "line": 31}
+            ],
+            "enum_members": [
+                {"owner": "parity::Mode", "name": "Idle", "ordinal": 1, "line": 9},
+                {"owner": "parity::Mode", "name": "Busy", "ordinal": 2, "line": 10}
+            ],
+            "types": [
+                {"kind": "class", "name": "parity::Box", "line": 14},
+                {"kind": "class", "name": "parity::Box::Nested", "line": 18}
+            ],
+            "fields": [
+                {"owner": "parity::Box", "name": "value", "type": "int", "line": 15},
+                {
+                    "owner": "parity::Box",
+                    "name": "mode",
+                    "type": "Mode",
+                    "line": 16
+                },
+                {
+                    "owner": "parity::Box",
+                    "name": "nested",
+                    "type": "struct Nested",
+                    "line": 20
+                },
+                {
+                    "owner": "parity::Box::Nested",
+                    "name": "size",
+                    "type": "Count",
+                    "line": 19
+                }
+            ],
+            "callables": [
+                {
+                    "kind": "method",
+                    "name": "parity::Box::read",
+                    "return_type": "int",
+                    "parameter_types": [],
+                    "qualifiers": ["const"],
+                    "returns_value": true,
+                    "definition_line": 23
+                },
+                {
+                    "kind": "function",
+                    "name": "parity::choose",
+                    "return_type": "int",
+                    "parameter_types": ["int"],
+                    "returns_value": true,
+                    "definition_line": 33,
+                    "prototype_line": 28
+                },
+                {
+                    "kind": "function",
+                    "name": "parity::choose",
+                    "return_type": "double",
+                    "parameter_types": ["double"],
+                    "returns_value": true,
+                    "definition_line": 37,
+                    "prototype_line": 29
+                },
+                {
+                    "kind": "function",
+                    "name": "parity::apply",
+                    "return_type": "int",
+                    "parameter_types": ["IntFunction", "int"],
+                    "returns_value": true,
+                    "definition_line": 41
+                },
+                {
+                    "kind": "function",
+                    "name": "parity::call_overload",
+                    "return_type": "int",
+                    "parameter_types": ["Box &", "int"],
+                    "returns_value": true,
+                    "definition_line": 45
+                },
+                {
+                    "kind": "function",
+                    "name": "parity::call_macro",
+                    "return_type": "int",
+                    "parameter_types": ["Box &", "int"],
+                    "returns_value": true,
+                    "definition_line": 49
+                }
+            ],
+            "documentation": [
+                {
+                    "owner": "parity::Box",
+                    "text": "A record with source-attached documentation.",
+                    "line": 13
+                },
+                {
+                    "owner": "parity::Box::read",
+                    "text": "Read the stored value.",
+                    "line": 22
+                }
+            ],
+            "calls": [
+                {
+                    "caller": "parity::call_overload",
+                    "target": "parity::Box::read",
+                    "definition_line": 23,
+                    "line": 46,
+                    "column": 18
+                },
+                {
+                    "caller": "parity::call_overload",
+                    "target": "parity::choose",
+                    "return_type": "int",
+                    "parameter_types": ["int"],
+                    "definition_line": 33,
+                    "line": 46,
+                    "column": 11
+                },
+                {
+                    "caller": "parity::call_overload",
+                    "target": "parity::choose",
+                    "return_type": "double",
+                    "parameter_types": ["double"],
+                    "definition_line": 37,
+                    "line": 46,
+                    "column": 32
+                },
+                {
+                    "caller": "parity::call_macro",
+                    "target": "parity::Box::read",
+                    "definition_line": 23,
+                    "line": 50,
+                    "column": 35,
+                    "origin": "macro_argument"
+                },
+                {
+                    "caller": "parity::call_macro",
+                    "target": "parity::choose",
+                    "return_type": "int",
+                    "parameter_types": ["int"],
+                    "definition_line": 33,
+                    "line": 50,
+                    "column": 27,
+                    "origin": "macro_argument"
+                },
+                {
+                    "caller": "parity::apply",
+                    "target": "function",
+                    "resolution": "indirect_unresolved",
+                    "line": 42,
+                    "column": 11
+                }
+            ],
+            "pending": {
+                "declarations": [
+                    {
+                        "kind": "macro",
+                        "name": "PARITY_CPP_CALL",
+                        "declared_in": "parity_cpp.hpp",
+                        "line": 4
+                    }
+                ],
+                "callables": [
+                    {
+                        "kind": "function",
+                        "name": "parity::generated_from_macro",
+                        "return_type": "int",
+                        "parameter_types": [],
+                        "returns_value": true,
+                        "generated": true,
+                        "generated_macro": "PARITY_CPP_GENERATE",
+                        "generated_spelling_line": 53,
+                        "invocation_line": 54,
+                        "generated_invocation_span": [941, 982]
+                    }
+                ]
+            }
+        },
+        "cross_tu_definition.cpp": {
+            "language": "cpp",
+            "callables": [
+                {
+                    "kind": "function",
+                    "name": "cross_tu::transform",
+                    "return_type": "int",
+                    "parameter_types": ["int"],
+                    "definition_line": 3
+                }
+            ],
+            "includes": [
+                {"name": "cross_tu_api.hpp", "kind": "include_local", "line": 1}
+            ]
+        },
+        "cross_tu_client.cpp": {
+            "language": "cpp",
+            "callables": [
+                {
+                    "kind": "function",
+                    "name": "cross_tu_client",
+                    "return_type": "int",
+                    "parameter_types": ["int"],
+                    "definition_line": 3
+                }
+            ],
+            "includes": [
+                {"name": "cross_tu_api.hpp", "kind": "include_local", "line": 1}
+            ],
+            "calls": [
+                {
+                    "caller": "cross_tu_client",
+                    "target": "cross_tu::transform",
+                    "return_type": "int",
+                    "parameter_types": ["int"],
+                    "definition_line": 3,
+                    "line": 4,
+                    "column": 11,
+                    "defined_in": "cross_tu_definition.cpp"
+                }
+            ]
+        },
+        "out_of_line/Owner.cpp": {
+            "language": "cpp",
+            "includes": [{"name": "Owner.hpp", "kind": "include_local", "line": 1}],
+            "external_owners": [
+                {
+                    "kind": "class",
+                    "name": "ownership::Owner",
+                    "source": "out_of_line/Owner.hpp"
+                }
+            ],
+            "callables": [
+                {
+                    "kind": "method",
+                    "name": "ownership::Owner::read",
+                    "return_type": "int",
+                    "parameter_types": [],
+                    "qualifiers": ["const"],
+                    "returns_value": true,
+                    "definition_line": 3,
+                    "owner_source": "out_of_line/Owner.hpp"
+                },
+                {
+                    "kind": "function",
+                    "name": "ownership::invoke",
+                    "return_type": "int",
+                    "parameter_types": ["const Owner &"],
+                    "returns_value": true,
+                    "definition_line": 7
+                }
+            ],
+            "calls": [
+                {
+                    "caller": "ownership::invoke",
+                    "target": "ownership::Owner::read",
+                    "definition_line": 3,
+                    "line": 8,
+                    "column": 11,
+                    "defined_in": "out_of_line/Owner.cpp"
+                }
+            ],
+            "forbidden_artifacts": [
+                {
+                    "kind": "class",
+                    "name": "ownership::Owner",
+                    "source": "out_of_line/Owner.cpp"
+                }
+            ]
+        },
+        "same-name-a/foo.c": {
+            "language": "c",
+            "callables": [
+                {
+                    "kind": "function",
+                    "name": "local_value",
+                    "return_type": "int",
+                    "parameter_types": ["int"],
+                    "linkage": "internal",
+                    "definition_line": 1
+                },
+                {
+                    "kind": "function",
+                    "name": "use_local_a",
+                    "return_type": "int",
+                    "parameter_types": [],
+                    "linkage": "external",
+                    "definition_line": 5
+                }
+            ],
+            "calls": [
+                {
+                    "caller": "use_local_a",
+                    "target": "local_value",
+                    "definition_line": 1,
+                    "resolution": "same_translation_unit_definition",
+                    "line": 6
+                }
+            ]
+        },
+        "same-name-b/foo.c": {
+            "language": "c",
+            "callables": [
+                {
+                    "kind": "function",
+                    "name": "local_value",
+                    "return_type": "int",
+                    "parameter_types": ["int"],
+                    "linkage": "internal",
+                    "definition_line": 1
+                },
+                {
+                    "kind": "function",
+                    "name": "use_local_b",
+                    "return_type": "int",
+                    "parameter_types": [],
+                    "linkage": "external",
+                    "definition_line": 5
+                }
+            ],
+            "calls": [
+                {
+                    "caller": "use_local_b",
+                    "target": "local_value",
+                    "definition_line": 1,
+                    "resolution": "same_translation_unit_definition",
+                    "line": 6
+                }
+            ]
+        },
+        "internal_a.cpp": {
+            "language": "cpp",
+            "callables": [
+                {
+                    "kind": "function",
+                    "name": "call_header_a",
+                    "return_type": "int",
+                    "parameter_types": ["int"],
+                    "definition_line": 3
+                }
+            ],
+            "calls": [
+                {
+                    "caller": "call_header_a",
+                    "target": "header_local",
+                    "resolution": "internal_header_unresolved_until_header_projection",
+                    "line": 4,
+                    "column": 11,
+                    "target_identity_must_differ_from": "internal_b.cpp:header_local"
+                }
+            ]
+        },
+        "internal_b.cpp": {
+            "language": "cpp",
+            "callables": [
+                {
+                    "kind": "function",
+                    "name": "call_header_b",
+                    "return_type": "int",
+                    "parameter_types": ["int"],
+                    "definition_line": 3
+                }
+            ],
+            "calls": [
+                {
+                    "caller": "call_header_b",
+                    "target": "header_local",
+                    "resolution": "internal_header_unresolved_until_header_projection",
+                    "line": 4,
+                    "column": 11,
+                    "target_identity_must_differ_from": "internal_a.cpp:header_local"
+                }
+            ]
+        }
+    },
+    "header_context_requests": [
+        {
+            "path": "parity_api.h",
+            "language": "c",
+            "status": "one_owner_translation_unit",
+            "owners": ["parity_c.c"]
+        },
+        {
+            "path": "parity_cpp.hpp",
+            "language": "cpp",
+            "status": "one_owner_translation_unit",
+            "owners": ["parity_cpp.cpp"]
+        },
+        {
+            "path": "cross_tu_api.hpp",
+            "language": "cpp",
+            "status": "multiple_owner_translation_units_hold",
+            "owners": ["cross_tu_client.cpp", "cross_tu_definition.cpp"]
+        },
+        {
+            "path": "out_of_line/Owner.hpp",
+            "language": "cpp",
+            "status": "one_owner_translation_unit",
+            "owners": ["out_of_line/Owner.cpp"]
+        },
+        {
+            "path": "shared_internal.hpp",
+            "language": "cpp",
+            "status": "multiple_owner_translation_units_hold",
+            "owners": ["internal_a.cpp", "internal_b.cpp"]
+        }
+    ],
+    "identity_invariants": [
+        {
+            "distinct": [
+                "same-name-a/foo.c:local_value",
+                "same-name-b/foo.c:local_value"
+            ],
+            "reason": "internal-linkage symbols share a basename but not a canonical source file"
+        },
+        {
+            "distinct": ["parity::choose(int)", "parity::choose(double)"],
+            "reason": "overload identity includes canonical function type"
+        },
+        {
+            "equal": [
+                "cross_tu::transform declaration",
+                "cross_tu::transform definition"
+            ],
+            "reason": "the source declaration and indexed definition share one Clang identity"
+        },
+        {
+            "distinct": [
+                "shared_internal.hpp:header_local@internal_a.cpp",
+                "shared_internal.hpp:header_local@internal_b.cpp"
+            ],
+            "reason": "internal header declarations have translation-unit-local identity"
+        }
+    ],
+    "identity_observation_requests": [
+        {
+            "reference": "same-name-a/foo.c:local_value",
+            "kind": "callable",
+            "source": "same-name-a/foo.c",
+            "name": "local_value",
+            "definition_line": 1,
+            "identity_field": "stable_id"
+        },
+        {
+            "reference": "same-name-b/foo.c:local_value",
+            "kind": "callable",
+            "source": "same-name-b/foo.c",
+            "name": "local_value",
+            "definition_line": 1,
+            "identity_field": "stable_id"
+        },
+        {
+            "reference": "parity::choose(int)",
+            "kind": "callable",
+            "source": "parity_cpp.cpp",
+            "name": "parity::choose",
+            "definition_line": 33,
+            "identity_field": "stable_id"
+        },
+        {
+            "reference": "parity::choose(double)",
+            "kind": "callable",
+            "source": "parity_cpp.cpp",
+            "name": "parity::choose",
+            "definition_line": 37,
+            "identity_field": "stable_id"
+        },
+        {
+            "reference": "cross_tu::transform declaration",
+            "kind": "call_target",
+            "source": "cross_tu_client.cpp",
+            "line": 4,
+            "column": 11,
+            "identity_field": "target_identity_value"
+        },
+        {
+            "reference": "cross_tu::transform definition",
+            "kind": "callable",
+            "source": "cross_tu_definition.cpp",
+            "name": "cross_tu::transform",
+            "definition_line": 3,
+            "identity_field": "semantic_identity_value"
+        },
+        {
+            "reference": "shared_internal.hpp:header_local@internal_a.cpp",
+            "kind": "call_target",
+            "source": "internal_a.cpp",
+            "line": 4,
+            "column": 11,
+            "identity_field": "target_identity_value"
+        },
+        {
+            "reference": "shared_internal.hpp:header_local@internal_b.cpp",
+            "kind": "call_target",
+            "source": "internal_b.cpp",
+            "line": 4,
+            "column": 11,
+            "identity_field": "target_identity_value"
+        }
+    ]
+}

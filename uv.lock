@@ -503,7 +503,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-analyzer-c"
-version = "2.0.15"
+version = "2.0.16"
 source = { editable = "packages/codira-analyzer-c" }
 dependencies = [
     { name = "codira" },
@@ -515,7 +515,7 @@ dependencies = [
 requires-dist = [
     { name = "black", marker = "extra == 'test'" },
     { name = "codira", specifier = ">=2.0.0,<3.0.0" },
-    { name = "codira-clang-frontend", marker = "extra == 'clang'", specifier = "==0.1.0" },
+    { name = "codira-clang-frontend", marker = "extra == 'clang'", specifier = "==0.2.0" },
     { name = "mypy", marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'test'" },
@@ -526,7 +526,7 @@ provides-extras = ["clang", "test"]
 
 [[package]]
 name = "codira-analyzer-cpp"
-version = "2.0.44"
+version = "2.0.45"
 source = { editable = "packages/codira-analyzer-cpp" }
 dependencies = [
     { name = "codira" },
@@ -538,7 +538,7 @@ dependencies = [
 requires-dist = [
     { name = "black", marker = "extra == 'test'" },
     { name = "codira", specifier = ">=2.0.0,<3.0.0" },
-    { name = "codira-clang-frontend", marker = "extra == 'clang'", specifier = "==0.1.0" },
+    { name = "codira-clang-frontend", marker = "extra == 'clang'", specifier = "==0.2.0" },
     { name = "mypy", marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'test'" },
@@ -709,7 +709,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-duckdb"
-version = "2.0.10"
+version = "2.0.11"
 source = { editable = "packages/codira-backend-duckdb" }
 dependencies = [
     { name = "codira" },
@@ -731,7 +731,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-backend-sqlite"
-version = "2.0.6"
+version = "2.0.7"
 source = { editable = "packages/codira-backend-sqlite" }
 dependencies = [
     { name = "codira" },
@@ -749,7 +749,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "codira-clang-frontend"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/codira-clang-frontend" }
 
 [package.metadata]

@@ -317,7 +317,19 @@ def test_call_and_ref_queries_filter_on_owner_prefix(tmp_path: Path) -> None:
             incoming=True,
             prefix="pkg/a.py",
         )
-    ) == [("pkg.a", "caller", "pkg.b", "imported_helper", None, None, 1)]
+    ) == [
+        (
+            "pkg.a",
+            "caller",
+            None,
+            "pkg.b",
+            "imported_helper",
+            None,
+            None,
+            None,
+            1,
+        ),
+    ]
     assert (
         find_call_edges(
             EdgeQueryRequest(

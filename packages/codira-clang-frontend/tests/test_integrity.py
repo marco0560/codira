@@ -129,13 +129,16 @@ class FrontendIntegrityTests(unittest.TestCase):
                 0,
                 json.dumps(
                     {
-                        "schema_version": "codira.clang-frontend-native/2",
+                        "schema_version": "codira.clang-frontend-native/3",
                         "declarations": [],
                         "non_function_declarations": [],
                         "calls": [],
                         "diagnostics": [],
                         "dependency_paths": [],
                         "search_directories": [],
+                        "includes": [],
+                        "preprocessing": [],
+                        "documentation_comments": [],
                         "capture_mode": "source_relevant",
                         "clang_version": "Clang fixture",
                         "target_triple": "x86_64-unknown-linux-gnu",
@@ -447,13 +450,16 @@ class FrontendIntegrityTests(unittest.TestCase):
         """
         self.assertEqual(_validate_response({}), "unsupported_native_protocol_version")
         response: dict[str, object] = {
-            "schema_version": "codira.clang-frontend-native/2",
+            "schema_version": "codira.clang-frontend-native/3",
             "declarations": [],
             "non_function_declarations": [],
             "calls": [],
             "diagnostics": [],
             "dependency_paths": [],
             "search_directories": [],
+            "includes": [],
+            "preprocessing": [],
+            "documentation_comments": [],
             "capture_mode": "source_relevant",
             "clang_version": "Clang fixture",
             "target_triple": "x86_64-unknown-linux-gnu",
@@ -482,13 +488,16 @@ class FrontendIntegrityTests(unittest.TestCase):
             Test assertion result.
         """
         response: dict[str, object] = {
-            "schema_version": "codira.clang-frontend-native/2",
+            "schema_version": "codira.clang-frontend-native/3",
             "declarations": [],
             "non_function_declarations": [],
             "calls": [],
             "diagnostics": [],
             "dependency_paths": [],
             "search_directories": [],
+            "includes": [],
+            "preprocessing": [],
+            "documentation_comments": [],
             "capture_mode": "source_relevant",
             "clang_version": "Clang fixture",
             "tool_return_code": 0,
@@ -581,13 +590,16 @@ class FrontendIntegrityTests(unittest.TestCase):
                 "not_hashed",
             )
             response = {
-                "schema_version": "codira.clang-frontend-native/2",
+                "schema_version": "codira.clang-frontend-native/3",
                 "declarations": [],
                 "non_function_declarations": [],
                 "calls": [],
                 "diagnostics": [],
                 "dependency_paths": [],
                 "search_directories": [],
+                "includes": [],
+                "preprocessing": [],
+                "documentation_comments": [],
                 "capture_mode": "source_relevant",
                 "clang_version": "Clang fixture",
                 "target_triple": "arm64-test",

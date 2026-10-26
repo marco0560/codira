@@ -104,7 +104,23 @@ if TYPE_CHECKING:
     from codira.semantic.embeddings import EmbeddingBackendSpec
 
 CallRecord = dict[str, str | int]
-CallRow = tuple[int, str, str, str, str, str, str | None, str | None, int, int]
+CallRow = tuple[
+    int,
+    str,
+    str,
+    str | None,
+    str,
+    str,
+    str,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    int,
+    int,
+]
 RefRow = tuple[int, str, str, str, str, str, str, str | None, str | None, int, int]
 FileRow = tuple[int, str, str, float, int, str, str, str]
 ModuleRow = tuple[int, int, str, str | None, int]
@@ -124,7 +140,22 @@ FunctionRow = tuple[
     str | None,
     str | None,
 ]
-SymbolIndexRow = tuple[int, str, str, str, str, int, int]
+SymbolIndexRow = tuple[
+    int,
+    str,
+    str,
+    str,
+    str,
+    int,
+    int,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+]
 DocumentationArtifactRow = tuple[
     int,
     int,
@@ -180,8 +211,10 @@ _CALL_EDGES_REBUILD_TABLE_DDL = """
         caller_file_id INTEGER NOT NULL,
         caller_module TEXT NOT NULL,
         caller_name TEXT NOT NULL,
+        caller_stable_id TEXT,
         callee_module TEXT,
         callee_name TEXT,
+        callee_stable_id TEXT,
         unresolved_identity TEXT NOT NULL DEFAULT '',
         external_target_kind TEXT,
         external_target_name TEXT,
@@ -208,8 +241,10 @@ _DERIVED_GRAPH_INDEX_DDL = (
         caller_file_id,
         caller_module,
         caller_name,
+        COALESCE(caller_stable_id, ''),
         COALESCE(callee_module, ''),
         COALESCE(callee_name, ''),
+        COALESCE(callee_stable_id, ''),
         unresolved_identity
     );
     """,
@@ -565,6 +600,17 @@ def _flush_structural_symbol_index_rows(
             "module_name": pa.array([row[4] for row in rows], type=pa.string()),
             "file_id": pa.array([row[5] for row in rows], type=pa.int64()),
             "lineno": pa.array([row[6] for row in rows], type=pa.int64()),
+            "semantic_identity_namespace": pa.array(
+                [row[7] for row in rows], type=pa.string()
+            ),
+            "semantic_identity_value": pa.array(
+                [row[8] for row in rows], type=pa.string()
+            ),
+            "owner_name": pa.array([row[9] for row in rows], type=pa.string()),
+            "owner_stable_id": pa.array([row[10] for row in rows], type=pa.string()),
+            "access": pa.array([row[11] for row in rows], type=pa.string()),
+            "signature": pa.array([row[12] for row in rows], type=pa.string()),
+            "type_text": pa.array([row[13] for row in rows], type=pa.string()),
         }
     )
     _flush_registered_arrow_table(
@@ -572,8 +618,15 @@ def _flush_structural_symbol_index_rows(
         view_name="__codira_pending_symbol_index_rows",
         table=table,
         insert_sql="""
-            INSERT INTO symbol_index(id, name, stable_id, type, module_name, file_id, lineno)
-            SELECT id, name, stable_id, type, module_name, file_id, lineno
+            INSERT INTO symbol_index(
+                id, name, stable_id, type, module_name, file_id, lineno,
+                semantic_identity_namespace, semantic_identity_value,
+                owner_name, owner_stable_id, access, signature, type_text
+            )
+            SELECT
+                id, name, stable_id, type, module_name, file_id, lineno,
+                semantic_identity_namespace, semantic_identity_value,
+                owner_name, owner_stable_id, access, signature, type_text
             FROM __codira_pending_symbol_index_rows
             """,
     )
