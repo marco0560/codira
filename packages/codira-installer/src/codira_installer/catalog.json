@@ -2,6 +2,12 @@
   "coordinated_version": "2.0.0",
   "packages": [
     {
+      "family": null,
+      "name": "codira-clang-frontend",
+      "path": "packages/codira-clang-frontend",
+      "selectable": false
+    },
+    {
       "configuration_schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -133,6 +139,32 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "clang_attempt_root": {
+            "default": ".artifacts/clang-frontend",
+            "description": "Durable root for immutable per-attempt Clang evidence; may be repository-relative or an explicit absolute path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_build_receipt_path": {
+            "description": "Explicit path to the helper build receipt used for toolchain identity.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_captured_profiles": {
+            "description": "Explicit generic captured-profile JSON file, selected by exact source path and digest.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_compile_commands": {
+            "description": "Explicit compilation database used to select the exact C profile for each source file.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_helper_path": {
+            "description": "Explicit path to the packaged Clang frontend helper executable.",
+            "minLength": 1,
+            "type": "string"
+          },
           "emit_doxygen_documentation": {
             "default": true,
             "type": "boolean"
@@ -159,6 +191,15 @@
             "default": false,
             "description": "Expand fully proven bounded file-scope declaration macros from captured source and contained headers; unsupported or uncertain sites remain partial.",
             "type": "boolean"
+          },
+          "frontend": {
+            "default": "tree-sitter",
+            "description": "Select the optional Clang frontend explicitly; Tree-sitter remains the default.",
+            "enum": [
+              "tree-sitter",
+              "clang"
+            ],
+            "type": "string"
           },
           "include_paths": {
             "default": [],
@@ -208,6 +249,32 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "clang_attempt_root": {
+            "default": ".artifacts/clang-frontend",
+            "description": "Durable root for immutable per-attempt Clang evidence; may be repository-relative or an explicit absolute path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_build_receipt_path": {
+            "description": "Explicit path to the helper build receipt used for toolchain identity.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_captured_profiles": {
+            "description": "Explicit generic captured-profile JSON file, selected by exact source path and digest.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_compile_commands": {
+            "description": "Explicit compilation database used to select the exact C++ profile for each source file.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "clang_helper_path": {
+            "description": "Explicit path to the packaged Clang frontend helper executable.",
+            "minLength": 1,
+            "type": "string"
+          },
           "emit_doxygen_documentation": {
             "default": true,
             "type": "boolean"
@@ -233,6 +300,15 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "frontend": {
+            "default": "tree-sitter",
+            "description": "Select the optional Clang frontend explicitly; Tree-sitter remains the default.",
+            "enum": [
+              "tree-sitter",
+              "clang"
+            ],
+            "type": "string"
           },
           "header_language": {
             "default": "auto",

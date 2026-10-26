@@ -1,4 +1,4 @@
-"""C++ language analyzer backed by tree-sitter.
+"""C++ language analyzer with Tree-sitter default and optional Clang frontend.
 
 Responsibilities
 ----------------
@@ -10,8 +10,9 @@ Responsibilities
 
 Design principles
 -----------------
-The analyzer keeps C++-specific parsing isolated to this package so the core
-runtime continues to own orchestration, storage, and query behavior.
+Tree-sitter remains the default. An explicitly selected shared Clang frontend
+can supply a source-written declaration and call subset when its exact compile
+profile and dependency closure are complete.
 
 Architectural role
 ------------------
@@ -35,12 +36,21 @@ import hashlib
 import json
 from bisect import bisect_right
 from dataclasses import dataclass, field, replace
+from importlib.metadata import version as distribution_version
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from codira_clang_frontend import (
+        ClangFrontend,
+        CompilationContext,
+        CompileProfile,
+        FrontendResult,
+        SourcePoint,
+    )
     from codira.contracts import LanguageAnalyzer
     from .cpp_macro_expansion import _MacroDefinition
     from .cpp_macro_context import MacroSelection
@@ -112,6 +122,7 @@ from codira.models import (
     AnalysisStatus,
     AnalysisCoverageState,
     CallSite,
+    CallKind,
     ClassArtifact,
     DeclarationArtifact,
     DeclarationKind,
@@ -131,6 +142,608 @@ from codira.plugin_config import (
 
 _CPP_SUFFIXES = {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".ipp", ".h"}
 __all__ = ["CppAnalyzer", "_disambiguate_callable_stable_ids", "build_analyzer"]
+
+
+def _clang_profile_and_frontend(
+    *,
+    path: Path,
+    root: Path,
+    compile_commands: str | None,
+    captured_profiles: str | None,
+    helper_path: str | None,
+    build_receipt_path: str | None,
+) -> tuple[ClangFrontend, CompileProfile]:
+    """Load a profile through the optional shared frontend package.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Translation unit selected by the indexer.
+    root : pathlib.Path
+        Repository containing the translation unit.
+    compile_commands, captured_profiles : str or None
+        Mutually exclusive exact profile evidence sources.
+    helper_path, build_receipt_path : str or None
+        Explicit frontend helper and build receipt paths.
+
+    Returns
+    -------
+    tuple[codira_clang_frontend.ClangFrontend, codira_clang_frontend.CompileProfile]
+        Validated frontend and source-bound profile.
+
+    Raises
+    ------
+    ImportError
+        If the optional frontend package is not installed.
+    ValueError
+        If profile or toolchain configuration is missing or invalid.
+    OSError
+        If an explicitly configured profile or toolchain input is unavailable.
+    """
+    if helper_path is None or build_receipt_path is None:
+        raise ValueError("Clang helper and build receipt paths must be configured")
+    if compile_commands is None and captured_profiles is None:
+        raise ValueError("a compile database or captured profile file is required")
+    from codira_clang_frontend import create_frontend_profile
+
+    def configured_path(value: str) -> Path:
+        candidate = Path(value)
+        return (candidate if candidate.is_absolute() else root / candidate).resolve()
+
+    return create_frontend_profile(
+        path=path,
+        root=root,
+        language="cpp",
+        compile_commands=(
+            configured_path(compile_commands) if compile_commands is not None else None
+        ),
+        captured_profiles=(
+            configured_path(captured_profiles)
+            if captured_profiles is not None
+            else None
+        ),
+        helper_path=configured_path(helper_path),
+        build_receipt_path=configured_path(build_receipt_path),
+    )
+
+
+def _clang_fallback_fingerprint(
+    *,
+    path: Path,
+    root: Path,
+    frontend_options: tuple[str | None, ...],
+) -> str:
+    """Hash unavailable Clang inputs so profile appearance invalidates reuse.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Translation unit whose current bytes are always included.
+    root : pathlib.Path
+        Repository root used to resolve relative explicit inputs.
+    frontend_options : tuple[str or None, ...]
+        Explicit profile, helper, receipt, and attempt-root settings.
+
+    Returns
+    -------
+    str
+        Deterministic unavailable-frontend identity without exposing command text.
+    """
+    captured_profiles, helper_path, build_receipt_path = frontend_options[1:4]
+    if (
+        captured_profiles is not None
+        and helper_path is not None
+        and build_receipt_path is not None
+    ):
+        try:
+            from codira_clang_frontend import captured_profile_fingerprint
+
+            def configured_path(value: str) -> Path:
+                candidate = Path(value)
+                return (
+                    candidate if candidate.is_absolute() else root / candidate
+                ).resolve()
+
+            return captured_profile_fingerprint(
+                configured_path(captured_profiles),
+                path,
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+                helper_path=configured_path(helper_path),
+                build_receipt_path=configured_path(build_receipt_path),
+            )
+        except (ImportError, OSError, ValueError):
+            pass
+    identities: list[dict[str, str | None]] = []
+    for configured in frontend_options:
+        if configured is None:
+            identities.append({"path": None, "sha256": None})
+            continue
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        except OSError:
+            digest = None
+        identities.append({"path": str(candidate.resolve()), "sha256": digest})
+    payload = {
+        "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "inputs": identities,
+        "package_version": _clang_package_version(),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _clang_package_version() -> str | None:
+    """Return the installed optional frontend version when available.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    str or None
+        Installed distribution version, or ``None`` when unavailable.
+    """
+    try:
+        return distribution_version("codira-clang-frontend")
+    except ImportError:
+        return None
+
+
+def _clang_source_position(
+    point: SourcePoint | None, source_path: Path
+) -> tuple[int, int] | None:
+    """Return a verified physical source line and zero-based column.
+
+    Parameters
+    ----------
+    point : codira_clang_frontend.SourcePoint or None
+        Clang spelling/expansion position for a source entity.
+    source_path : pathlib.Path
+        Translation unit whose physical coordinates are accepted.
+
+    Returns
+    -------
+    tuple[int, int] or None
+        One-based source line and zero-based column only when Clang names the
+        exact translation unit.
+    """
+    if point is None:
+        return None
+    for position in (point.spelling, point.expansion):
+        if position is None or position.path is None or position.line is None:
+            continue
+        try:
+            matches_source = Path(position.path).resolve() == source_path.resolve()
+        except OSError:
+            matches_source = False
+        if matches_source and position.column is not None:
+            return position.line, max(0, position.column - 1)
+    return None
+
+
+def _clang_fallback_result(
+    result: AnalysisResult,
+    reason: str,
+    *,
+    language: str,
+    frontend_result: FrontendResult | None = None,
+) -> AnalysisResult:
+    """Mark Tree-sitter fallback when the selected Clang path is incomplete.
+
+    Parameters
+    ----------
+    result : codira.models.AnalysisResult
+        Existing Tree-sitter result to retain as the sole analyzer output.
+    reason : str
+        Stable frontend fallback reason, without raw command or output text.
+    language : str
+        Language name used for the fallback grammar identity.
+    frontend_result : codira_clang_frontend.FrontendResult or None, optional
+        Retained result metadata, including raw attempt paths and digests.
+
+    Returns
+    -------
+    codira.models.AnalysisResult
+        Original artifacts with explicit partial Clang fallback status.
+    """
+    prior = result.status or AnalysisStatus(
+        grammar=f"tree-sitter-{language}",
+        target_contract={"language": language},
+    )
+    return replace(
+        result,
+        status=replace(
+            prior,
+            target_contract={
+                **prior.target_contract,
+                "requested_frontend": "clang",
+                "selected_frontend": "tree-sitter",
+                "clang_attempt": (
+                    _clang_result_evidence(frontend_result)
+                    if frontend_result is not None
+                    else None
+                ),
+            },
+            diagnostics=(
+                *prior.diagnostics,
+                AnalysisDiagnostic("clang_frontend_fallback", reason),
+            ),
+            coverage_state=AnalysisCoverageState.PARTIAL,
+        ),
+    )
+
+
+def _clang_result_evidence(result: FrontendResult) -> dict[str, object]:
+    """Serialize provenance references for one retained Clang attempt.
+
+    Parameters
+    ----------
+    result : codira_clang_frontend.FrontendResult
+        Frontend response whose outputs remain in its immutable attempt folder.
+
+    Returns
+    -------
+    dict[str, object]
+        Stable status, cache, profile, raw-output, and dependency references.
+    """
+    return {
+        "status": result.status,
+        "coverage_state": result.coverage_state,
+        "reasons": result.reasons,
+        "profile_identity": result.profile_identity,
+        "cache_fingerprint": result.cache_fingerprint,
+        "compilation_context": _clang_compilation_context_payload(
+            result.compilation_context
+        ),
+        "stdout_path": str(result.stdout_path) if result.stdout_path else None,
+        "stdout_sha256": result.stdout_sha256,
+        "stderr_path": str(result.stderr_path) if result.stderr_path else None,
+        "stderr_sha256": result.stderr_sha256,
+        "dependency_closure_sha256": (
+            result.dependency_closure.sha256
+            if result.dependency_closure is not None
+            else None
+        ),
+    }
+
+
+def _clang_compilation_context_payload(
+    context: CompilationContext | None,
+) -> dict[str, str | None] | None:
+    """Serialize compiler-derived target and sysroot identity for status.
+
+    Parameters
+    ----------
+    context : codira_clang_frontend.CompilationContext or None
+        Actual target and sysroot emitted by the Clang invocation.
+
+    Returns
+    -------
+    dict[str, str or None] or None
+        Persistable context values, or ``None`` when the helper supplied none.
+    """
+    if context is None:
+        return None
+    return {
+        "target_triple": context.target_triple,
+        "sysroot": context.sysroot,
+        "sysroot_path": (
+            str(context.sysroot_path) if context.sysroot_path is not None else None
+        ),
+    }
+
+
+def _analysis_from_clang_result(
+    path: Path, root: Path, result: FrontendResult
+) -> AnalysisResult | None:
+    """Map supported source-written Clang declarations and calls into C++ DTOs.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Original C++ translation unit.
+    root : pathlib.Path
+        Repository root used for durable analyzer identities.
+    result : codira_clang_frontend.FrontendResult
+        Complete frontend result with verified source coordinates.
+
+    Returns
+    -------
+    codira.models.AnalysisResult or None
+        Clang-backed output, or ``None`` when required ownership, visibility,
+        or physical source coordinates cannot be represented faithfully.
+    """
+    if result.status != "parsed" or result.coverage_state != "complete":
+        return None
+    owner_id = _symbol_owner_id(path, root)
+    class_declarations = {
+        item.qualified_name: item
+        for item in result.declarations
+        if item.provenance == "source_written"
+        and item.kind in {"class", "struct", "union"}
+    }
+    class_rows: dict[str, ClassArtifact] = {}
+    for qualified_name, declaration in class_declarations.items():
+        position = _clang_source_position(declaration.location, path)
+        if position is None:
+            return None
+        end_position = _clang_source_position(
+            declaration.span.end if declaration.span is not None else None, path
+        )
+        class_rows[qualified_name] = ClassArtifact(
+            name=qualified_name,
+            stable_id=_class_stable_id(owner_id, qualified_name),
+            lineno=position[0],
+            end_lineno=end_position[0] if end_position is not None else None,
+            docstring=None,
+            has_docstring=0,
+            methods=(),
+        )
+    functions: list[FunctionArtifact] = []
+    methods: dict[str, list[FunctionArtifact]] = {name: [] for name in class_rows}
+    overload_types: dict[str, set[str]] = {}
+    for callable_item in result.callables:
+        if callable_item.provenance != "source_written":
+            continue
+        overload_types.setdefault(callable_item.qualified_name, set()).add(
+            callable_item.function_type or callable_item.signature
+        )
+    overloaded_targets = {
+        qualified_name
+        for qualified_name, function_types in overload_types.items()
+        if len(function_types) > 1
+    }
+    for callable_item in result.callables:
+        if (
+            callable_item.provenance != "source_written"
+            or not callable_item.is_definition
+        ):
+            continue
+        if (
+            callable_item.kind
+            not in {
+                "function",
+                "method",
+                "constructor",
+                "destructor",
+                "conversion",
+            }
+            or callable_item.is_public is None
+        ):
+            return None
+        position = _clang_source_position(callable_item.location, path)
+        if position is None:
+            return None
+        class_name = (
+            callable_item.lexical_owner
+            if callable_item.kind
+            in {"method", "constructor", "destructor", "conversion"}
+            else None
+        )
+        if (
+            callable_item.kind
+            in {
+                "method",
+                "constructor",
+                "destructor",
+                "conversion",
+            }
+            and class_name is None
+        ):
+            return None
+        if class_name is not None and class_name not in class_rows:
+            return None
+        end_position = _clang_source_position(
+            callable_item.span.end if callable_item.span is not None else None, path
+        )
+        calls: list[CallSite] = []
+        for call in callable_item.calls:
+            if call.origin != "source_written":
+                continue
+            if not call.target:
+                return None
+            call_position = _clang_source_position(call.location, path)
+            if call_position is None:
+                return None
+            qualified_target = call.qualified_target or call.target
+            if qualified_target in overloaded_targets:
+                call_kind = "unresolved"
+                base = ""
+                target = qualified_target
+            elif "::" in qualified_target:
+                base, target = qualified_target.rsplit("::", 1)
+                call_kind = "attribute"
+            else:
+                base, target, call_kind = "", call.target, "name"
+            calls.append(
+                CallSite(
+                    kind=cast("CallKind", call_kind),
+                    target=target,
+                    base=base,
+                    lineno=call_position[0],
+                    col_offset=call_position[1],
+                    external_target_kind=_cpp_external_target_kind(base, target),
+                    external_target_name=qualified_target,
+                )
+            )
+        function = FunctionArtifact(
+            name=(
+                callable_item.name
+                if class_name is not None
+                else callable_item.qualified_name or callable_item.name
+            ),
+            stable_id=_function_stable_id(
+                owner_id,
+                (
+                    callable_item.name
+                    if class_name is not None
+                    else callable_item.qualified_name or callable_item.name
+                ),
+                class_name=class_name,
+            ),
+            lineno=position[0],
+            end_lineno=end_position[0] if end_position is not None else None,
+            signature=callable_item.signature,
+            docstring=None,
+            has_docstring=0,
+            is_method=int(class_name is not None),
+            is_public=int(callable_item.is_public),
+            parameters=tuple(name for name, _ in callable_item.parameters if name),
+            returns_value=0,
+            yields_value=0,
+            raises=0,
+            has_asserts=0,
+            decorators=(),
+            calls=tuple(sorted(calls, key=lambda item: (item.lineno, item.col_offset))),
+            callable_refs=(),
+            owner_name=class_name,
+            owner_stable_id=(
+                class_rows[class_name].stable_id if class_name is not None else None
+            ),
+        )
+        if class_name is None:
+            functions.append(function)
+        else:
+            methods[class_name].append(function)
+    classes = tuple(
+        replace(
+            class_rows[name],
+            methods=_disambiguate_callable_stable_ids(
+                tuple(
+                    sorted(
+                        methods[name],
+                        key=lambda item: (item.lineno, item.name, item.signature),
+                    )
+                )
+            ),
+        )
+        for name in sorted(class_rows, key=lambda key: (class_rows[key].lineno, key))
+    )
+    declaration_kinds = {
+        "constant",
+        "enum",
+        "namespace",
+        "type_alias",
+        "typedef",
+        "variable",
+    }
+    declarations: list[DeclarationArtifact] = []
+    for declaration in result.declarations:
+        if declaration.provenance != "source_written":
+            continue
+        if declaration.kind in {"class", "struct", "union"}:
+            continue
+        if declaration.kind not in declaration_kinds:
+            continue
+        position = _clang_source_position(declaration.location, path)
+        if position is None:
+            return None
+        signature = declaration.signature or declaration.type_text or declaration.name
+        declarations.append(
+            DeclarationArtifact(
+                name=declaration.qualified_name or declaration.name,
+                stable_id=_declaration_stable_id(
+                    owner_id,
+                    cast("DeclarationKind", declaration.kind),
+                    declaration.qualified_name or declaration.name,
+                ),
+                kind=cast("DeclarationKind", declaration.kind),
+                lineno=position[0],
+                signature=signature,
+            )
+        )
+    status_diagnostics = tuple(
+        AnalysisDiagnostic(
+            category="clang_diagnostic",
+            message=diagnostic.message,
+            line=diagnostic.location.line if diagnostic.location else None,
+            column=(diagnostic.location.column - 1)
+            if diagnostic.location and diagnostic.location.column is not None
+            else None,
+        )
+        for diagnostic in result.diagnostics
+    )
+    toolchain = result.toolchain_identity
+    dependency_closure = result.dependency_closure
+    return AnalysisResult(
+        source_path=path,
+        module=ModuleArtifact(
+            name=_module_name_for_path(path, root),
+            stable_id=_module_stable_id(path, root),
+            docstring=None,
+            has_docstring=0,
+        ),
+        classes=classes,
+        functions=_disambiguate_callable_stable_ids(
+            tuple(
+                sorted(
+                    functions, key=lambda item: (item.lineno, item.name, item.signature)
+                )
+            )
+        ),
+        declarations=tuple(
+            sorted(declarations, key=lambda item: (item.lineno, item.name, item.kind))
+        ),
+        imports=(),
+        index_symbols=True,
+        status=AnalysisStatus(
+            grammar="clang-cpp-frontend",
+            target_contract={
+                "language": "cpp",
+                "frontend": "clang",
+                "profile_identity": result.profile_identity,
+                "cache_fingerprint": result.cache_fingerprint,
+                "compilation_context": _clang_compilation_context_payload(
+                    result.compilation_context
+                ),
+                "attempt_evidence": _clang_result_evidence(result),
+                "toolchain_identity": (
+                    {
+                        "compiler_path": str(toolchain.compiler_path),
+                        "compiler_sha256": toolchain.compiler_sha256,
+                        "compiler_version": toolchain.compiler_version,
+                        "resource_dir": str(toolchain.resource_dir),
+                        "resource_probe_sha256": toolchain.resource_probe_sha256,
+                        "helper_path": str(toolchain.helper_path),
+                        "helper_sha256": toolchain.helper_sha256,
+                        "build_receipt_sha256": toolchain.build_receipt_sha256,
+                        "package_version": toolchain.package_version,
+                        "runtime_shared_library_identity": toolchain.runtime_shared_library_identity,
+                    }
+                    if toolchain is not None
+                    else None
+                ),
+                "dependency_closure": (
+                    {
+                        "status": dependency_closure.status,
+                        "sha256": dependency_closure.sha256,
+                        "file_count": len(dependency_closure.files),
+                    }
+                    if dependency_closure is not None
+                    else None
+                ),
+            },
+            diagnostics=status_diagnostics,
+            reliable_categories=("module", "class", "function", "declaration"),
+            omitted_categories=(
+                "import",
+                "documentation",
+                "macro",
+                "field",
+                "variable",
+                "function_body_flags",
+                "resolved_overload_dispatch",
+            ),
+            coverage_state=AnalysisCoverageState.PARTIAL,
+        ),
+    )
+
+
 _TYPE_LIKE_NAMES = {
     "auto",
     "bool",
@@ -4137,12 +4750,13 @@ class CppAnalyzer:
 
     Notes
     -----
-    This analyzer is backed by `tree-sitter-cpp` and targets deterministic
-    structural extraction rather than compilation-complete C++ semantics.
+    The default analyzer uses `tree-sitter-cpp`. An explicitly configured
+    Clang frontend is optional and falls back to Tree-sitter with partial
+    status when its profile, helper, or source mapping is incomplete.
     """
 
     name = "cpp"
-    version = "42"
+    version = "43"
     discovery_globs: tuple[str, ...] = (
         "*.cpp",
         "*.cc",
@@ -4184,6 +4798,12 @@ class CppAnalyzer:
         self._include_system_includes = True
         self._emit_namespaces = True
         self._emit_macros = True
+        self._frontend = "tree-sitter"
+        self._clang_compile_commands: str | None = None
+        self._clang_captured_profiles: str | None = None
+        self._clang_helper_path: str | None = None
+        self._clang_build_receipt_path: str | None = None
+        self._clang_attempt_root = ".artifacts/clang-frontend"
         self.configuration_fingerprint = plugin_configuration_fingerprint({})
 
     def configuration_json_schema(self) -> Mapping[str, object]:
@@ -4258,6 +4878,38 @@ class CppAnalyzer:
                     "default": "auto",
                     "description": "Language selection for ambiguous .h headers.",
                 },
+                "frontend": {
+                    "type": "string",
+                    "enum": ["tree-sitter", "clang"],
+                    "default": "tree-sitter",
+                    "description": "Select the optional Clang frontend explicitly; Tree-sitter remains the default.",
+                },
+                "clang_compile_commands": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Explicit compilation database used to select the exact C++ profile for each source file.",
+                },
+                "clang_captured_profiles": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Explicit generic captured-profile JSON file, selected by exact source path and digest.",
+                },
+                "clang_helper_path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Explicit path to the packaged Clang frontend helper executable.",
+                },
+                "clang_build_receipt_path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Explicit path to the helper build receipt used for toolchain identity.",
+                },
+                "clang_attempt_root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "default": ".artifacts/clang-frontend",
+                    "description": "Durable root for immutable per-attempt Clang evidence; may be repository-relative or an explicit absolute path.",
+                },
             }
         )
 
@@ -4285,6 +4937,30 @@ class CppAnalyzer:
             observation identities, ranges or bounds are rejected explicitly.
         """
 
+        frontend = config.get("frontend", "tree-sitter")
+        if not isinstance(frontend, str) or frontend not in {"tree-sitter", "clang"}:
+            raise ValueError("frontend must be tree-sitter or clang")
+        clang_options: dict[str, str | None] = {}
+        for option in (
+            "clang_compile_commands",
+            "clang_captured_profiles",
+            "clang_helper_path",
+            "clang_build_receipt_path",
+        ):
+            value = config.get(option)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"{option} must be a nonempty string when provided")
+            clang_options[option] = value if isinstance(value, str) else None
+        attempt_root = config.get("clang_attempt_root", ".artifacts/clang-frontend")
+        if not isinstance(attempt_root, str) or not attempt_root:
+            raise ValueError("clang_attempt_root must be a nonempty string")
+        if (
+            clang_options["clang_compile_commands"]
+            and clang_options["clang_captured_profiles"]
+        ):
+            raise ValueError(
+                "configure only one of clang_compile_commands or clang_captured_profiles"
+            )
         self._path_filters = analyzer_path_filters_from_config(config)
         self._header_language = str(config.get("header_language", "auto"))
         if self._header_language not in {"auto", "c", "cpp"}:
@@ -4331,6 +5007,12 @@ class CppAnalyzer:
         )
         self._emit_namespaces = bool(config.get("emit_namespaces", True))
         self._emit_macros = bool(config.get("emit_macros", True))
+        self._frontend = frontend
+        self._clang_compile_commands = clang_options["clang_compile_commands"]
+        self._clang_captured_profiles = clang_options["clang_captured_profiles"]
+        self._clang_helper_path = clang_options["clang_helper_path"]
+        self._clang_build_receipt_path = clang_options["clang_build_receipt_path"]
+        self._clang_attempt_root = attempt_root
         self.configuration_fingerprint = plugin_configuration_fingerprint(config)
 
     def analyzer_capability_declaration(self) -> AnalyzerCapabilityDeclaration:
@@ -4475,12 +5157,43 @@ class CppAnalyzer:
         """
         from .cpp_generated_analysis import captured_identity
 
-        return validate_analysis_input_fingerprint(
+        payload = json.loads(
             captured_identity(
                 read_include_context(
                     path, root, include_paths=self._include_search_paths
                 ),
                 self.configuration_fingerprint,
+            )
+        )
+        if self._frontend == "clang":
+            try:
+                frontend, profile = _clang_profile_and_frontend(
+                    path=path,
+                    root=root,
+                    compile_commands=self._clang_compile_commands,
+                    captured_profiles=self._clang_captured_profiles,
+                    helper_path=self._clang_helper_path,
+                    build_receipt_path=self._clang_build_receipt_path,
+                )
+                from codira_clang_frontend import frontend_profile_fingerprint
+
+                clang_identity = frontend_profile_fingerprint(frontend, profile)
+            except (ImportError, OSError, ValueError):
+                clang_identity = _clang_fallback_fingerprint(
+                    path=path,
+                    root=root,
+                    frontend_options=(
+                        self._clang_compile_commands,
+                        self._clang_captured_profiles,
+                        self._clang_helper_path,
+                        self._clang_build_receipt_path,
+                        self._clang_attempt_root,
+                    ),
+                )
+            payload["clang_frontend_fingerprint"] = clang_identity
+        return validate_analysis_input_fingerprint(
+            json.dumps(
+                payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")
             )
         )
 
@@ -4507,6 +5220,11 @@ class CppAnalyzer:
             payload = json.loads(expected)
         except ValueError:
             return False
+        if self._frontend == "clang":
+            try:
+                return self.analysis_input_fingerprint(path, root) == expected
+            except (OSError, ValueError):
+                return False
         return (
             isinstance(payload, dict)
             and payload.get("generated_provenance_version") == 1
@@ -4526,6 +5244,59 @@ class CppAnalyzer:
             )
         )
 
+    def _try_clang_frontend(
+        self, path: Path, root: Path
+    ) -> tuple[FrontendResult | None, str]:
+        """Run the optional frontend once with a fresh durable evidence leaf.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Translation unit selected for analysis.
+        root : pathlib.Path
+            Repository root used to resolve configured relative paths.
+
+        Returns
+        -------
+        tuple[codira_clang_frontend.FrontendResult or None, str]
+            Frontend result, or ``None``, and a stable fallback reason.
+
+        Notes
+        -----
+        Failed and successful attempt directories are retained. There is no
+        temporary-directory fallback for raw Clang evidence.
+        """
+        try:
+            frontend, profile = _clang_profile_and_frontend(
+                path=path,
+                root=root,
+                compile_commands=self._clang_compile_commands,
+                captured_profiles=self._clang_captured_profiles,
+                helper_path=self._clang_helper_path,
+                build_receipt_path=self._clang_build_receipt_path,
+            )
+        except ImportError:
+            return None, "optional_clang_frontend_package_unavailable"
+        except (OSError, ValueError):
+            return None, "clang_profile_or_toolchain_unavailable"
+        attempt_root = Path(self._clang_attempt_root)
+        if not attempt_root.is_absolute():
+            attempt_root = root / attempt_root
+        source_key = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:16]
+        attempt_id = uuid4().hex
+        attempt_dir = attempt_root / source_key / attempt_id
+        try:
+            attempt_dir.mkdir(parents=True, exist_ok=False)
+            result = frontend.analyze(
+                profile, attempt_dir=attempt_dir, attempt_id=attempt_id
+            )
+        except (OSError, ValueError):
+            return None, "clang_attempt_evidence_or_execution_unavailable"
+        if result.status != "parsed" or result.coverage_state != "complete":
+            reason = result.reasons[0] if result.reasons else "clang_result_incomplete"
+            return result, reason
+        return result, ""
+
     def analyze_file(self, path: Path, root: Path) -> AnalysisResult:
         """
         Analyze one C++ source file into normalized artifacts.
@@ -4542,6 +5313,15 @@ class CppAnalyzer:
         codira.models.AnalysisResult
             Normalized analysis result for the file.
         """
+        clang_fallback_reason: str | None = None
+        clang_result: FrontendResult | None = None
+        if self._frontend == "clang":
+            clang_result, clang_fallback_reason = self._try_clang_frontend(path, root)
+            if clang_result is not None and not clang_fallback_reason:
+                mapped = _analysis_from_clang_result(path, root, clang_result)
+                if mapped is not None:
+                    return mapped
+                clang_fallback_reason = "clang_entities_outside_supported_cpp_dto_scope"
         context = read_include_context(
             path, root, include_paths=self._include_search_paths
         )
@@ -4549,14 +5329,22 @@ class CppAnalyzer:
             from .cpp_generated_analysis import analyze_generated_file
 
             try:
-                return analyze_generated_file(self, path, root, context)
+                generated = analyze_generated_file(self, path, root, context)
+                if clang_fallback_reason is not None:
+                    return _clang_fallback_result(
+                        generated,
+                        clang_fallback_reason,
+                        language="cpp",
+                        frontend_result=clang_result,
+                    )
+                return generated
             except ValueError as error:
                 result = self._analyze_captured_file(path, root, context)
                 status = result.status
                 diagnostic = AnalysisDiagnostic(
                     category="macro_context", message=str(error)
                 )
-                return replace(
+                failed = replace(
                     result,
                     index_symbols=False,
                     status=AnalysisStatus(
@@ -4578,7 +5366,23 @@ class CppAnalyzer:
                         coverage_state=AnalysisCoverageState.PARTIAL,
                     ),
                 )
-        return self._analyze_captured_file(path, root, context)
+                if clang_fallback_reason is not None:
+                    return _clang_fallback_result(
+                        failed,
+                        clang_fallback_reason,
+                        language="cpp",
+                        frontend_result=clang_result,
+                    )
+                return failed
+        result = self._analyze_captured_file(path, root, context)
+        if clang_fallback_reason is not None:
+            result = _clang_fallback_result(
+                result,
+                clang_fallback_reason,
+                language="cpp",
+                frontend_result=clang_result,
+            )
+        return result
 
     def _analyze_captured_file(
         self,

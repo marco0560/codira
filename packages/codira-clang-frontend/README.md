@@ -1,0 +1,122 @@
+# codira-clang-frontend
+
+This optional package provides one Clang LibTooling frontend for Codira's C
+and C++ analyzer plugins. It is independent of the Codira core package and has
+no Python runtime dependencies. Without an explicitly configured helper and
+profile, analyzers continue using their existing frontend.
+
+## Native helper lifecycle
+
+The packaged C++ source is `src/codira_clang_frontend/native/clang_frontend.cpp`.
+Build it only as an explicit developer or operator step, using the matching
+Clang/LLVM development headers, libraries, compiler, and resource directory.
+The build API requires the compiler and library paths/names as inputs. It does
+not search `PATH`, invoke a build system, infer linker flags, or run during
+package import or indexing. A build receipt records the compiler invocation,
+binary and source hashes, resource probe, exact argv, and immutable raw build
+stdout/stderr. A failed build leaves its attempt outputs in place.
+
+For example, after installing the optional package and identifying the local
+LLVM installation, the operator can run:
+
+```bash
+python -m codira_clang_frontend.build_helper \
+  --compiler <absolute-clang-cxx-driver> \
+  --llvm-include-dir <absolute-llvm-include-directory> \
+  --llvm-library-dir <absolute-llvm-library-directory> \
+  --clang-cpp-library=<exact-clang-cpp-link-argument> \
+  --llvm-library=<exact-llvm-link-argument> \
+  --output <new-helper-path> \
+  --receipt <new-build-receipt-path>
+```
+
+The helper is never compiled automatically by `analyze`. The dynamically
+loaded LLVM/Clang shared-library closure is currently recorded as
+`runtime_shared_library_identity: not_hashed`; deployments must keep the
+matching runtime libraries available.
+
+## Compile profiles
+
+Choose exactly one explicit source of compiler argv:
+
+* `from_compile_commands` reads one unique matching `compile_commands.json`
+  row without executing it.
+* `from_captured_profile_json` loads one generic
+  `codira.clang-frontend-profile/2` record selected by exact source path and
+  source SHA-256. It is not coupled to a pilot or cohort identifier.
+* `from_captured_argv` binds an exact captured argv and its retained evidence.
+
+The profile retains the complete original argv and working directory. The
+frontend's result separately records the exact audited source-analysis argv
+and transformations, such as removal of output-only `-Xclang -ast-dump=json`
+and addition of `-fsyntax-only`. Compiler options are otherwise forwarded to
+Clang so it can diagnose unsupported options. Execution-control/plugin flags
+are held explicitly.
+
+A profile is cache-complete only when it binds the source, all compiler-observed
+dependencies, Clang's ordered effective include search roots, recursive search
+directory membership, and a controlled or explicitly captured compiler
+environment. Use `ClangFrontend.prepare_profile` before indexing to run the
+exact retained profile through the selected helper and persist a new immutable
+complete profile. Preparation does not build the helper. If historical
+ambient include settings were not captured, preparation records the controlled
+no-ambient environment used for that new profile; it does not claim to
+reproduce the historical environment.
+
+Preparation also binds the target triple from Clang's initialized `TargetInfo`
+and the exact sysroot setting from its `HeaderSearchOptions`. The result exposes
+these as `CompilationContext`; analysis compares its fresh native context with
+the prepared profile and holds indexing on a mismatch or an unbound profile.
+Schema `/1` captured profiles remain readable as partial inputs to explicit
+preparation; they cannot qualify for complete indexing until target/sysroot are
+bound. Sysroot paths are context metadata, not recursively hashed as a tree:
+freshness covers the files Clang actually observed and the effective search-root
+membership already captured for that invocation. This does not claim coverage
+of unused sysroot files.
+
+Dependency contents and include-root membership are checked for index-cache
+freshness. Membership traversal follows symlinked child directories with
+inode-based cycle detection, allowing newly added candidate headers beneath
+standard system symlink roots to invalidate cached analysis. This can cost
+more than hashing only previously included files, especially for broad system
+roots. The source file's parent and any parsed dependency parent not already
+covered by a recursive search root are also captured because quoted includes
+search relative to the including file. Keep the attempt output directory outside
+all captured include roots and source/dependency parents; `analyze` rejects an
+overlap before writing its reservation or streams. Permission and I/O failures
+make preparation incomplete rather than silently skipping entries.
+`captured_profile_fingerprint` provides a
+no-Clang fallback identity when strict profile reload detects stale evidence;
+it hashes current declared files, search-root membership, and receipt-named
+toolchain files so edits invalidate prior results.
+
+## Result and fallback semantics
+
+The public result records typed source declarations, callables, and calls
+owned by their callable USR, along with source spans, diagnostics, provenance,
+dependency evidence, helper stdout/stderr digests, and explicit status and
+coverage reasons. Calls are assigned to a definition when both a prototype
+and definition share one USR. Calls without a reported owner remain visible as
+unowned calls. Unknown provenance stays `unknown`; the frontend does not
+promote it to source-written.
+
+Malformed protocol data, helper failure, nonzero Clang tool return codes, and
+fatal/error diagnostics cannot produce a complete successful result. Optional
+frontend unavailability or a held/failed result is for the analyzer plugin to
+map to its explicit fallback status. The shared package does not silently
+claim a Tree-sitter fallback as a successful Clang parse.
+
+Each `analyze` call requires a durable attempt directory. It atomically
+reserves its attempt identity before starting the helper and persists exact
+stdout and stderr bytes before decoding. Reused attempt identities fail before
+another process can run. The package does not decide where an application
+stores those durable attempts; plugins should configure a stable per-attempt
+artifact directory.
+
+## Public API
+
+The package exports `ClangFrontend`, the typed `CompileProfile` and result
+records, profile loaders, `create_frontend_profile`,
+`frontend_profile_fingerprint`, and `captured_profile_fingerprint`. The latter
+two fingerprint functions do not invoke Clang. The package itself does not
+depend on Codira core DTOs or analyzer plugins.

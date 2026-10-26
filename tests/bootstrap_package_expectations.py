@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 
 EXPECTED_FIRST_PARTY_PACKAGE_DIRS: tuple[str, ...] = (
+    "packages/codira-clang-frontend",
     "packages/codira-analyzer-python",
     "packages/codira-analyzer-json",
     "packages/codira-analyzer-c",

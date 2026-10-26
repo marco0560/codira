@@ -38,6 +38,7 @@ The repository currently tracks these architecture decision records:
 - [ADR-034 — Bounded C++ declaration-macro analysis](ADR-034-bounded-cpp-declaration-macro-analysis.md)
 - [ADR-035 — Bounded opt-in C declaration-macro analysis](ADR-035-bounded-c-declaration-macro-analysis.md)
 - [ADR-036 — Optional Clang C and C++ frontend pilot](ADR-036-optional-clang-c-cpp-frontend-pilot.md)
+- [ADR-037 — Optional shared Clang production integration](ADR-037-optional-shared-clang-production-integration.md)
 
 `ADR-004` is the active migration record for the current architecture branch
 and should be read together with the documents under `docs/architecture/`.

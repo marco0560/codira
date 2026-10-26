@@ -2,6 +2,7 @@
   "schema_version": 1,
   "coordinated_version": "2.0.0",
   "packages": [
+    {"name": "codira-clang-frontend", "path": "packages/codira-clang-frontend", "family": null, "entry_point": null, "selectable": false},
     {"name": "codira-analyzer-python", "path": "packages/codira-analyzer-python", "family": "analyzer", "entry_point": "codira_analyzer_python:build_analyzer", "selectable": true},
     {"name": "codira-analyzer-json", "path": "packages/codira-analyzer-json", "family": "analyzer", "entry_point": "codira_analyzer_json:build_analyzer", "selectable": true},
     {"name": "codira-analyzer-c", "path": "packages/codira-analyzer-c", "family": "analyzer", "entry_point": "codira_analyzer_c:build_analyzer", "selectable": true},

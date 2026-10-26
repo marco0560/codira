@@ -3229,7 +3229,7 @@ def test_release_artifact_helper_builds_build_and_twine_commands() -> None:
             "build",
             "--wheel",
             "--sdist",
-            "/tmp/codira/packages/codira-analyzer-python",
+            "/tmp/codira/packages/codira-clang-frontend",
         ),
     )
     assert release_plan[-3:] == tuple(

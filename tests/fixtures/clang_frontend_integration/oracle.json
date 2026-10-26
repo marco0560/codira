@@ -1,0 +1,208 @@
+{
+  "schema_version": 1,
+  "source_authored_oracle": true,
+  "cases": {
+    "qualification.c": {
+      "view": "compiler_selected_source",
+      "source_symbols": [
+        {
+          "kind": "struct",
+          "name": "SourcePacket",
+          "line": 3
+        },
+        {
+          "kind": "typedef",
+          "name": "SourcePacket",
+          "line": 5
+        },
+        {
+          "kind": "function",
+          "name": "source_adjust",
+          "line": 7
+        },
+        {
+          "kind": "function",
+          "name": "forward_target",
+          "line": 19
+        },
+        {
+          "kind": "function",
+          "name": "source_relay",
+          "line": 14
+        },
+        {
+          "kind": "function",
+          "name": "source_entry",
+          "line": 25
+        }
+      ],
+      "excluded_source_symbols": [
+        "source_dormant"
+      ],
+      "calls": [
+        {
+          "caller": "source_relay",
+          "callee": "source_adjust",
+          "line": 16,
+          "column": 12
+        },
+        {
+          "caller": "source_relay",
+          "callee": "forward_target",
+          "line": 16,
+          "column": 36,
+          "macro_invocation": "QUAL_CALL"
+        },
+        {
+          "caller": "source_entry",
+          "callee": "source_relay",
+          "line": 27,
+          "column": 12
+        }
+      ],
+      "callable_ownership": {
+        "source_adjust": [],
+        "source_relay": [
+          "source_adjust",
+          "forward_target"
+        ],
+        "source_entry": [
+          "source_relay"
+        ]
+      },
+      "prototype_before_definition": {
+        "name": "forward_target",
+        "prototype_line": 12,
+        "definition_line": 19,
+        "expected_source_definitions": 1,
+        "call_owner": "source_relay"
+      },
+      "header_mutation": {
+        "input": "qualification_context.h",
+        "change": "QUAL_ENABLED 1 to 0",
+        "added_callables": [
+          "source_dormant"
+        ],
+        "removed_callables": [
+          "source_entry"
+        ]
+      },
+      "no_unlisted_source_callables": true
+    },
+    "qualification.cpp": {
+      "view": "compiler_selected_source",
+      "source_symbols": [
+        {
+          "kind": "namespace",
+          "name": "qualification",
+          "line": 3
+        },
+        {
+          "kind": "class",
+          "name": "qualification::Worker",
+          "line": 22
+        },
+        {
+          "kind": "function",
+          "name": "qualification::profile_context_marker",
+          "line": 6
+        },
+        {
+          "kind": "constructor",
+          "name": "qualification::Worker::Worker",
+          "line": 24
+        },
+        {
+          "kind": "method",
+          "name": "qualification::Worker::step",
+          "line": 26
+        },
+        {
+          "kind": "function",
+          "name": "qualification::choose",
+          "signature": "int(int)",
+          "line": 12
+        },
+        {
+          "kind": "function",
+          "name": "qualification::choose",
+          "signature": "int(double)",
+          "line": 17
+        },
+        {
+          "kind": "function_template",
+          "name": "qualification::identity",
+          "line": 39
+        },
+        {
+          "kind": "function",
+          "name": "qualification::invoke",
+          "line": 44
+        },
+        {
+          "kind": "type_alias",
+          "name": "qualification::WorkerAlias",
+          "line": 36
+        }
+      ],
+      "calls": [
+        {
+          "caller": "qualification::Worker::step",
+          "callee": "qualification::choose",
+          "signature": "int(int)",
+          "line": 28,
+          "column": 19
+        },
+        {
+          "caller": "qualification::invoke",
+          "callee": "qualification::choose",
+          "signature": "int(double)",
+          "line": 46,
+          "column": 33
+        },
+        {
+          "caller": "qualification::invoke",
+          "callee": "qualification::Worker::step",
+          "line": 46,
+          "column": 21
+        },
+        {
+          "caller": "qualification::invoke",
+          "callee": "qualification::identity",
+          "template_arguments": [
+            "int"
+          ],
+          "line": 46,
+          "column": 12
+        }
+      ],
+      "callable_ownership": {
+        "qualification::Worker::step": [
+          "qualification::choose"
+        ],
+        "qualification::invoke": [
+          "qualification::choose",
+          "qualification::Worker::step",
+          "qualification::identity"
+        ]
+      },
+      "header_mutation": {
+        "input": "qualification_context.h",
+        "change": "QUAL_CPP_ENABLED 1 to 0",
+        "removed_callables": [
+          "qualification::profile_context_marker"
+        ]
+      },
+      "profile_mutation": {
+        "compile_database_change": "add -DQUAL_CPP_ENABLED=0 to this translation unit",
+        "removed_callables": [
+          "qualification::profile_context_marker"
+        ]
+      },
+      "compiler_entities_are_not_source_symbols": [
+        "qualification::identity<int>"
+      ],
+      "no_unlisted_source_callables": true
+    }
+  }
+}

@@ -24,7 +24,7 @@ def test_c_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.14"
+    assert project["project"]["version"] == "2.0.15"
     assert "codira>=2.0.0,<3.0.0" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "c": "codira_analyzer_c:build_analyzer"
@@ -48,6 +48,40 @@ def test_c_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CAnalyzer)
     assert analyzer.name == "c"
+    assert analyzer.version == "24"
+
+
+def test_c_clang_frontend_is_opt_in_and_missing_profile_is_visible(
+    tmp_path: Path,
+) -> None:
+    """Keep the Tree-sitter default and surface missing Clang context.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing one C source file.
+
+    Returns
+    -------
+    None
+        The test checks the opt-in schema and explicit fallback status.
+    """
+    source = tmp_path / "sample.c"
+    source.write_text("int run(void) { return 7; }\n", encoding="utf-8")
+
+    analyzer = CAnalyzer()
+    schema = analyzer.configuration_json_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    assert properties["frontend"]["default"] == "tree-sitter"
+    analyzer.configure({"frontend": "clang"})
+    analysis = analyzer.analyze_file(source, tmp_path)
+
+    assert [item.name for item in analysis.functions] == ["run"]
+    assert analysis.status is not None
+    assert analysis.status.coverage_state == "partial"
+    assert analysis.status.target_contract["selected_frontend"] == "tree-sitter"
+    assert analysis.status.diagnostics[-1].category == "clang_frontend_fallback"
 
 
 def test_c_analyzer_applies_configuration_options(tmp_path: Path) -> None:
