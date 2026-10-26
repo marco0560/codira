@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from codira_analyzer_c import CAnalyzer
+from codira.generated import GeneratedCallableProvenance
 from codira_analyzer_c.c_declaration_macros import (
     MacroDefinition,
     MacroToken,
@@ -383,14 +384,17 @@ def test_opt_in_expands_generated_callable_with_source_provenance(
     result = analyzer.analyze_file(path, tmp_path)
 
     generated = [item for item in result.functions if item.generated is not None]
+    assert all(
+        isinstance(item.generated, GeneratedCallableProvenance) for item in generated
+    )
     assert result.index_symbols
     assert {
         (item.name, item.generated.role)
         for item in generated
-        if item.generated is not None
+        if isinstance(item.generated, GeneratedCallableProvenance)
     } == {("generated_entry", "definition")}
     definition = generated[0]
-    assert definition.generated is not None
+    assert isinstance(definition.generated, GeneratedCallableProvenance)
     assert definition.generated.invocation_span == (
         source.index("DECLARE_API"),
         source.index(";", source.index("DECLARE_API")),
@@ -453,17 +457,20 @@ def test_source_redefinition_and_undef_are_selected_per_invocation(
     result = analyzer.analyze_file(path, tmp_path)
 
     generated = [item for item in result.functions if item.generated is not None]
+    assert all(
+        isinstance(item.generated, GeneratedCallableProvenance) for item in generated
+    )
     assert result.index_symbols
     assert [
         (item.name, item.generated.role)
         for item in generated
-        if item.generated is not None
+        if isinstance(item.generated, GeneratedCallableProvenance)
     ] == [
         ("first_entry", "prototype"),
         ("second_entry", "definition"),
     ]
-    assert generated[0].generated is not None
-    assert generated[1].generated is not None
+    assert isinstance(generated[0].generated, GeneratedCallableProvenance)
+    assert isinstance(generated[1].generated, GeneratedCallableProvenance)
     assert generated[0].generated.inputs[0].replacement_sha256 != (
         generated[1].generated.inputs[0].replacement_sha256
     )
@@ -972,7 +979,7 @@ def test_generated_parameter_pointer_and_function_declarators_are_exact(
     result = analyzer.analyze_file(path, tmp_path)
 
     generated = next(item for item in result.functions if item.generated is not None)
-    assert generated.generated is not None
+    assert isinstance(generated.generated, GeneratedCallableProvenance)
     assert generated.generated.parameter_names == ("ptr", "label", "callback")
     assert generated.generated.parameter_types == (
         "int *",

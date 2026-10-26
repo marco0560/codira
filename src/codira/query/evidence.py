@@ -211,18 +211,9 @@ def expand_symbol(root: Path, identity: str, *, limit: int = 10) -> dict[str, ob
             },
         }
         if generated is not None:
-            first, last = cast("list[int]", generated["invocation_span"])
-            result.update(
-                generated_provenance=generated,
-                generated_declarations=generated_declarations,
-                source_kind="macro_invocation",
-                invocation_source=content[first:last].decode("utf-8"),
+            _attach_generated_evidence(
+                result, generated, generated_declarations, content
             )
-            # Aliases and prototypes have an invocation, never an implementation body.
-            if generated["role"] != "definition":
-                result["start_line"] = content.count(b"\n", 0, first) + 1
-                result["end_line"] = content.count(b"\n", 0, last - 1) + 1
-                result["source"] = content[first:last].decode("utf-8")
         return result
     finally:
         backend.close_connection(conn)
@@ -286,6 +277,7 @@ def _generated_evidence(
             or generated["context_identity"] != expected_inputs
         ):
             raise ValueError("generated provenance does not match indexed inputs")
+        _verify_observed_invocation(root, path, generated)
         analyzer = next(
             (
                 item
@@ -313,8 +305,104 @@ def _generated_evidence(
                 or overload["context_identity"] != expected_inputs
             ):
                 raise ValueError("generated overload does not match indexed inputs")
+            _verify_observed_invocation(root, path, overload)
             generated_declarations.append(overload)
     return generated, generated_declarations
+
+
+def _attach_generated_evidence(
+    result: dict[str, object],
+    generated: dict[str, object],
+    generated_declarations: list[dict[str, object]],
+    content: bytes,
+) -> None:
+    """Attach truthful generated provenance fields to symbol evidence.
+
+    Parameters
+    ----------
+    result : dict[str, object]
+        Symbol evidence response being assembled.
+    generated : dict[str, object]
+        Validated generated provenance payload.
+    generated_declarations : list[dict[str, object]]
+        Validated generated overload evidence.
+    content : bytes
+        Verified source bytes for V1 macro-invocation evidence.
+
+    Returns
+    -------
+    None
+        Evidence uses representation-appropriate source labels and ranges.
+    """
+    result["generated_provenance"] = generated
+    result["generated_declarations"] = generated_declarations
+    if generated.get("variant") == "compiler_observed":
+        result["source_kind"] = "compiler_generated"
+        if generated["invocation"] is not None:
+            result["compiler_observed_invocation"] = generated["invocation"]
+        return
+    first, last = cast("list[int]", generated["invocation_span"])
+    result.update(
+        source_kind="macro_invocation",
+        invocation_source=content[first:last].decode("utf-8"),
+    )
+    # V1 aliases and prototypes have an invocation, never an implementation body.
+    if generated["role"] != "definition":
+        result["start_line"] = content.count(b"\n", 0, first) + 1
+        result["end_line"] = content.count(b"\n", 0, last - 1) + 1
+        result["source"] = content[first:last].decode("utf-8")
+
+
+def _verify_observed_invocation(
+    root: Path,
+    indexed_path: Path,
+    payload: dict[str, object],
+) -> None:
+    """Match an observed preprocessor event to available source bytes.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Trusted repository root.
+    indexed_path : pathlib.Path
+        Indexed translation unit owning the callable.
+    payload : dict[str, object]
+        Validated provenance payload.
+
+    Returns
+    -------
+    None
+        Any available invocation source agrees with the captured observation.
+
+    Raises
+    ------
+    ValueError
+        If the invocation escapes the repository or disagrees with source bytes.
+    """
+    if payload.get("variant") != "compiler_observed":
+        return
+    invocation = payload["invocation"]
+    if invocation is None:
+        return
+    record = cast("dict[str, object]", invocation)
+    relative = cast("str", record["path"])
+    source_path = (root / relative).resolve()
+    try:
+        source_path.relative_to(root.resolve())
+    except ValueError as error:
+        raise ValueError("observed invocation path escapes repository") from error
+    if not source_path.is_file():
+        return
+    source = source_path.read_bytes()
+    if (
+        source_path == indexed_path.resolve()
+        and hashlib.sha256(source).hexdigest() != payload["source_sha256"]
+    ):
+        raise ValueError("source changed while verifying compiler observation")
+    start, end = cast("list[int]", record["byte_range"])
+    observed_text = cast("str", record["text"]).encode("utf-8")
+    if end > len(source) or source[start:end] != observed_text:
+        raise ValueError("observed preprocessor event does not match source bytes")
 
 
 def _relation_locations(

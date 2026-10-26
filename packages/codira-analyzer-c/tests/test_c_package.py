@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from codira.generated import (
+    CompilerObservedCallableProvenance,
+    generated_provenance_payload,
+    generated_provenance_rows,
+)
+from codira_clang_frontend.contracts import (
+    DependencyClosure,
+    DependencyInput,
+    FrontendPreprocessorEvent,
+    SourceSpan,
+)
+
 from dataclasses import asdict
 import tomllib
 from pathlib import Path
+
 
 from codira_analyzer_c import CAnalyzer, _analysis_from_clang_result, build_analyzer
 from codira_clang_frontend.frontend import _decode_entities
@@ -34,7 +49,7 @@ def test_c_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.16"
+    assert project["project"]["version"] == "2.0.17"
     assert "codira>=2.0.0,<3.0.0" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "c": "codira_analyzer_c:build_analyzer"
@@ -58,7 +73,7 @@ def test_c_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CAnalyzer)
     assert analyzer.name == "c"
-    assert analyzer.version == "25"
+    assert analyzer.version == "26"
 
 
 def test_c_clang_frontend_is_opt_in_and_missing_profile_is_visible(
@@ -512,3 +527,208 @@ def test_c_analyzer_emits_doxygen_documentation_only(tmp_path: Path) -> None:
     ] == [("documented", "doxygen", "function")]
     assert analysis.documentation[0].text == "Adds one to the value."
     assert analysis.documentation[0].attachment_confidence == "explicit"
+
+
+def test_c_clang_projection_persists_observed_macro_callable_evidence(
+    tmp_path: Path,
+) -> None:
+    """Persist matched macro callable evidence without token reconstruction.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing one C translation unit.
+
+    Returns
+    -------
+    None
+        The test checks source/profile facts, invocation bytes, callable identity,
+        calls, and physical invocation coordinates.
+    """
+    source = tmp_path / "macro.c"
+    source.write_text(
+        "void helper(void);\n"
+        "#define C_GENERATE(name, label) int name(void) { return helper(); }\n"
+        'C_GENERATE(generated, "café")\n',
+        encoding="utf-8",
+    )
+    source_bytes = source.read_bytes()
+    invocation_text = 'C_GENERATE(generated, "café")'
+    invocation_bytes = invocation_text.encode("utf-8")
+    invocation_start = source_bytes.index(invocation_bytes)
+    invocation_end = invocation_start + len(invocation_bytes) - 1
+    name_offset = source_bytes.index(b"generated")
+    helper_offset = source_bytes.index(b"helper")
+
+    def source_point(offset: int) -> SourcePoint:
+        """Build one source point from a known fixture byte offset.
+
+        Parameters
+        ----------
+        offset : int
+            Zero-based byte offset in the translation unit.
+
+        Returns
+        -------
+        codira_clang_frontend.SourcePoint
+            Physical spelling and expansion positions at the requested byte.
+        """
+        prefix = source_bytes[:offset]
+        line = prefix.count(b"\n") + 1
+        column = offset - prefix.rfind(b"\n")
+        position = SourcePosition(
+            path=str(source), line=line, column=column, offset=offset
+        )
+        return SourcePoint(spelling=position, expansion=position, is_macro=False)
+
+    invocation_point = source_point(invocation_start)
+    callable_location = SourcePoint(
+        spelling=source_point(name_offset).spelling,
+        expansion=invocation_point.expansion,
+        is_macro=True,
+    )
+    call_location = SourcePoint(
+        spelling=source_point(helper_offset).spelling,
+        expansion=invocation_point.expansion,
+        is_macro=True,
+    )
+    body_start = source_point(source_bytes.index(b"int name"))
+    body_end = source_point(source_bytes.index(b"}", source_bytes.index(b"int name")))
+    callable_span = SourceSpan(
+        begin=SourcePoint(
+            spelling=body_start.spelling,
+            expansion=invocation_point.expansion,
+            is_macro=True,
+        ),
+        end=SourcePoint(
+            spelling=body_end.spelling,
+            expansion=source_point(invocation_end).expansion,
+            is_macro=True,
+        ),
+    )
+    event = FrontendPreprocessorEvent(
+        kind="macro_expansion",
+        name="C_GENERATE",
+        replacement=(),
+        replacement_truncated=False,
+        function_like=True,
+        parameters=("name", "label"),
+        source_text=None,
+        condition=None,
+        result=None,
+        macro_defined=None,
+        invocation=invocation_text,
+        location=invocation_point,
+        span=SourceSpan(
+            begin=invocation_point,
+            end=source_point(invocation_end),
+        ),
+    )
+    callable_item = FrontendCallable(
+        usr="c:@F@generated",
+        kind="function",
+        name="generated",
+        qualified_name="generated",
+        lexical_owner=None,
+        decl_kind="Function",
+        signature="int generated(void)",
+        function_type="int (void)",
+        parameters=(),
+        has_prototype=True,
+        is_definition=True,
+        is_public=True,
+        provenance="macro_argument",
+        location=callable_location,
+        span=callable_span,
+        calls=(
+            FrontendCall(
+                target="helper",
+                qualified_target="helper",
+                target_usr="c:@F@helper",
+                caller_usr="c:@F@generated",
+                caller_name="generated",
+                caller_qualified_name="generated",
+                origin="macro_replacement",
+                location=call_location,
+                span=None,
+            ),
+        ),
+    )
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    result = FrontendResult(
+        status="parsed",
+        coverage_state="complete",
+        reasons=(),
+        diagnostics=(),
+        declarations=(),
+        callables=(callable_item,),
+        dependency_closure=DependencyClosure(
+            status="complete",
+            files=(DependencyInput(path=source, sha256=source_sha256),),
+            sha256="f" * 64,
+        ),
+        profile_identity="clang-profile-r1",
+        toolchain_identity=None,
+        cache_fingerprint="inner-frontend-cache-fingerprint",
+        stdout_path=None,
+        stdout_sha256="a" * 64,
+        stderr_path=None,
+        stderr_sha256="b" * 64,
+        preprocessing=(event,),
+    )
+    context_identity = '{"schema":"files-input-fingerprint-v1","id":"captured"}'
+
+    analysis = _analysis_from_clang_result(
+        source,
+        tmp_path,
+        result,
+        context_identity=context_identity,
+    )
+
+    assert analysis is not None
+    assert analysis.status is not None
+    assert analysis.status.omitted_categories == ()
+    function = analysis.functions[0]
+    assert function.lineno == 3
+    assert function.semantic_identity is not None
+    assert function.semantic_identity.value == "c:@F@generated"
+    assert isinstance(function.generated, CompilerObservedCallableProvenance)
+    assert function.generated.origin == "macro_argument"
+    assert function.generated.role == "definition"
+    assert function.generated.source_sha256 == source_sha256
+    assert function.generated.context_identity == context_identity
+    assert function.generated.invocation is not None
+    assert function.generated.invocation.name == "C_GENERATE"
+    assert function.generated.invocation.path == "macro.c"
+    assert function.generated.invocation.byte_range == (
+        invocation_start,
+        invocation_start + len(invocation_bytes),
+    )
+    assert function.generated.invocation.text == invocation_text
+    assert function.generated.receipt_namespace == (
+        "clang.frontend.callable-observation.v1"
+    )
+    assert (
+        json.loads(function.generated.receipt_json)["context"]["cache_fingerprint"]
+        == result.cache_fingerprint
+    )
+    callable_receipt = json.loads(function.generated.receipt_json)["callable"]
+    assert callable_receipt["span"]["begin"]["spelling"]["path"] == str(source)
+    assert callable_receipt["span"]["begin"]["spelling"]["line"] == 2
+    assert callable_receipt["span"]["begin"]["spelling"][
+        "offset"
+    ] == source_bytes.index(b"int name")
+    assert callable_receipt["span"]["begin"]["expansion"]["offset"] == (
+        invocation_start
+    )
+    assert callable_receipt["span"]["end"]["spelling"]["offset"] == source_bytes.index(
+        b"}", source_bytes.index(b"int name")
+    )
+    generated_rows = generated_provenance_rows(analysis)
+    assert len(generated_rows) == 1
+    assert generated_provenance_payload(generated_rows[0][1])["context_identity"] == (
+        context_identity
+    )
+    assert len(function.calls) == 1
+    assert function.calls[0].target_identity is not None
+    assert function.calls[0].target_identity.value == "c:@F@helper"

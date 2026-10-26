@@ -127,6 +127,112 @@ class GeneratedCallableProvenance:
     format_version: int = 1
 
 
+@dataclass(frozen=True)
+class CompilerObservedSourceCoordinate:
+    """Retain one compiler-reported source coordinate without reconstruction.
+
+    Parameters
+    ----------
+    path : str
+        Repository-relative source path reported by the producing frontend.
+    byte_offset : int
+        Zero-based byte offset reported by the producer.
+
+    Returns
+    -------
+    None
+        Immutable observed coordinate.
+    """
+
+    path: str
+    byte_offset: int
+
+
+@dataclass(frozen=True)
+class CompilerObservedMacroInvocation:
+    """Retain a separate observed preprocessor invocation event.
+
+    Parameters
+    ----------
+    name : str
+        Observed macro name.
+    path : str
+        Repository-relative path containing the invocation.
+    byte_range : tuple[int, int]
+        Zero-based half-open byte range of the observed invocation.
+    text : str
+        Invocation text captured by the preprocessor observer.
+
+    Returns
+    -------
+    None
+        Immutable preprocessor observation, not token derivation evidence.
+    """
+
+    name: str
+    path: str
+    byte_range: tuple[int, int]
+    text: str
+
+
+@dataclass(frozen=True)
+class CompilerObservedCallableProvenance:
+    """Describe compiler-observed callable origin without token reconstruction.
+
+    Parameters
+    ----------
+    origin : {'macro_argument', 'macro_replacement', 'implicit', 'template_instantiation', 'unknown'}
+        Normalized compiler-reported origin classification.
+    role : {'definition', 'prototype'}
+        Callable declaration role reported by the frontend.
+    source_sha256 : str
+        Digest of the indexed source translation unit.
+    context_identity : str
+        Analysis input fingerprint binding the compiler result.
+    spelling_location, expansion_location : CompilerObservedSourceCoordinate | None
+        Optional source coordinates reported by the compiler.
+    invocation : CompilerObservedMacroInvocation | None
+        Separate preprocessor event correlated with the compiler expansion
+        position, when observed.
+    receipt_namespace : str
+        Opaque namespace for the producer's canonical JSON receipt.
+    receipt_json : str
+        Bounded canonical compiler evidence, interpreted only by its producer.
+    variant : {'compiler_observed'}, optional
+        Discriminant for this representation variant.
+    format_version : {2}, optional
+        Version of this normalized compiler-observed representation.
+
+    Returns
+    -------
+    None
+        Immutable compiler evidence without fabricated tokens or source types.
+    """
+
+    origin: Literal[
+        "macro_argument",
+        "macro_replacement",
+        "implicit",
+        "template_instantiation",
+        "unknown",
+    ]
+    role: Literal["definition", "prototype"]
+    source_sha256: str
+    context_identity: str
+    receipt_namespace: str
+    receipt_json: str
+    spelling_location: CompilerObservedSourceCoordinate | None = None
+    expansion_location: CompilerObservedSourceCoordinate | None = None
+    invocation: CompilerObservedMacroInvocation | None = None
+    variant: Literal["compiler_observed"] = "compiler_observed"
+    format_version: Literal[2] = 2
+
+
+type GeneratedCallableEvidence = (
+    GeneratedCallableProvenance | CompilerObservedCallableProvenance
+)
+
+
 def generated_provenance_rows(analysis: AnalysisResult) -> tuple[tuple[str, str], ...]:
     """Serialize generated callable and overload provenance by stable identity.
 
@@ -225,6 +331,282 @@ def _valid_digest(value: object) -> bool:
         Whether the value is a complete SHA-256 representation.
     """
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _reject_nonfinite_json(value: str) -> Never:
+    """Reject JavaScript-style non-finite JSON constants.
+
+    Parameters
+    ----------
+    value : str
+        Non-standard JSON constant emitted by the decoder.
+
+    Returns
+    -------
+    Never
+        Always rejects the constant.
+
+    Raises
+    ------
+    ValueError
+        The value is not valid strict JSON.
+    """
+    _invalid(f"non-finite JSON value is unsupported: {value}")
+
+
+def _valid_repository_path(value: object) -> bool:
+    """Check a normalized repository-relative POSIX path.
+
+    Parameters
+    ----------
+    value : object
+        Candidate path from decoded compiler evidence.
+
+    Returns
+    -------
+    bool
+        Whether the path is relative, normalized and traversal-free.
+    """
+    if not isinstance(value, str) or not value or "\\" in value:
+        return False
+    path = PurePosixPath(value)
+    return (
+        not path.is_absolute()
+        and ".." not in path.parts
+        and path.as_posix() == value
+        and value != "."
+    )
+
+
+def _validate_observed_coordinate(value: object) -> None:
+    """Validate one compiler-reported source coordinate.
+
+    Parameters
+    ----------
+    value : object
+        Decoded spelling or expansion coordinate.
+
+    Returns
+    -------
+    None
+        The coordinate has a safe path and nonnegative byte offset.
+
+    Raises
+    ------
+    ValueError
+        If the coordinate shape or range is invalid.
+    """
+    if not isinstance(value, dict) or set(value) != {"path", "byte_offset"}:
+        _invalid("invalid compiler-observed source coordinate")
+    if not _valid_repository_path(value["path"]):
+        _invalid("invalid compiler-observed source path")
+    offset = value["byte_offset"]
+    if type(offset) is not int or offset < 0:
+        _invalid("invalid compiler-observed byte offset")
+
+
+def _validate_observed_invocation(value: object, payload: dict[str, object]) -> None:
+    """Validate one separately captured macro expansion event.
+
+    Parameters
+    ----------
+    value : object
+        Decoded macro invocation event.
+    payload : dict[str, object]
+        Parent compiler-observed callable record.
+
+    Returns
+    -------
+    None
+        The event is structurally valid and anchored to the expansion point.
+
+    Raises
+    ------
+    ValueError
+        If the event is malformed or conflicts with the callable origin.
+    """
+    if not isinstance(value, dict) or set(value) != {
+        "name",
+        "path",
+        "byte_range",
+        "text",
+    }:
+        _invalid("invalid observed macro invocation fields")
+    name, path, byte_range, text = (
+        value["name"],
+        value["path"],
+        value["byte_range"],
+        value["text"],
+    )
+    if (
+        not isinstance(name, str)
+        or not name
+        or len(name) > 256
+        or not _valid_repository_path(path)
+        or not isinstance(text, str)
+    ):
+        _invalid("invalid observed macro invocation identity")
+    start, end = _source_span(byte_range)
+    try:
+        text_bytes = text.encode("utf-8")
+    except UnicodeEncodeError:
+        _invalid("observed macro invocation is not valid UTF-8")
+    if len(text_bytes) != end - start or len(text_bytes) > 64 * 1024:
+        _invalid("observed macro invocation text does not match its byte range")
+    if payload["origin"] not in ("macro_argument", "macro_replacement"):
+        _invalid("non-macro callable cannot have a macro invocation")
+    expansion = payload["expansion_location"]
+    if (
+        not isinstance(expansion, dict)
+        or expansion["path"] != path
+        or not start <= expansion["byte_offset"] < end
+    ):
+        _invalid("macro invocation does not contain the expansion location")
+
+
+def _validate_receipt_json(value: object) -> None:
+    """Validate bounded canonical JSON without interpreting its contents.
+
+    Parameters
+    ----------
+    value : object
+        Namespaced receipt string from the producing compiler frontend.
+
+    Returns
+    -------
+    None
+        The receipt is canonical strict JSON within the approved bounds.
+
+    Raises
+    ------
+    ValueError
+        If size, JSON shape, depth or canonical form is invalid.
+    """
+    if not isinstance(value, str) or len(value.encode("utf-8")) > 64 * 1024:
+        _invalid("compiler receipt byte limit exceeded")
+    try:
+        receipt: object = json.loads(
+            value,
+            parse_constant=_reject_nonfinite_json,
+        )
+    except (json.JSONDecodeError, RecursionError):
+        _invalid("invalid compiler receipt JSON")
+    if not isinstance(receipt, dict):
+        _invalid("compiler receipt must be a JSON object")
+    _validate_json_tree(receipt, depth=0)
+    try:
+        canonical = json.dumps(
+            receipt,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError, RecursionError):
+        _invalid("compiler receipt is not canonical JSON")
+    if canonical != value:
+        _invalid("compiler receipt JSON is not canonical")
+
+
+def _validate_json_tree(value: object, *, depth: int) -> None:
+    """Validate receipt JSON types and bound nested object depth.
+
+    Parameters
+    ----------
+    value : object
+        A decoded JSON value.
+    depth : int
+        Current nesting depth.
+
+    Returns
+    -------
+    None
+        The tree contains only bounded standard JSON values.
+
+    Raises
+    ------
+    ValueError
+        If nesting exceeds 16 or a non-JSON value is encountered.
+    """
+    if depth > 16:
+        _invalid("compiler receipt nesting limit exceeded")
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            _invalid("compiler receipt object keys must be strings")
+        for child in value.values():
+            _validate_json_tree(child, depth=depth + 1)
+    elif isinstance(value, list):
+        for child in value:
+            _validate_json_tree(child, depth=depth + 1)
+    elif value is None or type(value) in {str, int, float, bool}:
+        return
+    else:
+        _invalid("compiler receipt contains a non-JSON value")
+
+
+def _validate_compiler_observed_payload(payload: dict[str, object]) -> None:
+    """Validate the tagged version-two compiler-observed variant.
+
+    Parameters
+    ----------
+    payload : dict[str, object]
+        Decoded version-two provenance object.
+
+    Returns
+    -------
+    None
+        The compiler-observed receipt is safe to expose to evidence clients.
+
+    Raises
+    ------
+    ValueError
+        If fields, context, coordinates, invocation or receipt are invalid.
+    """
+    required = {
+        "variant",
+        "format_version",
+        "origin",
+        "role",
+        "source_sha256",
+        "context_identity",
+        "spelling_location",
+        "expansion_location",
+        "invocation",
+        "receipt_namespace",
+        "receipt_json",
+    }
+    if (
+        set(payload) != required
+        or payload["variant"] != "compiler_observed"
+        or type(payload["format_version"]) is not int
+        or payload["format_version"] != 2
+        or payload["origin"]
+        not in {
+            "macro_argument",
+            "macro_replacement",
+            "implicit",
+            "template_instantiation",
+            "unknown",
+        }
+        or payload["role"] not in {"definition", "prototype"}
+    ):
+        _invalid("unsupported compiler-observed provenance fields or version")
+    if (
+        not _valid_digest(payload["source_sha256"])
+        or not isinstance(payload["context_identity"], str)
+        or not payload["context_identity"]
+    ):
+        _invalid("invalid compiler-observed input identity")
+    namespace = payload["receipt_namespace"]
+    if not isinstance(namespace, str) or not namespace or len(namespace) > 256:
+        _invalid("invalid compiler receipt namespace")
+    for key in ("spelling_location", "expansion_location"):
+        location = payload[key]
+        if location is not None:
+            _validate_observed_coordinate(location)
+    invocation = payload["invocation"]
+    if invocation is not None:
+        _validate_observed_invocation(invocation, payload)
+    _validate_receipt_json(payload["receipt_json"])
 
 
 def _validate_tokens(tokens: list[object], invocation: tuple[int, int]) -> None:
@@ -330,7 +712,7 @@ def generated_provenance_payload(value: str) -> dict[str, object]:
     Parameters
     ----------
     value : str
-        Serialized version-one provenance record.
+        Serialized version-one or compiler-observed version-two record.
 
     Returns
     -------
@@ -340,14 +722,20 @@ def generated_provenance_payload(value: str) -> dict[str, object]:
     Raises
     ------
     ValueError
-        If structure, bounds, hashes, paths or physical spelling claims fail.
+        If structure, bounds, hashes, paths or provenance claims fail.
     """
     if len(value.encode()) > 8 * 1024 * 1024:
         _invalid("generated provenance byte limit exceeded")
-    raw: object = json.loads(value)
+    try:
+        raw: object = json.loads(value, parse_constant=_reject_nonfinite_json)
+    except RecursionError:
+        _invalid("generated provenance nesting limit exceeded")
     if not isinstance(raw, dict):
         _invalid("generated provenance must be an object")
     payload = cast("dict[str, object]", raw)
+    if payload.get("variant") == "compiler_observed":
+        _validate_compiler_observed_payload(payload)
+        return payload
     required = {
         "format_version",
         "role",

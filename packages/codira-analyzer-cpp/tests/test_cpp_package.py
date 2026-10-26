@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from codira.generated import CompilerObservedCallableProvenance
+from codira_clang_frontend.contracts import SourcePoint, SourcePosition, SourceSpan
+
 import inspect
 from importlib.metadata import version
 from types import SimpleNamespace
@@ -33,8 +38,8 @@ def test_cpp_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.45"
-    assert version("codira-analyzer-cpp") == "2.0.45"
+    assert project["project"]["version"] == "2.0.46"
+    assert version("codira-analyzer-cpp") == "2.0.46"
     assert (
         Path(inspect.getfile(CppAnalyzer)).resolve()
         == (
@@ -64,7 +69,7 @@ def test_cpp_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CppAnalyzer)
     assert analyzer.name == "cpp"
-    assert analyzer.version == "44"
+    assert analyzer.version == "45"
 
 
 def test_cpp_clang_frontend_is_opt_in_and_missing_profile_is_visible(
@@ -448,3 +453,194 @@ def test_cpp_analyzer_emits_doxygen_documentation_only(tmp_path: Path) -> None:
     assert all(
         doc.attachment_confidence == "explicit" for doc in analysis.documentation
     )
+
+
+def test_cpp_clang_projection_persists_observed_macro_callable_evidence(
+    tmp_path: Path,
+) -> None:
+    """Persist matched C++ macro callable facts and retain namespace identity.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing one C++ translation unit.
+
+    Returns
+    -------
+    None
+        The test checks the invocation, profile identity, USR, calls, and origin.
+    """
+    source = tmp_path / "macro.cpp"
+    source.write_text(
+        "namespace parity {\n"
+        "#define CPP_GENERATE(name, label) int name() { return helper(); }\n"
+        'CPP_GENERATE(generated, "café")\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    source_bytes = source.read_bytes()
+    invocation_text = 'CPP_GENERATE(generated, "café")'
+    invocation_bytes = invocation_text.encode("utf-8")
+    invocation_start = source_bytes.index(invocation_bytes)
+    invocation_end = invocation_start + len(invocation_bytes) - 1
+    name_offset = source_bytes.index(b"generated")
+    helper_offset = source_bytes.index(b"helper")
+
+    def source_point(offset: int) -> SourcePoint:
+        """Build a compiler-compatible source point from a fixture byte offset.
+
+        Parameters
+        ----------
+        offset : int
+            Zero-based byte offset in the translation unit.
+
+        Returns
+        -------
+        codira_clang_frontend.contracts.SourcePoint
+            Point with spelling and expansion coordinates at the same byte.
+        """
+        prefix = source_bytes[:offset]
+        position = SourcePosition(
+            path=str(source),
+            line=prefix.count(b"\n") + 1,
+            column=offset - prefix.rfind(b"\n"),
+            offset=offset,
+        )
+        return SourcePoint(spelling=position, expansion=position, is_macro=False)
+
+    invocation_point = source_point(invocation_start)
+    callable_location = SourcePoint(
+        spelling=source_point(name_offset).spelling,
+        expansion=invocation_point.expansion,
+        is_macro=True,
+    )
+    helper_location = SourcePoint(
+        spelling=source_point(helper_offset).spelling,
+        expansion=invocation_point.expansion,
+        is_macro=True,
+    )
+    body_start_offset = source_bytes.index(b"int name")
+    body_end_offset = source_bytes.index(b"}", body_start_offset)
+    body_start = source_point(body_start_offset)
+    body_end = source_point(body_end_offset)
+    callable_span = SourceSpan(
+        begin=SourcePoint(
+            spelling=body_start.spelling,
+            expansion=invocation_point.expansion,
+            is_macro=True,
+        ),
+        end=SourcePoint(
+            spelling=body_end.spelling,
+            expansion=source_point(invocation_end).expansion,
+            is_macro=True,
+        ),
+    )
+    event = SimpleNamespace(
+        kind="macro_expansion",
+        name="CPP_GENERATE",
+        invocation=invocation_text,
+        location=invocation_point,
+        span=SourceSpan(
+            begin=invocation_point,
+            end=source_point(invocation_end),
+        ),
+    )
+    call = SimpleNamespace(
+        target="helper",
+        qualified_target="helper",
+        target_usr="c:@N@parity@F@helper#",
+        origin="macro_replacement",
+        location=helper_location,
+    )
+    callable_item = SimpleNamespace(
+        usr="c:@N@parity@F@generated#",
+        kind="function",
+        name="generated",
+        qualified_name="parity::generated",
+        lexical_owner="parity",
+        decl_kind="Function",
+        signature="int parity::generated()",
+        function_type="int ()",
+        parameters=(),
+        has_prototype=True,
+        is_definition=True,
+        is_public=True,
+        provenance="macro_argument",
+        location=callable_location,
+        span=callable_span,
+        calls=(call,),
+        returns_value=True,
+        is_variadic=False,
+        owner_usr="c:@N@parity",
+        owner_location=source_point(source_bytes.index(b"parity")),
+        qualifiers=SimpleNamespace(is_method=False),
+    )
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    result = SimpleNamespace(
+        status="parsed",
+        coverage_state="complete",
+        reasons=(),
+        declarations=(),
+        callables=(callable_item,),
+        diagnostics=(),
+        includes=(),
+        preprocessing=(event,),
+        documentation_comments=(),
+        profile_identity="clang-cpp-profile-r1",
+        cache_fingerprint="inner-frontend-cache-fingerprint",
+        toolchain_identity=None,
+        compilation_context=None,
+        dependency_closure=SimpleNamespace(
+            status="complete",
+            files=(SimpleNamespace(path=source, sha256=source_sha256),),
+            sha256="f" * 64,
+        ),
+        stdout_path=None,
+        stdout_sha256="a" * 64,
+        stderr_path=None,
+        stderr_sha256="b" * 64,
+        unowned_calls=(),
+    )
+    context_identity = '{"schema":"files-input-fingerprint-v1","id":"captured"}'
+
+    analysis = cpp_analyzer_module._analysis_from_clang_result(
+        source,
+        tmp_path,
+        cast("FrontendResult", result),
+        context_identity=context_identity,
+    )
+
+    assert analysis is not None
+    assert analysis.status is not None
+    assert analysis.status.omitted_categories == ()
+    function = analysis.functions[0]
+    assert function.name == "parity::generated"
+    assert function.lineno == 3
+    assert function.semantic_identity is not None
+    assert function.semantic_identity.value == "c:@N@parity@F@generated#"
+    assert isinstance(function.generated, CompilerObservedCallableProvenance)
+    assert function.generated.origin == "macro_argument"
+    assert function.generated.source_sha256 == source_sha256
+    assert function.generated.context_identity == context_identity
+    assert function.generated.invocation is not None
+    assert function.generated.invocation.path == "macro.cpp"
+    assert function.generated.invocation.byte_range == (
+        invocation_start,
+        invocation_start + len(invocation_bytes),
+    )
+    assert function.generated.invocation.text == invocation_text
+    receipt = json.loads(function.generated.receipt_json)
+    assert receipt["context"]["cache_fingerprint"] == result.cache_fingerprint
+    assert receipt["callable"]["span"]["begin"]["spelling"]["path"] == str(source)
+    assert receipt["callable"]["span"]["begin"]["spelling"]["line"] == 2
+    assert receipt["callable"]["span"]["begin"]["spelling"]["offset"] == (
+        body_start_offset
+    )
+    assert receipt["callable"]["span"]["begin"]["expansion"]["offset"] == (
+        invocation_start
+    )
+    assert receipt["callable"]["span"]["end"]["spelling"]["offset"] == (body_end_offset)
+    assert receipt["callable"]["owner_usr"] == "c:@N@parity"
+    assert len(function.calls) == 1
+    assert function.calls[0].target_identity is not None
+    assert function.calls[0].target_identity.value == "c:@N@parity@F@helper#"

@@ -31,7 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from dataclasses import replace
+from dataclasses import asdict, replace
 from importlib.metadata import version as distribution_version
 from typing import TYPE_CHECKING, Literal, cast
 from uuid import uuid4
@@ -44,8 +44,10 @@ if TYPE_CHECKING:
         CompileProfile,
         FrontendCallable,
         FrontendDeclaration,
+        FrontendPreprocessorEvent,
         FrontendResult,
         SourcePoint,
+        SourcePosition,
         SourceSpan,
     )
     from codira_clang_frontend.frontend import ClangFrontend
@@ -64,6 +66,9 @@ from .c_declaration_macros import (
 )
 from codira.analysis_inputs import validate_analysis_input_fingerprint
 from codira.generated import (
+    CompilerObservedCallableProvenance,
+    CompilerObservedMacroInvocation,
+    CompilerObservedSourceCoordinate,
     GeneratedCallableProvenance,
     GeneratedTokenProvenance,
     MacroInputProvenance,
@@ -453,8 +458,280 @@ def _clang_source_position(
     return None
 
 
+def _clang_compiler_source_coordinate(
+    position: SourcePosition | None, root: Path
+) -> CompilerObservedSourceCoordinate | None:
+    """Convert one compiler byte coordinate to a contained repository path.
+
+    Parameters
+    ----------
+    position : codira_clang_frontend.SourcePosition or None
+        Compiler-reported coordinate to preserve.
+    root : pathlib.Path
+        Repository boundary used to make the coordinate portable and safe.
+
+    Returns
+    -------
+    codira.generated.CompilerObservedSourceCoordinate or None
+        Repository-relative compiler coordinate, or ``None`` when it cannot be
+        represented without reconstructing a path or byte offset.
+    """
+    if (
+        position is None
+        or position.path is None
+        or position.offset is None
+        or position.offset < 0
+    ):
+        return None
+    try:
+        relative_path = Path(position.path).resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return None
+    return CompilerObservedSourceCoordinate(
+        path=relative_path.as_posix(), byte_offset=position.offset
+    )
+
+
+def _clang_macro_invocation_for_callable(
+    callable_item: FrontendCallable,
+    result: FrontendResult,
+    *,
+    path: Path,
+    root: Path,
+    source_bytes: bytes,
+    source_sha256: str,
+    context_identity: str | None,
+) -> (
+    tuple[
+        CompilerObservedCallableProvenance,
+        FrontendPreprocessorEvent,
+        int,
+        int,
+    ]
+    | None
+):
+    """Build compiler-observed provenance for one matched source macro.
+
+    Parameters
+    ----------
+    callable_item : codira_clang_frontend.FrontendCallable
+        Compiler callable with macro spelling and expansion locations.
+    result : codira_clang_frontend.FrontendResult
+        Profile, helper receipt, and preprocessor observations for the TU.
+    path : pathlib.Path
+        Translation unit whose source bytes were captured by Clang.
+    root : pathlib.Path
+        Repository root for safe persisted source coordinates.
+    source_bytes : bytes
+        Current translation-unit bytes, verified against the captured digest.
+    source_sha256 : str
+        Source digest from the frontend dependency closure.
+    context_identity : str or None
+        Exact outer analyzer input identity persisted on the indexed file.
+
+    Returns
+    -------
+    tuple[CompilerObservedCallableProvenance, FrontendPreprocessorEvent, int, int] or None
+        Validated callable evidence, matched invocation event, and its half-open
+        byte range; ``None`` means the evidence was incomplete or ambiguous.
+    """
+    origin = callable_item.provenance
+    if origin != "macro_argument" and origin != "macro_replacement":
+        return None
+    location = callable_item.location
+    expansion = location.expansion if location is not None else None
+    expansion_coordinate = _clang_compiler_source_coordinate(expansion, root)
+    if (
+        expansion is None
+        or expansion_coordinate is None
+        or Path(expansion.path or "").resolve() != path.resolve()
+        or not context_identity
+        or hashlib.sha256(source_bytes).hexdigest() != source_sha256
+    ):
+        return None
+
+    matching_events: list[FrontendPreprocessorEvent] = []
+    for event in result.preprocessing:
+        begin = event.span.begin if event.span is not None else None
+        begin_position = (
+            begin.expansion or begin.spelling if begin is not None else None
+        )
+        if (
+            event.kind == "macro_expansion"
+            and event.name
+            and event.invocation
+            and begin_position is not None
+            and begin_position.path is not None
+            and begin_position.offset == expansion.offset
+            and Path(begin_position.path).resolve() == path.resolve()
+        ):
+            matching_events.append(event)
+    if len(matching_events) != 1:
+        return None
+    event = matching_events[0]
+    if event.name is None or event.invocation is None:
+        return None
+    assert event.span is not None
+    assert event.span.begin is not None
+    assert event.span.end is not None
+    begin_position = event.span.begin.expansion or event.span.begin.spelling
+    end_position = event.span.end.expansion or event.span.end.spelling
+    if (
+        begin_position is None
+        or end_position is None
+        or begin_position.offset is None
+        or end_position.offset is None
+        or begin_position.offset < 0
+        or end_position.offset < begin_position.offset
+        or begin_position.path is None
+        or end_position.path is None
+        or Path(begin_position.path).resolve() != path.resolve()
+        or Path(end_position.path).resolve() != path.resolve()
+    ):
+        return None
+    start = begin_position.offset
+    inclusive_end = end_position.offset
+    try:
+        invocation_bytes = event.invocation.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    half_open_end = start + len(invocation_bytes)
+    if (
+        not invocation_bytes
+        or half_open_end - 1 != inclusive_end
+        or source_bytes[start:half_open_end] != invocation_bytes
+    ):
+        return None
+
+    spelling_coordinate = _clang_compiler_source_coordinate(
+        location.spelling if location is not None else None, root
+    )
+    event_range = (start, half_open_end)
+    invocation = CompilerObservedMacroInvocation(
+        name=event.name,
+        path=expansion_coordinate.path,
+        byte_range=event_range,
+        text=event.invocation,
+    )
+    owner_location = callable_item.owner_location
+    owner_coordinate = (
+        _clang_compiler_source_coordinate(
+            owner_location.expansion or owner_location.spelling, root
+        )
+        if owner_location is not None
+        else None
+    )
+    receipt = {
+        "schema": "clang.frontend.callable-observation.v1",
+        "context": {
+            "profile_identity": result.profile_identity,
+            "cache_fingerprint": result.cache_fingerprint,
+            "analyzer_context_identity": context_identity,
+            "source_sha256": source_sha256,
+            "stdout_sha256": result.stdout_sha256,
+        },
+        "callable": {
+            "usr": callable_item.usr,
+            "kind": callable_item.kind,
+            "name": callable_item.name,
+            "qualified_name": callable_item.qualified_name,
+            "decl_kind": callable_item.decl_kind,
+            "signature": callable_item.signature,
+            "function_type": callable_item.function_type,
+            "provenance": callable_item.provenance,
+            "is_definition": callable_item.is_definition,
+            "span": asdict(callable_item.span)
+            if callable_item.span is not None
+            else None,
+            "spelling_location": asdict(spelling_coordinate)
+            if spelling_coordinate is not None
+            else None,
+            "expansion_location": asdict(expansion_coordinate),
+            "owner_usr": callable_item.owner_usr,
+            "owner_location": asdict(owner_coordinate)
+            if owner_coordinate is not None
+            else None,
+        },
+        "macro_expansion": {
+            "name": event.name,
+            "invocation": event.invocation,
+            "byte_range": event_range,
+        },
+    }
+    try:
+        receipt_json = json.dumps(
+            receipt,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        if len(receipt_json.encode("utf-8")) > 64 * 1024:
+            return None
+    except (TypeError, ValueError, UnicodeEncodeError):
+        return None
+    return (
+        CompilerObservedCallableProvenance(
+            origin=origin,
+            role="definition" if callable_item.is_definition else "prototype",
+            source_sha256=source_sha256,
+            context_identity=context_identity,
+            spelling_location=spelling_coordinate,
+            expansion_location=expansion_coordinate,
+            invocation=invocation,
+            receipt_namespace="clang.frontend.callable-observation.v1",
+            receipt_json=receipt_json,
+        ),
+        event,
+        start,
+        half_open_end,
+    )
+
+
+def _clang_captured_source(
+    path: Path, result: FrontendResult
+) -> tuple[str, bytes] | None:
+    """Return translation-unit bytes bound by the frontend dependency closure.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Translation unit whose digest is required.
+    result : codira_clang_frontend.FrontendResult
+        Frontend result carrying hashed dependency inputs.
+
+    Returns
+    -------
+    tuple[str, bytes] or None
+        Captured source digest and matching current bytes.
+    """
+    closure = result.dependency_closure
+    if closure is None:
+        return None
+    expected = next(
+        (
+            item.sha256
+            for item in closure.files
+            if item.path.resolve() == path.resolve()
+        ),
+        None,
+    )
+    if expected is None:
+        return None
+    try:
+        source_bytes = path.read_bytes()
+    except OSError:
+        return None
+    if hashlib.sha256(source_bytes).hexdigest() != expected:
+        return None
+    return expected, source_bytes
+
+
 def _analysis_from_clang_result(
-    path: Path, root: Path, result: FrontendResult
+    path: Path,
+    root: Path,
+    result: FrontendResult,
+    *,
+    context_identity: str | None = None,
 ) -> AnalysisResult | None:
     """Map the supported source-written Clang subset into C analyzer DTOs.
 
@@ -466,6 +743,9 @@ def _analysis_from_clang_result(
         Repository root used for durable analyzer identities.
     result : codira_clang_frontend.contracts.FrontendResult
         Complete frontend result with verified source coordinates.
+    context_identity : str or None, optional
+        Outer C analyzer input fingerprint that binds frontend results to the
+        complete configuration and dependency context.
 
     Returns
     -------
@@ -590,9 +870,48 @@ def _analysis_from_clang_result(
             module_comment.span,
         )
     functions: list[FunctionArtifact] = []
-    callable_rows: dict[str, FrontendCallable] = {}
+    captured_source = (
+        _clang_captured_source(path, result)
+        if any(
+            item.provenance in {"macro_argument", "macro_replacement"}
+            for item in result.callables
+        )
+        else None
+    )
+    callable_rows: dict[
+        str,
+        tuple[
+            FrontendCallable,
+            CompilerObservedCallableProvenance | None,
+            FrontendPreprocessorEvent | None,
+        ],
+    ] = {}
+    omitted_generated_callable = False
     for callable_item in result.callables:
-        if callable_item.provenance != "source_written":
+        if callable_item.provenance in {"implicit", "template_instantiation"}:
+            continue
+        generated_provenance: CompilerObservedCallableProvenance | None = None
+        generated_event: FrontendPreprocessorEvent | None = None
+        if callable_item.provenance in {"macro_argument", "macro_replacement"}:
+            evidence = (
+                _clang_macro_invocation_for_callable(
+                    callable_item,
+                    result,
+                    path=path,
+                    root=root,
+                    source_bytes=captured_source[1],
+                    source_sha256=captured_source[0],
+                    context_identity=context_identity,
+                )
+                if captured_source is not None
+                else None
+            )
+            if evidence is None:
+                omitted_generated_callable = True
+                continue
+            generated_provenance, generated_event, _, _ = evidence
+        elif callable_item.provenance != "source_written":
+            omitted_generated_callable = True
             continue
         identity_key = callable_item.usr or (
             f"{callable_item.qualified_name}:{callable_item.signature}:"
@@ -600,19 +919,55 @@ def _analysis_from_clang_result(
         )
         current = callable_rows.get(identity_key)
         if current is None or callable_item.is_definition:
-            callable_rows[identity_key] = callable_item
-    omitted_generated = any(
-        item.provenance != "source_written" for item in result.callables
-    ) or any(item.provenance != "source_written" for item in result.declarations)
-    for callable_item in callable_rows.values():
+            callable_rows[identity_key] = (
+                callable_item,
+                generated_provenance,
+                generated_event,
+            )
+    omitted_generated = (
+        any(
+            item.provenance in {"macro_argument", "macro_replacement", "unknown"}
+            for item in result.declarations
+        )
+        or omitted_generated_callable
+    )
+    generated_diagnostics = (
+        [
+            AnalysisDiagnostic(
+                category="clang_generated_provenance",
+                message=(
+                    "compiler-observed macro callable evidence was ambiguous, "
+                    "incomplete, or exceeded the receipt bound"
+                ),
+            )
+        ]
+        if omitted_generated_callable
+        else []
+    )
+    for callable_item, generated_provenance, generated_event in callable_rows.values():
         if callable_item.kind != "function" or callable_item.is_public is None:
             return None
-        position = _clang_source_position(callable_item.location, path)
+        position = _clang_source_position(
+            callable_item.location,
+            path,
+            prefer_expansion=generated_provenance is not None,
+        )
         if position is None:
             return None
         line, _ = position
-        end_position = _clang_source_position(
-            callable_item.span.end if callable_item.span is not None else None, path
+        end_position = (
+            _clang_source_position(
+                generated_event.span.end
+                if generated_event is not None and generated_event.span is not None
+                else None,
+                path,
+                prefer_expansion=True,
+            )
+            if generated_event is not None
+            else _clang_source_position(
+                callable_item.span.end if callable_item.span is not None else None,
+                path,
+            )
         )
         calls: list[CallSite] = []
         for call in callable_item.calls:
@@ -670,6 +1025,7 @@ def _analysis_from_clang_result(
                 if callable_item.is_definition and callable_item.usr is not None
                 else None
             ),
+            generated=generated_provenance,
         )
         functions.append(function)
         add_documentation(
@@ -859,7 +1215,7 @@ def _analysis_from_clang_result(
             else None,
         )
         for diagnostic in result.diagnostics
-    )
+    ) + tuple(generated_diagnostics)
     omitted_categories: list[str] = []
     if omitted_generated:
         omitted_categories.append("generated_declaration")
@@ -3221,7 +3577,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "25"
+    version = "26"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -3686,7 +4042,21 @@ class CAnalyzer:
         if self._frontend == "clang":
             clang_result, clang_fallback_reason = self._try_clang_frontend(path, root)
             if clang_result is not None and not clang_fallback_reason:
-                mapped = _analysis_from_clang_result(path, root, clang_result)
+                context_identity = None
+                if any(
+                    item.provenance in {"macro_argument", "macro_replacement"}
+                    for item in clang_result.callables
+                ):
+                    try:
+                        context_identity = self.analysis_input_fingerprint(path, root)
+                    except (OSError, ValueError):
+                        context_identity = None
+                mapped = _analysis_from_clang_result(
+                    path,
+                    root,
+                    clang_result,
+                    context_identity=context_identity,
+                )
                 if mapped is not None:
                     return mapped
                 clang_fallback_reason = "clang_entities_outside_supported_c_dto_scope"

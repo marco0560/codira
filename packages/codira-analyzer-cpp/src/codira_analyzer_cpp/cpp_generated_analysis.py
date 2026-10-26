@@ -1974,7 +1974,7 @@ def _finalize(
             i
             for i, fn in enumerate(functions)
             if fn.name == qualified
-            and fn.generated is not None
+            and isinstance(fn.generated, GeneratedCallableProvenance)
             and generated_expansions[fn.name].span == expansion.span
         ]
         if len(matching) != 1:
@@ -1986,7 +1986,7 @@ def _finalize(
         if (
             type_node is None
             or _normalize_signature(_node_text(type_node, source)) != return_type
-            or fn.generated is None
+            or not isinstance(fn.generated, GeneratedCallableProvenance)
             or fn.generated.parameter_types != parameter_types
         ):
             raise ValueError("decltype and implementation type spellings disagree")
@@ -2024,7 +2024,7 @@ def _finalize(
             fn
             for fn in functions
             if fn.name == target
-            and fn.generated is not None
+            and isinstance(fn.generated, GeneratedCallableProvenance)
             and fn.generated.invocation_span == expansion.span
         ]
         if len(target_functions) != 1:
@@ -2032,7 +2032,10 @@ def _finalize(
                 "generated alias has no proven implementation linker target"
             )
         fn = target_functions[0]
-        if fn.generated is None or fn.generated.parameter_types != parameter_types:
+        if (
+            not isinstance(fn.generated, GeneratedCallableProvenance)
+            or fn.generated.parameter_types != parameter_types
+        ):
             raise ValueError("generated alias and implementation types disagree")
         generated = replace(
             provenance(

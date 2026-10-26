@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from codira.generated import GeneratedCallableProvenance
+    from codira.generated import GeneratedCallableEvidence
 
 CallKind = Literal["name", "attribute", "unresolved"]
 CallResolutionMode = Literal["legacy", "exact"]
@@ -108,7 +108,7 @@ class OverloadArtifact:
         Inclusive last source line when reported by the parser.
     docstring : str | None
         Overload docstring when present.
-    generated : codira.generated.GeneratedCallableProvenance | None, optional
+    generated : codira.generated.GeneratedCallableEvidence | None, optional
         Generated declaration evidence, distinct from physical source spelling.
 
     Returns
@@ -125,7 +125,7 @@ class OverloadArtifact:
     end_lineno: int | None
     docstring: str | None
 
-    generated: GeneratedCallableProvenance | None = None
+    generated: GeneratedCallableEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -409,7 +409,7 @@ class FunctionArtifact:
         Explicit class owner for a method whose declaration lives in another file.
     owner_stable_id : str | None, optional
         Proven declaration identity of that owner when uniquely known.
-    generated : codira.generated.GeneratedCallableProvenance | None, optional
+    generated : codira.generated.GeneratedCallableEvidence | None, optional
         Generated declaration evidence, distinct from physical source spelling.
     semantic_identity : codira.models.SemanticIdentity | None, optional
         Exact analyzer-provided callable identity when known.
@@ -440,7 +440,7 @@ class FunctionArtifact:
     overloads: tuple[OverloadArtifact, ...] = ()
     owner_name: str | None = None
     owner_stable_id: str | None = None
-    generated: GeneratedCallableProvenance | None = None
+    generated: GeneratedCallableEvidence | None = None
     semantic_identity: SemanticIdentity | None = None
 
     def logical_name(self, *, class_name: str | None = None) -> str:

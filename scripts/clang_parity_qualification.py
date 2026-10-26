@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
+from codira.generated import generated_provenance_payload
+
 if TYPE_CHECKING:
     from types import ModuleType
 
@@ -140,6 +142,10 @@ class DatabaseSnapshotRows:
         Persisted file IDs keyed by exact oracle-relative path.
     file_hashes : dict[int, str]
         Persisted source hashes keyed by file ID.
+    source_bytes_by_file : dict[int, bytes]
+        Current verified source bytes keyed by file ID.
+    analysis_input_fingerprints : dict[int, str]
+        Exact outer analyzer input identities keyed by file ID.
     symbols_by_id : dict[str, dict[str, Any]]
         Symbol rows keyed by stable ID.
     symbols_by_file : dict[int, list[dict[str, Any]]]
@@ -162,11 +168,15 @@ class DatabaseSnapshotRows:
         Persisted call edge rows.
     calls : list[dict[str, Any]]
         Persisted raw call record rows.
+    provenance_by_stable_id : dict[str, dict[str, object]]
+        Strictly validated generated provenance keyed by artifact stable ID.
     """
 
     file_paths: dict[int, str]
     file_ids_by_path: dict[str, int]
     file_hashes: dict[int, str]
+    source_bytes_by_file: dict[int, bytes]
+    analysis_input_fingerprints: dict[int, str]
     symbols_by_id: dict[str, dict[str, Any]]
     symbols_by_file: dict[int, list[dict[str, Any]]]
     callable_identities: dict[tuple[str, str], list[str]]
@@ -178,6 +188,7 @@ class DatabaseSnapshotRows:
     documentation: list[dict[str, Any]]
     edges: list[dict[str, Any]]
     calls: list[dict[str, Any]]
+    provenance_by_stable_id: dict[str, dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -565,6 +576,9 @@ def _validate_generated_invocation(
         _raise_format_error(
             source, "generated invocation span does not match source bytes"
         )
+    row["generated_invocation_text"] = source_bytes[
+        span_values[0] : span_values[1]
+    ].decode("utf-8")
     expected_name = _string(row.get("name"), f"{source}.generated callable name")
     if expected_name.rsplit("::", 1)[-1] not in source_bytes[
         span_values[0] : span_values[1]
@@ -676,6 +690,7 @@ def _matches(
             "generated_macro",
             "generated_invocation_span",
             "generated_spelling_line",
+            "generated_invocation_text",
         }:
             continue
         persisted_key = key
@@ -721,11 +736,17 @@ def _matches_generated_callable(
     provenance = observed.get("generated_provenance")
     if not isinstance(provenance, dict):
         return False
+    invocation = provenance.get("invocation")
     expected_span = expected.get("generated_invocation_span")
     if (
-        provenance.get("origin") != "compiler_macro_expansion"
+        provenance.get("variant") != "compiler_observed"
+        or provenance.get("origin") not in {"macro_argument", "macro_replacement"}
         or provenance.get("role") != "definition"
-        or provenance.get("invocation_span") != expected_span
+        or observed.get("source_kind") != "compiler_generated"
+        or not isinstance(invocation, dict)
+        or invocation.get("byte_range") != expected_span
+        or invocation.get("name") != expected.get("generated_macro")
+        or invocation.get("text") != expected.get("generated_invocation_text")
     ):
         return False
     if (
@@ -735,17 +756,48 @@ def _matches_generated_callable(
         or observed.get("source_sha256") != source_sha256
         or not isinstance(provenance.get("context_identity"), str)
         or not provenance.get("context_identity")
+        or provenance.get("context_identity")
+        != observed.get("outer_analysis_input_fingerprint")
+        or observed.get("generated_invocation_line") != expected.get("invocation_line")
     ):
         return False
     spelling_location = provenance.get("physical_spelling_location")
+    # V2 stores compiler facts in the receipt; the body spelling start is the
+    # callable span's begin.spelling coordinate, not its source-written name.
+    receipt_text = provenance.get("receipt_json")
+    if not isinstance(receipt_text, str):
+        return False
+    try:
+        receipt: JSONValue = json.loads(receipt_text)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(receipt, dict):
+        return False
+    context = receipt.get("context")
+    callable_record = receipt.get("callable")
+    if not isinstance(context, dict) or not isinstance(callable_record, dict):
+        return False
+    span = callable_record.get("span")
+    if not isinstance(span, dict) or not isinstance(span.get("begin"), dict):
+        return False
+    begin = cast("dict[str, JSONValue]", span["begin"])
+    spelling_location = begin.get("spelling")
     if not isinstance(spelling_location, dict):
         return False
     expected_spelling_line = expected.get("generated_spelling_line")
-    compiler_identity_ref = provenance.get("compiler_identity_ref")
+    compiler_identity_ref = observed.get("compiler_identity_ref")
+    compiler_usr = callable_record.get("usr")
+    stdout_sha256 = context.get("stdout_sha256")
     return (
         spelling_location.get("line") == expected_spelling_line
         and isinstance(compiler_identity_ref, str)
-        and bool(compiler_identity_ref)
+        and compiler_identity_ref == f"clang.usr.v1:{compiler_usr}"
+        and context.get("analyzer_context_identity")
+        == provenance.get("context_identity")
+        and context.get("source_sha256") == source_sha256
+        and isinstance(stdout_sha256, str)
+        and stdout_sha256 == observed.get("compiler_stdout_sha256")
+        and re.fullmatch(r"[0-9a-f]{64}", stdout_sha256) is not None
     )
 
 
@@ -1253,20 +1305,42 @@ def _load_database_snapshot_rows(
     DatabaseSnapshotRows
         Read-only table rows and lookup indexes for snapshot projection.
     """
-    files = _query_rows(connection, "SELECT id, path, hash FROM files")
+    files = _query_rows(
+        connection,
+        "SELECT id, path, hash, analysis_input_fingerprint FROM files",
+    )
     file_paths: dict[int, str] = {}
     file_ids_by_path: dict[str, int] = {}
     file_hashes: dict[int, str] = {}
+    source_bytes_by_file: dict[int, bytes] = {}
+    analysis_input_fingerprints: dict[int, str] = {}
     for row in files:
         file_id = int(row["id"])
-        relative = (
-            Path(_string(row.get("path"), "files.path"))
-            .relative_to(repository_root)
-            .as_posix()
-        )
+        persisted_path = Path(_string(row.get("path"), "files.path"))
+        try:
+            relative = persisted_path.relative_to(repository_root).as_posix()
+        except ValueError as error:
+            field = "files.path"
+            raise OracleFormatError(field, "is outside repository root") from error
         file_paths[file_id] = relative
         file_ids_by_path[relative] = file_id
-        file_hashes[file_id] = _string(row.get("hash"), "files.hash")
+        source_hash = _string(row.get("hash"), "files.hash")
+        file_hashes[file_id] = source_hash
+        fingerprint = row.get("analysis_input_fingerprint")
+        if not isinstance(fingerprint, str):
+            _raise_format_error("files.analysis_input_fingerprint", "must be text")
+        analysis_input_fingerprints[file_id] = fingerprint
+        source_path = (repository_root / relative).resolve()
+        if not source_path.is_relative_to(repository_root) or not source_path.is_file():
+            _raise_format_error(
+                relative, "persisted source file is missing or escapes root"
+            )
+        source_bytes = source_path.read_bytes()
+        if hashlib.sha256(source_bytes).hexdigest() != source_hash:
+            _raise_format_error(
+                relative, "source bytes differ from persisted file hash"
+            )
+        source_bytes_by_file[file_id] = source_bytes
     symbols = _query_rows(connection, "SELECT * FROM symbol_index")
     symbols_by_id = {str(row["stable_id"]): row for row in symbols}
     symbols_by_file: dict[int, list[dict[str, Any]]] = {}
@@ -1289,10 +1363,45 @@ def _load_database_snapshot_rows(
         classes.append(
             {**row, "file_id": module["file_id"], "module_name": module["name"]}
         )
+    provenance_by_stable_id: dict[str, dict[str, object]] = {}
+    for provenance_row in _query_rows(
+        connection,
+        "SELECT file_id, stable_id, payload FROM artifact_provenance",
+    ):
+        file_id = int(provenance_row["file_id"])
+        stable_id = _string(
+            provenance_row.get("stable_id"), "artifact_provenance.stable_id"
+        )
+        payload_text = _string(
+            provenance_row.get("payload"), "artifact_provenance.payload"
+        )
+        try:
+            payload = generated_provenance_payload(payload_text)
+        except (TypeError, ValueError) as error:
+            field = f"artifact_provenance[{stable_id}]"
+            raise OracleFormatError(
+                field, f"failed core validation: {error}"
+            ) from error
+        if (
+            file_id not in file_hashes
+            or payload["source_sha256"] != file_hashes.get(file_id)
+            or payload["context_identity"] != analysis_input_fingerprints.get(file_id)
+        ):
+            _raise_format_error(
+                f"artifact_provenance[{stable_id}]",
+                "source or outer analysis-input identity does not match its file row",
+            )
+        if stable_id in provenance_by_stable_id:
+            _raise_format_error(
+                f"artifact_provenance[{stable_id}]", "stable ID is duplicated"
+            )
+        provenance_by_stable_id[stable_id] = payload
     return DatabaseSnapshotRows(
         file_paths=file_paths,
         file_ids_by_path=file_ids_by_path,
         file_hashes=file_hashes,
+        source_bytes_by_file=source_bytes_by_file,
+        analysis_input_fingerprints=analysis_input_fingerprints,
         symbols_by_id=symbols_by_id,
         symbols_by_file=symbols_by_file,
         callable_identities=callable_identities,
@@ -1304,11 +1413,13 @@ def _load_database_snapshot_rows(
         documentation=_query_rows(connection, "SELECT * FROM documentation_artifacts"),
         edges=_query_rows(connection, "SELECT * FROM call_edges"),
         calls=_query_rows(connection, "SELECT * FROM call_records"),
+        provenance_by_stable_id=provenance_by_stable_id,
     )
 
 
 def _callable_snapshot_rows(
     rows: DatabaseSnapshotRows,
+    repository_root: Path,
 ) -> dict[tuple[int, int, str], dict[str, JSONValue]]:
     """Project persisted function and method rows with definition symbols.
 
@@ -1316,6 +1427,8 @@ def _callable_snapshot_rows(
     ----------
     rows : DatabaseSnapshotRows
         Normalized database tables and source indexes.
+    repository_root : pathlib.Path
+        Indexed source root used to normalize compiler receipt coordinates.
 
     Returns
     -------
@@ -1386,7 +1499,182 @@ def _callable_snapshot_rows(
             "linkage": "internal" if row.get("is_public") == 0 else "external",
             "signature": signature,
         }
+        callables[(file_id, int(row["lineno"]), name)].update(
+            _compiler_observed_callable_fields(rows, file_id, symbol, repository_root)
+        )
     return callables
+
+
+def _compiler_observed_callable_fields(
+    rows: DatabaseSnapshotRows,
+    file_id: int,
+    symbol: dict[str, Any] | None,
+    repository_root: Path,
+) -> dict[str, JSONValue]:
+    """Project v2 compiler observations from the persisted artifact payload.
+
+    Parameters
+    ----------
+    rows : DatabaseSnapshotRows
+        Strictly validated persisted tables, source bytes and provenance.
+    file_id : int
+        Source file ID owning the callable.
+    symbol : dict[str, Any] or None
+        Persisted symbol identity associated with the callable row.
+    repository_root : pathlib.Path
+        Indexed repository root used to normalize receipt paths.
+
+    Returns
+    -------
+    dict[str, JSONValue]
+        Compiler evidence fields sourced from the persisted v2 payload and
+        producer receipt; missing observations remain absent.
+    """
+    if symbol is None or not isinstance(symbol.get("stable_id"), str):
+        return {}
+    provenance = rows.provenance_by_stable_id.get(str(symbol["stable_id"]))
+    if provenance is None or provenance.get("variant") != "compiler_observed":
+        return {}
+    fields: dict[str, JSONValue] = {
+        "generated": True,
+        "source_kind": "compiler_generated",
+        "generated_provenance": cast("JSONValue", provenance),
+        "source_sha256": rows.file_hashes[file_id],
+        "outer_analysis_input_fingerprint": rows.analysis_input_fingerprints[file_id],
+    }
+    if provenance.get("receipt_namespace") != "clang.frontend.callable-observation.v1":
+        return fields
+    receipt_text = provenance.get("receipt_json")
+    if not isinstance(receipt_text, str):
+        _raise_format_error("compiler receipt", "must be a string")
+    receipt = _object(cast("JSONValue", json.loads(receipt_text)), "compiler receipt")
+    callable_record = _validate_compiler_receipt_identity(receipt, provenance, symbol)
+    context = _object(receipt.get("context"), "compiler receipt.context")
+    fields["compiler_identity_ref"] = (
+        str(symbol["semantic_identity_namespace"])
+        + ":"
+        + str(symbol["semantic_identity_value"])
+    )
+    fields["compiler_stdout_sha256"] = cast("str", context["stdout_sha256"])
+    macro = receipt.get("macro_expansion")
+    if isinstance(macro, dict) and provenance.get("invocation") is not None:
+        invocation = cast("dict[str, object]", provenance["invocation"])
+        invocation_start, invocation_end = cast("list[int]", invocation["byte_range"])
+        invocation_text = cast("str", invocation["text"])
+        source = rows.file_paths.get(file_id)
+        source_bytes = rows.source_bytes_by_file.get(file_id)
+        if source is None or source_bytes is None:
+            _raise_format_error("compiler receipt", "source file is unavailable")
+        if (
+            invocation.get("path") != source
+            or macro.get("name") != invocation.get("name")
+            or macro.get("invocation") != invocation_text
+            or macro.get("byte_range") != [invocation_start, invocation_end]
+            or invocation_end > len(source_bytes)
+            or source_bytes[invocation_start:invocation_end]
+            != invocation_text.encode("utf-8")
+        ):
+            _raise_format_error(
+                "compiler receipt.macro_expansion",
+                "does not match the source-authored invocation and bytes",
+            )
+        fields["generated_invocation_line"] = (
+            source_bytes.count(b"\n", 0, invocation_start) + 1
+        )
+    span_value = callable_record.get("span")
+    if not isinstance(span_value, dict):
+        return fields
+    begin_value = span_value.get("begin")
+    if not isinstance(begin_value, dict):
+        return fields
+    begin = begin_value
+    spelling_value = begin.get("spelling")
+    if not isinstance(spelling_value, dict):
+        return fields
+    spelling = spelling_value
+    raw_path = spelling.get("path")
+    raw_line = spelling.get("line")
+    raw_column = spelling.get("column")
+    raw_offset = spelling.get("offset")
+    try:
+        spelling_path = Path(_string(raw_path, "callable.span.begin.spelling.path"))
+        if spelling_path.is_absolute():
+            spelling_path = spelling_path.resolve().relative_to(
+                repository_root.resolve()
+            )
+        spelling_relative = spelling_path.as_posix()
+    except (OSError, ValueError, OracleFormatError):
+        return fields
+    if (
+        spelling_relative == rows.file_paths.get(file_id)
+        and isinstance(raw_line, int)
+        and not isinstance(raw_line, bool)
+        and isinstance(raw_column, int)
+        and not isinstance(raw_column, bool)
+        and isinstance(raw_offset, int)
+        and not isinstance(raw_offset, bool)
+    ):
+        fields["physical_spelling_location"] = {
+            "path": spelling_relative,
+            "line": raw_line,
+            "column": raw_column,
+            "byte_offset": raw_offset,
+        }
+    return fields
+
+
+def _validate_compiler_receipt_identity(
+    receipt: dict[str, JSONValue],
+    provenance: dict[str, object],
+    symbol: dict[str, Any],
+) -> dict[str, JSONValue]:
+    """Validate receipt schema, source context and callable USR.
+
+    Parameters
+    ----------
+    receipt : dict[str, JSONValue]
+        Parsed compiler observation receipt.
+    provenance : dict[str, object]
+        Core-validated compiler-observed provenance payload.
+    symbol : dict[str, Any]
+        Persisted symbol row associated with the callable.
+
+    Returns
+    -------
+    dict[str, JSONValue]
+        Validated callable receipt object.
+    """
+    if receipt.get("schema") != "clang.frontend.callable-observation.v1":
+        _raise_format_error("compiler receipt.schema", "is unsupported")
+    context = _object(receipt.get("context"), "compiler receipt.context")
+    if context.get("analyzer_context_identity") != provenance.get(
+        "context_identity"
+    ) or context.get("source_sha256") != provenance.get("source_sha256"):
+        _raise_format_error(
+            "compiler receipt.context",
+            "does not match the generated evidence source and analysis identity",
+        )
+    stdout_sha256 = context.get("stdout_sha256")
+    if (
+        not isinstance(stdout_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", stdout_sha256) is None
+    ):
+        _raise_format_error("compiler receipt.context.stdout_sha256", "is invalid")
+    callable_record = _object(receipt.get("callable"), "compiler receipt.callable")
+    compiler_usr = callable_record.get("usr")
+    symbol_namespace = symbol.get("semantic_identity_namespace")
+    symbol_value = symbol.get("semantic_identity_value")
+    if (
+        not isinstance(compiler_usr, str)
+        or not compiler_usr
+        or symbol_namespace != "clang.usr.v1"
+        or symbol_value != compiler_usr
+    ):
+        _raise_format_error(
+            "compiler receipt.callable.usr",
+            "does not match the persisted callable semantic identity",
+        )
+    return callable_record
 
 
 def _source_artifact_rows(
@@ -1741,7 +2029,7 @@ def _snapshot_from_connection(
     """
     rows = _load_database_snapshot_rows(connection, repository_root)
     actual_files = rows.file_ids_by_path
-    callable_lookup = _callable_snapshot_rows(rows)
+    callable_lookup = _callable_snapshot_rows(rows, repository_root)
 
     imports_by_file, enum_members_by_file, docs_by_file = _source_artifact_rows(
         rows, callable_lookup

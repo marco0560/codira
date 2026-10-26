@@ -18,6 +18,7 @@ import hashlib
 import pytest
 
 from codira_analyzer_cpp import CppAnalyzer
+from codira.generated import GeneratedCallableProvenance
 
 _DEFINITIONS = b"""#ifndef H
 #define H
@@ -79,7 +80,7 @@ def test_generated_callables_keep_roles_provenance_and_body_coordinates(
     names = {f.name: f for f in result.functions}
     implementation = names["ns::impl_f" if public else "ns::f"]
     assert implementation.parameters == ("x",)
-    assert implementation.generated is not None
+    assert isinstance(implementation.generated, GeneratedCallableProvenance)
     assert implementation.generated.role == "definition"
     assert implementation.generated.parameter_names == ("x",)
     assert implementation.generated.parameter_types == ("double",)
@@ -101,15 +102,15 @@ def test_generated_callables_keep_roles_provenance_and_body_coordinates(
     if public:
         alias = names["ns::f"]
         generated = alias.generated
-        assert generated is not None and generated.role == "alias"
+        assert isinstance(generated, GeneratedCallableProvenance)
+        assert generated.role == "alias"
         assert alias.calls == () and alias.parameters == () and alias.end_lineno is None
         assert generated.alias_target == "ns::impl_f" and generated.linkage_name == "f"
         assert generated.parameter_names == (None,)
         assert len(implementation.overloads) == 1
         prototype = implementation.overloads[0]
-        assert (
-            prototype.generated is not None and prototype.generated.role == "prototype"
-        )
+        assert isinstance(prototype.generated, GeneratedCallableProvenance)
+        assert prototype.generated.role == "prototype"
         assert prototype.generated.parameter_names == (None,)
         assert any(
             t.operation == "paste" and t.physical_spelling_span is None
@@ -212,7 +213,7 @@ def test_header_type_macros_use_their_earlier_state_and_origins(
     names = {function.name: function for function in result.functions}
     implementation = names["ns::impl_f"]
     for artifact in (implementation, implementation.overloads[0], names["ns::f"]):
-        assert artifact.generated is not None
+        assert isinstance(artifact.generated, GeneratedCallableProvenance)
         assert artifact.generated.parameter_types == ("double",)
         inputs = {
             item.name: item
@@ -257,7 +258,7 @@ def test_equivalent_header_type_proofs_preserve_distinct_macro_origins(
     result = _analyzer(True).analyze_file(path, tmp_path)
     assert result.index_symbols and result.status is None
     for function in result.functions:
-        assert function.generated is not None
+        assert isinstance(function.generated, GeneratedCallableProvenance)
         origins = [item for item in function.generated.inputs if item.name == "RET"]
         assert len(origins) == 2
         assert origins[0].span != origins[1].span
