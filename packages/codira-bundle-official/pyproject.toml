@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-bundle-official"
-version = "2.0.81"
+version = "2.0.82"
 description = "Curated first-party plugin bundle for codira"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -13,8 +13,8 @@ dependencies = [
     "einops>=0.8,<1.0",
     "codira-analyzer-python==2.0.2",
     "codira-analyzer-json==2.0.0",
-    "codira-analyzer-c==2.0.17",
-    "codira-analyzer-cpp==2.0.46",
+    "codira-analyzer-c==2.0.18",
+    "codira-analyzer-cpp==2.0.47",
     "codira-analyzer-rust==2.0.3",
     "codira-analyzer-javascript==2.0.0",
     "codira-analyzer-typescript==2.0.3",
@@ -36,7 +36,7 @@ dependencies = [
     "codira-vector-store-sqlite==2.0.0",
     "codira-vector-store-duckdb==2.0.0",
     "codira-similarity-index-qdrant==2.0.0",
-    "codira-installer==2.0.7",
+    "codira-installer==2.0.8",
 ]
 
 [project.optional-dependencies]

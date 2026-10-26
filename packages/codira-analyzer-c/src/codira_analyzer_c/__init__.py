@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from dataclasses import asdict, replace
 from importlib.metadata import version as distribution_version
 from typing import TYPE_CHECKING, Literal, cast
@@ -46,6 +46,7 @@ if TYPE_CHECKING:
         FrontendDeclaration,
         FrontendPreprocessorEvent,
         FrontendResult,
+        HeaderProjectionResolution,
         SourcePoint,
         SourcePosition,
         SourceSpan,
@@ -115,6 +116,56 @@ from codira.plugin_config import (
 
 _C_SUFFIXES = {".c", ".h"}
 __all__ = ["CAnalyzer", "_disambiguate_function_stable_ids", "build_analyzer"]
+
+
+def _clang_header_owner_profiles_from_config(value: object) -> dict[str, str]:
+    """Validate explicit repository-relative Clang header owner selections.
+
+    Parameters
+    ----------
+    value : object
+        Mapping from normalized repository-relative header paths to captured
+        profile identities.
+
+    Returns
+    -------
+    dict[str, str]
+        Validated header-to-profile selection map.
+
+    Raises
+    ------
+    ValueError
+        If a path or profile identity is empty or not normalized.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("clang_header_owner_profiles must be an object")
+    result: dict[str, str] = {}
+    for header, identity in value.items():
+        if (
+            not isinstance(header, str)
+            or not header
+            or "\\" in header
+            or not isinstance(identity, str)
+            or not identity
+        ):
+            raise ValueError(
+                "clang_header_owner_profiles requires relative paths and "
+                "nonempty profile identities"
+            )
+        path = PurePosixPath(header)
+        if (
+            path.is_absolute()
+            or str(path) != header
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            raise ValueError(
+                "clang_header_owner_profiles keys must be normalized "
+                "repository-relative paths"
+            )
+        result[header] = identity
+    return result
+
+
 _TYPE_LIKE_NAMES = {
     "bool",
     "char",
@@ -1251,6 +1302,22 @@ def _analysis_from_clang_result(
             target_contract={
                 "language": "c",
                 "frontend": "clang",
+                "requested_source_path": (
+                    str(result.requested_source_path)
+                    if getattr(result, "requested_source_path", None) is not None
+                    else None
+                ),
+                "requested_source_sha256": getattr(
+                    result, "requested_source_sha256", None
+                ),
+                "translation_unit_path": (
+                    str(result.translation_unit_path)
+                    if getattr(result, "translation_unit_path", None) is not None
+                    else None
+                ),
+                "header_projection_identity": getattr(
+                    result, "header_projection_identity", None
+                ),
                 "profile_identity": result.profile_identity,
                 "cache_fingerprint": result.cache_fingerprint,
                 "compilation_context": _clang_compilation_context_payload(
@@ -3577,7 +3644,7 @@ class CAnalyzer:
     """
 
     name = "c"
-    version = "26"
+    version = "27"
     discovery_globs: tuple[str, ...] = ("*.c", "*.h")
     default_coverage_roots: tuple[str, ...] = ("src", "include", "tests")
 
@@ -3604,6 +3671,7 @@ class CAnalyzer:
         self._frontend = "tree-sitter"
         self._clang_compile_commands: str | None = None
         self._clang_captured_profiles: str | None = None
+        self._clang_header_owner_profiles: dict[str, str] = {}
         self._clang_helper_path: str | None = None
         self._clang_build_receipt_path: str | None = None
         self._clang_attempt_root = ".artifacts/clang-frontend"
@@ -3660,6 +3728,11 @@ class CAnalyzer:
                     "type": "string",
                     "minLength": 1,
                     "description": "Explicit generic captured-profile JSON file, selected by exact source path and digest.",
+                },
+                "clang_header_owner_profiles": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string", "minLength": 1},
+                    "description": "Optional explicit header-to-captured-profile identity selections from header preparation candidates; unresolved headers remain held.",
                 },
                 "clang_helper_path": {
                     "type": "string",
@@ -3753,6 +3826,9 @@ class CAnalyzer:
         self._frontend = frontend
         self._clang_compile_commands = clang_options["clang_compile_commands"]
         self._clang_captured_profiles = clang_options["clang_captured_profiles"]
+        self._clang_header_owner_profiles = _clang_header_owner_profiles_from_config(
+            config.get("clang_header_owner_profiles", {})
+        )
         self._clang_helper_path = clang_options["clang_helper_path"]
         self._clang_build_receipt_path = clang_options["clang_build_receipt_path"]
         self._clang_attempt_root = attempt_root
@@ -3861,7 +3937,217 @@ class CAnalyzer:
             ``True`` when the path is allowed by include/exclude filters.
         """
 
-        return analyzer_path_allowed(path=path, root=root, filters=self._path_filters)
+        if not analyzer_path_allowed(path=path, root=root, filters=self._path_filters):
+            return False
+        if self._frontend != "clang" or path.suffix != ".h":
+            return True
+        resolution, reason = self._clang_header_projection_resolution(path, root)
+        return (
+            reason is None
+            and resolution is not None
+            and resolution.status == "ready"
+            and resolution.request is not None
+            and resolution.request.owner_profile.language == "c"
+        )
+
+    def _clang_header_projection_resolution(
+        self, path: Path, root: Path
+    ) -> tuple[HeaderProjectionResolution | None, str | None]:
+        """Resolve a header using only current captured owner profiles.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Physical header requested for indexing.
+        root : pathlib.Path
+            Repository root containing the configured captured profiles.
+
+        Returns
+        -------
+        tuple[HeaderProjectionResolution or None, str or None]
+            Owner resolution and a held reason when selection is invalid or
+            captured profile evidence is unavailable.
+        """
+        if self._clang_captured_profiles is None:
+            return None, "clang_header_captured_profiles_unavailable"
+        try:
+            relative = path.resolve().relative_to(root.resolve()).as_posix()
+        except (OSError, ValueError):
+            return None, "clang_header_outside_repository"
+        evidence = Path(self._clang_captured_profiles)
+        if not evidence.is_absolute():
+            evidence = root / evidence
+        try:
+            from codira_clang_frontend import (
+                from_captured_profiles_json,
+                resolve_header_projection,
+            )
+
+            profiles = from_captured_profiles_json(
+                evidence,
+                root,
+                requested_dependency_path=path,
+            )
+            resolution = resolve_header_projection(path, profiles)
+        except (ImportError, OSError, ValueError):
+            return None, "clang_header_owner_profiles_stale_or_invalid"
+        selected = self._clang_header_owner_profiles.get(relative)
+        if selected is None:
+            return resolution, None
+        try:
+            return (
+                resolve_header_projection(
+                    path, profiles, selected_owner_identity=selected
+                ),
+                None,
+            )
+        except ValueError:
+            return resolution, "clang_header_owner_selection_not_a_current_candidate"
+
+    def _analyze_clang_header(self, path: Path, root: Path) -> AnalysisResult:
+        """Analyze one header through its captured owner translation unit.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Physical header requested for projection.
+        root : pathlib.Path
+            Repository root used for contained profile and evidence paths.
+
+        Returns
+        -------
+        codira.models.AnalysisResult
+            Projected Clang artifacts, or an explicit empty partial held result.
+        """
+        resolution, reason = self._clang_header_projection_resolution(path, root)
+        if (
+            reason is not None
+            or resolution is None
+            or resolution.status != "ready"
+            or resolution.request is None
+            or resolution.request.owner_profile.language != "c"
+        ):
+            return self._clang_header_held_result(
+                path,
+                root,
+                reason
+                or (
+                    resolution.status if resolution is not None else "owner_unavailable"
+                ),
+            )
+        helper = Path(self._clang_helper_path or "")
+        receipt = Path(self._clang_build_receipt_path or "")
+        if not helper.is_absolute():
+            helper = root / helper
+        if not receipt.is_absolute():
+            receipt = root / receipt
+        from codira_clang_frontend import ClangFrontend, __version__
+
+        frontend = ClangFrontend(helper, receipt, package_version=__version__)
+        attempt_root = Path(self._clang_attempt_root)
+        if not attempt_root.is_absolute():
+            attempt_root = root / attempt_root
+        source_key = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:16]
+        attempt_id = uuid4().hex
+        attempt_dir = attempt_root / source_key / attempt_id
+        try:
+            attempt_dir.mkdir(parents=True, exist_ok=False)
+            result = frontend.analyze_header(
+                resolution.request, attempt_dir=attempt_dir, attempt_id=attempt_id
+            )
+        except (ImportError, OSError, ValueError):
+            return self._clang_header_held_result(
+                path, root, "clang_header_attempt_unavailable"
+            )
+        if result.status != "parsed" or result.coverage_state != "complete":
+            return self._clang_header_held_result(
+                path,
+                root,
+                result.reasons[0]
+                if result.reasons
+                else "clang_header_projection_incomplete",
+                frontend_result=result,
+            )
+        mapped = _analysis_from_clang_result(
+            path,
+            root,
+            result,
+            context_identity=self.analysis_input_fingerprint(path, root),
+        )
+        return mapped or self._clang_header_held_result(
+            path,
+            root,
+            "clang_header_entities_outside_supported_dto_scope",
+            frontend_result=result,
+        )
+
+    def _clang_header_held_result(
+        self,
+        path: Path,
+        root: Path,
+        reason: str,
+        *,
+        frontend_result: FrontendResult | None = None,
+    ) -> AnalysisResult:
+        """Return an empty partial result for a held header projection.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Requested physical header.
+        root : pathlib.Path
+            Repository root for module identity.
+        reason : str
+            Stable resolution or frontend failure category.
+        frontend_result : FrontendResult or None, optional
+            Optional completed attempt whose raw receipt remains in its
+            immutable attempt directory.
+
+        Returns
+        -------
+        codira.models.AnalysisResult
+            Non-indexable empty result with explicit omitted categories.
+        """
+        return AnalysisResult(
+            source_path=path,
+            module=ModuleArtifact(
+                name=_module_name_for_path(path, root),
+                stable_id=_module_stable_id(path, root),
+                docstring=None,
+                has_docstring=0,
+            ),
+            classes=(),
+            functions=(),
+            declarations=(),
+            imports=(),
+            documentation=(),
+            index_symbols=False,
+            status=AnalysisStatus(
+                grammar="clang-c-header-projection",
+                target_contract={
+                    "language": "c",
+                    "requested_frontend": "clang",
+                    "clang_attempt": (
+                        _clang_result_evidence(frontend_result)
+                        if frontend_result is not None
+                        else None
+                    ),
+                },
+                diagnostics=(
+                    AnalysisDiagnostic("clang_header_projection_held", reason),
+                ),
+                reliable_categories=(),
+                omitted_categories=(
+                    "module",
+                    "class",
+                    "function",
+                    "declaration",
+                    "import",
+                    "documentation",
+                ),
+                coverage_state=AnalysisCoverageState.PARTIAL,
+            ),
+        )
 
     def analysis_input_fingerprint(self, path: Path, root: Path) -> str:
         """Bind analysis reuse to contained C header bytes and lookup outcomes.
@@ -3894,6 +4180,37 @@ class CAnalyzer:
         payload = json.loads(context.identity)
         payload["configuration_fingerprint"] = self.configuration_fingerprint
         if self._frontend == "clang":
+            if path.suffix == ".h":
+                resolution, reason = self._clang_header_projection_resolution(
+                    path, root
+                )
+                payload["clang_header_projection"] = {
+                    "status": resolution.status if resolution is not None else "held",
+                    "reason": reason,
+                    "candidate_profile_identities": (
+                        list(resolution.candidate_profile_identities)
+                        if resolution is not None
+                        else []
+                    ),
+                    "owner_profile_identity": (
+                        resolution.request.owner_profile.identity
+                        if resolution is not None and resolution.request is not None
+                        else None
+                    ),
+                    "projection_identity": (
+                        resolution.request.identity
+                        if resolution is not None and resolution.request is not None
+                        else None
+                    ),
+                }
+                return validate_analysis_input_fingerprint(
+                    json.dumps(
+                        payload,
+                        sort_keys=True,
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                    )
+                )
             try:
                 frontend, profile = _clang_profile_and_frontend(
                     path=path,
@@ -4037,6 +4354,8 @@ class CAnalyzer:
         codira.models.AnalysisResult
             Normalized analysis result for the file.
         """
+        if self._frontend == "clang" and path.suffix == ".h":
+            return self._analyze_clang_header(path, root)
         clang_fallback_reason: str | None = None
         clang_result: FrontendResult | None = None
         if self._frontend == "clang":

@@ -19,6 +19,7 @@
 #include <llvm/ADT/SmallString.h>
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/Error.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include <algorithm>
@@ -91,6 +92,31 @@ std::string sourceText(clang::SourceRange Range,
   llvm::StringRef Text = clang::Lexer::getSourceText(
       clang::CharSourceRange::getTokenRange(Range), SM, LangOpts, &Invalid);
   return Invalid ? std::string() : Text.str();
+}
+
+bool samePhysicalPath(const std::string &Left, const std::string &Right) {
+  if (Left.empty() || Right.empty())
+    return false;
+  std::error_code LeftError;
+  std::error_code RightError;
+  const std::filesystem::path CanonicalLeft =
+      std::filesystem::weakly_canonical(Left, LeftError);
+  const std::filesystem::path CanonicalRight =
+      std::filesystem::weakly_canonical(Right, RightError);
+  if (LeftError || RightError)
+    return std::filesystem::path(Left).lexically_normal() ==
+           std::filesystem::path(Right).lexically_normal();
+  return CanonicalLeft == CanonicalRight;
+}
+
+bool isInPhysicalFile(clang::SourceLocation Location,
+                      const clang::SourceManager &SM,
+                      const std::string &Path) {
+  if (Location.isInvalid() || Path.empty())
+    return false;
+  const clang::SourceLocation Spelling =
+      SM.getFileLoc(SM.getSpellingLoc(Location));
+  return samePhysicalPath(SM.getFilename(Spelling).str(), Path);
 }
 
 std::string usr(const clang::Decl *Declaration) {
@@ -377,8 +403,10 @@ std::string conditionValue(clang::PPCallbacks::ConditionValueKind Value) {
 class CallbackCollector final : public clang::PPCallbacks {
 public:
   CallbackCollector(FrontendData &Data, const clang::SourceManager &SM,
-                    const clang::LangOptions &LangOpts, bool FullCapture)
-      : Data(Data), SM(SM), LangOpts(LangOpts), FullCapture(FullCapture) {}
+                    const clang::LangOptions &LangOpts, bool FullCapture,
+                    std::string ProjectionFile)
+      : Data(Data), SM(SM), LangOpts(LangOpts), FullCapture(FullCapture),
+        ProjectionFile(std::move(ProjectionFile)) {}
 
   void InclusionDirective(clang::SourceLocation HashLoc, const clang::Token &,
                           llvm::StringRef FileName, bool IsAngled,
@@ -386,6 +414,8 @@ public:
                           llvm::StringRef SearchPath, llvm::StringRef RelativePath,
                           const clang::Module *, bool ModuleImported,
                           clang::SrcMgr::CharacteristicKind) override {
+    if (!keepsLocation(HashLoc))
+      return;
     std::string Resolved = File ? File->getName().str() : std::string();
     if (!Resolved.empty())
       Data.DependencyPaths.push_back(Resolved);
@@ -406,7 +436,9 @@ public:
       return;
     MacroDefinitions[Info] = MacroDefinitionRecord{
         clang::Lexer::getSpelling(Name, SM, LangOpts), Name.getLocation(), Info};
-    if (FullCapture || isMainExpansion(Name.getLocation())) {
+    if (keepsLocation(Name.getLocation()) &&
+        (FullCapture || !ProjectionFile.empty() ||
+         isMainExpansion(Name.getLocation()))) {
       Data.Preprocessing.push_back(macroDefinitionEvent(MacroDefinitions[Info]));
       EmittedMacroDefinitions.insert(Info);
     } else {
@@ -416,7 +448,9 @@ public:
 
   void MacroUndefined(const clang::Token &Name, const clang::MacroDefinition &,
                       const clang::MacroDirective *) override {
-    if (FullCapture || isMainExpansion(Name.getLocation())) {
+    if (keepsLocation(Name.getLocation()) &&
+        (FullCapture || !ProjectionFile.empty() ||
+         isMainExpansion(Name.getLocation()))) {
       Data.Preprocessing.push_back(Object{
           {"kind", "macro_undefinition"},
           {"name", clang::Lexer::getSpelling(Name, SM, LangOpts)},
@@ -429,7 +463,9 @@ public:
   void MacroExpands(const clang::Token &Name,
                     const clang::MacroDefinition &Definition,
                     clang::SourceRange Range, const clang::MacroArgs *) override {
-    if (!FullCapture && !isMainExpansion(Name.getLocation())) {
+    if (!keepsLocation(Name.getLocation()) ||
+        (ProjectionFile.empty() && !FullCapture &&
+         !isMainExpansion(Name.getLocation()))) {
       ++Data.OmittedHeaderPreprocessingEvents;
       return;
     }
@@ -471,7 +507,8 @@ public:
   }
 
   void Else(clang::SourceLocation Loc, clang::SourceLocation) override {
-    if (!FullCapture && !isMainExpansion(Loc)) {
+    if (!keepsLocation(Loc) ||
+        (ProjectionFile.empty() && !FullCapture && !isMainExpansion(Loc))) {
       ++Data.OmittedHeaderPreprocessingEvents;
       return;
     }
@@ -480,7 +517,8 @@ public:
   }
 
   void Endif(clang::SourceLocation Loc, clang::SourceLocation) override {
-    if (!FullCapture && !isMainExpansion(Loc)) {
+    if (!keepsLocation(Loc) ||
+        (ProjectionFile.empty() && !FullCapture && !isMainExpansion(Loc))) {
       ++Data.OmittedHeaderPreprocessingEvents;
       return;
     }
@@ -497,6 +535,10 @@ private:
 
   bool isMainExpansion(clang::SourceLocation Loc) const {
     return SM.isWrittenInMainFile(SM.getExpansionLoc(Loc));
+  }
+
+  bool keepsLocation(clang::SourceLocation Loc) const {
+    return ProjectionFile.empty() || isInPhysicalFile(Loc, SM, ProjectionFile);
   }
 
   Value macroDefinitionEvent(const MacroDefinitionRecord &Record) const {
@@ -530,7 +572,8 @@ private:
   void conditional(llvm::StringRef Kind, clang::SourceLocation Loc,
                    clang::SourceRange Condition,
                    ConditionValueKind Result) {
-    if (!FullCapture && !isMainExpansion(Loc)) {
+    if (!keepsLocation(Loc) ||
+        (ProjectionFile.empty() && !FullCapture && !isMainExpansion(Loc))) {
       ++Data.OmittedHeaderPreprocessingEvents;
       return;
     }
@@ -544,7 +587,8 @@ private:
 
   void conditionalName(llvm::StringRef Kind, clang::SourceLocation Loc,
                        const clang::Token &Name, bool IsDefined) {
-    if (!FullCapture && !isMainExpansion(Loc)) {
+    if (!keepsLocation(Loc) ||
+        (ProjectionFile.empty() && !FullCapture && !isMainExpansion(Loc))) {
       ++Data.OmittedHeaderPreprocessingEvents;
       return;
     }
@@ -559,6 +603,7 @@ private:
   const clang::SourceManager &SM;
   const clang::LangOptions &LangOpts;
   bool FullCapture;
+  std::string ProjectionFile;
   std::unordered_map<const clang::MacroInfo *, MacroDefinitionRecord>
       MacroDefinitions;
   std::unordered_set<const clang::MacroInfo *> EmittedMacroDefinitions;
@@ -568,9 +613,10 @@ class FrontendVisitor final : public clang::RecursiveASTVisitor<FrontendVisitor>
 public:
   FrontendVisitor(clang::ASTContext &Context, FrontendData &Data,
                   llvm::StringRef MainFile, llvm::StringRef RepositoryRoot,
-                  bool FullCapture)
+                  bool FullCapture, llvm::StringRef ProjectionFile)
       : Context(Context), Data(Data), MainFile(MainFile.str()),
-        RepositoryRoot(RepositoryRoot.str()), FullCapture(FullCapture) {}
+        RepositoryRoot(RepositoryRoot.str()), FullCapture(FullCapture),
+        ProjectionFile(ProjectionFile.str()) {}
 
   bool shouldVisitTemplateInstantiations() const { return true; }
 
@@ -606,7 +652,9 @@ public:
     std::string Path = SM.getFilename(SM.getFileLoc(Location)).str();
     bool MainExpansion =
         SM.isWrittenInMainFile(SM.getExpansionLoc(Location));
-    if (!FullCapture && !MainExpansion) {
+    if ((!ProjectionFile.empty() &&
+         !isInPhysicalFile(Location, SM, ProjectionFile)) ||
+        (ProjectionFile.empty() && !FullCapture && !MainExpansion)) {
       ++Data.OmittedHeaderFunctionDeclarations;
       return true;
     }
@@ -680,7 +728,10 @@ public:
       return true;
     clang::SourceManager &SM = Context.getSourceManager();
     const clang::SourceLocation Location = Declaration->getLocation();
-    if (!SM.isWrittenInMainFile(SM.getExpansionLoc(Location)))
+    if ((!ProjectionFile.empty() &&
+         !isInPhysicalFile(Location, SM, ProjectionFile)) ||
+        (ProjectionFile.empty() &&
+         !SM.isWrittenInMainFile(SM.getExpansionLoc(Location))))
       return true;
     clang::PrintingPolicy Policy(Context.getLangOpts());
     std::string Type;
@@ -765,8 +816,10 @@ public:
   bool VisitCallExpr(clang::CallExpr *Call) {
     clang::SourceManager &SM = Context.getSourceManager();
     clang::SourceLocation Begin = Call->getBeginLoc();
-    if (!SM.isWrittenInMainFile(Begin) &&
-        !SM.isWrittenInMainFile(SM.getExpansionLoc(Begin)))
+    if ((!ProjectionFile.empty() &&
+         !isInPhysicalFile(Begin, SM, ProjectionFile)) ||
+        (ProjectionFile.empty() && !SM.isWrittenInMainFile(Begin) &&
+         !SM.isWrittenInMainFile(SM.getExpansionLoc(Begin))))
       return true;
     clang::SourceLocation Spelled = SM.getSpellingLoc(Begin);
     clang::SourceLocation Expanded = SM.getExpansionLoc(Begin);
@@ -845,6 +898,7 @@ private:
   std::string MainFile;
   std::string RepositoryRoot;
   bool FullCapture;
+  std::string ProjectionFile;
   std::string CurrentCallerUSR;
   std::string CurrentCallerName;
   std::string CurrentCallerQualifiedName;
@@ -855,14 +909,24 @@ class Consumer final : public clang::ASTConsumer {
 public:
   Consumer(clang::ASTContext &Context, FrontendData &Data,
            llvm::StringRef MainFile, llvm::StringRef RepositoryRoot,
-           bool FullCapture)
-      : Data(Data), Visitor(Context, Data, MainFile, RepositoryRoot, FullCapture) {}
+           bool FullCapture, llvm::StringRef ProjectionFile)
+      : Data(Data), Visitor(Context, Data, MainFile, RepositoryRoot,
+                            FullCapture, ProjectionFile),
+        ProjectionFile(ProjectionFile.str()) {}
 
   void HandleTranslationUnit(clang::ASTContext &Context) override {
     Visitor.TraverseDecl(Context.getTranslationUnitDecl());
     clang::SourceManager &SM = Context.getSourceManager();
-    const auto *Comments =
-        Context.Comments.getCommentsInFile(SM.getMainFileID());
+    clang::FileID CommentFile = SM.getMainFileID();
+    if (!ProjectionFile.empty()) {
+      auto File = SM.getFileManager().getFileRef(ProjectionFile);
+      if (!File) {
+        llvm::consumeError(File.takeError());
+        return;
+      }
+      CommentFile = SM.translateFile(*File);
+    }
+    const auto *Comments = Context.Comments.getCommentsInFile(CommentFile);
     if (!Comments)
       return;
     for (const auto &[Offset, Comment] : *Comments) {
@@ -879,13 +943,15 @@ public:
 private:
   FrontendData &Data;
   FrontendVisitor Visitor;
+  std::string ProjectionFile;
 };
 
 class Action final : public clang::ASTFrontendAction {
 public:
-  Action(FrontendData &Data, llvm::StringRef RepositoryRoot, bool FullCapture)
+  Action(FrontendData &Data, llvm::StringRef RepositoryRoot, bool FullCapture,
+         llvm::StringRef ProjectionFile)
       : Data(Data), RepositoryRoot(RepositoryRoot.str()),
-        FullCapture(FullCapture) {}
+        FullCapture(FullCapture), ProjectionFile(ProjectionFile.str()) {}
 
   std::unique_ptr<clang::ASTConsumer>
   CreateASTConsumer(clang::CompilerInstance &CI, llvm::StringRef InFile) override {
@@ -904,31 +970,36 @@ public:
           {"is_header_map", It->isHeaderMap()}});
     }
     PP.addPPCallbacks(std::make_unique<CallbackCollector>(
-        Data, SM, CI.getLangOpts(), FullCapture));
+        Data, SM, CI.getLangOpts(), FullCapture, ProjectionFile));
     return std::make_unique<Consumer>(CI.getASTContext(), Data, InFile,
-                                      RepositoryRoot, FullCapture);
+                                      RepositoryRoot, FullCapture,
+                                      ProjectionFile);
   }
 
 private:
   FrontendData &Data;
   std::string RepositoryRoot;
   bool FullCapture;
+  std::string ProjectionFile;
 };
 
 class Factory final : public clang::tooling::FrontendActionFactory {
 public:
-  Factory(FrontendData &Data, llvm::StringRef RepositoryRoot, bool FullCapture)
+  Factory(FrontendData &Data, llvm::StringRef RepositoryRoot, bool FullCapture,
+          llvm::StringRef ProjectionFile)
       : Data(Data), RepositoryRoot(RepositoryRoot.str()),
-        FullCapture(FullCapture) {}
+        FullCapture(FullCapture), ProjectionFile(ProjectionFile.str()) {}
 
   std::unique_ptr<clang::FrontendAction> create() override {
-    return std::make_unique<Action>(Data, RepositoryRoot, FullCapture);
+    return std::make_unique<Action>(Data, RepositoryRoot, FullCapture,
+                                    ProjectionFile);
   }
 
 private:
   FrontendData &Data;
   std::string RepositoryRoot;
   bool FullCapture;
+  std::string ProjectionFile;
 };
 
 class DiagnosticCollector final : public clang::DiagnosticConsumer {
@@ -981,6 +1052,7 @@ int main() {
   auto RepositoryRoot = Request->getString("repository_root");
   auto Arguments = Request->getArray("argv");
   auto RequestedCaptureMode = Request->getString("capture_mode");
+  auto RequestedProjection = Request->getString("projection_file");
   if (!File || !Directory || !RepositoryRoot || !Arguments) {
     llvm::errs() << "input requires file, directory, repository_root, and argv\n";
     return 2;
@@ -1004,12 +1076,20 @@ int main() {
     llvm::errs() << "capture_mode must be source_relevant or full\n";
     return 2;
   }
+  const std::string ProjectionFile =
+      RequestedProjection ? RequestedProjection->str() : std::string();
+  if (!ProjectionFile.empty() &&
+      (!std::filesystem::path(ProjectionFile).is_absolute() ||
+       !std::filesystem::is_regular_file(ProjectionFile))) {
+    llvm::errs() << "projection_file must be an existing absolute file\n";
+    return 2;
+  }
   bool FullCapture = CaptureMode == "full";
   clang::tooling::ClangTool Tool(FixedDatabase, {File->str()});
   FrontendData Data;
   DiagnosticCollector Diagnostics(Data);
   Tool.setDiagnosticConsumer(&Diagnostics);
-  Factory Actions(Data, *RepositoryRoot, FullCapture);
+  Factory Actions(Data, *RepositoryRoot, FullCapture, ProjectionFile);
   int Result = Tool.run(&Actions);
   std::sort(Data.DependencyPaths.begin(), Data.DependencyPaths.end());
   Data.DependencyPaths.erase(
@@ -1018,7 +1098,16 @@ int main() {
   Array Dependencies;
   for (const std::string &Path : Data.DependencyPaths)
     Dependencies.push_back(Path);
-  Object Output{{"schema_version", "codira.clang-frontend-native/3"},
+  const std::string ProjectionMode = ProjectionFile.empty()
+                                         ? CaptureMode
+                                         : "header_projection";
+  Object Output{{"schema_version", ProjectionFile.empty()
+                                         ? "codira.clang-frontend-native/3"
+                                         : "codira.clang-frontend-native/4"},
+                {"translation_unit_file", File->str()},
+                {"projection_file", ProjectionFile.empty()
+                                         ? Value(nullptr)
+                                         : Value(ProjectionFile)},
                 {"declarations", std::move(Data.Declarations)},
                 {"non_function_declarations",
                  std::move(Data.NonFunctionDeclarations)},
@@ -1032,7 +1121,11 @@ int main() {
                 {"dependency_paths", std::move(Dependencies)},
                 {"capture_mode", CaptureMode},
                 {"capture_projection",
-                 Object{{"mode", CaptureMode},
+                 Object{{"mode", ProjectionMode},
+                        {"translation_unit_file", File->str()},
+                        {"requested_header_file", ProjectionFile.empty()
+                                                        ? Value(nullptr)
+                                                        : Value(ProjectionFile)},
                         {"omitted_header_function_declarations",
                          Data.OmittedHeaderFunctionDeclarations},
                         {"omitted_header_macro_definitions",

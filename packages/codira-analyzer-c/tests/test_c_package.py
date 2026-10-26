@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import hashlib
 import json
 from codira.generated import (
@@ -49,7 +51,7 @@ def test_c_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.17"
+    assert project["project"]["version"] == "2.0.18"
     assert "codira>=2.0.0,<3.0.0" in project["project"]["dependencies"]
     assert project["project"]["entry-points"]["codira.analyzers"] == {
         "c": "codira_analyzer_c:build_analyzer"
@@ -73,7 +75,7 @@ def test_c_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CAnalyzer)
     assert analyzer.name == "c"
-    assert analyzer.version == "26"
+    assert analyzer.version == "27"
 
 
 def test_c_clang_frontend_is_opt_in_and_missing_profile_is_visible(
@@ -732,3 +734,71 @@ def test_c_clang_projection_persists_observed_macro_callable_evidence(
     assert len(function.calls) == 1
     assert function.calls[0].target_identity is not None
     assert function.calls[0].target_identity.value == "c:@F@helper"
+
+
+def test_c_clang_header_owner_selection_config_is_strict() -> None:
+    """Accept only normalized repository-relative explicit profile selections.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test verifies the additive Clang header selection contract.
+    """
+    analyzer = CAnalyzer()
+    analyzer.configure(
+        {
+            "frontend": "clang",
+            "clang_header_owner_profiles": {"include/api.h": "captured-profile"},
+        }
+    )
+
+    assert analyzer._clang_header_owner_profiles == {
+        "include/api.h": "captured-profile"
+    }
+    invalid: object
+    for invalid in (
+        {"../api.h": "profile"},
+        {"/include/api.h": "profile"},
+        {"include\\api.h": "profile"},
+        {"include/api.h": ""},
+        [],
+    ):
+        with pytest.raises(ValueError, match="clang_header_owner_profiles"):
+            CAnalyzer().configure(
+                {"frontend": "clang", "clang_header_owner_profiles": invalid}
+            )
+
+
+def test_c_clang_header_without_captured_owner_is_not_claimed_and_is_held(
+    tmp_path: Path,
+) -> None:
+    """Keep an unowned header explicit and prevent speculative C extraction.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test verifies unresolved Clang headers are not indexed as C facts.
+    """
+    header = tmp_path / "include" / "api.h"
+    header.parent.mkdir()
+    header.write_text("int declared(void);\n", encoding="utf-8")
+    analyzer = CAnalyzer()
+    analyzer.configure({"frontend": "clang"})
+
+    result = analyzer.analyze_file(header, tmp_path)
+
+    assert analyzer.allows_path(header, tmp_path) is False
+    assert result.index_symbols is False
+    assert result.functions == ()
+    assert result.declarations == ()
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"

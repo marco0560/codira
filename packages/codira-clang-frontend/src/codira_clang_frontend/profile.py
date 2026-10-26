@@ -17,6 +17,8 @@ import json
 import os
 import stat
 import shlex
+from collections.abc import Mapping
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal, cast
 
@@ -24,6 +26,9 @@ from .contracts import (
     CompilationContext,
     CompileProfile,
     DependencyInput,
+    HeaderProjectionCandidate,
+    HeaderProjectionRequest,
+    HeaderProjectionResolution,
     IncludeDirectoryInput,
 )
 
@@ -71,6 +76,189 @@ def _canonical_hash(value: object) -> str:
     """
     payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+@lru_cache(maxsize=4)
+def _read_profile_manifest(
+    evidence_path: Path, expected_sha256: str
+) -> dict[str, object]:
+    """Read one profile manifest, cached by its exact content digest.
+
+    Parameters
+    ----------
+    evidence_path : pathlib.Path
+        Manifest path to load.
+    expected_sha256 : str
+        Digest computed from the current manifest bytes.
+
+    Returns
+    -------
+    dict[str, object]
+        Decoded JSON object matching the digest.
+
+    Raises
+    ------
+    ValueError
+        If the manifest changes while it is being read or is not an object.
+    OSError
+        If the manifest cannot be read.
+    """
+    payload = evidence_path.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != expected_sha256:
+        raise ValueError("captured profile manifest changed while being read")
+    document = _mapping(json.loads(payload))
+    if document is None:
+        raise ValueError("captured profile manifest must be a JSON object")
+    return document
+
+
+def _profile_manifest(path: Path) -> dict[str, object]:
+    """Load a captured profile manifest under its content identity.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Captured profile manifest path.
+
+    Returns
+    -------
+    dict[str, object]
+        Parsed manifest whose cache key includes its exact SHA-256 digest.
+    """
+    resolved = path.resolve(strict=True)
+    return _read_profile_manifest(resolved, _sha256(resolved))
+
+
+def resolve_header_projection(
+    requested_header_path: Path,
+    owner_profiles: tuple[CompileProfile, ...],
+    *,
+    selected_owner_identity: str | None = None,
+) -> HeaderProjectionResolution:
+    """Resolve a header only through captured complete owner dependencies.
+
+    Parameters
+    ----------
+    requested_header_path : pathlib.Path
+        Existing physical header requested for projection.
+    owner_profiles : tuple[CompileProfile, ...]
+        Captured translation-unit profiles available for owner discovery.
+    selected_owner_identity : str or None, optional
+        Explicit profile identity to select when multiple owners captured the
+        same header.
+
+    Returns
+    -------
+    HeaderProjectionResolution
+        Ready request or a held missing, ambiguous, or stale result.
+
+    Raises
+    ------
+    OSError
+        If the requested header or a matching captured source cannot be read.
+    ValueError
+        If explicit owner selection names no captured candidate.
+    """
+    header = requested_header_path.resolve()
+    if not header.is_file():
+        return HeaderProjectionResolution("missing_header", header, ())
+    header_digest = _sha256(header)
+    matching: list[CompileProfile] = []
+    stale_match = False
+    for profile in owner_profiles:
+        dependency = next(
+            (item for item in profile.dependencies if item.path.resolve() == header),
+            None,
+        )
+        if dependency is None:
+            continue
+        if dependency.sha256 != header_digest:
+            stale_match = True
+            continue
+        if profile.status != "complete" or not profile.include_search_complete:
+            continue
+        if _sha256(profile.source_path) != profile.source_sha256:
+            continue
+        matching.append(profile)
+
+    candidates = tuple(sorted({item.identity for item in matching}))
+    if selected_owner_identity is not None:
+        selected = [
+            profile
+            for profile in matching
+            if profile.identity == selected_owner_identity
+        ]
+        if not selected:
+            raise ValueError("selected owner identity is not a captured header owner")
+        owner = selected[0]
+        selection: Literal["unique_captured_owner", "explicit_captured_owner"] = (
+            "explicit_captured_owner"
+        )
+    elif len(candidates) == 1:
+        owner = next(item for item in matching if item.identity == candidates[0])
+        selection = "unique_captured_owner"
+    elif not candidates:
+        status: Literal[
+            "ready",
+            "missing_header",
+            "missing_owner",
+            "ambiguous_owner",
+            "stale_header",
+        ] = "stale_header" if stale_match else "missing_owner"
+        return HeaderProjectionResolution(
+            status,
+            header,
+            candidates,
+            tuple(
+                HeaderProjectionCandidate(
+                    profile.identity, profile.source_path, profile.language
+                )
+                for profile in sorted(matching, key=lambda item: item.identity)
+            ),
+        )
+    else:
+        return HeaderProjectionResolution(
+            "ambiguous_owner",
+            header,
+            candidates,
+            tuple(
+                HeaderProjectionCandidate(
+                    profile.identity, profile.source_path, profile.language
+                )
+                for profile in sorted(matching, key=lambda item: item.identity)
+            ),
+        )
+
+    identity = _canonical_hash(
+        {
+            "schema": "codira.clang-header-projection/1",
+            "requested_header_path": str(header),
+            "requested_header_sha256": header_digest,
+            "owner_profile_identity": owner.identity,
+            "translation_unit_path": str(owner.source_path.resolve()),
+            "translation_unit_sha256": owner.source_sha256,
+            "selection": selection,
+        }
+    )
+    request = HeaderProjectionRequest(
+        requested_header_path=header,
+        requested_header_sha256=header_digest,
+        owner_profile=owner,
+        selection=selection,
+        identity=identity,
+    )
+    return HeaderProjectionResolution(
+        "ready",
+        header,
+        candidates,
+        tuple(
+            HeaderProjectionCandidate(
+                profile.identity, profile.source_path, profile.language
+            )
+            for profile in sorted(matching, key=lambda item: item.identity)
+        ),
+        request,
+    )
 
 
 def _mapping(value: object) -> dict[str, object] | None:
@@ -557,7 +745,7 @@ def from_captured_profile_json(
 
     Returns
     -------
-    codira_clang_frontend.contracts.CompileProfile
+    CompileProfile
         Validated profile with original argv and dependency evidence.
 
     Raises
@@ -567,7 +755,7 @@ def from_captured_profile_json(
     OSError
         If evidence or source files cannot be read.
     """
-    document = _read_json_object(evidence_path)
+    document = _profile_manifest(evidence_path)
     schema = document.get("schema", document.get("schema_version"))
     if schema not in {PROFILE_SCHEMA, _PREVIOUS_PROFILE_SCHEMA}:
         raise ValueError("captured profile evidence has an unsupported schema")
@@ -593,7 +781,154 @@ def from_captured_profile_json(
             "captured profile file must contain exactly one record matching "
             f"{source} at {source_sha256}; found {len(matches)}"
         )
-    row = matches[0]
+    if _sha256(source) != source_sha256:
+        raise ValueError("captured profile source digest does not match selection")
+    return _load_captured_profile_record(
+        matches[0], schema, evidence_path, source, repository_root
+    )
+
+
+def from_captured_profiles_json(
+    evidence_path: Path,
+    repository_root: Path,
+    source_sha256_by_path: Mapping[Path, str] | None = None,
+    *,
+    requested_dependency_path: Path | None = None,
+) -> tuple[CompileProfile, ...]:
+    """Load current captured owner profiles for one requested dependency.
+
+    Parameters
+    ----------
+    evidence_path : pathlib.Path
+        Immutable JSON manifest containing one or more captured profiles.
+    repository_root : pathlib.Path
+        Repository checkout containing the requested translation units.
+    source_sha256_by_path : Mapping[pathlib.Path, str] or None, optional
+        Current checkout digests keyed by canonical translation-unit path.
+        Only profiles for these source paths can be returned. When omitted,
+        candidate source files are hashed after dependency-path filtering.
+    requested_dependency_path : pathlib.Path or None, optional
+        If supplied, inspect only profile records whose captured dependencies
+        include this exact physical path before hashing or materializing source
+        profiles. This bounds header-owner discovery to relevant candidates.
+
+    Returns
+    -------
+    tuple[CompileProfile, ...]
+        Validated captured profiles in manifest order; distinct profile
+        identities for one source path are preserved.
+
+    Raises
+    ------
+    ValueError
+        If a candidate source row is stale or a candidate profile is malformed.
+    OSError
+        If evidence, source, dependency, or include-directory inputs cannot be
+        read.
+    """
+    document = _profile_manifest(evidence_path)
+    schema = document.get("schema", document.get("schema_version"))
+    if schema not in {PROFILE_SCHEMA, _PREVIOUS_PROFILE_SCHEMA}:
+        raise ValueError("captured profile evidence has an unsupported schema")
+    records_value = document.get("profiles")
+    if not isinstance(records_value, list):
+        raise ValueError("captured profile evidence requires a profiles array")
+    requested = (
+        requested_dependency_path.resolve()
+        if requested_dependency_path is not None
+        else None
+    )
+    expected_digests = (
+        {source.resolve(): digest for source, digest in source_sha256_by_path.items()}
+        if source_sha256_by_path is not None
+        else None
+    )
+    current_digests: dict[Path, str] = {}
+    profiles: list[CompileProfile] = []
+    identities: set[str] = set()
+    for value in records_value:
+        row = _mapping(value)
+        if row is None:
+            continue
+        row_source = row.get("source_path")
+        row_digest = row.get("source_sha256")
+        if not isinstance(row_source, str):
+            continue
+        source = Path(row_source).resolve()
+        if expected_digests is not None and source not in expected_digests:
+            continue
+        dependencies_value = row.get("dependencies")
+        if not isinstance(dependencies_value, list):
+            continue
+        if requested is not None and not any(
+            isinstance(dependency, dict)
+            and isinstance(dependency.get("path"), str)
+            and Path(str(dependency["path"])).resolve() == requested
+            for dependency in dependencies_value
+        ):
+            continue
+        if source not in current_digests:
+            if expected_digests is None:
+                current_digests[source] = _sha256(source)
+            else:
+                expected_digest = expected_digests[source]
+                if _sha256(source) != expected_digest:
+                    raise ValueError(
+                        "current translation unit digest differs from supplied "
+                        f"digest: {source}"
+                    )
+                current_digests[source] = expected_digest
+        expected_digest = current_digests[source]
+        if row_digest != expected_digest:
+            raise ValueError(
+                f"captured profile source row is stale for requested owner: {source}"
+            )
+        profile = _load_captured_profile_record(
+            row, schema, evidence_path, source, repository_root
+        )
+        if profile.identity in identities:
+            raise ValueError(
+                f"captured profile evidence repeats profile identity {profile.identity}"
+            )
+        identities.add(profile.identity)
+        profiles.append(profile)
+    return tuple(profiles)
+
+
+def _load_captured_profile_record(
+    row: dict[str, object],
+    schema: object,
+    evidence_path: Path,
+    source: Path,
+    repository_root: Path,
+) -> CompileProfile:
+    """Validate and materialize one captured-profile record.
+
+    Parameters
+    ----------
+    row : dict[str, object]
+        Captured profile record selected from the manifest.
+    schema : object
+        Validated manifest schema value.
+    evidence_path : pathlib.Path
+        Immutable JSON evidence containing the selected record.
+    source : pathlib.Path
+        Canonical translation-unit source path.
+    repository_root : pathlib.Path
+        Repository checkout containing the translation unit.
+
+    Returns
+    -------
+    CompileProfile
+        Validated profile with original argv and dependency evidence.
+
+    Raises
+    ------
+    ValueError
+        If the record or its captured input identities are invalid.
+    OSError
+        If evidence or profile inputs cannot be read.
+    """
     expected_source_digest = row.get("source_sha256")
     if (
         not isinstance(expected_source_digest, str)

@@ -160,6 +160,14 @@
             "minLength": 1,
             "type": "string"
           },
+          "clang_header_owner_profiles": {
+            "additionalProperties": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "description": "Optional explicit header-to-captured-profile identity selections from header preparation candidates; unresolved headers remain held.",
+            "type": "object"
+          },
           "clang_helper_path": {
             "description": "Explicit path to the packaged Clang frontend helper executable.",
             "minLength": 1,
@@ -269,6 +277,14 @@
             "description": "Explicit compilation database used to select the exact C++ profile for each source file.",
             "minLength": 1,
             "type": "string"
+          },
+          "clang_header_owner_profiles": {
+            "additionalProperties": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "description": "Optional explicit header-to-captured-profile identity selections from header preparation candidates; unresolved headers remain held.",
+            "type": "object"
           },
           "clang_helper_path": {
             "description": "Explicit path to the packaged Clang frontend helper executable.",

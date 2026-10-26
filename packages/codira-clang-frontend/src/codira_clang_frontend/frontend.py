@@ -13,6 +13,7 @@ None
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 import json
 import os
@@ -38,6 +39,7 @@ from .contracts import (
     FrontendPreprocessorEvent,
     FrontendResult,
     FrontendStatus,
+    HeaderProjectionRequest,
     IncludeDirectoryInput,
     PreprocessorEventKind,
     SourcePoint,
@@ -155,6 +157,24 @@ def _hash_json(value: object) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _same_path(value: object, expected: Path) -> bool:
+    """Compare a native path value with a canonical expected path.
+
+    Parameters
+    ----------
+    value : object
+        Untrusted native JSON field.
+    expected : pathlib.Path
+        Expected local path.
+
+    Returns
+    -------
+    bool
+        Whether both values resolve to the same physical path.
+    """
+    return isinstance(value, str) and Path(value).resolve() == expected.resolve()
+
+
 def _mapping(value: object) -> dict[str, object] | None:
     """Return a JSON object when the runtime value has the expected shape.
 
@@ -219,7 +239,10 @@ def _validate_response(response: dict[str, object]) -> str | None:
         Stable protocol failure reason, or ``None`` when required fields have
         the expected version and JSON shapes.
     """
-    if response.get("schema_version") != "codira.clang-frontend-native/3":
+    if response.get("schema_version") not in {
+        "codira.clang-frontend-native/3",
+        "codira.clang-frontend-native/4",
+    }:
         return "unsupported_native_protocol_version"
     array_fields = (
         "declarations",
@@ -329,6 +352,13 @@ def _validate_response(response: dict[str, object]) -> str | None:
         return "invalid_native_protocol_compilation_context"
     if _mapping(response.get("capture_projection")) is None:
         return "invalid_native_protocol_capture_projection"
+    if response.get("schema_version") == "codira.clang-frontend-native/4":
+        if not isinstance(response.get("translation_unit_file"), str):
+            return "invalid_native_protocol_translation_unit_file"
+        if response.get("projection_file") is not None and not isinstance(
+            response.get("projection_file"), str
+        ):
+            return "invalid_native_protocol_projection_file"
     return None
 
 
@@ -862,6 +892,7 @@ class ClangFrontend:
         attempt_dir: Path,
         attempt_id: str | None = None,
         allow_unbound_context: bool = False,
+        header_projection: HeaderProjectionRequest | None = None,
     ) -> FrontendResult:
         """Run one isolated Clang translation unit with immutable raw evidence.
 
@@ -876,6 +907,8 @@ class ClangFrontend:
         allow_unbound_context : bool, optional
             Permit an unbound profile only for explicit preparation, which
             captures the native context and writes a new immutable profile.
+        header_projection : HeaderProjectionRequest or None, optional
+            Header projection request resolved from captured owner dependencies.
 
         Returns
         -------
@@ -894,6 +927,12 @@ class ClangFrontend:
         No fallback is run here. Callers must choose Tree-sitter explicitly when
         the result is held or failed, and preserve that status in analysis data.
         """
+        if header_projection is not None and (
+            header_projection.owner_profile.identity != profile.identity
+            or header_projection.owner_profile.source_path.resolve()
+            != profile.source_path.resolve()
+        ):
+            raise ValueError("header projection owner profile does not match analysis")
         selected_id = attempt_id or uuid.uuid4().hex
         if not selected_id or any(
             char
@@ -938,6 +977,18 @@ class ClangFrontend:
                 stderr_path=None,
             )
         source_digest_before = _sha256(profile.source_path)
+        if (
+            header_projection is not None
+            and _sha256(header_projection.requested_header_path)
+            != header_projection.requested_header_sha256
+        ):
+            return self._held(
+                profile,
+                input_fingerprint,
+                "requested_header_changed_before_frontend",
+                stdout_path=None,
+                stderr_path=None,
+            )
         try:
             toolchain = self._load_toolchain_identity()
         except (OSError, ValueError, json.JSONDecodeError) as error:
@@ -976,7 +1027,7 @@ class ClangFrontend:
                 stderr_path=None,
                 toolchain=toolchain,
             )
-        request = {
+        request: dict[str, object] = {
             "file": str(profile.source_path),
             "directory": str(profile.working_directory),
             "repository_root": str(profile.repository_root),
@@ -984,6 +1035,14 @@ class ClangFrontend:
             "capture_mode": "source_relevant",
             "argv": adapted,
         }
+        if header_projection is not None:
+            request["projection_file"] = str(header_projection.requested_header_path)
+            input_fingerprint = _hash_json(
+                {
+                    "profile_fingerprint": input_fingerprint,
+                    "header_projection_identity": header_projection.identity,
+                }
+            )
         result = subprocess.run(
             [str(self.helper_path)],
             input=json.dumps(request, separators=(",", ":")).encode("utf-8"),
@@ -1009,6 +1068,22 @@ class ClangFrontend:
                 stdout_sha=stdout_digest,
                 stderr_sha=stderr_digest,
                 toolchain=toolchain,
+            )
+        if (
+            header_projection is not None
+            and _sha256(header_projection.requested_header_path)
+            != header_projection.requested_header_sha256
+        ):
+            return self._held(
+                profile,
+                input_fingerprint,
+                "requested_header_changed_during_frontend",
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                stdout_sha=stdout_digest,
+                stderr_sha=stderr_digest,
+                toolchain=toolchain,
+                failed=True,
             )
         if result.returncode != 0:
             return self._held(
@@ -1062,6 +1137,52 @@ class ClangFrontend:
                 toolchain=toolchain,
                 failed=True,
             )
+        if header_projection is not None:
+            if response.get("schema_version") != "codira.clang-frontend-native/4":
+                return self._held(
+                    profile,
+                    input_fingerprint,
+                    "header_projection_requires_native_protocol_v4",
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                    stdout_sha=stdout_digest,
+                    stderr_sha=stderr_digest,
+                    toolchain=toolchain,
+                    failed=True,
+                )
+            capture_projection = _mapping(response.get("capture_projection"))
+            if (
+                not _same_path(
+                    response.get("translation_unit_file"), profile.source_path
+                )
+                or not _same_path(
+                    response.get("projection_file"),
+                    header_projection.requested_header_path,
+                )
+                or (
+                    capture_projection is None
+                    or capture_projection.get("mode") != "header_projection"
+                    or not _same_path(
+                        capture_projection.get("translation_unit_file"),
+                        profile.source_path,
+                    )
+                    or not _same_path(
+                        capture_projection.get("requested_header_file"),
+                        header_projection.requested_header_path,
+                    )
+                )
+            ):
+                return self._held(
+                    profile,
+                    input_fingerprint,
+                    "header_projection_protocol_paths_mismatch",
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                    stdout_sha=stdout_digest,
+                    stderr_sha=stderr_digest,
+                    toolchain=toolchain,
+                    failed=True,
+                )
         tool_return_code = cast("int", response["tool_return_code"])
         if tool_return_code != 0:
             return self._held(
@@ -1138,6 +1259,9 @@ class ClangFrontend:
                 "dependency_closure_sha256": dependency_closure.sha256,
                 "package_version": self.package_version,
                 "compilation_context": _context_record(compilation_context),
+                "header_projection_identity": (
+                    header_projection.identity if header_projection else None
+                ),
             }
         )
         return FrontendResult(
@@ -1163,6 +1287,57 @@ class ClangFrontend:
             includes=includes,
             preprocessing=preprocessing,
             documentation_comments=documentation_comments,
+            requested_source_path=(
+                header_projection.requested_header_path
+                if header_projection is not None
+                else profile.source_path
+            ),
+            requested_source_sha256=(
+                header_projection.requested_header_sha256
+                if header_projection is not None
+                else source_digest_before
+            ),
+            translation_unit_path=profile.source_path,
+            header_projection_identity=(
+                header_projection.identity if header_projection is not None else None
+            ),
+        )
+
+    def analyze_header(
+        self,
+        request: HeaderProjectionRequest,
+        *,
+        attempt_dir: Path,
+        attempt_id: str | None = None,
+    ) -> FrontendResult:
+        """Project one header with its captured owning translation unit.
+
+        Parameters
+        ----------
+        request : HeaderProjectionRequest
+            Resolved requested header and its captured owner profile.
+        attempt_dir : pathlib.Path
+            Durable directory for immutable raw helper output.
+        attempt_id : str or None, optional
+            Stable caller-selected attempt identity.
+
+        Returns
+        -------
+        FrontendResult
+            Header-scoped frontend output with separate physical source paths.
+        """
+        result = self.analyze(
+            request.owner_profile,
+            attempt_dir=attempt_dir,
+            attempt_id=attempt_id,
+            header_projection=request,
+        )
+        return replace(
+            result,
+            requested_source_path=request.requested_header_path,
+            requested_source_sha256=request.requested_header_sha256,
+            translation_unit_path=request.owner_profile.source_path,
+            header_projection_identity=request.identity,
         )
 
     def prepare_profile(

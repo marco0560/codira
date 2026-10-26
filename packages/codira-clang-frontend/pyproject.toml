@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codira-clang-frontend"
-version = "0.2.0"
+version = "0.3.0"
 description = "Optional shared Clang LibTooling frontend for Codira C-family analyzers"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
+
+[project.scripts]
+codira-clang-prepare-headers = "codira_clang_frontend.header_projection_cli:main"
 
 [project.optional-dependencies]
 test = ["mypy", "pytest", "ruff"]

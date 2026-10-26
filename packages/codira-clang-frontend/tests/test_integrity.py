@@ -28,13 +28,19 @@ from codira_clang_frontend import (
     directory_membership_sha256,
     from_captured_argv,
     from_captured_profile_json,
+    from_captured_profiles_json,
     frontend_profile_fingerprint,
+    PROFILE_SCHEMA,
+    resolve_header_projection,
     write_prepared_profile,
 )
 from codira_clang_frontend.contracts import (
     DependencyInput,
     IncludeDirectoryInput,
     ToolchainIdentity,
+)
+from codira_clang_frontend.header_projection_cli import (
+    _write_captured_profiles_manifest,
 )
 from codira_clang_frontend.frontend import (
     _decode_compilation_context,
@@ -468,12 +474,113 @@ class FrontendIntegrityTests(unittest.TestCase):
             "capture_projection": {},
         }
         self.assertIsNone(_validate_response(response))
+        response["schema_version"] = "codira.clang-frontend-native/4"
+        response["translation_unit_file"] = "/tmp/owner.cpp"
+        response["projection_file"] = "/tmp/api.hpp"
+        self.assertIsNone(_validate_response(response))
         response["tool_return_code"] = 1
         self.assertIsNone(_validate_response(response))
         response["calls"] = ["malformed-record"]
         self.assertEqual(
             _validate_response(response), "invalid_native_protocol_record_shape"
         )
+
+    def test_header_projection_uses_only_captured_dependency_owners(self) -> None:
+        """Resolve one owner and hold ambiguous captured dependency contexts.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Test assertion result.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            header = root / "generated" / "api.hpp"
+            header.parent.mkdir()
+            header.write_text("int value();\n", encoding="utf-8")
+            header_digest = sha256(header)
+            translation_units = [root / "one.cpp", root / "two.cpp"]
+            profiles: list[CompileProfile] = []
+            for index, translation_unit in enumerate(translation_units):
+                translation_unit.write_text("#include <api.hpp>\n", encoding="utf-8")
+                profiles.append(
+                    CompileProfile(
+                        source_path=translation_unit,
+                        source_sha256=sha256(translation_unit),
+                        working_directory=root,
+                        repository_root=root,
+                        argv=("clang++", str(translation_unit)),
+                        language="cpp",
+                        origin="captured_argv",
+                        status="complete",
+                        identity=f"profile-{index}",
+                        dependencies=(DependencyInput(header, header_digest),),
+                        include_search_complete=True,
+                    )
+                )
+
+            unique = resolve_header_projection(header, (profiles[0],))
+            self.assertEqual(unique.status, "ready")
+            self.assertIsNotNone(unique.request)
+            assert unique.request is not None
+            self.assertEqual(unique.request.owner_profile.identity, "profile-0")
+            self.assertEqual(unique.request.requested_header_sha256, header_digest)
+
+            ambiguous = resolve_header_projection(header, tuple(profiles))
+            self.assertEqual(ambiguous.status, "ambiguous_owner")
+            self.assertEqual(
+                ambiguous.candidate_profile_identities, ("profile-0", "profile-1")
+            )
+            selected = resolve_header_projection(
+                header, tuple(profiles), selected_owner_identity="profile-1"
+            )
+            self.assertEqual(selected.status, "ready")
+            self.assertIsNotNone(selected.request)
+            assert selected.request is not None
+            self.assertEqual(selected.request.owner_profile.identity, "profile-1")
+            missing = resolve_header_projection(root / "generated.h", tuple(profiles))
+            self.assertEqual(missing.status, "missing_header")
+
+    def test_header_projection_holds_stale_dependency_bytes(self) -> None:
+        """Reject captured owners whose dependency digest no longer matches.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Test assertion result.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            header = root / "api.h"
+            source = root / "owner.c"
+            header.write_text("int api(void);\n", encoding="utf-8")
+            source.write_text('#include "api.h"\n', encoding="utf-8")
+            captured_digest = sha256(header)
+            header.write_text("int api(void); /* changed */\n", encoding="utf-8")
+            profile = CompileProfile(
+                source_path=source,
+                source_sha256=sha256(source),
+                working_directory=root,
+                repository_root=root,
+                argv=("clang", str(source)),
+                language="c",
+                origin="captured_argv",
+                status="complete",
+                identity="owner-profile",
+                dependencies=(DependencyInput(header, captured_digest),),
+                include_search_complete=True,
+            )
+            resolution = resolve_header_projection(header, (profile,))
+            self.assertEqual(resolution.status, "stale_header")
+            self.assertIsNone(resolution.request)
 
     def test_native_protocol_requires_compiler_context(self) -> None:
         """Reject protocol responses without actual Clang target/sysroot fields.
@@ -723,6 +830,98 @@ class FrontendIntegrityTests(unittest.TestCase):
         self.assertEqual(loaded.compilation_context, context)
         self.assertEqual(original_fingerprint, prepared_fingerprint)
         self.assertEqual(prepared_fingerprint, loaded_fingerprint)
+
+    def test_captured_owner_profiles_filter_by_header_and_reject_stale_sources(
+        self,
+    ) -> None:
+        """Preserve current context variants for one header owner source.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Test assertion result.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "unit.cpp"
+            source.write_text('#include "unit.hpp"\n', encoding="utf-8")
+            include = root / "include"
+            include.mkdir()
+            header = include / "unit.hpp"
+            header.write_text("int function(int value);\n", encoding="utf-8")
+            evidence = root / "capture.json"
+            evidence.write_text("{}", encoding="utf-8")
+            context = CompilationContext("x86_64-test-linux", "/", Path("/"))
+            dependencies = (
+                DependencyInput(source, sha256(source)),
+                DependencyInput(header, sha256(header)),
+            )
+            include_directory = IncludeDirectoryInput(
+                include, directory_membership_sha256(include), order=0
+            )
+            prepared_profile_paths: list[Path] = []
+            for index in (1, 2):
+                profile = from_captured_argv(
+                    source,
+                    root,
+                    root,
+                    ("clang++", f"-DPROFILE={index}", str(source)),
+                    "cpp",
+                    profile_id=f"captured-{index}",
+                    status="complete",
+                    evidence_path=evidence,
+                    dependencies=dependencies,
+                    include_directories=(include_directory,),
+                    include_search_complete=True,
+                    compilation_context=context,
+                )
+                output = root / f"profile-{index}.json"
+                write_prepared_profile(
+                    profile,
+                    dependencies,
+                    (include_directory,),
+                    (),
+                    "controlled_no_ambient",
+                    context,
+                    output,
+                )
+                prepared_profile_paths.append(output)
+            collection = _write_captured_profiles_manifest(prepared_profile_paths, root)
+            combined = json.loads(collection.read_text(encoding="utf-8"))
+            records = combined["profiles"]
+            records.append(
+                {
+                    "source_path": str(root / "missing-unrelated.cpp"),
+                    "source_sha256": "stale-source-is-filtered-before-read",
+                    "dependencies": [{"path": str(root / "other.hpp")}],
+                }
+            )
+            collection.write_text(
+                json.dumps({"schema_version": PROFILE_SCHEMA, "profiles": records}),
+                encoding="utf-8",
+            )
+
+            loaded = from_captured_profiles_json(
+                collection,
+                root,
+                requested_dependency_path=header,
+            )
+            self.assertEqual(len(loaded), 2)
+            self.assertNotEqual(loaded[0].identity, loaded[1].identity)
+            self.assertTrue(all(profile.source_path == source for profile in loaded))
+
+            source.write_text("int changed;\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "current translation unit digest"):
+                from_captured_profiles_json(
+                    collection,
+                    root,
+                    {source: dependencies[0].sha256},
+                    requested_dependency_path=header,
+                )
 
     def test_relative_native_dependencies_resolve_against_compile_cwd(self) -> None:
         """Hash relative Clang paths from the captured profile directory.

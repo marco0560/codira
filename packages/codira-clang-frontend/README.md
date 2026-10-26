@@ -107,6 +107,67 @@ frontend unavailability or a held/failed result is for the analyzer plugin to
 map to its explicit fallback status. The shared package does not silently
 claim a Tree-sitter fallback as a successful Clang parse.
 
+## Requested header projection
+
+`ClangFrontend.analyze_header` accepts a `HeaderProjectionRequest` resolved
+from complete captured dependency manifests. The request keeps the physical
+header path and digest separate from the owning translation unit and its exact
+captured argv. A unique captured owner is selected automatically; multiple
+owners are held unless the caller selects one of the candidate profile
+identities explicitly. The native helper parses the owning translation unit,
+then filters reported physical entities to the requested header. Internal
+linkage identity remains scoped to the actual translation unit. Header requests
+require native protocol v4; ordinary translation-unit requests continue to
+accept the existing v3 protocol.
+
+Generated headers must exist before preparation begins. The preparation CLI
+never runs a project build and never guesses compile flags. Its request JSON
+names every TU profile source, generated header, helper, and build receipt:
+
+```bash
+python -m codira_clang_frontend.header_projection_cli \
+  --request <absolute-request-json> \
+  --output-dir <new-immutable-run-directory>
+```
+
+The CLI prepares incomplete captured TU profiles before owner discovery,
+retains raw helper streams and per-TU/per-header checkpoints, and writes one
+preparation summary with missing or ambiguous contexts explicit. Preparation
+completion is profile/context evidence, not semantic parity qualification. Resume only the same
+output directory with the unchanged request, helper, and receipt:
+
+```bash
+python -m codira_clang_frontend.header_projection_cli \
+  --request <same-absolute-request-json> \
+  --output-dir <same-run-directory> \
+  --resume
+```
+
+If any bound input changes, start a new output identity; old checkpoints are
+never silently reused.
+
+An analyzer can resolve and parse a requested header directly:
+
+```python
+resolution = resolve_header_projection(header_path, captured_profiles)
+if resolution.request is not None:
+    result = frontend.analyze_header(
+        resolution.request,
+        attempt_dir=attempt_directory,
+        attempt_id=attempt_id,
+    )
+else:
+    hold_status = resolution.status
+    owner_candidates = resolution.candidates
+```
+
+`FrontendResult.requested_source_path` and `requested_source_sha256` identify
+the physical requested header. `translation_unit_path` and
+`header_projection_identity` identify the captured owner context and bind the
+projection. The selected language is `resolution.request.owner_profile.language`;
+callers should use an explicit owner identity when multiple language or TU
+contexts are candidates.
+
 Each `analyze` call requires a durable attempt directory. It atomically
 reserves its attempt identity before starting the helper and persists exact
 stdout and stderr bytes before decoding. Reused attempt identities fail before

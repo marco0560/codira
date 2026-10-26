@@ -299,6 +299,92 @@ class CompileProfile:
 
 
 @dataclass(frozen=True)
+class HeaderProjectionRequest:
+    """Project one physical header using a captured owning translation unit.
+
+    Parameters
+    ----------
+    requested_header_path : pathlib.Path
+        Physical header requested for entity projection.
+    requested_header_sha256 : str
+        Content digest captured when the request was resolved.
+    owner_profile : CompileProfile
+        Exact captured profile for the translation unit that includes the header.
+    selection : {"unique_captured_owner", "explicit_captured_owner"}
+        Evidence used to select the owner profile.
+    identity : str
+        Stable request identity binding both header and owner profile.
+
+    Returns
+    -------
+    None
+        Immutable, profile-bound header projection request.
+    """
+
+    requested_header_path: Path
+    requested_header_sha256: str
+    owner_profile: CompileProfile
+    selection: Literal["unique_captured_owner", "explicit_captured_owner"]
+    identity: str
+
+
+@dataclass(frozen=True)
+class HeaderProjectionCandidate:
+    """One captured owner profile that includes the requested header.
+
+    Parameters
+    ----------
+    profile_identity : str
+        Exact captured profile identity.
+    translation_unit_path : pathlib.Path
+        Physical owning translation unit.
+    language : {"c", "cpp"}
+        Language of the captured owner invocation.
+
+    Returns
+    -------
+    None
+        Immutable owner candidate.
+    """
+
+    profile_identity: str
+    translation_unit_path: Path
+    language: Literal["c", "cpp"]
+
+
+@dataclass(frozen=True)
+class HeaderProjectionResolution:
+    """Owner discovery result for a requested physical header.
+
+    Parameters
+    ----------
+    status : {"ready", "missing_header", "missing_owner", "ambiguous_owner", "stale_header"}
+        Deterministic resolution outcome.
+    requested_header_path : pathlib.Path
+        Canonical physical header path.
+    candidate_profile_identities : tuple[str, ...]
+        Sorted complete captured owner profile identities.
+    candidates : tuple[HeaderProjectionCandidate, ...]
+        Candidate identities with their physical TU path and language.
+    request : HeaderProjectionRequest or None
+        Bound request when one owner is selected.
+
+    Returns
+    -------
+    None
+        Immutable owner discovery result.
+    """
+
+    status: Literal[
+        "ready", "missing_header", "missing_owner", "ambiguous_owner", "stale_header"
+    ]
+    requested_header_path: Path
+    candidate_profile_identities: tuple[str, ...]
+    candidates: tuple[HeaderProjectionCandidate, ...] = ()
+    request: HeaderProjectionRequest | None = None
+
+
+@dataclass(frozen=True)
 class SourcePosition:
     """One Clang source coordinate, preserving unavailable fields as ``None``.
 
@@ -720,7 +806,7 @@ class FrontendResult:
     diagnostics : tuple[FrontendDiagnostic, ...]
         Native Clang diagnostics.
     declarations : tuple[FrontendDeclaration, ...]
-        Nonfunction declarations from the main translation unit.
+        Nonfunction declarations from the requested physical source.
     callables : tuple[FrontendCallable, ...]
         Functions and methods with owned calls.
     dependency_closure : DependencyClosure or None
@@ -750,7 +836,16 @@ class FrontendResult:
     preprocessing : tuple[FrontendPreprocessorEvent, ...], optional
         Macro and conditional events captured by the preprocessor callbacks.
     documentation_comments : tuple[FrontendDocumentationComment, ...], optional
-        Doxygen comments physically written in the main translation unit.
+        Doxygen comments physically written in the requested source file.
+    requested_source_path : pathlib.Path or None, optional
+        Physical source path requested from the frontend; a header for a
+        projection, otherwise the translation unit.
+    requested_source_sha256 : str or None, optional
+        Content digest of the requested physical source.
+    translation_unit_path : pathlib.Path or None, optional
+        Actual translation unit whose captured argv was passed to Clang.
+    header_projection_identity : str or None, optional
+        Stable identity binding a header projection to its owner profile.
 
     Returns
     -------
@@ -780,3 +875,7 @@ class FrontendResult:
     includes: tuple[FrontendInclude, ...] = ()
     preprocessing: tuple[FrontendPreprocessorEvent, ...] = ()
     documentation_comments: tuple[FrontendDocumentationComment, ...] = ()
+    requested_source_path: Path | None = None
+    requested_source_sha256: str | None = None
+    translation_unit_path: Path | None = None
+    header_projection_identity: str | None = None

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import hashlib
 import json
 from codira.generated import CompilerObservedCallableProvenance
@@ -12,14 +14,17 @@ from importlib.metadata import version
 from types import SimpleNamespace
 import tomllib
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import codira_analyzer_cpp as cpp_analyzer_module
 from codira_analyzer_cpp import CppAnalyzer, build_analyzer
 from codira_analyzer_cpp import cpp_syntax
 
-if TYPE_CHECKING:
-    from codira_clang_frontend.contracts import FrontendResult
+from codira_clang_frontend.contracts import FrontendResult
+from codira_clang_frontend.frontend import (
+    _decode_documentation_comments,
+    _decode_entities,
+)
 
 
 def test_cpp_package_declares_expected_entry_point() -> None:
@@ -38,8 +43,8 @@ def test_cpp_package_declares_expected_entry_point() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert project["project"]["version"] == "2.0.46"
-    assert version("codira-analyzer-cpp") == "2.0.46"
+    assert project["project"]["version"] == "2.0.47"
+    assert version("codira-analyzer-cpp") == "2.0.47"
     assert (
         Path(inspect.getfile(CppAnalyzer)).resolve()
         == (
@@ -69,7 +74,7 @@ def test_cpp_package_builds_expected_analyzer() -> None:
 
     assert isinstance(analyzer, CppAnalyzer)
     assert analyzer.name == "cpp"
-    assert analyzer.version == "45"
+    assert analyzer.version == "46"
 
 
 def test_cpp_clang_frontend_is_opt_in_and_missing_profile_is_visible(
@@ -644,3 +649,236 @@ def test_cpp_clang_projection_persists_observed_macro_callable_evidence(
     assert len(function.calls) == 1
     assert function.calls[0].target_identity is not None
     assert function.calls[0].target_identity.value == "c:@N@parity@F@helper#"
+
+
+def test_cpp_clang_header_owner_selection_config_is_strict() -> None:
+    """Accept only normalized repository-relative explicit profile selections.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    None
+        The test verifies the additive Clang header selection contract.
+    """
+    analyzer = CppAnalyzer()
+    analyzer.configure(
+        {
+            "frontend": "clang",
+            "clang_header_owner_profiles": {"include/api.h": "captured-profile"},
+        }
+    )
+
+    assert analyzer._clang_header_owner_profiles == {
+        "include/api.h": "captured-profile"
+    }
+    invalid: object
+    for invalid in (
+        {"../api.h": "profile"},
+        {"/include/api.h": "profile"},
+        {"include\\api.h": "profile"},
+        {"include/api.h": ""},
+        [],
+    ):
+        with pytest.raises(ValueError, match="clang_header_owner_profiles"):
+            CppAnalyzer().configure(
+                {"frontend": "clang", "clang_header_owner_profiles": invalid}
+            )
+
+
+def test_cpp_clang_unowned_header_is_claimed_only_as_held(tmp_path: Path) -> None:
+    """Route an unresolved header to a non-indexable partial C++ result.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root.
+
+    Returns
+    -------
+    None
+        The test verifies ambiguous routing does not emit heuristic symbols.
+    """
+    header = tmp_path / "include" / "api.h"
+    header.parent.mkdir()
+    header.write_text("int declared(void);\n", encoding="utf-8")
+    analyzer = CppAnalyzer()
+    analyzer.configure({"frontend": "clang"})
+
+    result = analyzer.analyze_file(header, tmp_path)
+
+    assert analyzer.allows_path(header, tmp_path) is True
+    assert result.index_symbols is False
+    assert result.functions == ()
+    assert result.declarations == ()
+    assert result.status is not None
+    assert result.status.coverage_state.value == "partial"
+
+
+def test_cpp_clang_projection_attaches_documentation_to_qualified_prototype(
+    tmp_path: Path,
+) -> None:
+    """Retain documentation attached to a namespaced header prototype.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary repository root containing the projected header.
+
+    Returns
+    -------
+    None
+        The test checks the native response decoder and documentation mapping.
+    """
+    source = tmp_path / "api.hpp"
+    source_text = (
+        "namespace api {\n/// Transform the input.\nint transform(int value);\n}\n"
+    )
+    source.write_text(source_text, encoding="utf-8")
+    comment = {
+        "text": "Transform the input.",
+        "location": {
+            "spelling": {"path": str(source), "line": 2, "column": 1, "offset": 18},
+            "expansion": {"path": str(source), "line": 2, "column": 1, "offset": 18},
+            "is_macro": False,
+        },
+        "range": {
+            "begin": {
+                "spelling": {"path": str(source), "line": 2, "column": 1, "offset": 18},
+                "expansion": {
+                    "path": str(source),
+                    "line": 2,
+                    "column": 1,
+                    "offset": 18,
+                },
+                "is_macro": False,
+            },
+            "end": {
+                "spelling": {
+                    "path": str(source),
+                    "line": 2,
+                    "column": 24,
+                    "offset": 41,
+                },
+                "expansion": {
+                    "path": str(source),
+                    "line": 2,
+                    "column": 24,
+                    "offset": 41,
+                },
+                "is_macro": False,
+            },
+        },
+    }
+    response = {
+        "declarations": [
+            {
+                "decl_kind": "function",
+                "documentation": "Transform the input.",
+                "documentation_location": comment["location"],
+                "documentation_range": comment["range"],
+                "function_type": "int (int)",
+                "has_prototype": True,
+                "identity": {
+                    "decl_kind": "function",
+                    "kind": "written",
+                    "provenance": "source_written",
+                    "usr": "c:@N@api@F@transform#I#",
+                },
+                "is_definition": False,
+                "is_public": True,
+                "lexical_owner": "api",
+                "location": {
+                    "spelling": {
+                        "path": str(source),
+                        "line": 3,
+                        "column": 5,
+                        "offset": 43,
+                    },
+                    "expansion": {
+                        "path": str(source),
+                        "line": 3,
+                        "column": 5,
+                        "offset": 43,
+                    },
+                    "is_macro": False,
+                },
+                "method_qualifiers": {"is_method": False},
+                "name": "transform",
+                "native_decl_kind": "Function",
+                "owner_usr": "c:@N@api",
+                "parameters": [{"name": "value", "type": "int", "location": None}],
+                "qualified_name": "api::transform",
+                "range": {
+                    "begin": {
+                        "spelling": {
+                            "path": str(source),
+                            "line": 3,
+                            "column": 1,
+                            "offset": 39,
+                        },
+                        "expansion": {
+                            "path": str(source),
+                            "line": 3,
+                            "column": 1,
+                            "offset": 39,
+                        },
+                        "is_macro": False,
+                    },
+                    "end": {
+                        "spelling": {
+                            "path": str(source),
+                            "line": 3,
+                            "column": 29,
+                            "offset": 67,
+                        },
+                        "expansion": {
+                            "path": str(source),
+                            "line": 3,
+                            "column": 29,
+                            "offset": 67,
+                        },
+                        "is_macro": False,
+                    },
+                },
+                "returns_value": False,
+                "signature": "int api::transform(int value)",
+            }
+        ],
+        "non_function_declarations": [],
+        "calls": [],
+        "documentation_comments": [comment],
+    }
+    declarations, callables, _ = _decode_entities(response)
+    result = FrontendResult(
+        status="parsed",
+        coverage_state="complete",
+        reasons=(),
+        diagnostics=(),
+        declarations=declarations,
+        callables=callables,
+        dependency_closure=None,
+        profile_identity="header-profile",
+        toolchain_identity=None,
+        cache_fingerprint="header-fingerprint",
+        stdout_path=None,
+        stdout_sha256=None,
+        stderr_path=None,
+        stderr_sha256=None,
+        documentation_comments=_decode_documentation_comments([comment]),
+    )
+
+    analysis = cpp_analyzer_module._analysis_from_clang_result(source, tmp_path, result)
+
+    assert analysis is not None
+    assert [(item.name, item.docstring) for item in analysis.functions] == [
+        ("api::transform", "Transform the input.")
+    ]
+    assert [
+        (item.title, item.lineno, item.text, item.owner_stable_id)
+        for item in analysis.documentation
+    ] == [
+        ("api::transform", 2, "Transform the input.", analysis.functions[0].stable_id)
+    ]

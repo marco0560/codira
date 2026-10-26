@@ -28,6 +28,9 @@ from .contracts import (
     FrontendInclude,
     FrontendPreprocessorEvent,
     FrontendResult,
+    HeaderProjectionCandidate,
+    HeaderProjectionRequest,
+    HeaderProjectionResolution,
     IncludeDirectoryInput,
     SourcePoint,
     SourcePosition,
@@ -44,14 +47,16 @@ from .profile import (
     directory_membership_sha256,
     from_captured_argv,
     from_captured_profile_json,
+    from_captured_profiles_json,
     from_compile_commands,
+    resolve_header_projection,
     write_prepared_profile,
 )
 
 try:
     __version__ = version("codira-clang-frontend")
 except PackageNotFoundError:
-    __version__ = "0.2.0"
+    __version__ = "0.3.0"
 
 
 def create_frontend_profile(
@@ -166,6 +171,9 @@ __all__ = [
     "FrontendInclude",
     "FrontendPreprocessorEvent",
     "FrontendResult",
+    "HeaderProjectionCandidate",
+    "HeaderProjectionRequest",
+    "HeaderProjectionResolution",
     "IncludeDirectoryInput",
     "SourcePoint",
     "SourcePosition",
@@ -176,7 +184,9 @@ __all__ = [
     "captured_profile_fingerprint",
     "from_captured_argv",
     "from_captured_profile_json",
+    "from_captured_profiles_json",
     "from_compile_commands",
+    "resolve_header_projection",
     "create_frontend_profile",
     "frontend_profile_fingerprint",
     "profile_toolchain_fingerprint",
