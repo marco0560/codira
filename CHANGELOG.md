@@ -1,3 +1,11 @@
+## [2.4.8](https://github.com/marco0560/codira/compare/v2.4.7...v2.4.8) (2026-10-28)
+
+### Bug Fixes
+
+* **analyzer:** avoid Rust coordinate reference corruption ([e58b0da](https://github.com/marco0560/codira/commit/e58b0dac2f50826108b3c2050cdf21e17a386b72))
+* **dev:** honor benchmark model admission configurations ([91c4e07](https://github.com/marco0560/codira/commit/91c4e07a3c25e72ee7c3346899f92e551037bf5e))
+* **dev:** moved personal-secrets ([69dc7fc](https://github.com/marco0560/codira/commit/69dc7fc48c7ec45c48b1d8664de2e8b6c7f4b2e7))
+
 ## [2.4.7](https://github.com/marco0560/codira/compare/v2.4.6...v2.4.7) (2026-10-16)
 
 ### Bug Fixes
