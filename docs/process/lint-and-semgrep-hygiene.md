@@ -285,9 +285,9 @@ host parser.
 - `src/codira/contracts.py:3598` (PLR0913): Exact symbol identity remains an explicit optional backend query filter.
 - `src/codira/query/exact.py:949` (PLR0913): Exact symbol identity remains an explicit graph lookup filter.
 - `src/codira/mcp/server.py:272` (SLF001 - required SDK transport boundary): The MCP transport adapter requires the SDK private server boundary.
-- `src/codira/query/context_scoring.py:638` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `src/codira/query/context_scoring.py:787` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
-- `src/codira/query/context_scoring.py:822` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/query/context_scoring.py:686` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/query/context_scoring.py:835` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
+- `src/codira/query/context_scoring.py:870` (PLR0913): Explicit query or evaluation inputs preserve the existing integration contract.
 
 ### Native subscription preparation
 

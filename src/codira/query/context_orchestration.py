@@ -57,6 +57,7 @@ from codira.query.context_scoring import (
     _diversify_merged_symbols_explain,
     _is_documentation_symbol,
     _rank_signals_with_provenance,
+    _unique_exact_callable_target,
 )
 from codira.query.context_source import (
     _tokenize,
@@ -159,6 +160,24 @@ def _initial_context_state(
         retrieval_signals,
         intent=intent,
     )
+    exact_callable_target = _unique_exact_callable_target(
+        request.root,
+        request.query,
+        conn,
+        normalized_prefix,
+    )
+    if exact_callable_target is not None:
+        exact_target_index = next(
+            (
+                index
+                for index, entry in enumerate(ranked_merged)
+                if entry[0] == exact_callable_target
+            ),
+            None,
+        )
+        if exact_target_index is not None and exact_target_index > 0:
+            ranked_merged.insert(0, ranked_merged.pop(exact_target_index))
+
     if request.explain:
         top_matches, diversity = _diversify_merged_symbols_explain(
             [symbol for symbol, _score in ranked_merged],
