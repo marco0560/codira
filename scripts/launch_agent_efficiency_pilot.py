@@ -41,13 +41,13 @@ from scripts.run_agent_efficiency_phase6_pilot import (
 
 FACTORY_VERSION = "1.0"
 SOPS_ENVIRONMENT = (
-    "/home/marco/.config/personal-secrets/secrets/"
+    "/home/marco/credentials/personal-secrets/secrets/"
     "openrouter_codira_agent_efficiency_pilot.env"
 )
 CANARY_SOPS_ENVIRONMENTS = {
     "campaign": SOPS_ENVIRONMENT,
     "codira-tests": (
-        "/home/marco/.config/personal-secrets/secrets/openrouter_codira_tests.env"
+        "/home/marco/credentials/personal-secrets/secrets/openrouter_codira_tests.env"
     ),
 }
 BENCHMARK_ROOT = Path("benchmarks/agent-efficiency")

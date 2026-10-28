@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PERSONAL_SECRETS_DIR = Path.home() / ".config" / "personal-secrets" / "secrets"
+PERSONAL_SECRETS_DIR = Path.home() / "credentials" / "personal-secrets" / "secrets"
 
 
 class RepoConfigRestore:

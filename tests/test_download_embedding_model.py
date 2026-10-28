@@ -329,7 +329,11 @@ def test_download_embedding_model_main_scopes_huggingface_credentials(
         "sops",
         "exec-env",
         str(
-            Path.home() / ".config" / "personal-secrets" / "secrets" / "huggingface.env"
+            Path.home()
+            / "credentials"
+            / "personal-secrets"
+            / "secrets"
+            / "huggingface.env"
         ),
     )
     assert "--sops-exec --skip-smoke --model-id bge-small-en-v1.5-onnx" in command[3]
